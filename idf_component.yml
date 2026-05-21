@@ -1,0 +1,10 @@
+version: "0.0.1"
+description: "Pure C99 React Native renderer for embedded systems"
+url: "https://github.com/TheMasterCoder007/embedded-react"
+targets:
+  - esp32s3
+  - esp32p4
+  - esp32
+dependencies:
+  idf:
+    version: ">=5.0"
