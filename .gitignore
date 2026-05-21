@@ -1,0 +1,28 @@
+# JetBrains
+.idea/
+
+# CMake build directories
+build/
+cmake-build-*/
+out/
+
+# Compiled output
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# Font converter output
+tools/font-converter/build/
+*.ttf.h
+
+# Test artifacts
+tests/*/build/
+Testing/
+
+# OS
+.DS_Store
+Thumbs.db
