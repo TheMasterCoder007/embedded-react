@@ -1,0 +1,29 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+# Enforce 4-space indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+# Maximum line length
+ColumnLimit: 120
+# Place braces on the next line (Allman style)
+BreakBeforeBraces: Allman
+# Indent within namespaces
+NamespaceIndentation: All
+# Indent 'public:', 'protected:', etc.
+IndentAccessModifiers: true
+AccessModifierOffset: 0
+# Indent 'case' within 'switch'
+IndentCaseLabels: true
+# Keep pointers with the type (Type* name)
+PointerAlignment: Left
+# Do not allow short functions on a single line
+AllowShortFunctionsOnASingleLine: None
+# Do not allow short blocks on a single line
+AllowShortBlocksOnASingleLine: Never
+# Do not merge short if statements into a single line
+AllowShortIfStatementsOnASingleLine: false
+# Organize includes
+SortIncludes: true
+...
