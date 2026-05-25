@@ -50,4 +50,14 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
  */
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h);
 
+/**
+ * @brief Advances the renderer's internal time counter by delta_ms milliseconds.
+ *
+ * Called from embedded_renderer_tick() on each frame. The accumulated value is
+ * returned by er_now_ms().
+ *
+ * @param[in] delta_ms  Milliseconds elapsed since the last tick.
+ */
+void er_tick(uint32_t delta_ms);
+
 #endif
