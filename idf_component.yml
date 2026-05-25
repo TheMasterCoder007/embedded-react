@@ -1,5 +1,5 @@
 version: "0.0.1"
-description: "Pure C99 React Native renderer for embedded systems"
+description: "React Native for embedded MCUs — write JSX, run it on a microcontroller."
 url: "https://github.com/TheMasterCoder007/embedded-react"
 targets:
   - esp32s3
