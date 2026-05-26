@@ -17,8 +17,28 @@
 #define SCREEN_H 320
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+static float s_dpi_scale = 1.0f;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Converts a density-independent pixel value to physical pixels.
+ *
+ * Multiplies v by the DPI scale factor set during backend initialisation.
+ * Returns v unchanged on displays where dpi_scale == 1.0 (1× / 96 dpi).
+ *
+ * @param[in] v Value in density-independent pixels.
+ *
+ * @return Equivalent value in physical pixels.
+ */
+static int16_t dp(int v) {
+    return (int16_t)(v * s_dpi_scale + 0.5f);
+}
 
 /**
  * @brief Returns an ERProps struct with all layout fields set to ER_LAYOUT_AUTO.
@@ -50,38 +70,44 @@ static ERProps props_default(void) {
  * Creates a simple UI demonstrating flexbox layout, rounded rectangles, and text
  * rendering via the pure-C scene graph API (er_scene.h). No React or JS is involved —
  * this is the C-driver validation path for the rendering stack.
+ *
+ * All layout values are expressed in density-independent pixels via dp() so the
+ * scene scales correctly on HiDPI displays without changing any constants.
+ *
+ * @param[in] phys_w Physical framebuffer width in pixels.
+ * @param[in] phys_h Physical framebuffer height in pixels.
  */
-static void build_scene(void) {
+static void build_scene(int phys_w, int phys_h) {
     ERProps p;
 
-    /* Root: full-screen dark background, flex column, 20 px padding. */
+    /* Root: full-screen dark background, flex column, 20 dp padding. */
     ERNode *root = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.width = SCREEN_W;
-    p.height = SCREEN_H;
+    p.width = (int16_t)phys_w;
+    p.height = (int16_t)phys_h;
     p.background_color = 0xFF1A1A2E;
     p.flex_direction = ER_FLEX_COL;
     p.align_items = ER_ALIGN_STRETCH;
-    p.padding = 20;
+    p.padding = dp(20);
     er_node_set_props(root, &p);
 
     /* Title text. */
     ERNode *title = er_node_create(ER_NODE_TEXT);
     p = props_default();
-    p.height = 36;
+    p.height = dp(36);
     p.color = 0xFFFFFFFF;
-    p.font_size = 24;
+    p.font_size = (uint8_t)dp(24);
     strncpy(p.text, "embedded-react", ER_TEXT_MAX);
     er_node_set_props(title, &p);
 
     /* Card 1: dark blue, rounded, holds a descriptive label. */
     ERNode *card1 = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = 90;
-    p.margin_top = 16;
+    p.height = dp(90);
+    p.margin_top = dp(16);
     p.background_color = 0xFF16213E;
-    p.border_radius = 10;
-    p.padding = 14;
+    p.border_radius = dp(10);
+    p.padding = dp(14);
     p.align_items = ER_ALIGN_STRETCH;
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(card1, &p);
@@ -89,18 +115,18 @@ static void build_scene(void) {
     ERNode *card1_label = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFFFFFFF;
-    p.font_size = 16;
+    p.font_size = (uint8_t)dp(16);
     strncpy(p.text, "Scene graph  *  Yoga flexbox  *  Rounded rects", ER_TEXT_MAX);
     er_node_set_props(card1_label, &p);
 
     /* Card 2: red accent, rounded, holds the quit hint. */
     ERNode *card2 = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = 90;
-    p.margin_top = 12;
+    p.height = dp(90);
+    p.margin_top = dp(12);
     p.background_color = 0xFFE94560;
-    p.border_radius = 10;
-    p.padding = 14;
+    p.border_radius = dp(10);
+    p.padding = dp(14);
     p.align_items = ER_ALIGN_STRETCH;
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(card2, &p);
@@ -108,7 +134,7 @@ static void build_scene(void) {
     ERNode *card2_label = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFFFFFFF;
-    p.font_size = 16;
+    p.font_size = (uint8_t)dp(16);
     strncpy(p.text, "SDL2 backend active  --  press ESC to quit", ER_TEXT_MAX);
     er_node_set_props(card2_label, &p);
 
@@ -145,7 +171,7 @@ int main(void) {
         "embedded-react",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         SCREEN_W, SCREEN_H,
-        SDL_WINDOW_SHOWN);
+        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         SDL_Quit();
@@ -162,7 +188,11 @@ int main(void) {
         return 1;
     }
 
-    if (!er_sdl_backend_init(renderer, SCREEN_W, SCREEN_H)) {
+    int phys_w = SCREEN_W, phys_h = SCREEN_H;
+    SDL_GetRendererOutputSize(renderer, &phys_w, &phys_h);
+    s_dpi_scale = (float)phys_w / (float)SCREEN_W;
+
+    if (!er_sdl_backend_init(renderer, phys_w, phys_h)) {
         SDL_Log("er_sdl_backend_init failed");
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -170,7 +200,7 @@ int main(void) {
         return 1;
     }
 
-    build_scene();
+    build_scene(phys_w, phys_h);
 
     bool running = true;
     uint32_t prev = SDL_GetTicks();

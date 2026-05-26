@@ -7,8 +7,11 @@ Output format
 -------------
 For each requested pixel size the font is rendered into a packed glyph atlas
 plus a per-glyph metrics table (width, height, x_offset, y_offset, advance).
-Bitmaps are 1bpp, row-major, MSB = leftmost pixel; each row is
-ceil(width / 8) bytes.
+Bitmaps are row-major at the requested BPP (--bpp 1|2|4|8):
+  1-bit: MSB = leftmost pixel, each row is ceil(width / 8) bytes.
+  2-bit: MSB pair = leftmost pixel, each row is ceil(width / 4) bytes.
+  4-bit: high nibble = left pixel of pair, each row is ceil(width / 2) bytes.
+  8-bit: raw grayscale coverage, each row is width bytes.
 
 ASCII glyphs (default 0x20..0x7E) form a dense range, indexed by
 `(codepoint - first)`. Optional special symbols (--symbol-set / --extras)
@@ -29,7 +32,7 @@ Usage
         --out src/font_data.c
 
 A single-size .bin blob (for runtime upload via er_font_load) carries only the
-dense ASCII range — wire format v1.
+dense ASCII range — wire format v2 (includes BPP).
 
 Dependencies
     pip install Pillow
@@ -132,10 +135,14 @@ SYMBOL_SETS: Dict[str, List[int]] = {
 # Glyph rasterization
 # ---------------------------------------------------------------------------
 
-def rasterize_glyph(pil_font, ch: str) -> dict | None:
-    """Render one glyph. Returns dict with offset (=0), width, height,
-    x_offset, y_offset, advance, bitmap_bytes — or None if the font has
-    no glyph for `ch`.
+def rasterize_glyph(pil_font, ch: str, bpp: int = 1) -> dict | None:
+    """Render one glyph.
+
+    Returns dict with offset (=0), width, height, x_offset, y_offset, advance,
+    bitmap_bytes — or None if the font has no glyph for `ch`.
+
+    bpp=1  — packed 1-bit-per-pixel, MSB = leftmost pixel; row stride = ceil(w/8) bytes.
+    bpp=8  — 8-bit grayscale, 1 byte per pixel; row stride = w bytes.
     """
     from PIL import Image, ImageDraw  # type: ignore
 
@@ -165,16 +172,47 @@ def rasterize_glyph(pil_font, ch: str) -> dict | None:
     draw.text((-x0, -y0), ch, font=pil_font, fill=255)
     pixels = list(img.getdata())
 
-    row_bytes = (w + 7) // 8
-    out = bytearray()
-    for row in range(h):
-        for byte_idx in range(row_bytes):
-            byte = 0
-            for bit in range(8):
-                col = byte_idx * 8 + bit
-                if col < w and pixels[row * w + col] >= 128:
-                    byte |= (0x80 >> bit)
-            out.append(byte)
+    if bpp == 8:
+        # 8-bit grayscale: 1 byte per pixel, raw coverage 0-255.
+        out = bytearray()
+        for row in range(h):
+            for col in range(w):
+                out.append(pixels[row * w + col])
+    elif bpp == 4:
+        # 4-bit grayscale: 2 pixels per byte, high nibble = left pixel.
+        row_bytes = (w + 1) // 2
+        out = bytearray()
+        for row in range(h):
+            for col_byte in range(row_bytes):
+                lo_col = col_byte * 2
+                hi_col = lo_col + 1
+                lo_px = pixels[row * w + lo_col] >> 4 if lo_col < w else 0
+                hi_px = pixels[row * w + hi_col] >> 4 if hi_col < w else 0
+                out.append((lo_px << 4) | hi_px)
+    elif bpp == 2:
+        # 2-bit grayscale: 4 pixels per byte, bits 7-6 = leftmost pixel.
+        row_bytes = (w + 3) // 4
+        out = bytearray()
+        for row in range(h):
+            for col_byte in range(row_bytes):
+                byte = 0
+                for pair in range(4):
+                    col = col_byte * 4 + pair
+                    if col < w:
+                        byte |= (pixels[row * w + col] >> 6) << (6 - pair * 2)
+                out.append(byte)
+    else:
+        # 1-bit packed: 8 pixels per byte, MSB = leftmost pixel.
+        row_bytes = (w + 7) // 8
+        out = bytearray()
+        for row in range(h):
+            for byte_idx in range(row_bytes):
+                byte = 0
+                for bit in range(8):
+                    col = byte_idx * 8 + bit
+                    if col < w and pixels[row * w + col] >= 128:
+                        byte |= (0x80 >> bit)
+                out.append(byte)
 
     return {
         "width":    w,
@@ -188,7 +226,8 @@ def rasterize_glyph(pil_font, ch: str) -> dict | None:
 
 def render_size(font_path: str, pixel_size: int,
                 first: int, last: int,
-                symbols: List[int]) -> Tuple[List[dict], List[Tuple[int, dict]], bytes, int, int]:
+                symbols: List[int],
+                bpp: int = 1) -> Tuple[List[dict], List[Tuple[int, dict]], bytes, int, int]:
     """Render dense range [first, last] plus optional sparse `symbols`.
 
     Returns (dense_glyphs, extras, bitmap_blob, line_height, baseline)
@@ -206,7 +245,7 @@ def render_size(font_path: str, pixel_size: int,
 
     for code in range(first, last + 1):
         ch = chr(code)
-        g = rasterize_glyph(pil_font, ch)
+        g = rasterize_glyph(pil_font, ch, bpp=bpp)
         if g is None:
             # Should never happen for ASCII, but guard anyway.
             g = {"width": 0, "height": 0, "x_offset": 0, "y_offset": 0,
@@ -227,7 +266,7 @@ def render_size(font_path: str, pixel_size: int,
         if first <= code <= last:
             continue  # already covered by dense range
         ch = chr(code)
-        g = rasterize_glyph(pil_font, ch)
+        g = rasterize_glyph(pil_font, ch, bpp=bpp)
         if g is None or (g["width"] == 0 and g["advance"] == 0):
             print(f"  warn: font has no glyph for U+{code:04X}, skipping",
                   file=sys.stderr)
@@ -260,7 +299,7 @@ def _safe_comment_char(code: int) -> str:
 
 def emit_c(out_path: str, font_path: str, symbol: str,
            sizes_data, first: int, last: int,
-           symbols: List[int]) -> None:
+           symbols: List[int], bpp: int = 1) -> None:
     num_glyphs = last - first + 1
     lines: List[str] = []
 
@@ -268,12 +307,13 @@ def emit_c(out_path: str, font_path: str, symbol: str,
     cmd_symbols = ""
     if symbols:
         cmd_symbols = " --extras " + ",".join(f"0x{c:04X}" for c in symbols)
+    cmd_bpp = f" --bpp {bpp}" if bpp != 1 else ""
 
     lines.append("/* AUTO-GENERATED — do not edit by hand.")
     lines.append(f" * Source : {os.path.basename(font_path)}")
     lines.append(f" * Command: python3 tools/font-converter/gen_font.py "
                  f"--font {os.path.basename(font_path)} --sizes {sizes_str} "
-                 f"--symbol {symbol}{cmd_symbols} --out {out_path}")
+                 f"--symbol {symbol}{cmd_symbols}{cmd_bpp} --out {out_path}")
     lines.append(f" * Date   : {datetime.datetime.now().strftime('%Y-%m-%d')}")
     lines.append(" */")
     lines.append('#include "font_bitmap.h"')
@@ -333,6 +373,7 @@ def emit_c(out_path: str, font_path: str, symbol: str,
         lines.append(f"    .pixel_size   = {pixel_size},")
         lines.append(f"    .line_height  = {line_h},")
         lines.append(f"    .baseline     = {baseline},")
+        lines.append(f"    .format       = {bpp},")
         lines.append("};")
         lines.append("")
 
@@ -359,41 +400,44 @@ def emit_c(out_path: str, font_path: str, symbol: str,
 # ---------------------------------------------------------------------------
 
 FONT_BLOB_MAGIC   = b"FONT"
-FONT_BLOB_VERSION = 1
+FONT_BLOB_VERSION = 2
 
 
 def build_blob(pixel_size: int, dense: List[dict], bitmap: bytes,
-               line_height: int, baseline: int, first: int, last: int) -> bytes:
-    """Pack one font size into the er_font_load wire format (ASCII only).
+               line_height: int, baseline: int, first: int, last: int,
+               bpp: int = 1) -> bytes:
+    """Pack one font size into the er_font_load wire format v2 (ASCII only).
 
-    Layout:
+    v2 layout (17-byte header):
         0..3   magic 'F','O','N','T'
-        4      version
+        4      version = 2
         5      first  (ASCII byte)
         6      last   (ASCII byte)
         7      pixel_size
         8      line_height
         9      baseline
-        10..11 glyph_count (uint16 LE)
-        12..15 bitmap_size (uint32 LE)
-        16..   glyph_count * 8 bytes — GlyphInfo entries
+        10     format / BPP (1, 2, 4, or 8)
+        11..12 glyph_count (uint16 LE)
+        13..16 bitmap_size (uint32 LE)
+        17..   glyph_count * 8 bytes — GlyphInfo entries
         ...    bitmap_size bytes — packed glyph atlas
     """
     import struct
     if last < first:
         raise ValueError("last < first")
     if first > 0xFF or last > 0xFF:
-        raise ValueError("wire format v1 only supports 8-bit codepoints")
+        raise ValueError("wire format only supports 8-bit codepoints")
     glyph_count = last - first + 1
     if len(dense) != glyph_count:
         raise ValueError(f"glyph count mismatch: have {len(dense)}, want {glyph_count}")
 
     header = struct.pack(
-        "<4sBBBBBBHI",
+        "<4sBBBBBBBHI",
         FONT_BLOB_MAGIC,
         FONT_BLOB_VERSION,
         first, last, pixel_size,
         line_height, baseline,
+        bpp,
         glyph_count,
         len(bitmap),
     )
@@ -409,8 +453,9 @@ def build_blob(pixel_size: int, dense: List[dict], bitmap: bytes,
 
 
 def emit_bin(out_path: str, pixel_size: int, dense: List[dict], bitmap: bytes,
-             line_height: int, baseline: int, first: int, last: int) -> None:
-    blob = build_blob(pixel_size, dense, bitmap, line_height, baseline, first, last)
+             line_height: int, baseline: int, first: int, last: int,
+             bpp: int = 1) -> None:
+    blob = build_blob(pixel_size, dense, bitmap, line_height, baseline, first, last, bpp=bpp)
     with open(out_path, "wb") as f:
         f.write(blob)
     print(f"Wrote {len(blob)} byte font blob -> {out_path}")
@@ -449,6 +494,8 @@ def main() -> None:
                         help="Predefined extra-symbol set to include (default 'none')")
     parser.add_argument("--extras", default="",
                         help="Comma-separated extra codepoints (hex/dec), merged with --symbol-set")
+    parser.add_argument("--bpp", type=int, default=1, choices=[1, 2, 4, 8],
+                        help="Bits per pixel: 1 (packed, default), 2, 4, or 8 (grayscale AA)")
     args = parser.parse_args()
 
     first = int(args.first, 0)
@@ -458,6 +505,7 @@ def main() -> None:
     symbols = list(SYMBOL_SETS.get(args.symbol_set, []))
     symbols += parse_extras(args.extras)
     symbols = sorted(set(symbols))
+    bpp = args.bpp
 
     if not (args.out or args.bin_out):
         print("Error: specify at least one of --out / --bin-out", file=sys.stderr)
@@ -479,15 +527,15 @@ def main() -> None:
     sizes_data = []
     for px in sizes:
         print(f"  rendering size {px} px...")
-        dense, extras, blob, line_h, baseline = render_size(args.font, px, first, last, symbols)
+        dense, extras, blob, line_h, baseline = render_size(args.font, px, first, last, symbols, bpp=bpp)
         sizes_data.append((px, dense, extras, blob, line_h, baseline))
 
     if args.out:
-        emit_c(args.out, args.font, args.symbol, sizes_data, first, last, symbols)
+        emit_c(args.out, args.font, args.symbol, sizes_data, first, last, symbols, bpp=bpp)
 
     if args.bin_out:
         px, dense, _extras, blob, line_h, baseline = sizes_data[0]
-        emit_bin(args.bin_out, px, dense, blob, line_h, baseline, first, last)
+        emit_bin(args.bin_out, px, dense, blob, line_h, baseline, first, last, bpp=bpp)
 
 
 if __name__ == "__main__":

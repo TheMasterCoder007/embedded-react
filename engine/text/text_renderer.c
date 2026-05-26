@@ -140,6 +140,95 @@ static void draw_glyph(
     }
 }
 
+/**
+ * @brief Draws a single anti-aliased glyph using grayscale coverage at any supported BPP (2, 4, or 8).
+ *
+ * Unpacks grayscale coverage values from the packed bitmap and scales them to 0-255:
+ * 2-bit (0-3 × 85), 4-bit (0-15 × 17), 8-bit (identity). Builds a premultiplied
+ * ARGB8888 row buffer and composites it via er_blit_copy.
+ * Output is clipped to the supplied clip rectangle.
+ *
+ * @param[in] g         GlyphInfo describing the glyph dimensions and bitmap offset.
+ * @param[in] bitmap    Pointer to the font's packed grayscale bitmap data.
+ * @param[in] bpp       Bits per pixel of the font bitmap (2, 4, or 8).
+ * @param[in] cursor_x  Cursor X origin (left of the advance box) in framebuffer pixels.
+ * @param[in] cursor_y  Cursor Y origin (top of the line box) in framebuffer pixels.
+ * @param[in] clip      Clipping rectangle; no pixels are drawn outside this area.
+ * @param[in] color     Text color as straight-alpha ARGB8888.
+ */
+static void draw_glyph_aa(
+    const GlyphInfo* g, const uint8_t* bitmap, uint8_t bpp,
+    int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
+{
+    if (g->width == 0U || g->height == 0U)
+        return;
+
+    const uint8_t src_a = (uint8_t)(color >> 24);
+    const uint8_t src_r = (uint8_t)(color >> 16);
+    const uint8_t src_g = (uint8_t)(color >>  8);
+    const uint8_t src_b = (uint8_t)(color);
+
+    const uint8_t* bmp      = bitmap + g->bitmap_offset;
+    const int      clip_x1  = clip->x;
+    const int      clip_y1  = clip->y;
+    const int      clip_x2  = clip->x + clip->w;
+    const int      clip_y2  = clip->y + clip->h;
+    const int      origin_x = cursor_x + g->x_offset;
+    const int      origin_y = cursor_y + g->y_offset;
+
+    /* Row stride depends on BPP; glyph width is uint8_t so max is 255 px. */
+    const int row_stride = (bpp == 8) ? (int)g->width
+                         : (bpp == 4) ? ((int)g->width + 1) / 2
+                                      : ((int)g->width + 3) / 4;  /* bpp == 2 */
+
+    uint32_t row_buf[256]; /* stack buffer: max glyph width 255 px */
+
+    for (int row = 0; row < (int)g->height; row++)
+    {
+        const int fy = origin_y + row;
+        if (fy < clip_y1 || fy >= clip_y2)
+            continue;
+
+        const int col_start = (clip_x1 > origin_x) ? clip_x1 - origin_x : 0;
+        const int col_end   = (clip_x2 < origin_x + (int)g->width) ? clip_x2 - origin_x : (int)g->width;
+        if (col_start >= col_end)
+            continue;
+
+        const uint8_t* src_row = bmp + (size_t)row * (size_t)row_stride;
+        for (int col = col_start; col < col_end; col++)
+        {
+            uint8_t cov;
+            if (bpp == 8)
+            {
+                cov = src_row[col];
+            }
+            else if (bpp == 4)
+            {
+                /* High nibble = left pixel of each pair. */
+                const uint8_t nibble = (col & 1) ? src_row[col >> 1] & 0x0FU
+                                                  : src_row[col >> 1] >> 4;
+                cov = nibble * 17U;  /* 0-15 → 0,17,…,255 */
+            }
+            else
+            {
+                /* bpp == 2: bits 7-6 = leftmost pixel of each quartet. */
+                const uint8_t pair = (src_row[col >> 2] >> (6U - ((uint8_t)col & 3U) * 2U)) & 0x03U;
+                cov = pair * 85U;  /* 0-3 → 0,85,170,255 */
+            }
+
+            const uint8_t a  = (uint8_t)(((uint32_t)src_a * cov + 127U) / 255U);
+            const uint8_t pr = (uint8_t)(((uint32_t)src_r * a  + 127U) / 255U);
+            const uint8_t pg = (uint8_t)(((uint32_t)src_g * a  + 127U) / 255U);
+            const uint8_t pb = (uint8_t)(((uint32_t)src_b * a  + 127U) / 255U);
+            row_buf[col - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) |
+                                       ((uint32_t)pg <<  8) | (uint32_t)pb;
+        }
+
+        er_blit_copy(row_buf, (col_end - col_start) * (int)sizeof(uint32_t),
+                     origin_x + col_start, fy, col_end - col_start, 1);
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -186,7 +275,10 @@ void er_text_render(const char* text, ERRect clip, uint32_t color, uint8_t font_
                 break;
         }
 
-        draw_glyph(g, font->bitmap, cursor_x, cursor_y, &clip, color);
+        if (font->format != ERUI_FONT_FMT_1BIT)
+            draw_glyph_aa(g, font->bitmap, font->format, cursor_x, cursor_y, &clip, color);
+        else
+            draw_glyph(g, font->bitmap, cursor_x, cursor_y, &clip, color);
         cursor_x += g->advance;
     }
 }

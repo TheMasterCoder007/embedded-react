@@ -13,8 +13,8 @@
 #define FONT_BLOB_MAGIC_1     0x4FU /**< Wire-format magic byte 1: 'O'. */
 #define FONT_BLOB_MAGIC_2     0x4EU /**< Wire-format magic byte 2: 'N'. */
 #define FONT_BLOB_MAGIC_3     0x54U /**< Wire-format magic byte 3: 'T'. */
-#define FONT_BLOB_VERSION     1U    /**< format version of supported font blob. */
-#define FONT_BLOB_HEADER_SIZE 16U   /**< Fixed header size in bytes. */
+#define FONT_BLOB_VERSION     2U    /**< Version of supported font blob. */
+#define FONT_BLOB_HEADER_SIZE 17U   /**< Fixed header size in bytes. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types
@@ -63,7 +63,7 @@ uint32_t font_blob_used_bytes(void);
  * and a BitmapFont entry is added to the registry under the given name.
  *
  * @param[in] name       Null-terminated font family name.
- * @param[in] blob       Pointer to the FONT v1 wire-format data.
+ * @param[in] blob       Pointer to the FONT wire-format data.
  * @param[in] blob_size  Size of the blob in bytes.
  *
  * @return FONT_BLOB_OK on success, or a FontBlobStatus error code on failure.

@@ -112,26 +112,44 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
     const uint8_t pixel_size = blob[7];
     const uint8_t line_height = blob[8];
     const uint8_t baseline = blob[9];
-    const uint16_t glyph_count = read_u16_le(&blob[10]);
-    const uint32_t bitmap_size = read_u32_le(&blob[12]);
+    const uint8_t  format      = blob[10];
+    const uint16_t glyph_count = read_u16_le(&blob[11]);
+    const uint32_t bitmap_size = read_u32_le(&blob[13]);
 
     if (last < first || glyph_count != (uint16_t)(last - first + 1U))
         return FONT_BLOB_ERR_BAD_RANGE;
 
-    const uint32_t glyph_bytes = (uint32_t)glyph_count * sizeof(GlyphInfo);
-    const uint32_t expected_size = FONT_BLOB_HEADER_SIZE + glyph_bytes + bitmap_size;
+    /* Wire format packs each GlyphInfo as 8 bytes (bitmap_offset as uint16_t, no padding).
+     * The in-memory GlyphInfo uses uint32_t for bitmap_offset + 3 pad bytes = 12 bytes.
+     * Parse field-by-field, zero-extending the 2-byte wire offset to 4 bytes and zeroing pad. */
+    const uint32_t glyph_wire_bytes = (uint32_t)glyph_count * 8U;
+    const uint32_t glyph_mem_bytes  = (uint32_t)glyph_count * sizeof(GlyphInfo);
+    const uint32_t expected_size    = FONT_BLOB_HEADER_SIZE + glyph_wire_bytes + bitmap_size;
     if (blob_size < expected_size)
         return FONT_BLOB_ERR_SIZE_MISMATCH;
 
     BitmapFont* font_dst = (void*)blob_alloc(sizeof(BitmapFont));
-    uint8_t* glyph_dst = blob_alloc(glyph_bytes);
+    uint8_t* glyph_dst = blob_alloc(glyph_mem_bytes);
     uint8_t* bitmap_dst = blob_alloc(bitmap_size);
     if (!font_dst || !glyph_dst || (bitmap_size > 0U && !bitmap_dst))
         return FONT_BLOB_ERR_OUT_OF_MEMORY;
 
-    memcpy(glyph_dst, blob + FONT_BLOB_HEADER_SIZE, glyph_bytes);
+    {
+        const uint8_t* src = blob + FONT_BLOB_HEADER_SIZE;
+        GlyphInfo*     dst = (GlyphInfo*)(void*)glyph_dst;
+        for (uint16_t i = 0; i < glyph_count; i++, src += 8U, dst++)
+        {
+            dst->bitmap_offset = read_u16_le(src);
+            dst->width         = src[2];
+            dst->height        = src[3];
+            dst->x_offset      = (int8_t)src[4];
+            dst->y_offset      = (int8_t)src[5];
+            dst->advance       = src[6];
+            dst->_pad[0]       = dst->_pad[1] = dst->_pad[2] = 0;
+        }
+    }
     if (bitmap_size > 0U)
-        memcpy(bitmap_dst, blob + FONT_BLOB_HEADER_SIZE + glyph_bytes, bitmap_size);
+        memcpy(bitmap_dst, blob + FONT_BLOB_HEADER_SIZE + glyph_wire_bytes, bitmap_size);
 
     font_dst->bitmap = bitmap_dst;
     font_dst->glyphs = (const GlyphInfo*)(void*)glyph_dst;
@@ -142,6 +160,7 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
     font_dst->baseline = baseline;
     font_dst->first = first;
     font_dst->last = last;
+    font_dst->format = format;
 
     if (!font_registry_add(name, font_dst))
         return FONT_BLOB_ERR_REGISTRY_FULL;
