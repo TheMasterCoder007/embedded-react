@@ -12,7 +12,7 @@ falls back to `software/`).
 | `esp32-lcd/` | ESP32-S3 LCD peripheral + PSRAM framebuffer, CPU blit | Stub |
 | `framebuffer/` | Generic Linux `/dev/fb0` blitter | Planned (README only) |
 | `opengl/` | OpenGL ES 2.0 — RPi, Android, anything with a GL context | Planned (README only) |
-| `sdl/` | SDL2 — desktop dev and host-side test target | Stub (first end-to-end target) |
+| `sdl/` | SDL2 — desktop dev and host-side test target | **Implemented** |
 | `software/` | Pure CPU blit — works on any board with a writable framebuffer | Stub |
 | `web/` | WebGL/Canvas via WASM | Planned (README only) |
 

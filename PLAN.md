@@ -91,7 +91,7 @@ This separation pays for itself in three ways:
 | `engine/platform/`         | Engine-side platform abstractions (time source, etc.)     | Empty (no abstractions needed yet)                   |
 | `engine/tests/`            | Host-side CTest suites (layout, text)                     | Green                                                |
 | `backends/dma2d/`          | STM32 DMA2D hardware blitter                              | Stub                                                 |
-| `backends/sdl/`            | SDL2 desktop backend                                      | Stub (first end-to-end target)                       |
+| `backends/sdl/`            | SDL2 desktop backend                                      | **Implemented** (`fill`, `copy`, `blend`; premultiplied blend mode) |
 | `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Stub                                                 |
 | `backends/software/`       | Pure CPU blit (RP2040, low-end MCUs)                      | Stub                                                 |
 | `backends/opengl/`         | OpenGL ES 2.0 (RPi, Android)                              | README only                                          |
@@ -426,13 +426,12 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - Text renderer (multi-byte UTF-8, run-length glyph blits) — implemented
 - Built-in Inter font at 10/12/16/20/24/32/48 px + symbol set — implemented
 - Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)
-- Backend interface — wired (stubs for all seven backends)
+- Backend interface — wired; `backends/sdl/` fully implemented
 - Host-side CTest (layout + text + rendering/rrect) — green
 
 **Next (Flow A)**
 
 - Finish engine: shadows, transforms, animation engine, hit-testing, image scaling
-- `backends/sdl/` real implementation
 - Metro-compatible bundler
 - React reconciler hosted in QuickJS (`bridges/quickjs/`)
 - End-to-end: `examples/linux/` — JSX → SDL2 desktop preview
