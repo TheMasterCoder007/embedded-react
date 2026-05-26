@@ -85,11 +85,13 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
      * For a scanline at distance dy above the horizontal center line:
      *   dx_f = sqrt(r² − dy²)                   — arc half-width (float)
      *   dx   = floor(dx_f)                       — last fully-inside column offset
-     *   frac = dx_f − dx                         — coverage of the sub-pixel edge column
      *
      * Interior span: [x + r − dx,  x + w − r + dx)
-     * AA edge pixels (when ERUI_BORDER_AA): columns x + r − dx − 1  and  x + w − r + dx,
-     *   each blended at coverage = frac.
+     * AA edge pixels (when ERUI_BORDER_AA): columns are stepped outward from the
+     *   interior edge (k = 0, 1, 2, ...) until SDF coverage drops to zero.
+     *   Pixel centre at step k has offset (dx + k + 0.5, dy - 0.5) from the arc
+     *   centre; coverage = r + 0.5 - dist.  Typically 1-3 iterations; up to
+     *   O(sqrt(r)) at the arc apex.
      */
     for (int dy = 1; dy <= r; dy++)
     {
@@ -106,24 +108,34 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
             fill_span(argb, bot_py, x0, x1);
 
 #if ERUI_BORDER_AA
-        float frac = dx_f - (float)dx;
-        if (frac > 0.0f)
         {
-            uint32_t aa = scale_alpha(argb, (uint8_t)(frac * 255.0f + 0.5f));
-            int ax_l = x0 - 1;
-            int ax_r = x1;
+            float cy = (float)dy - 0.5f;
+            for (int k = 0; ; k++)
+            {
+                float cx   = (float)dx + (float)k + 0.5f;
+                float dist = sqrtf(cx * cx + cy * cy);
+                float cov  = (float)r + 0.5f - dist;
+                if (cov <= 0.0f)
+                    break;
+                if (cov < 1.0f)
+                {
+                    uint32_t aa  = scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
+                    int ax_l = x0 - 1 - k;
+                    int ax_r = x1     + k;
 
-            if (ax_l >= x)
-            {
-                er_blit_fill(aa, ax_l, top_py, 1, 1);
-                if (bot_py != top_py)
-                    er_blit_fill(aa, ax_l, bot_py, 1, 1);
-            }
-            if (ax_r < x + w)
-            {
-                er_blit_fill(aa, ax_r, top_py, 1, 1);
-                if (bot_py != top_py)
-                    er_blit_fill(aa, ax_r, bot_py, 1, 1);
+                    if (ax_l >= x)
+                    {
+                        er_blit_fill(aa, ax_l, top_py, 1, 1);
+                        if (bot_py != top_py)
+                            er_blit_fill(aa, ax_l, bot_py, 1, 1);
+                    }
+                    if (ax_r < x + w)
+                    {
+                        er_blit_fill(aa, ax_r, top_py, 1, 1);
+                        if (bot_py != top_py)
+                            er_blit_fill(aa, ax_r, bot_py, 1, 1);
+                    }
+                }
             }
         }
 #endif

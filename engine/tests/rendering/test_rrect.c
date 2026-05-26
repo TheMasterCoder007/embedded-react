@@ -199,16 +199,14 @@ int main(void)
         return fail("rrect: bottom-right corner pixel should not be filled");
 
     /* --- interior and span-boundary pixels are filled correctly --- */
-    /* dy=4 (top row y=0): dx=0, span [4, 16). Pixel 4 in, pixel 3 out.  */
-    /* The middle strip starts at y=4 (r=4): x=0 filled for full-width rows. */
+    /* dy=4 (top row y=0): dx=0, span [4, 16). Pixel 4 filled solid.         */
+    /* The middle strip starts at y=4 (r=4): x=0 filled for full-width rows.  */
     if (px(&tc, 10, 10) != 0xFF445566)
         return fail("rrect: center pixel not filled");
     if (px(&tc, 4, 0) != 0xFF445566)
         return fail("rrect: first pixel of top-row span not filled");
     if (px(&tc, 15, 0) != 0xFF445566)
         return fail("rrect: last pixel of top-row span not filled");
-    if (px(&tc, 3, 0) != 0)
-        return fail("rrect: pixel just outside top-row span incorrectly filled");
     if (px(&tc, 0, 4) != 0xFF445566)
         return fail("rrect: first middle-strip pixel at x=0 not filled");
 
@@ -229,7 +227,7 @@ int main(void)
     /* px(3,6) and px(15,15): inside inner rect → blue (background).         */
     /*                                                                         */
     /* Top row y=0: outer dy=6, dx=0, span [6,24). Inner doesn't reach y=0.  */
-    /* px(15,0): in outer span → red. px(5,0): outside outer span → empty.   */
+    /* px(15,0): in outer span → red. px(2,0): outside AA band → empty.       */
     reset(&tc);
     er_rrect_fill_bordered(0xFF0000FF, 0xFFFF0000, 3, 0, 0, 30, 30, 6);
     if (px(&tc, 0, 6) != 0xFFFF0000)
@@ -242,7 +240,7 @@ int main(void)
         return fail("border ring: first inner pixel should be background color");
     if (px(&tc, 15, 0) != 0xFFFF0000)
         return fail("border ring: top-row center pixel should be border color");
-    if (px(&tc, 5, 0) != 0)
+    if (px(&tc, 2, 0) != 0)
         return fail("border ring: pixel outside outer arc should be empty");
 
     /* --- large radius clamps to pill shape without crashing --- */
@@ -257,9 +255,9 @@ int main(void)
     /* --- anti-aliased edge pixel carries partial alpha --- */
     /*                                                                         */
     /* 20x20 rect at (5,5) with r=4, fully opaque black (0xFF000000).        */
-    /* dy=1 → row y=8. dx_f=sqrt(15)≈3.873, dx=3, frac≈0.873.               */
-    /* AA left pixel: ax_l = 5+4-3-1 = 5.                                    */
-    /* cov = (uint8_t)(0.873*255+0.5) = 223 → alpha byte ≈ 223.              */
+    /* dy=1 → row y=8. dx_f=sqrt(15)≈3.873, dx=3. AA left pixel: ax_l=5.    */
+    /* SDF: cx=3.5, cy=0.5, dist=sqrt(12.5)≈3.536, cov=4.5-3.536=0.964.     */
+    /* alpha = (uint8_t)(0.964*255+0.5) = 246.                                */
     /* Accept [200, 254] to allow for minor floating-point platform variation. */
     reset(&tc);
     er_rrect_fill(0xFF000000, 5, 5, 20, 20, 4);
