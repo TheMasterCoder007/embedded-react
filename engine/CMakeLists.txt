@@ -93,5 +93,6 @@ target_link_libraries(embedded-react PUBLIC m)
 # ---------------------------------------------------------------------------
 if (BUILD_TESTING AND CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     add_subdirectory(tests/layout)
+    add_subdirectory(tests/rendering)
     add_subdirectory(tests/text)
 endif ()

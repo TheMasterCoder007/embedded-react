@@ -44,7 +44,7 @@ This is an in-progress project. Here's what is and isn't real today:
 
 | Layer                                   | Status       | Notes                                                                                                                                                                                                        |
 |-----------------------------------------|--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C engine** (`engine/`)                | In progress  | Scene graph, Yoga flexbox layout, text rendering, font system, and host-side CTest all work today. Shadows, rounded rectangles, transforms, animation engine, hit-testing — scaffolded, not yet implemented. |
+| **C engine** (`engine/`)                | In progress  | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), and host-side CTest (layout, text, rendering/rrect) all work today. Shadows, transforms, animation engine, hit-testing — scaffolded, not yet implemented. |
 | **Backends** (`backends/`)              | Stubs        | All seven slots scaffolded; none implemented yet. `sdl/` is the first planned target.                                                                                                                        |
 | **QuickJS bridge** (`bridges/quickjs/`) | Stub         | Metro-compatible bundler + React reconciler integration is the next major milestone.                                                                                                                         |
 | **Examples** (`examples/`)              | READMEs only | Each example pairs one backend + one bridge; lands as those are built.                                                                                                                                       |
@@ -145,8 +145,8 @@ possibilities the layering enables, not roadmap items.
 
 **Engine (in progress)**
 
-- Finish runtime: rounded rectangles, shadows, transforms, animation engine,
-  hit-testing, image scaling
+- ~~Rounded rectangle rasterizer (anti-aliased, bordered)~~ — done
+- Finish runtime: shadows, transforms, animation engine, hit-testing, image scaling
 
 **Flow A — React on QuickJS** (next)
 

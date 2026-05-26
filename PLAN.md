@@ -84,7 +84,7 @@ This separation pays for itself in three ways:
 | `engine/core/`             | Backend glue, frame tick                                  | Working                                              |
 | `engine/scene/`            | Node pool, tree, render pass, hit-testing                 | Partial (scene tree + render done; hit-testing stub) |
 | `engine/layout/`           | Yoga 7-pass flexbox                                       | Working                                              |
-| `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Stubs                                                |
+| `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Partial (rrect done; shadows, transforms, image stubs) |
 | `engine/text/`             | UTF-8 decode + glyph blit                                 | Working                                              |
 | `engine/animation/`        | Animated.Value engine                                     | Stub                                                 |
 | `engine/resources/`        | Font registry, font blob loader, built-in font            | Working                                              |
@@ -425,13 +425,13 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - Scene graph + Yoga flexbox layout — implemented
 - Text renderer (multi-byte UTF-8, run-length glyph blits) — implemented
 - Built-in Inter font at 10/12/16/20/24/32/48 px + symbol set — implemented
+- Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)
 - Backend interface — wired (stubs for all seven backends)
-- Host-side CTest (layout + text) — green
+- Host-side CTest (layout + text + rendering/rrect) — green
 
 **Next (Flow A)**
 
-- Finish engine: rounded rectangles, shadows, transforms, animation engine,
-  hit-testing, image scaling
+- Finish engine: shadows, transforms, animation engine, hit-testing, image scaling
 - `backends/sdl/` real implementation
 - Metro-compatible bundler
 - React reconciler hosted in QuickJS (`bridges/quickjs/`)

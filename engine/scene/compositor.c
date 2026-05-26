@@ -1,6 +1,7 @@
 #include "er_node_internal.h"
 #include "layout_engine.h"
 #include "renderer_internal.h"
+#include "rrect.h"
 #include "text_renderer.h"
 #include <string.h>
 
@@ -75,8 +76,9 @@ static void render_tree(ERNode* n, bool parent_dirty)
             case ER_NODE_PRESSABLE:
             case ER_NODE_MODAL:
             {
-                if ((n->props.view.background_color >> 24) != 0)
-                    er_blit_fill(n->props.view.background_color, x, y, w, h);
+                const ERViewProps* vp = &n->props.view;
+                er_rrect_fill_bordered(vp->background_color, vp->border_color,
+                                       vp->border_width, x, y, w, h, vp->border_radius);
                 break;
             }
             case ER_NODE_TEXT:
