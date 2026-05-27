@@ -20,9 +20,9 @@
  */
 typedef struct
 {
-    int pixels_drawn; /**< Total pixel area covered by in-bounds fill calls. */
-    int fills;        /**< Total number of fill_rect calls received. */
-    int out_of_bounds; /**< Number of fill_rect calls that fell outside the framebuffer. */
+    int pixels_drawn; /**< Total pixel area covered by in-bounds draw calls. */
+    int draw_ops; /**< Total number of draw calls received. */
+    int out_of_bounds; /**< Number of draw calls that fell outside the framebuffer. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -43,7 +43,7 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
     TestCtx* t = ctx;
     (void)argb;
-    t->fills++;
+    t->draw_ops++;
     if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
         t->out_of_bounds++;
     else
@@ -63,13 +63,14 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
  */
 static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
 {
+    TestCtx* t = ctx;
     (void)src;
     (void)s;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
+    t->draw_ops++;
+    if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
+        t->out_of_bounds++;
+    else
+        t->pixels_drawn += w * h;
 }
 
 /**
@@ -147,8 +148,8 @@ int main(void)
     ERRect clip = { 0, 0, FB_W, FB_H };
     er_text_render("Hello", clip, 0xFFFFFFFFu, 14, NULL);
 
-    if (tc.fills == 0)
-        return fail("no fill_rect calls emitted");
+    if (tc.draw_ops == 0)
+        return fail("no draw calls emitted");
     if (tc.pixels_drawn == 0)
         return fail("no pixels reported drawn");
     if (tc.out_of_bounds != 0)
