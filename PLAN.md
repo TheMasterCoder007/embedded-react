@@ -78,33 +78,33 @@ This separation pays for itself in three ways:
 
 ### What lives in each top-level folder
 
-| Folder                     | Purpose                                                   | Status                                               |
-|----------------------------|-----------------------------------------------------------|------------------------------------------------------|
-| `engine/include/`          | Public headers (`er_scene.h`, `native_renderer.h`)        | Stable                                               |
-| `engine/core/`             | Backend glue, frame tick                                  | Working                                              |
-| `engine/scene/`            | Node pool, tree, render pass, hit-testing                 | Partial (scene tree + render done; hit-testing stub) |
-| `engine/layout/`           | Yoga 7-pass flexbox                                       | Working                                              |
-| `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Partial (rrect done; shadows, transforms, image stubs) |
-| `engine/text/`             | UTF-8 decode + glyph blit                                 | Working                                              |
-| `engine/animation/`        | Animated.Value engine                                     | Stub                                                 |
-| `engine/resources/`        | Font registry, font blob loader, built-in font            | Working                                              |
-| `engine/platform/`         | Engine-side platform abstractions (time source, etc.)     | Empty (no abstractions needed yet)                   |
-| `engine/tests/`            | Host-side CTest suites (layout, text)                     | Green                                                |
-| `backends/dma2d/`          | STM32 DMA2D hardware blitter                              | Stub                                                 |
+| Folder                     | Purpose                                                   | Status                                                              |
+|----------------------------|-----------------------------------------------------------|---------------------------------------------------------------------|
+| `engine/include/`          | Public headers (`er_scene.h`, `native_renderer.h`)        | Stable                                                              |
+| `engine/core/`             | Backend glue, frame tick                                  | Working                                                             |
+| `engine/scene/`            | Node pool, tree, render pass, hit-testing                 | Partial (scene tree + render done; hit-testing stub)                |
+| `engine/layout/`           | Yoga 7-pass flexbox                                       | Working                                                             |
+| `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Partial (rrect done; shadows, transforms, image stubs)              |
+| `engine/text/`             | UTF-8 decode + glyph blit                                 | Working                                                             |
+| `engine/animation/`        | Animated.Value engine                                     | Stub                                                                |
+| `engine/resources/`        | Font registry, font blob loader, built-in font            | Working                                                             |
+| `engine/platform/`         | Engine-side platform abstractions (time source, etc.)     | Empty (no abstractions needed yet)                                  |
+| `engine/tests/`            | Host-side CTest suites (layout, text)                     | Green                                                               |
+| `backends/dma2d/`          | STM32 DMA2D hardware blitter                              | Stub                                                                |
 | `backends/sdl/`            | SDL2 desktop backend                                      | **Implemented** (`fill`, `copy`, `blend`; premultiplied blend mode) |
-| `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Stub                                                 |
-| `backends/software/`       | Pure CPU blit (RP2040, low-end MCUs)                      | Stub                                                 |
-| `backends/opengl/`         | OpenGL ES 2.0 (RPi, Android)                              | README only                                          |
-| `backends/framebuffer/`    | Linux `/dev/fb0`                                          | README only                                          |
-| `backends/web/`            | WebAssembly + Canvas/WebGL                                | README only                                          |
-| `bridges/quickjs/`         | React reconciler hosted on QuickJS                        | Stub (Flow A milestone)                              |
-| `examples/linux/`          | Desktop end-to-end demo                                   | Planned (Flow A first target)                        |
-| `examples/stm32h7/`        | First MCU bring-up                                        | Planned                                              |
-| `examples/esp32/`          | ESP32-S3 bring-up                                         | Planned                                              |
-| `examples/raspberry-pi/`   | RPi reference app                                         | Planned                                              |
-| `examples/dashboard-demo/` | Cross-platform UI showcase                                | Planned                                              |
-| `examples/marine-display/` | Real-world reference app                                  | Planned                                              |
-| `tools/font-converter/`    | TTF → C font data generator                               | Working                                              |
+| `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Stub                                                                |
+| `backends/software/`       | Pure CPU blit (RP2040, low-end MCUs)                      | Stub                                                                |
+| `backends/opengl/`         | OpenGL ES 2.0 (RPi, Android)                              | README only                                                         |
+| `backends/framebuffer/`    | Linux `/dev/fb0`                                          | README only                                                         |
+| `backends/web/`            | WebAssembly + Canvas/WebGL                                | README only                                                         |
+| `bridges/quickjs/`         | React reconciler hosted on QuickJS                        | Stub (Flow A milestone)                                             |
+| `examples/linux/`          | Desktop SDL demo                                          | Implemented as C-driver demo; Flow A JSX target planned             |
+| `examples/stm32h7/`        | First MCU bring-up                                        | Planned                                                             |
+| `examples/esp32/`          | ESP32-S3 bring-up                                         | Planned                                                             |
+| `examples/raspberry-pi/`   | RPi reference app                                         | Planned                                                             |
+| `examples/dashboard-demo/` | Cross-platform UI showcase                                | Planned                                                             |
+| `examples/marine-display/` | Real-world reference app                                  | Planned                                                             |
+| `tools/font-converter/`    | TTF → C font data generator                               | Working                                                             |
 
 ---
 
@@ -146,7 +146,8 @@ Under the hood:
   be exercised without flashing hardware), then `examples/stm32h7/` with
   `backends/dma2d/`.
 
-Flow A is not built yet. The runtime ABI it targets (`er_scene.h`) is.
+Flow A is not built yet. The runtime ABI it targets (`er_scene.h`) is, and
+`examples/linux/` currently validates that ABI through a pure-C SDL demo.
 
 ### Flow B — React as a compile target (future, design only)
 
@@ -394,9 +395,9 @@ void renderer_backend_init(void) {
 
 ### SDL2 (`backends/sdl/`)
 
-Same shape — the callbacks wrap `SDL_FillRect` / `SDL_BlitSurface`. Used to exercise
-Flow A end-to-end without flashing a board, and to run pixel-exact rendering regression
-tests in CI. First planned real backend implementation.
+Same shape — the callbacks wrap SDL renderer operations. Used to exercise the engine
+without flashing a board and intended to host the first Flow A desktop preview. This
+backend is implemented today with fill, copy, and premultiplied-alpha blend support.
 
 ### Software (`backends/software/`)
 
@@ -428,15 +429,17 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)
 - Backend interface — wired; `backends/sdl/` fully implemented
 - Host-side CTest (layout + text + rendering/rrect) — green
+- `examples/linux/` — pure-C SDL demo implemented; no React/QuickJS bridge yet
 
 **Next (Flow A)**
 
 - Finish engine: shadows, transforms, animation engine, hit-testing, image scaling
+- Thin `NativeUI` bridge surface around `er_scene.h`
 - Metro-compatible bundler
 - React reconciler hosted in QuickJS (`bridges/quickjs/`)
 - End-to-end: `examples/linux/` — JSX → SDL2 desktop preview
-- First MCU bring-up: `examples/stm32h7/` with `backends/dma2d/`
-- Second MCU: `examples/esp32/` with `backends/esp32-lcd/`
+- First MCU: `examples/esp32/` with `backends/esp32-lcd/`
+- Second MCU bring-up: `examples/stm32h7/` with `backends/dma2d/`
 
 **Later (Flow B)**
 

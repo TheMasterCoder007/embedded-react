@@ -41,4 +41,4 @@ ctest --test-dir build --output-on-failure
   Lua, JSON, visual editors, anything else) live in `bridges/`.
 - **No heap during rendering.** All scratch buffers are static, sized at compile time.
 - **Section banners + JSDoc-style function docs** per the rules in the repo root
-  `CLAUDE.md`.
+  `RULES.md`.

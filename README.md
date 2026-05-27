@@ -42,12 +42,12 @@ architecture: [`PLAN.md`](PLAN.md).
 
 This is an in-progress project. Here's what is and isn't real today:
 
-| Layer                                   | Status       | Notes                                                                                                                                                                                                        |
-|-----------------------------------------|--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C engine** (`engine/`)                | In progress  | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), and host-side CTest (layout, text, rendering/rrect) all work today. Shadows, transforms, animation engine, hit-testing — scaffolded, not yet implemented. |
-| **Backends** (`backends/`)              | In progress  | `backends/sdl/` fully implemented (fill, copy, blend with premultiplied blend mode). Other six backends remain stubs.                                                                                        |
-| **QuickJS bridge** (`bridges/quickjs/`) | Stub         | Metro-compatible bundler + React reconciler integration is the next major milestone.                                                                                                                         |
-| **Examples** (`examples/`)              | READMEs only | Each example pairs one backend + one bridge; lands as those are built.                                                                                                                                       |
+| Layer                                   | Status      | Notes                                                                                                                                                                                                                                                            |
+|-----------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **C engine** (`engine/`)                | In progress | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), and host-side CTest (layout, text, rendering/rrect) all work today. Shadows, transforms, animation engine, hit-testing — scaffolded, not yet implemented. |
+| **Backends** (`backends/`)              | In progress | `backends/sdl/` fully implemented (fill, copy, blend with premultiplied blend mode). Other six backends remain stubs.                                                                                                                                            |
+| **QuickJS bridge** (`bridges/quickjs/`) | Stub        | Metro-compatible bundler + React reconciler integration is the next major milestone.                                                                                                                                                                             |
+| **Examples** (`examples/`)              | Partial     | `examples/linux/` is implemented as a pure-C SDL demo that drives `er_scene.h` directly. Bridge-backed examples are not built yet; the remaining examples are READMEs only.                                                                                      |
 
 If you're looking for a finished embedded UI framework today, this isn't it yet. If you
 want to follow along — or contribute to the engine, the toolchain, or a backend — read
@@ -150,7 +150,7 @@ possibilities the layering enables, not roadmap items.
 
 **Flow A — React on QuickJS** (next)
 
-- `backends/sdl/` real implementation
+- Thin `NativeUI` bridge surface around `er_scene.h`
 - Metro-compatible bundler that emits a QuickJS bytecode payload + JS bundle
 - React reconciler hosted in QuickJS, calling `er_scene.h`
 - `examples/linux/` end-to-end — write JSX, run on desktop
@@ -191,9 +191,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The engine builds a single static library `embedded-react`. Backends, bridges, and
-examples are not built by the top-level CMakeLists yet — each will own its own
-CMakeLists once it has real code to compile.
+The engine builds a single static library `embedded-react`. Backends, bridges, and most
+examples are not built by the top-level CMakeLists yet. `examples/linux/` is a standalone
+CMake project that pulls in the engine and SDL backend directly.
 
 ---
 
@@ -203,6 +203,8 @@ The engine is intentionally small and self-contained — pure C99, no MCU SDK he
 platform `#ifdef`s. If you want to dig into the architecture (Yoga implementation,
 scratch buffer model, premultiplied ARGB pipeline, compile-time feature flags) read
 [`PLAN.md`](PLAN.md), especially its appendices.
+
+Code formatting and documentation rules live in [`RULES.md`](RULES.md).
 
 Contributions are welcome on any of the three layers: engine, backends, or bridges
 (including the React/QuickJS frontend).
