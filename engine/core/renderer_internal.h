@@ -61,6 +61,13 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
 void er_tick(uint32_t delta_ms);
 
 /**
+ * @brief Advances active native animations by delta_ms milliseconds.
+ *
+ * @param[in] delta_ms  Milliseconds elapsed since the last tick.
+ */
+void er_anim_tick(uint32_t delta_ms);
+
+/**
  * @brief Dispatches a touch event into the scene event subsystem.
  *
  * @param[in] finger_id  Finger index (0 for single-touch devices).

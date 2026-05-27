@@ -92,6 +92,7 @@ target_link_libraries(embedded-react PUBLIC m)
 # Tests (host-side, no MCU toolchain required)
 # ---------------------------------------------------------------------------
 if (BUILD_TESTING AND CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    add_subdirectory(tests/animation)
     add_subdirectory(tests/input)
     add_subdirectory(tests/layout)
     add_subdirectory(tests/rendering)

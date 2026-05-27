@@ -6,8 +6,8 @@ the scene is driven directly via `er_scene.h` to validate the full render stack
 
 **Status:** Implemented. C-driver path only (no React/QuickJS). Displays a dark-background
 window with a title and two rounded-corner cards at 480 × 320. The second card is
-clickable and toggles state through the engine hit-testing / press-event path. Press ESC
-to quit.
+clickable and toggles state through the engine hit-testing / press-event path, with its
+background color animated by the native timing animation engine. Press ESC to quit.
 
 ---
 
@@ -87,7 +87,7 @@ A 480 × 320 window titled **embedded-react** with:
 - White title text at the top
 - A dark blue rounded card labelled *Scene graph · Yoga flexbox · Rounded rects*
 - A red rounded card labelled *Click me: hit-testing + press events*
-- Clicking the red card toggles it to a green active state
+- Clicking the red card animates it to a green active state
 
 This is a pure C99 scene built with `er_scene.h`. React / QuickJS integration
 comes in the next milestone (Flow A).

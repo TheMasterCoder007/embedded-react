@@ -86,10 +86,10 @@ This separation pays for itself in three ways:
 | `engine/layout/`           | Yoga 7-pass flexbox                                       | Working                                                             |
 | `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Partial (rrect done; shadows, transforms, image stubs)              |
 | `engine/text/`             | UTF-8 decode + glyph blit                                 | Working                                                             |
-| `engine/animation/`        | Animated.Value engine                                     | Stub                                                                |
+| `engine/animation/`        | Animated.Value engine                                     | Partial (timing for existing color/opacity props)                   |
 | `engine/resources/`        | Font registry, font blob loader, built-in font            | Working                                                             |
 | `engine/platform/`         | Engine-side platform abstractions (time source, etc.)     | Empty (no abstractions needed yet)                                  |
-| `engine/tests/`            | Host-side CTest suites (layout, text)                     | Green                                                               |
+| `engine/tests/`            | Host-side CTest suites                                    | Green (animation, input, layout, text, rrect)                       |
 | `backends/dma2d/`          | STM32 DMA2D hardware blitter                              | Stub                                                                |
 | `backends/sdl/`            | SDL2 desktop backend                                      | **Implemented** (`fill`, `copy`, `blend`; premultiplied blend mode) |
 | `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Stub                                                                |
@@ -426,15 +426,16 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - Scene graph + Yoga flexbox layout — implemented
 - Text renderer (multi-byte UTF-8, run-length glyph blits) — implemented
 - Basic hit-testing + press/touch event dispatch — implemented
+- Timing animations for existing color/opacity props — implemented
 - Built-in Inter font at 10/12/16/20/24/32/48 px + symbol set — implemented
 - Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)
 - Backend interface — wired; `backends/sdl/` fully implemented
-- Host-side CTest (input + layout + text + rendering/rrect) — green
+- Host-side CTest (animation + input + layout + text + rendering/rrect) — green
 - `examples/linux/` — pure-C SDL demo implemented; no React/QuickJS bridge yet
 
 **Next (Flow A)**
 
-- Finish engine: shadows, transforms, animation engine, image scaling
+- Finish engine: shadows, transforms, full animation engine, image scaling
 - Thin `NativeUI` bridge surface around `er_scene.h`
 - Metro-compatible bundler
 - React reconciler hosted in QuickJS (`bridges/quickjs/`)

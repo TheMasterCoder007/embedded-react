@@ -57,6 +57,20 @@ static int event_px(int v)
 }
 
 /**
+ * @brief Packs an ARGB8888 color into a float for er_anim_start().
+ *
+ * @param[in] argb  ARGB8888 color.
+ *
+ * @return Float carrying the color bits.
+ */
+static float color_target(uint32_t argb)
+{
+    float value;
+    memcpy(&value, &argb, sizeof(value));
+    return value;
+}
+
+/**
  * @brief Returns an ERProps struct with all layout fields set to ER_LAYOUT_AUTO.
  *
  * All int16_t layout fields default to ER_LAYOUT_AUTO (not specified). Visual and
@@ -82,24 +96,11 @@ static ERProps props_default(void)
 }
 
 /**
- * @brief Applies the current interactive card state to the scene graph.
+ * @brief Applies the current interactive label state to the scene graph.
  */
-static void update_action_card(void)
+static void update_action_label(void)
 {
     ERProps p;
-
-    if (s_action_card)
-    {
-        p = props_default();
-        p.height = dp(90);
-        p.margin_top = dp(12);
-        p.background_color = s_action_enabled ? 0xFF2A9D8F : 0xFFE94560;
-        p.border_radius = dp(10);
-        p.padding = dp(14);
-        p.align_items = ER_ALIGN_STRETCH;
-        p.justify_content = ER_JUSTIFY_CENTER;
-        er_node_set_props(s_action_card, &p);
-    }
 
     if (s_action_label)
     {
@@ -107,9 +108,8 @@ static void update_action_card(void)
         p.color = 0xFFFFFFFF;
         p.font_size = (uint8_t)dp(16);
         strncpy(p.text,
-                s_action_enabled
-                    ? "Hit-testing active  --  click to toggle off"
-                    : "Click me: hit-testing + press events",
+                s_action_enabled ? "Hit-testing active  --  click to toggle off"
+                                 : "Click me: hit-testing + press events",
                 ER_TEXT_MAX);
         er_node_set_props(s_action_label, &p);
     }
@@ -128,7 +128,13 @@ static void on_action_press(ERNode* node, const EREventData* data, void* user_da
     (void)data;
     (void)user_data;
     s_action_enabled = !s_action_enabled;
-    update_action_card();
+    update_action_label();
+
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = 220U;
+    er_anim_start(s_action_card, ER_PROP_BACKGROUND_COLOR, color_target(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560),
+                  &cfg);
 }
 
 /**
