@@ -8,6 +8,8 @@
 #ifdef __cplusplus
 extern "C"
 {
+
+
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -54,16 +56,16 @@ typedef struct
  */
 typedef enum
 {
-    ER_NODE_VIEW               = 0, /**< Generic container (View). */
-    ER_NODE_TEXT,                   /**< Text label (Text). */
-    ER_NODE_IMAGE,                  /**< Bitmap image (Image). */
-    ER_NODE_SCROLL_VIEW,            /**< Scrollable container (ScrollView). */
-    ER_NODE_FLAT_LIST,              /**< Virtualised list (FlatList). */
-    ER_NODE_PRESSABLE,              /**< Touchable area (Pressable). */
-    ER_NODE_TEXT_INPUT,             /**< Single-line text input (TextInput). */
-    ER_NODE_ACTIVITY_INDICATOR,     /**< Spinning activity indicator. */
-    ER_NODE_SWITCH,                 /**< Boolean toggle switch. */
-    ER_NODE_MODAL,                  /**< Full-screen modal overlay. */
+    ER_NODE_VIEW = 0, /**< Generic container (View). */
+    ER_NODE_TEXT, /**< Text label (Text). */
+    ER_NODE_IMAGE, /**< Bitmap image (Image). */
+    ER_NODE_SCROLL_VIEW, /**< Scrollable container (ScrollView). */
+    ER_NODE_FLAT_LIST, /**< Virtualised list (FlatList). */
+    ER_NODE_PRESSABLE, /**< Touchable area (Pressable). */
+    ER_NODE_TEXT_INPUT, /**< Single-line text input (TextInput). */
+    ER_NODE_ACTIVITY_INDICATOR, /**< Spinning activity indicator. */
+    ER_NODE_SWITCH, /**< Boolean toggle switch. */
+    ER_NODE_MODAL, /**< Full-screen modal overlay. */
 } ERNodeType;
 
 /**
@@ -71,8 +73,8 @@ typedef enum
  */
 typedef enum
 {
-    ER_FLEX_COL         = 0, /**< Children stacked top-to-bottom (default). */
-    ER_FLEX_ROW         = 1, /**< Children laid out left-to-right. */
+    ER_FLEX_COL = 0, /**< Children stacked top-to-bottom (default). */
+    ER_FLEX_ROW = 1, /**< Children laid out left-to-right. */
     ER_FLEX_ROW_REVERSE = 2, /**< Children laid out right-to-left. */
     ER_FLEX_COL_REVERSE = 3, /**< Children stacked bottom-to-top. */
 } ERFlexDirection;
@@ -82,11 +84,11 @@ typedef enum
  */
 typedef enum
 {
-    ER_ALIGN_AUTO       = 0, /**< Inherit from parent's align_items (align_self default). */
-    ER_ALIGN_STRETCH    = 1, /**< Stretch to fill cross-axis (align_items default). */
+    ER_ALIGN_AUTO = 0, /**< Inherit from parent's align_items (align_self default). */
+    ER_ALIGN_STRETCH = 1, /**< Stretch to fill cross-axis (align_items default). */
     ER_ALIGN_FLEX_START = 2, /**< Align to the start of the cross-axis. */
-    ER_ALIGN_CENTER     = 3, /**< Center on the cross-axis. */
-    ER_ALIGN_FLEX_END   = 4, /**< Align to the end of the cross-axis. */
+    ER_ALIGN_CENTER = 3, /**< Center on the cross-axis. */
+    ER_ALIGN_FLEX_END = 4, /**< Align to the end of the cross-axis. */
 } ERFlexAlign;
 
 /**
@@ -94,12 +96,12 @@ typedef enum
  */
 typedef enum
 {
-    ER_JUSTIFY_FLEX_START    = 0, /**< Pack items toward the start (default). */
-    ER_JUSTIFY_CENTER        = 1, /**< Center items along the main axis. */
-    ER_JUSTIFY_FLEX_END      = 2, /**< Pack items toward the end. */
+    ER_JUSTIFY_FLEX_START = 0, /**< Pack items toward the start (default). */
+    ER_JUSTIFY_CENTER = 1, /**< Center items along the main axis. */
+    ER_JUSTIFY_FLEX_END = 2, /**< Pack items toward the end. */
     ER_JUSTIFY_SPACE_BETWEEN = 3, /**< Equal space between items; none at edges. */
-    ER_JUSTIFY_SPACE_AROUND  = 4, /**< Equal space around each item. */
-    ER_JUSTIFY_SPACE_EVENLY  = 5, /**< Equal space between items and at edges. */
+    ER_JUSTIFY_SPACE_AROUND = 4, /**< Equal space around each item. */
+    ER_JUSTIFY_SPACE_EVENLY = 5, /**< Equal space between items and at edges. */
 } ERFlexJustify;
 
 /**
@@ -107,8 +109,8 @@ typedef enum
  */
 typedef enum
 {
-    ER_WRAP_NOWRAP       = 0, /**< All items on one line; may overflow (default). */
-    ER_WRAP_WRAP         = 1, /**< Items wrap onto additional lines as needed. */
+    ER_WRAP_NOWRAP = 0, /**< All items on one line; may overflow (default). */
+    ER_WRAP_WRAP = 1, /**< Items wrap onto additional lines as needed. */
     ER_WRAP_WRAP_REVERSE = 2, /**< Items wrap onto additional lines in reverse. */
 } ERFlexWrap;
 
@@ -126,14 +128,14 @@ typedef enum
  */
 typedef enum
 {
-    ER_PROP_OPACITY          = 0, /**< Transparency (0.0–1.0). */
-    ER_PROP_TRANSLATE_X,          /**< Horizontal translation in pixels. */
-    ER_PROP_TRANSLATE_Y,          /**< Vertical translation in pixels. */
-    ER_PROP_SCALE_X,              /**< Horizontal scale factor. */
-    ER_PROP_SCALE_Y,              /**< Vertical scale factor. */
-    ER_PROP_ROTATE_Z,             /**< Rotation around the Z axis in degrees. */
-    ER_PROP_BACKGROUND_COLOR,     /**< Background ARGB8888 color packed as float bits. */
-    ER_PROP_COLOR,                /**< Foreground ARGB8888 color packed as float bits. */
+    ER_PROP_OPACITY = 0, /**< Transparency (0.0–1.0). */
+    ER_PROP_TRANSLATE_X, /**< Horizontal translation in pixels. */
+    ER_PROP_TRANSLATE_Y, /**< Vertical translation in pixels. */
+    ER_PROP_SCALE_X, /**< Horizontal scale factor. */
+    ER_PROP_SCALE_Y, /**< Vertical scale factor. */
+    ER_PROP_ROTATE_Z, /**< Rotation around the Z axis in degrees. */
+    ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
+    ER_PROP_COLOR, /**< Foreground ARGB8888 color packed as float bits. */
 } ERAnimProp;
 
 /**
@@ -143,7 +145,7 @@ typedef enum
 {
     ER_ANIM_TIMING = 0, /**< Time-based easing curve. */
     ER_ANIM_SPRING = 1, /**< Damped harmonic oscillator. */
-    ER_ANIM_DECAY  = 2, /**< Exponential friction decay. */
+    ER_ANIM_DECAY = 2, /**< Exponential friction decay. */
 } ERAnimType;
 
 /**
@@ -151,15 +153,16 @@ typedef enum
  */
 typedef enum
 {
-    ER_EVENT_PRESS       = 0, /**< Tap/click completed. */
-    ER_EVENT_LONG_PRESS,      /**< Press held beyond the long-press threshold. */
-    ER_EVENT_PRESS_IN,        /**< Finger/pointer entered the hit area. */
-    ER_EVENT_PRESS_OUT,       /**< Finger/pointer left the hit area. */
-    ER_EVENT_TOUCH_START,     /**< Raw touch-down on this node. */
-    ER_EVENT_TOUCH_MOVE,      /**< Raw touch-move on this node. */
-    ER_EVENT_TOUCH_END,       /**< Raw touch-up on this node. */
-    ER_EVENT_SCROLL,          /**< Scroll offset changed (ScrollView). */
-    ER_EVENT_LAYOUT,          /**< Computed layout rectangle changed. */
+    ER_EVENT_PRESS = 0, /**< Tap/click completed. */
+    ER_EVENT_LONG_PRESS, /**< Press held beyond the long-press threshold. */
+    ER_EVENT_PRESS_IN, /**< Finger/pointer entered the hit area. */
+    ER_EVENT_PRESS_OUT, /**< Finger/pointer left the hit area. */
+    ER_EVENT_TOUCH_START, /**< Raw touch-down on this node. */
+    ER_EVENT_TOUCH_MOVE, /**< Raw touch-move on this node. */
+    ER_EVENT_TOUCH_END, /**< Raw touch-up on this node. */
+    ER_EVENT_TOUCH_CANCEL, /**< Raw touch sequence canceled. */
+    ER_EVENT_SCROLL, /**< Scroll offset changed (ScrollView). */
+    ER_EVENT_LAYOUT, /**< Computed layout rectangle changed. */
 } EREventType;
 
 /**
@@ -174,52 +177,52 @@ typedef enum
 typedef struct ERProps
 {
     /* --- Layout (Yoga-compatible) --- */
-    int16_t left;         /**< Offset from flow position / absolute left anchor. */
-    int16_t top;          /**< Offset from flow position / absolute top anchor. */
-    int16_t right;        /**< Offset from flow position / absolute right anchor. */
-    int16_t bottom;       /**< Offset from flow position / absolute bottom anchor. */
-    int16_t width;        /**< Explicit width (ER_LAYOUT_AUTO = size from flex). */
-    int16_t height;       /**< Explicit height (ER_LAYOUT_AUTO = size from flex). */
-    int16_t min_width;    /**< Minimum width constraint. */
-    int16_t max_width;    /**< Maximum width constraint. */
-    int16_t min_height;   /**< Minimum height constraint. */
-    int16_t max_height;   /**< Maximum height constraint. */
-    int16_t padding;      /**< Uniform padding shorthand. */
+    int16_t left; /**< Offset from flow position / absolute left anchor. */
+    int16_t top; /**< Offset from flow position / absolute top anchor. */
+    int16_t right; /**< Offset from flow position / absolute right anchor. */
+    int16_t bottom; /**< Offset from flow position / absolute bottom anchor. */
+    int16_t width; /**< Explicit width (ER_LAYOUT_AUTO = size from flex). */
+    int16_t height; /**< Explicit height (ER_LAYOUT_AUTO = size from flex). */
+    int16_t min_width; /**< Minimum width constraint. */
+    int16_t max_width; /**< Maximum width constraint. */
+    int16_t min_height; /**< Minimum height constraint. */
+    int16_t max_height; /**< Maximum height constraint. */
+    int16_t padding; /**< Uniform padding shorthand. */
     int16_t padding_left;
     int16_t padding_top;
     int16_t padding_right;
     int16_t padding_bottom;
-    int16_t margin;       /**< Uniform margin shorthand. */
+    int16_t margin; /**< Uniform margin shorthand. */
     int16_t margin_left;
     int16_t margin_top;
     int16_t margin_right;
     int16_t margin_bottom;
-    int16_t gap;          /**< Gap between children (shorthand). */
-    int16_t row_gap;      /**< Gap between rows (overrides gap). */
-    int16_t column_gap;   /**< Gap between columns (overrides gap). */
-    int16_t flex_grow;    /**< How much to grow relative to siblings (0 = no grow). */
-    int16_t flex_shrink;  /**< How much to shrink relative to siblings (0 = no shrink). */
-    int16_t flex_basis;   /**< Base size before grow/shrink (ER_LAYOUT_AUTO = use width/height). */
-    uint8_t flex_direction;  /**< ERFlexDirection — default ER_FLEX_COL. */
-    uint8_t flex_wrap;       /**< ERFlexWrap     — default ER_WRAP_NOWRAP. */
-    uint8_t align_items;     /**< ERFlexAlign    — default ER_ALIGN_STRETCH. */
-    uint8_t align_self;      /**< ERFlexAlign    — default ER_ALIGN_AUTO. */
+    int16_t gap; /**< Gap between children (shorthand). */
+    int16_t row_gap; /**< Gap between rows (overrides gap). */
+    int16_t column_gap; /**< Gap between columns (overrides gap). */
+    int16_t flex_grow; /**< How much to grow relative to siblings (0 = no grow). */
+    int16_t flex_shrink; /**< How much to shrink relative to siblings (0 = no shrink). */
+    int16_t flex_basis; /**< Base size before grow/shrink (ER_LAYOUT_AUTO = use width/height). */
+    uint8_t flex_direction; /**< ERFlexDirection — default ER_FLEX_COL. */
+    uint8_t flex_wrap; /**< ERFlexWrap     — default ER_WRAP_NOWRAP. */
+    uint8_t align_items; /**< ERFlexAlign    — default ER_ALIGN_STRETCH. */
+    uint8_t align_self; /**< ERFlexAlign    — default ER_ALIGN_AUTO. */
     uint8_t justify_content; /**< ERFlexJustify  — default ER_JUSTIFY_FLEX_START. */
-    uint8_t position;        /**< ERPositionType — default ER_POS_RELATIVE. */
+    uint8_t position; /**< ERPositionType — default ER_POS_RELATIVE. */
 
     /* --- View visual --- */
     uint32_t background_color; /**< ARGB8888; 0x00000000 = transparent. */
-    uint32_t border_color;     /**< ARGB8888. */
-    int16_t  border_width;     /**< Border width in pixels. */
-    int16_t  border_radius;    /**< Corner radius in pixels. */
-    uint8_t  opacity;          /**< Node opacity 0–255 (255 = fully opaque). */
+    uint32_t border_color; /**< ARGB8888. */
+    int16_t border_width; /**< Border width in pixels. */
+    int16_t border_radius; /**< Corner radius in pixels. */
+    uint8_t opacity; /**< Node opacity 0–255 (255 = fully opaque). */
 
     /* --- Text --- */
-    char     text[ER_TEXT_MAX + 1];               /**< Null-terminated UTF-8 string. */
-    char     font_family[ER_FONT_FAMILY_MAX + 1]; /**< Font family name; "" = built-in Inter. */
-    uint32_t color;                               /**< Text ARGB8888; 0 defaults to white. */
-    uint8_t  font_size;                           /**< Font size in pixels. */
-    uint8_t  font_weight;                         /**< 0 = normal, 1 = bold. */
+    char text[ER_TEXT_MAX + 1]; /**< Null-terminated UTF-8 string. */
+    char font_family[ER_FONT_FAMILY_MAX + 1]; /**< Font family name; "" = built-in Inter. */
+    uint32_t color; /**< Text ARGB8888; 0 defaults to white. */
+    uint8_t font_size; /**< Font size in pixels. */
+    uint8_t font_weight; /**< 0 = normal, 1 = bold. */
 
     /* --- Image --- */
     char image_name[ER_IMAGE_NAME_MAX + 1]; /**< Asset name registered via er_image_load(). */
@@ -230,14 +233,14 @@ typedef struct ERProps
  */
 typedef struct ERAnimConfig
 {
-    ERAnimType type;        /**< Animation algorithm. */
-    uint32_t   duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. */
-    float      stiffness;   /**< Spring stiffness (ER_ANIM_SPRING). */
-    float      damping;     /**< Spring damping coefficient (ER_ANIM_SPRING). */
-    float      mass;        /**< Spring mass (ER_ANIM_SPRING). */
-    float      velocity;    /**< Initial velocity (ER_ANIM_DECAY). */
-    float      deceleration;/**< Friction coefficient (ER_ANIM_DECAY). */
-    bool       loop;        /**< Repeat the animation indefinitely. */
+    ERAnimType type; /**< Animation algorithm. */
+    uint32_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. */
+    float stiffness; /**< Spring stiffness (ER_ANIM_SPRING). */
+    float damping; /**< Spring damping coefficient (ER_ANIM_SPRING). */
+    float mass; /**< Spring mass (ER_ANIM_SPRING). */
+    float velocity; /**< Initial velocity (ER_ANIM_DECAY). */
+    float deceleration; /**< Friction coefficient (ER_ANIM_DECAY). */
+    bool loop; /**< Repeat the animation indefinitely. */
 } ERAnimConfig;
 
 /**
@@ -245,8 +248,8 @@ typedef struct ERAnimConfig
  */
 typedef struct EREventData
 {
-    int   x;        /**< Touch X coordinate in framebuffer pixels. */
-    int   y;        /**< Touch Y coordinate in framebuffer pixels. */
+    int x; /**< Touch X coordinate in framebuffer pixels. */
+    int y; /**< Touch Y coordinate in framebuffer pixels. */
     float scroll_x; /**< Scroll offset X (ER_EVENT_SCROLL). */
     float scroll_y; /**< Scroll offset Y (ER_EVENT_SCROLL). */
 } EREventData;

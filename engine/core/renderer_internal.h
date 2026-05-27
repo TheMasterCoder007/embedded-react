@@ -68,6 +68,18 @@ void er_tick(uint32_t delta_ms);
 void er_anim_tick(uint32_t delta_ms);
 
 /**
+ * @brief Clears input gesture state.
+ */
+void er_input_reset(void);
+
+/**
+ * @brief Advances input gesture timers by delta_ms milliseconds.
+ *
+ * @param[in] delta_ms  Milliseconds elapsed since the last tick.
+ */
+void er_input_tick(uint32_t delta_ms);
+
+/**
  * @brief Dispatches a touch event into the scene event subsystem.
  *
  * @param[in] finger_id  Finger index (0 for single-touch devices).

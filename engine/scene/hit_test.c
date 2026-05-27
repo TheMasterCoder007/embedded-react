@@ -1,12 +1,14 @@
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include <stdbool.h>
+#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_MAX_TOUCHES 5U
+#define ER_LONG_PRESS_MS 500U
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -19,6 +21,11 @@ typedef struct
 {
     bool active;
     bool inside;
+    bool long_press_fired;
+    bool long_press_cancelled;
+    uint32_t elapsed_ms;
+    int last_x;
+    int last_y;
     uint16_t press_target_tag;
     uint16_t touch_target_tag;
 } ERTouchState;
@@ -32,6 +39,18 @@ static ERTouchState s_touches[ER_MAX_TOUCHES];
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Resets a touch slot to its idle state.
+ *
+ * @param[in,out] touch  Touch state to reset.
+ */
+static void reset_touch(ERTouchState* touch)
+{
+    memset(touch, 0, sizeof(*touch));
+    touch->press_target_tag = ER_INVALID_TAG;
+    touch->touch_target_tag = ER_INVALID_TAG;
+}
 
 /**
  * @brief Returns whether a point lies inside a node's computed rectangle.
@@ -114,25 +133,6 @@ static bool has_handler(const ERNode* node, EREventType event)
 }
 
 /**
- * @brief Finds the nearest ancestor, including self, with a handler for an event.
- *
- * @param[in] node   Starting node.
- * @param[in] event  Event type.
- *
- * @return Matching node, or NULL if none was found before the root.
- */
-static ERNode* nearest_handler(ERNode* node, EREventType event)
-{
-    while (node)
-    {
-        if (has_handler(node, event))
-            return node;
-        node = er_get_node(node->parent_tag);
-    }
-    return NULL;
-}
-
-/**
  * @brief Finds the nearest ancestor with any press-related handler.
  *
  * @param[in] node  Starting node.
@@ -143,8 +143,8 @@ static ERNode* nearest_press_target(ERNode* node)
 {
     while (node)
     {
-        if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_PRESS_IN) ||
-            has_handler(node, ER_EVENT_PRESS_OUT))
+        if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS) ||
+            has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT))
             return node;
         node = er_get_node(node->parent_tag);
     }
@@ -170,6 +170,46 @@ static void dispatch_to_node(ERNode* node, EREventType event, int x, int y)
     node->events[event].fn(node, &data, node->events[event].user_data);
 }
 
+/**
+ * @brief Dispatches a raw touch event from target up through ancestors.
+ *
+ * @param[in] target  Original target node.
+ * @param[in] event   Raw touch event type.
+ * @param[in] x       Touch X coordinate.
+ * @param[in] y       Touch Y coordinate.
+ */
+static void dispatch_bubble(ERNode* target, EREventType event, int x, int y)
+{
+    ERNode* node = target;
+    while (node)
+    {
+        dispatch_to_node(node, event, x, y);
+        node = er_get_node(node->parent_tag);
+    }
+}
+
+/**
+ * @brief Cancels an active touch sequence.
+ *
+ * @param[in,out] touch  Touch state to cancel.
+ * @param[in] x          Touch X coordinate.
+ * @param[in] y          Touch Y coordinate.
+ */
+static void cancel_touch(ERTouchState* touch, int x, int y)
+{
+    if (!touch->active)
+        return;
+
+    ERNode* touch_target = er_get_node(touch->touch_target_tag);
+    ERNode* press_target = er_get_node(touch->press_target_tag);
+
+    dispatch_bubble(touch_target, ER_EVENT_TOUCH_CANCEL, x, y);
+    if (press_target && touch->inside)
+        dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
+
+    reset_touch(touch);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -183,27 +223,61 @@ void er_event_set(ERNode* node, EREventType event, EREventFn fn, void* user_data
     node->events[event].user_data = user_data;
 }
 
+void er_input_reset(void)
+{
+    for (int i = 0; i < ER_MAX_TOUCHES; i++)
+        reset_touch(&s_touches[i]);
+}
+
+void er_input_tick(uint32_t delta_ms)
+{
+    for (int i = 0; i < ER_MAX_TOUCHES; i++)
+    {
+        ERTouchState* touch = &s_touches[i];
+        if (!touch->active || touch->long_press_fired || touch->long_press_cancelled || !touch->inside)
+            continue;
+
+        if (UINT32_MAX - touch->elapsed_ms < delta_ms)
+            touch->elapsed_ms = UINT32_MAX;
+        else
+            touch->elapsed_ms += delta_ms;
+
+        if (touch->elapsed_ms >= ER_LONG_PRESS_MS)
+        {
+            ERNode* press_target = er_get_node(touch->press_target_tag);
+            dispatch_to_node(press_target, ER_EVENT_LONG_PRESS, touch->last_x, touch->last_y);
+            touch->long_press_fired = true;
+        }
+    }
+}
+
 void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 {
     if (finger_id >= ER_MAX_TOUCHES)
         return;
 
     ERTouchState* touch = &s_touches[finger_id];
-    ERNode* hit = hit_test(x, y);
 
     switch (phase)
     {
         case ER_TOUCH_DOWN:
         {
+            cancel_touch(touch, x, y);
+
+            ERNode* hit = hit_test(x, y);
             ERNode* press_target = nearest_press_target(hit);
-            ERNode* touch_target = nearest_handler(hit, ER_EVENT_TOUCH_START);
 
-            touch->active = true;
+            touch->active = hit != NULL;
             touch->inside = press_target ? point_inside_node(press_target, x, y) : false;
+            touch->long_press_fired = false;
+            touch->long_press_cancelled = false;
+            touch->elapsed_ms = 0U;
+            touch->last_x = x;
+            touch->last_y = y;
             touch->press_target_tag = press_target ? press_target->tag : ER_INVALID_TAG;
-            touch->touch_target_tag = touch_target ? touch_target->tag : ER_INVALID_TAG;
+            touch->touch_target_tag = hit ? hit->tag : ER_INVALID_TAG;
 
-            dispatch_to_node(touch_target, ER_EVENT_TOUCH_START, x, y);
+            dispatch_bubble(hit, ER_EVENT_TOUCH_START, x, y);
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
             break;
         }
@@ -214,11 +288,15 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             ERNode* touch_target = er_get_node(touch->touch_target_tag);
             ERNode* press_target = er_get_node(touch->press_target_tag);
-            dispatch_to_node(touch_target, ER_EVENT_TOUCH_MOVE, x, y);
+            touch->last_x = x;
+            touch->last_y = y;
+            dispatch_bubble(touch_target, ER_EVENT_TOUCH_MOVE, x, y);
 
             if (press_target)
             {
                 const bool inside = point_inside_node(press_target, x, y);
+                if (!inside)
+                    touch->long_press_cancelled = true;
                 if (inside != touch->inside)
                 {
                     dispatch_to_node(press_target, inside ? ER_EVENT_PRESS_IN : ER_EVENT_PRESS_OUT, x, y);
@@ -236,30 +314,21 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* press_target = er_get_node(touch->press_target_tag);
             const bool inside = press_target && point_inside_node(press_target, x, y);
 
-            dispatch_to_node(touch_target, ER_EVENT_TOUCH_END, x, y);
+            dispatch_bubble(touch_target, ER_EVENT_TOUCH_END, x, y);
             if (press_target)
             {
-                if (inside)
-                    dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
                 if (touch->inside)
                     dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
+                if (inside)
+                    dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
             }
 
-            touch->active = false;
-            touch->inside = false;
-            touch->press_target_tag = ER_INVALID_TAG;
-            touch->touch_target_tag = ER_INVALID_TAG;
+            reset_touch(touch);
             break;
         }
         case ER_TOUCH_CANCEL:
         {
-            if (touch->active && touch->inside)
-                dispatch_to_node(er_get_node(touch->press_target_tag), ER_EVENT_PRESS_OUT, x, y);
-
-            touch->active = false;
-            touch->inside = false;
-            touch->press_target_tag = ER_INVALID_TAG;
-            touch->touch_target_tag = ER_INVALID_TAG;
+            cancel_touch(touch, x, y);
             break;
         }
         default:

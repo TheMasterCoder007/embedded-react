@@ -7,6 +7,7 @@
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -24,6 +25,8 @@ static float s_dpi_scale = 1.0f;
 static ERNode* s_action_card = NULL;
 static ERNode* s_action_label = NULL;
 static bool s_action_enabled = false;
+static bool s_action_pressed = false;
+static int s_long_press_count = 0;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -101,18 +104,48 @@ static ERProps props_default(void)
 static void update_action_label(void)
 {
     ERProps p;
+    char text[ER_TEXT_MAX + 1];
 
     if (s_action_label)
     {
+        if (s_action_pressed)
+        {
+            strncpy(text, "Pressed: drag out/in, release, or hold", ER_TEXT_MAX);
+        }
+        else if (s_long_press_count > 0)
+        {
+            snprintf(text, sizeof(text), "Long press count: %d  --  click to toggle", s_long_press_count);
+        }
+        else
+        {
+            strncpy(text,
+                    s_action_enabled
+                        ? "Hit-testing active  --  click to toggle off"
+                        : "Click or long-press: interaction events",
+                    ER_TEXT_MAX);
+        }
+        text[ER_TEXT_MAX] = '\0';
+
         p = props_default();
         p.color = 0xFFFFFFFF;
         p.font_size = (uint8_t)dp(16);
-        strncpy(p.text,
-                s_action_enabled ? "Hit-testing active  --  click to toggle off"
-                                 : "Click me: hit-testing + press events",
-                ER_TEXT_MAX);
+        strncpy(p.text, text, ER_TEXT_MAX);
+        p.text[ER_TEXT_MAX] = '\0';
         er_node_set_props(s_action_label, &p);
     }
+}
+
+/**
+ * @brief Animates the interactive card to a target background color.
+ *
+ * @param[in] color  Target ARGB8888 color.
+ */
+static void animate_action_card(uint32_t color)
+{
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = 160U;
+    er_anim_start(s_action_card, ER_PROP_BACKGROUND_COLOR, color_target(color), &cfg);
 }
 
 /**
@@ -128,13 +161,77 @@ static void on_action_press(ERNode* node, const EREventData* data, void* user_da
     (void)data;
     (void)user_data;
     s_action_enabled = !s_action_enabled;
+    s_action_pressed = false;
     update_action_label();
+    animate_action_card(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560);
+}
 
-    ERAnimConfig cfg = {0};
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 220U;
-    er_anim_start(s_action_card, ER_PROP_BACKGROUND_COLOR, color_target(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560),
-                  &cfg);
+/**
+ * @brief Updates demo state when the interactive card is pressed.
+ *
+ * @param[in] node       Node that received the press-in event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Opaque callback context.
+ */
+static void on_action_press_in(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_action_pressed = true;
+    update_action_label();
+    animate_action_card(0xFF264653);
+}
+
+/**
+ * @brief Updates demo state when the interactive card press deactivates.
+ *
+ * @param[in] node       Node that received the press-out event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Opaque callback context.
+ */
+static void on_action_press_out(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_action_pressed = false;
+    update_action_label();
+    animate_action_card(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560);
+}
+
+/**
+ * @brief Updates demo state when the interactive card is long-pressed.
+ *
+ * @param[in] node       Node that received the long-press event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Opaque callback context.
+ */
+static void on_action_long_press(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_long_press_count++;
+    update_action_label();
+    animate_action_card(0xFFF4A261);
+}
+
+/**
+ * @brief Updates demo state when the interactive touch sequence is cancelled.
+ *
+ * @param[in] node       Node that received the cancel event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Opaque callback context.
+ */
+static void on_action_cancel(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_action_pressed = false;
+    update_action_label();
+    animate_action_card(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560);
 }
 
 /**
@@ -205,12 +302,16 @@ static void build_scene(int phys_w, int phys_h)
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(card2, &p);
     er_event_set(card2, ER_EVENT_PRESS, on_action_press, NULL);
+    er_event_set(card2, ER_EVENT_PRESS_IN, on_action_press_in, NULL);
+    er_event_set(card2, ER_EVENT_PRESS_OUT, on_action_press_out, NULL);
+    er_event_set(card2, ER_EVENT_LONG_PRESS, on_action_long_press, NULL);
+    er_event_set(card2, ER_EVENT_TOUCH_CANCEL, on_action_cancel, NULL);
 
     ERNode* card2_label = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFFFFFFF;
     p.font_size = (uint8_t)dp(16);
-    strncpy(p.text, "Click me: hit-testing + press events", ER_TEXT_MAX);
+    strncpy(p.text, "Click or long-press: interaction events", ER_TEXT_MAX);
     er_node_set_props(card2_label, &p);
     s_action_card = card2;
     s_action_label = card2_label;
@@ -301,6 +402,8 @@ int main(void)
                 embedded_renderer_touch(0, ER_TOUCH_UP, event_px(ev.button.x), event_px(ev.button.y));
             if (ev.type == SDL_MOUSEMOTION && (ev.motion.state & SDL_BUTTON_LMASK))
                 embedded_renderer_touch(0, ER_TOUCH_MOVE, event_px(ev.motion.x), event_px(ev.motion.y));
+            if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_LEAVE)
+                embedded_renderer_touch(0, ER_TOUCH_CANCEL, 0, 0);
         }
 
         er_commit();

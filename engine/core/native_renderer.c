@@ -45,11 +45,13 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
     g_backend = backend;
     font_registry_init();
     font_blob_init(0);
+    er_input_reset();
 }
 
 void embedded_renderer_tick(uint32_t delta_ms)
 {
     er_anim_tick(delta_ms);
+    er_input_tick(delta_ms);
     er_tick(delta_ms);
 }
 

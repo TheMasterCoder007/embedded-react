@@ -5,6 +5,12 @@
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#define EVENT_LOG_MAX 64
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -14,17 +20,37 @@
 typedef struct
 {
     int press_count;
+    int long_press_count;
     int press_in_count;
     int press_out_count;
     int touch_start_count;
+    int touch_move_count;
     int touch_end_count;
+    int touch_cancel_count;
     int last_x;
     int last_y;
+    char log[EVENT_LOG_MAX];
+    int log_len;
 } EventCounts;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Appends one event marker to a test event log.
+ *
+ * @param[in,out] counts  Counter state to update.
+ * @param[in] marker      Event marker byte.
+ */
+static void append_log(EventCounts* counts, char marker)
+{
+    if (counts->log_len < EVENT_LOG_MAX - 1)
+    {
+        counts->log[counts->log_len++] = marker;
+        counts->log[counts->log_len] = '\0';
+    }
+}
 
 /**
  * @brief Returns an ERProps struct with all layout fields set to ER_LAYOUT_AUTO.
@@ -61,6 +87,24 @@ static void on_press(ERNode* node, const EREventData* data, void* user_data)
     counts->press_count++;
     counts->last_x = data->x;
     counts->last_y = data->y;
+    append_log(counts, 'P');
+}
+
+/**
+ * @brief Records a long-press event.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to EventCounts.
+ */
+static void on_long_press(ERNode* node, const EREventData* data, void* user_data)
+{
+    EventCounts* counts = user_data;
+    (void)node;
+    counts->long_press_count++;
+    counts->last_x = data->x;
+    counts->last_y = data->y;
+    append_log(counts, 'L');
 }
 
 /**
@@ -76,6 +120,7 @@ static void on_press_in(ERNode* node, const EREventData* data, void* user_data)
     (void)node;
     (void)data;
     counts->press_in_count++;
+    append_log(counts, 'I');
 }
 
 /**
@@ -91,6 +136,7 @@ static void on_press_out(ERNode* node, const EREventData* data, void* user_data)
     (void)node;
     (void)data;
     counts->press_out_count++;
+    append_log(counts, 'O');
 }
 
 /**
@@ -106,6 +152,24 @@ static void on_touch_start(ERNode* node, const EREventData* data, void* user_dat
     (void)node;
     (void)data;
     counts->touch_start_count++;
+    append_log(counts, 'S');
+}
+
+/**
+ * @brief Records a touch-move event.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to EventCounts.
+ */
+static void on_touch_move(ERNode* node, const EREventData* data, void* user_data)
+{
+    EventCounts* counts = user_data;
+    (void)node;
+    counts->touch_move_count++;
+    counts->last_x = data->x;
+    counts->last_y = data->y;
+    append_log(counts, 'M');
 }
 
 /**
@@ -121,6 +185,23 @@ static void on_touch_end(ERNode* node, const EREventData* data, void* user_data)
     (void)node;
     (void)data;
     counts->touch_end_count++;
+    append_log(counts, 'E');
+}
+
+/**
+ * @brief Records a touch-cancel event.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to EventCounts.
+ */
+static void on_touch_cancel(ERNode* node, const EREventData* data, void* user_data)
+{
+    EventCounts* counts = user_data;
+    (void)node;
+    (void)data;
+    counts->touch_cancel_count++;
+    append_log(counts, 'C');
 }
 
 /**
@@ -153,36 +234,52 @@ static ERNode* create_root(void)
     return root;
 }
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Functions: Public
- ---------------------------------------------------------------------------------------------------------------------*/
+/**
+ * @brief Creates a pressable test node.
+ *
+ * @param[in] x       Absolute X coordinate.
+ * @param[in] y       Absolute Y coordinate.
+ * @param[in] w       Width in pixels.
+ * @param[in] h       Height in pixels.
+ * @param[in] counts  Event counter context.
+ *
+ * @return New pressable node.
+ */
+static ERNode* create_pressable(int16_t x, int16_t y, int16_t w, int16_t h, EventCounts* counts)
+{
+    ERNode* node = er_node_create(ER_NODE_PRESSABLE);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = x;
+    p.top = y;
+    p.width = w;
+    p.height = h;
+    p.background_color = 0xFF101010U;
+    er_node_set_props(node, &p);
+    er_event_set(node, ER_EVENT_PRESS, on_press, counts);
+    er_event_set(node, ER_EVENT_LONG_PRESS, on_long_press, counts);
+    er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, counts);
+    er_event_set(node, ER_EVENT_PRESS_OUT, on_press_out, counts);
+    er_event_set(node, ER_EVENT_TOUCH_START, on_touch_start, counts);
+    er_event_set(node, ER_EVENT_TOUCH_MOVE, on_touch_move, counts);
+    er_event_set(node, ER_EVENT_TOUCH_END, on_touch_end, counts);
+    er_event_set(node, ER_EVENT_TOUCH_CANCEL, on_touch_cancel, counts);
+    return node;
+}
 
 /**
- * @brief Test entry point for hit-testing and basic press dispatch.
+ * @brief Checks basic press ordering from touch down to touch up.
  *
- * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
  */
-int main(void)
+static int test_press_order(void)
 {
-    embedded_renderer_set_backend(NULL);
-
     ERNode* root = create_root();
-
-    EventCounts parent_counts = {0};
-    ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
-    ERProps p = props_default();
-    p.width = 120;
-    p.height = 80;
-    p.background_color = 0xFF101010U;
-    er_node_set_props(pressable, &p);
-    er_event_set(pressable, ER_EVENT_PRESS, on_press, &parent_counts);
-    er_event_set(pressable, ER_EVENT_PRESS_IN, on_press_in, &parent_counts);
-    er_event_set(pressable, ER_EVENT_PRESS_OUT, on_press_out, &parent_counts);
-    er_event_set(pressable, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
-    er_event_set(pressable, ER_EVENT_TOUCH_END, on_touch_end, &parent_counts);
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 120, 80, &counts);
 
     ERNode* label = er_node_create(ER_NODE_TEXT);
-    p = props_default();
+    ERProps p = props_default();
     p.height = 24;
     p.color = 0xFFFFFFFFU;
     p.font_size = 16;
@@ -196,38 +293,201 @@ int main(void)
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
     embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
 
-    if (parent_counts.press_count != 1)
+    if (counts.press_count != 1)
         return fail("press did not bubble from child text to parent pressable");
-    if (parent_counts.press_in_count != 1 || parent_counts.press_out_count != 1)
-        return fail("press in/out counts were wrong");
-    if (parent_counts.touch_start_count != 1 || parent_counts.touch_end_count != 1)
-        return fail("touch start/end counts were wrong");
-    if (parent_counts.last_x != 10 || parent_counts.last_y != 10)
+    if (strcmp(counts.log, "SIEOP") != 0)
+        return fail("basic press event order was wrong");
+    if (counts.last_x != 10 || counts.last_y != 10)
         return fail("event payload did not preserve touch coordinates");
 
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks move-out, move-back-in, and final press dispatch.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_out_and_back_in(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 140, 120);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 35, 35);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 35, 35);
+
+    if (counts.press_count != 1)
+        return fail("press did not fire after moving out and back in");
+    if (counts.press_in_count != 2 || counts.press_out_count != 2)
+        return fail("press in/out counts for move out/back in were wrong");
+    if (strcmp(counts.log, "SIMOMIEOP") != 0)
+        return fail("move out/back in event order was wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks cancellation dispatches touch cancel and press out without press.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_cancel(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(0, ER_TOUCH_CANCEL, 10, 10);
+
+    if (counts.touch_cancel_count != 1)
+        return fail("touch cancel did not fire");
+    if (counts.press_out_count != 1)
+        return fail("cancel did not emit press out");
+    if (counts.press_count != 0 || counts.touch_end_count != 0)
+        return fail("cancel emitted press or touch end");
+    if (strcmp(counts.log, "SICO") != 0)
+        return fail("cancel event order was wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks long-press timing and single-fire behaviour.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_long_press(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 12, 14);
+    embedded_renderer_tick(499U);
+    if (counts.long_press_count != 0)
+        return fail("long press fired before threshold");
+
+    embedded_renderer_tick(1U);
+    embedded_renderer_tick(1000U);
+    if (counts.long_press_count != 1)
+        return fail("long press did not fire exactly once");
+    if (counts.last_x != 12 || counts.last_y != 14)
+        return fail("long press did not preserve latest coordinates");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 12, 14);
+    if (counts.press_count != 1 || counts.press_out_count != 1)
+        return fail("long press sequence did not finish normally");
+    if (strcmp(counts.log, "SILEOP") != 0)
+        return fail("long press event order was wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks leaving the press target cancels long press even if the finger returns.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_long_press_cancelled_by_exit(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_tick(250U);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 100, 100);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 10, 10);
+    embedded_renderer_tick(500U);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+    if (counts.long_press_count != 0)
+        return fail("long press fired after leaving press target");
+    if (counts.press_count != 1)
+        return fail("press did not complete after returning inside");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks raw touch events bubble through ancestors.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_raw_touch_bubbling(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+
+    ERNode* parent = create_pressable(0, 0, 100, 80, &counts);
+    ERNode* child = create_pressable(10, 10, 40, 30, &counts);
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 15, 15);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 16, 16);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 16, 16);
+
+    if (counts.touch_start_count != 2 || counts.touch_move_count != 2 || counts.touch_end_count != 2)
+        return fail("raw touch events did not bubble through target ancestors");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks two active fingers can press separate targets independently.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_multi_touch(void)
+{
+    ERNode* root = create_root();
+    EventCounts left_counts = {0};
+    EventCounts right_counts = {0};
+    ERNode* left = create_pressable(0, 0, 80, 80, &left_counts);
+    ERNode* right = create_pressable(120, 0, 80, 80, &right_counts);
+    er_tree_append_child(root, left);
+    er_tree_append_child(root, right);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(1, ER_TOUCH_DOWN, 130, 10);
+    embedded_renderer_touch(1, ER_TOUCH_UP, 130, 10);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+    if (left_counts.press_count != 1 || right_counts.press_count != 1)
+        return fail("multi-touch presses did not complete independently");
+    if (left_counts.press_in_count != 1 || right_counts.press_in_count != 1)
+        return fail("multi-touch press-in counts were wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks later overlapping siblings win hit-testing.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_overlapping_siblings(void)
+{
+    ERNode* root = create_root();
     EventCounts bottom_counts = {0};
     EventCounts top_counts = {0};
-    ERNode* bottom = er_node_create(ER_NODE_PRESSABLE);
-    p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 20;
-    p.width = 80;
-    p.height = 80;
-    p.background_color = 0xFF202020U;
-    er_node_set_props(bottom, &p);
-    er_event_set(bottom, ER_EVENT_PRESS, on_press, &bottom_counts);
-
-    ERNode* top = er_node_create(ER_NODE_PRESSABLE);
-    p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 30;
-    p.top = 30;
-    p.width = 80;
-    p.height = 80;
-    p.background_color = 0xFF303030U;
-    er_node_set_props(top, &p);
-    er_event_set(top, ER_EVENT_PRESS, on_press, &top_counts);
+    ERNode* bottom = create_pressable(20, 20, 80, 80, &bottom_counts);
+    ERNode* top = create_pressable(30, 30, 80, 80, &top_counts);
 
     er_tree_append_child(root, bottom);
     er_tree_append_child(root, top);
@@ -240,6 +500,39 @@ int main(void)
         return fail("bottom overlapping sibling received press");
     if (top_counts.press_count != 1)
         return fail("top overlapping sibling did not receive press");
+
+    return EXIT_SUCCESS;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Test entry point for hit-testing and press dispatch.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
+ */
+int main(void)
+{
+    embedded_renderer_set_backend(NULL);
+
+    if (test_press_order() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_out_and_back_in() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_cancel() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_long_press() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_long_press_cancelled_by_exit() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_raw_touch_bubbling() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_multi_touch() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_overlapping_siblings() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
 
     return EXIT_SUCCESS;
 }

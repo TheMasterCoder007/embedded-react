@@ -12,8 +12,36 @@ project(embedded-react C)
 # FetchContent) opt into only the pieces they want.
 # ---------------------------------------------------------------------------
 
-if(BUILD_TESTING AND CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+if (BUILD_TESTING AND CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     enable_testing()
-endif()
+endif ()
 
 add_subdirectory(engine)
+
+find_program(CLANG_FORMAT_EXE clang-format)
+
+if (CLANG_FORMAT_EXE)
+    file(GLOB_RECURSE FORMAT_SOURCES
+            CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/engine/*.c"
+            "${CMAKE_SOURCE_DIR}/engine/*.h"
+            "${CMAKE_SOURCE_DIR}/backends/*.c"
+            "${CMAKE_SOURCE_DIR}/backends/*.h"
+            "${CMAKE_SOURCE_DIR}/examples/*.c"
+            "${CMAKE_SOURCE_DIR}/examples/*.h"
+            "${CMAKE_SOURCE_DIR}/bridges/*.c"
+            "${CMAKE_SOURCE_DIR}/bridges/*.h"
+    )
+
+    add_custom_target(format
+            COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Running clang-format"
+    )
+
+    add_custom_target(format-check
+            COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror ${FORMAT_SOURCES}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Checking clang-format"
+    )
+endif ()
