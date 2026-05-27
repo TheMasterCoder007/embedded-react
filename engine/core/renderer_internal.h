@@ -60,4 +60,14 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
  */
 void er_tick(uint32_t delta_ms);
 
+/**
+ * @brief Dispatches a touch event into the scene event subsystem.
+ *
+ * @param[in] finger_id  Finger index (0 for single-touch devices).
+ * @param[in] phase      Phase of the touch event.
+ * @param[in] x          X coordinate of the touch point in framebuffer pixels.
+ * @param[in] y          Y coordinate of the touch point in framebuffer pixels.
+ */
+void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
+
 #endif

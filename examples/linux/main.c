@@ -21,6 +21,9 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static float s_dpi_scale = 1.0f;
+static ERNode* s_action_card = NULL;
+static ERNode* s_action_label = NULL;
+static bool s_action_enabled = false;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -36,8 +39,21 @@ static float s_dpi_scale = 1.0f;
  *
  * @return Equivalent value in physical pixels.
  */
-static int16_t dp(int v) {
+static int16_t dp(int v)
+{
     return (int16_t)(v * s_dpi_scale + 0.5f);
+}
+
+/**
+ * @brief Converts an SDL window coordinate to physical framebuffer pixels.
+ *
+ * @param[in] v Window coordinate in SDL logical pixels.
+ *
+ * @return Equivalent framebuffer coordinate.
+ */
+static int event_px(int v)
+{
+    return (int)(v * s_dpi_scale + 0.5f);
 }
 
 /**
@@ -49,7 +65,8 @@ static int16_t dp(int v) {
  *
  * @return ERProps with all layout fields initialized to ER_LAYOUT_AUTO.
  */
-static ERProps props_default(void) {
+static ERProps props_default(void)
+{
     ERProps p = {0};
     p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
     p.width = p.height = ER_LAYOUT_AUTO;
@@ -65,6 +82,56 @@ static ERProps props_default(void) {
 }
 
 /**
+ * @brief Applies the current interactive card state to the scene graph.
+ */
+static void update_action_card(void)
+{
+    ERProps p;
+
+    if (s_action_card)
+    {
+        p = props_default();
+        p.height = dp(90);
+        p.margin_top = dp(12);
+        p.background_color = s_action_enabled ? 0xFF2A9D8F : 0xFFE94560;
+        p.border_radius = dp(10);
+        p.padding = dp(14);
+        p.align_items = ER_ALIGN_STRETCH;
+        p.justify_content = ER_JUSTIFY_CENTER;
+        er_node_set_props(s_action_card, &p);
+    }
+
+    if (s_action_label)
+    {
+        p = props_default();
+        p.color = 0xFFFFFFFF;
+        p.font_size = (uint8_t)dp(16);
+        strncpy(p.text,
+                s_action_enabled
+                    ? "Hit-testing active  --  click to toggle off"
+                    : "Click me: hit-testing + press events",
+                ER_TEXT_MAX);
+        er_node_set_props(s_action_label, &p);
+    }
+}
+
+/**
+ * @brief Toggles the SDL demo action card when it receives a press event.
+ *
+ * @param[in] node       Node that received the press.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Opaque callback context.
+ */
+static void on_action_press(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_action_enabled = !s_action_enabled;
+    update_action_card();
+}
+
+/**
  * @brief Builds the demo scene graph and sets it as the render root.
  *
  * Creates a simple UI demonstrating flexbox layout, rounded rectangles, and text
@@ -77,11 +144,12 @@ static ERProps props_default(void) {
  * @param[in] phys_w Physical framebuffer width in pixels.
  * @param[in] phys_h Physical framebuffer height in pixels.
  */
-static void build_scene(int phys_w, int phys_h) {
+static void build_scene(int phys_w, int phys_h)
+{
     ERProps p;
 
     /* Root: full-screen dark background, flex column, 20 dp padding. */
-    ERNode *root = er_node_create(ER_NODE_VIEW);
+    ERNode* root = er_node_create(ER_NODE_VIEW);
     p = props_default();
     p.width = (int16_t)phys_w;
     p.height = (int16_t)phys_h;
@@ -92,7 +160,7 @@ static void build_scene(int phys_w, int phys_h) {
     er_node_set_props(root, &p);
 
     /* Title text. */
-    ERNode *title = er_node_create(ER_NODE_TEXT);
+    ERNode* title = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.height = dp(36);
     p.color = 0xFFFFFFFF;
@@ -101,7 +169,7 @@ static void build_scene(int phys_w, int phys_h) {
     er_node_set_props(title, &p);
 
     /* Card 1: dark blue, rounded, holds a descriptive label. */
-    ERNode *card1 = er_node_create(ER_NODE_VIEW);
+    ERNode* card1 = er_node_create(ER_NODE_VIEW);
     p = props_default();
     p.height = dp(90);
     p.margin_top = dp(16);
@@ -112,15 +180,15 @@ static void build_scene(int phys_w, int phys_h) {
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(card1, &p);
 
-    ERNode *card1_label = er_node_create(ER_NODE_TEXT);
+    ERNode* card1_label = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFFFFFFF;
     p.font_size = (uint8_t)dp(16);
     strncpy(p.text, "Scene graph  *  Yoga flexbox  *  Rounded rects", ER_TEXT_MAX);
     er_node_set_props(card1_label, &p);
 
-    /* Card 2: red accent, rounded, holds the quit hint. */
-    ERNode *card2 = er_node_create(ER_NODE_VIEW);
+    /* Card 2: interactive pressable demonstrating hit-testing and event dispatch. */
+    ERNode* card2 = er_node_create(ER_NODE_PRESSABLE);
     p = props_default();
     p.height = dp(90);
     p.margin_top = dp(12);
@@ -130,13 +198,16 @@ static void build_scene(int phys_w, int phys_h) {
     p.align_items = ER_ALIGN_STRETCH;
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(card2, &p);
+    er_event_set(card2, ER_EVENT_PRESS, on_action_press, NULL);
 
-    ERNode *card2_label = er_node_create(ER_NODE_TEXT);
+    ERNode* card2_label = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFFFFFFF;
     p.font_size = (uint8_t)dp(16);
-    strncpy(p.text, "SDL2 backend active  --  press ESC to quit", ER_TEXT_MAX);
+    strncpy(p.text, "Click me: hit-testing + press events", ER_TEXT_MAX);
     er_node_set_props(card2_label, &p);
+    s_action_card = card2;
+    s_action_label = card2_label;
 
     /* Assemble the tree. */
     er_tree_append_child(card1, card1_label);
@@ -160,28 +231,31 @@ static void build_scene(int phys_w, int phys_h) {
  *
  * @return 0 on clean exit, 1 if SDL or backend initialization fails.
  */
-int main(void) {
+int main(void)
+{
     SDL_SetMainReady();
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0)
+    {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
 
-    SDL_Window *window = SDL_CreateWindow(
-        "embedded-react",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        SCREEN_W, SCREEN_H,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
-    if (!window) {
+    SDL_Window* window = SDL_CreateWindow("embedded-react",
+                                          SDL_WINDOWPOS_CENTERED,
+                                          SDL_WINDOWPOS_CENTERED,
+                                          SCREEN_W,
+                                          SCREEN_H,
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+    if (!window)
+    {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         SDL_Quit();
         return 1;
     }
 
-    SDL_Renderer *renderer = SDL_CreateRenderer(
-        window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer)
+    {
         SDL_Log("SDL_CreateRenderer failed: %s", SDL_GetError());
         SDL_DestroyWindow(window);
         SDL_Quit();
@@ -192,7 +266,8 @@ int main(void) {
     SDL_GetRendererOutputSize(renderer, &phys_w, &phys_h);
     s_dpi_scale = (float)phys_w / (float)SCREEN_W;
 
-    if (!er_sdl_backend_init(renderer, phys_w, phys_h)) {
+    if (!er_sdl_backend_init(renderer, phys_w, phys_h))
+    {
         SDL_Log("er_sdl_backend_init failed");
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -205,13 +280,21 @@ int main(void) {
     bool running = true;
     uint32_t prev = SDL_GetTicks();
 
-    while (running) {
+    while (running)
+    {
         SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
+        while (SDL_PollEvent(&ev))
+        {
             if (ev.type == SDL_QUIT)
                 running = false;
             if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)
                 running = false;
+            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
+                embedded_renderer_touch(0, ER_TOUCH_DOWN, event_px(ev.button.x), event_px(ev.button.y));
+            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+                embedded_renderer_touch(0, ER_TOUCH_UP, event_px(ev.button.x), event_px(ev.button.y));
+            if (ev.type == SDL_MOUSEMOTION && (ev.motion.state & SDL_BUTTON_LMASK))
+                embedded_renderer_touch(0, ER_TOUCH_MOVE, event_px(ev.motion.x), event_px(ev.motion.y));
         }
 
         er_commit();

@@ -12,7 +12,6 @@ BreakBeforeBraces: Allman
 # Indent within namespaces
 NamespaceIndentation: All
 # Indent 'public:', 'protected:', etc.
-IndentAccessModifiers: true
 AccessModifierOffset: 0
 # Indent 'case' within 'switch'
 IndentCaseLabels: true

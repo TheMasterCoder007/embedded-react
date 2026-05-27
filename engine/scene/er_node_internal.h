@@ -57,9 +57,9 @@ typedef struct
 {
     uint32_t background_color; /**< ARGB8888; 0x00000000 = transparent. */
     uint32_t border_color;     /**< ARGB8888. */
-    int16_t  border_width;
-    int16_t  border_radius;
-    uint8_t  opacity;          /**< 0–255. */
+    int16_t border_width;
+    int16_t border_radius;
+    uint8_t opacity; /**< 0–255. */
 } ERViewProps;
 
 /**
@@ -67,11 +67,11 @@ typedef struct
  */
 typedef struct
 {
-    char     text[ER_TEXT_MAX + 1];
-    char     font_family[ER_FONT_FAMILY_MAX + 1];
-    uint32_t color;       /**< ARGB8888. */
-    uint8_t  font_size;
-    uint8_t  font_weight; /**< 0 = normal, 1 = bold. */
+    char text[ER_TEXT_MAX + 1];
+    char font_family[ER_FONT_FAMILY_MAX + 1];
+    uint32_t color; /**< ARGB8888. */
+    uint8_t font_size;
+    uint8_t font_weight; /**< 0 = normal, 1 = bold. */
 } ERTextProps;
 
 /**
@@ -83,6 +83,15 @@ typedef struct
 } ERImageProps;
 
 /**
+ * @brief Registered event handler and caller-owned context pointer.
+ */
+typedef struct
+{
+    EREventFn fn;
+    void* user_data;
+} EREventHandler;
+
+/**
  * @brief Full internal scene graph node.
  *
  * ERNode* in the public API points to one of these slots in the static pool.
@@ -90,19 +99,20 @@ typedef struct
  */
 struct ERNode
 {
-    uint16_t     tag;
-    uint16_t     parent_tag;
-    uint16_t     first_child_tag;
-    uint16_t     next_sibling_tag;
-    ERNodeType   type;
-    bool         in_use;
-    bool         dirty;
+    uint16_t tag;
+    uint16_t parent_tag;
+    uint16_t first_child_tag;
+    uint16_t next_sibling_tag;
+    ERNodeType type;
+    bool in_use;
+    bool dirty;
     ERLayoutSpec layout;
     ERLayoutRect computed;
+    EREventHandler events[ER_EVENT_LAYOUT + 1U];
     union
     {
-        ERViewProps  view;
-        ERTextProps  text;
+        ERViewProps view;
+        ERTextProps text;
         ERImageProps image;
     } props;
 };
@@ -119,5 +129,12 @@ struct ERNode
  * @return Pointer to the node if the tag is valid and the node is in use, otherwise NULL.
  */
 ERNode* er_get_node(uint16_t tag);
+
+/**
+ * @brief Returns the current scene root node.
+ *
+ * @return Root node, or NULL if no root is set.
+ */
+ERNode* er_get_root_node(void);
 
 #endif

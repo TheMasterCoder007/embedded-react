@@ -44,7 +44,7 @@ This is an in-progress project. Here's what is and isn't real today:
 
 | Layer                                   | Status      | Notes                                                                                                                                                                                                                                                            |
 |-----------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C engine** (`engine/`)                | In progress | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), and host-side CTest (layout, text, rendering/rrect) all work today. Shadows, transforms, animation engine, hit-testing — scaffolded, not yet implemented. |
+| **C engine** (`engine/`)                | In progress | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), basic hit-testing / press events, and host-side CTest (input, layout, text, rendering/rrect) work today. Shadows, transforms, animation engine, and image scaling remain scaffolded or incomplete. |
 | **Backends** (`backends/`)              | In progress | `backends/sdl/` fully implemented (fill, copy, blend with premultiplied blend mode). Other six backends remain stubs.                                                                                                                                            |
 | **QuickJS bridge** (`bridges/quickjs/`) | Stub        | Metro-compatible bundler + React reconciler integration is the next major milestone.                                                                                                                                                                             |
 | **Examples** (`examples/`)              | Partial     | `examples/linux/` is implemented as a pure-C SDL demo that drives `er_scene.h` directly. Bridge-backed examples are not built yet; the remaining examples are READMEs only.                                                                                      |
@@ -145,8 +145,7 @@ possibilities the layering enables, not roadmap items.
 
 **Engine (in progress)**
 
-- ~~Rounded rectangle rasterizer (anti-aliased, bordered)~~ — done
-- Finish runtime: shadows, transforms, animation engine, hit-testing, image scaling
+- Finish runtime: shadows, transforms, animation engine, image scaling
 
 **Flow A — React on QuickJS** (next)
 

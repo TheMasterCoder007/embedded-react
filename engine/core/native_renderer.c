@@ -1,6 +1,6 @@
+#include "native_renderer.h"
 #include "font_blob.h"
 #include "font_registry.h"
-#include "native_renderer.h"
 #include "renderer_internal.h"
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -54,8 +54,5 @@ void embedded_renderer_tick(uint32_t delta_ms)
 
 void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 {
-    (void)finger_id;
-    (void)phase;
-    (void)x;
-    (void)y;
+    er_dispatch_touch(finger_id, phase, x, y);
 }

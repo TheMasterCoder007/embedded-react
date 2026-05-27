@@ -5,7 +5,9 @@ the scene is driven directly via `er_scene.h` to validate the full render stack
 (Yoga layout → rrect rasterizer → SDL2 blit) on a real display without flashing hardware.
 
 **Status:** Implemented. C-driver path only (no React/QuickJS). Displays a dark-background
-window with a title and two rounded-corner cards at 480 × 320. Press ESC to quit.
+window with a title and two rounded-corner cards at 480 × 320. The second card is
+clickable and toggles state through the engine hit-testing / press-event path. Press ESC
+to quit.
 
 ---
 
@@ -84,7 +86,8 @@ A 480 × 320 window titled **embedded-react** with:
 - Dark navy background (`#1A1A2E`)
 - White title text at the top
 - A dark blue rounded card labelled *Scene graph · Yoga flexbox · Rounded rects*
-- A red rounded card labelled *SDL2 backend active -- press ESC to quit*
+- A red rounded card labelled *Click me: hit-testing + press events*
+- Clicking the red card toggles it to a green active state
 
 This is a pure C99 scene built with `er_scene.h`. React / QuickJS integration
 comes in the next milestone (Flow A).
