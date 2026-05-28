@@ -153,6 +153,24 @@ extern "C"
     } ERPointerEvents;
 
     /**
+     * @brief Gesture responder query types used with er_responder_query_set().
+     *
+     * Capture queries (root→leaf) are evaluated before bubble queries (leaf→root).
+     * The first node whose callback returns true claims the gesture responder.
+     */
+    typedef enum
+    {
+        ER_QUERY_START_SHOULD_SET = 0,         /**< Bubble: claim on touch-down. */
+        ER_QUERY_START_SHOULD_SET_CAPTURE = 1, /**< Capture: claim on touch-down (wins over bubble). */
+        ER_QUERY_MOVE_SHOULD_SET = 2,          /**< Bubble: claim on touch-move. */
+        ER_QUERY_MOVE_SHOULD_SET_CAPTURE = 3,  /**< Capture: claim on touch-move (wins over bubble). */
+        ER_QUERY_TERMINATION_REQUEST = 4,      /**< Can the current responder be taken? Return true to yield. */
+    } ERResponderQuery;
+
+    /** @brief Number of ERResponderQuery values; used to size the per-node query handler array. */
+#define ER_RESPONDER_QUERY_COUNT 5U
+
+    /**
      * @brief Animatable node properties.
      */
     typedef enum
@@ -182,16 +200,21 @@ extern "C"
      */
     typedef enum
     {
-        ER_EVENT_PRESS = 0,    /**< Tap/click completed. */
-        ER_EVENT_LONG_PRESS,   /**< Press held beyond the long-press threshold. */
-        ER_EVENT_PRESS_IN,     /**< Finger/pointer entered the hit area. */
-        ER_EVENT_PRESS_OUT,    /**< Finger/pointer left the hit area. */
-        ER_EVENT_TOUCH_START,  /**< Raw touch-down on this node. */
-        ER_EVENT_TOUCH_MOVE,   /**< Raw touch-move on this node. */
-        ER_EVENT_TOUCH_END,    /**< Raw touch-up on this node. */
-        ER_EVENT_TOUCH_CANCEL, /**< Raw touch sequence canceled. */
-        ER_EVENT_SCROLL,       /**< Scroll offset changed (ScrollView). */
-        ER_EVENT_LAYOUT,       /**< Computed layout rectangle changed. */
+        ER_EVENT_PRESS = 0,           /**< Tap/click completed. */
+        ER_EVENT_LONG_PRESS,          /**< Press held beyond the long-press threshold. */
+        ER_EVENT_PRESS_IN,            /**< Finger/pointer entered the hit area. */
+        ER_EVENT_PRESS_OUT,           /**< Finger/pointer left the hit area. */
+        ER_EVENT_TOUCH_START,         /**< Raw touch-down on this node. */
+        ER_EVENT_TOUCH_MOVE,          /**< Raw touch-move on this node. */
+        ER_EVENT_TOUCH_END,           /**< Raw touch-up on this node. */
+        ER_EVENT_TOUCH_CANCEL,        /**< Raw touch sequence canceled. */
+        ER_EVENT_SCROLL,              /**< Scroll offset changed (ScrollView). */
+        ER_EVENT_RESPONDER_GRANT,     /**< Node was granted the gesture responder. */
+        ER_EVENT_RESPONDER_REJECT,    /**< Node's responder request was denied by the current responder. */
+        ER_EVENT_RESPONDER_MOVE,      /**< Gesture moved while this node is the active responder. */
+        ER_EVENT_RESPONDER_RELEASE,   /**< Touch ended while this node is the active responder. */
+        ER_EVENT_RESPONDER_TERMINATE, /**< Responder was taken by another node or cancelled. */
+        ER_EVENT_LAYOUT,              /**< Computed layout rectangle changed. */
     } EREventType;
 
     /**
@@ -289,6 +312,8 @@ extern "C"
     {
         int x;              /**< Touch X coordinate in framebuffer pixels. */
         int y;              /**< Touch Y coordinate in framebuffer pixels. */
+        int dx;             /**< X displacement from touch-down origin (responder events). */
+        int dy;             /**< Y displacement from touch-down origin (responder events). */
         float scroll_x;     /**< Scroll offset X (ER_EVENT_SCROLL). */
         float scroll_y;     /**< Scroll offset Y (ER_EVENT_SCROLL). */
         ERRect layout_rect; /**< New computed rectangle (ER_EVENT_LAYOUT). */
@@ -302,6 +327,19 @@ extern "C"
      * @param[in] user_data  Opaque pointer supplied when the handler was registered.
      */
     typedef void (*EREventFn)(ERNode* node, const EREventData* data, void* user_data);
+
+    /**
+     * @brief Callback signature for gesture responder negotiation queries.
+     *
+     * Returns true when the node wishes to become (or remain) the active gesture responder.
+     *
+     * @param[in] node       The node being queried.
+     * @param[in] data       Current touch event payload (x, y, dx, dy populated).
+     * @param[in] user_data  Opaque pointer supplied at registration.
+     *
+     * @return true to claim or retain the responder; false to pass.
+     */
+    typedef bool (*ERResponderQueryFn)(ERNode* node, const EREventData* data, void* user_data);
 
     /*----------------------------------------------------------------------------------------------------------------------
      - Functions: Public
@@ -422,6 +460,20 @@ extern "C"
      * @param[in] user_data  Opaque pointer forwarded to the callback.
      */
     void er_event_set(ERNode* node, EREventType event, EREventFn fn, void* user_data);
+
+    /**
+     * @brief Registers a gesture responder query callback on a node.
+     *
+     * Query callbacks return a bool and participate in the capture/bubble negotiation
+     * protocol that decides which node owns the active gesture. Replaces any previously
+     * registered callback for the same query type.
+     *
+     * @param[in] node       Target node.
+     * @param[in] query      Query type (see ERResponderQuery).
+     * @param[in] fn         Callback to invoke during negotiation, or NULL to remove.
+     * @param[in] user_data  Opaque pointer forwarded to the callback.
+     */
+    void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data);
 
 #ifdef __cplusplus
 }

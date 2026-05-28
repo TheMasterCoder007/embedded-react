@@ -43,6 +43,24 @@ typedef struct
 } LayoutRecord;
 
 /**
+ * @brief Tracks gesture responder events and controls query responses for a node.
+ */
+typedef struct
+{
+    bool should_claim;         /**< Value returned by the query callbacks. */
+    int min_abs_dx;            /**< Minimum |dx| required before claiming (0 = always). */
+    bool yield_on_termination; /**< Value returned by ER_QUERY_TERMINATION_REQUEST. */
+    int grant_count;
+    int reject_count;
+    int move_count;
+    int release_count;
+    int terminate_count;
+    int termination_request_count;
+    int last_dx;
+    int last_dy;
+} ResponderRecord;
+
+/**
  * @brief Records the last color drawn by a test backend.
  */
 typedef struct
@@ -301,6 +319,119 @@ static void on_layout(ERNode* node, const EREventData* data, void* user_data)
     (void)node;
     rec->count++;
     rec->rect = data->layout_rect;
+}
+
+/**
+ * @brief Query callback: claims the responder when should_claim is true and |dx| >= min_abs_dx.
+ *
+ * @param[in] node       Node being queried.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ *
+ * @return true when the node wishes to claim the responder.
+ */
+static bool query_should_claim(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    if (rec->min_abs_dx > 0 && data->dx < rec->min_abs_dx && data->dx > -rec->min_abs_dx)
+        return false;
+    return rec->should_claim;
+}
+
+/**
+ * @brief Query callback for ER_QUERY_TERMINATION_REQUEST.
+ *
+ * @param[in] node       Node being queried.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ *
+ * @return yield_on_termination field of the record.
+ */
+static bool query_termination_request(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    (void)data;
+    rec->termination_request_count++;
+    return rec->yield_on_termination;
+}
+
+/**
+ * @brief Records an ER_EVENT_RESPONDER_GRANT callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ */
+static void on_responder_grant(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    (void)data;
+    rec->grant_count++;
+}
+
+/**
+ * @brief Records an ER_EVENT_RESPONDER_REJECT callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ */
+static void on_responder_reject(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    (void)data;
+    rec->reject_count++;
+}
+
+/**
+ * @brief Records an ER_EVENT_RESPONDER_MOVE callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ */
+static void on_responder_move(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    rec->move_count++;
+    rec->last_dx = data->dx;
+    rec->last_dy = data->dy;
+}
+
+/**
+ * @brief Records an ER_EVENT_RESPONDER_RELEASE callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ */
+static void on_responder_release(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    rec->release_count++;
+    rec->last_dx = data->dx;
+    rec->last_dy = data->dy;
+}
+
+/**
+ * @brief Records an ER_EVENT_RESPONDER_TERMINATE callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Pointer to ResponderRecord.
+ */
+static void on_responder_terminate(ERNode* node, const EREventData* data, void* user_data)
+{
+    ResponderRecord* rec = user_data;
+    (void)node;
+    (void)data;
+    rec->terminate_count++;
 }
 
 /**
@@ -685,6 +816,340 @@ static int test_z_index_render_order(void)
         return fail("higher zIndex sibling did not render last");
 
     embedded_renderer_set_backend(NULL);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Registers all responder event handlers and query callbacks on a node.
+ *
+ * @param[in] node  Target node.
+ * @param[in] rec   Pointer to the ResponderRecord that receives all callbacks.
+ */
+static void wire_responder(ERNode* node, ResponderRecord* rec)
+{
+    er_event_set(node, ER_EVENT_RESPONDER_GRANT, on_responder_grant, rec);
+    er_event_set(node, ER_EVENT_RESPONDER_REJECT, on_responder_reject, rec);
+    er_event_set(node, ER_EVENT_RESPONDER_MOVE, on_responder_move, rec);
+    er_event_set(node, ER_EVENT_RESPONDER_RELEASE, on_responder_release, rec);
+    er_event_set(node, ER_EVENT_RESPONDER_TERMINATE, on_responder_terminate, rec);
+}
+
+/**
+ * @brief Checks that a node claiming ER_QUERY_START_SHOULD_SET becomes the responder on
+ *        touch-down and receives grant, move, and release events.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_start_should_set(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord rec = {0};
+    rec.should_claim = true;
+
+    ERNode* view = er_node_create(ER_NODE_PRESSABLE);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    er_node_set_props(view, &p);
+    wire_responder(view, &rec);
+    er_responder_query_set(view, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+
+    er_tree_append_child(root, view);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+
+    if (rec.grant_count != 1)
+        return fail("responder not granted on start-should-set");
+
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 10);
+
+    if (rec.move_count != 1)
+        return fail("responder did not receive move event");
+    if (rec.last_dx != 20 || rec.last_dy != 0)
+        return fail("responder move event had wrong dx/dy");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 30, 10);
+
+    if (rec.release_count != 1)
+        return fail("responder did not receive release event");
+    if (rec.last_dx != 20)
+        return fail("responder release event had wrong dx");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that a node claiming ER_QUERY_MOVE_SHOULD_SET becomes the responder only
+ *        after sufficient displacement, and then receives move and release events.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_move_should_set(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord rec = {0};
+    rec.should_claim = true;
+    rec.min_abs_dx = 20; /* claim only when |dx| >= 20 */
+
+    ERNode* view = er_node_create(ER_NODE_PRESSABLE);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    er_node_set_props(view, &p);
+    wire_responder(view, &rec);
+    er_responder_query_set(view, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+
+    er_tree_append_child(root, view);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+
+    if (rec.grant_count != 0)
+        return fail("responder granted at touch-down without start-should-set");
+
+    /* Small move — below threshold, no grant */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 20, 10);
+
+    if (rec.grant_count != 0)
+        return fail("responder granted before reaching displacement threshold");
+
+    /* Large move — crosses threshold, grant fires */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 35, 10);
+
+    if (rec.grant_count != 1)
+        return fail("responder not granted after reaching displacement threshold");
+
+    /* Subsequent move fires responder-move */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 50, 10);
+
+    if (rec.move_count != 1)
+        return fail("responder did not receive move after being granted");
+    if (rec.last_dx != 40)
+        return fail("responder move had wrong dx");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 50, 10);
+
+    if (rec.release_count != 1)
+        return fail("responder did not receive release");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that a capture-phase claim (ER_QUERY_START_SHOULD_SET_CAPTURE on the parent)
+ *        wins over a bubble-phase claim (ER_QUERY_START_SHOULD_SET on the child).
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_capture_wins_over_bubble(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord parent_rec = {0};
+    ResponderRecord child_rec = {0};
+    parent_rec.should_claim = true;
+    child_rec.should_claim = true;
+
+    /* Parent at [0,0,80,80] claims via capture */
+    ERNode* parent = er_node_create(ER_NODE_VIEW);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        er_node_set_props(parent, &p);
+        wire_responder(parent, &parent_rec);
+        er_responder_query_set(parent, ER_QUERY_START_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+    }
+
+    /* Child at [10,10,40,40] claims via bubble */
+    ERNode* child = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 10;
+        p.top = 10;
+        p.width = 40;
+        p.height = 40;
+        er_node_set_props(child, &p);
+        wire_responder(child, &child_rec);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
+    }
+
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    /* Touch inside child — parent capture must win */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+
+    if (parent_rec.grant_count != 1)
+        return fail("parent capture did not win responder negotiation");
+    if (child_rec.grant_count != 0)
+        return fail("child bubble incorrectly claimed responder over parent capture");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+    if (parent_rec.release_count != 1)
+        return fail("parent responder did not receive release");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that when a new claimant wins move-should-set and the current responder
+ *        yields (ER_QUERY_TERMINATION_REQUEST returns true), the responder transfers.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_termination_accepted(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord child_rec = {0};
+    ResponderRecord parent_rec = {0};
+    child_rec.should_claim = true; /* child claims on start */
+    child_rec.yield_on_termination = true;
+    parent_rec.should_claim = true; /* parent claims on move (capture) */
+
+    /* Parent container — claims the responder via move capture */
+    ERNode* parent = er_node_create(ER_NODE_VIEW);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        er_node_set_props(parent, &p);
+        wire_responder(parent, &parent_rec);
+        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+    }
+
+    /* Child node — claims the responder on touch-down */
+    ERNode* child = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 10;
+        p.top = 10;
+        p.width = 40;
+        p.height = 40;
+        er_node_set_props(child, &p);
+        wire_responder(child, &child_rec);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
+        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_rec);
+    }
+
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+
+    if (child_rec.grant_count != 1)
+        return fail("child did not become responder on touch-down");
+
+    /* Move: parent capture fires → child asked to yield → child yields → transfer */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 20);
+
+    if (child_rec.termination_request_count != 1)
+        return fail("termination request was not sent to the current responder");
+    if (child_rec.terminate_count != 1)
+        return fail("current responder did not receive terminate after yielding");
+    if (parent_rec.grant_count != 1)
+        return fail("new claimant did not receive grant after termination was accepted");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
+
+    if (parent_rec.release_count != 1)
+        return fail("new responder did not receive release");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that when a new claimant wins move-should-set but the current responder
+ *        refuses to yield (ER_QUERY_TERMINATION_REQUEST returns false), the claimant is
+ *        rejected and the original responder keeps receiving events.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_termination_rejected(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord child_rec = {0};
+    ResponderRecord parent_rec = {0};
+    child_rec.should_claim = true;
+    child_rec.yield_on_termination = false; /* child refuses to yield */
+    parent_rec.should_claim = true;
+
+    ERNode* parent = er_node_create(ER_NODE_VIEW);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        er_node_set_props(parent, &p);
+        wire_responder(parent, &parent_rec);
+        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+    }
+
+    ERNode* child = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 10;
+        p.top = 10;
+        p.width = 40;
+        p.height = 40;
+        er_node_set_props(child, &p);
+        wire_responder(child, &child_rec);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
+        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_rec);
+    }
+
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+
+    if (child_rec.grant_count != 1)
+        return fail("child did not become responder on touch-down");
+
+    /* Move: parent capture fires → child refuses to yield → parent gets reject */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 20);
+
+    if (child_rec.termination_request_count != 1)
+        return fail("termination request was not sent to the current responder");
+    if (child_rec.terminate_count != 0)
+        return fail("current responder received terminate despite refusing to yield");
+    if (parent_rec.reject_count != 1)
+        return fail("rejected claimant did not receive reject event");
+    if (parent_rec.grant_count != 0)
+        return fail("rejected claimant incorrectly received grant");
+
+    /* Child must still receive the next move */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 20);
+
+    if (child_rec.move_count < 1)
+        return fail("original responder stopped receiving moves after rejection");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 40, 20);
+
+    if (child_rec.release_count != 1)
+        return fail("original responder did not receive release");
+
     return EXIT_SUCCESS;
 }
 
@@ -1097,6 +1562,16 @@ int main(void)
     if (test_overflow_hidden_clips_hit() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_layout_event_dispatch() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_start_should_set() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_move_should_set() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_capture_wins_over_bubble() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_termination_accepted() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_termination_rejected() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;

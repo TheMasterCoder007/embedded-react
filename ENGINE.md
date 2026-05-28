@@ -26,7 +26,7 @@ hit-testing are working. The remaining work is everything above raw events.
   clipping ancestor, not just the leaf rect.
 - [ ] **Hit-test through 2D transforms** — once `transform.c` lands, hit-testing must
   apply the inverse transform to the query point at each transformed ancestor.
-- [ ] **Gesture/PanResponder support** — slop threshold, capture phase, `onMoveShouldSetResponder`,
+- [x] **Gesture/PanResponder support** — slop threshold, capture phase, `onMoveShouldSetResponder`,
   `onStartShouldSetResponder` equivalents, gesture cancel when scroll grabs the
   responder.
 - [ ] **ScrollView gesture handler** — translate vertical/horizontal pan into scroll

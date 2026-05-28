@@ -94,6 +94,15 @@ typedef struct
 } EREventHandler;
 
 /**
+ * @brief Registered gesture responder query callback and caller-owned context pointer.
+ */
+typedef struct
+{
+    ERResponderQueryFn fn;
+    void* user_data;
+} ERResponderQueryHandler;
+
+/**
  * @brief Full internal scene graph node.
  *
  * ERNode* in the public API points to one of these slots in the static pool.
@@ -118,6 +127,7 @@ struct ERNode
     ERLayoutRect computed;
     ERLayoutRect prev_computed; /**< Computed rect from the previous commit, used to detect layout changes. */
     EREventHandler events[ER_EVENT_LAYOUT + 1U];
+    ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     union
     {
         ERViewProps view;

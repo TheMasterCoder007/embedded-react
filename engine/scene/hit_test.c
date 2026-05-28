@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Per-finger press tracking state.
+ * @brief Per-finger press and gesture tracking state.
  */
 typedef struct
 {
@@ -30,8 +30,11 @@ typedef struct
     uint32_t elapsed_ms;
     int last_x;
     int last_y;
+    int start_x; /**< X coordinate at touch-down; used to compute dx for gesture events. */
+    int start_y; /**< Y coordinate at touch-down; used to compute dy for gesture events. */
     uint16_t press_target_tag;
     uint16_t touch_target_tag;
+    uint16_t responder_tag; /**< Node currently owning this touch as the gesture responder. */
 } ERTouchState;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -54,6 +57,7 @@ static void reset_touch(ERTouchState* touch)
     memset(touch, 0, sizeof(*touch));
     touch->press_target_tag = ER_INVALID_TAG;
     touch->touch_target_tag = ER_INVALID_TAG;
+    touch->responder_tag = ER_INVALID_TAG;
 }
 
 /**
@@ -319,6 +323,129 @@ static void dispatch_bubble(ERNode* target, EREventType event, int x, int y)
 }
 
 /**
+ * @brief Invokes a node event handler with a pre-built event data payload.
+ *
+ * @param[in] node   Target node.
+ * @param[in] event  Event type.
+ * @param[in] data   Event payload to forward to the handler.
+ */
+static void dispatch_to_node_data(ERNode* node, EREventType event, const EREventData* data)
+{
+    if (!has_handler(node, event))
+        return;
+    node->events[event].fn(node, data, node->events[event].user_data);
+}
+
+/**
+ * @brief Builds a leaf-to-root array of node tags starting from a given node.
+ *
+ * chain[0] is start (leaf); chain[return_value - 1] is the root-most ancestor reached.
+ *
+ * @param[in]  start    Leaf node to start from.
+ * @param[out] chain    Output tag buffer (caller-allocated).
+ * @param[in]  max_len  Capacity of chain.
+ *
+ * @return Number of tags written into chain.
+ */
+static int build_ancestor_chain(const ERNode* start, uint16_t* chain, int max_len)
+{
+    int count = 0;
+    const ERNode* node = start;
+    while (node && count < max_len)
+    {
+        chain[count++] = node->tag;
+        node = er_get_node(node->parent_tag);
+    }
+    return count;
+}
+
+/**
+ * @brief Runs capture-then-bubble responder negotiation along an ancestor chain.
+ *
+ * Iterates root→leaf (capture phase) then leaf→root (bubble phase), calling the
+ * corresponding query callback on each node. Returns the first node whose callback
+ * returns true, or NULL if no node claims the responder.
+ *
+ * @param[in] chain          Tag array built by build_ancestor_chain (chain[0]=leaf).
+ * @param[in] chain_len      Number of entries in chain.
+ * @param[in] capture_query  Query type for the capture phase.
+ * @param[in] bubble_query   Query type for the bubble phase.
+ * @param[in] data           Event data forwarded to each callback.
+ *
+ * @return The claiming node, or NULL when no node claims the responder.
+ */
+static ERNode* negotiate_responder(const uint16_t* chain,
+                                   int chain_len,
+                                   ERResponderQuery capture_query,
+                                   ERResponderQuery bubble_query,
+                                   const EREventData* data)
+{
+    /* Capture phase: root → leaf */
+    for (int i = chain_len - 1; i >= 0; i--)
+    {
+        ERNode* node = er_get_node(chain[i]);
+        if (!node)
+            continue;
+        const ERResponderQueryHandler* h = &node->queries[(uint8_t)capture_query];
+        if (h->fn && h->fn(node, data, h->user_data))
+            return node;
+    }
+    /* Bubble phase: leaf → root */
+    for (int i = 0; i < chain_len; i++)
+    {
+        ERNode* node = er_get_node(chain[i]);
+        if (!node)
+            continue;
+        const ERResponderQueryHandler* h = &node->queries[(uint8_t)bubble_query];
+        if (h->fn && h->fn(node, data, h->user_data))
+            return node;
+    }
+    return NULL;
+}
+
+/**
+ * @brief Fires ER_EVENT_RESPONDER_TERMINATE on the current responder and clears the slot.
+ *
+ * Does nothing when no responder is active.
+ *
+ * @param[in,out] touch  Touch slot owning the responder.
+ * @param[in]     data   Event data forwarded to the terminate callback.
+ */
+static void terminate_responder_if_active(ERTouchState* touch, const EREventData* data)
+{
+    if (touch->responder_tag == ER_INVALID_TAG)
+        return;
+    ERNode* responder = er_get_node(touch->responder_tag);
+    if (responder)
+        dispatch_to_node_data(responder, ER_EVENT_RESPONDER_TERMINATE, data);
+    touch->responder_tag = ER_INVALID_TAG;
+}
+
+/**
+ * @brief Grants the gesture responder role to a node and fires ER_EVENT_RESPONDER_GRANT.
+ *
+ * @param[in,out] touch  Touch slot to update.
+ * @param[in]     node   Node to grant.
+ * @param[in]     data   Event data forwarded to the grant callback.
+ */
+static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData* data)
+{
+    touch->responder_tag = node->tag;
+    dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
+}
+
+/**
+ * @brief Fires ER_EVENT_RESPONDER_REJECT on a node whose responder claim was denied.
+ *
+ * @param[in] node  Node that was rejected.
+ * @param[in] data  Event data forwarded to the reject callback.
+ */
+static void reject_responder(ERNode* node, const EREventData* data)
+{
+    dispatch_to_node_data(node, ER_EVENT_RESPONDER_REJECT, data);
+}
+
+/**
  * @brief Cancels an active touch sequence.
  *
  * @param[in,out] touch  Touch state to cancel.
@@ -337,6 +464,13 @@ static void cancel_touch(ERTouchState* touch, int x, int y)
     if (press_target && touch->inside)
         dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
 
+    EREventData rdata = {0};
+    rdata.x = x;
+    rdata.y = y;
+    rdata.dx = x - touch->start_x;
+    rdata.dy = y - touch->start_y;
+    terminate_responder_if_active(touch, &rdata);
+
     reset_touch(touch);
 }
 
@@ -351,6 +485,15 @@ void er_event_set(ERNode* node, EREventType event, EREventFn fn, void* user_data
 
     node->events[event].fn = fn;
     node->events[event].user_data = user_data;
+}
+
+void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data)
+{
+    if (!node || (uint8_t)query >= ER_RESPONDER_QUERY_COUNT)
+        return;
+
+    node->queries[(uint8_t)query].fn = fn;
+    node->queries[(uint8_t)query].user_data = user_data;
 }
 
 void er_input_reset(void)
@@ -404,11 +547,27 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             touch->elapsed_ms = 0U;
             touch->last_x = x;
             touch->last_y = y;
+            touch->start_x = x;
+            touch->start_y = y;
             touch->press_target_tag = press_target ? press_target->tag : ER_INVALID_TAG;
             touch->touch_target_tag = hit ? hit->tag : ER_INVALID_TAG;
 
             dispatch_bubble(hit, ER_EVENT_TOUCH_START, x, y);
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
+
+            /* Gesture responder negotiation: start-should-set */
+            if (hit)
+            {
+                uint16_t chain[ERUI_MAX_NODES];
+                const int chain_len = build_ancestor_chain(hit, chain, ERUI_MAX_NODES);
+                EREventData data = {0};
+                data.x = x;
+                data.y = y;
+                ERNode* claimant = negotiate_responder(
+                    chain, chain_len, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &data);
+                if (claimant)
+                    grant_responder(touch, claimant, &data);
+            }
             break;
         }
         case ER_TOUCH_MOVE:
@@ -433,6 +592,50 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     touch->inside = inside;
                 }
             }
+
+            /* Build responder event data with cumulative displacement */
+            const int dx = x - touch->start_x;
+            const int dy = y - touch->start_y;
+            EREventData rdata = {0};
+            rdata.x = x;
+            rdata.y = y;
+            rdata.dx = dx;
+            rdata.dy = dy;
+
+            /* Dispatch move to the current gesture responder */
+            ERNode* responder = er_get_node(touch->responder_tag);
+            if (responder)
+                dispatch_to_node_data(responder, ER_EVENT_RESPONDER_MOVE, &rdata);
+
+            /* Move-should-set negotiation: any node in the chain may claim the responder */
+            if (touch_target)
+            {
+                uint16_t chain[ERUI_MAX_NODES];
+                const int chain_len = build_ancestor_chain(touch_target, chain, ERUI_MAX_NODES);
+                ERNode* claimant = negotiate_responder(
+                    chain, chain_len, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata);
+
+                if (claimant && claimant != responder)
+                {
+                    bool yields = true;
+                    if (responder)
+                    {
+                        const ERResponderQueryHandler* rq = &responder->queries[ER_QUERY_TERMINATION_REQUEST];
+                        if (rq->fn)
+                            yields = rq->fn(responder, &rdata, rq->user_data);
+                    }
+
+                    if (yields)
+                    {
+                        terminate_responder_if_active(touch, &rdata);
+                        grant_responder(touch, claimant, &rdata);
+                    }
+                    else
+                    {
+                        reject_responder(claimant, &rdata);
+                    }
+                }
+            }
             break;
         }
         case ER_TOUCH_UP:
@@ -443,6 +646,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* touch_target = er_get_node(touch->touch_target_tag);
             ERNode* press_target = er_get_node(touch->press_target_tag);
             const bool inside = press_target && point_inside_node_with_slop(press_target, x, y);
+            const int dx = x - touch->start_x;
+            const int dy = y - touch->start_y;
 
             dispatch_bubble(touch_target, ER_EVENT_TOUCH_END, x, y);
             if (press_target)
@@ -451,6 +656,18 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
                 if (inside)
                     dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
+            }
+
+            /* Release the gesture responder */
+            ERNode* responder = er_get_node(touch->responder_tag);
+            if (responder)
+            {
+                EREventData rdata = {0};
+                rdata.x = x;
+                rdata.y = y;
+                rdata.dx = dx;
+                rdata.dy = dy;
+                dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &rdata);
             }
 
             reset_touch(touch);
