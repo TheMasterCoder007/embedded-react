@@ -128,6 +128,12 @@ struct ERNode
     ERLayoutSpec layout;
     ERLayoutRect computed;
     ERLayoutRect prev_computed; /**< Computed rect from the previous commit, used to detect layout changes. */
+    float scroll_offset_x;      /**< Horizontal scroll position in pixels (ScrollView only). */
+    float scroll_offset_y;      /**< Vertical scroll position in pixels (ScrollView only). */
+    float scroll_vel_x;         /**< Momentum velocity X in px/ms (positive = content moving right). */
+    float scroll_vel_y;         /**< Momentum velocity Y in px/ms (positive = content moving down). */
+    int16_t scroll_content_w;   /**< Bounding width of all children; computed after layout (ScrollView only). */
+    int16_t scroll_content_h;   /**< Bounding height of all children; computed after layout (ScrollView only). */
     EREventHandler events[ER_EVENT_LAYOUT + 1U];
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     union

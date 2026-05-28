@@ -24,10 +24,10 @@
 typedef struct
 {
     char name[IMAGE_NAME_MAX + 1]; /**< Null-terminated asset name. */
-    const uint32_t* buf; /**< Premultiplied ARGB8888 pixel data (caller-owned). */
-    int w; /**< Image width in pixels. */
-    int h; /**< Image height in pixels. */
-    bool in_use; /**< True when this slot holds a valid entry. */
+    const uint32_t* buf;           /**< Premultiplied ARGB8888 pixel data (caller-owned). */
+    int w;                         /**< Image width in pixels. */
+    int h;                         /**< Image height in pixels. */
+    bool in_use;                   /**< True when this slot holds a valid entry. */
 } ImageEntry;
 
 /*----------------------------------------------------------------------------------------------------------------------

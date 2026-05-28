@@ -15,6 +15,26 @@
 const EmbeddedRenderBackend* er_backend(void);
 
 /**
+ * @brief Pushes a new clip rectangle, intersected with any currently active clip.
+ *
+ * All subsequent er_blit_fill / er_blit_copy / er_blit_blend calls are scissored to the
+ * intersection of every pushed clip rectangle.  Calls must be balanced with er_pop_clip_rect().
+ *
+ * @param[in] x  Left edge of the clip rectangle.
+ * @param[in] y  Top edge of the clip rectangle.
+ * @param[in] w  Width of the clip rectangle in pixels.
+ * @param[in] h  Height of the clip rectangle in pixels.
+ */
+void er_push_clip_rect(int x, int y, int w, int h);
+
+/**
+ * @brief Pops the most recently pushed clip rectangle.
+ *
+ * After this call the previous clip (or no clip, if the stack is now empty) is restored.
+ */
+void er_pop_clip_rect(void);
+
+/**
  * @brief Fills a rectangle with a solid ARGB color via the active backend.
  *
  * @param[in] argb  ARGB8888 color value (straight alpha).

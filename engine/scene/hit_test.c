@@ -1,5 +1,6 @@
 #include "er_node_internal.h"
 #include "renderer_internal.h"
+#include <math.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -9,6 +10,10 @@
 
 #define ER_MAX_TOUCHES 5U
 #define ER_LONG_PRESS_MS 500U
+#define ER_SCROLL_SLOP 5          /**< Minimum cumulative pan distance in pixels before auto-scroll claims. */
+#define ER_SCROLL_FRICTION 0.002f /**< Velocity decay per millisecond (≈ React Native deceleration:0.998/frame). */
+#define ER_SCROLL_VEL_STOP 0.001f /**< Velocity magnitude below which momentum scrolling stops. */
+#define ER_SCROLL_VEL_WINDOW 200U /**< Maximum age in ms of the last recorded move used for velocity estimation. */
 
 #ifndef ERUI_MAX_NODES
 #define ERUI_MAX_NODES 512
@@ -30,8 +35,13 @@ typedef struct
     uint32_t elapsed_ms;
     int last_x;
     int last_y;
-    int start_x; /**< X coordinate at touch-down; used to compute dx for gesture events. */
-    int start_y; /**< Y coordinate at touch-down; used to compute dy for gesture events. */
+    int start_x;                /**< X coordinate at touch-down; used to compute dx for gesture events. */
+    int start_y;                /**< Y coordinate at touch-down; used to compute dy for gesture events. */
+    int prev_move_x;            /**< X coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
+    int prev_move_y;            /**< Y coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
+    uint32_t prev_move_time_ms; /**< er_now_ms() at the last recorded TOUCH_MOVE. */
+    float initial_scroll_x;     /**< ScrollView scroll_offset_x when the responder was granted. */
+    float initial_scroll_y;     /**< ScrollView scroll_offset_y when the responder was granted. */
     uint16_t press_target_tag;
     uint16_t touch_target_tag;
     uint16_t responder_tag; /**< Node currently owning this touch as the gesture responder. */
@@ -182,14 +192,34 @@ static void sort_children_by_z_index(uint16_t* tags, int count)
 }
 
 /**
+ * @brief Finds the nearest ScrollView ancestor of a node (inclusive of the node itself).
+ *
+ * @param[in] node  Starting node.
+ *
+ * @return The first ScrollView found walking up the ancestor chain, or NULL.
+ */
+static ERNode* find_scroll_view_ancestor(ERNode* node)
+{
+    while (node)
+    {
+        if (node->type == ER_NODE_SCROLL_VIEW)
+            return node;
+        node = er_get_node(node->parent_tag);
+    }
+    return NULL;
+}
+
+/**
  * @brief Recursively finds the topmost deepest hittable node under a point.
  *
- * Respects pointer_events, hitSlop, and overflow:hidden clipping. Children appended
- * later win over earlier siblings; higher zIndex wins over lower.
+ * Respects pointer_events, hitSlop, and overflow:hidden / overflow:scroll clipping.
+ * For ScrollView nodes the hit coordinates are adjusted into content space before
+ * recursing, so children are tested at their layout-computed positions regardless of
+ * the current scroll offset.
  *
  * @param[in] node  Subtree root to inspect.
- * @param[in] x     X coordinate in framebuffer pixels.
- * @param[in] y     Y coordinate in framebuffer pixels.
+ * @param[in] x     X coordinate in framebuffer pixels (screen space).
+ * @param[in] y     Y coordinate in framebuffer pixels (screen space).
  *
  * @return Best hit node, or NULL when the point is outside the hittable subtree.
  */
@@ -216,6 +246,11 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
 
         if (!clips || point_inside_node(node, x, y))
         {
+            /* Translate query point into content space for ScrollView nodes so that
+             * children are tested against their layout-computed positions. */
+            const int child_x = (node->type == ER_NODE_SCROLL_VIEW) ? x + (int)node->scroll_offset_x : x;
+            const int child_y = (node->type == ER_NODE_SCROLL_VIEW) ? y + (int)node->scroll_offset_y : y;
+
             uint16_t child_tags[ERUI_MAX_NODES];
             const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
             sort_children_by_z_index(child_tags, child_count);
@@ -226,7 +261,7 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
                 if (!child)
                     continue;
 
-                ERNode* child_hit = hit_test_node(child, x, y);
+                ERNode* child_hit = hit_test_node(child, child_x, child_y);
                 if (child_hit)
                     return child_hit;
             }
@@ -424,6 +459,10 @@ static void terminate_responder_if_active(ERTouchState* touch, const EREventData
 /**
  * @brief Grants the gesture responder role to a node and fires ER_EVENT_RESPONDER_GRANT.
  *
+ * When the granted node is a ScrollView the touch slot records the scroll offset at
+ * the time of the grant and the current move position so that er_dispatch_touch can
+ * derive absolute offsets and momentum velocity without needing per-frame deltas.
+ *
  * @param[in,out] touch  Touch slot to update.
  * @param[in]     node   Node to grant.
  * @param[in]     data   Event data forwarded to the grant callback.
@@ -432,6 +471,12 @@ static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData
 {
     touch->responder_tag = node->tag;
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
+
+    if (node->type == ER_NODE_SCROLL_VIEW)
+    {
+        touch->initial_scroll_x = node->scroll_offset_x;
+        touch->initial_scroll_y = node->scroll_offset_y;
+    }
 }
 
 /**
@@ -500,6 +545,19 @@ void er_input_reset(void)
 {
     for (int i = 0; i < ER_MAX_TOUCHES; i++)
         reset_touch(&s_touches[i]);
+
+    /* Zero momentum velocities on every pool node so that scroll state from a previous
+     * scene (or a previous test) cannot outlive the backend reset and fire a stale
+     * event callback.  er_get_node() returns NULL for unused slots. */
+    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+    {
+        ERNode* n = er_get_node(tag);
+        if (n && n->type == ER_NODE_SCROLL_VIEW)
+        {
+            n->scroll_vel_x = 0.0f;
+            n->scroll_vel_y = 0.0f;
+        }
+    }
 }
 
 void er_input_tick(uint32_t delta_ms)
@@ -521,6 +579,32 @@ void er_input_tick(uint32_t delta_ms)
             dispatch_to_node(press_target, ER_EVENT_LONG_PRESS, touch->last_x, touch->last_y);
             touch->long_press_fired = true;
         }
+    }
+
+    /* Momentum scrolling: decay velocity on all ScrollView nodes and update offsets.
+     * Velocity decay approximates React Native's deceleration:0.998 per 16.67ms frame. */
+    const float decay_factor = 1.0f - ER_SCROLL_FRICTION * (float)delta_ms;
+    const float factor = decay_factor < 0.0f ? 0.0f : decay_factor;
+
+    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+    {
+        ERNode* sv = er_get_node(tag);
+        if (!sv || sv->type != ER_NODE_SCROLL_VIEW)
+            continue;
+        if (sv->scroll_vel_x == 0.0f && sv->scroll_vel_y == 0.0f)
+            continue;
+
+        sv->scroll_vel_x *= factor;
+        sv->scroll_vel_y *= factor;
+
+        if (fabsf(sv->scroll_vel_x) < ER_SCROLL_VEL_STOP)
+            sv->scroll_vel_x = 0.0f;
+        if (fabsf(sv->scroll_vel_y) < ER_SCROLL_VEL_STOP)
+            sv->scroll_vel_y = 0.0f;
+
+        er_scroll_view_set_offset(sv,
+                                  sv->scroll_offset_x + sv->scroll_vel_x * (float)delta_ms,
+                                  sv->scroll_offset_y + sv->scroll_vel_y * (float)delta_ms);
     }
 }
 
@@ -549,6 +633,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             touch->last_y = y;
             touch->start_x = x;
             touch->start_y = y;
+            touch->prev_move_x = x;
+            touch->prev_move_y = y;
+            touch->prev_move_time_ms = er_now_ms();
             touch->press_target_tag = press_target ? press_target->tag : ER_INVALID_TAG;
             touch->touch_target_tag = hit ? hit->tag : ER_INVALID_TAG;
 
@@ -636,6 +723,43 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     }
                 }
             }
+
+            /* Auto-scroll: if no responder was claimed and the pan exceeds slop, find the
+             * nearest ScrollView ancestor and grant it automatically. */
+            if (touch->responder_tag == ER_INVALID_TAG && touch_target)
+            {
+                const int abs_dx = dx < 0 ? -dx : dx;
+                const int abs_dy = dy < 0 ? -dy : dy;
+                if (abs_dx >= ER_SCROLL_SLOP || abs_dy >= ER_SCROLL_SLOP)
+                {
+                    ERNode* sv = find_scroll_view_ancestor(touch_target);
+                    if (sv)
+                        grant_responder(touch, sv, &rdata);
+                }
+            }
+
+            /* Apply incremental scroll to any active ScrollView responder. */
+            {
+                ERNode* active = er_get_node(touch->responder_tag);
+                if (active && active->type == ER_NODE_SCROLL_VIEW)
+                {
+                    er_scroll_view_set_offset(
+                        active, touch->initial_scroll_x - (float)dx, touch->initial_scroll_y - (float)dy);
+
+                    /* Update live velocity so that TOUCH_UP always inherits the most
+                     * recent movement speed, even when UP follows MOVE in the same tick. */
+                    const uint32_t now_ms = er_now_ms();
+                    const uint32_t vel_elapsed = now_ms - touch->prev_move_time_ms;
+                    if (vel_elapsed > 0U && vel_elapsed <= ER_SCROLL_VEL_WINDOW)
+                    {
+                        active->scroll_vel_x = -(float)(x - touch->prev_move_x) / (float)vel_elapsed;
+                        active->scroll_vel_y = -(float)(y - touch->prev_move_y) / (float)vel_elapsed;
+                    }
+                    touch->prev_move_x = x;
+                    touch->prev_move_y = y;
+                    touch->prev_move_time_ms = now_ms;
+                }
+            }
             break;
         }
         case ER_TOUCH_UP:
@@ -668,6 +792,21 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 rdata.dx = dx;
                 rdata.dy = dy;
                 dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &rdata);
+
+                /* Final velocity update for ScrollView responders: if real time elapsed
+                 * between the last MOVE and this UP (finger held still before release),
+                 * re-sample to capture deceleration.  Velocity was already set during the
+                 * last MOVE and is kept unchanged when elapsed == 0. */
+                if (responder->type == ER_NODE_SCROLL_VIEW)
+                {
+                    const uint32_t now_ms = er_now_ms();
+                    const uint32_t elapsed = now_ms - touch->prev_move_time_ms;
+                    if (elapsed > 0U && elapsed <= ER_SCROLL_VEL_WINDOW)
+                    {
+                        responder->scroll_vel_x = -(float)(x - touch->prev_move_x) / (float)elapsed;
+                        responder->scroll_vel_y = -(float)(y - touch->prev_move_y) / (float)elapsed;
+                    }
+                }
             }
 
             reset_touch(touch);

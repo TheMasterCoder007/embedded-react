@@ -127,26 +127,34 @@ void er_mark_dirty_upward(ERNode* node)
 /**
  * @brief Recursively renders a node and its children depth-first.
  *
- * A node is painted when it or any ancestor is dirty. The dirty flag is cleared
- * after the node is drawn, before descending into children.
+ * translate_x / translate_y accumulate the total scroll offset contributed by all
+ * ScrollView ancestors.  Each node's actual screen position is computed by subtracting
+ * the accumulated translation from its layout-computed position.
+ *
+ * overflow:hidden and overflow:scroll nodes push a scissor clip rectangle around their
+ * children so that out-of-bounds content is not visible.  ScrollView nodes also add
+ * their current scroll offset to the running translation for their children.
  *
  * @param[in] n             Node to render.
  * @param[in] parent_dirty  true when an ancestor was dirty this frame.
+ * @param[in] translate_x   Accumulated horizontal scroll offset from ancestor ScrollViews.
+ * @param[in] translate_y   Accumulated vertical scroll offset from ancestor ScrollViews.
  */
-static void render_tree(ERNode* n, bool parent_dirty)
+static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y)
 {
     if (n->layout.display == ER_DISPLAY_NONE)
         return;
 
     const bool should_render = n->dirty || parent_dirty;
 
+    /* Actual screen position after applying all ancestor scroll offsets. */
+    const int px = n->computed.x - translate_x;
+    const int py = n->computed.y - translate_y;
+    const int w = n->computed.w;
+    const int h = n->computed.h;
+
     if (should_render)
     {
-        const int x = n->computed.x;
-        const int y = n->computed.y;
-        const int w = n->computed.w;
-        const int h = n->computed.h;
-
         switch (n->type)
         {
             case ER_NODE_VIEW:
@@ -156,18 +164,18 @@ static void render_tree(ERNode* n, bool parent_dirty)
             {
                 const ERViewProps* vp = &n->props.view;
                 er_rrect_fill_bordered(
-                    vp->background_color, vp->border_color, vp->border_width, x, y, w, h, vp->border_radius);
+                    vp->background_color, vp->border_color, vp->border_width, px, py, w, h, vp->border_radius);
                 break;
             }
             case ER_NODE_TEXT:
             {
                 const uint32_t color = n->props.text.color ? n->props.text.color : 0xFFFFFFFFU;
-                const ERRect clip = {x, y, w, h};
+                const ERRect clip = {px, py, w, h};
                 er_text_render(n->props.text.text, clip, color, n->props.text.font_size, n->props.text.font_family);
                 break;
             }
             case ER_NODE_IMAGE:
-                er_image_render(&n->props.image, x, y, w, h);
+                er_image_render(&n->props.image, px, py, w, h);
                 break;
             case ER_NODE_FLAT_LIST:
             case ER_NODE_TEXT_INPUT:
@@ -180,6 +188,15 @@ static void render_tree(ERNode* n, bool parent_dirty)
 
     n->dirty = false;
 
+    /* Overflow clipping: push a scissor rect so children cannot draw outside this node. */
+    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL);
+    if (clips)
+        er_push_clip_rect(px, py, w, h);
+
+    /* Scroll offset translation: ScrollView children are shifted by the current offset. */
+    const int child_tx = (n->type == ER_NODE_SCROLL_VIEW) ? translate_x + (int)n->scroll_offset_x : translate_x;
+    const int child_ty = (n->type == ER_NODE_SCROLL_VIEW) ? translate_y + (int)n->scroll_offset_y : translate_y;
+
     uint16_t child_tags[ERUI_MAX_NODES];
     const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
     sort_children_by_z_index(child_tags, child_count);
@@ -189,7 +206,70 @@ static void render_tree(ERNode* n, bool parent_dirty)
         ERNode* child = er_get_node(child_tags[i]);
         if (!child)
             continue;
-        render_tree(child, should_render);
+        render_tree(child, should_render, child_tx, child_ty);
+    }
+
+    if (clips)
+        er_pop_clip_rect();
+}
+
+/**
+ * @brief Recomputes the bounding content size of a ScrollView's children after layout.
+ *
+ * scroll_content_w and scroll_content_h store the rightmost and bottommost extents of
+ * all direct children relative to the ScrollView's own computed origin.  These values
+ * are used to clamp scroll offsets in er_scroll_view_set_offset().
+ *
+ * @param[in,out] node  ScrollView node to update.
+ */
+static void update_scroll_content_size(ERNode* node)
+{
+    int16_t max_w = 0;
+    int16_t max_h = 0;
+
+    uint16_t child_tag = node->first_child_tag;
+    while (child_tag != ER_INVALID_TAG)
+    {
+        const ERNode* child = er_get_node(child_tag);
+        if (child)
+        {
+            const int16_t right = (int16_t)(child->computed.x - node->computed.x + child->computed.w);
+            const int16_t bottom = (int16_t)(child->computed.y - node->computed.y + child->computed.h);
+            if (right > max_w)
+                max_w = right;
+            if (bottom > max_h)
+                max_h = bottom;
+        }
+        child_tag = child ? child->next_sibling_tag : ER_INVALID_TAG;
+    }
+
+    node->scroll_content_w = max_w;
+    node->scroll_content_h = max_h;
+}
+
+/**
+ * @brief Walks the subtree and updates scroll_content_w / scroll_content_h on all ScrollViews.
+ *
+ * Called after the layout pass so content-size clamping is based on freshly-computed rects.
+ *
+ * @param[in] node  Subtree root to walk.
+ */
+static void refresh_scroll_content_sizes(ERNode* node)
+{
+    if (!node)
+        return;
+
+    if (node->type == ER_NODE_SCROLL_VIEW)
+        update_scroll_content_size(node);
+
+    uint16_t child_tag = node->first_child_tag;
+    while (child_tag != ER_INVALID_TAG)
+    {
+        ERNode* child = er_get_node(child_tag);
+        if (!child)
+            break;
+        refresh_scroll_content_sizes(child);
+        child_tag = child->next_sibling_tag;
     }
 }
 
@@ -454,8 +534,9 @@ void er_commit(void)
     const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
     er_layout_compute(s_root_tag, rw, rh);
+    refresh_scroll_content_sizes(root);
     dispatch_layout_events(root);
-    render_tree(root, false);
+    render_tree(root, false, 0, 0);
 }
 
 uint32_t er_now_ms(void)
@@ -466,4 +547,44 @@ uint32_t er_now_ms(void)
 void er_tick(uint32_t delta_ms)
 {
     s_now_ms += delta_ms;
+}
+
+void er_scroll_view_set_offset(ERNode* node, float x, float y)
+{
+    if (!node || node->type != ER_NODE_SCROLL_VIEW)
+        return;
+
+    /* Clamp to valid scroll range.  The maximum offset is content_size − viewport_size,
+     * floored at 0 so we never scroll past the start or beyond the end. */
+    float max_x = (float)(node->scroll_content_w - node->computed.w);
+    float max_y = (float)(node->scroll_content_h - node->computed.h);
+    if (max_x < 0.0f)
+        max_x = 0.0f;
+    if (max_y < 0.0f)
+        max_y = 0.0f;
+
+    if (x < 0.0f)
+        x = 0.0f;
+    if (x > max_x)
+        x = max_x;
+    if (y < 0.0f)
+        y = 0.0f;
+    if (y > max_y)
+        y = max_y;
+
+    if (x == node->scroll_offset_x && y == node->scroll_offset_y)
+        return;
+
+    node->scroll_offset_x = x;
+    node->scroll_offset_y = y;
+    er_mark_dirty_upward(node);
+
+    const EREventHandler* h = &node->events[ER_EVENT_SCROLL];
+    if (h->fn)
+    {
+        EREventData data = {0};
+        data.scroll_x = x;
+        data.scroll_y = y;
+        h->fn(node, &data, h->user_data);
+    }
 }

@@ -29,9 +29,9 @@ hit-testing are working. The remaining work is everything above raw events.
 - [x] **Gesture/PanResponder support** — slop threshold, capture phase, `onMoveShouldSetResponder`,
   `onStartShouldSetResponder` equivalents, gesture cancel when scroll grabs the
   responder.
-- [ ] **ScrollView gesture handler** — translate vertical/horizontal pan into scroll
+- [x] **ScrollView gesture handler** — translate vertical/horizontal pan into scroll
   offset; emit `ER_EVENT_SCROLL` with `scroll_x`/`scroll_y` already in `EREventData`.
-- [ ] **Momentum scrolling** — exponential decay on touch-up; honors `decelerationRate`;
+- [x] **Momentum scrolling** — exponential decay on touch-up; honors `decelerationRate`;
   snap-to-offset when configured.
 - [x] **Layout event dispatch** — `ER_EVENT_LAYOUT` is declared in `er_scene.h` but never
   fired. Compare previous vs. computed rect after layout and dispatch when changed.
@@ -53,7 +53,7 @@ hit-testing are working. The remaining work is everything above raw events.
   ancestor repaint.
 - [ ] **`display: none` short-circuit in layout + render** — skip layout pass, skip paint,
   skip hit-testing.
-- [ ] **Clip-rect stack during render** — push/pop on `overflow: hidden` and on scroll
+- [x] **Clip-rect stack during render** — push/pop on `overflow: hidden` and on scroll
   viewports; intersect with backend draw rect before each blit.
 
 ## 3. Layout
@@ -218,7 +218,7 @@ for several node types declared in `ERNodeType`.
 | `ER_NODE_MODAL`              | renders as View | Z-order to top of root, backdrop, animation entry/exit                 |
 | `ER_NODE_TEXT`               | working         | (see Text section)                                                     |
 | `ER_NODE_IMAGE`              | working         | -                                                                      |
-| `ER_NODE_SCROLL_VIEW`        | renders as View | Content offset, clip to viewport, scroll gesture, momentum, `onScroll` |
+| `ER_NODE_SCROLL_VIEW`        | working         | -                                                                      |
 | `ER_NODE_FLAT_LIST`          | not rendered    | Virtualization: render visible rows + overscan only; row recycling     |
 | `ER_NODE_TEXT_INPUT`         | not rendered    | Cursor, IME callback hook, hardware keyboard input path, selection     |
 | `ER_NODE_ACTIVITY_INDICATOR` | not rendered    | Animated spinner driven by built-in `Animated.loop` on rotate          |
@@ -258,7 +258,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] animation, input, layout, text, rrect
 - [x] **Hit-test under opacity / display:none** (covered by existing tests)
 - [ ] **Hit-test under transforms**
-- [ ] **Scroll gesture + momentum**
+- [x] **Scroll gesture + momentum**
 - [x] **Layout event dispatch**
 - [ ] **Spring / decay animations**
 - [ ] **Sequence / parallel / stagger**
