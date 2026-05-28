@@ -43,6 +43,15 @@ static ERNode* s_zidx_result = NULL;
 
 static const uint32_t k_cycle_colors[] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB};
 
+/* Panel 4 — ScrollView */
+static ERNode* s_sv_v_lbl = NULL; /**< Live vertical-offset readout label.   */
+static ERNode* s_sv_h_lbl = NULL; /**< Live horizontal-offset readout label. */
+
+static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
+
+static const uint32_t k_sv_h_colors[8] = {
+    0xFF264653, 0xFF2A9D8F, 0xFF457B9D, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -387,6 +396,60 @@ static void on_hide_toggle_press(ERNode* node, const EREventData* data, void* ct
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 4 callbacks (ScrollView)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_SCROLL callback for the vertical ScrollView demo.
+ *
+ * Updates the live offset readout label below the viewport.
+ *
+ * @param[in] node  Node that dispatched the event (unused).
+ * @param[in] data  Event payload carrying data->scroll_y.
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_scroll_v(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)ctx;
+    if (!s_sv_v_lbl)
+        return;
+    char buf[ER_TEXT_MAX + 1];
+    snprintf(buf, sizeof(buf), "offset  y:  %.0f px", data->scroll_y);
+    ERProps p = props_default();
+    p.color = 0xFF4477AA;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, buf, ER_TEXT_MAX);
+    p.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_sv_v_lbl, &p);
+}
+
+/**
+ * @brief ER_EVENT_SCROLL callback for the horizontal ScrollView demo.
+ *
+ * Updates the live offset readout label below the viewport.
+ *
+ * @param[in] node  Node that dispatched the event (unused).
+ * @param[in] data  Event payload carrying data->scroll_x.
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_scroll_h(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)ctx;
+    if (!s_sv_h_lbl)
+        return;
+    char buf[ER_TEXT_MAX + 1];
+    snprintf(buf, sizeof(buf), "offset  x:  %.0f px", data->scroll_x);
+    ERProps p = props_default();
+    p.color = 0xFF4477AA;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, buf, ER_TEXT_MAX);
+    p.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_sv_h_lbl, &p);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — scene construction
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -498,10 +561,11 @@ static ERNode* make_panel(void)
 /**
  * @brief Builds the demo scene.
  *
- * Three panels demonstrate every engine feature that is currently working:
- *   Panel 1 — Layout & Style: flexbox rows, rounded rects, borders, justify-content.
- *   Panel 2 — Touch & Events: press/long-press/cancel, event coordinates, zIndex.
- *   Panel 3 — Animation & Display:None: bg-color timing animation, display:none toggle.
+ * Two rows demonstrate every engine feature that is currently working:
+ *   Row 1 Panel 1 — Layout & Style: flexbox rows, rounded rects, borders, justify-content.
+ *   Row 1 Panel 2 — Touch & Events: press/long-press/cancel, event coordinates, zIndex.
+ *   Row 1 Panel 3 — Animation & Display:None: bg-color timing animation, display:none toggle.
+ *   Row 2 Panel 4 — ScrollView: vertical + horizontal viewports, clip, gesture, momentum.
  *
  * @param[in] phys_w  Physical framebuffer width in pixels.
  * @param[in] phys_h  Physical framebuffer height in pixels.
@@ -889,6 +953,117 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(col3, hide_btn);
 
     /* =====================================================================
+     * PANEL 4 — ScrollView (bottom row, full width, split into two halves)
+     * =================================================================== */
+
+    /* ---- Left half: vertical ScrollView -------------------------------- */
+    ERNode* sv_left = make_panel();
+    er_tree_append_child(sv_left, make_section_header("SCROLL VIEW  vertical"));
+    er_tree_append_child(sv_left, make_caption("drag up / down  —  fling for momentum"));
+
+    ERNode* sv_v = er_node_create(ER_NODE_SCROLL_VIEW);
+    p = props_default();
+    p.height = dp(120);
+    p.overflow = ER_OVERFLOW_SCROLL;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(4);
+    er_node_set_props(sv_v, &p);
+    er_event_set(sv_v, ER_EVENT_SCROLL, on_scroll_v, NULL);
+
+    for (int i = 0; i < 6; i++)
+    {
+        ERNode* card = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.height = dp(36);
+        p.background_color = k_sv_v_colors[i];
+        p.border_radius = dp(5);
+        p.align_items = ER_ALIGN_CENTER;
+        p.justify_content = ER_JUSTIFY_CENTER;
+        er_node_set_props(card, &p);
+
+        ERNode* card_lbl = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFFFFFFFF;
+        p.font_size = (uint8_t)dp(11);
+        char row_txt[16];
+        snprintf(row_txt, sizeof(row_txt), "row %d", i + 1);
+        strncpy(p.text, row_txt, ER_TEXT_MAX);
+        er_node_set_props(card_lbl, &p);
+        er_tree_append_child(card, card_lbl);
+        er_tree_append_child(sv_v, card);
+    }
+    er_tree_append_child(sv_left, sv_v);
+
+    ERNode* sv_v_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF4477AA;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "offset  y:  0 px", ER_TEXT_MAX);
+    er_node_set_props(sv_v_lbl, &p);
+    s_sv_v_lbl = sv_v_lbl;
+    er_tree_append_child(sv_left, sv_v_lbl);
+
+    /* ---- Right half: horizontal ScrollView ----------------------------- */
+    ERNode* sv_right = make_panel();
+    er_tree_append_child(sv_right, make_section_header("SCROLL VIEW  horizontal"));
+    er_tree_append_child(sv_right, make_caption("swipe left / right"));
+
+    ERNode* sv_h = er_node_create(ER_NODE_SCROLL_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.overflow = ER_OVERFLOW_SCROLL;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(5);
+    er_node_set_props(sv_h, &p);
+    er_event_set(sv_h, ER_EVENT_SCROLL, on_scroll_h, NULL);
+
+    for (int i = 0; i < 8; i++)
+    {
+        ERNode* card = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.width = dp(80);
+        p.background_color = k_sv_h_colors[i];
+        p.border_radius = dp(5);
+        p.align_items = ER_ALIGN_CENTER;
+        p.justify_content = ER_JUSTIFY_CENTER;
+        er_node_set_props(card, &p);
+
+        ERNode* card_lbl = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFFFFFFFF;
+        p.font_size = (uint8_t)dp(11);
+        char col_txt[16];
+        snprintf(col_txt, sizeof(col_txt), "col %d", i + 1);
+        strncpy(p.text, col_txt, ER_TEXT_MAX);
+        er_node_set_props(card_lbl, &p);
+        er_tree_append_child(card, card_lbl);
+        er_tree_append_child(sv_h, card);
+    }
+    er_tree_append_child(sv_right, sv_h);
+
+    ERNode* sv_h_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF4477AA;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "offset  x:  0 px", ER_TEXT_MAX);
+    er_node_set_props(sv_h_lbl, &p);
+    s_sv_h_lbl = sv_h_lbl;
+    er_tree_append_child(sv_right, sv_h_lbl);
+
+    /* ---- Bottom row container ------------------------------------------ */
+    ERNode* sv_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(210); /* explicit height so flex_grow on columns doesn't crowd it out */
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(12);
+    er_node_set_props(sv_row, &p);
+    er_tree_append_child(sv_row, sv_left);
+    er_tree_append_child(sv_row, sv_right);
+
+    /* =====================================================================
      * ASSEMBLE
      * =================================================================== */
     er_tree_append_child(columns, col1);
@@ -897,6 +1072,7 @@ static void build_scene(int phys_w, int phys_h)
 
     er_tree_append_child(root, header);
     er_tree_append_child(root, columns);
+    er_tree_append_child(root, sv_row);
     er_tree_set_root(root);
 }
 
