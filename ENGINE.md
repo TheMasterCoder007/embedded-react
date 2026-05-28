@@ -113,10 +113,10 @@ Everything else under `engine/rendering/` is a stub.
 ### 4.4 Opacity compositing
 
 - [x] Per-node opacity prop stored in `ERViewProps`
-- [ ] **Offscreen composite for `opacity < 255` on a non-leaf subtree** — rasterize into
+- [x] **Offscreen composite for `opacity < 255` on a non-leaf subtree** — rasterize into
   scratch slot, then blend at the node's alpha. Currently `opacity` is stored but the
   compositor doesn't use it.
-- [ ] **Opacity nesting depth** capped at `ERUI_MAX_OPACITY_DEPTH`.
+- [x] **Opacity nesting depth** capped at `ERUI_MAX_OPACITY_DEPTH`.
 
 ### 4.5 Image rendering
 
@@ -137,10 +137,10 @@ Everything else under `engine/rendering/` is a stub.
 
 ### 4.7 Scratch buffer pool
 
-- [ ] **Static pool declaration** — `ERUI_SCRATCH_W × ERUI_SCRATCH_H × ERUI_SCRATCH_POOL_DEPTH × 4`
+- [x] **Static pool declaration** — `ERUI_SCRATCH_W × ERUI_SCRATCH_H × ERUI_SCRATCH_POOL_DEPTH × 4`
   bytes at module scope.
-- [ ] **Slot alloc / release API** for shadow / opacity / transform consumers.
-- [ ] **Premultiplied ARGB8888 blend helper** that walks scratch rows into the backend
+- [x] **Slot alloc / release API** for shadow / opacity / transform consumers.
+- [x] **Premultiplied ARGB8888 blend helper** that walks scratch rows into the backend
   via `blend_rect`.
 
 ### 4.8 Canvas API ([canvas_bindings.c](engine/rendering/canvas_bindings.c) is a stub)
@@ -248,7 +248,7 @@ PLAN.md lists these. None are wired through actual `#if` guards in the source ye
 - [ ] `ERUI_TRANSFORMS` — `FULL` vs `TRANSLATE_ONLY` paths.
 - [ ] `ERUI_FONT_SIZES` — already drives baked font selection.
 - [ ] `ERUI_MAX_NODES` — already honored.
-- [ ] `ERUI_MAX_OPACITY_DEPTH`, `ERUI_SCRATCH_W/H`, `ERUI_SCRATCH_POOL_DEPTH` — for the
+- [x] `ERUI_MAX_OPACITY_DEPTH`, `ERUI_SCRATCH_W/H`, `ERUI_SCRATCH_POOL_DEPTH` — for the
   scratch pool work (4.7).
 
 ## 10. Tests
@@ -265,7 +265,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Image scaling + tint + resizeMode**
 - [ ] **Shadow rasterizer (visual baseline comparison)**
 - [ ] **Transform render + hit-test**
-- [ ] **Opacity offscreen compositing**
+- [x] **Opacity offscreen compositing**
 - [ ] **Multi-line / ellipsize text**
 - [ ] **Node pool free-slot reuse**
 

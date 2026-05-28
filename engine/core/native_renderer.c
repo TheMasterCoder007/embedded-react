@@ -36,6 +36,13 @@ static const EmbeddedRenderBackend* g_backend = NULL;
 static ClipEntry s_clip_stack[ER_CLIP_STACK_DEPTH];
 static int s_clip_depth = 0;
 
+/* Scratch redirect: when s_scratch_buf is non-NULL all blit calls write into it. */
+static uint32_t* s_scratch_buf = NULL;
+static int s_scratch_w = 0;
+static int s_scratch_h = 0;
+static int s_scratch_ox = 0;
+static int s_scratch_oy = 0;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -75,9 +82,162 @@ static bool apply_clip(int* x, int* y, int* w, int* h)
     return *w > 0 && *h > 0;
 }
 
+/**
+ * @brief Source-over blends a straight-alpha ARGB fill into the active scratch buffer.
+ *
+ * Premultiplies the color components before blending so the scratch buffer stays in
+ * premultiplied ARGB8888 throughout the compositing pass.
+ *
+ * @param[in] argb  Straight-alpha ARGB8888 fill color.
+ * @param[in] lx    Scratch-local left edge.
+ * @param[in] ly    Scratch-local top edge.
+ * @param[in] lw    Width in pixels.
+ * @param[in] lh    Height in pixels.
+ */
+static void scratch_do_fill(uint32_t argb, int lx, int ly, int lw, int lh)
+{
+    const uint8_t sa = (uint8_t)((argb >> 24) & 0xFFU);
+    if (sa == 0U)
+        return;
+
+    const uint8_t sr = (uint8_t)((uint32_t)((argb >> 16) & 0xFFU) * sa / 255U);
+    const uint8_t sg = (uint8_t)((uint32_t)((argb >> 8) & 0xFFU) * sa / 255U);
+    const uint8_t sb = (uint8_t)((uint32_t)(argb & 0xFFU) * sa / 255U);
+    const uint8_t inv_sa = (uint8_t)(255U - sa);
+
+    for (int row = ly; row < ly + lh; row++)
+    {
+        if (row < 0 || row >= s_scratch_h)
+            continue;
+        uint32_t* dst_row = s_scratch_buf + row * s_scratch_w;
+        for (int col = lx; col < lx + lw; col++)
+        {
+            if (col < 0 || col >= s_scratch_w)
+                continue;
+            if (sa == 255U)
+            {
+                dst_row[col] = (0xFFU << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
+            }
+            else
+            {
+                const uint32_t d = dst_row[col];
+                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
+                const uint8_t or_ = (uint8_t)(sr + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
+                const uint8_t og = (uint8_t)(sg + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
+                const uint8_t ob = (uint8_t)(sb + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
+                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Source-over blends a premultiplied ARGB source into the scratch buffer at a global alpha.
+ *
+ * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] stride  Source row stride in bytes.
+ * @param[in] alpha   Global alpha scale (0 = transparent, 255 = opaque).
+ * @param[in] lx      Scratch-local left edge.
+ * @param[in] ly      Scratch-local top edge.
+ * @param[in] lw      Width in pixels.
+ * @param[in] lh      Height in pixels.
+ */
+static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx, int ly, int lw, int lh)
+{
+    if (alpha == 0U)
+        return;
+
+    for (int row = 0; row < lh; row++)
+    {
+        const int dy = ly + row;
+        if (dy < 0 || dy >= s_scratch_h)
+            continue;
+        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
+        uint32_t* dst_row = s_scratch_buf + dy * s_scratch_w;
+
+        for (int col = 0; col < lw; col++)
+        {
+            const int dx = lx + col;
+            if (dx < 0 || dx >= s_scratch_w)
+                continue;
+
+            uint32_t sp = src_row[col];
+            if (alpha < 255U)
+            {
+                /* Scale all premultiplied channels by the global alpha. */
+                sp = ((uint32_t)((sp >> 24) & 0xFFU) * alpha / 255U << 24)
+                     | ((uint32_t)((sp >> 16) & 0xFFU) * alpha / 255U << 16)
+                     | ((uint32_t)((sp >> 8) & 0xFFU) * alpha / 255U << 8) | (uint32_t)(sp & 0xFFU) * alpha / 255U;
+            }
+
+            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
+            if (sa == 0U)
+                continue;
+
+            if (sa == 255U)
+            {
+                dst_row[dx] = sp;
+            }
+            else
+            {
+                const uint32_t d = dst_row[dx];
+                const uint8_t inv_sa = (uint8_t)(255U - sa);
+                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
+                const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
+                const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
+                const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
+                dst_row[dx] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Copies premultiplied ARGB pixels directly into the scratch buffer (opaque overwrite).
+ *
+ * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] stride  Source row stride in bytes.
+ * @param[in] lx      Scratch-local left edge.
+ * @param[in] ly      Scratch-local top edge.
+ * @param[in] lw      Width in pixels.
+ * @param[in] lh      Height in pixels.
+ */
+static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw, int lh)
+{
+    for (int row = 0; row < lh; row++)
+    {
+        const int dy = ly + row;
+        if (dy < 0 || dy >= s_scratch_h)
+            continue;
+        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
+        uint32_t* dst_row = s_scratch_buf + dy * s_scratch_w;
+        for (int col = 0; col < lw; col++)
+        {
+            const int dx = lx + col;
+            if (dx < 0 || dx >= s_scratch_w)
+                continue;
+            dst_row[dx] = src_row[col];
+        }
+    }
+}
+
 const EmbeddedRenderBackend* er_backend(void)
 {
     return g_backend;
+}
+
+void er_scratch_begin(uint32_t* buf, int w, int h, int ox, int oy)
+{
+    s_scratch_buf = buf;
+    s_scratch_w = w;
+    s_scratch_h = h;
+    s_scratch_ox = ox;
+    s_scratch_oy = oy;
+}
+
+void er_scratch_end(void)
+{
+    s_scratch_buf = NULL;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -125,6 +285,11 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
 {
     if (!apply_clip(&x, &y, &w, &h))
         return;
+    if (s_scratch_buf)
+    {
+        scratch_do_fill(argb, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        return;
+    }
     if (g_backend && g_backend->fill_rect)
         g_backend->fill_rect(argb, x, y, w, h, g_backend->ctx);
 }
@@ -139,6 +304,11 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
     const int dx = x - orig_x;
     const int dy = y - orig_y;
     src = (const uint8_t*)src + (size_t)dy * (size_t)stride + (size_t)dx * 4U;
+    if (s_scratch_buf)
+    {
+        scratch_do_copy(src, stride, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        return;
+    }
     if (g_backend && g_backend->copy_rect)
         g_backend->copy_rect(src, stride, x, y, w, h, g_backend->ctx);
 }
@@ -152,6 +322,11 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
     const int dx = x - orig_x;
     const int dy = y - orig_y;
     src = (const uint8_t*)src + (size_t)dy * (size_t)stride + (size_t)dx * 4U;
+    if (s_scratch_buf)
+    {
+        scratch_do_blend(src, stride, alpha, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        return;
+    }
     if (g_backend && g_backend->blend_rect)
         g_backend->blend_rect(src, stride, alpha, x, y, w, h, g_backend->ctx);
 }

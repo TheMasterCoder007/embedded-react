@@ -7,3 +7,7 @@ add_test(NAME rendering_rrect COMMAND test_rrect)
 add_executable(test_image test_image.c)
 target_link_libraries(test_image PRIVATE embedded-react)
 add_test(NAME rendering_image COMMAND test_image)
+
+add_executable(test_opacity test_opacity.c)
+target_link_libraries(test_opacity PRIVATE embedded-react)
+add_test(NAME rendering_opacity COMMAND test_opacity)

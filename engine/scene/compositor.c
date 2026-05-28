@@ -3,6 +3,7 @@
 #include "layout_engine.h"
 #include "renderer_internal.h"
 #include "rrect.h"
+#include "scratch_pool.h"
 #include "text_renderer.h"
 #include <string.h>
 
@@ -153,6 +154,16 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     const int w = n->computed.w;
     const int h = n->computed.h;
 
+    /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
+     * scratch slot which is then blended at the node's alpha.  er_scratch_push returns
+     * false when the pool is exhausted or the node is too large; in that case the subtree
+     * renders at full opacity (graceful degradation). */
+    const uint8_t node_opacity = (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW
+                                  || n->type == ER_NODE_PRESSABLE || n->type == ER_NODE_MODAL)
+                                     ? n->props.view.opacity
+                                     : 255U;
+    const bool use_scratch = (node_opacity < 255U) && should_render && er_scratch_push(px, py, w, h);
+
     if (should_render)
     {
         switch (n->type)
@@ -211,6 +222,10 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     if (clips)
         er_pop_clip_rect();
+
+    /* Blend the scratch slot back at this node's opacity. */
+    if (use_scratch)
+        er_scratch_pop_blend(node_opacity, px, py, w, h);
 }
 
 /**

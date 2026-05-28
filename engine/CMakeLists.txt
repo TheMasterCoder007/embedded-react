@@ -20,6 +20,8 @@ set(ERUI_TRANSFORMS "FULL" CACHE STRING "FULL or TRANSLATE_ONLY")
 set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
+set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
+set(ERUI_SCRATCH_H "240" CACHE STRING "Scratch buffer height in pixels (max compositable node height)")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
 set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
 
@@ -42,6 +44,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/image_registry.c
         rendering/image_scaler.c
         rendering/rrect.c
+        rendering/scratch_pool.c
         rendering/shadow.c
         rendering/transform.c
 
@@ -86,6 +89,8 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
         ERUI_MAX_NODES=${ERUI_MAX_NODES}
         ERUI_MAX_OPACITY_DEPTH=${ERUI_MAX_OPACITY_DEPTH}
+        ERUI_SCRATCH_W=${ERUI_SCRATCH_W}
+        ERUI_SCRATCH_H=${ERUI_SCRATCH_H}
 )
 
 target_compile_definitions(embedded-react PRIVATE

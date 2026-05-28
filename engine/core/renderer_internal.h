@@ -71,6 +71,26 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h);
 
 /**
+ * @brief Redirects all subsequent blit calls into an off-screen ARGB8888 scratch buffer.
+ *
+ * After this call er_blit_fill / er_blit_copy / er_blit_blend write pixel data into buf
+ * rather than forwarding to the real backend.  Call er_scratch_end() to restore normal
+ * routing.  buf must remain valid until er_scratch_end() is called.
+ *
+ * @param[in] buf  Scratch buffer; w × h premultiplied ARGB8888 pixels, row-major.
+ * @param[in] w    Buffer width in pixels.
+ * @param[in] h    Buffer height in pixels.
+ * @param[in] ox   World-space X coordinate that maps to buf column 0.
+ * @param[in] oy   World-space Y coordinate that maps to buf row 0.
+ */
+void er_scratch_begin(uint32_t* buf, int w, int h, int ox, int oy);
+
+/**
+ * @brief Clears scratch redirection, restoring blit routing to the real framebuffer.
+ */
+void er_scratch_end(void);
+
+/**
  * @brief Advances the renderer's internal time counter by delta_ms milliseconds.
  *
  * Called from embedded_renderer_tick() on each frame. The accumulated value is
