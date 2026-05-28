@@ -24,7 +24,7 @@ hit-testing are working. The remaining work is everything above raw events.
   sized node is hittable regardless of visibility.
 - [x] **Hit-test clipping to `overflow: hidden` ancestors** — point must lie inside every
   clipping ancestor, not just the leaf rect.
-- [ ] **Hit-test through 2D transforms** — once `transform.c` lands, hit-testing must
+- [x] **Hit-test through 2D transforms** — once `transform.c` lands, hit-testing must
   apply the inverse transform to the query point at each transformed ancestor.
 - [x] **Gesture/PanResponder support** — slop threshold, capture phase, `onMoveShouldSetResponder`,
   `onStartShouldSetResponder` equivalents, gesture cancel when scroll grabs the
@@ -100,14 +100,14 @@ Everything else under `engine/rendering/` is a stub.
 - [ ] Uses scratch buffer pool (see 4.7).
 - [ ] Add the shadow fields to `ERProps` and the View prop union.
 
-### 4.3 Transforms ([transform.c](engine/rendering/transform.c) is a stub)
+### 4.3 Transforms ([transform.c](engine/rendering/transform.c))
 
-- [ ] **Translate-only fast path** — pure integer offset, no rasterization (`ERUI_TRANSFORMS=TRANSLATE_ONLY`).
-- [ ] **2D affine pass** — `scaleX/Y`, `rotateZ`, `translateX/Y`, `transformOrigin`. Rasterize
+- [x] **Translate-only fast path** — pure integer offset, no rasterization (`ERUI_TRANSFORMS=TRANSLATE_ONLY`).
+- [x] **2D affine pass** — `scaleX/Y`, `rotateZ`, `translateX/Y`, `transformOrigin`. Rasterize
   transformed subtree into a scratch slot, blend to parent.
 - [ ] **3D pass** — `rotateX`, `rotateY`, `perspective` — gated behind `ERUI_3D_TRANSFORMS`.
-- [ ] **Transform matrix propagation** during render and during hit-test (inverse mapping).
-- [ ] Add transform fields to `ERProps` (currently animatable via `ERAnimProp` enum but
+- [x] **Transform matrix propagation** during render and during hit-test (inverse mapping).
+- [x] Add transform fields to `ERProps` (currently animatable via `ERAnimProp` enum but
   no static prop fields exist).
 
 ### 4.4 Opacity compositing
@@ -187,7 +187,7 @@ opacity and the two color props.
   `er_anim_start` rejects non-timing.
 - [ ] **Decay animations** (`ER_ANIM_DECAY`) — exponential friction; honor `velocity` and
   `deceleration`.
-- [ ] **Translate/scale/rotate property support** — `apply_numeric_value` only handles
+- [x] **Translate/scale/rotate property support** — `apply_numeric_value` only handles
   `ER_PROP_OPACITY`. Add translateX/Y, scaleX/Y, rotateZ once transform props exist
   in `ERViewProps` (or its successor).
 - [ ] **`Animated.delay`** — start time offset before the first tick contributes.
@@ -257,14 +257,14 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 - [x] animation, input, layout, text, rrect
 - [x] **Hit-test under opacity / display:none** (covered by existing tests)
-- [ ] **Hit-test under transforms**
+- [x] **Hit-test under transforms**
 - [x] **Scroll gesture + momentum**
 - [x] **Layout event dispatch**
 - [ ] **Spring / decay animations**
 - [ ] **Sequence / parallel / stagger**
 - [x] **Image scaling + tint + resizeMode**
 - [ ] **Shadow rasterizer (visual baseline comparison)**
-- [ ] **Transform render + hit-test**
+- [x] **Transform render + hit-test**
 - [x] **Opacity offscreen compositing**
 - [ ] **Multi-line / ellipsize text**
 - [ ] **Node pool free-slot reuse**

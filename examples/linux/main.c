@@ -14,8 +14,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SCREEN_W 960
-#define SCREEN_H 620
+#define SCREEN_W 1024
+#define SCREEN_H 768
 
 #define CYCLE_COUNT 5
 
@@ -46,6 +46,12 @@ static const uint32_t k_cycle_colors[] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0x
 /* Panel 4 — ScrollView */
 static ERNode* s_sv_v_lbl = NULL; /**< Live vertical-offset readout label.   */
 static ERNode* s_sv_h_lbl = NULL; /**< Live horizontal-offset readout label. */
+
+/* Panel 5 — Transforms & Opacity (looping self-animated nodes) */
+static ERNode* s_xform_translate = NULL;
+static ERNode* s_xform_rotate = NULL;
+static ERNode* s_xform_scale = NULL;
+static ERNode* s_opacity_node = NULL;
 
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
@@ -148,6 +154,23 @@ static void anim_bg(ERNode* node, uint32_t color, uint32_t ms)
     cfg.type = ER_ANIM_TIMING;
     cfg.duration_ms = ms;
     er_anim_start(node, ER_PROP_BACKGROUND_COLOR, color_bits(color), &cfg);
+}
+
+/**
+ * @brief Starts a looping ping-pong timing animation on a transform property.
+ *
+ * @param[in] node   Target node.
+ * @param[in] prop   Animatable property (ER_PROP_TRANSLATE_X/Y, SCALE_X/Y, ROTATE_Z, OPACITY).
+ * @param[in] to_val Target value for the first half of each loop.
+ * @param[in] ms     Duration of one half-cycle in milliseconds.
+ */
+static void anim_loop(ERNode* node, ERAnimProp prop, float to_val, uint32_t ms)
+{
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = ms;
+    cfg.loop = true;
+    er_anim_start(node, prop, to_val, &cfg);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -555,6 +578,102 @@ static ERNode* make_panel(void)
     p.padding = dp(14);
     p.gap = dp(9);
     er_node_set_props(col, &p);
+    return col;
+}
+
+/**
+ * @brief Creates one transform-demo sub-item: a label above an animated inner box.
+ *
+ * The outer VIEW is a fixed-height column container (background tinted dark).
+ * The inner VIEW is the node that will receive the looping transform animation.
+ * A pointer to the inner node is written to *out_node.
+ *
+ * @param[in]  caption   Short label describing the transform.
+ * @param[in]  box_color Fill color for the animated inner box.
+ * @param[out] out_node  Receives the inner animated node.
+ *
+ * @return The outer container VIEW, ready to be appended to the panel.
+ */
+static ERNode* make_xform_demo(const char* caption, uint32_t box_color, ERNode** out_node)
+{
+    ERNode* outer = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(7);
+    p.gap = dp(6);
+    p.padding = dp(8);
+    er_node_set_props(outer, &p);
+
+    ERNode* lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF7799BB;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, caption, ER_TEXT_MAX);
+    er_node_set_props(lbl, &p);
+    er_tree_append_child(outer, lbl);
+
+    ERNode* box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.width = dp(44);
+    p.height = dp(44);
+    p.background_color = box_color;
+    p.border_radius = dp(6);
+    er_node_set_props(box, &p);
+    er_tree_append_child(outer, box);
+
+    if (out_node)
+        *out_node = box;
+    return outer;
+}
+
+/**
+ * @brief Builds Panel 5 — Transforms & Opacity.
+ *
+ * Four demo sub-items arranged in two rows:
+ *   Row 1: translate X  |  rotate Z
+ *   Row 2: scale X/Y    |  opacity
+ *
+ * The animated nodes are stored in s_xform_* / s_opacity_node so that the
+ * caller can start looping animations after the scene is fully assembled.
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_transforms_panel(void)
+{
+    ERNode* col = make_panel();
+    er_tree_append_child(col, make_section_header("TRANSFORMS  &  OPACITY"));
+    er_tree_append_child(col, make_caption("looping timing animations — no interaction required"));
+
+    /* Row 1 */
+    ERNode* row1 = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(6);
+    er_node_set_props(row1, &p);
+
+    er_tree_append_child(row1, make_xform_demo("translateX", 0xFF2A9D8F, &s_xform_translate));
+    er_tree_append_child(row1, make_xform_demo("rotateZ", 0xFFE94560, &s_xform_rotate));
+    er_tree_append_child(col, row1);
+
+    /* Row 2 */
+    ERNode* row2 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(6);
+    er_node_set_props(row2, &p);
+
+    er_tree_append_child(row2, make_xform_demo("scale", 0xFFF4A261, &s_xform_scale));
+    er_tree_append_child(row2, make_xform_demo("opacity", 0xFF9B59B6, &s_opacity_node));
+    er_tree_append_child(col, row2);
+
     return col;
 }
 
@@ -1055,13 +1174,14 @@ static void build_scene(int phys_w, int phys_h)
     /* ---- Bottom row container ------------------------------------------ */
     ERNode* sv_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(210); /* explicit height so flex_grow on columns doesn't crowd it out */
+    p.height = dp(260);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(12);
     er_node_set_props(sv_row, &p);
     er_tree_append_child(sv_row, sv_left);
     er_tree_append_child(sv_row, sv_right);
+    er_tree_append_child(sv_row, build_transforms_panel());
 
     /* =====================================================================
      * ASSEMBLE
@@ -1134,6 +1254,20 @@ int main(void)
     }
 
     build_scene(phys_w, phys_h);
+
+    /* Start looping transform / opacity animations for Panel 5.
+     * Each animates to a target and ping-pongs back on the next half-cycle. */
+    if (s_xform_translate)
+        anim_loop(s_xform_translate, ER_PROP_TRANSLATE_X, (float)dp(36), 700);
+    if (s_xform_rotate)
+        anim_loop(s_xform_rotate, ER_PROP_ROTATE_Z, 45.0f, 900);
+    if (s_xform_scale)
+    {
+        anim_loop(s_xform_scale, ER_PROP_SCALE_X, 1.25f, 800);
+        anim_loop(s_xform_scale, ER_PROP_SCALE_Y, 1.25f, 800);
+    }
+    if (s_opacity_node)
+        anim_loop(s_opacity_node, ER_PROP_OPACITY, 0.15f, 1100);
 
     bool running = true;
     uint32_t prev = SDL_GetTicks();

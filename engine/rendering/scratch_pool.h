@@ -36,6 +36,30 @@ extern "C"
     bool er_scratch_push(int x, int y, int w, int h);
 
     /**
+     * @brief Sets a "base" scratch target that blit calls fall back to when the opacity stack is empty.
+     *
+     * Used by the transform subsystem to capture a subtree render into an off-screen buffer while
+     * allowing nested opacity compositing to still work correctly inside the transform.  Must be
+     * paired with er_scratch_pop_base().  Only one base target may be active at a time.
+     *
+     * @param[in] buf  Scratch buffer; ERUI_SCRATCH_W × ERUI_SCRATCH_H premultiplied ARGB8888.
+     * @param[in] w    Buffer width in pixels.
+     * @param[in] h    Buffer height in pixels.
+     * @param[in] ox   World-space X coordinate that maps to buf column 0.
+     * @param[in] oy   World-space Y coordinate that maps to buf row 0.
+     */
+    void er_scratch_push_base(uint32_t* buf, int w, int h, int ox, int oy);
+
+    /**
+     * @brief Clears the base scratch target and restores normal routing.
+     *
+     * If opacity scratch slots are currently active their routing is preserved.
+     * After this call the base target is NULL and blit routing reverts to the active opacity slot
+     * (or the real framebuffer if the opacity stack is also empty).
+     */
+    void er_scratch_pop_base(void);
+
+    /**
      * @brief Blends the top scratch slot onto the destination and releases it.
      *
      * Restores blit routing to whatever was active before the matching er_scratch_push()

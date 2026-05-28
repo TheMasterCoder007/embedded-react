@@ -304,6 +304,15 @@ extern "C"
         char image_name[ER_IMAGE_NAME_MAX + 1]; /**< Asset name registered via er_image_load(). */
         uint8_t resize_mode;                    /**< ERResizeMode — default ER_RESIZE_COVER. */
         uint32_t tint_color;                    /**< Straight-alpha ARGB8888; 0 = no tint. */
+
+        /* --- Transform --- */
+        float transform_translate_x; /**< X translation in pixels (0 = none). */
+        float transform_translate_y; /**< Y translation in pixels (0 = none). */
+        float transform_scale_x;     /**< X scale factor; 0.0 treated as identity (1.0). */
+        float transform_scale_y;     /**< Y scale factor; 0.0 treated as identity (1.0). */
+        float transform_rotate_z;    /**< Clockwise rotation in degrees (0 = none). */
+        float transform_origin_x;    /**< Fractional X pivot [0.0–1.0]; negative = center (0.5). */
+        float transform_origin_y;    /**< Fractional Y pivot [0.0–1.0]; negative = center (0.5). */
     } ERProps;
 
     /**

@@ -5,6 +5,7 @@
 #include "rrect.h"
 #include "scratch_pool.h"
 #include "text_renderer.h"
+#include "transform.h"
 #include <string.h>
 
 #ifndef ERUI_MAX_NODES
@@ -149,10 +150,42 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     const bool should_render = n->dirty || parent_dirty;
 
     /* Actual screen position after applying all ancestor scroll offsets. */
-    const int px = n->computed.x - translate_x;
-    const int py = n->computed.y - translate_y;
+    int px = n->computed.x - translate_x;
+    int py = n->computed.y - translate_y;
     const int w = n->computed.w;
     const int h = n->computed.h;
+
+    /* --- 2D transform application --- */
+    bool doing_affine = false;
+    int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
+    float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
+
+    if (n->has_transform)
+    {
+#if ERUI_TRANSFORMS_FULL
+        if (!er_transform_is_translate_only(n))
+        {
+            /* Full affine: render into scratch, then inverse-map blit. */
+            float a, b, c, d, ftx, fty;
+            er_transform_compute_matrix(n, px, py, w, h, &a, &b, &c, &d, &ftx, &fty);
+            er_transform_aabb(px, py, w, h, a, b, c, d, ftx, fty, &dst_x, &dst_y, &dst_w, &dst_h);
+
+            if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity)
+                && er_transform_source_begin(px, py, w, h))
+            {
+                doing_affine = true;
+            }
+            /* On failure (too large or singular matrix) fall through to normal render at
+             * the untransformed position as a graceful degradation. */
+        }
+        else
+#endif
+        {
+            /* Translate-only fast path: shift the render position by the prop offsets. */
+            px += (int)n->tp_translate_x;
+            py += (int)n->tp_translate_y;
+        }
+    }
 
     /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
      * scratch slot which is then blended at the node's alpha.  er_scratch_push returns
@@ -226,6 +259,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     /* Blend the scratch slot back at this node's opacity. */
     if (use_scratch)
         er_scratch_pop_blend(node_opacity, px, py, w, h);
+
+    /* Affine transform: end source capture and blit the transformed result. */
+    if (doing_affine)
+        er_transform_source_end_blit(
+            px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
 }
 
 /**
@@ -427,6 +465,18 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->hit_slop_top = props->hit_slop_top;
     node->hit_slop_right = props->hit_slop_right;
     node->hit_slop_bottom = props->hit_slop_bottom;
+
+    /* Copy transform props. */
+    node->tp_translate_x = props->transform_translate_x;
+    node->tp_translate_y = props->transform_translate_y;
+    node->tp_scale_x = props->transform_scale_x;
+    node->tp_scale_y = props->transform_scale_y;
+    node->tp_rotate_z = props->transform_rotate_z;
+    node->tp_origin_x = props->transform_origin_x;
+    node->tp_origin_y = props->transform_origin_y;
+    node->has_transform =
+        (props->transform_translate_x != 0.0f || props->transform_translate_y != 0.0f
+         || props->transform_scale_x != 0.0f || props->transform_scale_y != 0.0f || props->transform_rotate_z != 0.0f);
 
     /* Copy type-specific visual props. */
     switch (node->type)

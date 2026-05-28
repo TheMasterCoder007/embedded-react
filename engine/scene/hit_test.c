@@ -1,5 +1,6 @@
 #include "er_node_internal.h"
 #include "renderer_internal.h"
+#include "transform.h"
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
@@ -136,6 +137,55 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
 }
 
 /**
+ * @brief Returns whether a screen-space point, after inverse-transforming through a node's
+ *        2D transform, lies inside the node's slop-extended layout rectangle.
+ *
+ * For nodes without a transform this is identical to point_inside_node_with_slop().
+ * For translated nodes the query is adjusted by the negative translation offset.
+ * For full-affine nodes the full inverse matrix is applied.
+ *
+ * @param[in] node  Node to test.
+ * @param[in] x     Screen-space X coordinate.
+ * @param[in] y     Screen-space Y coordinate.
+ *
+ * @return true when the point maps into the node's slop-extended layout bounds.
+ */
+static bool point_inside_transformed_with_slop(const ERNode* node, int x, int y)
+{
+    int qx = x, qy = y;
+    if (node->has_transform)
+    {
+#if ERUI_TRANSFORMS_FULL
+        if (!er_transform_is_translate_only(node))
+        {
+            float a, b, c, d, ftx, fty;
+            er_transform_compute_matrix(node,
+                                        node->computed.x,
+                                        node->computed.y,
+                                        node->computed.w,
+                                        node->computed.h,
+                                        &a,
+                                        &b,
+                                        &c,
+                                        &d,
+                                        &ftx,
+                                        &fty);
+            float ia, ib, ic, id, itx, ity;
+            if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
+                return false;
+            er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
+        }
+        else
+#endif
+        {
+            qx = x - (int)node->tp_translate_x;
+            qy = y - (int)node->tp_translate_y;
+        }
+    }
+    return point_inside_node_with_slop(node, qx, qy);
+}
+
+/**
  * @brief Collects child tags into an array in append order.
  *
  * @param[in] parent    Parent node whose children should be collected.
@@ -234,8 +284,42 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
     if (pe == ER_POINTER_EVENTS_NONE)
         return NULL;
 
-    /* Gate entry on the slop-extended bounds. */
-    if (!point_inside_node_with_slop(node, x, y))
+    /* Apply this node's transform (if any) to convert the screen-space query point into the
+     * coordinate space where the node's computed rect lives.  For translate-only transforms,
+     * subtract the translation offset.  For full affine transforms, apply the inverse matrix. */
+    int qx = x, qy = y;
+    if (node->has_transform)
+    {
+#if ERUI_TRANSFORMS_FULL
+        if (!er_transform_is_translate_only(node))
+        {
+            float a, b, c, d, ftx, fty;
+            er_transform_compute_matrix(node,
+                                        node->computed.x,
+                                        node->computed.y,
+                                        node->computed.w,
+                                        node->computed.h,
+                                        &a,
+                                        &b,
+                                        &c,
+                                        &d,
+                                        &ftx,
+                                        &fty);
+            float ia, ib, ic, id, itx, ity;
+            if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
+                return NULL; /* Singular transform — not hittable. */
+            er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
+        }
+        else
+#endif
+        {
+            qx = x - (int)node->tp_translate_x;
+            qy = y - (int)node->tp_translate_y;
+        }
+    }
+
+    /* Gate entry on the slop-extended bounds (using the transform-adjusted query). */
+    if (!point_inside_node_with_slop(node, qx, qy))
         return NULL;
 
     /* Recurse into children unless box-only. */
@@ -244,12 +328,12 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
         /* overflow:hidden and overflow:scroll clip child hit-testing to strict bounds. */
         const bool clips = (node->layout.overflow == ER_OVERFLOW_HIDDEN || node->layout.overflow == ER_OVERFLOW_SCROLL);
 
-        if (!clips || point_inside_node(node, x, y))
+        if (!clips || point_inside_node(node, qx, qy))
         {
             /* Translate query point into content space for ScrollView nodes so that
              * children are tested against their layout-computed positions. */
-            const int child_x = (node->type == ER_NODE_SCROLL_VIEW) ? x + (int)node->scroll_offset_x : x;
-            const int child_y = (node->type == ER_NODE_SCROLL_VIEW) ? y + (int)node->scroll_offset_y : y;
+            const int child_x = (node->type == ER_NODE_SCROLL_VIEW) ? qx + (int)node->scroll_offset_x : qx;
+            const int child_y = (node->type == ER_NODE_SCROLL_VIEW) ? qy + (int)node->scroll_offset_y : qy;
 
             uint16_t child_tags[ERUI_MAX_NODES];
             const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
@@ -625,7 +709,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* press_target = nearest_press_target(hit);
 
             touch->active = hit != NULL;
-            touch->inside = press_target ? point_inside_node_with_slop(press_target, x, y) : false;
+            touch->inside = press_target ? point_inside_transformed_with_slop(press_target, x, y) : false;
             touch->long_press_fired = false;
             touch->long_press_cancelled = false;
             touch->elapsed_ms = 0U;
@@ -670,7 +754,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             if (press_target)
             {
-                const bool inside = point_inside_node_with_slop(press_target, x, y);
+                const bool inside = point_inside_transformed_with_slop(press_target, x, y);
                 if (!inside)
                     touch->long_press_cancelled = true;
                 if (inside != touch->inside)
@@ -769,7 +853,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             ERNode* touch_target = er_get_node(touch->touch_target_tag);
             ERNode* press_target = er_get_node(touch->press_target_tag);
-            const bool inside = press_target && point_inside_node_with_slop(press_target, x, y);
+            const bool inside = press_target && point_inside_transformed_with_slop(press_target, x, y);
             const int dx = x - touch->start_x;
             const int dy = y - touch->start_y;
 

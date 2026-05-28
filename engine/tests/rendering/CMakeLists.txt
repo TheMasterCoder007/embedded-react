@@ -11,3 +11,7 @@ add_test(NAME rendering_image COMMAND test_image)
 add_executable(test_opacity test_opacity.c)
 target_link_libraries(test_opacity PRIVATE embedded-react)
 add_test(NAME rendering_opacity COMMAND test_opacity)
+
+add_executable(test_transform test_transform.c)
+target_link_libraries(test_transform PRIVATE embedded-react)
+add_test(NAME rendering_transform COMMAND test_transform)

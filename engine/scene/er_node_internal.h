@@ -134,6 +134,15 @@ struct ERNode
     float scroll_vel_y;         /**< Momentum velocity Y in px/ms (positive = content moving down). */
     int16_t scroll_content_w;   /**< Bounding width of all children; computed after layout (ScrollView only). */
     int16_t scroll_content_h;   /**< Bounding height of all children; computed after layout (ScrollView only). */
+    /* Transform props: raw values copied from ERProps */
+    float tp_translate_x; /**< X translation in pixels. */
+    float tp_translate_y; /**< Y translation in pixels. */
+    float tp_scale_x;     /**< X scale factor; 0.0 = identity (1.0). */
+    float tp_scale_y;     /**< Y scale factor; 0.0 = identity (1.0). */
+    float tp_rotate_z;    /**< Clockwise rotation in degrees. */
+    float tp_origin_x;    /**< Fractional X pivot; negative = center (0.5). */
+    float tp_origin_y;    /**< Fractional Y pivot; negative = center (0.5). */
+    bool has_transform;   /**< True when any transform prop is non-identity. */
     EREventHandler events[ER_EVENT_LAYOUT + 1U];
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     union

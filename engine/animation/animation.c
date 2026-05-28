@@ -102,6 +102,21 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
                 return false;
             *value = (float)node->props.view.opacity / 255.0f;
             return true;
+        case ER_PROP_TRANSLATE_X:
+            *value = node->tp_translate_x;
+            return true;
+        case ER_PROP_TRANSLATE_Y:
+            *value = node->tp_translate_y;
+            return true;
+        case ER_PROP_SCALE_X:
+            *value = node->tp_scale_x;
+            return true;
+        case ER_PROP_SCALE_Y:
+            *value = node->tp_scale_y;
+            return true;
+        case ER_PROP_ROTATE_Z:
+            *value = node->tp_rotate_z;
+            return true;
         default:
             return false;
     }
@@ -147,6 +162,17 @@ static bool read_color_value(const ERNode* node, ERAnimProp prop, uint32_t* colo
  *
  * @return true if the property was applied.
  */
+/**
+ * @brief Recomputes node->has_transform from the current tp_* fields.
+ *
+ * @param[in,out] node  Node to update.
+ */
+static void update_has_transform(ERNode* node)
+{
+    node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
+                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f);
+}
+
 static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
 {
     if (!node)
@@ -162,6 +188,26 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
             if (value > 1.0f)
                 value = 1.0f;
             node->props.view.opacity = (uint8_t)(value * 255.0f + 0.5f);
+            return true;
+        case ER_PROP_TRANSLATE_X:
+            node->tp_translate_x = value;
+            update_has_transform(node);
+            return true;
+        case ER_PROP_TRANSLATE_Y:
+            node->tp_translate_y = value;
+            update_has_transform(node);
+            return true;
+        case ER_PROP_SCALE_X:
+            node->tp_scale_x = value;
+            update_has_transform(node);
+            return true;
+        case ER_PROP_SCALE_Y:
+            node->tp_scale_y = value;
+            update_has_transform(node);
+            return true;
+        case ER_PROP_ROTATE_Z:
+            node->tp_rotate_z = value;
+            update_has_transform(node);
             return true;
         default:
             return false;
