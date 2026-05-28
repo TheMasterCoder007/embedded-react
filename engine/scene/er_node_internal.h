@@ -41,6 +41,7 @@ typedef struct
     uint8_t justify_content; /**< ERFlexJustify    */
     uint8_t position;        /**< ERPositionType   */
     uint8_t display;         /**< ERDisplayMode    */
+    uint8_t overflow;        /**< EROverflow       */
 } ERLayoutSpec;
 
 /**
@@ -108,8 +109,14 @@ struct ERNode
     bool in_use;
     bool dirty;
     int16_t z_index;
+    uint8_t pointer_events;  /**< ERPointerEvents — controls which parts of the node receive touch events. */
+    int16_t hit_slop_left;   /**< Pixels by which the left hit edge extends beyond the computed rect. */
+    int16_t hit_slop_top;    /**< Pixels by which the top hit edge extends beyond the computed rect. */
+    int16_t hit_slop_right;  /**< Pixels by which the right hit edge extends beyond the computed rect. */
+    int16_t hit_slop_bottom; /**< Pixels by which the bottom hit edge extends beyond the computed rect. */
     ERLayoutSpec layout;
     ERLayoutRect computed;
+    ERLayoutRect prev_computed; /**< Computed rect from the previous commit, used to detect layout changes. */
     EREventHandler events[ER_EVENT_LAYOUT + 1U];
     union
     {

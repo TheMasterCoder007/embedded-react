@@ -34,6 +34,15 @@ typedef struct
 } EventCounts;
 
 /**
+ * @brief Accumulates ER_EVENT_LAYOUT callbacks for a node.
+ */
+typedef struct
+{
+    int count;
+    ERRect rect;
+} LayoutRecord;
+
+/**
  * @brief Records the last color drawn by a test backend.
  */
 typedef struct
@@ -277,6 +286,21 @@ static void on_touch_cancel(ERNode* node, const EREventData* data, void* user_da
     (void)data;
     counts->touch_cancel_count++;
     append_log(counts, 'C');
+}
+
+/**
+ * @brief Records an ER_EVENT_LAYOUT callback.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Layout event payload.
+ * @param[in] user_data  Pointer to LayoutRecord.
+ */
+static void on_layout(ERNode* node, const EREventData* data, void* user_data)
+{
+    LayoutRecord* rec = user_data;
+    (void)node;
+    rec->count++;
+    rec->rect = data->layout_rect;
 }
 
 /**
@@ -664,6 +688,301 @@ static int test_z_index_render_order(void)
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Checks that pointer_events:none prevents the node and all children from receiving touches.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_none(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    p.background_color = 0xFF101010U;
+    p.pointer_events = ER_POINTER_EVENTS_NONE;
+    er_node_set_props(pressable, &p);
+    er_event_set(pressable, ER_EVENT_PRESS, on_press, &counts);
+    er_event_set(pressable, ER_EVENT_TOUCH_START, on_touch_start, &counts);
+
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+    if (counts.press_count != 0 || counts.touch_start_count != 0)
+        return fail("pointer_events:none node received touch events");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that pointer_events:box-none passes touches to children but not to the node itself.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_none(void)
+{
+    ERNode* root = create_root();
+    EventCounts parent_counts = {0};
+    EventCounts child_counts = {0};
+
+    /* Parent view with BOX_NONE — transparent to touches, but passes them through */
+    ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+        er_node_set_props(parent, &p);
+        er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
+        er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
+    }
+
+    /* Child pressable inside parent */
+    ERNode* child = create_pressable(10, 10, 40, 40, &child_counts);
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    /* Touch inside child — child must receive press, parent must not */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 15, 15);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 15, 15);
+
+    if (child_counts.press_count != 1)
+        return fail("pointer_events:box-none child did not receive press");
+    if (parent_counts.press_count != 0)
+        return fail("pointer_events:box-none parent received press when child was hit");
+
+    /* Touch inside parent but outside child — nobody receives press */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 60, 60);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 60, 60);
+
+    if (parent_counts.press_count != 0)
+        return fail("pointer_events:box-none parent received press on direct hit");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that pointer_events:box-only delivers touches to the node but not its children.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_only(void)
+{
+    ERNode* root = create_root();
+    EventCounts parent_counts = {0};
+    EventCounts child_counts = {0};
+
+    /* Parent pressable with BOX_ONLY — absorbs all touches, children get nothing */
+    ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        p.pointer_events = ER_POINTER_EVENTS_BOX_ONLY;
+        er_node_set_props(parent, &p);
+        er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
+        er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
+    }
+
+    ERNode* child = create_pressable(10, 10, 40, 40, &child_counts);
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    /* Touch inside child — parent must receive press, child must not */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 15, 15);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 15, 15);
+
+    if (parent_counts.press_count != 1)
+        return fail("pointer_events:box-only parent did not receive press");
+    if (child_counts.press_count != 0)
+        return fail("pointer_events:box-only child received press");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that hitSlop extends the hit area beyond the node's strict bounds.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_hit_slop(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+
+    /* Pressable at [50,50,80,80] with 20px left slop — hittable from x=30 */
+    ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 50;
+        p.top = 50;
+        p.width = 80;
+        p.height = 80;
+        p.hit_slop_left = 20;
+        er_node_set_props(pressable, &p);
+        er_event_set(pressable, ER_EVENT_PRESS, on_press, &counts);
+        er_event_set(pressable, ER_EVENT_PRESS_IN, on_press_in, &counts);
+        er_event_set(pressable, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+        er_event_set(pressable, ER_EVENT_TOUCH_START, on_touch_start, &counts);
+    }
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    /* Touch in slop zone (x=35, inside [30,50)) — press must fire */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 35, 80);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 35, 80);
+
+    if (counts.press_count != 1)
+        return fail("hitSlop touch in slop zone did not fire press");
+
+    /* Touch outside slop zone (x=25, outside [30,...)) — no press */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 25, 80);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 25, 80);
+
+    if (counts.press_count != 1)
+        return fail("hitSlop touch outside slop zone fired press");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that overflow:hidden prevents children from being hit outside the strict parent bounds,
+ *        even when the parent has hitSlop that would otherwise allow entry.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_overflow_hidden_clips_hit(void)
+{
+    ERNode* root = create_root();
+    EventCounts parent_counts = {0};
+    EventCounts child_counts = {0};
+
+    /*
+     * Parent PRESSABLE at [20,20,80,80] with overflow:hidden and 30px right slop.
+     * Strict right edge at x=100; slop extends hittable zone to x=130.
+     */
+    ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 20;
+        p.top = 20;
+        p.width = 80;
+        p.height = 80;
+        p.overflow = ER_OVERFLOW_HIDDEN;
+        p.hit_slop_right = 30;
+        er_node_set_props(parent, &p);
+        er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
+        er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
+    }
+
+    /*
+     * Child PRESSABLE at left=70,top=0 relative to parent → absolute [90,20,60,60].
+     * Its right edge reaches x=150, well outside the parent's strict right edge (x=100).
+     */
+    ERNode* child = er_node_create(ER_NODE_PRESSABLE);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 70;
+        p.top = 0;
+        p.width = 60;
+        p.height = 60;
+        er_node_set_props(child, &p);
+        er_event_set(child, ER_EVENT_PRESS, on_press, &child_counts);
+        er_event_set(child, ER_EVENT_TOUCH_START, on_touch_start, &child_counts);
+    }
+
+    er_tree_append_child(parent, child);
+    er_tree_append_child(root, parent);
+    er_commit();
+
+    /*
+     * Touch at (110, 30): inside child [90,20,60,60] and inside parent slop zone
+     * (100 < 110 < 130) but outside parent strict bounds.
+     * overflow:hidden must prevent the child from being hit.
+     * The parent itself is hittable in its slop zone — press must fire on parent.
+     */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 110, 30);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 110, 30);
+
+    if (child_counts.touch_start_count != 0 || child_counts.press_count != 0)
+        return fail("overflow:hidden did not clip child hit in parent slop zone");
+    if (parent_counts.press_count != 1)
+        return fail("overflow:hidden parent was not hittable in its own slop zone");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that ER_EVENT_LAYOUT fires when a node's computed rect changes.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_layout_event_dispatch(void)
+{
+    ERNode* root = create_root();
+    LayoutRecord rec = {0};
+
+    ERNode* view = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 10;
+    p.top = 20;
+    p.width = 60;
+    p.height = 40;
+    er_node_set_props(view, &p);
+    er_event_set(view, ER_EVENT_LAYOUT, on_layout, &rec);
+    er_tree_append_child(root, view);
+
+    er_commit();
+
+    if (rec.count != 1)
+        return fail("layout event did not fire on first commit");
+    if (rec.rect.x != 10 || rec.rect.y != 20 || rec.rect.w != 60 || rec.rect.h != 40)
+        return fail("layout event payload was wrong");
+
+    er_commit();
+
+    if (rec.count != 1)
+        return fail("layout event fired again with no layout change");
+
+    /* Move the node — layout event must fire again with the new rect */
+    ERProps p2 = props_default();
+    p2.position = ER_POS_ABSOLUTE;
+    p2.left = 30;
+    p2.top = 20;
+    p2.width = 60;
+    p2.height = 40;
+    er_node_set_props(view, &p2);
+    er_commit();
+
+    if (rec.count != 2)
+        return fail("layout event did not fire after rect change");
+    if (rec.rect.x != 30)
+        return fail("layout event payload did not reflect moved position");
+
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -766,6 +1085,18 @@ int main(void)
     if (test_display_none_not_hittable() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_opacity_zero_not_hittable() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_none() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_none() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_only() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_hit_slop() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_overflow_hidden_clips_hit() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_layout_event_dispatch() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;

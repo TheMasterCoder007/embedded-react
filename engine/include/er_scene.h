@@ -133,6 +133,27 @@ typedef enum
 } ERDisplayMode;
 
 /**
+ * @brief Overflow behaviour controlling how a node clips its content.
+ */
+typedef enum
+{
+    ER_OVERFLOW_VISIBLE = 0, /**< Content renders beyond node bounds (default). */
+    ER_OVERFLOW_HIDDEN  = 1, /**< Content and hit-testing are clipped to node bounds. */
+    ER_OVERFLOW_SCROLL  = 2, /**< Content clipped; scroll offset applied by ScrollView. */
+} EROverflow;
+
+/**
+ * @brief Controls which parts of a node and its subtree can receive pointer events.
+ */
+typedef enum
+{
+    ER_POINTER_EVENTS_AUTO     = 0, /**< Node and subtree participate in hit-testing (default). */
+    ER_POINTER_EVENTS_NONE     = 1, /**< Neither this node nor its children receive touch events. */
+    ER_POINTER_EVENTS_BOX_ONLY = 2, /**< Only this node is hittable; children are transparent to touches. */
+    ER_POINTER_EVENTS_BOX_NONE = 3, /**< This node is transparent to touches; children are hittable. */
+} ERPointerEvents;
+
+/**
  * @brief Animatable node properties.
  */
 typedef enum
@@ -227,6 +248,14 @@ typedef struct ERProps
     int16_t border_radius; /**< Corner radius in pixels. */
     int16_t z_index; /**< Sibling stacking order; higher values render and hit-test above lower values. */
     uint8_t opacity; /**< Node opacity 0–255 (255 = fully opaque). */
+    uint8_t overflow; /**< EROverflow — default ER_OVERFLOW_VISIBLE. */
+
+    /* --- Interaction --- */
+    uint8_t pointer_events;  /**< ERPointerEvents — default ER_POINTER_EVENTS_AUTO. */
+    int16_t hit_slop_left;   /**< Extend hit area beyond left edge in pixels. */
+    int16_t hit_slop_top;    /**< Extend hit area beyond top edge in pixels. */
+    int16_t hit_slop_right;  /**< Extend hit area beyond right edge in pixels. */
+    int16_t hit_slop_bottom; /**< Extend hit area beyond bottom edge in pixels. */
 
     /* --- Text --- */
     char text[ER_TEXT_MAX + 1]; /**< Null-terminated UTF-8 string. */
@@ -259,10 +288,11 @@ typedef struct ERAnimConfig
  */
 typedef struct EREventData
 {
-    int x; /**< Touch X coordinate in framebuffer pixels. */
-    int y; /**< Touch Y coordinate in framebuffer pixels. */
-    float scroll_x; /**< Scroll offset X (ER_EVENT_SCROLL). */
-    float scroll_y; /**< Scroll offset Y (ER_EVENT_SCROLL). */
+    int x;               /**< Touch X coordinate in framebuffer pixels. */
+    int y;               /**< Touch Y coordinate in framebuffer pixels. */
+    float scroll_x;      /**< Scroll offset X (ER_EVENT_SCROLL). */
+    float scroll_y;      /**< Scroll offset Y (ER_EVENT_SCROLL). */
+    ERRect layout_rect;  /**< New computed rectangle (ER_EVENT_LAYOUT). */
 } EREventData;
 
 /**

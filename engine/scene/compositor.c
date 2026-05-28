@@ -192,6 +192,46 @@ static void render_tree(ERNode* n, bool parent_dirty)
     }
 }
 
+/**
+ * @brief Walks the subtree and fires ER_EVENT_LAYOUT for every node whose computed
+ *        rectangle changed since the previous commit.
+ *
+ * @param[in] node  Subtree root to check.
+ */
+static void dispatch_layout_events(ERNode* node)
+{
+    if (!node)
+        return;
+
+    const ERLayoutRect cur = node->computed;
+    const ERLayoutRect prev = node->prev_computed;
+
+    if (cur.x != prev.x || cur.y != prev.y || cur.w != prev.w || cur.h != prev.h)
+    {
+        const EREventHandler* h = &node->events[ER_EVENT_LAYOUT];
+        if (h->fn)
+        {
+            EREventData data = {0};
+            data.layout_rect.x = (int)cur.x;
+            data.layout_rect.y = (int)cur.y;
+            data.layout_rect.w = (int)cur.w;
+            data.layout_rect.h = (int)cur.h;
+            h->fn(node, &data, h->user_data);
+        }
+        node->prev_computed = cur;
+    }
+
+    uint16_t child_tag = node->first_child_tag;
+    while (child_tag != ER_INVALID_TAG)
+    {
+        ERNode* child = er_get_node(child_tag);
+        if (!child)
+            break;
+        dispatch_layout_events(child);
+        child_tag = child->next_sibling_tag;
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -285,7 +325,13 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->justify_content = props->justify_content;
     L->position = props->position;
     L->display = props->display;
+    L->overflow = props->overflow;
     node->z_index = props->z_index;
+    node->pointer_events = props->pointer_events;
+    node->hit_slop_left = props->hit_slop_left;
+    node->hit_slop_top = props->hit_slop_top;
+    node->hit_slop_right = props->hit_slop_right;
+    node->hit_slop_bottom = props->hit_slop_bottom;
 
     /* Copy type-specific visual props. */
     switch (node->type)
@@ -406,6 +452,7 @@ void er_commit(void)
     const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
     er_layout_compute(s_root_tag, rw, rh);
+    dispatch_layout_events(root);
     render_tree(root, false);
 }
 

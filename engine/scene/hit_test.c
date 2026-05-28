@@ -81,13 +81,13 @@ static bool node_is_invisible(const ERNode* node)
 }
 
 /**
- * @brief Returns whether a point lies inside a node's computed rectangle.
+ * @brief Returns whether a point lies inside a node's strict computed rectangle.
  *
  * @param[in] node  Node whose computed rectangle should be tested.
  * @param[in] x     X coordinate in framebuffer pixels.
  * @param[in] y     Y coordinate in framebuffer pixels.
  *
- * @return true when the point is inside node.
+ * @return true when the point is inside node's strict bounds.
  */
 static bool point_inside_node(const ERNode* node, int x, int y)
 {
@@ -95,6 +95,28 @@ static bool point_inside_node(const ERNode* node, int x, int y)
     const int y1 = node->computed.y;
     const int x2 = x1 + node->computed.w;
     const int y2 = y1 + node->computed.h;
+
+    return x >= x1 && y >= y1 && x < x2 && y < y2;
+}
+
+/**
+ * @brief Returns whether a point lies inside a node's hit-slop-extended rectangle.
+ *
+ * Each edge is extended outward by the corresponding hit_slop field on the node.
+ * When all slop values are zero this is identical to point_inside_node().
+ *
+ * @param[in] node  Node to test.
+ * @param[in] x     X coordinate in framebuffer pixels.
+ * @param[in] y     Y coordinate in framebuffer pixels.
+ *
+ * @return true when the point is inside the slop-extended bounds.
+ */
+static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
+{
+    const int x1 = (int)node->computed.x - (int)node->hit_slop_left;
+    const int y1 = (int)node->computed.y - (int)node->hit_slop_top;
+    const int x2 = (int)node->computed.x + (int)node->computed.w + (int)node->hit_slop_right;
+    const int y2 = (int)node->computed.y + (int)node->computed.h + (int)node->hit_slop_bottom;
 
     return x >= x1 && y >= y1 && x < x2 && y < y2;
 }
@@ -156,36 +178,61 @@ static void sort_children_by_z_index(uint16_t* tags, int count)
 }
 
 /**
- * @brief Recursively finds the topmost deepest node under a point.
+ * @brief Recursively finds the topmost deepest hittable node under a point.
  *
- * Children appended later are treated as visually above earlier siblings because the
- * renderer paints them later.
+ * Respects pointer_events, hitSlop, and overflow:hidden clipping. Children appended
+ * later win over earlier siblings; higher zIndex wins over lower.
  *
  * @param[in] node  Subtree root to inspect.
  * @param[in] x     X coordinate in framebuffer pixels.
  * @param[in] y     Y coordinate in framebuffer pixels.
  *
- * @return Best hit node, or NULL when the point is outside the subtree.
+ * @return Best hit node, or NULL when the point is outside the hittable subtree.
  */
 static ERNode* hit_test_node(ERNode* node, int x, int y)
 {
-    if (!node || node_is_invisible(node) || !point_inside_node(node, x, y))
+    if (!node || node_is_invisible(node))
         return NULL;
 
-    uint16_t child_tags[ERUI_MAX_NODES];
-    const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
-    sort_children_by_z_index(child_tags, child_count);
+    const uint8_t pe = node->pointer_events;
 
-    for (int i = child_count - 1; i >= 0; i--)
+    /* pointer_events:none — neither this node nor any descendant is hittable. */
+    if (pe == ER_POINTER_EVENTS_NONE)
+        return NULL;
+
+    /* Gate entry on the slop-extended bounds. */
+    if (!point_inside_node_with_slop(node, x, y))
+        return NULL;
+
+    /* Recurse into children unless box-only. */
+    if (pe != ER_POINTER_EVENTS_BOX_ONLY)
     {
-        ERNode* child = er_get_node(child_tags[i]);
-        if (!child)
-            continue;
+        /* overflow:hidden and overflow:scroll clip child hit-testing to strict bounds. */
+        const bool clips = (node->layout.overflow == ER_OVERFLOW_HIDDEN ||
+                            node->layout.overflow == ER_OVERFLOW_SCROLL);
 
-        ERNode* child_hit = hit_test_node(child, x, y);
-        if (child_hit)
-            return child_hit;
+        if (!clips || point_inside_node(node, x, y))
+        {
+            uint16_t child_tags[ERUI_MAX_NODES];
+            const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
+            sort_children_by_z_index(child_tags, child_count);
+
+            for (int i = child_count - 1; i >= 0; i--)
+            {
+                ERNode* child = er_get_node(child_tags[i]);
+                if (!child)
+                    continue;
+
+                ERNode* child_hit = hit_test_node(child, x, y);
+                if (child_hit)
+                    return child_hit;
+            }
+        }
     }
+
+    /* pointer_events:box-none — this node is not hittable itself; children are. */
+    if (pe == ER_POINTER_EVENTS_BOX_NONE)
+        return NULL;
 
     return node;
 }
@@ -352,7 +399,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* press_target = nearest_press_target(hit);
 
             touch->active = hit != NULL;
-            touch->inside = press_target ? point_inside_node(press_target, x, y) : false;
+            touch->inside = press_target ? point_inside_node_with_slop(press_target, x, y) : false;
             touch->long_press_fired = false;
             touch->long_press_cancelled = false;
             touch->elapsed_ms = 0U;
@@ -378,7 +425,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             if (press_target)
             {
-                const bool inside = point_inside_node(press_target, x, y);
+                const bool inside = point_inside_node_with_slop(press_target, x, y);
                 if (!inside)
                     touch->long_press_cancelled = true;
                 if (inside != touch->inside)
@@ -396,7 +443,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             ERNode* touch_target = er_get_node(touch->touch_target_tag);
             ERNode* press_target = er_get_node(touch->press_target_tag);
-            const bool inside = press_target && point_inside_node(press_target, x, y);
+            const bool inside = press_target && point_inside_node_with_slop(press_target, x, y);
 
             dispatch_bubble(touch_target, ER_EVENT_TOUCH_END, x, y);
             if (press_target)

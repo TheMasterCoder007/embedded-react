@@ -22,7 +22,7 @@ hit-testing are working. The remaining work is everything above raw events.
 - [x] zIndex-aware hit-testing
 - [x] **Hit-test rejection for `display: none` and `opacity == 0` nodes** — currently any
   sized node is hittable regardless of visibility.
-- [ ] **Hit-test clipping to `overflow: hidden` ancestors** — point must lie inside every
+- [x] **Hit-test clipping to `overflow: hidden` ancestors** — point must lie inside every
   clipping ancestor, not just the leaf rect.
 - [ ] **Hit-test through 2D transforms** — once `transform.c` lands, hit-testing must
   apply the inverse transform to the query point at each transformed ancestor.
@@ -33,11 +33,11 @@ hit-testing are working. The remaining work is everything above raw events.
   offset; emit `ER_EVENT_SCROLL` with `scroll_x`/`scroll_y` already in `EREventData`.
 - [ ] **Momentum scrolling** — exponential decay on touch-up; honors `decelerationRate`;
   snap-to-offset when configured.
-- [ ] **Layout event dispatch** — `ER_EVENT_LAYOUT` is declared in `er_scene.h` but never
+- [x] **Layout event dispatch** — `ER_EVENT_LAYOUT` is declared in `er_scene.h` but never
   fired. Compare previous vs. computed rect after layout and dispatch when changed.
-- [ ] **`pointerEvents` prop** — `auto` / `none` / `box-only` / `box-none`. Add to ERProps
+- [x] **`pointerEvents` prop** — `auto` / `none` / `box-only` / `box-none`. Add to ERProps
   and respect in hit-testing.
-- [ ] **`hitSlop`** — extend node rect by configurable per-edge slop in hit-testing.
+- [x] **`hitSlop`** — extend node rect by configurable per-edge slop in hit-testing.
 
 ## 2. Scene Graph & Commit
 
@@ -256,9 +256,10 @@ PLAN.md lists these. None are wired through actual `#if` guards in the source ye
 Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 - [x] animation, input, layout, text, rrect
-- [ ] **Hit-test under transforms / opacity / display:none**
+- [x] **Hit-test under opacity / display:none** (covered by existing tests)
+- [ ] **Hit-test under transforms**
 - [ ] **Scroll gesture + momentum**
-- [ ] **Layout event dispatch**
+- [x] **Layout event dispatch**
 - [ ] **Spring / decay animations**
 - [ ] **Sequence / parallel / stagger**
 - [ ] **Image scaling + tint + resizeMode**
