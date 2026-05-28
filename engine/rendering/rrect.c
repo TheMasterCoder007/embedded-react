@@ -95,8 +95,14 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
      */
     for (int dy = 1; dy <= r; dy++)
     {
-        float dx_f = sqrtf((float)(r * r - dy * dy));
-        int dx = (int)dx_f;
+        /*
+         * Compute the solid-span half-width using pixel-centre SDF sampling,
+         * consistent with the AA fringe loop below.
+         */
+        float r05 = (float)r - 0.5f;
+        float cy0 = (float)dy - 0.5f;
+        float dx_f = sqrtf(r05 * r05 - cy0 * cy0);
+        int dx = (int)(dx_f + 0.5f); /* round to nearest */
         int x0 = x + r - dx;
         int x1 = x + w - r + dx;
 
@@ -112,16 +118,16 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
             float cy = (float)dy - 0.5f;
             for (int k = 0; ; k++)
             {
-                float cx   = (float)dx + (float)k + 0.5f;
+                float cx = (float)dx + (float)k + 0.5f;
                 float dist = sqrtf(cx * cx + cy * cy);
-                float cov  = (float)r + 0.5f - dist;
+                float cov = (float)r + 0.5f - dist;
                 if (cov <= 0.0f)
                     break;
                 if (cov < 1.0f)
                 {
-                    uint32_t aa  = scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
+                    uint32_t aa = scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
                     int ax_l = x0 - 1 - k;
-                    int ax_r = x1     + k;
+                    int ax_r = x1 + k;
 
                     if (ax_l >= x)
                     {
