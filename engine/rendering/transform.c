@@ -22,6 +22,52 @@ static uint32_t s_xform_src[ERUI_SCRATCH_H * ERUI_SCRATCH_W];
 static uint32_t s_xform_dst[ERUI_SCRATCH_H * ERUI_SCRATCH_W];
 /* True while a source capture is active. */
 static bool s_xform_active = false;
+
+/* Bilinear channel lerp: a,b in [0,255]; t in [0,256]. Result in [0,255]. */
+#define ER_LERP_CH(a, b, t) (((uint32_t)(a) * (256u - (t)) + (uint32_t)(b) * (t)) >> 8u)
+
+/**
+ * @brief Samples the source scratch with bilinear filtering.
+ *
+ * Premultiplied ARGB8888 channels are interpolated independently, so no
+ * unpremultiply/repremultiply pass is needed.  Out-of-bounds neighbours
+ * are treated as fully transparent (0).
+ *
+ * @param[in] src    Source pixel buffer (row stride = ERUI_SCRATCH_W).
+ * @param[in] src_w  Logical width of the source region.
+ * @param[in] src_h  Logical height of the source region.
+ * @param[in] flx    Sub-pixel X in source-local coordinates.
+ * @param[in] fly    Sub-pixel Y in source-local coordinates.
+ *
+ * @return Bilinearly filtered premultiplied ARGB8888 pixel.
+ */
+static uint32_t er_bilerp(const uint32_t* src, int src_w, int src_h, float flx, float fly)
+{
+    const int x0 = (int)floorf(flx);
+    const int y0 = (int)floorf(fly);
+    const int x1 = x0 + 1;
+    const int y1 = y0 + 1;
+
+    const uint32_t wx = (uint32_t)((flx - (float)x0) * 256.0f);
+    const uint32_t wy = (uint32_t)((fly - (float)y0) * 256.0f);
+
+    const uint32_t c00 = (x0 >= 0 && x0 < src_w && y0 >= 0 && y0 < src_h) ? src[y0 * ERUI_SCRATCH_W + x0] : 0u;
+    const uint32_t c10 = (x1 >= 0 && x1 < src_w && y0 >= 0 && y0 < src_h) ? src[y0 * ERUI_SCRATCH_W + x1] : 0u;
+    const uint32_t c01 = (x0 >= 0 && x0 < src_w && y1 >= 0 && y1 < src_h) ? src[y1 * ERUI_SCRATCH_W + x0] : 0u;
+    const uint32_t c11 = (x1 >= 0 && x1 < src_w && y1 >= 0 && y1 < src_h) ? src[y1 * ERUI_SCRATCH_W + x1] : 0u;
+
+    const uint32_t out_a = ER_LERP_CH(ER_LERP_CH(c00 >> 24, c10 >> 24, wx), ER_LERP_CH(c01 >> 24, c11 >> 24, wx), wy);
+    const uint32_t out_r = ER_LERP_CH(ER_LERP_CH((c00 >> 16) & 0xFFu, (c10 >> 16) & 0xFFu, wx),
+                                      ER_LERP_CH((c01 >> 16) & 0xFFu, (c11 >> 16) & 0xFFu, wx),
+                                      wy);
+    const uint32_t out_g = ER_LERP_CH(ER_LERP_CH((c00 >> 8) & 0xFFu, (c10 >> 8) & 0xFFu, wx),
+                                      ER_LERP_CH((c01 >> 8) & 0xFFu, (c11 >> 8) & 0xFFu, wx),
+                                      wy);
+    const uint32_t out_b =
+        ER_LERP_CH(ER_LERP_CH(c00 & 0xFFu, c10 & 0xFFu, wx), ER_LERP_CH(c01 & 0xFFu, c11 & 0xFFu, wx), wy);
+
+    return (out_a << 24u) | (out_r << 16u) | (out_g << 8u) | out_b;
+}
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -210,14 +256,15 @@ void er_transform_source_end_blit(int src_x,
         {
             const float sx = (float)(dst_x + ox);
 
-            /* Inverse-transform screen point → layout space. */
-            const int lx = (int)(ia * sx + ic * sy + itx) - src_x;
-            const int ly = (int)(ib * sx + id * sy + ity) - src_y;
+            /* Inverse-transform screen point → source-local sub-pixel coordinates. */
+            const float flx = (ia * sx + ic * sy + itx) - (float)src_x;
+            const float fly = (ib * sx + id * sy + ity) - (float)src_y;
 
-            if (lx < 0 || lx >= src_w || ly < 0 || ly >= src_h)
+            /* Coarse bounds reject: skip if all four bilinear neighbours are outside. */
+            if (flx < -1.0f || flx >= (float)src_w || fly < -1.0f || fly >= (float)src_h)
                 continue;
 
-            dst_row[ox] = s_xform_src[ly * ERUI_SCRATCH_W + lx];
+            dst_row[ox] = er_bilerp(s_xform_src, src_w, src_h, flx, fly);
         }
     }
 

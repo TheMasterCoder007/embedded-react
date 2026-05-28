@@ -359,9 +359,19 @@ int main(void)
         if (px(&tc, 4, 4) != 0xFFFF0000U)
             return fail("scale 2x: pixel at (4,4) should be red (inside scaled quad)");
 
-        /* Pixel (7,7) is the last pixel inside the scaled quad — should also be red. */
-        if (px(&tc, 7, 7) != 0xFFFF0000U)
-            return fail("scale 2x: pixel at (7,7) should be red (last pixel in scaled quad)");
+        /* Pixel (6,6) maps to source (3.0,3.0) — last texel centre — bilinear lands
+         * entirely on the red source pixel so the result is full red. */
+        if (px(&tc, 6, 6) != 0xFFFF0000U)
+            return fail("scale 2x: pixel at (6,6) should be red (last source texel centre)");
+
+        /* Pixel (7,7) maps to source (3.5,3.5): bilinear blends the last red texel with
+         * the transparent border; composited on the white background this is a reddish
+         * blend where red channel > green channel. */
+        {
+            const uint32_t p77 = px(&tc, 7, 7);
+            if (((p77 >> 16) & 0xFFu) <= ((p77 >> 8) & 0xFFu))
+                return fail("scale 2x: pixel at (7,7) should be reddish (bilinear edge blend)");
+        }
 
         /* Pixel (9,9) is outside the 8×8 scaled quad — should be white. */
         if (px(&tc, 9, 9) != 0xFFFFFFFFU)
