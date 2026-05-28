@@ -130,6 +130,15 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     if (!n)
         return;
 
+    if (n->layout.display == ER_DISPLAY_NONE)
+    {
+        n->computed.x = 0;
+        n->computed.y = 0;
+        n->computed.w = 0;
+        n->computed.h = 0;
+        return;
+    }
+
     n->computed.x = x;
     n->computed.y = y;
     n->computed.w = w;
@@ -170,7 +179,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         ERNode* c = er_get_node(ct);
         if (!c)
             break;
-        if (c->layout.position != ER_POS_ABSOLUTE)
+        if (c->layout.position != ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
         {
             const ERLayoutSpec* cl = &c->layout;
 
@@ -546,7 +555,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         ERNode* c = er_get_node(ct);
         if (!c)
             break;
-        if (c->layout.position == ER_POS_ABSOLUTE)
+        if (c->layout.position == ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
         {
             const ERLayoutSpec* cl = &c->layout;
             const int16_t ml = edge_or(cl->margin_left, cl->margin);

@@ -57,6 +57,30 @@ static void reset_touch(ERTouchState* touch)
 }
 
 /**
+ * @brief Returns true when a node is invisible and should be excluded from hit-testing.
+ *
+ * A node is invisible when display:none or when it is a view-type node with opacity 0.
+ * Children of an invisible node are also excluded because hit_test_node returns NULL
+ * before recursing into them.
+ *
+ * @param[in] node  Node to test.
+ *
+ * @return true when the node should not receive touch events.
+ */
+static bool node_is_invisible(const ERNode* node)
+{
+    if (node->layout.display == ER_DISPLAY_NONE)
+        return true;
+    if (node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW ||
+        node->type == ER_NODE_PRESSABLE || node->type == ER_NODE_MODAL)
+    {
+        if (node->props.view.opacity == 0)
+            return true;
+    }
+    return false;
+}
+
+/**
  * @brief Returns whether a point lies inside a node's computed rectangle.
  *
  * @param[in] node  Node whose computed rectangle should be tested.
@@ -145,7 +169,7 @@ static void sort_children_by_z_index(uint16_t* tags, int count)
  */
 static ERNode* hit_test_node(ERNode* node, int x, int y)
 {
-    if (!node || !point_inside_node(node, x, y))
+    if (!node || node_is_invisible(node) || !point_inside_node(node, x, y))
         return NULL;
 
     uint16_t child_tags[ERUI_MAX_NODES];

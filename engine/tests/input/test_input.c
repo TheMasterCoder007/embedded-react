@@ -144,6 +144,7 @@ static ERProps props_default(void)
     p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
     p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
     p.flex_basis = ER_LAYOUT_AUTO;
+    p.opacity = 255U;
     return p;
 }
 
@@ -668,6 +669,72 @@ static int test_z_index_render_order(void)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Checks that a display:none node and its children never receive touch events.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_display_none_not_hittable(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    p.background_color = 0xFF101010U;
+    p.display = ER_DISPLAY_NONE;
+    er_node_set_props(pressable, &p);
+
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+    if (counts.press_count != 0 || counts.touch_start_count != 0)
+        return fail("display:none node received touch events");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that an opacity:0 view node does not receive touch events.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_opacity_zero_not_hittable(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    p.background_color = 0xFF101010U;
+    p.opacity = 0;
+    er_node_set_props(pressable, &p);
+
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+    if (counts.press_count != 0 || counts.touch_start_count != 0)
+        return fail("opacity:0 node received touch events");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Test entry point for hit-testing and press dispatch.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
@@ -695,6 +762,10 @@ int main(void)
     if (test_z_index_hit_order() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_z_index_render_order() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_display_none_not_hittable() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_opacity_zero_not_hittable() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;

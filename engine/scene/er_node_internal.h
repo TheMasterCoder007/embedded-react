@@ -40,6 +40,7 @@ typedef struct
     uint8_t align_self;      /**< ERFlexAlign      */
     uint8_t justify_content; /**< ERFlexJustify    */
     uint8_t position;        /**< ERPositionType   */
+    uint8_t display;         /**< ERDisplayMode    */
 } ERLayoutSpec;
 
 /**

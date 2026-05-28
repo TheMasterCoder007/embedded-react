@@ -96,6 +96,7 @@ static ERProps props_default(void)
     p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
     p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
     p.flex_basis = ER_LAYOUT_AUTO;
+    p.opacity = 255U;
     return p;
 }
 

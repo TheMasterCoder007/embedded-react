@@ -20,7 +20,7 @@ hit-testing are working. The remaining work is everything above raw events.
 - [x] Raw touch start / move / end / cancel + bubbling through ancestors
 - [x] Multitouch (up to 5 fingers)
 - [x] zIndex-aware hit-testing
-- [ ] **Hit-test rejection for `display: none` and `opacity == 0` nodes** — currently any
+- [x] **Hit-test rejection for `display: none` and `opacity == 0` nodes** — currently any
   sized node is hittable regardless of visibility.
 - [ ] **Hit-test clipping to `overflow: hidden` ancestors** — point must lie inside every
   clipping ancestor, not just the leaf rect.

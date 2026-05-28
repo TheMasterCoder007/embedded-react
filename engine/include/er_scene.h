@@ -124,6 +124,15 @@ typedef enum
 } ERPositionType;
 
 /**
+ * @brief Display mode controlling whether a node participates in layout and rendering.
+ */
+typedef enum
+{
+    ER_DISPLAY_FLEX = 0, /**< Node participates in layout (default). */
+    ER_DISPLAY_NONE = 1, /**< Node and its entire subtree are excluded from layout, render, and hit-testing. */
+} ERDisplayMode;
+
+/**
  * @brief Animatable node properties.
  */
 typedef enum
@@ -209,6 +218,7 @@ typedef struct ERProps
     uint8_t align_self; /**< ERFlexAlign    — default ER_ALIGN_AUTO. */
     uint8_t justify_content; /**< ERFlexJustify  — default ER_JUSTIFY_FLEX_START. */
     uint8_t position; /**< ERPositionType — default ER_POS_RELATIVE. */
+    uint8_t display; /**< ERDisplayMode  — default ER_DISPLAY_FLEX. */
 
     /* --- View visual --- */
     uint32_t background_color; /**< ARGB8888; 0x00000000 = transparent. */

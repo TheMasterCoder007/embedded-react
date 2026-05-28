@@ -134,6 +134,9 @@ void er_mark_dirty_upward(ERNode* node)
  */
 static void render_tree(ERNode* n, bool parent_dirty)
 {
+    if (n->layout.display == ER_DISPLAY_NONE)
+        return;
+
     const bool should_render = n->dirty || parent_dirty;
 
     if (should_render)
@@ -224,6 +227,13 @@ ERNode* er_node_create(ERNodeType type)
 
     init_layout_defaults(&n->layout);
 
+    /* View-type nodes default to fully opaque */
+    if (type == ER_NODE_VIEW || type == ER_NODE_SCROLL_VIEW ||
+        type == ER_NODE_PRESSABLE || type == ER_NODE_MODAL)
+    {
+        n->props.view.opacity = 255U;
+    }
+
     return n;
 }
 
@@ -274,6 +284,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->align_self = props->align_self;
     L->justify_content = props->justify_content;
     L->position = props->position;
+    L->display = props->display;
     node->z_index = props->z_index;
 
     /* Copy type-specific visual props. */
