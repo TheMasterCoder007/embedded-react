@@ -118,16 +118,16 @@ Everything else under `engine/rendering/` is a stub.
   compositor doesn't use it.
 - [ ] **Opacity nesting depth** capped at `ERUI_MAX_OPACITY_DEPTH`.
 
-### 4.5 Image rendering ([image_scaler.c](engine/rendering/image_scaler.c) is a stub)
+### 4.5 Image rendering
 
 - [x] `ERImageProps` + `image_name` registered on the node
-- [ ] **`er_image_load` actual implementation** — current body is empty.
-- [ ] **Image registry** — name → (buf, w, h) lookup keyed like font registry.
-- [ ] **Nearest-neighbor scaling** (default).
+- [x] **`er_image_load` actual implementation** — delegates to image registry.
+- [x] **Image registry** — name → (buf, w, h) lookup keyed like font registry.
+- [x] **Nearest-neighbor scaling** (default).
 - [ ] **Bilinear scaling** behind `ERUI_BILINEAR_SCALE`.
-- [ ] **`resizeMode`** — cover / contain / stretch / repeat / center.
-- [ ] **`tintColor`** — modulate sampled RGB by tint color before blend.
-- [ ] **Render path in compositor** — `ER_NODE_IMAGE` currently falls through the switch.
+- [x] **`resizeMode`** — cover / contain / stretch / repeat / center.
+- [x] **`tintColor`** — modulate sampled RGB by tint color before blend.
+- [x] **Render path in compositor** — `ER_NODE_IMAGE` case added to `render_tree`.
 
 ### 4.6 Gradients
 
@@ -217,7 +217,7 @@ for several node types declared in `ERNodeType`.
 | `ER_NODE_PRESSABLE`          | working         | -                                                                      |
 | `ER_NODE_MODAL`              | renders as View | Z-order to top of root, backdrop, animation entry/exit                 |
 | `ER_NODE_TEXT`               | working         | (see Text section)                                                     |
-| `ER_NODE_IMAGE`              | not rendered    | Image registry + scaler (see 4.5)                                      |
+| `ER_NODE_IMAGE`              | working         | -                                                                      |
 | `ER_NODE_SCROLL_VIEW`        | renders as View | Content offset, clip to viewport, scroll gesture, momentum, `onScroll` |
 | `ER_NODE_FLAT_LIST`          | not rendered    | Virtualization: render visible rows + overscan only; row recycling     |
 | `ER_NODE_TEXT_INPUT`         | not rendered    | Cursor, IME callback hook, hardware keyboard input path, selection     |
@@ -231,7 +231,7 @@ in the props union, any per-node state.
 
 - [x] Font registry + built-in Inter blob
 - [x] Runtime `er_font_load` (`ERUI_FONT_POOL_BYTES`)
-- [ ] **Image registry** — analogous to font registry; `er_image_load` populates, the
+- [x] **Image registry** — analogous to font registry; `er_image_load` populates, the
   Image node looks up by name.
 - [ ] **Resource teardown / replace** — `er_font_load`/`er_image_load` re-registering the
   same name should release the prior entry's pool bytes (or document that it leaks).
@@ -262,7 +262,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Layout event dispatch**
 - [ ] **Spring / decay animations**
 - [ ] **Sequence / parallel / stagger**
-- [ ] **Image scaling + tint + resizeMode**
+- [x] **Image scaling + tint + resizeMode**
 - [ ] **Shadow rasterizer (visual baseline comparison)**
 - [ ] **Transform render + hit-test**
 - [ ] **Opacity offscreen compositing**
