@@ -215,6 +215,7 @@ typedef struct ERProps
     uint32_t border_color; /**< ARGB8888. */
     int16_t border_width; /**< Border width in pixels. */
     int16_t border_radius; /**< Corner radius in pixels. */
+    int16_t z_index; /**< Sibling stacking order; higher values render and hit-test above lower values. */
     uint8_t opacity; /**< Node opacity 0–255 (255 = fully opaque). */
 
     /* --- Text --- */

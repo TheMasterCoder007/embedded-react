@@ -82,7 +82,7 @@ This separation pays for itself in three ways:
 |----------------------------|-----------------------------------------------------------|---------------------------------------------------------------------|
 | `engine/include/`          | Public headers (`er_scene.h`, `native_renderer.h`)        | Stable                                                              |
 | `engine/core/`             | Backend glue, frame tick                                  | Working                                                             |
-| `engine/scene/`            | Node pool, tree, render pass, hit-testing                 | Partial (scene tree, render, basic hit-testing + press events done) |
+| `engine/scene/`            | Node pool, tree, render pass, hit-testing                 | Partial (scene tree, render, Pressable/touch events + zIndex done)  |
 | `engine/layout/`           | Yoga 7-pass flexbox                                       | Working                                                             |
 | `engine/rendering/`        | Rounded rects, shadows, transforms, image scaling, canvas | Partial (rrect done; shadows, transforms, image stubs)              |
 | `engine/text/`             | UTF-8 decode + glyph blit                                 | Working                                                             |
@@ -425,7 +425,7 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 
 - Scene graph + Yoga flexbox layout — implemented
 - Text renderer (multi-byte UTF-8, run-length glyph blits) — implemented
-- Basic hit-testing + press/touch event dispatch — implemented
+- Pressable/touch event dispatch — implemented (press in/out, press, long press, cancel, bubbling, multitouch, zIndex)
 - Timing animations for existing color/opacity props — implemented
 - Built-in Inter font at 10/12/16/20/24/32/48 px + symbol set — implemented
 - Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)

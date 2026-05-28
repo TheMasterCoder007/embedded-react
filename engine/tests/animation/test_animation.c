@@ -6,8 +6,86 @@
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Types: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Records the last fill color emitted by the renderer.
+ */
+typedef struct
+{
+    uint32_t last_fill_color;
+} RenderCounts;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Backend fill callback used to check render order.
+ *
+ * @param[in] argb  Fill color.
+ * @param[in] x     Destination X.
+ * @param[in] y     Destination Y.
+ * @param[in] w     Fill width.
+ * @param[in] h     Fill height.
+ * @param[in] ctx   Pointer to RenderCounts.
+ */
+static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+{
+    RenderCounts* counts = ctx;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    counts->last_fill_color = argb;
+}
+
+/**
+ * @brief Backend copy callback unused by this test.
+ *
+ * @param[in] src     Source buffer.
+ * @param[in] stride  Source stride.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] w       Width.
+ * @param[in] h       Height.
+ * @param[in] ctx     Opaque context.
+ */
+static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
+
+/**
+ * @brief Backend blend callback unused by this test.
+ *
+ * @param[in] src     Source buffer.
+ * @param[in] stride  Source stride.
+ * @param[in] alpha   Global alpha.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] w       Width.
+ * @param[in] h       Height.
+ * @param[in] ctx     Opaque context.
+ */
+static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)alpha;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
 
 /**
  * @brief Packs a uint32_t into a float without numeric conversion.
@@ -105,6 +183,52 @@ int main(void)
     er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF0000FFU), &cfg);
     if (card->props.view.background_color != 0xFF0000FFU)
         return fail("zero-duration animation did not apply immediately");
+
+    RenderCounts counts = {0};
+    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &counts};
+    embedded_renderer_set_backend(&be);
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.width = 120;
+    p.height = 80;
+    p.background_color = 0xFF000000U;
+    er_node_set_props(root, &p);
+    er_tree_set_root(root);
+
+    ERNode* low = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 60;
+    p.background_color = 0xFFFF0000U;
+    p.z_index = 0;
+    er_node_set_props(low, &p);
+
+    ERNode* high = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 20;
+    p.top = 10;
+    p.width = 80;
+    p.height = 60;
+    p.background_color = 0xFF0000FFU;
+    p.z_index = 10;
+    er_node_set_props(high, &p);
+
+    er_tree_append_child(root, low);
+    er_tree_append_child(root, high);
+    er_commit();
+
+    cfg.duration_ms = 100U;
+    er_anim_start(low, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &cfg);
+    embedded_renderer_tick(50U);
+    er_commit();
+
+    if (counts.last_fill_color != 0xFF0000FFU)
+        return fail("animated lower zIndex node rendered over higher sibling");
 
     return EXIT_SUCCESS;
 }

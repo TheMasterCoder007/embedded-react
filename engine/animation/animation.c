@@ -315,7 +315,7 @@ void er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfi
             (void)apply_color_value(node, prop, anim->to_color);
         else
             (void)apply_numeric_value(node, prop, anim->to_value);
-        node->dirty = true;
+        er_mark_dirty_upward(node);
         anim->active = false;
     }
 }
@@ -358,7 +358,7 @@ void er_anim_tick(uint32_t delta_ms)
             const float value = anim->from_value + (anim->to_value - anim->from_value) * t;
             (void)apply_numeric_value(node, anim->prop, value);
         }
-        node->dirty = true;
+        er_mark_dirty_upward(node);
 
         if (t >= 1.0f)
         {

@@ -50,6 +50,80 @@ static void init_layout_defaults(ERLayoutSpec* L)
 }
 
 /**
+ * @brief Collects child tags into an array in append order.
+ *
+ * @param[in] parent    Parent node whose children should be collected.
+ * @param[out] tags     Output child tag buffer.
+ * @param[in] max_tags  Capacity of tags.
+ *
+ * @return Number of child tags written.
+ */
+static int collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
+{
+    int count = 0;
+    uint16_t child_tag = parent->first_child_tag;
+
+    while (child_tag != ER_INVALID_TAG && count < max_tags)
+    {
+        ERNode* child = er_get_node(child_tag);
+        if (!child)
+            break;
+
+        tags[count++] = child_tag;
+        child_tag = child->next_sibling_tag;
+    }
+
+    return count;
+}
+
+/**
+ * @brief Sorts child tags by zIndex while preserving append order for equal zIndex.
+ *
+ * @param[in,out] tags   Child tag array to sort.
+ * @param[in] count      Number of tags in the array.
+ */
+static void sort_children_by_z_index(uint16_t* tags, int count)
+{
+    for (int i = 1; i < count; i++)
+    {
+        const uint16_t key = tags[i];
+        const ERNode* key_node = er_get_node(key);
+        const int16_t key_z = key_node ? key_node->z_index : 0;
+        int j = i - 1;
+
+        while (j >= 0)
+        {
+            const ERNode* node = er_get_node(tags[j]);
+            const int16_t z = node ? node->z_index : 0;
+            if (z <= key_z)
+                break;
+            tags[j + 1] = tags[j];
+            j--;
+        }
+
+        tags[j + 1] = key;
+    }
+}
+
+/**
+ * @brief Marks a node and all ancestors dirty so stale child pixels are repainted.
+ *
+ * The renderer currently paints into a persistent framebuffer. If a child changes
+ * shape or text, the parent background must be redrawn before the child is painted
+ * again, otherwise old pixels can remain visible.
+ *
+ * @param[in,out] node  Node whose ancestor chain should be invalidated.
+ */
+void er_mark_dirty_upward(ERNode* node)
+{
+    while (node)
+    {
+        node->dirty = true;
+        node = er_get_node(node->parent_tag);
+    }
+}
+
+/**
  * @brief Recursively renders a node and its children depth-first.
  *
  * A node is painted when it or any ancestor is dirty. The dirty flag is cleared
@@ -102,14 +176,16 @@ static void render_tree(ERNode* n, bool parent_dirty)
 
     n->dirty = false;
 
-    uint16_t child_tag = n->first_child_tag;
-    while (child_tag != ER_INVALID_TAG)
+    uint16_t child_tags[ERUI_MAX_NODES];
+    const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
+    sort_children_by_z_index(child_tags, child_count);
+
+    for (int i = 0; i < child_count; i++)
     {
-        ERNode* child = er_get_node(child_tag);
+        ERNode* child = er_get_node(child_tags[i]);
         if (!child)
-            break;
+            continue;
         render_tree(child, should_render);
-        child_tag = child->next_sibling_tag;
     }
 }
 
@@ -198,6 +274,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->align_self = props->align_self;
     L->justify_content = props->justify_content;
     L->position = props->position;
+    node->z_index = props->z_index;
 
     /* Copy type-specific visual props. */
     switch (node->type)
@@ -229,7 +306,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             break;
     }
 
-    node->dirty = true;
+    er_mark_dirty_upward(node);
 }
 
 void er_tree_append_child(ERNode* parent, ERNode* child)

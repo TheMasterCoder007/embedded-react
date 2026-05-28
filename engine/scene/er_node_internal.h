@@ -106,6 +106,7 @@ struct ERNode
     ERNodeType type;
     bool in_use;
     bool dirty;
+    int16_t z_index;
     ERLayoutSpec layout;
     ERLayoutRect computed;
     EREventHandler events[ER_EVENT_LAYOUT + 1U];
@@ -136,5 +137,12 @@ ERNode* er_get_node(uint16_t tag);
  * @return Root node, or NULL if no root is set.
  */
 ERNode* er_get_root_node(void);
+
+/**
+ * @brief Marks a node and all ancestors dirty.
+ *
+ * @param[in,out] node  Node whose ancestor chain should be invalidated.
+ */
+void er_mark_dirty_upward(ERNode* node);
 
 #endif

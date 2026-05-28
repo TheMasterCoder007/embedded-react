@@ -10,6 +10,10 @@
 #define ER_MAX_TOUCHES 5U
 #define ER_LONG_PRESS_MS 500U
 
+#ifndef ERUI_MAX_NODES
+#define ERUI_MAX_NODES 512
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -72,6 +76,62 @@ static bool point_inside_node(const ERNode* node, int x, int y)
 }
 
 /**
+ * @brief Collects child tags into an array in append order.
+ *
+ * @param[in] parent    Parent node whose children should be collected.
+ * @param[out] tags     Output child tag buffer.
+ * @param[in] max_tags  Capacity of tags.
+ *
+ * @return Number of child tags written.
+ */
+static int collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
+{
+    int count = 0;
+    uint16_t child_tag = parent->first_child_tag;
+
+    while (child_tag != ER_INVALID_TAG && count < max_tags)
+    {
+        ERNode* child = er_get_node(child_tag);
+        if (!child)
+            break;
+
+        tags[count++] = child_tag;
+        child_tag = child->next_sibling_tag;
+    }
+
+    return count;
+}
+
+/**
+ * @brief Sorts child tags by zIndex while preserving append order for equal zIndex.
+ *
+ * @param[in,out] tags   Child tag array to sort.
+ * @param[in] count      Number of tags in the array.
+ */
+static void sort_children_by_z_index(uint16_t* tags, int count)
+{
+    for (int i = 1; i < count; i++)
+    {
+        const uint16_t key = tags[i];
+        const ERNode* key_node = er_get_node(key);
+        const int16_t key_z = key_node ? key_node->z_index : 0;
+        int j = i - 1;
+
+        while (j >= 0)
+        {
+            const ERNode* node = er_get_node(tags[j]);
+            const int16_t z = node ? node->z_index : 0;
+            if (z <= key_z)
+                break;
+            tags[j + 1] = tags[j];
+            j--;
+        }
+
+        tags[j + 1] = key;
+    }
+}
+
+/**
  * @brief Recursively finds the topmost deepest node under a point.
  *
  * Children appended later are treated as visually above earlier siblings because the
@@ -88,22 +148,22 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
     if (!node || !point_inside_node(node, x, y))
         return NULL;
 
-    ERNode* best = node;
-    uint16_t child_tag = node->first_child_tag;
-    while (child_tag != ER_INVALID_TAG)
+    uint16_t child_tags[ERUI_MAX_NODES];
+    const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
+    sort_children_by_z_index(child_tags, child_count);
+
+    for (int i = child_count - 1; i >= 0; i--)
     {
-        ERNode* child = er_get_node(child_tag);
+        ERNode* child = er_get_node(child_tags[i]);
         if (!child)
-            break;
+            continue;
 
         ERNode* child_hit = hit_test_node(child, x, y);
         if (child_hit)
-            best = child_hit;
-
-        child_tag = child->next_sibling_tag;
+            return child_hit;
     }
 
-    return best;
+    return node;
 }
 
 /**

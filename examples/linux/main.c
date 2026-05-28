@@ -27,6 +27,7 @@ static ERNode* s_action_label = NULL;
 static bool s_action_enabled = false;
 static bool s_action_pressed = false;
 static int s_long_press_count = 0;
+static char s_status_message[ER_TEXT_MAX + 1];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -116,6 +117,10 @@ static void update_action_label(void)
         {
             snprintf(text, sizeof(text), "Long press count: %d  --  click to toggle", s_long_press_count);
         }
+        else if (s_status_message[0] != '\0')
+        {
+            strncpy(text, s_status_message, ER_TEXT_MAX);
+        }
         else
         {
             strncpy(text,
@@ -162,6 +167,7 @@ static void on_action_press(ERNode* node, const EREventData* data, void* user_da
     (void)user_data;
     s_action_enabled = !s_action_enabled;
     s_action_pressed = false;
+    s_status_message[0] = '\0';
     update_action_label();
     animate_action_card(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560);
 }
@@ -179,6 +185,7 @@ static void on_action_press_in(ERNode* node, const EREventData* data, void* user
     (void)data;
     (void)user_data;
     s_action_pressed = true;
+    s_status_message[0] = '\0';
     update_action_label();
     animate_action_card(0xFF264653);
 }
@@ -198,6 +205,22 @@ static void on_action_press_out(ERNode* node, const EREventData* data, void* use
     s_action_pressed = false;
     update_action_label();
     animate_action_card(s_action_enabled ? 0xFF2A9D8F : 0xFFE94560);
+}
+
+/**
+ * @brief Updates demo state when one of the zIndex stack cards is pressed.
+ *
+ * @param[in] node       Node that received the press.
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Null-terminated stack label.
+ */
+static void on_stack_press(ERNode* node, const EREventData* data, void* user_data)
+{
+    const char* label = user_data;
+    (void)node;
+    (void)data;
+    snprintf(s_status_message, sizeof(s_status_message), "%s zIndex target received the click", label);
+    update_action_label();
 }
 
 /**
@@ -274,7 +297,7 @@ static void build_scene(int phys_w, int phys_h)
     /* Card 1: dark blue, rounded, holds a descriptive label. */
     ERNode* card1 = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(90);
+    p.height = dp(80);
     p.margin_top = dp(16);
     p.background_color = 0xFF16213E;
     p.border_radius = dp(10);
@@ -293,7 +316,7 @@ static void build_scene(int phys_w, int phys_h)
     /* Card 2: interactive pressable demonstrating hit-testing and event dispatch. */
     ERNode* card2 = er_node_create(ER_NODE_PRESSABLE);
     p = props_default();
-    p.height = dp(90);
+    p.height = dp(80);
     p.margin_top = dp(12);
     p.background_color = 0xFFE94560;
     p.border_radius = dp(10);
@@ -316,12 +339,59 @@ static void build_scene(int phys_w, int phys_h)
     s_action_card = card2;
     s_action_label = card2_label;
 
+    /* Overlapping absolute pressables: high zIndex should render and hit-test on top. */
+    ERNode* stack_low = er_node_create(ER_NODE_PRESSABLE);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = dp(306);
+    p.top = dp(218);
+    p.width = dp(86);
+    p.height = dp(42);
+    p.background_color = 0xFF457B9D;
+    p.border_radius = dp(8);
+    p.padding = dp(8);
+    p.z_index = 1;
+    er_node_set_props(stack_low, &p);
+    er_event_set(stack_low, ER_EVENT_PRESS, on_stack_press, "LOW");
+
+    ERNode* stack_low_label = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(12);
+    strncpy(p.text, "LOW", ER_TEXT_MAX);
+    er_node_set_props(stack_low_label, &p);
+
+    ERNode* stack_high = er_node_create(ER_NODE_PRESSABLE);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = dp(346);
+    p.top = dp(234);
+    p.width = dp(86);
+    p.height = dp(42);
+    p.background_color = 0xFF2A9D8F;
+    p.border_radius = dp(8);
+    p.padding = dp(8);
+    p.z_index = 8;
+    er_node_set_props(stack_high, &p);
+    er_event_set(stack_high, ER_EVENT_PRESS, on_stack_press, "HIGH");
+
+    ERNode* stack_high_label = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(12);
+    strncpy(p.text, "HIGH", ER_TEXT_MAX);
+    er_node_set_props(stack_high_label, &p);
+
     /* Assemble the tree. */
     er_tree_append_child(card1, card1_label);
     er_tree_append_child(card2, card2_label);
+    er_tree_append_child(stack_low, stack_low_label);
+    er_tree_append_child(stack_high, stack_high_label);
     er_tree_append_child(root, title);
     er_tree_append_child(root, card1);
     er_tree_append_child(root, card2);
+    er_tree_append_child(root, stack_high);
+    er_tree_append_child(root, stack_low);
     er_tree_set_root(root);
 }
 

@@ -33,6 +33,14 @@ typedef struct
     int log_len;
 } EventCounts;
 
+/**
+ * @brief Records the last color drawn by a test backend.
+ */
+typedef struct
+{
+    uint32_t last_fill_color;
+} RenderCounts;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -50,6 +58,72 @@ static void append_log(EventCounts* counts, char marker)
         counts->log[counts->log_len++] = marker;
         counts->log[counts->log_len] = '\0';
     }
+}
+
+/**
+ * @brief Backend fill callback used to verify render stacking order.
+ *
+ * @param[in] argb  Fill color.
+ * @param[in] x     Destination X.
+ * @param[in] y     Destination Y.
+ * @param[in] w     Fill width.
+ * @param[in] h     Fill height.
+ * @param[in] ctx   Pointer to RenderCounts.
+ */
+static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+{
+    RenderCounts* counts = ctx;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    counts->last_fill_color = argb;
+}
+
+/**
+ * @brief Backend copy callback unused by input tests.
+ *
+ * @param[in] src     Source buffer.
+ * @param[in] stride  Source stride.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] w       Width.
+ * @param[in] h       Height.
+ * @param[in] ctx     Opaque context.
+ */
+static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
+
+/**
+ * @brief Backend blend callback unused by input tests.
+ *
+ * @param[in] src     Source buffer.
+ * @param[in] stride  Source stride.
+ * @param[in] alpha   Global alpha.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] w       Width.
+ * @param[in] h       Height.
+ * @param[in] ctx     Opaque context.
+ */
+static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)alpha;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
 }
 
 /**
@@ -264,6 +338,35 @@ static ERNode* create_pressable(int16_t x, int16_t y, int16_t w, int16_t h, Even
     er_event_set(node, ER_EVENT_TOUCH_MOVE, on_touch_move, counts);
     er_event_set(node, ER_EVENT_TOUCH_END, on_touch_end, counts);
     er_event_set(node, ER_EVENT_TOUCH_CANCEL, on_touch_cancel, counts);
+    return node;
+}
+
+/**
+ * @brief Creates a pressable test node with a zIndex.
+ *
+ * @param[in] x       Absolute X coordinate.
+ * @param[in] y       Absolute Y coordinate.
+ * @param[in] w       Width in pixels.
+ * @param[in] h       Height in pixels.
+ * @param[in] z_index Sibling stacking order.
+ * @param[in] color   Background color.
+ * @param[in] counts  Event counter context.
+ *
+ * @return New pressable node.
+ */
+static ERNode* create_pressable_z(int16_t x, int16_t y, int16_t w, int16_t h, int16_t z_index, uint32_t color,
+                                  EventCounts* counts)
+{
+    ERNode* node = create_pressable(x, y, w, h, counts);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = x;
+    p.top = y;
+    p.width = w;
+    p.height = h;
+    p.background_color = color;
+    p.z_index = z_index;
+    er_node_set_props(node, &p);
     return node;
 }
 
@@ -504,6 +607,62 @@ static int test_overlapping_siblings(void)
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Checks higher zIndex wins hit-testing even when appended earlier.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_z_index_hit_order(void)
+{
+    ERNode* root = create_root();
+    EventCounts high_counts = {0};
+    EventCounts low_counts = {0};
+    ERNode* high = create_pressable_z(20, 20, 80, 80, 10, 0xFF00FF00U, &high_counts);
+    ERNode* low = create_pressable_z(30, 30, 80, 80, 0, 0xFFFF0000U, &low_counts);
+
+    er_tree_append_child(root, high);
+    er_tree_append_child(root, low);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 40, 40);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 40, 40);
+
+    if (high_counts.press_count != 1)
+        return fail("higher zIndex sibling did not receive press");
+    if (low_counts.press_count != 0)
+        return fail("lower zIndex sibling received press");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks higher zIndex renders after lower zIndex.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_z_index_render_order(void)
+{
+    RenderCounts render_counts = {0};
+    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &render_counts};
+    embedded_renderer_set_backend(&be);
+
+    ERNode* root = create_root();
+    EventCounts high_counts = {0};
+    EventCounts low_counts = {0};
+    ERNode* high = create_pressable_z(20, 20, 80, 80, 10, 0xFF00FF00U, &high_counts);
+    ERNode* low = create_pressable_z(30, 30, 80, 80, 0, 0xFFFF0000U, &low_counts);
+
+    er_tree_append_child(root, high);
+    er_tree_append_child(root, low);
+    er_commit();
+
+    if (render_counts.last_fill_color != 0xFF00FF00U)
+        return fail("higher zIndex sibling did not render last");
+
+    embedded_renderer_set_backend(NULL);
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -532,6 +691,10 @@ int main(void)
     if (test_multi_touch() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_overlapping_siblings() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_z_index_hit_order() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_z_index_render_order() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;
