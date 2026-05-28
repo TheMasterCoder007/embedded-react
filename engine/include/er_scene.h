@@ -142,6 +142,20 @@ extern "C"
     } EROverflow;
 
     /**
+     * @brief How an Image node scales its source bitmap to fill the computed layout rect.
+     *
+     * Mirrors React Native's Image resizeMode prop.
+     */
+    typedef enum
+    {
+        ER_RESIZE_COVER = 0,   /**< Scale to fill, cropping the longer axis from the centre (default). */
+        ER_RESIZE_CONTAIN = 1, /**< Scale to fit, letterboxing if aspect ratios differ. */
+        ER_RESIZE_STRETCH = 2, /**< Stretch to exactly fill the layout rect, ignoring aspect ratio. */
+        ER_RESIZE_REPEAT = 3,  /**< Tile at the image's original pixel size. */
+        ER_RESIZE_CENTER = 4,  /**< Display at original size, centred; clip to bounds if larger. */
+    } ERResizeMode;
+
+    /**
      * @brief Controls which parts of a node and its subtree can receive pointer events.
      */
     typedef enum
@@ -288,6 +302,8 @@ extern "C"
 
         /* --- Image --- */
         char image_name[ER_IMAGE_NAME_MAX + 1]; /**< Asset name registered via er_image_load(). */
+        uint8_t resize_mode;                    /**< ERResizeMode — default ER_RESIZE_COVER. */
+        uint32_t tint_color;                    /**< Straight-alpha ARGB8888; 0 = no tint. */
     } ERProps;
 
     /**

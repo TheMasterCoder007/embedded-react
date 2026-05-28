@@ -17,6 +17,7 @@ set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
+set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
 
 # ---------------------------------------------------------------------------
 # Sources — grouped by subsystem to match the engine/ folder layout
@@ -34,6 +35,7 @@ set(EMBEDDED_REACT_SOURCES
 
         # rendering: primitives (rounded rects, shadows, transforms, image, canvas)
         rendering/canvas_bindings.c
+        rendering/image_registry.c
         rendering/image_scaler.c
         rendering/rrect.c
         rendering/shadow.c
@@ -84,6 +86,7 @@ target_compile_definitions(embedded-react PUBLIC
 
 target_compile_definitions(embedded-react PRIVATE
         ERUI_FONT_POOL_BYTES=${ERUI_FONT_POOL_BYTES}
+        ERUI_MAX_IMG_ROW_PIXELS=${ERUI_MAX_IMG_ROW_PIXELS}
 )
 
 target_link_libraries(embedded-react PUBLIC m)

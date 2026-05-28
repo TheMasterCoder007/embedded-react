@@ -1,0 +1,24 @@
+#ifndef EMBEDDED_REACT_IMAGE_SCALER_H
+#define EMBEDDED_REACT_IMAGE_SCALER_H
+
+#include "er_node_internal.h"
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Renders an Image node's bitmap into the active backend at the given destination rect.
+ *
+ * The image is looked up in the image registry by name. If not found, nothing is drawn.
+ * Scaling mode and tint color are taken from props.
+ *
+ * @param[in] props  Image node props carrying the asset name, resize_mode, and tint_color.
+ * @param[in] x     Destination left edge in framebuffer pixels.
+ * @param[in] y     Destination top edge in framebuffer pixels.
+ * @param[in] w     Destination width in pixels.
+ * @param[in] h     Destination height in pixels.
+ */
+void er_image_render(const ERImageProps* props, int x, int y, int w, int h);
+
+#endif

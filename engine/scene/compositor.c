@@ -1,4 +1,5 @@
 #include "er_node_internal.h"
+#include "image_scaler.h"
 #include "layout_engine.h"
 #include "renderer_internal.h"
 #include "rrect.h"
@@ -166,6 +167,8 @@ static void render_tree(ERNode* n, bool parent_dirty)
                 break;
             }
             case ER_NODE_IMAGE:
+                er_image_render(&n->props.image, x, y, w, h);
+                break;
             case ER_NODE_FLAT_LIST:
             case ER_NODE_TEXT_INPUT:
             case ER_NODE_ACTIVITY_INDICATOR:
@@ -355,6 +358,8 @@ void er_node_set_props(ERNode* node, const ERProps* props)
         case ER_NODE_IMAGE:
             strncpy(node->props.image.image_name, props->image_name, ER_IMAGE_NAME_MAX);
             node->props.image.image_name[ER_IMAGE_NAME_MAX] = '\0';
+            node->props.image.resize_mode = props->resize_mode;
+            node->props.image.tint_color = props->tint_color;
             break;
         default:
             break;

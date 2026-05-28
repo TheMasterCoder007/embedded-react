@@ -1,6 +1,7 @@
 #include "native_renderer.h"
 #include "font_blob.h"
 #include "font_registry.h"
+#include "image_registry.h"
 #include "renderer_internal.h"
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -45,6 +46,7 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
     g_backend = backend;
     font_registry_init();
     font_blob_init(0);
+    image_registry_init();
     er_input_reset();
 }
 

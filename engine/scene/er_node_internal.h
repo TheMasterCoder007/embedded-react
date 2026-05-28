@@ -82,6 +82,8 @@ typedef struct
 typedef struct
 {
     char image_name[ER_IMAGE_NAME_MAX + 1];
+    uint8_t resize_mode; /**< ERResizeMode */
+    uint32_t tint_color; /**< Straight-alpha ARGB8888 tint; 0 = no tint. */
 } ERImageProps;
 
 /**
