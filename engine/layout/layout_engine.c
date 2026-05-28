@@ -510,7 +510,15 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
 
     /*--------------------------------------------------------------------------
      * Pass 6 — write resolved sizes and origins back to children; recurse.
+     *
+     * Two-loop design: Pass 6a commits every child's resolved rect to the
+     * child's own computed struct before any recursion.  Pass 6b then walks
+     * the sibling chain to recurse — it never reads s_scratch[i].tag again,
+     * so the recursive calls' use of the global s_scratch cannot corrupt the
+     * parent's in-progress child list.
      *------------------------------------------------------------------------*/
+
+    /* Pass 6a — resolve and store each in-flow child's rect; no recursion. */
     for (int i = 0; i < n_inflow; i++)
     {
         ERNode* c = er_get_node(s_scratch[i].tag);
@@ -544,7 +552,21 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         else if (cl->bottom != ER_LAYOUT_AUTO)
             cy = (int16_t)(cy - cl->bottom);
 
-        compute_layout(s_scratch[i].tag, cw, ch, cx, cy);
+        c->computed.x = cx;
+        c->computed.y = cy;
+        c->computed.w = cw;
+        c->computed.h = ch;
+    }
+
+    /* Pass 6b — recurse via sibling chain using pre-stored computed rects. */
+    for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
+    {
+        ERNode* c = er_get_node(ct);
+        if (!c)
+            break;
+        if (c->layout.position != ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
+            compute_layout(c->tag, c->computed.w, c->computed.h, c->computed.x, c->computed.y);
+        ct = c->next_sibling_tag;
     }
 
     /*--------------------------------------------------------------------------

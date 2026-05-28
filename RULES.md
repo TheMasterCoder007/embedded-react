@@ -33,4 +33,5 @@ void function_name(int param1, int param2) {}
 
 ## Code Style
 
-- Follow .clang-format rules when writing code.
+- The project contains a .clang-format file to enforce code style. There is a cmake configuration called format. Run
+  before commiting your changes.
