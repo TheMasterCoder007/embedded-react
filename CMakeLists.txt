@@ -33,6 +33,9 @@ if (CLANG_FORMAT_EXE)
             "${CMAKE_SOURCE_DIR}/bridges/*.h"
     )
 
+    # Exclude generated files
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX ".*/font_data\\.c$")
+
     add_custom_target(format
             COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
