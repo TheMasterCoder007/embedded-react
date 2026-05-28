@@ -41,9 +41,7 @@ static bool s_target_hidden = false;
 /* Shared status for zIndex test */
 static ERNode* s_zidx_result = NULL;
 
-static const uint32_t k_cycle_colors[] = {
-    0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB
-};
+static const uint32_t k_cycle_colors[] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — helpers
@@ -382,9 +380,8 @@ static void on_hide_toggle_press(ERNode* node, const EREventData* data, void* ct
     ERProps lp = props_default();
     lp.color = 0xFFFFFFFF;
     lp.font_size = (uint8_t)dp(13);
-    strncpy(lp.text,
-            s_target_hidden ? "SHOW  (currently display:none)" : "HIDE  (currently display:flex)",
-            ER_TEXT_MAX);
+    strncpy(
+        lp.text, s_target_hidden ? "SHOW  (currently display:none)" : "HIDE  (currently display:flex)", ER_TEXT_MAX);
     lp.text[ER_TEXT_MAX] = '\0';
     er_node_set_props(s_hide_btn_label, &lp);
 }
@@ -733,8 +730,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(touch_card, touch_lbl);
     er_tree_append_child(col2, touch_card);
 
-    er_tree_append_child(col2, make_caption(
-                             "press   press_in   press_out   long_press   cancel"));
+    er_tree_append_child(col2, make_caption("press   press_in   press_out   long_press   cancel"));
 
     /* zIndex stacking area */
     er_tree_append_child(col2, make_section_header("zINDEX STACKING"));
@@ -926,13 +922,12 @@ int main(void)
         return 1;
     }
 
-    SDL_Window* window = SDL_CreateWindow(
-        "embedded-react  engine demo",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        SCREEN_W,
-        SCREEN_H,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_Window* window = SDL_CreateWindow("embedded-react  engine demo",
+                                          SDL_WINDOWPOS_CENTERED,
+                                          SDL_WINDOWPOS_CENTERED,
+                                          SCREEN_W,
+                                          SCREEN_H,
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window)
     {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
@@ -940,8 +935,7 @@ int main(void)
         return 1;
     }
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(
-        window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer)
     {
         SDL_Log("SDL_CreateRenderer failed: %s", SDL_GetError());

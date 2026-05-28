@@ -154,10 +154,8 @@ static void render_tree(ERNode* n, bool parent_dirty)
             case ER_NODE_MODAL:
             {
                 const ERViewProps* vp = &n->props.view;
-                er_rrect_fill_bordered(vp->background_color,
-                                       vp->border_color,
-                                       vp->border_width, x, y, w, h,
-                                       vp->border_radius);
+                er_rrect_fill_bordered(
+                    vp->background_color, vp->border_color, vp->border_width, x, y, w, h, vp->border_radius);
                 break;
             }
             case ER_NODE_TEXT:
@@ -268,8 +266,7 @@ ERNode* er_node_create(ERNodeType type)
     init_layout_defaults(&n->layout);
 
     /* View-type nodes default to fully opaque */
-    if (type == ER_NODE_VIEW || type == ER_NODE_SCROLL_VIEW ||
-        type == ER_NODE_PRESSABLE || type == ER_NODE_MODAL)
+    if (type == ER_NODE_VIEW || type == ER_NODE_SCROLL_VIEW || type == ER_NODE_PRESSABLE || type == ER_NODE_MODAL)
     {
         n->props.view.opacity = 255U;
     }

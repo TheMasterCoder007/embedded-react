@@ -44,7 +44,7 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius);
  * @param[in] h           Height of the outer bounding box in pixels.
  * @param[in] radius      Outer corner radius in pixels (0 = plain rectangle).
  */
-void er_rrect_fill_bordered(uint32_t bg_argb, uint32_t border_argb,
-                             int border_w, int x, int y, int w, int h, int radius);
+void er_rrect_fill_bordered(
+    uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius);
 
 #endif

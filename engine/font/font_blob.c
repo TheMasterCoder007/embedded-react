@@ -100,8 +100,8 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
     if (!name || !blob || blob_size < FONT_BLOB_HEADER_SIZE)
         return FONT_BLOB_ERR_TOO_SHORT;
 
-    if (blob[0] != FONT_BLOB_MAGIC_0 || blob[1] != FONT_BLOB_MAGIC_1 || blob[2] != FONT_BLOB_MAGIC_2 ||
-        blob[3] != FONT_BLOB_MAGIC_3)
+    if (blob[0] != FONT_BLOB_MAGIC_0 || blob[1] != FONT_BLOB_MAGIC_1 || blob[2] != FONT_BLOB_MAGIC_2
+        || blob[3] != FONT_BLOB_MAGIC_3)
         return FONT_BLOB_ERR_BAD_MAGIC;
 
     if (blob[4] != FONT_BLOB_VERSION)
@@ -112,7 +112,7 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
     const uint8_t pixel_size = blob[7];
     const uint8_t line_height = blob[8];
     const uint8_t baseline = blob[9];
-    const uint8_t  format      = blob[10];
+    const uint8_t format = blob[10];
     const uint16_t glyph_count = read_u16_le(&blob[11]);
     const uint32_t bitmap_size = read_u32_le(&blob[13]);
 
@@ -123,8 +123,8 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
      * The in-memory GlyphInfo uses uint32_t for bitmap_offset + 3 pad bytes = 12 bytes.
      * Parse field-by-field, zero-extending the 2-byte wire offset to 4 bytes and zeroing pad. */
     const uint32_t glyph_wire_bytes = (uint32_t)glyph_count * 8U;
-    const uint32_t glyph_mem_bytes  = (uint32_t)glyph_count * sizeof(GlyphInfo);
-    const uint32_t expected_size    = FONT_BLOB_HEADER_SIZE + glyph_wire_bytes + bitmap_size;
+    const uint32_t glyph_mem_bytes = (uint32_t)glyph_count * sizeof(GlyphInfo);
+    const uint32_t expected_size = FONT_BLOB_HEADER_SIZE + glyph_wire_bytes + bitmap_size;
     if (blob_size < expected_size)
         return FONT_BLOB_ERR_SIZE_MISMATCH;
 
@@ -136,16 +136,16 @@ FontBlobStatus font_blob_register(const char* name, const uint8_t* blob, uint32_
 
     {
         const uint8_t* src = blob + FONT_BLOB_HEADER_SIZE;
-        GlyphInfo*     dst = (GlyphInfo*)(void*)glyph_dst;
+        GlyphInfo* dst = (GlyphInfo*)(void*)glyph_dst;
         for (uint16_t i = 0; i < glyph_count; i++, src += 8U, dst++)
         {
             dst->bitmap_offset = read_u16_le(src);
-            dst->width         = src[2];
-            dst->height        = src[3];
-            dst->x_offset      = (int8_t)src[4];
-            dst->y_offset      = (int8_t)src[5];
-            dst->advance       = src[6];
-            dst->_pad[0]       = dst->_pad[1] = dst->_pad[2] = 0;
+            dst->width = src[2];
+            dst->height = src[3];
+            dst->x_offset = (int8_t)src[4];
+            dst->y_offset = (int8_t)src[5];
+            dst->advance = src[6];
+            dst->_pad[0] = dst->_pad[1] = dst->_pad[2] = 0;
         }
     }
     if (bitmap_size > 0U)

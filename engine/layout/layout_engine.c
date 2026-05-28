@@ -19,19 +19,19 @@
  */
 typedef struct
 {
-        uint16_t tag;
-        int16_t main;  /**< Resolved main-axis size. */
-        int16_t cross; /**< Resolved cross-axis size. */
-        int16_t margin_main_start;
-        int16_t margin_main_end;
-        int16_t margin_cross_start;
-        int16_t margin_cross_end;
-        int16_t main_pos;  /**< Offset within parent content along the main axis. */
-        int16_t cross_pos; /**< Offset within parent content along the cross-axis. */
-        int16_t flex_grow;
-        int16_t flex_shrink;
-        uint8_t line;  /**< Wrap-line index. */
-        uint8_t align; /**< Resolved align (auto → parent align_items). */
+    uint16_t tag;
+    int16_t main;  /**< Resolved main-axis size. */
+    int16_t cross; /**< Resolved cross-axis size. */
+    int16_t margin_main_start;
+    int16_t margin_main_end;
+    int16_t margin_cross_start;
+    int16_t margin_cross_end;
+    int16_t main_pos;  /**< Offset within parent content along the main axis. */
+    int16_t cross_pos; /**< Offset within parent content along the cross-axis. */
+    int16_t flex_grow;
+    int16_t flex_shrink;
+    uint8_t line;  /**< Wrap-line index. */
+    uint8_t align; /**< Resolved align (auto → parent align_items). */
 } FlexChild;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -188,8 +188,8 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (c->type == ER_NODE_TEXT)
             {
                 int measured_w = 0, measured_h = 0;
-                er_text_measure(c->props.text.text, c->props.text.font_size, c->props.text.font_family, &measured_w,
-                                &measured_h);
+                er_text_measure(
+                    c->props.text.text, c->props.text.font_size, c->props.text.font_family, &measured_w, &measured_h);
                 intr_w = (int16_t)measured_w;
                 intr_h = (int16_t)measured_h;
             }

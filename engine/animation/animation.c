@@ -77,8 +77,10 @@ static bool is_color_prop(ERAnimProp prop)
  */
 static bool is_view_node(const ERNode* node)
 {
-    return node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW ||
-           node->type == ER_NODE_PRESSABLE || node->type == ER_NODE_MODAL;
+    return node->type == ER_NODE_VIEW
+           || node->type == ER_NODE_SCROLL_VIEW
+           || node->type == ER_NODE_PRESSABLE
+           || node->type == ER_NODE_MODAL;
 }
 
 /**

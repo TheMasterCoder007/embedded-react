@@ -9,47 +9,47 @@ extern "C"
 {
 #endif
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Functions: Public
- ---------------------------------------------------------------------------------------------------------------------*/
+    /*----------------------------------------------------------------------------------------------------------------------
+     - Functions: Public
+     ---------------------------------------------------------------------------------------------------------------------*/
 
-/**
- * @brief Initialises the SDL2 render backend and registers it with the engine.
- *
- * Creates two internal textures sized to fb_w × fb_h:
- *   - A render-target (ARGB8888) that acts as a persistent framebuffer; all engine
- *     draw calls write into it, and er_sdl_present() blits it to the screen each frame
- *     regardless of whether er_commit() did any work.
- *   - A streaming (ARGB8888) scratch texture used by copy_rect and blend_rect.
- *
- * The caller retains ownership of renderer and is responsible for destroying it
- * after er_sdl_backend_destroy(). Requires SDL 2.0.6 or later
- * (SDL_ComposeCustomBlendMode).
- *
- * @param[in] renderer  SDL2 renderer to draw into. Must outlive the backend.
- * @param[in] fb_w      Framebuffer width in pixels (must be > 0).
- * @param[in] fb_h      Framebuffer height in pixels (must be > 0).
- *
- * @return true on success, false if either texture could not be created.
- */
-bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h);
+    /**
+     * @brief Initialises the SDL2 render backend and registers it with the engine.
+     *
+     * Creates two internal textures sized to fb_w × fb_h:
+     *   - A render-target (ARGB8888) that acts as a persistent framebuffer; all engine
+     *     draw calls write into it, and er_sdl_present() blits it to the screen each frame
+     *     regardless of whether er_commit() did any work.
+     *   - A streaming (ARGB8888) scratch texture used by copy_rect and blend_rect.
+     *
+     * The caller retains ownership of renderer and is responsible for destroying it
+     * after er_sdl_backend_destroy(). Requires SDL 2.0.6 or later
+     * (SDL_ComposeCustomBlendMode).
+     *
+     * @param[in] renderer  SDL2 renderer to draw into. Must outlive the backend.
+     * @param[in] fb_w      Framebuffer width in pixels (must be > 0).
+     * @param[in] fb_h      Framebuffer height in pixels (must be > 0).
+     *
+     * @return true on success, false if either texture could not be created.
+     */
+    bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h);
 
-/**
- * @brief Composites the persistent framebuffer onto the screen and presents it.
- *
- * Blits the internal render-target texture to the SDL renderer, then calls
- * SDL_RenderPresent(). Safe to call even when er_commit() was a no-op — the last
- * rendered frame is preserved in the framebuffer texture between calls.
- */
-void er_sdl_present(void);
+    /**
+     * @brief Composites the persistent framebuffer onto the screen and presents it.
+     *
+     * Blits the internal render-target texture to the SDL renderer, then calls
+     * SDL_RenderPresent(). Safe to call even when er_commit() was a no-op — the last
+     * rendered frame is preserved in the framebuffer texture between calls.
+     */
+    void er_sdl_present(void);
 
-/**
- * @brief Destroys the SDL2 backend and frees its scratch texture.
- *
- * The SDL_Renderer passed to er_sdl_backend_init() is not destroyed here;
- * the caller owns it.
- */
-void er_sdl_backend_destroy(void);
+    /**
+     * @brief Destroys the SDL2 backend and frees its scratch texture.
+     *
+     * The SDL_Renderer passed to er_sdl_backend_init() is not destroyed here;
+     * the caller owns it.
+     */
+    void er_sdl_backend_destroy(void);
 
 #ifdef __cplusplus
 }

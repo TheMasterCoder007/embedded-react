@@ -33,12 +33,12 @@
 typedef struct
 {
     uint32_t bitmap_offset; /**< Byte offset into the font bitmap array. */
-    uint8_t width; /**< Glyph bitmap width in pixels. */
-    uint8_t height; /**< Glyph bitmap height in pixels. */
-    int8_t x_offset; /**< Horizontal bearing from the cursor origin to the glyph's left edge. */
-    int8_t y_offset; /**< Vertical bearing from the cursor baseline to the glyph's top edge. */
-    uint8_t advance; /**< Cursor advance in pixels after drawing this glyph. */
-    uint8_t _pad[3]; /**< Explicit padding to maintain 12-byte struct size. */
+    uint8_t width;          /**< Glyph bitmap width in pixels. */
+    uint8_t height;         /**< Glyph bitmap height in pixels. */
+    int8_t x_offset;        /**< Horizontal bearing from the cursor origin to the glyph's left edge. */
+    int8_t y_offset;        /**< Vertical bearing from the cursor baseline to the glyph's top edge. */
+    uint8_t advance;        /**< Cursor advance in pixels after drawing this glyph. */
+    uint8_t _pad[3];        /**< Explicit padding to maintain 12-byte struct size. */
 } GlyphInfo;
 
 /**
@@ -49,7 +49,7 @@ typedef struct
 typedef struct
 {
     uint32_t codepoint; /**< Unicode codepoint this entry covers. */
-    GlyphInfo info; /**< Glyph metrics for this codepoint. */
+    GlyphInfo info;     /**< Glyph metrics for this codepoint. */
 } ExtraGlyph;
 
 /**
@@ -64,16 +64,16 @@ typedef struct
  */
 typedef struct
 {
-    const uint8_t* bitmap; /**< Font bitmap data; layout determined by format. */
-    const GlyphInfo* glyphs; /**< Dense glyph array for codepoints [first, last]. */
+    const uint8_t* bitmap;    /**< Font bitmap data; layout determined by format. */
+    const GlyphInfo* glyphs;  /**< Dense glyph array for codepoints [first, last]. */
     const ExtraGlyph* extras; /**< Sorted sparse glyph array for out-of-range codepoints. */
-    uint16_t extras_count; /**< Number of entries in the extra array. */
-    uint16_t first; /**< First codepoint covered by the dense glyphs array. */
-    uint16_t last; /**< Last codepoint covered by the dense glyphs array. */
-    uint8_t pixel_size; /**< Nominal font size in pixels (cap height). */
-    uint8_t line_height; /**< Recommended line height including leading. */
-    uint8_t baseline; /**< Distance from the top of the line box to the text baseline. */
-    uint8_t format; /**< Bits per pixel: 1, 2, 4, or 8 (ERUI_FONT_FMT_* constants). 0 treated as 1-bit. */
+    uint16_t extras_count;    /**< Number of entries in the extra array. */
+    uint16_t first;           /**< First codepoint covered by the dense glyphs array. */
+    uint16_t last;            /**< Last codepoint covered by the dense glyphs array. */
+    uint8_t pixel_size;       /**< Nominal font size in pixels (cap height). */
+    uint8_t line_height;      /**< Recommended line height including leading. */
+    uint8_t baseline;         /**< Distance from the top of the line box to the text baseline. */
+    uint8_t format;           /**< Bits per pixel: 1, 2, 4, or 8 (ERUI_FONT_FMT_* constants). 0 treated as 1-bit. */
 } BitmapFont;
 
 /*----------------------------------------------------------------------------------------------------------------------

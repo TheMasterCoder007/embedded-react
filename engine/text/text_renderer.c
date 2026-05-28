@@ -22,30 +22,30 @@
  */
 static uint32_t utf8_next(const char** pp)
 {
-    const uint8_t* p          = (const uint8_t*)*pp;
-    const uint8_t  b0         = p[0];
-    uint32_t       cp         = 0;
-    int            n          = 0;
-    int            beyond_bmp = 0;
+    const uint8_t* p = (const uint8_t*)*pp;
+    const uint8_t b0 = p[0];
+    uint32_t cp = 0;
+    int n = 0;
+    int beyond_bmp = 0;
 
     if (b0 < 0x80U)
     {
-        n  = 1;
+        n = 1;
         cp = b0;
     }
     else if ((b0 & 0xE0U) == 0xC0U)
     {
-        n  = 2;
+        n = 2;
         cp = b0 & 0x1FU;
     }
     else if ((b0 & 0xF0U) == 0xE0U)
     {
-        n  = 3;
+        n = 3;
         cp = b0 & 0x0FU;
     }
     else if ((b0 & 0xF8U) == 0xF0U)
     {
-        n          = 4;
+        n = 4;
         beyond_bmp = 1;
     }
     else
@@ -87,14 +87,14 @@ static uint32_t utf8_next(const char** pp)
  * @param[in] clip      Clipping rectangle; no pixels are drawn outside this area.
  * @param[in] color     Text color as straight-alpha ARGB8888.
  */
-static void draw_glyph(
-    const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
+static void
+draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
 {
     if (g->width == 0U || g->height == 0U)
         return;
 
-    const uint8_t* bmp       = bitmap + g->bitmap_offset;
-    const int      row_bytes = (g->width + 7) >> 3;
+    const uint8_t* bmp = bitmap + g->bitmap_offset;
+    const int row_bytes = (g->width + 7) >> 3;
 
     const int clip_x1 = clip->x;
     const int clip_y1 = clip->y;
@@ -110,14 +110,14 @@ static void draw_glyph(
         if (fy < clip_y1 || fy >= clip_y2)
             continue;
 
-        const uint8_t* src_row  = bmp + (size_t)row * (size_t)row_bytes;
-        int            run_start = -1;
+        const uint8_t* src_row = bmp + (size_t)row * (size_t)row_bytes;
+        int run_start = -1;
 
         for (int col = 0; col < g->width; col++)
         {
-            const int     fx         = origin_x + col;
-            const int     in_clip_x  = (fx >= clip_x1 && fx < clip_x2);
-            const uint8_t bit        = src_row[col >> 3] & (uint8_t)(0x80U >> (col & 7));
+            const int fx = origin_x + col;
+            const int in_clip_x = (fx >= clip_x1 && fx < clip_x2);
+            const uint8_t bit = src_row[col >> 3] & (uint8_t)(0x80U >> (col & 7));
 
             if (bit && in_clip_x)
             {
@@ -133,7 +133,7 @@ static void draw_glyph(
 
         if (run_start >= 0)
         {
-            const int run_end    = origin_x + g->width;
+            const int run_end = origin_x + g->width;
             const int clipped_end = (run_end < clip_x2) ? run_end : clip_x2;
             er_blit_fill(color, run_start, fy, clipped_end - run_start, 1);
         }
@@ -156,30 +156,34 @@ static void draw_glyph(
  * @param[in] clip      Clipping rectangle; no pixels are drawn outside this area.
  * @param[in] color     Text color as straight-alpha ARGB8888.
  */
-static void draw_glyph_aa(
-    const GlyphInfo* g, const uint8_t* bitmap, uint8_t bpp,
-    int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
+static void draw_glyph_aa(const GlyphInfo* g,
+                          const uint8_t* bitmap,
+                          uint8_t bpp,
+                          int cursor_x,
+                          int cursor_y,
+                          const ERRect* clip,
+                          uint32_t color)
 {
     if (g->width == 0U || g->height == 0U)
         return;
 
     const uint8_t src_a = (uint8_t)(color >> 24);
     const uint8_t src_r = (uint8_t)(color >> 16);
-    const uint8_t src_g = (uint8_t)(color >>  8);
+    const uint8_t src_g = (uint8_t)(color >> 8);
     const uint8_t src_b = (uint8_t)(color);
 
-    const uint8_t* bmp      = bitmap + g->bitmap_offset;
-    const int      clip_x1  = clip->x;
-    const int      clip_y1  = clip->y;
-    const int      clip_x2  = clip->x + clip->w;
-    const int      clip_y2  = clip->y + clip->h;
-    const int      origin_x = cursor_x + g->x_offset;
-    const int      origin_y = cursor_y + g->y_offset;
+    const uint8_t* bmp = bitmap + g->bitmap_offset;
+    const int clip_x1 = clip->x;
+    const int clip_y1 = clip->y;
+    const int clip_x2 = clip->x + clip->w;
+    const int clip_y2 = clip->y + clip->h;
+    const int origin_x = cursor_x + g->x_offset;
+    const int origin_y = cursor_y + g->y_offset;
 
     /* Row stride depends on BPP; glyph width is uint8_t so max is 255 px. */
-    const int row_stride = (bpp == 8) ? (int)g->width
-                         : (bpp == 4) ? ((int)g->width + 1) / 2
-                                      : ((int)g->width + 3) / 4;  /* bpp == 2 */
+    const int row_stride = (bpp == 8)   ? (int)g->width
+                           : (bpp == 4) ? ((int)g->width + 1) / 2
+                                        : ((int)g->width + 3) / 4; /* bpp == 2 */
 
     uint32_t row_buf[256]; /* stack buffer: max glyph width 255 px */
 
@@ -190,7 +194,7 @@ static void draw_glyph_aa(
             continue;
 
         const int col_start = (clip_x1 > origin_x) ? clip_x1 - origin_x : 0;
-        const int col_end   = (clip_x2 < origin_x + (int)g->width) ? clip_x2 - origin_x : (int)g->width;
+        const int col_end = (clip_x2 < origin_x + (int)g->width) ? clip_x2 - origin_x : (int)g->width;
         if (col_start >= col_end)
             continue;
 
@@ -205,27 +209,25 @@ static void draw_glyph_aa(
             else if (bpp == 4)
             {
                 /* High nibble = left pixel of each pair. */
-                const uint8_t nibble = (col & 1) ? src_row[col >> 1] & 0x0FU
-                                                  : src_row[col >> 1] >> 4;
-                cov = nibble * 17U;  /* 0-15 → 0,17,…,255 */
+                const uint8_t nibble = (col & 1) ? src_row[col >> 1] & 0x0FU : src_row[col >> 1] >> 4;
+                cov = nibble * 17U; /* 0-15 → 0,17,…,255 */
             }
             else
             {
                 /* bpp == 2: bits 7-6 = leftmost pixel of each quartet. */
                 const uint8_t pair = (src_row[col >> 2] >> (6U - ((uint8_t)col & 3U) * 2U)) & 0x03U;
-                cov = pair * 85U;  /* 0-3 → 0,85,170,255 */
+                cov = pair * 85U; /* 0-3 → 0,85,170,255 */
             }
 
-            const uint8_t a  = (uint8_t)(((uint32_t)src_a * cov + 127U) / 255U);
-            const uint8_t pr = (uint8_t)(((uint32_t)src_r * a  + 127U) / 255U);
-            const uint8_t pg = (uint8_t)(((uint32_t)src_g * a  + 127U) / 255U);
-            const uint8_t pb = (uint8_t)(((uint32_t)src_b * a  + 127U) / 255U);
-            row_buf[col - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) |
-                                       ((uint32_t)pg <<  8) | (uint32_t)pb;
+            const uint8_t a = (uint8_t)(((uint32_t)src_a * cov + 127U) / 255U);
+            const uint8_t pr = (uint8_t)(((uint32_t)src_r * a + 127U) / 255U);
+            const uint8_t pg = (uint8_t)(((uint32_t)src_g * a + 127U) / 255U);
+            const uint8_t pb = (uint8_t)(((uint32_t)src_b * a + 127U) / 255U);
+            row_buf[col - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) | ((uint32_t)pg << 8) | (uint32_t)pb;
         }
 
-        er_blit_copy(row_buf, (col_end - col_start) * (int)sizeof(uint32_t),
-                     origin_x + col_start, fy, col_end - col_start, 1);
+        er_blit_copy(
+            row_buf, (col_end - col_start) * (int)sizeof(uint32_t), origin_x + col_start, fy, col_end - col_start, 1);
     }
 }
 
@@ -248,8 +250,8 @@ void er_text_render(const char* text, ERRect clip, uint32_t color, uint8_t font_
         return;
 
     const int line_h = font->line_height;
-    int       cursor_x = clip.x;
-    int       cursor_y = clip.y;
+    int cursor_x = clip.x;
+    int cursor_y = clip.y;
 
     const char* p = text;
     while (*p)
@@ -283,8 +285,7 @@ void er_text_render(const char* text, ERRect clip, uint32_t color, uint8_t font_
     }
 }
 
-void er_text_measure(
-    const char* text, uint8_t font_size, const char* font_family, int* out_width, int* out_height)
+void er_text_measure(const char* text, uint8_t font_size, const char* font_family, int* out_width, int* out_height)
 {
     if (font_size < 8U)
         font_size = 8U;
@@ -307,10 +308,10 @@ void er_text_measure(
         const char* p = text;
         while (*p)
         {
-            const uint32_t   cp = utf8_next(&p);
+            const uint32_t cp = utf8_next(&p);
             if (cp == (uint32_t)'\n')
                 continue;
-            const GlyphInfo* g  = font_glyph(font, cp);
+            const GlyphInfo* g = font_glyph(font, cp);
             if (g)
                 width += g->advance;
         }

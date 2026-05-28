@@ -379,8 +379,8 @@ static ERNode* create_pressable(int16_t x, int16_t y, int16_t w, int16_t h, Even
  *
  * @return New pressable node.
  */
-static ERNode* create_pressable_z(int16_t x, int16_t y, int16_t w, int16_t h, int16_t z_index, uint32_t color,
-                                  EventCounts* counts)
+static ERNode*
+create_pressable_z(int16_t x, int16_t y, int16_t w, int16_t h, int16_t z_index, uint32_t color, EventCounts* counts)
 {
     ERNode* node = create_pressable(x, y, w, h, counts);
     ERProps p = props_default();

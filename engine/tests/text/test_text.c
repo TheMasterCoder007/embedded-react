@@ -20,8 +20,8 @@
  */
 typedef struct
 {
-    int pixels_drawn; /**< Total pixel area covered by in-bounds draw calls. */
-    int draw_ops; /**< Total number of draw calls received. */
+    int pixels_drawn;  /**< Total pixel area covered by in-bounds draw calls. */
+    int draw_ops;      /**< Total number of draw calls received. */
     int out_of_bounds; /**< Number of draw calls that fell outside the framebuffer. */
 } TestCtx;
 
@@ -141,11 +141,11 @@ int main(void)
     if (h2 != h)
         return fail("line height changed between measures");
 
-    TestCtx              tc = { 0 };
-    EmbeddedRenderBackend be = { fill_cb, copy_cb, blend_cb, NULL, NULL, &tc };
+    TestCtx tc = {0};
+    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
     embedded_renderer_set_backend(&be);
 
-    ERRect clip = { 0, 0, FB_W, FB_H };
+    ERRect clip = {0, 0, FB_W, FB_H};
     er_text_render("Hello", clip, 0xFFFFFFFFu, 14, NULL);
 
     if (tc.draw_ops == 0)
@@ -155,17 +155,22 @@ int main(void)
     if (tc.out_of_bounds != 0)
         return fail("fill_rect emitted outside framebuffer bounds");
 
-    TestCtx tc2 = { 0 };
+    TestCtx tc2 = {0};
     be.ctx = &tc2;
     embedded_renderer_set_backend(&be);
-    ERRect tiny = { 0, 0, 4, 64 };
+    ERRect tiny = {0, 0, 4, 64};
     er_text_render("Hello", tiny, 0xFFFFFFFFu, 14, NULL);
     if (tc2.out_of_bounds != 0)
         return fail("narrow clip emitted out-of-bounds fills");
 
     int w_plain = 0, w_sym = 0, dummy = 0;
     er_text_measure("23C", 16, NULL, &w_plain, &dummy);
-    er_text_measure("23\xC2\xB0" "C", 16, NULL, &w_sym, &dummy);
+    er_text_measure("23\xC2\xB0"
+                    "C",
+                    16,
+                    NULL,
+                    &w_sym,
+                    &dummy);
     if (w_sym <= w_plain)
         return fail("U+00B0 degree symbol did not measure wider than 2-char baseline");
 

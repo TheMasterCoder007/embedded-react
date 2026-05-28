@@ -9,12 +9,12 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FONT_BLOB_MAGIC_0     0x46U /**< Wire-format magic byte 0: 'F'. */
-#define FONT_BLOB_MAGIC_1     0x4FU /**< Wire-format magic byte 1: 'O'. */
-#define FONT_BLOB_MAGIC_2     0x4EU /**< Wire-format magic byte 2: 'N'. */
-#define FONT_BLOB_MAGIC_3     0x54U /**< Wire-format magic byte 3: 'T'. */
-#define FONT_BLOB_VERSION     2U    /**< Version of supported font blob. */
-#define FONT_BLOB_HEADER_SIZE 17U   /**< Fixed header size in bytes. */
+#define FONT_BLOB_MAGIC_0 0x46U   /**< Wire-format magic byte 0: 'F'. */
+#define FONT_BLOB_MAGIC_1 0x4FU   /**< Wire-format magic byte 1: 'O'. */
+#define FONT_BLOB_MAGIC_2 0x4EU   /**< Wire-format magic byte 2: 'N'. */
+#define FONT_BLOB_MAGIC_3 0x54U   /**< Wire-format magic byte 3: 'T'. */
+#define FONT_BLOB_VERSION 2U      /**< Version of supported font blob. */
+#define FONT_BLOB_HEADER_SIZE 17U /**< Fixed header size in bytes. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types
@@ -25,11 +25,11 @@
  */
 typedef enum
 {
-    FONT_BLOB_OK                = 0, /**< Registration succeeded. */
-    FONT_BLOB_ERR_TOO_SHORT     = 1, /**< Blob is smaller than the minimum header size. */
-    FONT_BLOB_ERR_BAD_MAGIC     = 2, /**< Magic bytes do not match the FONT signature. */
-    FONT_BLOB_ERR_BAD_VERSION   = 3, /**< Blob version is not supported. */
-    FONT_BLOB_ERR_BAD_RANGE     = 4, /**< Glyph range fields are inconsistent. */
+    FONT_BLOB_OK = 0,                /**< Registration succeeded. */
+    FONT_BLOB_ERR_TOO_SHORT = 1,     /**< Blob is smaller than the minimum header size. */
+    FONT_BLOB_ERR_BAD_MAGIC = 2,     /**< Magic bytes do not match the FONT signature. */
+    FONT_BLOB_ERR_BAD_VERSION = 3,   /**< Blob version is not supported. */
+    FONT_BLOB_ERR_BAD_RANGE = 4,     /**< Glyph range fields are inconsistent. */
     FONT_BLOB_ERR_SIZE_MISMATCH = 5, /**< Blob is smaller than the size implied by the header. */
     FONT_BLOB_ERR_OUT_OF_MEMORY = 6, /**< Not enough space in the font pool. */
     FONT_BLOB_ERR_REGISTRY_FULL = 7, /**< Font registry has no free slots. */

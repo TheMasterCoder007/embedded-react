@@ -11,11 +11,11 @@
  */
 typedef struct
 {
-    SDL_Renderer* renderer; /**< SDL2 renderer owned by the caller. */
-    SDL_Texture* fb; /**< Render-target texture used as a persistent framebuffer. */
-    SDL_Texture* scratch; /**< Streaming ARGB8888 texture for copy/blend ops. */
-    int scratch_w; /**< Width of the scratch texture in pixels. */
-    int scratch_h; /**< Height of the scratch texture in pixels. */
+    SDL_Renderer* renderer;      /**< SDL2 renderer owned by the caller. */
+    SDL_Texture* fb;             /**< Render-target texture used as a persistent framebuffer. */
+    SDL_Texture* scratch;        /**< Streaming ARGB8888 texture for copy/blend ops. */
+    int scratch_w;               /**< Width of the scratch texture in pixels. */
+    int scratch_h;               /**< Height of the scratch texture in pixels. */
     SDL_BlendMode premult_blend; /**< Custom blend mode for premultiplied ARGB sources. */
 } SDLCtx;
 
@@ -99,8 +99,7 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
  * @param[in] h                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SDLCtx.
  */
-static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha,
-                          int x, int y, int w, int h, void* ctx)
+static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
     SDLCtx* c = ctx;
     SDL_Rect src_rect = {0, 0, w, h};
@@ -132,16 +131,14 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
      * Standard SDL_BLENDMODE_BLEND would expect un-premultiplied src and would
      * double-multiply the alpha channel.
      */
-    s_ctx.premult_blend = SDL_ComposeCustomBlendMode(
-        SDL_BLENDFACTOR_ONE,
-        SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-        SDL_BLENDOPERATION_ADD,
-        SDL_BLENDFACTOR_ONE,
-        SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-        SDL_BLENDOPERATION_ADD);
+    s_ctx.premult_blend = SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,
+                                                     SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                                                     SDL_BLENDOPERATION_ADD,
+                                                     SDL_BLENDFACTOR_ONE,
+                                                     SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                                                     SDL_BLENDOPERATION_ADD);
 
-    s_ctx.scratch = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
-                                      SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
+    s_ctx.scratch = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
     if (!s_ctx.scratch)
         return false;
 
@@ -149,8 +146,7 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
 
     /* Persistent framebuffer: all engine draw calls target this texture, so the
      * last rendered frame survives across frames where er_commit() is a no-op. */
-    s_ctx.fb = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
-                                 SDL_TEXTUREACCESS_TARGET, fb_w, fb_h);
+    s_ctx.fb = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, fb_w, fb_h);
     if (!s_ctx.fb)
     {
         SDL_DestroyTexture(s_ctx.scratch);

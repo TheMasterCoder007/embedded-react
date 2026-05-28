@@ -4,7 +4,10 @@ BasedOnStyle: LLVM
 # Enforce 4-space indentation
 IndentWidth: 4
 TabWidth: 4
+ContinuationIndentWidth: 4
 UseTab: Never
+# Break before binary operators
+BreakBeforeBinaryOperators: NonAssignment
 # Maximum line length
 ColumnLimit: 120
 # Place braces on the next line (Allman style)
@@ -25,4 +28,7 @@ AllowShortBlocksOnASingleLine: Never
 AllowShortIfStatementsOnASingleLine: false
 # Organize includes
 SortIncludes: true
+# Do not bin pack arguments
+BinPackArguments: false
+BinPackParameters: false
 ...

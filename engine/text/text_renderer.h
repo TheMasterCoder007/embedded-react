@@ -35,7 +35,6 @@ void er_text_render(const char* text, ERRect clip, uint32_t color, uint8_t font_
  * @param[out] out_width   Receives the measured width in pixels, or 0 if the text is NULL.
  * @param[out] out_height  Receives the font's line height in pixels.
  */
-void er_text_measure(
-    const char* text, uint8_t font_size, const char* font_family, int* out_width, int* out_height);
+void er_text_measure(const char* text, uint8_t font_size, const char* font_family, int* out_width, int* out_height);
 
 #endif

@@ -71,8 +71,8 @@ static bool node_is_invisible(const ERNode* node)
 {
     if (node->layout.display == ER_DISPLAY_NONE)
         return true;
-    if (node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW ||
-        node->type == ER_NODE_PRESSABLE || node->type == ER_NODE_MODAL)
+    if (node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_PRESSABLE
+        || node->type == ER_NODE_MODAL)
     {
         if (node->props.view.opacity == 0)
             return true;
@@ -208,8 +208,7 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
     if (pe != ER_POINTER_EVENTS_BOX_ONLY)
     {
         /* overflow:hidden and overflow:scroll clip child hit-testing to strict bounds. */
-        const bool clips = (node->layout.overflow == ER_OVERFLOW_HIDDEN ||
-                            node->layout.overflow == ER_OVERFLOW_SCROLL);
+        const bool clips = (node->layout.overflow == ER_OVERFLOW_HIDDEN || node->layout.overflow == ER_OVERFLOW_SCROLL);
 
         if (!clips || point_inside_node(node, x, y))
         {
@@ -274,8 +273,8 @@ static ERNode* nearest_press_target(ERNode* node)
 {
     while (node)
     {
-        if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS) ||
-            has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT))
+        if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS)
+            || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT))
             return node;
         node = er_get_node(node->parent_tag);
     }

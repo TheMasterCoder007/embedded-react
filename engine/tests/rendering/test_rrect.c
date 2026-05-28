@@ -21,10 +21,10 @@
  */
 typedef struct
 {
-    uint32_t* fb; /**< Flat ARGB8888 framebuffer; rows are fb_w pixels wide. */
-    int fb_w; /**< Framebuffer width in pixels. */
-    int fb_h; /**< Framebuffer height in pixels. */
-    int fills; /**< Total fill_rect calls received. */
+    uint32_t* fb;      /**< Flat ARGB8888 framebuffer; rows are fb_w pixels wide. */
+    int fb_w;          /**< Framebuffer width in pixels. */
+    int fb_h;          /**< Framebuffer height in pixels. */
+    int fills;         /**< Total fill_rect calls received. */
     int out_of_bounds; /**< fill_rect calls that fell outside the framebuffer. */
 } TestCtx;
 

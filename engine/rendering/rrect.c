@@ -1,5 +1,5 @@
-#include "renderer_internal.h"
 #include "rrect.h"
+#include "renderer_internal.h"
 #include <math.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -116,7 +116,7 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
 #if ERUI_BORDER_AA
         {
             float cy = (float)dy - 0.5f;
-            for (int k = 0; ; k++)
+            for (int k = 0;; k++)
             {
                 float cx = (float)dx + (float)k + 0.5f;
                 float dist = sqrtf(cx * cx + cy * cy);
@@ -148,8 +148,8 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
     }
 }
 
-void er_rrect_fill_bordered(uint32_t bg_argb, uint32_t border_argb,
-                            int border_w, int x, int y, int w, int h, int radius)
+void er_rrect_fill_bordered(
+    uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius)
 {
     if (border_w > 0 && (border_argb >> 24) != 0)
     {
