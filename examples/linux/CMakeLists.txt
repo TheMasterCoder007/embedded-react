@@ -23,6 +23,12 @@ project(embedded-react-desktop C)
 
 find_package(SDL2 REQUIRED)
 
+# Desktop demo always enables shadows and uses a larger scratch buffer so that
+# panel-sized nodes can receive box shadows without graceful-degradation silent skips.
+set(ERUI_SHADOWS ON CACHE BOOL "Enable box shadow rasterizer" FORCE)
+set(ERUI_SCRATCH_W "512" CACHE STRING "Scratch buffer width in pixels" FORCE)
+set(ERUI_SCRATCH_H "512" CACHE STRING "Scratch buffer height in pixels" FORCE)
+
 add_subdirectory(
         ${CMAKE_CURRENT_SOURCE_DIR}/../../engine
         ${CMAKE_CURRENT_BINARY_DIR}/engine

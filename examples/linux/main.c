@@ -622,6 +622,11 @@ static ERNode* make_xform_demo(const char* caption, uint32_t box_color, ERNode**
     p.height = dp(44);
     p.background_color = box_color;
     p.border_radius = dp(6);
+    p.shadow_color = box_color; /* colored shadow matching the box */
+    p.shadow_offset_x = (float)dp(2);
+    p.shadow_offset_y = (float)dp(3);
+    p.shadow_opacity = 0.55f;
+    p.shadow_radius = (uint8_t)dp(5);
     er_node_set_props(box, &p);
     er_tree_append_child(outer, box);
 
@@ -645,8 +650,8 @@ static ERNode* make_xform_demo(const char* caption, uint32_t box_color, ERNode**
 static ERNode* build_transforms_panel(void)
 {
     ERNode* col = make_panel();
-    er_tree_append_child(col, make_section_header("TRANSFORMS  &  OPACITY"));
-    er_tree_append_child(col, make_caption("looping timing animations — no interaction required"));
+    er_tree_append_child(col, make_section_header("TRANSFORMS  OPACITY  SHADOWS"));
+    er_tree_append_child(col, make_caption("looping animations  —  shadow tracks translateX and opacity"));
 
     /* Row 1 */
     ERNode* row1 = er_node_create(ER_NODE_VIEW);
@@ -720,6 +725,10 @@ static void build_scene(int phys_w, int phys_h)
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_CENTER;
     p.justify_content = ER_JUSTIFY_SPACE_BETWEEN;
+    p.shadow_color = 0xFF000000;
+    p.shadow_offset_y = (float)dp(4);
+    p.shadow_opacity = 0.45f;
+    p.shadow_radius = (uint8_t)dp(7);
     er_node_set_props(header, &p);
 
     ERNode* hdr_title = er_node_create(ER_NODE_TEXT);
@@ -733,7 +742,11 @@ static void build_scene(int phys_w, int phys_h)
     p = props_default();
     p.color = 0xFF556677;
     p.font_size = (uint8_t)dp(12);
+#if ERUI_SHADOWS
+    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows", ER_TEXT_MAX);
+#else
     strncpy(p.text, "C99  Yoga flexbox  SDL2", ER_TEXT_MAX);
+#endif
     er_node_set_props(hdr_sub, &p);
 
     er_tree_append_child(header, hdr_title);
@@ -814,6 +827,11 @@ static void build_scene(int phys_w, int phys_h)
     p.padding = dp(12);
     p.align_items = ER_ALIGN_CENTER;
     p.justify_content = ER_JUSTIFY_CENTER;
+    p.shadow_color = 0xFF2A9D8F; /* teal shadow matching border */
+    p.shadow_offset_x = (float)dp(3);
+    p.shadow_offset_y = (float)dp(3);
+    p.shadow_opacity = 0.55f;
+    p.shadow_radius = (uint8_t)dp(5);
     er_node_set_props(bordered, &p);
 
     ERNode* bordered_lbl = er_node_create(ER_NODE_TEXT);
@@ -895,6 +913,11 @@ static void build_scene(int phys_w, int phys_h)
     p.padding = dp(14);
     p.align_items = ER_ALIGN_CENTER;
     p.justify_content = ER_JUSTIFY_CENTER;
+    p.shadow_color = 0xFF000000;
+    p.shadow_offset_x = (float)dp(2);
+    p.shadow_offset_y = (float)dp(4);
+    p.shadow_opacity = 0.5f;
+    p.shadow_radius = (uint8_t)dp(6);
     er_node_set_props(touch_card, &p);
     er_event_set(touch_card, ER_EVENT_PRESS, on_touch_press, NULL);
     er_event_set(touch_card, ER_EVENT_PRESS_IN, on_touch_press_in, NULL);
@@ -938,6 +961,10 @@ static void build_scene(int phys_w, int phys_h)
     p.border_radius = dp(7);
     p.padding = dp(10);
     p.z_index = 1;
+    p.shadow_color = 0xFF000000;
+    p.shadow_offset_y = (float)dp(3);
+    p.shadow_opacity = 0.35f;
+    p.shadow_radius = (uint8_t)dp(4);
     er_node_set_props(z_low, &p);
     er_event_set(z_low, ER_EVENT_PRESS, on_zidx_low_press, NULL);
 
@@ -961,6 +988,10 @@ static void build_scene(int phys_w, int phys_h)
     p.border_radius = dp(7);
     p.padding = dp(10);
     p.z_index = 5;
+    p.shadow_color = 0xFF000000;
+    p.shadow_offset_y = (float)dp(5);
+    p.shadow_opacity = 0.5f;
+    p.shadow_radius = (uint8_t)dp(6);
     er_node_set_props(z_high, &p);
     er_event_set(z_high, ER_EVENT_PRESS, on_zidx_high_press, NULL);
 

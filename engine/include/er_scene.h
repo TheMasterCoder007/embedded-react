@@ -313,6 +313,14 @@ extern "C"
         float transform_rotate_z;    /**< Clockwise rotation in degrees (0 = none). */
         float transform_origin_x;    /**< Fractional X pivot [0.0–1.0]; negative = center (0.5). */
         float transform_origin_y;    /**< Fractional Y pivot [0.0–1.0]; negative = center (0.5). */
+
+        /* --- Shadow (View-family only; requires ERUI_SHADOWS at build time) --- */
+        uint32_t shadow_color; /**< ARGB8888; default 0xFF000000 (opaque black). */
+        float shadow_offset_x; /**< Shadow X offset in pixels (0 = directly behind node). */
+        float shadow_offset_y; /**< Shadow Y offset in pixels (0 = directly behind node). */
+        float shadow_opacity;  /**< 0.0–1.0; 0 = no shadow (default). */
+        uint8_t shadow_radius; /**< Blur radius in pixels; 0 = hard edge. */
+        uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
     } ERProps;
 
     /**

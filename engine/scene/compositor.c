@@ -4,6 +4,7 @@
 #include "renderer_internal.h"
 #include "rrect.h"
 #include "scratch_pool.h"
+#include "shadow.h"
 #include "text_renderer.h"
 #include "transform.h"
 #include <string.h>
@@ -184,6 +185,25 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             /* Translate-only fast path: shift the render position by the prop offsets. */
             px += (int)n->tp_translate_x;
             py += (int)n->tp_translate_y;
+        }
+    }
+
+    /* Shadow: rendered before opacity scratch so the shadow lands in the outer destination
+     * (framebuffer or an ancestor opacity slot) rather than inside this node's own composite.
+     * Affine-transformed nodes are skipped for v1 — the shadow would otherwise be rasterised
+     * into the transform scratch and distorted by the inverse-map blit. */
+    if (should_render && !doing_affine)
+    {
+        switch (n->type)
+        {
+            case ER_NODE_VIEW:
+            case ER_NODE_SCROLL_VIEW:
+            case ER_NODE_PRESSABLE:
+            case ER_NODE_MODAL:
+                er_shadow_render(&n->props.view, px, py, w, h);
+                break;
+            default:
+                break;
         }
     }
 
@@ -490,6 +510,12 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.border_width = props->border_width;
             node->props.view.border_radius = props->border_radius;
             node->props.view.opacity = props->opacity;
+            node->props.view.shadow_color = props->shadow_color;
+            node->props.view.shadow_offset_x = props->shadow_offset_x;
+            node->props.view.shadow_offset_y = props->shadow_offset_y;
+            node->props.view.shadow_opacity = props->shadow_opacity;
+            node->props.view.shadow_radius = props->shadow_radius;
+            node->props.view.elevation = props->elevation;
             break;
         case ER_NODE_TEXT:
             strncpy(node->props.text.text, props->text, ER_TEXT_MAX);

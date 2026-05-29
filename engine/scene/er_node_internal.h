@@ -62,6 +62,14 @@ typedef struct
     int16_t border_width;
     int16_t border_radius;
     uint8_t opacity; /**< 0–255. */
+
+    /* Shadow */
+    uint32_t shadow_color; /**< ARGB8888; default 0xFF000000 (black). */
+    float shadow_offset_x; /**< Shadow X offset in pixels. */
+    float shadow_offset_y; /**< Shadow Y offset in pixels. */
+    float shadow_opacity;  /**< 0.0–1.0; 0 means no shadow. */
+    uint8_t shadow_radius; /**< Blur radius in pixels. */
+    uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
 } ERViewProps;
 
 /**
