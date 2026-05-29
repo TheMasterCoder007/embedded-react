@@ -14,8 +14,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SCREEN_W 1024
-#define SCREEN_H 768
+#define SCREEN_W 1280
+#define SCREEN_H 1024
 
 #define CYCLE_COUNT 5
 
@@ -52,6 +52,13 @@ static ERNode* s_xform_translate = NULL;
 static ERNode* s_xform_rotate = NULL;
 static ERNode* s_xform_scale = NULL;
 static ERNode* s_opacity_node = NULL;
+
+/* Panel 6 — Spring, Sequence, Stagger */
+static ERNode* s_spring_box = NULL;                          /**< Box that springs on button press. */
+static bool s_spring_forward = false;                        /**< Direction toggle for spring demo. */
+static ERNode* s_seq_boxes[3] = {NULL, NULL, NULL};          /**< Three boxes animated in sequence. */
+static ERNode* s_stagger_bars[4] = {NULL, NULL, NULL, NULL}; /**< Four bars animated with stagger. */
+static ERNode* s_spring_status_lbl = NULL;
 
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
@@ -170,6 +177,25 @@ static void anim_loop(ERNode* node, ERAnimProp prop, float to_val, uint32_t ms)
     cfg.type = ER_ANIM_TIMING;
     cfg.duration_ms = ms;
     cfg.loop = true;
+    er_anim_start(node, prop, to_val, &cfg);
+}
+
+/**
+ * @brief Starts a spring animation on a transform property.
+ *
+ * @param[in] node      Target node.
+ * @param[in] prop      Animatable property.
+ * @param[in] to_val    Target value.
+ * @param[in] stiffness Spring stiffness (higher = snappier).
+ * @param[in] damping   Damping coefficient (higher = less bounce).
+ */
+static void anim_spring(ERNode* node, ERAnimProp prop, float to_val, float stiffness, float damping)
+{
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_SPRING;
+    cfg.stiffness = stiffness;
+    cfg.damping = damping;
+    cfg.mass = 1.0f;
     er_anim_start(node, prop, to_val, &cfg);
 }
 
@@ -473,6 +499,124 @@ static void on_scroll_h(ERNode* node, const EREventData* data, void* ctx)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 6 callbacks (Spring / Sequence / Stagger)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "SPRING" button in Panel 6.
+ *
+ * Toggles the spring box between translateX = 0 and translateX = dp(80),
+ * using a bouncy underdamped spring (stiffness=200, damping=12).
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_spring_press(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_spring_box)
+        return;
+    s_spring_forward = !s_spring_forward;
+    const float target = s_spring_forward ? (float)dp(80) : 0.0f;
+    anim_spring(s_spring_box, ER_PROP_TRANSLATE_X, target, 200.0f, 12.0f);
+
+    if (s_spring_status_lbl)
+    {
+        ERProps lp = props_default();
+        lp.color = 0xFF4477AA;
+        lp.font_size = (uint8_t)dp(11);
+        strncpy(lp.text,
+                s_spring_forward ? "springing forward  (stiffness=200  damping=12)" : "springing back",
+                ER_TEXT_MAX);
+        lp.text[ER_TEXT_MAX] = '\0';
+        er_node_set_props(s_spring_status_lbl, &lp);
+    }
+}
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "SEQUENCE" button in Panel 6.
+ *
+ * Cycles each of the three sequence boxes through a color animation in order,
+ * demonstrating the er_anim_sequence() API.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_sequence_press(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_seq_boxes[0] || !s_seq_boxes[1] || !s_seq_boxes[2])
+        return;
+
+    static const uint32_t k_seq_colors[3][2] = {
+        {0xFF264653, 0xFF2A9D8F},
+        {0xFF264653, 0xFFE94560},
+        {0xFF264653, 0xFFF4A261},
+    };
+
+    static int seq_phase = 0;
+
+    ERAnimEntry entries[3];
+    memset(entries, 0, sizeof(entries));
+
+    for (int i = 0; i < 3; i++)
+    {
+        entries[i].node = s_seq_boxes[i];
+        entries[i].prop = ER_PROP_BACKGROUND_COLOR;
+        entries[i].value = color_bits(k_seq_colors[i][seq_phase & 1]);
+        entries[i].cfg.type = ER_ANIM_TIMING;
+        entries[i].cfg.easing = ER_EASE_EASE_IN_OUT;
+        entries[i].cfg.duration_ms = 350U;
+    }
+
+    seq_phase++;
+    er_anim_sequence(entries, 3, NULL, NULL);
+}
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "STAGGER" button in Panel 6.
+ *
+ * Animates four bars from opacity 0.2 to 1.0 (or back), each starting
+ * 80 ms after the previous, demonstrating er_anim_stagger().
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_stagger_press(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+
+    static bool stagger_in = false;
+    stagger_in = !stagger_in;
+
+    ERAnimEntry entries[4];
+    memset(entries, 0, sizeof(entries));
+
+    for (int i = 0; i < 4; i++)
+    {
+        if (!s_stagger_bars[i])
+            return;
+        entries[i].node = s_stagger_bars[i];
+        entries[i].prop = ER_PROP_OPACITY;
+        entries[i].value = stagger_in ? 1.0f : 0.2f;
+        entries[i].cfg.type = ER_ANIM_TIMING;
+        entries[i].cfg.easing = ER_EASE_EASE_OUT;
+        entries[i].cfg.duration_ms = 400U;
+    }
+
+    er_anim_stagger(entries, 4, 80U, NULL, NULL);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — scene construction
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -578,6 +722,142 @@ static ERNode* make_panel(void)
     p.padding = dp(14);
     p.gap = dp(9);
     er_node_set_props(col, &p);
+    return col;
+}
+
+/**
+ * @brief Builds Panel 6 — Spring, Sequence & Stagger.
+ *
+ * Three sub-sections:
+ *   SPRING    — a single box that bounces to a target and back.
+ *   SEQUENCE  — three boxes that light up one after another.
+ *   STAGGER   — four bars that fade in with an offset delay between each.
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_spring_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    /* ---- SPRING ---- */
+    er_tree_append_child(col, make_section_header("SPRING"));
+    er_tree_append_child(col, make_caption("stiffness=200  damping=12  (underdamped)"));
+
+    /* Track area: holds the spring box in absolute position */
+    ERNode* spring_track = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(48);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(6);
+    p.overflow = ER_OVERFLOW_HIDDEN;
+    er_node_set_props(spring_track, &p);
+
+    ERNode* spring_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = dp(8);
+    p.top = dp(8);
+    p.width = dp(32);
+    p.height = dp(32);
+    p.background_color = 0xFF2A9D8F;
+    p.border_radius = dp(6);
+    p.shadow_color = 0xFF2A9D8F;
+    p.shadow_offset_x = 0.0f;
+    p.shadow_offset_y = (float)dp(3);
+    p.shadow_opacity = 0.7f;
+    p.shadow_radius = (uint8_t)dp(5);
+    er_node_set_props(spring_box, &p);
+    s_spring_box = spring_box;
+    er_tree_append_child(spring_track, spring_box);
+    er_tree_append_child(col, spring_track);
+
+    ERNode* spring_status = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF4477AA;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "press button to launch", ER_TEXT_MAX);
+    er_node_set_props(spring_status, &p);
+    s_spring_status_lbl = spring_status;
+    er_tree_append_child(col, spring_status);
+    er_tree_append_child(col, make_button("SPRING", on_spring_press));
+
+    /* ---- Divider ---- */
+    ERNode* div1 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div1, &p);
+    er_tree_append_child(col, div1);
+
+    /* ---- SEQUENCE ---- */
+    er_tree_append_child(col, make_section_header("SEQUENCE"));
+    er_tree_append_child(col, make_caption("three colors fire one after another  (350 ms each)"));
+
+    static const uint32_t k_seq_init[3] = {0xFF264653, 0xFF264653, 0xFF264653};
+    ERNode* seq_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(32);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(5);
+    er_node_set_props(seq_row, &p);
+
+    for (int i = 0; i < 3; i++)
+    {
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.flex_grow = 1;
+        p.background_color = k_seq_init[i];
+        p.border_radius = dp(5);
+        er_node_set_props(box, &p);
+        s_seq_boxes[i] = box;
+        er_tree_append_child(seq_row, box);
+    }
+    er_tree_append_child(col, seq_row);
+    er_tree_append_child(col, make_button("PLAY SEQUENCE", on_sequence_press));
+
+    /* ---- Divider ---- */
+    ERNode* div2 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div2, &p);
+    er_tree_append_child(col, div2);
+
+    /* ---- STAGGER ---- */
+    er_tree_append_child(col, make_section_header("STAGGER"));
+    er_tree_append_child(col, make_caption("four bars  —  80 ms offset between each start"));
+
+    static const uint32_t k_bar_colors[4] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6};
+
+    ERNode* stagger_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(32);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(4);
+    er_node_set_props(stagger_row, &p);
+
+    for (int i = 0; i < 4; i++)
+    {
+        ERNode* bar = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.flex_grow = 1;
+        p.background_color = k_bar_colors[i];
+        p.border_radius = dp(4);
+        p.opacity = 51U; /* start at ~0.2 */
+        er_node_set_props(bar, &p);
+        s_stagger_bars[i] = bar;
+        er_tree_append_child(stagger_row, bar);
+    }
+    er_tree_append_child(col, stagger_row);
+    er_tree_append_child(col, make_button("STAGGER IN / OUT", on_stagger_press));
+
     return col;
 }
 
@@ -743,9 +1023,9 @@ static void build_scene(int phys_w, int phys_h)
     p.color = 0xFF556677;
     p.font_size = (uint8_t)dp(12);
 #if ERUI_SHADOWS
-    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows", ER_TEXT_MAX);
+    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  stagger", ER_TEXT_MAX);
 #else
-    strncpy(p.text, "C99  Yoga flexbox  SDL2", ER_TEXT_MAX);
+    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  spring  sequence  stagger", ER_TEXT_MAX);
 #endif
     er_node_set_props(hdr_sub, &p);
 
@@ -1113,7 +1393,7 @@ static void build_scene(int phys_w, int phys_h)
 
     ERNode* sv_v = er_node_create(ER_NODE_SCROLL_VIEW);
     p = props_default();
-    p.height = dp(120);
+    p.height = dp(200);
     p.overflow = ER_OVERFLOW_SCROLL;
     p.flex_direction = ER_FLEX_COL;
     p.align_items = ER_ALIGN_STRETCH;
@@ -1161,7 +1441,7 @@ static void build_scene(int phys_w, int phys_h)
 
     ERNode* sv_h = er_node_create(ER_NODE_SCROLL_VIEW);
     p = props_default();
-    p.height = dp(52);
+    p.height = dp(80);
     p.overflow = ER_OVERFLOW_SCROLL;
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
@@ -1205,7 +1485,7 @@ static void build_scene(int phys_w, int phys_h)
     /* ---- Bottom row container ------------------------------------------ */
     ERNode* sv_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(260);
+    p.height = dp(500);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(12);
@@ -1213,6 +1493,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(sv_row, sv_left);
     er_tree_append_child(sv_row, sv_right);
     er_tree_append_child(sv_row, build_transforms_panel());
+    er_tree_append_child(sv_row, build_spring_panel());
 
     /* =====================================================================
      * ASSEMBLE

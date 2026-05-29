@@ -210,6 +210,51 @@ extern "C"
     } ERAnimType;
 
     /**
+     * @brief Easing curve applied to ER_ANIM_TIMING animations.
+     *
+     * Mirrors the Easing module from React Native.  ER_EASE_BEZIER uses the four
+     * bezier_* control-point fields in ERAnimConfig.  All other values are self-
+     * contained.
+     */
+    typedef enum
+    {
+        ER_EASE_LINEAR = 0,   /**< Constant rate (default). */
+        ER_EASE_EASE,         /**< Smooth ease-in-out (cubic-bezier 0.25,0.1,0.25,1). */
+        ER_EASE_EASE_IN,      /**< Accelerate from zero (cubic-bezier 0.42,0,1,1). */
+        ER_EASE_EASE_OUT,     /**< Decelerate to zero (cubic-bezier 0,0,0.58,1). */
+        ER_EASE_EASE_IN_OUT,  /**< Accelerate then decelerate (cubic-bezier 0.42,0,0.58,1). */
+        ER_EASE_QUAD_IN,      /**< Quadratic acceleration. */
+        ER_EASE_QUAD_OUT,     /**< Quadratic deceleration. */
+        ER_EASE_QUAD_IN_OUT,  /**< Quadratic in then out. */
+        ER_EASE_CUBIC_IN,     /**< Cubic acceleration. */
+        ER_EASE_CUBIC_OUT,    /**< Cubic deceleration. */
+        ER_EASE_CUBIC_IN_OUT, /**< Cubic in then out. */
+        ER_EASE_BOUNCE_OUT,   /**< Bouncing deceleration at the end. */
+        ER_EASE_ELASTIC_OUT,  /**< Elastic overshoot with decay at the end. */
+        ER_EASE_BEZIER,       /**< Custom cubic-bezier; set bezier_x1/y1/x2/y2. */
+    } ERAnimEasing;
+
+    /**
+     * @brief Opaque handle returned by er_anim_start() and the group functions.
+     *
+     * Pass to er_anim_stop() to cancel before completion.  ER_ANIM_HANDLE_INVALID
+     * (0) is the sentinel for "no animation".
+     */
+    typedef uint16_t ERAnimHandle;
+
+/** @brief Sentinel value indicating no animation or an already-completed animation. */
+#define ER_ANIM_HANDLE_INVALID 0U
+
+    /**
+     * @brief Callback invoked when an animation or group finishes.
+     *
+     * @param[in] finished    true when the animation ran to completion; false when
+     *                        it was stopped early via er_anim_stop().
+     * @param[in] user_data   Opaque pointer supplied at registration.
+     */
+    typedef void (*ERAnimCompleteFn)(bool finished, void* user_data);
+
+    /**
      * @brief Event types that can be wired to a callback via er_event_set().
      */
     typedef enum
@@ -324,19 +369,41 @@ extern "C"
     } ERProps;
 
     /**
-     * @brief Animation timing configuration passed to er_anim_start().
+     * @brief Animation configuration passed to er_anim_start() and group functions.
+     *
+     * Zero-initialise, then set only the fields relevant to the chosen type.
+     * All fields that are not set default to sensible values (see field docs).
      */
     typedef struct ERAnimConfig
     {
-        ERAnimType type;      /**< Animation algorithm. */
-        uint32_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. */
-        float stiffness;      /**< Spring stiffness (ER_ANIM_SPRING). */
-        float damping;        /**< Spring damping coefficient (ER_ANIM_SPRING). */
-        float mass;           /**< Spring mass (ER_ANIM_SPRING). */
-        float velocity;       /**< Initial velocity (ER_ANIM_DECAY). */
-        float deceleration;   /**< Friction coefficient (ER_ANIM_DECAY). */
-        bool loop;            /**< Repeat the animation indefinitely. */
+        ERAnimType type;              /**< Animation algorithm (default ER_ANIM_TIMING). */
+        ERAnimEasing easing;          /**< Easing curve for ER_ANIM_TIMING (default ER_EASE_LINEAR). */
+        uint32_t duration_ms;         /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. */
+        uint32_t delay_ms;            /**< Delay before the animation begins; 0 = start immediately. */
+        float stiffness;              /**< Spring stiffness k (ER_ANIM_SPRING; default 100). */
+        float damping;                /**< Spring damping coefficient c (ER_ANIM_SPRING; default 10). */
+        float mass;                   /**< Spring mass m (ER_ANIM_SPRING; default 1). */
+        float velocity;               /**< Initial velocity in value/s for spring; value/ms for decay. */
+        float deceleration;           /**< Per-ms friction [0,1) for ER_ANIM_DECAY (default 0.998). */
+        float bezier_x1;              /**< First control point X for ER_EASE_BEZIER [0,1]. */
+        float bezier_y1;              /**< First control point Y for ER_EASE_BEZIER. */
+        float bezier_x2;              /**< Second control point X for ER_EASE_BEZIER [0,1]. */
+        float bezier_y2;              /**< Second control point Y for ER_EASE_BEZIER. */
+        bool loop;                    /**< Ping-pong repeat for ER_ANIM_TIMING; ignored otherwise. */
+        ERAnimCompleteFn on_complete; /**< Called when the animation finishes; NULL = none. */
+        void* on_complete_user_data;  /**< Forwarded to on_complete as user_data. */
     } ERAnimConfig;
+
+    /**
+     * @brief Single entry in an animation group (er_anim_sequence / parallel / stagger).
+     */
+    typedef struct
+    {
+        ERNode* node;     /**< Target scene node. */
+        ERAnimProp prop;  /**< Property to animate. */
+        float value;      /**< Target value (same encoding as er_anim_start). */
+        ERAnimConfig cfg; /**< Per-entry animation configuration. */
+    } ERAnimEntry;
 
     /**
      * @brief Payload delivered to an EREventFn callback.
@@ -467,12 +534,19 @@ extern "C"
     /**
      * @brief Starts an animation on a node property.
      *
+     * Any previously running animation on the same node+prop is cancelled before
+     * the new one starts.  If cfg is NULL a zero-duration linear timing animation
+     * is used, snapping the property to value immediately.
+     *
      * @param[in] node   Node to animate.
      * @param[in] prop   Property to animate.
-     * @param[in] value  Target value to animate towards.
-     * @param[in] cfg    Animation timing configuration.
+     * @param[in] value  Target value; for color props, pass the ARGB8888 word packed into
+     *                   a float via memcpy (use the color_bits() pattern).
+     * @param[in] cfg    Animation configuration, or NULL for an immediate snap.
+     *
+     * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
      */
-    void er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* cfg);
+    ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* cfg);
 
     /**
      * @brief Cancels a running animation on a node property.
@@ -481,6 +555,64 @@ extern "C"
      * @param[in] prop  Property whose animation should be cancelled.
      */
     void er_anim_cancel(ERNode* node, ERAnimProp prop);
+
+    /**
+     * @brief Stops any animation (or group) identified by handle.
+     *
+     * The on_complete callback, if any, is called with finished = false.  Passing
+     * ER_ANIM_HANDLE_INVALID is a no-op.
+     *
+     * @param[in] handle  Handle returned by er_anim_start() or a group function.
+     */
+    void er_anim_stop(ERAnimHandle handle);
+
+    /**
+     * @brief Runs a list of animations one after another (Animated.sequence equivalent).
+     *
+     * Each animation starts only after the previous one finishes.  on_complete is
+     * called after the last entry completes.
+     *
+     * @param[in] entries      Array of animation entries.
+     * @param[in] count        Number of entries (capped at ERUI_MAX_GROUP_ENTRIES).
+     * @param[in] on_complete  Called when all entries finish; NULL = none.
+     * @param[in] user_data    Forwarded to on_complete.
+     *
+     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     */
+    ERAnimHandle
+    er_anim_sequence(const ERAnimEntry* entries, uint16_t count, ERAnimCompleteFn on_complete, void* user_data);
+
+    /**
+     * @brief Starts all animations simultaneously (Animated.parallel equivalent).
+     *
+     * on_complete is called once all entries have finished.
+     *
+     * @param[in] entries      Array of animation entries.
+     * @param[in] count        Number of entries (capped at ERUI_MAX_GROUP_ENTRIES).
+     * @param[in] on_complete  Called when every entry finishes; NULL = none.
+     * @param[in] user_data    Forwarded to on_complete.
+     *
+     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     */
+    ERAnimHandle
+    er_anim_parallel(const ERAnimEntry* entries, uint16_t count, ERAnimCompleteFn on_complete, void* user_data);
+
+    /**
+     * @brief Starts animations with a fixed delay between each start (Animated.stagger equivalent).
+     *
+     * Entry i starts after i × stagger_ms milliseconds.  on_complete is called once
+     * all entries have finished.
+     *
+     * @param[in] entries      Array of animation entries.
+     * @param[in] count        Number of entries (capped at ERUI_MAX_GROUP_ENTRIES).
+     * @param[in] stagger_ms   Delay in milliseconds between consecutive entry starts.
+     * @param[in] on_complete  Called when every entry finishes; NULL = none.
+     * @param[in] user_data    Forwarded to on_complete.
+     *
+     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     */
+    ERAnimHandle er_anim_stagger(
+        const ERAnimEntry* entries, uint16_t count, uint32_t stagger_ms, ERAnimCompleteFn on_complete, void* user_data);
 
     /**
      * @brief Programmatically sets the scroll offset of a ScrollView node.

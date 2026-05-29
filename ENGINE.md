@@ -180,22 +180,24 @@ opacity and the two color props.
 - [x] Color interpolation (per-channel lerp)
 - [x] Opacity property
 - [x] Loop flag (ping-pong via swap)
-- [ ] **Easing functions** — `Easing.ease`, `linear`, `quad`, `cubic`, `bezier(...)`,
-  `bounce`, `elastic`, `in`/`out`/`inOut` variants.
-- [ ] **Spring animations** (`ER_ANIM_SPRING`) — damped harmonic oscillator using
-  `stiffness` / `damping` / `mass` / initial velocity. The config fields exist but
-  `er_anim_start` rejects non-timing.
-- [ ] **Decay animations** (`ER_ANIM_DECAY`) — exponential friction; honor `velocity` and
-  `deceleration`.
-- [x] **Translate/scale/rotate property support** — `apply_numeric_value` only handles
-  `ER_PROP_OPACITY`. Add translateX/Y, scaleX/Y, rotateZ once transform props exist
-  in `ERViewProps` (or its successor).
-- [ ] **`Animated.delay`** — start time offset before the first tick contributes.
-- [ ] **`Animated.sequence`** — chained group; needs animation group/handle IDs.
-- [ ] **`Animated.parallel`** — group started together, joint completion callback.
-- [ ] **`Animated.stagger`** — sequence with constant delay between starts.
-- [ ] **Completion callback** — bridge needs to know when a `.start(callback)` resolves.
-  Requires animation handles returned from `er_anim_start`.
+- [x] **Easing functions** — `ER_EASE_LINEAR`, `EASE`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT`,
+  `QUAD_IN/OUT/IN_OUT`, `CUBIC_IN/OUT/IN_OUT`, `BOUNCE_OUT`, `ELASTIC_OUT`, `BEZIER`
+  (cubic-bezier with four control points). Newton's-method solver used for bezier X→t.
+- [x] **Spring animations** (`ER_ANIM_SPRING`) — Euler-integrated damped harmonic oscillator
+  using `stiffness` / `damping` / `mass` / initial velocity; settles with dual threshold.
+- [x] **Decay animations** (`ER_ANIM_DECAY`) — per-ms exponential friction; `velocity` /
+  `deceleration`; stops when |velocity| < DECAY_VEL_STOP.
+- [x] **Translate/scale/rotate property support** — `apply_numeric_value` handles translateX/Y,
+  scaleX/Y, rotateZ; `update_has_transform` keeps the dirty flag correct.
+- [x] **`Animated.delay`** — `delay_ms` field in ERAnimConfig; delay counted before the
+  animation clock starts; leftover time after expiry applied correctly on the same tick.
+- [x] **`Animated.sequence`** — `er_anim_sequence()` starts each entry only after the
+  previous finishes; fires group on_complete when the last entry is done.
+- [x] **`Animated.parallel`** — `er_anim_parallel()` starts all entries simultaneously;
+  fires group on_complete once all entries have completed.
+- [x] **`Animated.stagger`** — `er_anim_stagger()` adds i×stagger_ms delay to each entry.
+- [x] **Completion callback** — `ERAnimCompleteFn on_complete` in ERAnimConfig; fired with
+  `finished=true` on natural end, `finished=false` via `er_anim_stop()`.
 - [ ] **`useNativeDriver: true` binding model** — bind a JS-owned `Animated.Value` ID to
   a C-side float without re-entering JS each frame. Design lives in the bridge, but
   the engine must support naming animatable values independently of nodes (or accept
@@ -260,8 +262,8 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Hit-test under transforms**
 - [x] **Scroll gesture + momentum**
 - [x] **Layout event dispatch**
-- [ ] **Spring / decay animations**
-- [ ] **Sequence / parallel / stagger**
+- [x] **Spring / decay animations**
+- [x] **Sequence / parallel / stagger**
 - [x] **Image scaling + tint + resizeMode**
 - [ ] **Shadow rasterizer (visual baseline comparison)**
 - [x] **Transform render + hit-test**

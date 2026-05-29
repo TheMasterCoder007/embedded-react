@@ -1,6 +1,7 @@
 #include "er_node_internal.h"
 #include "er_scene.h"
 #include "native_renderer.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,11 +138,47 @@ static int fail(const char* msg)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — completion callback helper
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Completion flag set by the test completion callback.
+ */
+static int s_complete_count = 0;
+static bool s_complete_finished = false;
+
+/**
+ * @brief Completion callback that records how many times it was called and whether it was finished.
+ *
+ * @param[in] finished   true if the animation completed normally.
+ * @param[in] user_data  Unused.
+ */
+static void on_complete(bool finished, void* user_data)
+{
+    (void)user_data;
+    s_complete_count++;
+    s_complete_finished = finished;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Test entry point for timing animation behaviour.
+ * @brief Test entry point exercising the animation engine.
+ *
+ * Tests covered:
+ *   - Timing: linear interpolation, dirty flag, cancellation, zero-duration snap.
+ *   - Easing: quad-in produces a value lower than linear at t=0.5.
+ *   - Spring: settles at the target within a reasonable time.
+ *   - Decay: velocity decreases each tick.
+ *   - Delay: animation value unchanged until delay expires.
+ *   - Completion callback: fires with finished=true on natural end.
+ *   - Sequence: three animations run in order.
+ *   - Parallel: two animations run simultaneously.
+ *   - Stagger: animations start with the configured inter-entry delay.
+ *   - er_anim_stop: cancels an active animation and fires finished=false.
+ *   - zIndex-order render: animated lower-z node does not paint over higher-z sibling.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
@@ -149,6 +186,9 @@ int main(void)
 {
     embedded_renderer_set_backend(NULL);
 
+    /* -----------------------------------------------------------------------
+     * TIMING: basic color interpolation and dirty flag
+     * ---------------------------------------------------------------------- */
     ERNode* card = er_node_create(ER_NODE_VIEW);
     ERProps p = props_default();
     p.width = 100;
@@ -164,27 +204,403 @@ int main(void)
     er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &cfg);
     embedded_renderer_tick(50U);
     if (card->props.view.background_color != 0xFF808000U)
-        return fail("background color did not interpolate at half duration");
+        return fail("timing: background color did not interpolate at half duration");
     if (!card->dirty)
-        return fail("animated node was not marked dirty");
+        return fail("timing: animated node was not marked dirty");
 
     embedded_renderer_tick(50U);
     if (card->props.view.background_color != 0xFF00FF00U)
-        return fail("background color did not finish at target");
+        return fail("timing: background color did not finish at target");
 
+    /* -----------------------------------------------------------------------
+     * TIMING: cancellation stops the animation
+     * ---------------------------------------------------------------------- */
     er_anim_start(card, ER_PROP_OPACITY, 0.0f, &cfg);
     embedded_renderer_tick(25U);
     er_anim_cancel(card, ER_PROP_OPACITY);
     const uint8_t cancelled_opacity = card->props.view.opacity;
     embedded_renderer_tick(100U);
     if (card->props.view.opacity != cancelled_opacity)
-        return fail("cancelled opacity animation continued ticking");
+        return fail("cancel: cancelled opacity animation continued ticking");
 
+    /* -----------------------------------------------------------------------
+     * TIMING: zero-duration snaps immediately
+     * ---------------------------------------------------------------------- */
     cfg.duration_ms = 0U;
     er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF0000FFU), &cfg);
     if (card->props.view.background_color != 0xFF0000FFU)
-        return fail("zero-duration animation did not apply immediately");
+        return fail("zero-duration: animation did not apply immediately");
 
+    /* -----------------------------------------------------------------------
+     * EASING: quad-in must produce a value below linear at the midpoint
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* eq = er_node_create(ER_NODE_VIEW);
+        ERProps ep = props_default();
+        ep.width = 10;
+        ep.height = 10;
+        ep.opacity = 0U;
+        er_node_set_props(eq, &ep);
+
+        ERAnimConfig ec = {0};
+        ec.type = ER_ANIM_TIMING;
+        ec.duration_ms = 100U;
+        ec.easing = ER_EASE_QUAD_IN;
+        er_anim_start(eq, ER_PROP_OPACITY, 1.0f, &ec);
+        embedded_renderer_tick(50U);
+
+        /* Quad-in at t=0.5: f(0.5)=0.25  →  opacity ≈ 64.
+         * Linear at t=0.5 would give opacity ≈ 128. */
+        if (eq->props.view.opacity >= 100U)
+            return fail("easing quad-in: midpoint value should be well below linear");
+
+        er_node_destroy(eq);
+    }
+
+    /* -----------------------------------------------------------------------
+     * EASING: ease-out must produce a value above linear at the midpoint
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* eo = er_node_create(ER_NODE_VIEW);
+        ERProps ep = props_default();
+        ep.width = 10;
+        ep.height = 10;
+        ep.opacity = 0U;
+        er_node_set_props(eo, &ep);
+
+        ERAnimConfig ec = {0};
+        ec.type = ER_ANIM_TIMING;
+        ec.duration_ms = 100U;
+        ec.easing = ER_EASE_EASE_OUT;
+        er_anim_start(eo, ER_PROP_OPACITY, 1.0f, &ec);
+        embedded_renderer_tick(50U);
+
+        /* ease-out is faster at the beginning → midpoint value > linear (128). */
+        if (eo->props.view.opacity <= 128U)
+            return fail("easing ease-out: midpoint value should be above linear");
+
+        er_node_destroy(eo);
+    }
+
+    /* -----------------------------------------------------------------------
+     * SPRING: settles at the target within 3 seconds
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* sn = er_node_create(ER_NODE_VIEW);
+        ERProps sp = props_default();
+        sp.width = 10;
+        sp.height = 10;
+        sp.opacity = 0U;
+        er_node_set_props(sn, &sp);
+
+        ERAnimConfig sc = {0};
+        sc.type = ER_ANIM_SPRING;
+        sc.stiffness = 100.0f;
+        sc.damping = 10.0f;
+        sc.mass = 1.0f;
+        er_anim_start(sn, ER_PROP_OPACITY, 1.0f, &sc);
+
+        /* Tick for up to 3 seconds; expect the spring to settle. */
+        for (int tick = 0; tick < 300; tick++)
+            embedded_renderer_tick(10U);
+
+        /* Opacity should be 255 (fully opaque) after the spring settles. */
+        if (sn->props.view.opacity < 250U)
+            return fail("spring: did not settle at target opacity within 3 seconds");
+
+        er_node_destroy(sn);
+    }
+
+    /* -----------------------------------------------------------------------
+     * DECAY: velocity decreases over time
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* dn = er_node_create(ER_NODE_VIEW);
+        ERProps dp2 = props_default();
+        dp2.width = 10;
+        dp2.height = 10;
+        dp2.opacity = 0U;
+        er_node_set_props(dn, &dp2);
+
+        ERAnimConfig dc = {0};
+        dc.type = ER_ANIM_DECAY;
+        dc.velocity = 0.1f; /* 0.1 normalised/ms — moves toward to_value initially */
+        dc.deceleration = 0.990f; /* aggressive deceleration for a short test */
+
+        er_anim_start(dn, ER_PROP_OPACITY, 1.0f, &dc);
+
+        embedded_renderer_tick(50U);
+        const uint8_t mid_opacity = dn->props.view.opacity;
+        embedded_renderer_tick(500U);
+        const uint8_t late_opacity = dn->props.view.opacity;
+
+        /* After 500ms extra the position must not have grown by much more than the first 50ms. */
+        const int delta_mid = (int)mid_opacity;
+        const int delta_late = (int)late_opacity - delta_mid;
+        if (delta_late > delta_mid * 3)
+            return fail("decay: velocity did not decelerate — position grew unexpectedly");
+
+        er_node_destroy(dn);
+    }
+
+    /* -----------------------------------------------------------------------
+     * DELAY: animation value must not change until delay expires
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* ln = er_node_create(ER_NODE_VIEW);
+        ERProps lp2 = props_default();
+        lp2.width = 10;
+        lp2.height = 10;
+        lp2.opacity = 0U;
+        er_node_set_props(ln, &lp2);
+
+        ERAnimConfig lc = {0};
+        lc.type = ER_ANIM_TIMING;
+        lc.duration_ms = 100U;
+        lc.delay_ms = 200U;
+
+        er_anim_start(ln, ER_PROP_OPACITY, 1.0f, &lc);
+
+        embedded_renderer_tick(100U); /* within delay window */
+        if (ln->props.view.opacity != 0U)
+            return fail("delay: opacity changed before delay expired");
+
+        embedded_renderer_tick(200U); /* past the delay; animation should be running */
+        embedded_renderer_tick(100U); /* complete the animation duration */
+        if (ln->props.view.opacity < 240U)
+            return fail("delay: animation did not complete after delay + duration");
+
+        er_node_destroy(ln);
+    }
+
+    /* -----------------------------------------------------------------------
+     * COMPLETION CALLBACK: fires with finished=true at end of timing animation
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* cn = er_node_create(ER_NODE_VIEW);
+        ERProps cp2 = props_default();
+        cp2.width = 10;
+        cp2.height = 10;
+        cp2.opacity = 0U;
+        er_node_set_props(cn, &cp2);
+
+        s_complete_count = 0;
+        s_complete_finished = false;
+
+        ERAnimConfig cc = {0};
+        cc.type = ER_ANIM_TIMING;
+        cc.duration_ms = 100U;
+        cc.on_complete = on_complete;
+
+        er_anim_start(cn, ER_PROP_OPACITY, 1.0f, &cc);
+        embedded_renderer_tick(100U);
+
+        if (s_complete_count != 1)
+            return fail("completion: on_complete not called exactly once at end");
+        if (!s_complete_finished)
+            return fail("completion: on_complete called with finished=false on natural end");
+
+        er_node_destroy(cn);
+    }
+
+    /* -----------------------------------------------------------------------
+     * COMPLETION CALLBACK: er_anim_stop fires finished=false
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* sn2 = er_node_create(ER_NODE_VIEW);
+        ERProps sp2 = props_default();
+        sp2.width = 10;
+        sp2.height = 10;
+        sp2.opacity = 0U;
+        er_node_set_props(sn2, &sp2);
+
+        s_complete_count = 0;
+        s_complete_finished = true; /* will be overwritten */
+
+        ERAnimConfig sc2 = {0};
+        sc2.type = ER_ANIM_TIMING;
+        sc2.duration_ms = 500U;
+        sc2.on_complete = on_complete;
+
+        ERAnimHandle h = er_anim_start(sn2, ER_PROP_OPACITY, 1.0f, &sc2);
+        embedded_renderer_tick(100U);
+        er_anim_stop(h);
+
+        if (s_complete_count != 1)
+            return fail("er_anim_stop: on_complete not called after stop");
+        if (s_complete_finished)
+            return fail("er_anim_stop: on_complete should have finished=false");
+
+        er_node_destroy(sn2);
+    }
+
+    /* -----------------------------------------------------------------------
+     * SEQUENCE: three color animations fire one after another
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* a = er_node_create(ER_NODE_VIEW);
+        ERNode* b = er_node_create(ER_NODE_VIEW);
+        ERNode* c = er_node_create(ER_NODE_VIEW);
+
+        ERProps pp = props_default();
+        pp.width = 10;
+        pp.height = 10;
+        pp.background_color = 0xFF000000U;
+        er_node_set_props(a, &pp);
+        er_node_set_props(b, &pp);
+        er_node_set_props(c, &pp);
+
+        ERAnimEntry entries[3];
+        memset(entries, 0, sizeof(entries));
+
+        entries[0].node = a;
+        entries[0].prop = ER_PROP_BACKGROUND_COLOR;
+        entries[0].value = float_from_bits(0xFFFF0000U);
+        entries[0].cfg.type = ER_ANIM_TIMING;
+        entries[0].cfg.duration_ms = 100U;
+
+        entries[1].node = b;
+        entries[1].prop = ER_PROP_BACKGROUND_COLOR;
+        entries[1].value = float_from_bits(0xFF00FF00U);
+        entries[1].cfg.type = ER_ANIM_TIMING;
+        entries[1].cfg.duration_ms = 100U;
+
+        entries[2].node = c;
+        entries[2].prop = ER_PROP_BACKGROUND_COLOR;
+        entries[2].value = float_from_bits(0xFF0000FFU);
+        entries[2].cfg.type = ER_ANIM_TIMING;
+        entries[2].cfg.duration_ms = 100U;
+
+        s_complete_count = 0;
+        s_complete_finished = false;
+
+        er_anim_sequence(entries, 3, on_complete, NULL);
+
+        /* After 100ms: first animation done, second should be running. */
+        embedded_renderer_tick(100U);
+        if (a->props.view.background_color != 0xFFFF0000U)
+            return fail("sequence: entry 0 did not reach target at t=100ms");
+        if (b->props.view.background_color == 0xFF00FF00U)
+            return fail("sequence: entry 1 finished before entry 0 was done");
+        if (s_complete_count != 0)
+            return fail("sequence: group completed too early");
+
+        /* After another 100ms: second done. */
+        embedded_renderer_tick(100U);
+        if (b->props.view.background_color != 0xFF00FF00U)
+            return fail("sequence: entry 1 did not reach target at t=200ms");
+
+        /* After another 100ms: third done, group completed. */
+        embedded_renderer_tick(100U);
+        if (c->props.view.background_color != 0xFF0000FFU)
+            return fail("sequence: entry 2 did not reach target at t=300ms");
+        if (s_complete_count != 1)
+            return fail("sequence: group on_complete not called after last entry");
+        if (!s_complete_finished)
+            return fail("sequence: group on_complete called with finished=false");
+
+        er_node_destroy(a);
+        er_node_destroy(b);
+        er_node_destroy(c);
+    }
+
+    /* -----------------------------------------------------------------------
+     * PARALLEL: two animations start and finish simultaneously
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* pa = er_node_create(ER_NODE_VIEW);
+        ERNode* pb = er_node_create(ER_NODE_VIEW);
+
+        ERProps pp = props_default();
+        pp.width = 10;
+        pp.height = 10;
+        pp.opacity = 0U;
+        er_node_set_props(pa, &pp);
+        er_node_set_props(pb, &pp);
+
+        ERAnimEntry entries[2];
+        memset(entries, 0, sizeof(entries));
+
+        entries[0].node = pa;
+        entries[0].prop = ER_PROP_OPACITY;
+        entries[0].value = 1.0f;
+        entries[0].cfg.type = ER_ANIM_TIMING;
+        entries[0].cfg.duration_ms = 100U;
+
+        entries[1].node = pb;
+        entries[1].prop = ER_PROP_OPACITY;
+        entries[1].value = 1.0f;
+        entries[1].cfg.type = ER_ANIM_TIMING;
+        entries[1].cfg.duration_ms = 150U;
+
+        s_complete_count = 0;
+
+        er_anim_parallel(entries, 2, on_complete, NULL);
+
+        embedded_renderer_tick(100U);
+        if (pa->props.view.opacity < 250U)
+            return fail("parallel: entry 0 (100ms) not done at t=100ms");
+        if (s_complete_count != 0)
+            return fail("parallel: group completed before longer entry finished");
+
+        embedded_renderer_tick(50U);
+        if (pb->props.view.opacity < 250U)
+            return fail("parallel: entry 1 (150ms) not done at t=150ms");
+        if (s_complete_count != 1)
+            return fail("parallel: group on_complete not called after all entries done");
+
+        er_node_destroy(pa);
+        er_node_destroy(pb);
+    }
+
+    /* -----------------------------------------------------------------------
+     * STAGGER: second animation starts after stagger_ms delay
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* sa = er_node_create(ER_NODE_VIEW);
+        ERNode* sb = er_node_create(ER_NODE_VIEW);
+
+        ERProps sp = props_default();
+        sp.width = 10;
+        sp.height = 10;
+        sp.opacity = 0U;
+        er_node_set_props(sa, &sp);
+        er_node_set_props(sb, &sp);
+
+        ERAnimEntry entries[2];
+        memset(entries, 0, sizeof(entries));
+
+        entries[0].node = sa;
+        entries[0].prop = ER_PROP_OPACITY;
+        entries[0].value = 1.0f;
+        entries[0].cfg.type = ER_ANIM_TIMING;
+        entries[0].cfg.duration_ms = 100U;
+
+        entries[1].node = sb;
+        entries[1].prop = ER_PROP_OPACITY;
+        entries[1].value = 1.0f;
+        entries[1].cfg.type = ER_ANIM_TIMING;
+        entries[1].cfg.duration_ms = 100U;
+
+        /* stagger 50ms: entry 0 starts at 0ms, entry 1 at 50ms. */
+        er_anim_stagger(entries, 2, 50U, NULL, NULL);
+
+        /* At t=100ms: entry 0 done (0-100ms), entry 1 halfway (50-150ms). */
+        embedded_renderer_tick(100U);
+        if (sa->props.view.opacity < 250U)
+            return fail("stagger: entry 0 not done at t=100ms");
+        if (sb->props.view.opacity >= 250U)
+            return fail("stagger: entry 1 should not be done at t=100ms (starts at 50ms)");
+        if (sb->props.view.opacity == 0U)
+            return fail("stagger: entry 1 should have started by t=100ms");
+
+        er_node_destroy(sa);
+        er_node_destroy(sb);
+    }
+
+    /* -----------------------------------------------------------------------
+     * RENDER ORDER: animated lower-z node must not paint over higher-z sibling
+     * ---------------------------------------------------------------------- */
     RenderCounts counts = {0};
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &counts};
     embedded_renderer_set_backend(&be);
@@ -224,12 +640,13 @@ int main(void)
     er_commit();
 
     cfg.duration_ms = 100U;
+    cfg.easing = ER_EASE_LINEAR;
     er_anim_start(low, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &cfg);
     embedded_renderer_tick(50U);
     er_commit();
 
     if (counts.last_fill_color != 0xFF0000FFU)
-        return fail("animated lower zIndex node rendered over higher sibling");
+        return fail("render order: animated lower zIndex node rendered over higher sibling");
 
     return EXIT_SUCCESS;
 }
