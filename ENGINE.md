@@ -216,14 +216,14 @@ for several node types declared in `ERNodeType`.
 |------------------------------|-----------------|------------------------------------------------------------------------|
 | `ER_NODE_VIEW`               | working         | -                                                                      |
 | `ER_NODE_PRESSABLE`          | working         | -                                                                      |
-| `ER_NODE_MODAL`              | renders as View | Z-order to top of root, backdrop, animation entry/exit                 |
+| `ER_NODE_MODAL`              | working         | Visible/hidden via `modal_visible`; backdrop fill; z-index 1000 layer  |
 | `ER_NODE_TEXT`               | working         | (see Text section)                                                     |
 | `ER_NODE_IMAGE`              | working         | -                                                                      |
 | `ER_NODE_SCROLL_VIEW`        | working         | -                                                                      |
-| `ER_NODE_FLAT_LIST`          | not rendered    | Virtualization: render visible rows + overscan only; row recycling     |
-| `ER_NODE_TEXT_INPUT`         | not rendered    | Cursor, IME callback hook, hardware keyboard input path, selection     |
-| `ER_NODE_ACTIVITY_INDICATOR` | not rendered    | Animated spinner driven by built-in `Animated.loop` on rotate          |
-| `ER_NODE_SWITCH`             | not rendered    | Thumb track + animated slide; bool state prop                          |
+| `ER_NODE_FLAT_LIST`          | working         | Scrolls like ScrollView; virtualisation still TODO                     |
+| `ER_NODE_TEXT_INPUT`         | working         | Auto-focus on press; key input via `embedded_renderer_key`; cursor blink|
+| `ER_NODE_ACTIVITY_INDICATOR` | working         | 8-dot fading ring driven by built-in looping `rotate_z` animation      |
+| `ER_NODE_SWITCH`             | working         | Pill track + animated thumb; value prop drives 200 ms ease-in-out      |
 
 Each entry corresponds to an item to land: render case, prop fields in `ERProps`, type
 in the props union, any per-node state.
@@ -288,7 +288,7 @@ A path that keeps the engine demoable at each step:
 7. ~~**Animation engine completion**~~ — spring, decay, easing, transform properties,
    sequence/parallel, completion callbacks — **done**.
 8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`, `textDecorationLine` — **done**.
-9. **Remaining components** — TextInput, Switch, ActivityIndicator, Modal, FlatList.
+9. ~~**Remaining components**~~ — TextInput, Switch, ActivityIndicator, Modal, FlatList — **done**.
 10. **Dirty-rect tracking + node pool reuse** — perf / longevity polish before MCU bring-up.
 11. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest
     target build can drop them.

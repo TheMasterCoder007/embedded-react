@@ -86,12 +86,13 @@ static bool node_is_invisible(const ERNode* node)
 {
     if (node->layout.display == ER_DISPLAY_NONE)
         return true;
-    if (node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_PRESSABLE
-        || node->type == ER_NODE_MODAL)
+    if (node->type == ER_NODE_VIEW || node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_PRESSABLE)
     {
         if (node->props.view.opacity == 0)
             return true;
     }
+    if (node->type == ER_NODE_MODAL && (!node->modal_visible || node->props.view.opacity == 0))
+        return true;
     return false;
 }
 
@@ -252,7 +253,7 @@ static ERNode* find_scroll_view_ancestor(ERNode* node)
 {
     while (node)
     {
-        if (node->type == ER_NODE_SCROLL_VIEW)
+        if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
             return node;
         node = er_get_node(node->parent_tag);
     }
@@ -332,8 +333,9 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
         {
             /* Translate query point into content space for ScrollView nodes so that
              * children are tested against their layout-computed positions. */
-            const int child_x = (node->type == ER_NODE_SCROLL_VIEW) ? qx + (int)node->scroll_offset_x : qx;
-            const int child_y = (node->type == ER_NODE_SCROLL_VIEW) ? qy + (int)node->scroll_offset_y : qy;
+            const bool node_scrolls = (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST);
+            const int child_x = node_scrolls ? qx + (int)node->scroll_offset_x : qx;
+            const int child_y = node_scrolls ? qy + (int)node->scroll_offset_y : qy;
 
             uint16_t child_tags[ERUI_MAX_NODES];
             const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
@@ -396,8 +398,12 @@ static ERNode* nearest_press_target(ERNode* node)
 {
     while (node)
     {
+        /* TextInput and Switch nodes act as press targets even without explicit press
+         * callbacks so that auto-focus / built-in toggle behavior works without
+         * requiring the caller to register a handler on every instance. */
         if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS)
-            || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT))
+            || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT)
+            || node->type == ER_NODE_TEXT_INPUT || node->type == ER_NODE_SWITCH)
             return node;
         node = er_get_node(node->parent_tag);
     }
@@ -556,7 +562,7 @@ static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData
     touch->responder_tag = node->tag;
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
 
-    if (node->type == ER_NODE_SCROLL_VIEW)
+    if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
     {
         touch->initial_scroll_x = node->scroll_offset_x;
         touch->initial_scroll_y = node->scroll_offset_y;
@@ -609,7 +615,7 @@ static void cancel_touch(ERTouchState* touch, int x, int y)
 
 void er_event_set(ERNode* node, EREventType event, EREventFn fn, void* user_data)
 {
-    if (!node || event > ER_EVENT_LAYOUT)
+    if (!node || (unsigned)event >= (unsigned)ER_EVENT_TYPE_COUNT_)
         return;
 
     node->events[event].fn = fn;
@@ -636,7 +642,7 @@ void er_input_reset(void)
     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
     {
         ERNode* n = er_get_node(tag);
-        if (n && n->type == ER_NODE_SCROLL_VIEW)
+        if (n && (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST))
         {
             n->scroll_vel_x = 0.0f;
             n->scroll_vel_y = 0.0f;
@@ -673,7 +679,7 @@ void er_input_tick(uint32_t delta_ms)
     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
     {
         ERNode* sv = er_get_node(tag);
-        if (!sv || sv->type != ER_NODE_SCROLL_VIEW)
+        if (!sv || (sv->type != ER_NODE_SCROLL_VIEW && sv->type != ER_NODE_FLAT_LIST))
             continue;
         if (sv->scroll_vel_x == 0.0f && sv->scroll_vel_y == 0.0f)
             continue;
@@ -725,6 +731,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             dispatch_bubble(hit, ER_EVENT_TOUCH_START, x, y);
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
+
+            /* Auto-focus TextInput on press; blur any focused TextInput when tapping
+             * anything else so the keyboard is dismissed on outside taps. */
+            if (press_target && press_target->type == ER_NODE_TEXT_INPUT && press_target->props.text_input.editable)
+                er_text_input_focus(press_target);
+            else
+                er_text_input_blur();
 
             /* Gesture responder negotiation: start-should-set */
             if (hit)
@@ -825,7 +838,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             /* Apply incremental scroll to any active ScrollView responder. */
             {
                 ERNode* active = er_get_node(touch->responder_tag);
-                if (active && active->type == ER_NODE_SCROLL_VIEW)
+                if (active && (active->type == ER_NODE_SCROLL_VIEW || active->type == ER_NODE_FLAT_LIST))
                 {
                     er_scroll_view_set_offset(
                         active, touch->initial_scroll_x - (float)dx, touch->initial_scroll_y - (float)dy);
@@ -863,7 +876,24 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 if (touch->inside)
                     dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
                 if (inside)
+                {
+                    /* Built-in Switch toggle: flipping value on press kicks off the
+                     * 200 ms thumb animation in er_node_set_props. The user's
+                     * ER_EVENT_PRESS handler (if any) runs immediately after. */
+                    if (press_target->type == ER_NODE_SWITCH)
+                    {
+                        const uint8_t new_val = press_target->props.sw.value ? 0U : 1U;
+                        press_target->props.sw.value = new_val;
+                        ERAnimConfig cfg;
+                        memset(&cfg, 0, sizeof(cfg));
+                        cfg.type = ER_ANIM_TIMING;
+                        cfg.easing = ER_EASE_EASE_IN_OUT;
+                        cfg.duration_ms = 200U;
+                        er_anim_start(press_target, ER_PROP_SWITCH_THUMB, new_val ? 1.0f : 0.0f, &cfg);
+                        er_mark_dirty_upward(press_target);
+                    }
                     dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
+                }
             }
 
             /* Release the gesture responder */
@@ -881,7 +911,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                  * between the last MOVE and this UP (finger held still before release),
                  * re-sample to capture deceleration.  Velocity was already set during the
                  * last MOVE and is kept unchanged when elapsed == 0. */
-                if (responder->type == ER_NODE_SCROLL_VIEW)
+                if (responder->type == ER_NODE_SCROLL_VIEW || responder->type == ER_NODE_FLAT_LIST)
                 {
                     const uint32_t now_ms = er_now_ms();
                     const uint32_t elapsed = now_ms - touch->prev_move_time_ms;

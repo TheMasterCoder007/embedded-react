@@ -368,5 +368,43 @@ int main(void)
     if (under_max_y <= plain_max_y)
         return fail("UNDERLINE did not extend pixel extent below plain text");
 
+    /* ---- Regression: text after a space must render, not be trimmed ----
+     * Earlier the line-break logic treated "saw any whitespace on this line"
+     * as if the line ended in whitespace. "Hello world" was committed as just
+     * "Hello", so typing past a space in a TextInput appeared to do nothing. */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Hello world";
+    par.clip = (ERRect){0, 0, FB_W, FB_H};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.number_of_lines = 1;
+    par.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    er_text_render(&par);
+    const int two_word_max_x = tc.max_x;
+
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text = "Hello";
+    er_text_render(&par);
+    const int one_word_max_x = tc.max_x;
+
+    if (two_word_max_x <= one_word_max_x)
+        return fail("\"Hello world\" must render wider than \"Hello\" (post-space text was trimmed)");
+
+    /* ---- Regression: trailing whitespace should still be trimmed at EOF ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text = "Hello   ";
+    er_text_render(&par);
+    const int trailing_ws_max_x = tc.max_x;
+
+    if (trailing_ws_max_x > one_word_max_x + 2)
+        return fail("trailing whitespace was not trimmed at end-of-string");
+
     return EXIT_SUCCESS;
 }

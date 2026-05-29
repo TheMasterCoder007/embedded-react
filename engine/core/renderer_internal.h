@@ -129,4 +129,15 @@ void er_input_tick(uint32_t delta_ms);
  */
 void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
 
+/**
+ * @brief Delivers a keyboard event to the currently focused TextInput node.
+ *
+ * Called by embedded_renderer_key(). Inserts utf8_char into the focused node's text
+ * buffer, or processes control codes such as ER_KEY_BACKSPACE and ER_KEY_RETURN.
+ *
+ * @param[in] keycode    Control key code (ER_KEY_BACKSPACE, ER_KEY_RETURN, …), or 0.
+ * @param[in] utf8_char  Null-terminated character to insert, or NULL for control keys.
+ */
+void er_text_input_key(uint32_t keycode, const char* utf8_char);
+
 #endif

@@ -19,3 +19,8 @@ add_test(NAME rendering_transform COMMAND test_transform)
 add_executable(test_shadow test_shadow.c)
 target_link_libraries(test_shadow PRIVATE embedded-react)
 add_test(NAME rendering_shadow COMMAND test_shadow)
+
+add_executable(test_components test_components.c)
+target_link_libraries(test_components PRIVATE embedded-react)
+target_include_directories(test_components PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
+add_test(NAME rendering_components COMMAND test_components)

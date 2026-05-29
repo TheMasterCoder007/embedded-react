@@ -101,6 +101,45 @@ typedef struct
 } ERImageProps;
 
 /**
+ * @brief Visual properties for an ActivityIndicator node.
+ */
+typedef struct
+{
+    uint32_t color;    /**< Spinner dot color; 0 = 0xFFFFFFFF (white). */
+    uint8_t animating; /**< 1 = spinning, 0 = stopped. */
+} ERActivityIndicatorProps;
+
+/**
+ * @brief Visual properties for a Switch node.
+ */
+typedef struct
+{
+    uint8_t value;              /**< 0 = off, 1 = on. */
+    uint32_t track_color_false; /**< Track color when off. */
+    uint32_t track_color_true;  /**< Track color when on. */
+    uint32_t thumb_color;       /**< Thumb circle fill color. */
+} ERSwitchProps;
+
+/**
+ * @brief Visual properties for a TextInput node.
+ */
+typedef struct
+{
+    uint32_t background_color;
+    uint32_t border_color;
+    int16_t border_width;
+    int16_t border_radius;
+    uint8_t opacity;
+    uint32_t color; /**< Text color. */
+    uint8_t font_size;
+    char font_family[ER_FONT_FAMILY_MAX + 1];
+    char placeholder[ER_PLACEHOLDER_MAX + 1];
+    uint32_t placeholder_color;
+    uint32_t cursor_color;
+    uint8_t editable;
+} ERTextInputProps;
+
+/**
  * @brief Registered event handler and caller-owned context pointer.
  */
 typedef struct
@@ -157,13 +196,24 @@ struct ERNode
     float tp_origin_x;    /**< Fractional X pivot; negative = center (0.5). */
     float tp_origin_y;    /**< Fractional Y pivot; negative = center (0.5). */
     bool has_transform;   /**< True when any transform prop is non-identity. */
-    EREventHandler events[ER_EVENT_LAYOUT + 1U];
+    EREventHandler events[ER_EVENT_TYPE_COUNT_];
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
+    /* Switch: animated thumb position 0.0 (off) → 1.0 (on). */
+    float switch_thumb_t;
+    /* TextInput: current text content and focus state. */
+    char input_text[ER_TEXT_MAX + 1];
+    bool is_focused;
+    /* Modal: visibility and backdrop color (stored here to avoid growing ERViewProps). */
+    uint8_t modal_visible;
+    uint32_t modal_backdrop_color;
     union
     {
         ERViewProps view;
         ERTextProps text;
         ERImageProps image;
+        ERActivityIndicatorProps act;
+        ERSwitchProps sw;
+        ERTextInputProps text_input;
     } props;
 };
 

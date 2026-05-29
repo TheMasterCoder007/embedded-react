@@ -83,6 +83,29 @@ extern "C"
      */
     void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
 
+/** @brief Keycode for the Backspace key. */
+#define ER_KEY_BACKSPACE 8U
+/** @brief Keycode for the Return / Enter key. */
+#define ER_KEY_RETURN 13U
+/** @brief Keycode for the Escape key. */
+#define ER_KEY_ESCAPE 27U
+/** @brief Keycode for the Delete key (forward-delete). */
+#define ER_KEY_DELETE 127U
+
+    /**
+     * @brief Delivers a keyboard event to the currently focused TextInput node.
+     *
+     * When a TextInput is focused (via er_text_input_focus()), calling this function
+     * inserts utf8_char into the text buffer (for printable characters), or processes
+     * control codes such as ER_KEY_BACKSPACE and ER_KEY_RETURN.
+     *
+     * @param[in] keycode    Key code (use ER_KEY_* macros for control keys, or 0 for
+     *                       pure UTF-8 character input).
+     * @param[in] utf8_char  Null-terminated UTF-8 encoded character to insert, or NULL
+     *                       for pure control keys (ER_KEY_BACKSPACE, ER_KEY_RETURN, …).
+     */
+    void embedded_renderer_key(uint32_t keycode, const char* utf8_char);
+
 #ifdef __cplusplus
 }
 #endif

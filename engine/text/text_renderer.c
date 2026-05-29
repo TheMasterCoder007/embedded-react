@@ -344,15 +344,19 @@ static int break_lines(const char* text,
         const char* next_word = p; /* start of next word after whitespace */
         int word_end_w = 0;
         int line_w = 0;
-        bool saw_ws = false;
+        bool saw_ws = false;       /* line has seen any whitespace (governs wrap break) */
+        bool ends_with_ws = false; /* most recent chars consumed were whitespace */
+        const char* ws_start = p;  /* position of the last run of trailing whitespace */
+        int ws_start_w = 0;        /* line width up to ws_start */
 
         for (;;)
         {
             if (!*p)
             {
-                /* End of string: commit the final line. */
-                if (saw_ws)
-                    out[n++] = (LineSpan){line_start, (int)(word_end - line_start), word_end_w};
+                /* End of string: commit the full line, but trim any trailing whitespace
+                 * so labels like "Hello   " render as "Hello" without phantom advance. */
+                if (ends_with_ws)
+                    out[n++] = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
                 else
                     out[n++] = (LineSpan){line_start, (int)(p - line_start), line_w};
                 goto outer_break;
@@ -360,9 +364,9 @@ static int break_lines(const char* text,
 
             if (*p == '\n')
             {
-                /* Explicit newline: commit the line and advance past '\n'. */
-                if (saw_ws)
-                    out[n++] = (LineSpan){line_start, (int)(word_end - line_start), word_end_w};
+                /* Explicit newline: same trim rule as end-of-string. */
+                if (ends_with_ws)
+                    out[n++] = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
                 else
                     out[n++] = (LineSpan){line_start, (int)(p - line_start), line_w};
                 p++;
@@ -374,6 +378,11 @@ static int break_lines(const char* text,
                 /* Record end of the current word before consuming whitespace. */
                 word_end = p;
                 word_end_w = line_w;
+                if (!ends_with_ws)
+                {
+                    ws_start = p;
+                    ws_start_w = line_w;
+                }
                 while (*p == ' ' || *p == '\t')
                 {
                     uint32_t cp = utf8_next(&p);
@@ -381,6 +390,7 @@ static int break_lines(const char* text,
                 }
                 next_word = p;
                 saw_ws = true;
+                ends_with_ws = true;
                 continue;
             }
 
@@ -407,6 +417,7 @@ static int break_lines(const char* text,
             }
 
             line_w += adv;
+            ends_with_ws = false;
         }
     }
 

@@ -1,12 +1,14 @@
 #include "er_node_internal.h"
 #include "image_scaler.h"
 #include "layout_engine.h"
+#include "native_renderer.h"
 #include "renderer_internal.h"
 #include "rrect.h"
 #include "scratch_pool.h"
 #include "shadow.h"
 #include "text_renderer.h"
 #include "transform.h"
+#include <math.h>
 #include <string.h>
 
 #ifndef ERUI_MAX_NODES
@@ -21,6 +23,8 @@ static ERNode s_nodes[ERUI_MAX_NODES];
 static uint16_t s_next_tag = 0;
 static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint32_t s_now_ms = 0;
+static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
+static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -110,6 +114,86 @@ static void sort_children_by_z_index(uint16_t* tags, int count)
 }
 
 /**
+ * @brief Linearly interpolates a single ARGB8888 color channel.
+ *
+ * @param[in] a  From channel value.
+ * @param[in] b  To channel value.
+ * @param[in] t  Interpolation fraction [0.0, 1.0].
+ *
+ * @return Interpolated channel value.
+ */
+static uint8_t lerp_ch(uint8_t a, uint8_t b, float t)
+{
+    return (uint8_t)((float)a + ((float)b - (float)a) * t + 0.5f);
+}
+
+/**
+ * @brief Linearly interpolates between two ARGB8888 colors per-channel.
+ *
+ * @param[in] a  From color.
+ * @param[in] b  To color.
+ * @param[in] t  Interpolation fraction [0.0, 1.0].
+ *
+ * @return Interpolated ARGB8888 color.
+ */
+static uint32_t lerp_color32(uint32_t a, uint32_t b, float t)
+{
+    const uint8_t fa = lerp_ch((uint8_t)(a >> 24), (uint8_t)(b >> 24), t);
+    const uint8_t fr = lerp_ch((uint8_t)(a >> 16), (uint8_t)(b >> 16), t);
+    const uint8_t fg = lerp_ch((uint8_t)(a >> 8), (uint8_t)(b >> 8), t);
+    const uint8_t fb = lerp_ch((uint8_t)a, (uint8_t)b, t);
+    return ((uint32_t)fa << 24) | ((uint32_t)fr << 16) | ((uint32_t)fg << 8) | fb;
+}
+
+/**
+ * @brief Renders an ActivityIndicator as a ring of 8 fading dots.
+ *
+ * The current spin angle is read from n->tp_rotate_z (driven by a looping rotate_z
+ * animation started when animating=1).  Each dot's opacity fades from the leading
+ * dot (full) to the trailing dot (~15%), creating the classic spinner illusion.
+ *
+ * @param[in] n   ActivityIndicator node to render.
+ * @param[in] px  Left edge of the node in framebuffer pixels.
+ * @param[in] py  Top edge of the node in framebuffer pixels.
+ * @param[in] w   Width of the node in pixels.
+ * @param[in] h   Height of the node in pixels.
+ */
+static void render_activity_indicator(const ERNode* n, int px, int py, int w, int h)
+{
+#define ACTIND_DOT_COUNT 8
+    const int dia = w < h ? w : h;
+    const int dot_size = dia / 5;
+    if (dot_size < 1)
+        return;
+
+    const int cx = px + w / 2;
+    const int cy = py + h / 2;
+    const int ring_r = dia / 2 - dot_size / 2 - 2;
+
+    const uint32_t base_color = n->props.act.color ? n->props.act.color : 0xFFFFFFFFU;
+    const float base_a = (float)((base_color >> 24) & 0xFFU);
+    const float angle_offset_deg = n->tp_rotate_z;
+
+    for (int i = 0; i < ACTIND_DOT_COUNT; i++)
+    {
+        const float angle_deg = angle_offset_deg + (float)i * (360.0f / ACTIND_DOT_COUNT);
+        const float angle_rad = angle_deg * (float)(3.14159265358979323846 / 180.0);
+        const int dot_cx = cx + (int)((float)ring_r * cosf(angle_rad) + 0.5f);
+        const int dot_cy = cy + (int)((float)ring_r * sinf(angle_rad) + 0.5f);
+        const int dot_px = dot_cx - dot_size / 2;
+        const int dot_py = dot_cy - dot_size / 2;
+
+        /* Leading dot (i==0) is full opacity; trailing dots fade to ~15%. */
+        const float fade = 1.0f - (float)i / ACTIND_DOT_COUNT * 0.85f;
+        const uint8_t alpha = (uint8_t)(base_a * fade + 0.5f);
+        const uint32_t dot_color = ((uint32_t)alpha << 24) | (base_color & 0x00FFFFFFu);
+
+        er_rrect_fill_bordered(dot_color, 0x00000000U, 0, dot_px, dot_py, dot_size, dot_size, dot_size / 2);
+    }
+#undef ACTIND_DOT_COUNT
+}
+
+/**
  * @brief Marks a node and all ancestors dirty so stale child pixels are repainted.
  *
  * The renderer currently paints into a persistent framebuffer. If a child changes
@@ -161,7 +245,9 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
 
-    if (n->has_transform)
+    /* ActivityIndicator uses tp_rotate_z as its internal spin angle — skip the affine
+     * transform path which would rasterize the whole node into a scratch buffer. */
+    if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR)
     {
 #if ERUI_TRANSFORMS_FULL
         if (!er_transform_is_translate_only(n))
@@ -199,8 +285,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_VIEW:
             case ER_NODE_SCROLL_VIEW:
             case ER_NODE_PRESSABLE:
-            case ER_NODE_MODAL:
                 er_shadow_render(&n->props.view, px, py, w, h);
+                break;
+            case ER_NODE_MODAL:
+                if (n->modal_visible)
+                    er_shadow_render(&n->props.view, px, py, w, h);
                 break;
             default:
                 break;
@@ -211,10 +300,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
      * scratch slot which is then blended at the node's alpha.  er_scratch_push returns
      * false when the pool is exhausted or the node is too large; in that case the subtree
      * renders at full opacity (graceful degradation). */
-    const uint8_t node_opacity = (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW
-                                  || n->type == ER_NODE_PRESSABLE || n->type == ER_NODE_MODAL)
-                                     ? n->props.view.opacity
-                                     : 255U;
+    const uint8_t node_opacity =
+        (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+         || (n->type == ER_NODE_MODAL && n->modal_visible) || n->type == ER_NODE_TEXT_INPUT)
+            ? n->props.view.opacity
+            : 255U;
     const bool use_scratch = (node_opacity < 255U) && should_render && er_scratch_push(px, py, w, h);
 
     if (should_render)
@@ -224,8 +314,24 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_VIEW:
             case ER_NODE_SCROLL_VIEW:
             case ER_NODE_PRESSABLE:
+            case ER_NODE_FLAT_LIST:
+            {
+                const ERViewProps* vp = &n->props.view;
+                er_rrect_fill_bordered(
+                    vp->background_color, vp->border_color, vp->border_width, px, py, w, h, vp->border_radius);
+                break;
+            }
             case ER_NODE_MODAL:
             {
+                if (!n->modal_visible)
+                    break;
+                /* Draw backdrop over the entire root before the modal's own background. */
+                ERNode* root = er_get_root_node();
+                if (root)
+                {
+                    const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
+                    er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
+                }
                 const ERViewProps* vp = &n->props.view;
                 er_rrect_fill_bordered(
                     vp->background_color, vp->border_color, vp->border_width, px, py, w, h, vp->border_radius);
@@ -253,10 +359,79 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_IMAGE:
                 er_image_render(&n->props.image, px, py, w, h);
                 break;
-            case ER_NODE_FLAT_LIST:
-            case ER_NODE_TEXT_INPUT:
             case ER_NODE_ACTIVITY_INDICATOR:
+                render_activity_indicator(n, px, py, w, h);
+                break;
             case ER_NODE_SWITCH:
+            {
+                const ERSwitchProps* sp = &n->props.sw;
+                const float t = n->switch_thumb_t;
+
+                /* Track: pill-shaped rectangle, color lerped between off/on. */
+                const uint32_t off_c = sp->track_color_false ? sp->track_color_false : 0xFF767577U;
+                const uint32_t on_c = sp->track_color_true ? sp->track_color_true : 0xFF81B0FFU;
+                er_rrect_fill_bordered(lerp_color32(off_c, on_c, t), 0x00000000U, 0, px, py, w, h, h / 2);
+
+                /* Thumb: circular knob that slides along the track. */
+                const int margin = 2;
+                const int thumb_size = h - 2 * margin;
+                const int travel = w - thumb_size - 2 * margin;
+                const int thumb_x = px + margin + (int)(t * (float)travel + 0.5f);
+                const uint32_t tc = sp->thumb_color ? sp->thumb_color : 0xFFFFFFFFU;
+                er_rrect_fill_bordered(
+                    tc, 0x00000000U, 0, thumb_x, py + margin, thumb_size, thumb_size, thumb_size / 2);
+                break;
+            }
+            case ER_NODE_TEXT_INPUT:
+            {
+                const ERTextInputProps* tip = &n->props.text_input;
+                const int pad_h = tip->border_width + 4;
+                const int pad_v = tip->border_width + 3;
+
+                /* Background + border. When focused we draw the border in cursor_color
+                 * directly via the bordered fill helper. Doing it this way (rather than a
+                 * second highlight pass with bg=0) avoids overwriting the field interior
+                 * with the border color, which would hide both the text and the cursor. */
+                const uint32_t border_c = (n->is_focused && tip->border_width > 0)
+                                              ? (tip->cursor_color ? tip->cursor_color : 0xFF4488FFU)
+                                              : tip->border_color;
+                er_rrect_fill_bordered(
+                    tip->background_color, border_c, tip->border_width, px, py, w, h, tip->border_radius);
+
+                /* Text content or placeholder. */
+                const bool show_ph = (n->input_text[0] == '\0');
+                ERTextRenderParams par;
+                memset(&par, 0, sizeof(par));
+                par.text = show_ph ? tip->placeholder : n->input_text;
+                par.clip = (ERRect){px + pad_h, py + pad_v, w - 2 * pad_h, h - 2 * pad_v};
+                par.color = show_ph ? (tip->placeholder_color ? tip->placeholder_color : 0xFF888888U)
+                                    : (tip->color ? tip->color : 0xFFFFFFFFU);
+                par.font_size = tip->font_size ? tip->font_size : 16U;
+                par.font_family = tip->font_family;
+                par.number_of_lines = 1;
+                par.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+                er_text_render(&par);
+
+                /* Blinking cursor when focused and not showing placeholder. */
+                if (n->is_focused && !show_ph && (s_now_ms % 1000U < 500U))
+                {
+                    int text_w = 0, text_h = 0;
+                    er_text_measure(n->input_text, par.font_size, tip->font_family, 0, &text_w, &text_h);
+                    int cursor_x = px + pad_h + text_w;
+                    const int max_cx = px + w - pad_h - 2;
+                    if (cursor_x > max_cx)
+                        cursor_x = max_cx;
+                    const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
+                    er_rrect_fill_bordered(cc, 0x00000000U, 0, cursor_x, py + pad_v, 2, h - 2 * pad_v, 0);
+                }
+                else if (n->is_focused && show_ph && (s_now_ms % 1000U < 500U))
+                {
+                    /* Cursor at start when field is empty. */
+                    const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
+                    er_rrect_fill_bordered(cc, 0x00000000U, 0, px + pad_h, py + pad_v, 2, h - 2 * pad_v, 0);
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -269,9 +444,10 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     if (clips)
         er_push_clip_rect(px, py, w, h);
 
-    /* Scroll offset translation: ScrollView children are shifted by the current offset. */
-    const int child_tx = (n->type == ER_NODE_SCROLL_VIEW) ? translate_x + (int)n->scroll_offset_x : translate_x;
-    const int child_ty = (n->type == ER_NODE_SCROLL_VIEW) ? translate_y + (int)n->scroll_offset_y : translate_y;
+    /* Scroll offset translation: ScrollView and FlatList children are shifted by the current offset. */
+    const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+    const int child_tx = is_scroller ? translate_x + (int)n->scroll_offset_x : translate_x;
+    const int child_ty = is_scroller ? translate_y + (int)n->scroll_offset_y : translate_y;
 
     uint16_t child_tags[ERUI_MAX_NODES];
     const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
@@ -344,7 +520,7 @@ static void refresh_scroll_content_sizes(ERNode* node)
     if (!node)
         return;
 
-    if (node->type == ER_NODE_SCROLL_VIEW)
+    if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
         update_scroll_content_size(node);
 
     uint16_t child_tag = node->first_child_tag;
@@ -433,11 +609,27 @@ ERNode* er_node_create(ERNodeType type)
 
     init_layout_defaults(&n->layout);
 
-    /* View-type nodes default to fully opaque */
+    /* View-type nodes default to fully opaque. */
     if (type == ER_NODE_VIEW || type == ER_NODE_SCROLL_VIEW || type == ER_NODE_PRESSABLE || type == ER_NODE_MODAL)
     {
         n->props.view.opacity = 255U;
     }
+
+    /* ActivityIndicator starts spinning immediately. */
+    if (type == ER_NODE_ACTIVITY_INDICATOR)
+    {
+        n->props.act.animating = 1U;
+        ERAnimConfig cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.type = ER_ANIM_TIMING;
+        cfg.duration_ms = 1000U;
+        cfg.loop = true;
+        er_anim_start(n, ER_PROP_ROTATE_Z, 360.0f, &cfg);
+    }
+
+    /* TextInput: default to editable. */
+    if (type == ER_NODE_TEXT_INPUT)
+        n->props.text_input.editable = 1U;
 
     return n;
 }
@@ -516,7 +708,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
         case ER_NODE_VIEW:
         case ER_NODE_SCROLL_VIEW:
         case ER_NODE_PRESSABLE:
-        case ER_NODE_MODAL:
+        case ER_NODE_FLAT_LIST:
             node->props.view.background_color = props->background_color;
             node->props.view.border_color = props->border_color;
             node->props.view.border_width = props->border_width;
@@ -550,11 +742,240 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.image.resize_mode = props->resize_mode;
             node->props.image.tint_color = props->tint_color;
             break;
+        case ER_NODE_ACTIVITY_INDICATOR:
+        {
+            const uint8_t was_animating = node->props.act.animating;
+            node->props.act.color = props->indicator_color;
+            node->props.act.animating = props->animating;
+            if (props->animating && !was_animating)
+            {
+                /* (Re-)start the looping spin animation. */
+                ERAnimConfig cfg;
+                memset(&cfg, 0, sizeof(cfg));
+                cfg.type = ER_ANIM_TIMING;
+                cfg.duration_ms = 1000U;
+                cfg.loop = true;
+                er_anim_start(node, ER_PROP_ROTATE_Z, 360.0f, &cfg);
+            }
+            else if (!props->animating && was_animating)
+            {
+                er_anim_cancel(node, ER_PROP_ROTATE_Z);
+            }
+            break;
+        }
+        case ER_NODE_SWITCH:
+        {
+            const uint8_t old_value = node->props.sw.value;
+            node->props.sw.track_color_false = props->track_color_false;
+            node->props.sw.track_color_true = props->track_color_true;
+            node->props.sw.thumb_color = props->thumb_color;
+            node->props.sw.value = props->switch_value;
+
+            /* Animate the thumb when the value changes. */
+            if (props->switch_value != old_value)
+            {
+                ERAnimConfig cfg;
+                memset(&cfg, 0, sizeof(cfg));
+                cfg.type = ER_ANIM_TIMING;
+                cfg.easing = ER_EASE_EASE_IN_OUT;
+                cfg.duration_ms = 200U;
+                er_anim_start(node, ER_PROP_SWITCH_THUMB, props->switch_value ? 1.0f : 0.0f, &cfg);
+            }
+            break;
+        }
+        case ER_NODE_TEXT_INPUT:
+            node->props.text_input.background_color = props->background_color;
+            node->props.text_input.border_color = props->border_color;
+            node->props.text_input.border_width = props->border_width;
+            node->props.text_input.border_radius = props->border_radius;
+            node->props.text_input.opacity = props->opacity ? props->opacity : 255U;
+            node->props.text_input.color = props->color;
+            node->props.text_input.font_size = props->font_size;
+            strncpy(node->props.text_input.font_family, props->font_family, ER_FONT_FAMILY_MAX);
+            node->props.text_input.font_family[ER_FONT_FAMILY_MAX] = '\0';
+            strncpy(node->props.text_input.placeholder, props->placeholder, ER_PLACEHOLDER_MAX);
+            node->props.text_input.placeholder[ER_PLACEHOLDER_MAX] = '\0';
+            node->props.text_input.placeholder_color = props->placeholder_color;
+            node->props.text_input.cursor_color = props->cursor_color;
+            node->props.text_input.editable = props->editable ? props->editable : 1U;
+            /* If 'text' is provided, set it as the current input value. */
+            if (props->text[0] != '\0')
+                er_text_input_set_text(node, props->text);
+            break;
+        case ER_NODE_MODAL:
+            node->props.view.background_color = props->background_color;
+            node->props.view.border_color = props->border_color;
+            node->props.view.border_width = props->border_width;
+            node->props.view.border_radius = props->border_radius;
+            node->props.view.opacity = props->opacity ? props->opacity : 255U;
+            node->modal_visible = props->modal_visible;
+            node->modal_backdrop_color = props->backdrop_color;
+            /* Propagate visibility to the layout so the modal takes no space when hidden. */
+            node->layout.display = props->modal_visible ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE;
+            node->props.view.shadow_color = props->shadow_color;
+            node->props.view.shadow_offset_x = props->shadow_offset_x;
+            node->props.view.shadow_offset_y = props->shadow_offset_y;
+            node->props.view.shadow_opacity = props->shadow_opacity;
+            node->props.view.shadow_radius = props->shadow_radius;
+            node->props.view.elevation = props->elevation;
+            break;
         default:
             break;
     }
 
     er_mark_dirty_upward(node);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public — TextInput
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Gives keyboard focus to a TextInput node.
+ *
+ * @param[in] node  TextInput node to focus, or NULL to blur the current input.
+ */
+void er_text_input_focus(ERNode* node)
+{
+    if (node && node->type != ER_NODE_TEXT_INPUT)
+        return;
+
+    /* Blur the currently focused node first. */
+    if (s_focused_input_tag != ER_INVALID_TAG)
+    {
+        ERNode* old = er_get_node(s_focused_input_tag);
+        if (old)
+        {
+            old->is_focused = false;
+            er_mark_dirty_upward(old);
+            const EREventHandler* h = &old->events[ER_EVENT_BLUR];
+            if (h->fn)
+            {
+                EREventData d = {0};
+                h->fn(old, &d, h->user_data);
+            }
+        }
+        s_focused_input_tag = ER_INVALID_TAG;
+    }
+
+    if (!node)
+        return;
+
+    node->is_focused = true;
+    s_focused_input_tag = node->tag;
+    er_mark_dirty_upward(node);
+
+    const EREventHandler* h = &node->events[ER_EVENT_FOCUS];
+    if (h->fn)
+    {
+        EREventData d = {0};
+        h->fn(node, &d, h->user_data);
+    }
+}
+
+/**
+ * @brief Removes focus from the currently focused TextInput, if any.
+ */
+void er_text_input_blur(void)
+{
+    er_text_input_focus(NULL);
+}
+
+/**
+ * @brief Returns the current text content of a TextInput node.
+ *
+ * @param[in] node  TextInput node.
+ *
+ * @return Pointer to the null-terminated text buffer, or NULL if not a TextInput.
+ */
+const char* er_text_input_get_text(const ERNode* node)
+{
+    if (!node || node->type != ER_NODE_TEXT_INPUT)
+        return NULL;
+    return node->input_text;
+}
+
+/**
+ * @brief Sets the text content of a TextInput node.
+ *
+ * @param[in] node  TextInput node.
+ * @param[in] text  Null-terminated UTF-8 string.
+ */
+void er_text_input_set_text(ERNode* node, const char* text)
+{
+    if (!node || node->type != ER_NODE_TEXT_INPUT || !text)
+        return;
+    strncpy(node->input_text, text, ER_TEXT_MAX);
+    node->input_text[ER_TEXT_MAX] = '\0';
+    er_mark_dirty_upward(node);
+}
+
+/**
+ * @brief Processes a keyboard event for the currently focused TextInput node.
+ *
+ * @param[in] keycode    Control key code (ER_KEY_*) or 0 for printable characters.
+ * @param[in] utf8_char  Character to insert, or NULL for control keys.
+ */
+void er_text_input_key(uint32_t keycode, const char* utf8_char)
+{
+    if (s_focused_input_tag == ER_INVALID_TAG)
+        return;
+    ERNode* node = er_get_node(s_focused_input_tag);
+    if (!node || !node->props.text_input.editable)
+        return;
+
+    const size_t len = strlen(node->input_text);
+    bool changed = false;
+
+    if (keycode == ER_KEY_BACKSPACE || keycode == ER_KEY_DELETE)
+    {
+        if (len > 0)
+        {
+            /* Remove the last UTF-8 character (back up past any continuation bytes). */
+            size_t i = len - 1;
+            while (i > 0 && ((unsigned char)node->input_text[i] & 0xC0U) == 0x80U)
+                i--;
+            node->input_text[i] = '\0';
+            changed = true;
+        }
+    }
+    else if (keycode == ER_KEY_RETURN)
+    {
+        const EREventHandler* h = &node->events[ER_EVENT_SUBMIT_EDITING];
+        if (h->fn)
+        {
+            EREventData d = {0};
+            d.changed_text = node->input_text;
+            h->fn(node, &d, h->user_data);
+        }
+    }
+    else if (keycode == ER_KEY_ESCAPE)
+    {
+        er_text_input_blur();
+    }
+    else if (utf8_char && utf8_char[0] != '\0')
+    {
+        /* Append the UTF-8 character if there is room. */
+        const size_t char_len = strlen(utf8_char);
+        if (len + char_len < ER_TEXT_MAX)
+        {
+            memcpy(node->input_text + len, utf8_char, char_len);
+            node->input_text[len + char_len] = '\0';
+            changed = true;
+        }
+    }
+
+    if (changed)
+    {
+        er_mark_dirty_upward(node);
+        const EREventHandler* h = &node->events[ER_EVENT_CHANGE_TEXT];
+        if (h->fn)
+        {
+            EREventData d = {0};
+            d.changed_text = node->input_text;
+            h->fn(node, &d, h->user_data);
+        }
+    }
 }
 
 void er_tree_append_child(ERNode* parent, ERNode* child)
@@ -639,6 +1060,32 @@ void er_commit(void)
     if (!root)
         return;
 
+    /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the
+     * 500 ms blink phase has changed since the last commit. This keeps the render
+     * cost negligible (one re-render every half-second) instead of every frame. */
+    if (s_focused_input_tag != ER_INVALID_TAG)
+    {
+        ERNode* focus = er_get_node(s_focused_input_tag);
+        if (focus && focus->type == ER_NODE_TEXT_INPUT && focus->is_focused)
+        {
+            const uint8_t cursor_phase = (s_now_ms % 1000U < 500U) ? 1U : 0U;
+            if (cursor_phase != s_last_cursor_phase)
+            {
+                er_mark_dirty_upward(focus);
+                s_last_cursor_phase = cursor_phase;
+            }
+        }
+        else
+        {
+            s_focused_input_tag = ER_INVALID_TAG;
+            s_last_cursor_phase = 2U;
+        }
+    }
+    else
+    {
+        s_last_cursor_phase = 2U;
+    }
+
     const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
     const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
@@ -660,7 +1107,7 @@ void er_tick(uint32_t delta_ms)
 
 void er_scroll_view_set_offset(ERNode* node, float x, float y)
 {
-    if (!node || node->type != ER_NODE_SCROLL_VIEW)
+    if (!node || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
         return;
 
     /* Clamp to valid scroll range.  The maximum offset is content_size − viewport_size,

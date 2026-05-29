@@ -64,6 +64,16 @@ static ERNode* s_spring_status_lbl = NULL;
 static ERNode* s_ls_lbl = NULL; /**< Letter-spacing demo label. */
 static int s_ls_value = 0;      /**< Current letter_spacing value cycling through 0-4. */
 
+/* Panel 8 — Components */
+static ERNode* s_switch_node = NULL;     /**< Switch under test. */
+static bool s_switch_on = false;         /**< Tracks logical Switch state. */
+static ERNode* s_switch_label = NULL;    /**< Text label that mirrors Switch state. */
+static ERNode* s_text_input_node = NULL; /**< TextInput under test. */
+static ERNode* s_text_echo_lbl = NULL;   /**< Text node that mirrors TextInput content. */
+static ERNode* s_modal_node = NULL;      /**< Modal under test. */
+static ERNode* s_modal_open_btn_lbl = NULL;
+static bool s_modal_visible = false;
+
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
 static const uint32_t k_sv_h_colors[8] = {
@@ -657,6 +667,185 @@ static void on_ls_cycle(ERNode* node, const EREventData* data, void* ctx)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 8 callbacks (Components)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_PRESS callback fired by the Switch node itself.
+ *
+ * The engine already flipped the Switch's value and started the thumb-slide
+ * animation by the time this callback runs.  This handler only mirrors the
+ * new state into the adjacent label so the user can see what changed.
+ *
+ * @param[in] node  Switch node that was pressed.
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context (unused).
+ */
+static void on_switch_press(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)data;
+    (void)ctx;
+    if (!node || !s_switch_label)
+        return;
+    /* Engine already flipped the Switch's value before invoking this handler;
+     * mirror the new logical state in our local tracker. */
+    s_switch_on = !s_switch_on;
+
+    ERProps lp = props_default();
+    lp.color = s_switch_on ? 0xFF2A9D8F : 0xFF99AABB;
+    lp.font_size = (uint8_t)dp(12);
+    strncpy(lp.text, s_switch_on ? "ON  (tap again to toggle off)" : "OFF  (tap switch to toggle)", ER_TEXT_MAX);
+    lp.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_switch_label, &lp);
+}
+
+/**
+ * @brief ER_EVENT_CHANGE_TEXT callback for the Panel 8 TextInput.
+ *
+ * Mirrors the typed text into the echo label so the user can see the input
+ * value rendered as plain text.
+ *
+ * @param[in] node  TextInput node (unused).
+ * @param[in] data  Event payload containing the updated text.
+ * @param[in] ctx   User context (unused).
+ */
+static void on_text_input_change(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)ctx;
+    if (!s_text_echo_lbl || !data)
+        return;
+    const char* live = data->changed_text ? data->changed_text : "";
+
+    ERProps p = props_default();
+    p.color = live[0] ? 0xFFEEF4FF : 0xFF99AABB;
+    p.font_size = (uint8_t)dp(12);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    char buf[ER_TEXT_MAX + 1];
+    if (live[0] == '\0')
+        snprintf(buf, sizeof(buf), "(type to see echo here)");
+    else
+        snprintf(buf, sizeof(buf), "echo:  %s", live);
+    strncpy(p.text, buf, ER_TEXT_MAX);
+    p.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_text_echo_lbl, &p);
+}
+
+/**
+ * @brief ER_EVENT_SUBMIT_EDITING callback for the Panel 8 TextInput.
+ *
+ * Fires when the user presses Enter while the input is focused. Echos the
+ * submitted text below in green so the user sees a clear "submit" signal,
+ * then clears the input so they can type the next value.
+ *
+ * @param[in] node  TextInput node that submitted.
+ * @param[in] data  Event payload (data->changed_text holds the submitted text).
+ * @param[in] ctx   User context (unused).
+ */
+static void on_text_input_submit(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)ctx;
+    if (!node || !s_text_echo_lbl || !data)
+        return;
+    const char* submitted = data->changed_text ? data->changed_text : "";
+
+    ERProps p = props_default();
+    p.color = 0xFF2A9D8F;
+    p.font_size = (uint8_t)dp(12);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    char buf[ER_TEXT_MAX + 1];
+    snprintf(buf, sizeof(buf), "submitted:  %s", submitted[0] ? submitted : "(empty)");
+    strncpy(p.text, buf, ER_TEXT_MAX);
+    p.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_text_echo_lbl, &p);
+
+    /* Clear the input so the next keystroke starts a fresh entry. */
+    er_text_input_set_text(node, "");
+}
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "OPEN MODAL" button.
+ *
+ * Sets the modal's modal_visible prop to 1, which causes the engine to render
+ * the modal's backdrop and frame on top of the rest of the scene.
+ *
+ * @param[in] node  Pressable node (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context (unused).
+ */
+/**
+ * @brief Builds the modal's ERProps with the given visibility.
+ *
+ * Centralised so on_modal_open / on_modal_close use the same layout — only the
+ * modal_visible flag differs. align_items defaults to STRETCH so the dismiss
+ * button receives the full inner width and is hit-testable.
+ *
+ * @param[in] visible  1 to show the modal, 0 to hide it.
+ *
+ * @return Fully populated ERProps ready for er_node_set_props.
+ */
+static ERProps modal_props(uint8_t visible)
+{
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = dp(80);
+    p.top = dp(180);
+    p.width = dp(360);
+    p.height = dp(200);
+    p.background_color = 0xFF172233;
+    p.border_radius = dp(12);
+    p.border_color = 0xFF2A9D8F;
+    p.border_width = dp(2);
+    p.padding = dp(20);
+    p.align_items = ER_ALIGN_STRETCH;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    p.gap = dp(10);
+    p.z_index = 1000;
+    p.modal_visible = visible;
+    p.backdrop_color = 0xCC000000;
+    p.shadow_color = 0xFF000000;
+    p.shadow_offset_y = (float)dp(10);
+    p.shadow_opacity = 0.7f;
+    p.shadow_radius = (uint8_t)dp(20);
+    return p;
+}
+
+static void on_modal_open(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_modal_node)
+        return;
+    s_modal_visible = true;
+    ERProps p = modal_props(1);
+    er_node_set_props(s_modal_node, &p);
+}
+
+/**
+ * @brief ER_EVENT_PRESS callback for the modal's "DISMISS" button.
+ *
+ * Sets modal_visible to 0, hiding the modal and its backdrop.
+ *
+ * @param[in] node  Pressable node (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context (unused).
+ */
+static void on_modal_close(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_modal_node)
+        return;
+    s_modal_visible = false;
+    ERProps p = modal_props(0);
+    er_node_set_props(s_modal_node, &p);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — scene construction
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -729,7 +918,10 @@ static ERNode* make_button(const char* label_text, EREventFn on_press)
     p.background_color = 0xFF243447;
     p.border_radius = dp(6);
     p.padding_left = p.padding_right = dp(12);
-    p.align_items = ER_ALIGN_CENTER;
+    /* align_items: STRETCH so the label fills the button's horizontal interior,
+     * letting text_align: CENTER do the visual centering even when the text is
+     * narrower than the button width. */
+    p.align_items = ER_ALIGN_STRETCH;
     p.justify_content = ER_JUSTIFY_CENTER;
     er_node_set_props(btn, &p);
     er_event_set(btn, ER_EVENT_PRESS, on_press, NULL);
@@ -738,6 +930,9 @@ static ERNode* make_button(const char* label_text, EREventFn on_press)
     p = props_default();
     p.color = 0xFFDDEEFF;
     p.font_size = (uint8_t)dp(13);
+    p.text_align = ER_TEXT_ALIGN_CENTER;
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
     strncpy(p.text, label_text, ER_TEXT_MAX);
     er_node_set_props(lbl, &p);
     er_tree_append_child(btn, lbl);
@@ -1199,6 +1394,169 @@ static ERNode* build_text_panel(void)
     er_tree_append_child(deco_row, strike_lbl);
 
     er_tree_append_child(col, deco_row);
+
+    return col;
+}
+
+/**
+ * @brief Builds Panel 8 — Components.
+ *
+ * Demonstrates ActivityIndicator (spinner), Switch (animated toggle), TextInput
+ * (keyboard-driven editing), FlatList (virtualised list, behaves as a scroller),
+ * and Modal (overlay with backdrop and dismiss).
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_components_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    /* ---- ACTIVITY INDICATOR ---- */
+    er_tree_append_child(col, make_section_header("ACTIVITY INDICATOR"));
+    er_tree_append_child(col, make_caption("8-dot fading ring  —  auto-spinning"));
+
+    ERNode* act_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(60);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_SPACE_AROUND;
+    er_node_set_props(act_row, &p);
+
+    ERNode* act_small = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    p = props_default();
+    p.width = dp(28);
+    p.height = dp(28);
+    p.indicator_color = 0xFF2A9D8F;
+    p.animating = 1;
+    er_node_set_props(act_small, &p);
+    er_tree_append_child(act_row, act_small);
+
+    ERNode* act_med = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    p = props_default();
+    p.width = dp(44);
+    p.height = dp(44);
+    p.indicator_color = 0xFFF4A261;
+    p.animating = 1;
+    er_node_set_props(act_med, &p);
+    er_tree_append_child(act_row, act_med);
+
+    ERNode* act_big = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    p = props_default();
+    p.width = dp(54);
+    p.height = dp(54);
+    p.indicator_color = 0xFFE94560;
+    p.animating = 1;
+    er_node_set_props(act_big, &p);
+    er_tree_append_child(act_row, act_big);
+
+    er_tree_append_child(col, act_row);
+
+    /* Divider */
+    ERNode* div1 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div1, &p);
+    er_tree_append_child(col, div1);
+
+    /* ---- SWITCH ---- */
+    er_tree_append_child(col, make_section_header("SWITCH"));
+    er_tree_append_child(col, make_caption("tap button  —  animated track + thumb"));
+
+    ERNode* sw_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(36);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_SPACE_BETWEEN;
+    er_node_set_props(sw_row, &p);
+
+    ERNode* sw = er_node_create(ER_NODE_SWITCH);
+    p = props_default();
+    p.width = dp(50);
+    p.height = dp(28);
+    p.switch_value = 0;
+    p.track_color_false = 0xFF455A64;
+    p.track_color_true = 0xFF2A9D8F;
+    p.thumb_color = 0xFFFFFFFF;
+    er_node_set_props(sw, &p);
+    s_switch_node = sw;
+    er_event_set(sw, ER_EVENT_PRESS, on_switch_press, NULL);
+    er_tree_append_child(sw_row, sw);
+
+    ERNode* sw_label = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF99AABB;
+    p.font_size = (uint8_t)dp(12);
+    strncpy(p.text, "OFF  (tap switch to toggle)", ER_TEXT_MAX);
+    er_node_set_props(sw_label, &p);
+    s_switch_label = sw_label;
+    er_tree_append_child(sw_row, sw_label);
+
+    er_tree_append_child(col, sw_row);
+
+    /* Divider */
+    ERNode* div2 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div2, &p);
+    er_tree_append_child(col, div2);
+
+    /* ---- TEXT INPUT ---- */
+    er_tree_append_child(col, make_section_header("TEXT INPUT"));
+    er_tree_append_child(col, make_caption("click to focus  —  type to edit"));
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_default();
+    p.height = dp(34);
+    p.background_color = 0xFF0F1E2D;
+    p.border_color = 0xFF2A4D6B;
+    p.border_width = dp(1);
+    p.border_radius = dp(6);
+    p.color = 0xFFFFFFFF;
+    p.placeholder_color = 0xFF55708C;
+    p.cursor_color = 0xFF2A9D8F;
+    p.font_size = (uint8_t)dp(13);
+    p.editable = 1;
+    strncpy(p.placeholder, "Type something...", ER_PLACEHOLDER_MAX);
+    er_node_set_props(ti, &p);
+    s_text_input_node = ti;
+    er_event_set(ti, ER_EVENT_CHANGE_TEXT, on_text_input_change, NULL);
+    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_text_input_submit, NULL);
+    er_tree_append_child(col, ti);
+
+    ERNode* echo = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF99AABB;
+    p.font_size = (uint8_t)dp(12);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    strncpy(p.text, "(type to see echo here)", ER_TEXT_MAX);
+    er_node_set_props(echo, &p);
+    s_text_echo_lbl = echo;
+    er_tree_append_child(col, echo);
+
+    /* Divider */
+    ERNode* div3 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div3, &p);
+    er_tree_append_child(col, div3);
+
+    /* ---- MODAL ---- */
+    er_tree_append_child(col, make_section_header("MODAL"));
+    er_tree_append_child(col, make_caption("backdrop overlay  +  centered card"));
+    er_tree_append_child(col, make_button("OPEN MODAL", on_modal_open));
 
     return col;
 }
@@ -1736,6 +2094,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(sv_row, build_transforms_panel());
     er_tree_append_child(sv_row, build_spring_panel());
     er_tree_append_child(sv_row, build_text_panel());
+    er_tree_append_child(sv_row, build_components_panel());
 
     /* =====================================================================
      * ASSEMBLE
@@ -1747,6 +2106,50 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(root, header);
     er_tree_append_child(root, columns);
     er_tree_append_child(root, sv_row);
+
+    /* ---- Modal overlay node (hidden by default; appears on OPEN MODAL press) ---- */
+    ERNode* modal = er_node_create(ER_NODE_MODAL);
+    p = modal_props(0);
+    er_node_set_props(modal, &p);
+    s_modal_node = modal;
+
+    /* Modal content: title, body, dismiss button. */
+    ERNode* modal_title = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFEEF4FF;
+    p.font_size = (uint8_t)dp(18);
+    p.text_align = ER_TEXT_ALIGN_CENTER;
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    strncpy(p.text, "Modal Dialog", ER_TEXT_MAX);
+    er_node_set_props(modal_title, &p);
+    er_tree_append_child(modal, modal_title);
+
+    ERNode* modal_body = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF99AABB;
+    p.font_size = (uint8_t)dp(12);
+    p.text_align = ER_TEXT_ALIGN_CENTER;
+    p.number_of_lines = 2;
+    p.height = dp(40); /* room for two lines */
+    strncpy(p.text, "Backdrop dims the rest of the scene.  Tap dismiss to close.", ER_TEXT_MAX);
+    er_node_set_props(modal_body, &p);
+    er_tree_append_child(modal, modal_body);
+
+    /* Constrain the dismiss button so it doesn't span the entire modal width. */
+    ERNode* dismiss = make_button("DISMISS", on_modal_close);
+    ERProps dp2 = props_default();
+    dp2.height = dp(36);
+    dp2.width = dp(160);
+    dp2.align_self = ER_ALIGN_CENTER;
+    dp2.background_color = 0xFFE94560;
+    dp2.border_radius = dp(6);
+    dp2.align_items = ER_ALIGN_STRETCH;
+    dp2.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(dismiss, &dp2);
+    er_tree_append_child(modal, dismiss);
+    er_tree_append_child(root, modal);
+
     er_tree_set_root(root);
 }
 
@@ -1826,6 +2229,8 @@ int main(void)
     bool running = true;
     uint32_t prev = SDL_GetTicks();
 
+    SDL_StartTextInput();
+
     while (running)
     {
         SDL_Event ev;
@@ -1833,8 +2238,26 @@ int main(void)
         {
             if (ev.type == SDL_QUIT)
                 running = false;
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)
-                running = false;
+            if (ev.type == SDL_KEYDOWN)
+            {
+                /* ESC dismisses the modal first; only quits when nothing is open. */
+                if (ev.key.keysym.sym == SDLK_ESCAPE)
+                {
+                    if (s_modal_visible)
+                        on_modal_close(NULL, NULL, NULL);
+                    else
+                        running = false;
+                }
+                else if (ev.key.keysym.sym == SDLK_BACKSPACE)
+                    embedded_renderer_key(ER_KEY_BACKSPACE, NULL);
+                else if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER)
+                    embedded_renderer_key(ER_KEY_RETURN, NULL);
+            }
+            if (ev.type == SDL_TEXTINPUT)
+            {
+                /* SDL gives the typed UTF-8 character(s) here. */
+                embedded_renderer_key(0, ev.text.text);
+            }
             if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
                 embedded_renderer_touch(0, ER_TOUCH_DOWN, event_px(ev.button.x), event_px(ev.button.y));
             if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)

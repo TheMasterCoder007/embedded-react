@@ -1,10 +1,12 @@
 #include "native_renderer.h"
+#include "er_scene.h"
 #include "font_blob.h"
 #include "font_registry.h"
 #include "image_registry.h"
 #include "renderer_internal.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -355,4 +357,9 @@ void embedded_renderer_tick(uint32_t delta_ms)
 void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 {
     er_dispatch_touch(finger_id, phase, x, y);
+}
+
+void embedded_renderer_key(uint32_t keycode, const char* utf8_char)
+{
+    er_text_input_key(keycode, utf8_char);
 }

@@ -32,6 +32,9 @@ extern "C"
 /** @brief Maximum length of ERProps::image_name, excluding the null terminator. */
 #define ER_IMAGE_NAME_MAX 63
 
+/** @brief Maximum length of ERProps::placeholder, excluding the null terminator. */
+#define ER_PLACEHOLDER_MAX 63
+
     /*----------------------------------------------------------------------------------------------------------------------
      - Types
      ---------------------------------------------------------------------------------------------------------------------*/
@@ -228,6 +231,7 @@ extern "C"
         ER_PROP_ROTATE_Z,         /**< Rotation around the Z axis in degrees. */
         ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
         ER_PROP_COLOR,            /**< Foreground ARGB8888 color packed as float bits. */
+        ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
     } ERAnimProp;
 
     /**
@@ -305,6 +309,11 @@ extern "C"
         ER_EVENT_RESPONDER_RELEASE,   /**< Touch ended while this node is the active responder. */
         ER_EVENT_RESPONDER_TERMINATE, /**< Responder was taken by another node or cancelled. */
         ER_EVENT_LAYOUT,              /**< Computed layout rectangle changed. */
+        ER_EVENT_CHANGE_TEXT,         /**< TextInput text changed; data->changed_text holds the new string. */
+        ER_EVENT_SUBMIT_EDITING,      /**< TextInput Return/Enter key pressed. */
+        ER_EVENT_FOCUS,               /**< TextInput gained keyboard focus. */
+        ER_EVENT_BLUR,                /**< TextInput lost keyboard focus. */
+        ER_EVENT_TYPE_COUNT_,         /**< Sentinel — not a real event; used for array sizing. */
     } EREventType;
 
     /**
@@ -403,6 +412,26 @@ extern "C"
         float shadow_opacity;  /**< 0.0–1.0; 0 = no shadow (default). */
         uint8_t shadow_radius; /**< Blur radius in pixels; 0 = hard edge. */
         uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
+
+        /* --- ActivityIndicator --- */
+        uint32_t indicator_color; /**< Spinner dot color; 0 = 0xFFFFFFFF (white). */
+        uint8_t animating;        /**< 1 = spinning (default when node created), 0 = stopped. */
+
+        /* --- Switch --- */
+        uint8_t switch_value;       /**< 0 = off, 1 = on. */
+        uint32_t track_color_false; /**< Track color when off; 0 = system gray (0xFF767577). */
+        uint32_t track_color_true;  /**< Track color when on;  0 = system blue (0xFF81B0FF). */
+        uint32_t thumb_color;       /**< Thumb fill color; 0 = white (0xFFFFFFFF). */
+
+        /* --- TextInput --- */
+        char placeholder[ER_PLACEHOLDER_MAX + 1]; /**< Shown when the input is empty. */
+        uint32_t placeholder_color;               /**< Placeholder color; 0 = dim gray (0xFF888888). */
+        uint32_t cursor_color;                    /**< Cursor bar color; 0 = same as color field. */
+        uint8_t editable;                         /**< 1 = editable (default), 0 = read-only. */
+
+        /* --- Modal --- */
+        uint8_t modal_visible;   /**< 1 = shown, 0 = hidden (default). */
+        uint32_t backdrop_color; /**< Full-screen backdrop ARGB8888; 0 = 0x99000000. */
     } ERProps;
 
     /**
@@ -447,13 +476,14 @@ extern "C"
      */
     typedef struct EREventData
     {
-        int x;              /**< Touch X coordinate in framebuffer pixels. */
-        int y;              /**< Touch Y coordinate in framebuffer pixels. */
-        int dx;             /**< X displacement from touch-down origin (responder events). */
-        int dy;             /**< Y displacement from touch-down origin (responder events). */
-        float scroll_x;     /**< Scroll offset X (ER_EVENT_SCROLL). */
-        float scroll_y;     /**< Scroll offset Y (ER_EVENT_SCROLL). */
-        ERRect layout_rect; /**< New computed rectangle (ER_EVENT_LAYOUT). */
+        int x;                    /**< Touch X coordinate in framebuffer pixels. */
+        int y;                    /**< Touch Y coordinate in framebuffer pixels. */
+        int dx;                   /**< X displacement from touch-down origin (responder events). */
+        int dy;                   /**< Y displacement from touch-down origin (responder events). */
+        float scroll_x;           /**< Scroll offset X (ER_EVENT_SCROLL). */
+        float scroll_y;           /**< Scroll offset Y (ER_EVENT_SCROLL). */
+        ERRect layout_rect;       /**< New computed rectangle (ER_EVENT_LAYOUT). */
+        const char* changed_text; /**< Points into node's text buffer (ER_EVENT_CHANGE_TEXT). */
     } EREventData;
 
     /**
@@ -689,6 +719,47 @@ extern "C"
      * @param[in] user_data  Opaque pointer forwarded to the callback.
      */
     void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data);
+
+    /**
+     * @brief Gives keyboard focus to a TextInput node.
+     *
+     * Blurs any previously focused input, marks the node dirty to draw the cursor,
+     * and fires ER_EVENT_FOCUS on the new node and ER_EVENT_BLUR on the old one.
+     *
+     * @param[in] node  TextInput node to focus, or NULL to only blur.
+     */
+    void er_text_input_focus(ERNode* node);
+
+    /**
+     * @brief Removes keyboard focus from whichever TextInput currently has it.
+     *
+     * Fires ER_EVENT_BLUR on the previously focused node and marks it dirty.
+     * No-op when no input is focused.
+     */
+    void er_text_input_blur(void);
+
+    /**
+     * @brief Returns a pointer to the TextInput node's current text buffer.
+     *
+     * The returned pointer is valid until the node is destroyed or its text is
+     * modified by er_text_input_set_text() or a key event.
+     *
+     * @param[in] node  TextInput node.
+     *
+     * @return Null-terminated UTF-8 string, or NULL if node is not a TextInput.
+     */
+    const char* er_text_input_get_text(const ERNode* node);
+
+    /**
+     * @brief Replaces the TextInput node's current text with the supplied string.
+     *
+     * Fires ER_EVENT_CHANGE_TEXT if the text changed.  Truncates at ER_TEXT_MAX
+     * characters.
+     *
+     * @param[in] node  TextInput node.
+     * @param[in] text  Null-terminated UTF-8 string.
+     */
+    void er_text_input_set_text(ERNode* node, const char* text);
 
 #ifdef __cplusplus
 }

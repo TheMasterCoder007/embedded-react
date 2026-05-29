@@ -219,6 +219,11 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
         case ER_PROP_ROTATE_Z:
             *value = node->tp_rotate_z;
             return true;
+        case ER_PROP_SWITCH_THUMB:
+            if (node->type != ER_NODE_SWITCH)
+                return false;
+            *value = node->switch_thumb_t;
+            return true;
         default:
             return false;
     }
@@ -309,7 +314,19 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
             return true;
         case ER_PROP_ROTATE_Z:
             node->tp_rotate_z = value;
-            update_has_transform(node);
+            /* ActivityIndicator uses rotate_z as its internal spin angle; skip has_transform
+             * so the affine-transform render path does not try to rasterize it into scratch. */
+            if (node->type != ER_NODE_ACTIVITY_INDICATOR)
+                update_has_transform(node);
+            return true;
+        case ER_PROP_SWITCH_THUMB:
+            if (node->type != ER_NODE_SWITCH)
+                return false;
+            if (value < 0.0f)
+                value = 0.0f;
+            if (value > 1.0f)
+                value = 1.0f;
+            node->switch_thumb_t = value;
             return true;
         default:
             return false;
