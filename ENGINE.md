@@ -92,13 +92,13 @@ Everything else under `engine/rendering/` is a stub.
 - [ ] **`borderStyle`** — `solid` / `dashed` / `dotted`.
 - [ ] **Per-edge `borderColor`** (`borderLeftColor`, etc.).
 
-### 4.2 Shadows ([shadow.c](engine/rendering/shadow.c) is a stub)
+### 4.2 Shadows ([shadow.c](engine/rendering/shadow.c))
 
-- [ ] **Two-pass box blur** rasterizer (horizontal + vertical separable kernel).
-- [ ] Honor `shadowColor`, `shadowOffset`, `shadowOpacity`, `shadowRadius`, `elevation`.
-- [ ] Gated behind `ERUI_SHADOWS`.
-- [ ] Uses scratch buffer pool (see 4.7).
-- [ ] Add the shadow fields to `ERProps` and the View prop union.
+- [x] **Two-pass box blur** rasterizer (horizontal + vertical separable kernel).
+- [x] Honor `shadowColor`, `shadowOffset`, `shadowOpacity`, `shadowRadius`, `elevation`.
+- [x] Gated behind `ERUI_SHADOWS`.
+- [x] Uses static scratch buffers inside shadow.c (independent of the scratch pool).
+- [x] Shadow fields added to `ERProps` and `ERViewProps`.
 
 ### 4.3 Transforms ([transform.c](engine/rendering/transform.c))
 
@@ -156,20 +156,19 @@ built-in Inter font at fixed sizes.
 - [x] UTF-8 decode
 - [x] Glyph blit at all baked sizes
 - [x] Solid color
-- [ ] **Multi-line wrapping** — wrap on word boundaries; honor parent width.
-- [ ] **`numberOfLines`** truncation.
-- [ ] **`ellipsizeMode`** (`head` / `middle` / `tail`).
-- [ ] **`textAlign`** (`left` / `center` / `right` / `justify`).
-- [ ] **`lineHeight`** override (default is font ascent + descent).
-- [ ] **`letterSpacing`**.
+- [x] **Multi-line wrapping** — word-boundary wrap; character-boundary fallback for overlong words.
+- [x] **`numberOfLines`** truncation.
+- [x] **`ellipsizeMode`** — `tail` (appends U+2026) and `clip`; head/middle deferred.
+- [x] **`textAlign`** — `left` / `center` / `right`; justify deferred.
+- [x] **`lineHeight`** override (default is font line_height).
+- [x] **`letterSpacing`**.
 - [ ] **`fontWeight: bold`** rendering path (already in `ERTextProps`, no glyph switch yet).
 - [ ] **`fontStyle: italic`** — needs italic font variants in the baked font blob or a
   synthetic skew.
-- [ ] **`textDecorationLine`** (`underline` / `line-through`).
+- [x] **`textDecorationLine`** — `underline` (below baseline) and `line-through` (mid-cap).
 - [ ] **Nested `<Text>` spans** — currently `ERTextProps.text` is one string. Either flatten
   at bridge layer or introduce text-run children.
-- [ ] **Text measurement API** — needed by layout for intrinsic-size pass (already
-  invoked implicitly; expose so layout can request it).
+- [x] **Text measurement API** — `er_text_measure()` exposed; accepts `letter_spacing`.
 
 ## 6. Animation
 
@@ -268,7 +267,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [ ] **Shadow rasterizer (visual baseline comparison)**
 - [x] **Transform render + hit-test**
 - [x] **Opacity offscreen compositing**
-- [ ] **Multi-line / ellipsize text**
+- [x] **Multi-line / ellipsize text**
 - [ ] **Node pool free-slot reuse**
 
 ---
@@ -277,18 +276,18 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 A path that keeps the engine demoable at each step:
 
-1. **Finish touch** — `display:none` / `opacity:0` hit-rejection, `pointerEvents`, layout
-   event dispatch. Closes the input chapter.
-2. **Image rendering** — registry + nearest scaler + resizeMode. Unlocks half the React
-   demo apps.
-3. **ScrollView** — clip + gesture + momentum. Most apps need this before they look real.
-4. **Opacity compositing + scratch pool** — required by shadows and transforms; small
-   self-contained landing.
-5. **Transforms (2D)** — translate fast path + affine pass + hit-test inverse.
-6. **Shadows** — straightforward once the scratch pool exists.
-7. **Animation engine completion** — spring, decay, easing, transform properties,
-   sequence/parallel, completion callbacks.
-8. **Text upgrades** — wrapping, `numberOfLines`, alignment, weight.
+1. ~~**Finish touch**~~ — `display:none` / `opacity:0` hit-rejection, `pointerEvents`, layout
+   event dispatch — **done**.
+2. ~~**Image rendering**~~ — registry + nearest scaler + resizeMode. Unlocks half the React
+   demo apps — **done**.
+3. ~~**ScrollView**~~ — clip + gesture + momentum. Most apps need this before they look real — **done**.
+4. ~~**Opacity compositing + scratch pool**~~ — required by shadows and transforms; small
+   self-contained landing — **done**.
+5. ~~**Transforms (2D)**~~ — translate fast path + affine pass + hit-test inverse — **done**.
+6. ~~**Shadows**~~ — straightforward once the scratch pool exists — **done**.
+7. ~~**Animation engine completion**~~ — spring, decay, easing, transform properties,
+   sequence/parallel, completion callbacks — **done**.
+8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`, `textDecorationLine` — **done**.
 9. **Remaining components** — TextInput, Switch, ActivityIndicator, Modal, FlatList.
 10. **Dirty-rect tracking + node pool reuse** — perf / longevity polish before MCU bring-up.
 11. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest

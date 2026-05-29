@@ -188,10 +188,24 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (c->type == ER_NODE_TEXT)
             {
                 int measured_w = 0, measured_h = 0;
-                er_text_measure(
-                    c->props.text.text, c->props.text.font_size, c->props.text.font_family, &measured_w, &measured_h);
+                er_text_measure(c->props.text.text,
+                                c->props.text.font_size,
+                                c->props.text.font_family,
+                                c->props.text.letter_spacing,
+                                &measured_w,
+                                &measured_h);
                 intr_w = (int16_t)measured_w;
-                intr_h = (int16_t)measured_h;
+
+                /* Height of one line: explicit line_height override, else measured line height. */
+                const int16_t line_h =
+                    (c->props.text.line_height > 0) ? c->props.text.line_height : (int16_t)measured_h;
+
+                /* Reserve vertical room for every line the node may render.  number_of_lines
+                 * gives a deterministic cap; without it the single-line measurement is used
+                 * (true wrap-to-content height needs a width-aware measure pass — not yet
+                 * implemented). */
+                const int lines = (c->props.text.number_of_lines > 1) ? (int)c->props.text.number_of_lines : 1;
+                intr_h = (int16_t)(line_h * lines);
             }
 
             /* Base main size. */

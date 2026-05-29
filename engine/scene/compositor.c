@@ -233,9 +233,21 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             }
             case ER_NODE_TEXT:
             {
-                const uint32_t color = n->props.text.color ? n->props.text.color : 0xFFFFFFFFU;
-                const ERRect clip = {px, py, w, h};
-                er_text_render(n->props.text.text, clip, color, n->props.text.font_size, n->props.text.font_family);
+                const ERTextProps* tp = &n->props.text;
+                ERTextRenderParams par;
+                memset(&par, 0, sizeof(par));
+                par.text = tp->text;
+                par.clip = (ERRect){px, py, w, h};
+                par.color = tp->color ? tp->color : 0xFFFFFFFFU;
+                par.font_size = tp->font_size;
+                par.font_family = tp->font_family;
+                par.text_align = tp->text_align;
+                par.number_of_lines = tp->number_of_lines;
+                par.ellipsize_mode = tp->ellipsize_mode;
+                par.text_decoration = tp->text_decoration;
+                par.line_height = tp->line_height;
+                par.letter_spacing = tp->letter_spacing;
+                er_text_render(&par);
                 break;
             }
             case ER_NODE_IMAGE:
@@ -525,6 +537,12 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text.color = props->color;
             node->props.text.font_size = props->font_size;
             node->props.text.font_weight = props->font_weight;
+            node->props.text.text_align = props->text_align;
+            node->props.text.number_of_lines = props->number_of_lines;
+            node->props.text.ellipsize_mode = props->ellipsize_mode;
+            node->props.text.text_decoration = props->text_decoration;
+            node->props.text.line_height = props->line_height;
+            node->props.text.letter_spacing = props->letter_spacing;
             break;
         case ER_NODE_IMAGE:
             strncpy(node->props.image.image_name, props->image_name, ER_IMAGE_NAME_MAX);

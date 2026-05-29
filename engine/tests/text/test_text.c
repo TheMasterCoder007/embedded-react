@@ -3,31 +3,50 @@
 #include "text_renderer.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 256
-#define FB_H 64
+#define FB_W 320
+#define FB_H 240
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Accumulates statistics from fill_rect callbacks during a render pass.
+ * @brief Accumulates statistics from fill_rect / copy_rect callbacks during a render pass.
  */
 typedef struct
 {
     int pixels_drawn;  /**< Total pixel area covered by in-bounds draw calls. */
     int draw_ops;      /**< Total number of draw calls received. */
     int out_of_bounds; /**< Number of draw calls that fell outside the framebuffer. */
+    int min_x;         /**< Leftmost x coordinate seen across all draw calls. */
+    int max_x;         /**< Rightmost x+w coordinate seen across all draw calls. */
+    int min_y;         /**< Topmost y coordinate seen across all draw calls. */
+    int max_y;         /**< Bottommost y+h coordinate seen across all draw calls. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Resets a TestCtx to its zero state with sentinel min/max values.
+ *
+ * @param[out] t  TestCtx to reset.
+ */
+static void ctx_reset(TestCtx* t)
+{
+    memset(t, 0, sizeof(*t));
+    t->min_x = FB_W;
+    t->max_x = 0;
+    t->min_y = FB_H;
+    t->max_y = 0;
+}
 
 /**
  * @brief Backend fill_rect callback that records pixel statistics into a TestCtx.
@@ -47,19 +66,29 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
     if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
         t->out_of_bounds++;
     else
+    {
         t->pixels_drawn += w * h;
+        if (x < t->min_x)
+            t->min_x = x;
+        if (x + w > t->max_x)
+            t->max_x = x + w;
+        if (y < t->min_y)
+            t->min_y = y;
+        if (y + h > t->max_y)
+            t->max_y = y + h;
+    }
 }
 
 /**
- * @brief Backend copy_rect callback (no-op stub for testing).
+ * @brief Backend copy_rect callback that records statistics into a TestCtx.
  *
  * @param[in] src  Source pixel buffer (unused).
  * @param[in] s    Source stride in bytes (unused).
- * @param[in] x    Destination X coordinate (unused).
- * @param[in] y    Destination Y coordinate (unused).
- * @param[in] w    Width in pixels (unused).
- * @param[in] h    Height in pixels (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] x    Destination X coordinate.
+ * @param[in] y    Destination Y coordinate.
+ * @param[in] w    Width in pixels.
+ * @param[in] h    Height in pixels.
+ * @param[in] ctx  Opaque context.
  */
 static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
 {
@@ -70,7 +99,17 @@ static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ct
     if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
         t->out_of_bounds++;
     else
+    {
         t->pixels_drawn += w * h;
+        if (x < t->min_x)
+            t->min_x = x;
+        if (x + w > t->max_x)
+            t->max_x = x + w;
+        if (y < t->min_y)
+            t->min_y = y;
+        if (y + h > t->max_y)
+            t->max_y = y + h;
+    }
 }
 
 /**
@@ -115,76 +154,219 @@ static int fail(const char* msg)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Test entry point — exercises er_text_measure() and er_text_render() behaviour.
+ * @brief Test entry point — exercises er_text_measure() and er_text_render() features.
  *
- * Verifies that:
- *   - Measurement returns positive dimensions for ASCII text.
- *   - A longer string measures wider.
- *   - fill_rect is called during rendering and produces pixels within bounds.
+ * Verifies:
+ *   - Basic measurement returns positive dimensions.
+ *   - A longer string measures wider; line heights are consistent.
+ *   - letter_spacing widens measurement proportionally.
+ *   - UTF-8 multi-byte sequences are measured correctly.
+ *   - Rendering produces in-bounds draw calls.
  *   - A narrow clip rect produces no out-of-bounds fills.
- *   - Multi-byte UTF-8 sequences (2-byte and 3-byte) measure correctly.
- *   - 4-byte UTF-8 sequences (emoji) fall back to the '?' glyph width.
+ *   - textAlign CENTER shifts pixels rightward vs LEFT.
+ *   - textAlign RIGHT shifts pixels further right than CENTER.
+ *   - numberOfLines + TAIL ellipsis keeps pixels within the clip width.
+ *   - Word-boundary wrapping produces more lines than single-line.
+ *   - letter_spacing during render stays in bounds.
+ *   - textDecoration UNDERLINE produces extra pixels below the text baseline.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
 int main(void)
 {
+    /* ---- Measurement basics ---- */
     int w = 0, h = 0;
-    er_text_measure("Hello", 14, NULL, &w, &h);
+    er_text_measure("Hello", 14, NULL, 0, &w, &h);
     if (w <= 0 || h <= 0)
         return fail("measure produced non-positive size");
 
     int w2 = 0, h2 = 0;
-    er_text_measure("HelloHello", 14, NULL, &w2, &h2);
+    er_text_measure("HelloHello", 14, NULL, 0, &w2, &h2);
     if (w2 <= w)
         return fail("longer string did not measure wider");
     if (h2 != h)
         return fail("line height changed between measures");
 
-    TestCtx tc = {0};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    /* letter_spacing widens a non-empty string. */
+    int w_nols = 0, w_ls = 0, dummy = 0;
+    er_text_measure("Hello", 14, NULL, 0, &w_nols, &dummy);
+    er_text_measure("Hello", 14, NULL, 2, &w_ls, &dummy);
+    if (w_ls <= w_nols)
+        return fail("letter_spacing=2 did not produce wider measure");
 
-    ERRect clip = {0, 0, FB_W, FB_H};
-    er_text_render("Hello", clip, 0xFFFFFFFFu, 14, NULL);
-
-    if (tc.draw_ops == 0)
-        return fail("no draw calls emitted");
-    if (tc.pixels_drawn == 0)
-        return fail("no pixels reported drawn");
-    if (tc.out_of_bounds != 0)
-        return fail("fill_rect emitted outside framebuffer bounds");
-
-    TestCtx tc2 = {0};
-    be.ctx = &tc2;
-    embedded_renderer_set_backend(&be);
-    ERRect tiny = {0, 0, 4, 64};
-    er_text_render("Hello", tiny, 0xFFFFFFFFu, 14, NULL);
-    if (tc2.out_of_bounds != 0)
-        return fail("narrow clip emitted out-of-bounds fills");
-
-    int w_plain = 0, w_sym = 0, dummy = 0;
-    er_text_measure("23C", 16, NULL, &w_plain, &dummy);
+    /* UTF-8: 2-byte sequence measures wider than the plain ASCII baseline. */
+    int w_plain = 0, w_sym = 0;
+    er_text_measure("23C", 16, NULL, 0, &w_plain, &dummy);
     er_text_measure("23\xC2\xB0"
                     "C",
                     16,
                     NULL,
+                    0,
                     &w_sym,
                     &dummy);
     if (w_sym <= w_plain)
         return fail("U+00B0 degree symbol did not measure wider than 2-char baseline");
 
+    /* UTF-8: 3-byte sequence. */
     int w_ascii = 0, w_arrow = 0;
-    er_text_measure("X", 16, NULL, &w_ascii, &dummy);
-    er_text_measure("\xE2\x86\x92", 16, NULL, &w_arrow, &dummy);
+    er_text_measure("X", 16, NULL, 0, &w_ascii, &dummy);
+    er_text_measure("\xE2\x86\x92", 16, NULL, 0, &w_arrow, &dummy);
     if (w_arrow <= 0)
         return fail("U+2192 right-arrow measured zero width");
 
+    /* UTF-8: 4-byte sequence falls back to '?'. */
     int w_q = 0, w_emoji = 0;
-    er_text_measure("?", 16, NULL, &w_q, &dummy);
-    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, &w_emoji, &dummy);
+    er_text_measure("?", 16, NULL, 0, &w_q, &dummy);
+    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, 0, &w_emoji, &dummy);
     if (w_emoji != w_q)
         return fail("4-byte UTF-8 (emoji) did not fall back to '?'");
+
+    /* ---- Backend setup ---- */
+    TestCtx tc;
+    ctx_reset(&tc);
+    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
+    embedded_renderer_set_backend(&be);
+
+    /* ---- Basic render produces in-bounds pixels ---- */
+    ERTextRenderParams par;
+    memset(&par, 0, sizeof(par));
+    par.text = "Hello";
+    par.clip = (ERRect){0, 0, FB_W, FB_H};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+
+    er_text_render(&par);
+    if (tc.draw_ops == 0)
+        return fail("no draw calls emitted for basic render");
+    if (tc.pixels_drawn == 0)
+        return fail("no pixels reported drawn for basic render");
+    if (tc.out_of_bounds != 0)
+        return fail("fill_rect emitted outside framebuffer bounds for basic render");
+
+    /* ---- Narrow clip: no out-of-bounds fills ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.clip = (ERRect){0, 0, 4, FB_H};
+    er_text_render(&par);
+    if (tc.out_of_bounds != 0)
+        return fail("narrow clip emitted out-of-bounds fills");
+
+    /* ---- textAlign LEFT vs CENTER: center must be shifted right ---- */
+    par.clip = (ERRect){0, 0, 200, 40};
+
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text_align = ER_TEXT_ALIGN_LEFT;
+    er_text_render(&par);
+    const int left_min_x = tc.min_x;
+
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text_align = ER_TEXT_ALIGN_CENTER;
+    er_text_render(&par);
+    const int center_min_x = tc.min_x;
+
+    if (center_min_x <= left_min_x)
+        return fail("CENTER alignment did not shift text right compared to LEFT");
+
+    /* ---- textAlign RIGHT must be further right than CENTER ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text_align = ER_TEXT_ALIGN_RIGHT;
+    er_text_render(&par);
+    const int right_min_x = tc.min_x;
+
+    if (right_min_x <= center_min_x)
+        return fail("RIGHT alignment did not shift text right compared to CENTER");
+
+    /* ---- numberOfLines=1 + TAIL ellipsis: all pixels must stay within clip ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "This is a long string that should get truncated with an ellipsis";
+    par.clip = (ERRect){0, 0, 120, 40};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.text_align = ER_TEXT_ALIGN_LEFT;
+    par.number_of_lines = 1;
+    par.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    er_text_render(&par);
+    if (tc.out_of_bounds != 0)
+        return fail("ellipsis render emitted out-of-bounds pixels");
+    if (tc.draw_ops == 0)
+        return fail("ellipsis render produced no draw calls");
+
+    /* ---- Word-boundary wrapping: wide text in narrow clip spans more lines ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Hello World How Are You Today";
+    par.clip = (ERRect){0, 0, 80, 200};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    er_text_render(&par);
+    const int wrap_max_y = tc.max_y;
+    const int wrap_ops = tc.draw_ops;
+
+    /* Single-line render of the same text (unlimited width) for comparison. */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.clip = (ERRect){0, 0, FB_W, 200};
+    er_text_render(&par);
+    const int single_max_y = tc.max_y;
+
+    if (wrap_max_y <= single_max_y)
+        return fail("word-wrapped text did not extend further down than single-line");
+    if (wrap_ops == 0)
+        return fail("wrapped render produced no draw calls");
+    if (tc.out_of_bounds != 0)
+        return fail("wrapped render emitted out-of-bounds pixels");
+
+    /* ---- letter_spacing during render stays in bounds ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Spaced";
+    par.clip = (ERRect){10, 5, 200, 40};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.letter_spacing = 4;
+    er_text_render(&par);
+    if (tc.out_of_bounds != 0)
+        return fail("letter_spacing render emitted out-of-bounds pixels");
+    if (tc.draw_ops == 0)
+        return fail("letter_spacing render produced no draw calls");
+
+    /* ---- textDecoration UNDERLINE produces extra pixels below baseline ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Underline";
+    par.clip = (ERRect){0, 0, FB_W, FB_H};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.text_decoration = ER_TEXT_DECORATION_UNDERLINE;
+    er_text_render(&par);
+    const int under_max_y = tc.max_y;
+
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.text_decoration = ER_TEXT_DECORATION_NONE;
+    er_text_render(&par);
+    const int plain_max_y = tc.max_y;
+
+    if (under_max_y <= plain_max_y)
+        return fail("UNDERLINE did not extend pixel extent below plain text");
 
     return EXIT_SUCCESS;
 }

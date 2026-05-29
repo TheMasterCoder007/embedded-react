@@ -60,6 +60,10 @@ static ERNode* s_seq_boxes[3] = {NULL, NULL, NULL};          /**< Three boxes an
 static ERNode* s_stagger_bars[4] = {NULL, NULL, NULL, NULL}; /**< Four bars animated with stagger. */
 static ERNode* s_spring_status_lbl = NULL;
 
+/* Panel 7 — Text Features */
+static ERNode* s_ls_lbl = NULL; /**< Letter-spacing demo label. */
+static int s_ls_value = 0;      /**< Current letter_spacing value cycling through 0-4. */
+
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
 static const uint32_t k_sv_h_colors[8] = {
@@ -617,6 +621,42 @@ static void on_stagger_press(ERNode* node, const EREventData* data, void* ctx)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 7 callbacks (Text Features)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "LETTER SPACING" cycle button in Panel 7.
+ *
+ * Cycles the letter_spacing demo label through values 0, 1, 2, 3, 4 px, rebuilding
+ * the node props each time so the change is visible immediately.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_ls_cycle(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_ls_lbl)
+        return;
+    /* Cycle through 0, 2, 4, 6 px spacing so the change is clearly visible. */
+    static const int k_ls_steps[] = {0, 2, 4, 6};
+    s_ls_value = (s_ls_value + 1) % 4;
+    const int ls_px = k_ls_steps[s_ls_value];
+    ERProps p = props_default();
+    p.color = 0xFFEEF4FF;
+    p.font_size = (uint8_t)dp(13);
+    p.letter_spacing = (int16_t)dp(ls_px);
+    char buf[ER_TEXT_MAX + 1];
+    snprintf(buf, sizeof(buf), "SPACING  (%d px)", dp(ls_px));
+    strncpy(p.text, buf, ER_TEXT_MAX);
+    p.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_ls_lbl, &p);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — scene construction
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -637,6 +677,8 @@ static ERNode* make_section_header(const char* text)
     ERProps p = props_default();
     p.color = 0xFF5588AA;
     p.font_size = (uint8_t)dp(11);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
     strncpy(p.text, text, ER_TEXT_MAX);
     er_node_set_props(n, &p);
     return n;
@@ -659,6 +701,8 @@ static ERNode* make_caption(const char* text)
     ERProps p = props_default();
     p.color = 0xFF99AABB;
     p.font_size = (uint8_t)dp(11);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
     strncpy(p.text, text, ER_TEXT_MAX);
     er_node_set_props(n, &p);
     return n;
@@ -963,6 +1007,203 @@ static ERNode* build_transforms_panel(void)
 }
 
 /**
+ * @brief Creates one alignment-demo row: a label above a constrained text node.
+ *
+ * The text node uses the supplied alignment value so the three rows in the alignment
+ * section can be compared side-by-side.
+ *
+ * @param[in] label_text  Caption shown above the text sample.
+ * @param[in] sample      Sample text to render with the given alignment.
+ * @param[in] align       ERTextAlign value to apply.
+ * @param[in] bg          Background color for the text container.
+ *
+ * @return Outer container VIEW, ready to be appended to the panel.
+ */
+static ERNode* make_align_demo(const char* label_text, const char* sample, uint8_t align, uint32_t bg)
+{
+    ERNode* outer = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(3);
+    er_node_set_props(outer, &p);
+
+    ERNode* cap = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF7799BB;
+    p.font_size = (uint8_t)dp(10);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    strncpy(p.text, label_text, ER_TEXT_MAX);
+    er_node_set_props(cap, &p);
+    er_tree_append_child(outer, cap);
+
+    ERNode* box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.background_color = bg;
+    p.border_radius = dp(5);
+    p.padding = dp(4);
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(box, &p);
+
+    ERNode* txt = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(12);
+    p.text_align = align;
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    strncpy(p.text, sample, ER_TEXT_MAX);
+    er_node_set_props(txt, &p);
+    er_tree_append_child(box, txt);
+    er_tree_append_child(outer, box);
+
+    return outer;
+}
+
+/**
+ * @brief Builds Panel 7 — Text Features.
+ *
+ * Demonstrates word-boundary wrapping, textAlign (left / center / right),
+ * numberOfLines + tail ellipsis, letterSpacing, and textDecoration.
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_text_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    /* ---- Section: Alignment ---- */
+    er_tree_append_child(col, make_section_header("TEXT ALIGN"));
+
+    ERNode* align_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(56);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(4);
+    er_node_set_props(align_row, &p);
+
+    er_tree_append_child(align_row, make_align_demo("left", "align left", ER_TEXT_ALIGN_LEFT, 0xFF1A3048));
+    er_tree_append_child(align_row, make_align_demo("center", "center", ER_TEXT_ALIGN_CENTER, 0xFF1A2840));
+    er_tree_append_child(align_row, make_align_demo("right", "align right", ER_TEXT_ALIGN_RIGHT, 0xFF1A2038));
+    er_tree_append_child(col, align_row);
+
+    /* ---- Section: numberOfLines + ellipsis ---- */
+    er_tree_append_child(col, make_section_header("NUMBER OF LINES"));
+    er_tree_append_child(col, make_caption("1-line  +  tail ellipsis"));
+
+    /* Fixed-height boxes so multi-line text has room to render. */
+    ERNode* ellip_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(34);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(5);
+    p.padding_left = p.padding_right = dp(6);
+    p.align_items = ER_ALIGN_STRETCH;      /* text fills width → left-adjusted */
+    p.justify_content = ER_JUSTIFY_CENTER; /* vertically centre the single line */
+    er_node_set_props(ellip_box, &p);
+
+    ERNode* ellip_txt = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFF4A261;
+    p.font_size = (uint8_t)dp(13);
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    strncpy(p.text, "Long sentence intentionally exceeds the box width so tail ellipsis fires", ER_TEXT_MAX);
+    er_node_set_props(ellip_txt, &p);
+    er_tree_append_child(ellip_box, ellip_txt);
+    er_tree_append_child(col, ellip_box);
+
+    /* 2-line version: a VIEW with height:auto does not yet size to its children in the
+     * engine, so the box is given an explicit height tall enough for two lines + padding. */
+    er_tree_append_child(col, make_caption("2-line cap  +  ellipsis"));
+
+    ERNode* ellip2_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(54);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(5);
+    p.padding = dp(6);
+    er_node_set_props(ellip2_box, &p);
+
+    ERNode* ellip2_txt = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF2A9D8F;
+    p.font_size = (uint8_t)dp(13);
+    p.number_of_lines = 2;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    strncpy(p.text,
+            "This longer paragraph wraps across several lines and is then capped at two lines so the tail "
+            "ellipsis truncates the remaining overflow text",
+            ER_TEXT_MAX);
+    er_node_set_props(ellip2_txt, &p);
+    er_tree_append_child(ellip2_box, ellip2_txt);
+    er_tree_append_child(col, ellip2_box);
+
+    /* ---- Section: letterSpacing ---- */
+    er_tree_append_child(col, make_section_header("LETTER SPACING"));
+
+    /* Fixed height so the label never wraps and always reads clearly. */
+    ERNode* ls_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(34);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(5);
+    p.padding_left = p.padding_right = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    er_node_set_props(ls_box, &p);
+
+    ERNode* ls_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFEEF4FF;
+    p.font_size = (uint8_t)dp(13);
+    p.letter_spacing = 0;
+    strncpy(p.text, "SPACING  (0 px)", ER_TEXT_MAX);
+    er_node_set_props(ls_lbl, &p);
+    s_ls_lbl = ls_lbl;
+    er_tree_append_child(ls_box, ls_lbl);
+    er_tree_append_child(col, ls_box);
+    er_tree_append_child(col, make_button("CYCLE SPACING", on_ls_cycle));
+
+    /* ---- Section: textDecoration ---- */
+    er_tree_append_child(col, make_section_header("TEXT DECORATION"));
+
+    ERNode* deco_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(36);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_CENTER;
+    p.gap = dp(12);
+    er_node_set_props(deco_row, &p);
+
+    ERNode* under_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF2A9D8F;
+    p.font_size = (uint8_t)dp(14);
+    p.text_decoration = ER_TEXT_DECORATION_UNDERLINE;
+    strncpy(p.text, "underline", ER_TEXT_MAX);
+    er_node_set_props(under_lbl, &p);
+    er_tree_append_child(deco_row, under_lbl);
+
+    ERNode* strike_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFE94560;
+    p.font_size = (uint8_t)dp(14);
+    p.text_decoration = ER_TEXT_DECORATION_LINE_THROUGH;
+    strncpy(p.text, "line-through", ER_TEXT_MAX);
+    er_node_set_props(strike_lbl, &p);
+    er_tree_append_child(deco_row, strike_lbl);
+
+    er_tree_append_child(col, deco_row);
+
+    return col;
+}
+
+/**
  * @brief Builds the demo scene.
  *
  * Two rows demonstrate every engine feature that is currently working:
@@ -1023,9 +1264,9 @@ static void build_scene(int phys_w, int phys_h)
     p.color = 0xFF556677;
     p.font_size = (uint8_t)dp(12);
 #if ERUI_SHADOWS
-    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  stagger", ER_TEXT_MAX);
+    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  text align  ellipsis", ER_TEXT_MAX);
 #else
-    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  spring  sequence  stagger", ER_TEXT_MAX);
+    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  spring  sequence  text align  ellipsis", ER_TEXT_MAX);
 #endif
     er_node_set_props(hdr_sub, &p);
 
@@ -1494,6 +1735,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(sv_row, sv_right);
     er_tree_append_child(sv_row, build_transforms_panel());
     er_tree_append_child(sv_row, build_spring_panel());
+    er_tree_append_child(sv_row, build_text_panel());
 
     /* =====================================================================
      * ASSEMBLE

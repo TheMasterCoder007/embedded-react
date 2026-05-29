@@ -324,7 +324,7 @@ int main(void)
 
         ERAnimConfig dc = {0};
         dc.type = ER_ANIM_DECAY;
-        dc.velocity = 0.1f; /* 0.1 normalised/ms — moves toward to_value initially */
+        dc.velocity = 0.1f;       /* 0.1 normalised/ms — moves toward to_value initially */
         dc.deceleration = 0.990f; /* aggressive deceleration for a short test */
 
         er_anim_start(dn, ER_PROP_OPACITY, 1.0f, &dc);

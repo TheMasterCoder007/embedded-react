@@ -167,6 +167,37 @@ extern "C"
     } ERPointerEvents;
 
     /**
+     * @brief Horizontal alignment of text lines within the layout rectangle.
+     */
+    typedef enum
+    {
+        ER_TEXT_ALIGN_LEFT = 0,   /**< Left-align each line (default). */
+        ER_TEXT_ALIGN_CENTER = 1, /**< Centre each line horizontally. */
+        ER_TEXT_ALIGN_RIGHT = 2,  /**< Right-align each line. */
+    } ERTextAlign;
+
+    /**
+     * @brief Ellipsis placement when text is truncated by number_of_lines.
+     */
+    typedef enum
+    {
+        ER_TEXT_ELLIPSIZE_TAIL = 0,   /**< Truncate the end and append '…' (default). */
+        ER_TEXT_ELLIPSIZE_HEAD = 1,   /**< Truncate the beginning and prepend '…'. */
+        ER_TEXT_ELLIPSIZE_MIDDLE = 2, /**< Keep start and end; truncate the middle. */
+        ER_TEXT_ELLIPSIZE_CLIP = 3,   /**< Clip at boundary without any ellipsis. */
+    } ERTextEllipsize;
+
+    /**
+     * @brief Decoration line drawn over or under rendered glyphs.
+     */
+    typedef enum
+    {
+        ER_TEXT_DECORATION_NONE = 0,         /**< No decoration (default). */
+        ER_TEXT_DECORATION_UNDERLINE = 1,    /**< Underline drawn one pixel below the baseline. */
+        ER_TEXT_DECORATION_LINE_THROUGH = 2, /**< Strikethrough drawn at mid-cap height. */
+    } ERTextDecoration;
+
+    /**
      * @brief Gesture responder query types used with er_responder_query_set().
      *
      * Capture queries (root→leaf) are evaluated before bubble queries (leaf→root).
@@ -344,6 +375,12 @@ extern "C"
         uint32_t color;                           /**< Text ARGB8888; 0 defaults to white. */
         uint8_t font_size;                        /**< Font size in pixels. */
         uint8_t font_weight;                      /**< 0 = normal, 1 = bold. */
+        uint8_t text_align;                       /**< ERTextAlign — default ER_TEXT_ALIGN_LEFT. */
+        uint8_t number_of_lines;                  /**< Maximum rendered lines; 0 = unlimited. */
+        uint8_t ellipsize_mode;                   /**< ERTextEllipsize — used when number_of_lines truncates. */
+        uint8_t text_decoration;                  /**< ERTextDecoration — default none. */
+        int16_t line_height;                      /**< Line height in pixels; 0 = use font default. */
+        int16_t letter_spacing;                   /**< Extra pixels added to each glyph advance; may be negative. */
 
         /* --- Image --- */
         char image_name[ER_IMAGE_NAME_MAX + 1]; /**< Asset name registered via er_image_load(). */

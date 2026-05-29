@@ -82,6 +82,12 @@ typedef struct
     uint32_t color; /**< ARGB8888. */
     uint8_t font_size;
     uint8_t font_weight; /**< 0 = normal, 1 = bold. */
+    uint8_t text_align;  /**< ERTextAlign. */
+    uint8_t number_of_lines;
+    uint8_t ellipsize_mode;  /**< ERTextEllipsize. */
+    uint8_t text_decoration; /**< ERTextDecoration. */
+    int16_t line_height;     /**< 0 = font default. */
+    int16_t letter_spacing;
 } ERTextProps;
 
 /**
