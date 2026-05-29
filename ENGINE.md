@@ -51,7 +51,7 @@ hit-testing are working. The remaining work is everything above raw events.
 - [ ] **Dirty-rectangle tracking** — record the union of dirty rects per frame so the
   backend can blit only changed regions. Today every dirty subtree forces a full
   ancestor repaint.
-- [ ] **`display: none` short-circuit in layout + render** — skip layout pass, skip paint,
+- [x] **`display: none` short-circuit in layout + render** — skip layout pass, skip paint,
   skip hit-testing.
 - [x] **Clip-rect stack during render** — push/pop on `overflow: hidden` and on scroll
   viewports; intersect with backend draw rect before each blit.
@@ -71,7 +71,7 @@ the props currently in `ERLayoutSpec`. Additions:
   either expand in the prop-copy step or add fields.
 - [ ] **`flexBasis: '50%'` percent support** — currently int16_t pixels only. Decide on a
   sentinel encoding or a separate percent field, document in `er_scene.h`.
-- [ ] **`display: none`** node skip (see Scene Graph item).
+- [x] **`display: none`** node skip (see Scene Graph item).
 - [ ] **`overflow: scroll`** path that produces a virtual content size larger than the
   computed rect, consumed by ScrollView.
 
@@ -239,16 +239,17 @@ in the props union, any per-node state.
 
 ## 9. Compile-Time Feature Flags
 
-PLAN.md lists these. None are wired through actual `#if` guards in the source yet.
+PLAN.md lists these. Several are now wired through `#if` guards in the source; the
+remainder still lack guards or the underlying feature is not yet implemented.
 
-- [ ] `ERUI_SHADOWS` — gate shadow code paths.
-- [ ] `ERUI_BORDER_AA` — already wired in rrect.
+- [x] `ERUI_SHADOWS` — gate shadow code paths.
+- [x] `ERUI_BORDER_AA` — already wired in rrect.
 - [ ] `ERUI_3D_TRANSFORMS` — gate rotateX/Y/perspective.
 - [ ] `ERUI_BILINEAR_SCALE` — switch image scaler kernel.
 - [ ] `ERUI_GRADIENT` / `ERUI_GRADIENT_RADIAL` — gate gradient rasterizer.
-- [ ] `ERUI_TRANSFORMS` — `FULL` vs `TRANSLATE_ONLY` paths.
+- [x] `ERUI_TRANSFORMS` — `FULL` vs `TRANSLATE_ONLY` paths (wired as `ERUI_TRANSFORMS_FULL`).
 - [ ] `ERUI_FONT_SIZES` — already drives baked font selection.
-- [ ] `ERUI_MAX_NODES` — already honored.
+- [x] `ERUI_MAX_NODES` — already honored.
 - [x] `ERUI_MAX_OPACITY_DEPTH`, `ERUI_SCRATCH_W/H`, `ERUI_SCRATCH_POOL_DEPTH` — for the
   scratch pool work (4.7).
 
@@ -264,7 +265,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Spring / decay animations**
 - [x] **Sequence / parallel / stagger**
 - [x] **Image scaling + tint + resizeMode**
-- [ ] **Shadow rasterizer (visual baseline comparison)**
+- [x] **Shadow rasterizer (visual baseline comparison)**
 - [x] **Transform render + hit-test**
 - [x] **Opacity offscreen compositing**
 - [x] **Multi-line / ellipsize text**
