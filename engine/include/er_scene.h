@@ -682,6 +682,26 @@ extern "C"
         const ERAnimEntry* entries, uint16_t count, uint32_t stagger_ms, ERAnimCompleteFn on_complete, void* user_data);
 
     /**
+     * @brief Returns the axis-aligned bounding rectangle of all pixels repainted during the last er_commit().
+     *
+     * Useful for partial-update display drivers (SPI DMA, etc.) that can restrict
+     * their transfer to only the changed region each frame.  The rect is in framebuffer
+     * pixels and is guaranteed to cover every pixel modified by the last er_commit().
+     * It may be slightly conservative (e.g. shadows expand it by their blur radius).
+     *
+     * The value is invalidated on the next er_commit() call, so read it immediately
+     * after er_commit() returns and before the next one starts.
+     *
+     * @param[out] out  Populated with the dirty rectangle; set to {0,0,0,0} when
+     *                  nothing was repainted.  May be NULL if only the return value
+     *                  is needed.
+     *
+     * @return true when at least one node was repainted and @p out contains a valid
+     *         non-empty rectangle; false when the scene was already clean this frame.
+     */
+    bool er_get_dirty_rect(ERRect* out);
+
+    /**
      * @brief Programmatically sets the scroll offset of a ScrollView node.
      *
      * The offset is clamped to the valid range [0, content_size − viewport_size] on each

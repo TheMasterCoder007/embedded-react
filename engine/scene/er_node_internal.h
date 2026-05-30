@@ -172,6 +172,8 @@ struct ERNode
     ERNodeType type;
     bool in_use;
     bool dirty;
+    bool source_dirty; /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
+                          dirty-rect accumulation. */
     int16_t z_index;
     uint8_t pointer_events;  /**< ERPointerEvents — controls which parts of the node receive touch events. */
     int16_t hit_slop_left;   /**< Pixels by which the left hit edge extends beyond the computed rect. */

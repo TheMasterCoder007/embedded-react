@@ -44,6 +44,21 @@ extern "C"
     void er_sdl_present(void);
 
     /**
+     * @brief Toggles a diagnostic overlay that outlines the engine's dirty rect each frame.
+     *
+     * When enabled, er_sdl_present() draws a yellow rectangle around the union of all
+     * pixels repainted by the most recent er_commit().  Frames with no dirty pixels
+     * produce no outline.  The overlay is drawn in the logical coordinate space of the
+     * SDL window, so pass the same DPI scale factor that was used to compute the
+     * physical framebuffer size.
+     *
+     * @param[in] enable  true to show the overlay, false to hide it.
+     * @param[in] scale   DPI scale factor (physical pixels / logical pixels); pass 1.0
+     *                    on non-HiDPI displays.
+     */
+    void er_sdl_set_show_dirty_rect(bool enable, float scale);
+
+    /**
      * @brief Destroys the SDL2 backend and frees its scratch texture.
      *
      * The SDL_Renderer passed to er_sdl_backend_init() is not destroyed here;

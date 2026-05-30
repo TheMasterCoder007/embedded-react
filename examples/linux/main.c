@@ -25,6 +25,9 @@
 
 static float s_dpi_scale = 1.0f;
 
+/* Dirty-rect diagnostic overlay toggle (D key). */
+static bool s_dirty_overlay_on = false;
+
 /* Panel 2 — Touch & Events */
 static ERNode* s_touch_card = NULL;
 static ERNode* s_touch_label = NULL;
@@ -1622,9 +1625,13 @@ static void build_scene(int phys_w, int phys_h)
     p.color = 0xFF556677;
     p.font_size = (uint8_t)dp(12);
 #if ERUI_SHADOWS
-    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  text align  ellipsis", ER_TEXT_MAX);
+    strncpy(p.text,
+            "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  text  —  press D = dirty rect overlay",
+            ER_TEXT_MAX);
 #else
-    strncpy(p.text, "C99  Yoga flexbox  SDL2  |  spring  sequence  text align  ellipsis", ER_TEXT_MAX);
+    strncpy(p.text,
+            "C99  Yoga flexbox  SDL2  |  spring  sequence  text align  —  press D = dirty rect overlay",
+            ER_TEXT_MAX);
 #endif
     er_node_set_props(hdr_sub, &p);
 
@@ -2247,6 +2254,12 @@ int main(void)
                         on_modal_close(NULL, NULL, NULL);
                     else
                         running = false;
+                }
+                else if (ev.key.keysym.sym == SDLK_d)
+                {
+                    /* Toggle dirty-rect diagnostic overlay (yellow outline). */
+                    s_dirty_overlay_on = !s_dirty_overlay_on;
+                    er_sdl_set_show_dirty_rect(s_dirty_overlay_on, s_dpi_scale);
                 }
                 else if (ev.key.keysym.sym == SDLK_BACKSPACE)
                     embedded_renderer_key(ER_KEY_BACKSPACE, NULL);

@@ -45,12 +45,12 @@ hit-testing are working. The remaining work is everything above raw events.
 - [x] Parent / first-child / next-sibling tree
 - [x] Dirty propagation up the ancestor chain
 - [x] zIndex-aware paint order
-- [ ] **Free-slot reuse in `er_node_destroy`** — `s_next_tag` only grows; destroyed nodes
-  leak their slots. Need a free-list or bitmap so long-lived apps don't exhaust the
-  pool.
-- [ ] **Dirty-rectangle tracking** — record the union of dirty rects per frame so the
-  backend can blit only changed regions. Today every dirty subtree forces a full
-  ancestor repaint.
+- [x] **Free-slot reuse in `er_node_destroy`** — LIFO free-list; destroyed nodes return
+  their tag to the stack so the next `er_node_create` reuses it. Double-free guard
+  (checks `in_use`) prevents free-list corruption.
+- [x] **Dirty-rectangle tracking (v1 — source-dirty only)** — `er_get_dirty_rect()` returns
+  the union of source-dirty leaf rects after each `er_commit()`. Shadow bleed is included
+  conservatively. Host MCU drivers can use this for partial DMA transfers.
 - [x] **`display: none` short-circuit in layout + render** — skip layout pass, skip paint,
   skip hit-testing.
 - [x] **Clip-rect stack during render** — push/pop on `overflow: hidden` and on scroll
@@ -269,7 +269,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Transform render + hit-test**
 - [x] **Opacity offscreen compositing**
 - [x] **Multi-line / ellipsize text**
-- [ ] **Node pool free-slot reuse**
+- [x] **Node pool free-slot reuse**
 
 ---
 
@@ -290,7 +290,7 @@ A path that keeps the engine demoable at each step:
    sequence/parallel, completion callbacks — **done**.
 8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`, `textDecorationLine` — **done**.
 9. ~~**Remaining components**~~ — TextInput, Switch, ActivityIndicator, Modal, FlatList — **done**.
-10. **Dirty-rect tracking + node pool reuse** — perf / longevity polish before MCU bring-up.
+10. ~~**Dirty-rect tracking + node pool reuse**~~ — perf / longevity polish before MCU bring-up — **done**.
 11. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest
     target build can drop them.
 12. **Test coverage** — fill the matrix in §10 as features land.

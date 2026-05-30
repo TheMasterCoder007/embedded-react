@@ -21,10 +21,16 @@
 
 static ERNode s_nodes[ERUI_MAX_NODES];
 static uint16_t s_next_tag = 0;
+static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node slots available for reuse. */
+static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint32_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
+
+/* Dirty-rect tracking: union of all screen rects repainted during the current er_commit(). */
+static ERRect s_dirty_rect;
+static bool s_has_dirty = false;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -194,6 +200,45 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
 }
 
 /**
+ * @brief Expands the per-commit dirty rectangle to include the given screen-space rect.
+ *
+ * Called from render_tree() whenever a node is actually repainted. The union grows
+ * monotonically within each commit and is reset at the start of the next one.
+ *
+ * @param[in] x  Left edge of the repainted region in framebuffer pixels.
+ * @param[in] y  Top edge of the repainted region in framebuffer pixels.
+ * @param[in] w  Width of the repainted region in pixels.
+ * @param[in] h  Height of the repainted region in pixels.
+ */
+static void union_dirty_rect(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0)
+        return;
+
+    if (!s_has_dirty)
+    {
+        s_dirty_rect.x = x;
+        s_dirty_rect.y = y;
+        s_dirty_rect.w = w;
+        s_dirty_rect.h = h;
+        s_has_dirty = true;
+        return;
+    }
+
+    const int x2 = s_dirty_rect.x + s_dirty_rect.w;
+    const int y2 = s_dirty_rect.y + s_dirty_rect.h;
+    const int nx2 = x + w;
+    const int ny2 = y + h;
+
+    if (x < s_dirty_rect.x)
+        s_dirty_rect.x = x;
+    if (y < s_dirty_rect.y)
+        s_dirty_rect.y = y;
+    s_dirty_rect.w = (nx2 > x2 ? nx2 : x2) - s_dirty_rect.x;
+    s_dirty_rect.h = (ny2 > y2 ? ny2 : y2) - s_dirty_rect.y;
+}
+
+/**
  * @brief Marks a node and all ancestors dirty so stale child pixels are repainted.
  *
  * The renderer currently paints into a persistent framebuffer. If a child changes
@@ -204,6 +249,12 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
  */
 void er_mark_dirty_upward(ERNode* node)
 {
+    /* Mark only the initiating node as source_dirty so the dirty-rect
+     * accumulator can track which pixels actually changed, not which
+     * ancestors were incidentally re-rendered to clear the background. */
+    if (node)
+        node->source_dirty = true;
+
     while (node)
     {
         node->dirty = true;
@@ -294,6 +345,40 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             default:
                 break;
         }
+    }
+
+    /* Dirty-rect accumulation: only the node that was DIRECTLY dirtied (source_dirty)
+     * contributes to the dirty rect, not ancestors that re-render merely to clear
+     * backgrounds.  This keeps the reported rect tight around the actually-changed
+     * pixels so MCU display drivers can restrict partial DMA transfers. */
+    if (n->source_dirty)
+    {
+        if (doing_affine)
+        {
+            union_dirty_rect(dst_x, dst_y, dst_w, dst_h);
+        }
+        else
+        {
+            int ux = px, uy = py, uw = w, uh = h;
+#if ERUI_SHADOWS
+            /* Expand conservatively for shadow bleed outside the node layout rect. */
+            if ((n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+                 || (n->type == ER_NODE_MODAL && n->modal_visible))
+                && (n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
+            {
+                const int r = (int)n->props.view.shadow_radius;
+                const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
+                const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
+                const int exp = r + (ox > oy ? ox : oy);
+                ux -= exp;
+                uy -= exp;
+                uw += 2 * exp;
+                uh += 2 * exp;
+            }
+#endif
+            union_dirty_rect(ux, uy, uw, uh);
+        }
+        n->source_dirty = false;
     }
 
     /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
@@ -592,10 +677,18 @@ ERNode* er_get_root_node(void)
 
 ERNode* er_node_create(ERNodeType type)
 {
-    if (s_next_tag >= (uint16_t)ERUI_MAX_NODES)
-        return NULL;
+    uint16_t tag;
+    if (s_free_count > 0)
+    {
+        tag = s_free_list[--s_free_count];
+    }
+    else
+    {
+        if (s_next_tag >= (uint16_t)ERUI_MAX_NODES)
+            return NULL;
+        tag = s_next_tag++;
+    }
 
-    const uint16_t tag = s_next_tag++;
     ERNode* n = &s_nodes[tag];
     memset(n, 0, sizeof(ERNode));
 
@@ -636,10 +729,13 @@ ERNode* er_node_create(ERNodeType type)
 
 void er_node_destroy(ERNode* node)
 {
-    if (!node)
+    if (!node || !node->in_use)
         return;
     node->in_use = false;
     node->dirty = false;
+    /* Guard against overflow (would only occur on a double-free bug in the caller). */
+    if (s_free_count < (uint16_t)ERUI_MAX_NODES)
+        s_free_list[s_free_count++] = node->tag;
 }
 
 void er_node_set_props(ERNode* node, const ERProps* props)
@@ -1060,6 +1156,9 @@ void er_commit(void)
     if (!root)
         return;
 
+    /* Reset dirty-rect accumulator for this commit. */
+    s_has_dirty = false;
+
     /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the
      * 500 ms blink phase has changed since the last commit. This keeps the render
      * cost negligible (one re-render every half-second) instead of every frame. */
@@ -1098,6 +1197,23 @@ void er_commit(void)
 uint32_t er_now_ms(void)
 {
     return s_now_ms;
+}
+
+bool er_get_dirty_rect(ERRect* out)
+{
+    if (out)
+    {
+        if (s_has_dirty)
+            *out = s_dirty_rect;
+        else
+        {
+            out->x = 0;
+            out->y = 0;
+            out->w = 0;
+            out->h = 0;
+        }
+    }
+    return s_has_dirty;
 }
 
 void er_tick(uint32_t delta_ms)

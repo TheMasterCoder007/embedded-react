@@ -1,3 +1,4 @@
+#include "er_scene.h"
 #include "native_renderer.h"
 #include "sdl_backend.h"
 #include <SDL2/SDL.h>
@@ -25,6 +26,8 @@ typedef struct
 
 static SDLCtx s_ctx;
 static EmbeddedRenderBackend s_backend;
+static bool s_show_dirty_overlay = false;
+static float s_dirty_scale = 1.0f;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -170,6 +173,12 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
     return true;
 }
 
+void er_sdl_set_show_dirty_rect(bool enable, float scale)
+{
+    s_show_dirty_overlay = enable;
+    s_dirty_scale = (scale > 0.0f) ? scale : 1.0f;
+}
+
 void er_sdl_present(void)
 {
     if (!s_ctx.renderer)
@@ -180,6 +189,25 @@ void er_sdl_present(void)
     SDL_SetRenderDrawColor(s_ctx.renderer, 0, 0, 0, 255);
     SDL_RenderClear(s_ctx.renderer);
     SDL_RenderCopy(s_ctx.renderer, s_ctx.fb, NULL, NULL);
+
+    /* Optional dirty-rect diagnostic overlay: yellow outline of repainted region. */
+    if (s_show_dirty_overlay)
+    {
+        ERRect dr;
+        if (er_get_dirty_rect(&dr))
+        {
+            SDL_Rect sdl_r = {
+                (int)((float)dr.x / s_dirty_scale),
+                (int)((float)dr.y / s_dirty_scale),
+                (int)((float)dr.w / s_dirty_scale),
+                (int)((float)dr.h / s_dirty_scale),
+            };
+            SDL_SetRenderDrawBlendMode(s_ctx.renderer, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(s_ctx.renderer, 255, 220, 0, 255);
+            SDL_RenderDrawRect(s_ctx.renderer, &sdl_r);
+        }
+    }
+
     SDL_RenderPresent(s_ctx.renderer);
 
     /* Restore the render target so the next er_commit() draws back into the framebuffer. */
