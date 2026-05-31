@@ -14,8 +14,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SCREEN_W 1440
-#define SCREEN_H 1100
+#define SCREEN_W 800
+#define SCREEN_H 600
 
 #define CYCLE_COUNT 5
 
@@ -24,6 +24,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static float s_dpi_scale = 1.0f;
+static ERNode* s_root_node = NULL; /**< Scene root — updated in place on window resize. */
 
 /* Dirty-rect diagnostic overlay toggle (D key). */
 static bool s_dirty_overlay_on = false;
@@ -970,6 +971,60 @@ static ERNode* make_panel(void)
     p.border_radius = dp(10);
     p.padding = dp(14);
     p.gap = dp(9);
+    er_node_set_props(col, &p);
+    return col;
+}
+
+/**
+ * @brief Rewrites a panel's props to give it an explicit height.
+ *
+ * The layout engine performs intrinsic measurement only for Text nodes; View
+ * containers default to intr_h = 0 along the main axis when no explicit height
+ * is supplied.  make_panel() omits height because it's intended to live inside
+ * a fixed-height flex_row (the top row), where align_items stretches the
+ * cross-axis to fill.  When a panel is placed inside a flex_col instead, the
+ * main axis becomes vertical and the panel must declare a concrete height or
+ * it collapses to zero — which would let nothing render and leave the outer
+ * ScrollView nothing to scroll.  This helper rewrites the panel's props with
+ * the same styling that make_panel() applies, plus the requested height and
+ * flex_grow = 0 so the panel never expands beyond its declared size.
+ *
+ * @param[in,out] panel       Panel node produced by make_panel() (directly or via build_*_panel()).
+ * @param[in]     height_px   Explicit panel height in physical pixels.
+ */
+static void panel_set_fixed_height(ERNode* panel, int16_t height_px)
+{
+    ERProps p = props_default();
+    p.flex_grow = 0;
+    p.height = height_px;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.background_color = 0xFF0D1B2A;
+    p.border_radius = dp(10);
+    p.padding = dp(14);
+    p.gap = dp(9);
+    er_node_set_props(panel, &p);
+}
+
+/**
+ * @brief Creates a transparent vertical column for the three-column grid.
+ *
+ * Columns share the available width equally (flex_grow=1) and stack their
+ * panel children top-to-bottom with a standard gap.  No background or border
+ * radius — the panels themselves carry those.  align_items=STRETCH lets each
+ * fixed-height panel claim the column's full width.
+ *
+ * @return Newly created VIEW node. Caller appends panels and attaches to the grid row.
+ */
+static ERNode* make_column(void)
+{
+    ERNode* col = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.justify_content = ER_JUSTIFY_FLEX_START;
+    p.gap = dp(12);
     er_node_set_props(col, &p);
     return col;
 }
@@ -2092,13 +2147,14 @@ static ERNode* build_borders_layout_panel(void)
 /**
  * @brief Builds the demo scene.
  *
- * Two rows demonstrate every engine feature that is currently working:
- *   Row 1 Panel 1 — Layout & Style: flexbox rows, rounded rects, borders, justify-content.
- *   Row 1 Panel 2 — Touch & Events: press/long-press/cancel, event coordinates, zIndex.
- *   Row 1 Panel 3 — Animation & Display:None: bg-color timing animation, display:none toggle.
- *   Row 2 Panel 4 — ScrollView: vertical + horizontal viewports, clip, gesture, momentum.
- *   Row 2 Panel 9  — Borders & Layout: per-corner radii, borderStyle, aspectRatio, flexBasis%, paddingH/V.
- *   Row 2 Panel 10 — Gradients: linear vertical/horizontal/diagonal + radial gradient cards.
+ * The header is pinned at the top of the root. Below it, a vertical
+ * ScrollView contains two rows of panels:
+ *   Top row (fixed height): Panel 1 Layout & Style, Panel 2 Touch & Events,
+ *     Panel 3 Animation & Display:None.
+ *   Bottom row (three columns, content height): Column A — Panel 4 ScrollView V,
+ *     Panel 6 Spring/Seq/Stagger, Panel 9 Borders & Layout; Column B — Panel 4
+ *     ScrollView H, Panel 7 Text, Panel 10 Gradients; Column C — Panel 5
+ *     Transforms & Opacity, Panel 8 Components.
  *
  * @param[in] phys_w  Physical framebuffer width in pixels.
  * @param[in] phys_h  Physical framebuffer height in pixels.
@@ -2120,6 +2176,7 @@ static void build_scene(int phys_w, int phys_h)
     p.padding = dp(16);
     p.gap = dp(12);
     er_node_set_props(root, &p);
+    s_root_node = root;
 
     /* =====================================================================
      * HEADER BAR
@@ -2164,17 +2221,6 @@ static void build_scene(int phys_w, int phys_h)
 
     er_tree_append_child(header, hdr_title);
     er_tree_append_child(header, hdr_sub);
-
-    /* =====================================================================
-     * COLUMN ROW
-     * =================================================================== */
-    ERNode* columns = er_node_create(ER_NODE_VIEW);
-    p = props_default();
-    p.flex_grow = 1;
-    p.flex_direction = ER_FLEX_ROW;
-    p.align_items = ER_ALIGN_STRETCH;
-    p.gap = dp(12);
-    er_node_set_props(columns, &p);
 
     /* =====================================================================
      * PANEL 1 — Layout & Style
@@ -2615,33 +2661,100 @@ static void build_scene(int phys_w, int phys_h)
     s_sv_h_lbl = sv_h_lbl;
     er_tree_append_child(sv_right, sv_h_lbl);
 
-    /* ---- Bottom row container ------------------------------------------ */
-    ERNode* sv_row = er_node_create(ER_NODE_VIEW);
+    /* =====================================================================
+     * ASSEMBLE
+     *
+     * Top row: three equal panels at a fixed height (unchanged from original).
+     * Bottom row: eight panels spread across three columns so each gets a
+     *   comfortable width instead of being packed into one horizontal strip.
+     *   Column A: ScrollView V, Spring/Seq/Stagger, Borders & Layout.
+     *   Column B: ScrollView H, Text Features,      Gradients.
+     *   Column C: Transforms & Opacity, Components.
+     * Both rows live inside a vertical ScrollView for resize/overflow handling.
+     * =================================================================== */
+
+    /* ---- Top row (col1 / col2 / col3 — fixed height) ---- */
+    ERNode* top_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(500);
+    p.height = dp(480);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(12);
-    er_node_set_props(sv_row, &p);
-    er_tree_append_child(sv_row, sv_left);
-    er_tree_append_child(sv_row, sv_right);
-    er_tree_append_child(sv_row, build_transforms_panel());
-    er_tree_append_child(sv_row, build_spring_panel());
-    er_tree_append_child(sv_row, build_text_panel());
-    er_tree_append_child(sv_row, build_components_panel());
-    er_tree_append_child(sv_row, build_borders_layout_panel());
-    er_tree_append_child(sv_row, build_gradient_panel());
+    er_node_set_props(top_row, &p);
 
-    /* =====================================================================
-     * ASSEMBLE
-     * =================================================================== */
-    er_tree_append_child(columns, col1);
-    er_tree_append_child(columns, col2);
-    er_tree_append_child(columns, col3);
+    er_tree_append_child(top_row, col1);
+    er_tree_append_child(top_row, col2);
+    er_tree_append_child(top_row, col3);
+
+    /* ---- Bottom row (three columns, explicit panel heights) ----
+     * The layout engine has no intrinsic measurement for VIEW containers, so
+     * every panel placed inside a flex_col must declare a concrete height or
+     * it collapses to zero pixels (and renders nothing).  Heights below are
+     * sized to comfortably hold each panel's contents; tune per panel if any
+     * future change makes a panel taller. */
+    ERNode* col_a = make_column();
+    ERNode* col_b = make_column();
+    ERNode* col_c = make_column();
+
+    ERNode* p_sv_left = sv_left;
+    ERNode* p_sv_right = sv_right;
+    ERNode* p_transforms = build_transforms_panel();
+    ERNode* p_spring = build_spring_panel();
+    ERNode* p_text = build_text_panel();
+    ERNode* p_components = build_components_panel();
+    ERNode* p_borders = build_borders_layout_panel();
+    ERNode* p_gradients = build_gradient_panel();
+
+    panel_set_fixed_height(p_sv_left, dp(300));
+    panel_set_fixed_height(p_sv_right, dp(200));
+    panel_set_fixed_height(p_transforms, dp(260));
+    panel_set_fixed_height(p_spring, dp(420));
+    panel_set_fixed_height(p_text, dp(420));
+    panel_set_fixed_height(p_components, dp(460));
+    panel_set_fixed_height(p_borders, dp(420));
+    panel_set_fixed_height(p_gradients, dp(440));
+
+    er_tree_append_child(col_a, p_sv_left);
+    er_tree_append_child(col_b, p_sv_right);
+    er_tree_append_child(col_c, p_transforms);
+
+    er_tree_append_child(col_a, p_spring);
+    er_tree_append_child(col_b, p_text);
+    er_tree_append_child(col_c, p_components);
+
+    er_tree_append_child(col_a, p_borders);
+    er_tree_append_child(col_b, p_gradients);
+
+    /* Bottom row height must encompass the tallest column.  Tallest is col_a
+     * (300 + 420 + 420 + 24 px of gaps = 1164); pick a slightly larger value
+     * so columns can stretch into it without clipping. */
+    ERNode* bot_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1180);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(12);
+    er_node_set_props(bot_row, &p);
+
+    er_tree_append_child(bot_row, col_a);
+    er_tree_append_child(bot_row, col_b);
+    er_tree_append_child(bot_row, col_c);
+
+    /* ---- Outer scroll view ---- */
+    ERNode* outer_scroll = er_node_create(ER_NODE_SCROLL_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.overflow = ER_OVERFLOW_SCROLL;
+    p.flex_direction = ER_FLEX_COL;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(12);
+    er_node_set_props(outer_scroll, &p);
+
+    er_tree_append_child(outer_scroll, top_row);
+    er_tree_append_child(outer_scroll, bot_row);
 
     er_tree_append_child(root, header);
-    er_tree_append_child(root, columns);
-    er_tree_append_child(root, sv_row);
+    er_tree_append_child(root, outer_scroll);
 
     /* ---- Modal overlay node (hidden by default; appears on OPEN MODAL press) ---- */
     ERNode* modal = er_node_create(ER_NODE_MODAL);
@@ -2716,7 +2829,7 @@ int main(void)
                                           SDL_WINDOWPOS_CENTERED,
                                           SCREEN_W,
                                           SCREEN_H,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
     if (!window)
     {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
@@ -2806,8 +2919,35 @@ int main(void)
                 embedded_renderer_touch(0, ER_TOUCH_UP, event_px(ev.button.x), event_px(ev.button.y));
             if (ev.type == SDL_MOUSEMOTION && (ev.motion.state & SDL_BUTTON_LMASK))
                 embedded_renderer_touch(0, ER_TOUCH_MOVE, event_px(ev.motion.x), event_px(ev.motion.y));
-            if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_LEAVE)
-                embedded_renderer_touch(0, ER_TOUCH_CANCEL, 0, 0);
+            if (ev.type == SDL_WINDOWEVENT)
+            {
+                if (ev.window.event == SDL_WINDOWEVENT_LEAVE)
+                    embedded_renderer_touch(0, ER_TOUCH_CANCEL, 0, 0);
+                else if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+                {
+                    /* Derive physical size from the event's logical dims + the cached DPI
+                     * scale.  SDL_GetRendererOutputSize can lag one frame on Win32 (the
+                     * renderer output isn't guaranteed to update synchronously with the
+                     * window event), causing the framebuffer texture to be created at the
+                     * old size and stretched to fit the new window — appearing grainy. */
+                    const int new_log_w = ev.window.data1;
+                    const int new_log_h = ev.window.data2;
+                    phys_w = (int)((float)new_log_w * s_dpi_scale + 0.5f);
+                    phys_h = (int)((float)new_log_h * s_dpi_scale + 0.5f);
+                    er_sdl_backend_destroy();
+                    if (!er_sdl_backend_init(renderer, phys_w, phys_h))
+                        SDL_Log("er_sdl_backend_init (resize) failed");
+                    ERProps rp = props_default();
+                    rp.width = (int16_t)phys_w;
+                    rp.height = (int16_t)phys_h;
+                    rp.background_color = 0xFF111927;
+                    rp.flex_direction = ER_FLEX_COL;
+                    rp.align_items = ER_ALIGN_STRETCH;
+                    rp.padding = dp(16);
+                    rp.gap = dp(12);
+                    er_node_set_props(s_root_node, &rp);
+                }
+            }
         }
 
         er_commit();

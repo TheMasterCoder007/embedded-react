@@ -243,6 +243,36 @@ static void sort_children_by_z_index(uint16_t* tags, int count)
 }
 
 /**
+ * @brief Accumulates the total scroll offset of all ScrollView/FlatList ancestors.
+ *
+ * Walking from node's parent up to the root, sums every ancestor's
+ * scroll_offset_x/y.  Adding the result to a raw screen-space coordinate
+ * converts it into the layout coordinate space where computed.x/y live,
+ * so that point_inside_transformed_with_slop gives the correct result even
+ * when an ancestor scroll view has a non-zero scroll offset.
+ *
+ * @param[in]  node   Node whose ancestor offsets to accumulate (excluding self).
+ * @param[out] out_x  Total horizontal scroll offset.
+ * @param[out] out_y  Total vertical scroll offset.
+ */
+static void accumulate_scroll_offsets(const ERNode* node, int* out_x, int* out_y)
+{
+    int sx = 0, sy = 0;
+    const ERNode* n = er_get_node(node->parent_tag);
+    while (n)
+    {
+        if (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST)
+        {
+            sx += (int)n->scroll_offset_x;
+            sy += (int)n->scroll_offset_y;
+        }
+        n = er_get_node(n->parent_tag);
+    }
+    *out_x = sx;
+    *out_y = sy;
+}
+
+/**
  * @brief Finds the nearest ScrollView ancestor of a node (inclusive of the node itself).
  *
  * @param[in] node  Starting node.
@@ -715,7 +745,16 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* press_target = nearest_press_target(hit);
 
             touch->active = hit != NULL;
-            touch->inside = press_target ? point_inside_transformed_with_slop(press_target, x, y) : false;
+            if (press_target)
+            {
+                int sx = 0, sy = 0;
+                accumulate_scroll_offsets(press_target, &sx, &sy);
+                touch->inside = point_inside_transformed_with_slop(press_target, x + sx, y + sy);
+            }
+            else
+            {
+                touch->inside = false;
+            }
             touch->long_press_fired = false;
             touch->long_press_cancelled = false;
             touch->elapsed_ms = 0U;
@@ -767,7 +806,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             if (press_target)
             {
-                const bool inside = point_inside_transformed_with_slop(press_target, x, y);
+                int sx = 0, sy = 0;
+                accumulate_scroll_offsets(press_target, &sx, &sy);
+                const bool inside = point_inside_transformed_with_slop(press_target, x + sx, y + sy);
                 if (!inside)
                     touch->long_press_cancelled = true;
                 if (inside != touch->inside)
@@ -866,7 +907,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             ERNode* touch_target = er_get_node(touch->touch_target_tag);
             ERNode* press_target = er_get_node(touch->press_target_tag);
-            const bool inside = press_target && point_inside_transformed_with_slop(press_target, x, y);
+            bool inside = false;
+            if (press_target)
+            {
+                int sx = 0, sy = 0;
+                accumulate_scroll_offsets(press_target, &sx, &sy);
+                inside = point_inside_transformed_with_slop(press_target, x + sx, y + sy);
+            }
             const int dx = x - touch->start_x;
             const int dy = y - touch->start_y;
 
