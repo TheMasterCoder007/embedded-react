@@ -29,6 +29,8 @@ typedef struct ERTextRenderParams
     uint8_t font_style;      /**< ERFontStyle — 0 = normal, 1 = italic (synthetic shear). */
     int16_t line_height;     /**< Line height in pixels; 0 = use the font's natural value. */
     int16_t letter_spacing;  /**< Extra pixels added to each glyph advance; may be negative. */
+    uint8_t span_count;      /**< 0 = use text; >0 = render using spans[] instead. */
+    const ERTextSpan* spans; /**< Span array; NULL or ignored when span_count == 0. */
 } ERTextRenderParams;
 
 /*----------------------------------------------------------------------------------------------------------------------

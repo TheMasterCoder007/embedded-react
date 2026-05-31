@@ -1482,6 +1482,88 @@ static ERNode* build_text_panel(void)
 
     er_tree_append_child(col, deco_row);
 
+    /* ---- Section: Nested spans ---- */
+    er_tree_append_child(col, make_section_header("NESTED SPANS"));
+    er_tree_append_child(col, make_caption("per-span color, weight, style, decoration"));
+
+    /* Container: two Text nodes rendered via er_node_set_text_spans().
+     * Explicit height required: span-mode Text nodes have empty text[] so the
+     * layout engine cannot derive intrinsic height from er_text_measure(). */
+    ERNode* span_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(62);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(5);
+    p.padding = dp(8);
+    p.flex_direction = ER_FLEX_COL;
+    p.gap = dp(6);
+    p.align_items = ER_ALIGN_STRETCH;
+    er_node_set_props(span_box, &p);
+
+    /* Row 1: "Hello " (white) + "World" (teal bold) */
+    {
+        ERNode* t = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFFFFFFFF;
+        p.font_size = (uint8_t)dp(13);
+        er_node_set_props(t, &p);
+
+        ERTextSpan sp[2];
+        memset(sp, 0, sizeof(sp));
+        strncpy(sp[0].text, "Hello ", ER_SPAN_TEXT_MAX);
+        sp[0].font_weight = 0xFFU; /* inherit normal */
+        sp[0].font_style = 0xFFU;
+        sp[0].text_decoration = 0xFFU;
+        sp[0].letter_spacing = ER_LAYOUT_AUTO;
+
+        strncpy(sp[1].text, "World", ER_SPAN_TEXT_MAX);
+        sp[1].color = 0xFF2A9D8F; /* teal */
+        sp[1].font_weight = 1U;   /* bold */
+        sp[1].font_style = 0xFFU;
+        sp[1].text_decoration = 0xFFU;
+        sp[1].letter_spacing = ER_LAYOUT_AUTO;
+
+        er_node_set_text_spans(t, sp, 2);
+        er_tree_append_child(span_box, t);
+    }
+
+    /* Row 2: "Normal " + "Italic " (orange) + "Bold Underline" (red bold underline) */
+    {
+        ERNode* t = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFFEEF4FF;
+        p.font_size = (uint8_t)dp(13);
+        er_node_set_props(t, &p);
+
+        ERTextSpan sp[3];
+        memset(sp, 0, sizeof(sp));
+
+        strncpy(sp[0].text, "Normal ", ER_SPAN_TEXT_MAX);
+        sp[0].font_weight = 0xFFU;
+        sp[0].font_style = 0xFFU;
+        sp[0].text_decoration = 0xFFU;
+        sp[0].letter_spacing = ER_LAYOUT_AUTO;
+
+        strncpy(sp[1].text, "Italic ", ER_SPAN_TEXT_MAX);
+        sp[1].color = 0xFFF4A261; /* orange */
+        sp[1].font_weight = 0xFFU;
+        sp[1].font_style = ER_FONT_STYLE_ITALIC;
+        sp[1].text_decoration = 0xFFU;
+        sp[1].letter_spacing = ER_LAYOUT_AUTO;
+
+        strncpy(sp[2].text, "Bold+Underline", ER_SPAN_TEXT_MAX);
+        sp[2].color = 0xFFE94560; /* red */
+        sp[2].font_weight = 1U;
+        sp[2].font_style = 0xFFU;
+        sp[2].text_decoration = ER_TEXT_DECORATION_UNDERLINE;
+        sp[2].letter_spacing = ER_LAYOUT_AUTO;
+
+        er_node_set_text_spans(t, sp, 3);
+        er_tree_append_child(span_box, t);
+    }
+
+    er_tree_append_child(col, span_box);
+
     /* ---- Section: fontWeight / fontStyle — one line per variant ---- */
     er_tree_append_child(col, make_section_header("FONT WEIGHT & STYLE"));
 
@@ -2728,7 +2810,7 @@ static void build_scene(int phys_w, int phys_h)
     panel_set_fixed_height(p_sv_right, dp(200));
     panel_set_fixed_height(p_transforms, dp(260));
     panel_set_fixed_height(p_spring, dp(420));
-    panel_set_fixed_height(p_text, dp(420));
+    panel_set_fixed_height(p_text, dp(570));
     panel_set_fixed_height(p_components, dp(460));
     panel_set_fixed_height(p_borders, dp(420));
     panel_set_fixed_height(p_gradients, dp(440));
@@ -2744,12 +2826,12 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(col_a, p_borders);
     er_tree_append_child(col_b, p_gradients);
 
-    /* Bottom row height must encompass the tallest column.  Tallest is col_a
-     * (300 + 420 + 420 + 24 px of gaps = 1164); pick a slightly larger value
-     * so columns can stretch into it without clipping. */
+    /* Bottom row height must encompass the tallest column.
+     * col_a: 300+420+420+36 = 1176; col_b: 200+570+440+36 = 1246 (tallest).
+     * Pick a slightly larger value so columns can stretch without clipping. */
     ERNode* bot_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(1180);
+    p.height = dp(1260);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(12);

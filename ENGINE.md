@@ -170,8 +170,11 @@ built-in Inter font at fixed sizes.
 - [x] **`fontStyle: italic`** — synthetic horizontal shear (ITALIC_SLOPE = 0.2 ≈ 11°);
   each row shifted right by (height − 1 − row) × slope, no extra font data needed.
 - [x] **`textDecorationLine`** — `underline` (below baseline) and `line-through` (mid-cap).
-- [ ] **Nested `<Text>` spans** — currently `ERTextProps.text` is one string. Either flatten
-  at bridge layer or introduce text-run children.
+- [x] **Nested `<Text>` spans** — `ERTextSpan` struct with per-span color, weight, style,
+  decoration, letter_spacing overrides (sentinels inherit from parent). Up to
+  `ER_TEXT_MAX_SPANS` (4) spans per node. `er_node_set_text_spans()` sets spans directly;
+  spans can also be passed via `ERProps.spans[]`. Renderer merges spans into one buffer for
+  line-breaking, then renders per-span runs with resolved styles.
 - [x] **Text measurement API** — `er_text_measure()` exposed; accepts `letter_spacing`.
 
 ## 6. Animation

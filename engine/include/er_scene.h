@@ -226,6 +226,12 @@ extern "C"
 /** @brief Maximum number of color stops in a gradient. */
 #define ER_GRADIENT_MAX_STOPS 4
 
+/** @brief Maximum number of inline text spans in a Text node. */
+#define ER_TEXT_MAX_SPANS 4
+
+/** @brief Maximum length of a single text span's content, excluding the null terminator. */
+#define ER_SPAN_TEXT_MAX 63
+
     /**
      * @brief Type of gradient fill applied to a View-family node background.
      *
@@ -372,6 +378,24 @@ extern "C"
     } EREventType;
 
     /**
+     * @brief One inline text span with per-span style overrides.
+     *
+     * Sentinel values cause a field to inherit from the parent Text node.  Sentinels:
+     * color == 0, font_size == 0, font_weight == 0xFF, font_style == 0xFF,
+     * text_decoration == 0xFF, letter_spacing == ER_LAYOUT_AUTO (INT16_MIN).
+     */
+    typedef struct
+    {
+        char text[ER_SPAN_TEXT_MAX + 1]; /**< Null-terminated UTF-8 text fragment. */
+        uint32_t color;                  /**< ARGB8888; 0 = inherit parent color. */
+        uint8_t font_size;               /**< Font size in pixels; 0 = inherit parent font_size. */
+        uint8_t font_weight;             /**< 0 = normal, 1 = bold, 0xFF = inherit. */
+        uint8_t font_style;              /**< ERFontStyle; 0xFF = inherit. */
+        uint8_t text_decoration;         /**< ERTextDecoration; 0xFF = inherit. */
+        int16_t letter_spacing;          /**< Extra pixels per glyph advance; ER_LAYOUT_AUTO = inherit. */
+    } ERTextSpan;
+
+    /**
      * @brief Flat property bag passed to er_node_set_props().
      *
      * Initialise all int16_t layout fields to ER_LAYOUT_AUTO and all other fields to zero
@@ -469,6 +493,8 @@ extern "C"
         uint8_t text_decoration;                  /**< ERTextDecoration — default none. */
         int16_t line_height;                      /**< Line height in pixels; 0 = use font default. */
         int16_t letter_spacing;                   /**< Extra pixels added to each glyph advance; may be negative. */
+        uint8_t span_count;                       /**< 0 = use text[]; >0 = render using spans[] instead. */
+        ERTextSpan spans[ER_TEXT_MAX_SPANS];      /**< Per-span style overrides; active when span_count > 0. */
 
         /* --- Image --- */
         char image_name[ER_IMAGE_NAME_MAX + 1]; /**< Asset name registered via er_image_load(). */
@@ -869,6 +895,22 @@ extern "C"
      * @param[in] text  Null-terminated UTF-8 string.
      */
     void er_text_input_set_text(ERNode* node, const char* text);
+
+    /**
+     * @brief Sets inline text spans on a Text node, enabling per-span style overrides.
+     *
+     * When count > 0 the node renders using the provided span array instead of its
+     * text[] string.  Each span contributes a UTF-8 text fragment; style fields left at
+     * their sentinel values inherit from the node's base ERProps: color == 0,
+     * font_size == 0, font_weight == 0xFF, font_style == 0xFF, text_decoration == 0xFF,
+     * letter_spacing == ER_LAYOUT_AUTO.  Passing count == 0 or spans == NULL reverts to
+     * single-string rendering.
+     *
+     * @param[in] node   Text node to configure.
+     * @param[in] spans  Array of span descriptors; may be NULL when count == 0.
+     * @param[in] count  Number of spans; clamped to ER_TEXT_MAX_SPANS.
+     */
+    void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count);
 
 #ifdef __cplusplus
 }

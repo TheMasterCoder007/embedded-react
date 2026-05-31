@@ -501,9 +501,14 @@ outer_break:
 
 void er_text_render(const ERTextRenderParams* params)
 {
-    if (!params || !params->text || ((params->color >> 24) & 0xFFU) == 0U)
+    if (!params || ((params->color >> 24) & 0xFFU) == 0U)
         return;
     if (params->clip.w <= 0 || params->clip.h <= 0)
+        return;
+
+    /* Span mode: params->text is ignored; spans[] provides the content. */
+    const bool span_mode = (params->span_count > 0 && params->spans != NULL);
+    if (!span_mode && !params->text)
         return;
 
     uint8_t sz = params->font_size;
@@ -521,15 +526,45 @@ void er_text_render(const ERTextRenderParams* params)
     const bool bold = (params->font_weight != 0U);
     const bool italic = (params->font_style != 0U);
 
-    /* Build line spans. */
-    LineSpan spans[TEXT_MAX_LINES];
+    /* ---- Span mode: merge all span texts into one buffer for line-breaking. ---- */
+#define SPAN_MERGED_MAX (ER_TEXT_MAX_SPANS * (ER_SPAN_TEXT_MAX + 1))
+    char merged[SPAN_MERGED_MAX + 1];
+    uint8_t span_map[SPAN_MERGED_MAX]; /* span_map[i] = span index of merged[i] */
+    const char* render_src;
+
+    if (span_mode)
+    {
+        size_t pos = 0;
+        for (uint8_t si = 0; si < params->span_count && pos < SPAN_MERGED_MAX; si++)
+        {
+            const char* s = params->spans[si].text;
+            while (*s && pos < SPAN_MERGED_MAX)
+            {
+                merged[pos] = *s++;
+                span_map[pos] = si;
+                pos++;
+            }
+        }
+        merged[pos] = '\0';
+        render_src = merged;
+    }
+    else
+    {
+        render_src = params->text;
+    }
+
+    if (!render_src || !render_src[0])
+        return;
+
+    /* ---- Line breaking (always uses parent ls for measurement). ---- */
+    LineSpan lines[TEXT_MAX_LINES];
     bool truncated = false;
     const int n_lines = break_lines(
-        params->text, font, params->clip.w, ls, (int)params->number_of_lines, spans, TEXT_MAX_LINES, &truncated);
+        render_src, font, params->clip.w, ls, (int)params->number_of_lines, lines, TEXT_MAX_LINES, &truncated);
     if (n_lines == 0)
         return;
 
-    /* Pre-compute ellipsis glyph for TAIL mode. */
+    /* ---- Pre-compute ellipsis glyph for TAIL mode. ---- */
     const bool do_ellipsis = truncated && (params->ellipsize_mode != ER_TEXT_ELLIPSIZE_CLIP);
     int ellipsis_px = 0;
     uint32_t ellipsis_cp = 0;
@@ -543,7 +578,7 @@ void er_text_render(const ERTextRenderParams* params)
         ellipsis_px = (int)ellipsis_g->advance + ls + (bold ? 1 : 0);
     }
 
-    /* Render each line. */
+    /* ---- Render each line. ---- */
     for (int i = 0; i < n_lines; i++)
     {
         const int cursor_y = params->clip.y + i * lh;
@@ -553,15 +588,14 @@ void er_text_render(const ERTextRenderParams* params)
         const bool is_last = (i == n_lines - 1);
         const bool apply_ellip = (do_ellipsis && is_last);
 
-        /* Determine the visible text range.  For the ellipsis line we shorten
-         * the span so that text + '…' fits within clip.w. */
-        const char* render_end = spans[i].start + spans[i].byte_len;
-        int render_w = spans[i].px_width;
+        /* Determine the visible text range; shorten for ellipsis. */
+        const char* render_end = lines[i].start + lines[i].byte_len;
+        int render_w = lines[i].px_width;
 
         if (apply_ellip)
         {
             const int avail = params->clip.w - ellipsis_px;
-            const char* p = spans[i].start;
+            const char* p = lines[i].start;
             const char* cut = p;
             int w = 0;
             while (p < render_end && *p)
@@ -589,55 +623,116 @@ void er_text_render(const ERTextRenderParams* params)
         }
         else if (params->text_align == ER_TEXT_ALIGN_CENTER)
         {
-            const int off = (params->clip.w - spans[i].px_width) / 2;
+            const int off = (params->clip.w - lines[i].px_width) / 2;
             cursor_x = params->clip.x + (off > 0 ? off : 0);
         }
         else /* ER_TEXT_ALIGN_RIGHT */
         {
-            const int off = params->clip.w - spans[i].px_width;
+            const int off = params->clip.w - lines[i].px_width;
             cursor_x = params->clip.x + (off > 0 ? off : 0);
         }
 
-        /* Draw text glyphs. */
+        if (span_mode)
         {
-            const char* p = spans[i].start;
+            /* ---- Span-aware rendering: group consecutive chars of the same span. ---- */
+            const char* p = lines[i].start;
             int cx = cursor_x;
+
             while (p < render_end && *p)
             {
-                uint32_t cp = utf8_next(&p);
-                draw_cp(font, cp, cx, cursor_y, &params->clip, params->color, italic);
+                const size_t byte_off = (size_t)(p - render_src);
+                const uint8_t si = span_map[byte_off];
+                const ERTextSpan* sp = &params->spans[si];
+
+                /* Resolve per-span style; sentinels inherit from base params. */
+                const uint32_t seg_color = sp->color ? sp->color : params->color;
+                const bool seg_bold = (sp->font_weight == 0xFFU) ? bold : (sp->font_weight != 0U);
+                const bool seg_italic = (sp->font_style == 0xFFU) ? italic : (sp->font_style != 0U);
+                const int seg_ls = (sp->letter_spacing == ER_LAYOUT_AUTO) ? ls : (int)sp->letter_spacing;
+                const uint8_t seg_deco = (sp->text_decoration == 0xFFU) ? params->text_decoration : sp->text_decoration;
+
+                const int seg_start_cx = cx;
+
+                /* Render all characters of this span run within the line. */
+                while (p < render_end && *p)
+                {
+                    const size_t cur_off = (size_t)(p - render_src);
+                    if (span_map[cur_off] != si)
+                        break;
+                    uint32_t cp = utf8_next(&p);
+                    draw_cp(font, cp, cx, cursor_y, &params->clip, seg_color, seg_italic);
+                    if (seg_bold)
+                        draw_cp(font, cp, cx + 1, cursor_y, &params->clip, seg_color, seg_italic);
+                    cx += glyph_adv(font, cp, seg_ls) + (seg_bold ? 1 : 0);
+                }
+
+                /* Text decoration for this span segment. */
+                if (seg_deco != ER_TEXT_DECORATION_NONE)
+                {
+                    int dec_w = cx - seg_start_cx;
+                    const int right_edge = params->clip.x + params->clip.w;
+                    if (seg_start_cx + dec_w > right_edge)
+                        dec_w = right_edge - seg_start_cx;
+                    if (dec_w > 0)
+                    {
+                        const int dec_y = (seg_deco == ER_TEXT_DECORATION_UNDERLINE)
+                                              ? cursor_y + (int)font->baseline + 1
+                                              : cursor_y + (int)font->baseline * 2 / 3;
+                        if (dec_y >= params->clip.y && dec_y < params->clip.y + params->clip.h)
+                            er_blit_fill(seg_color, seg_start_cx, dec_y, dec_w, 1);
+                    }
+                }
+            }
+
+            /* Ellipsis glyph uses parent style. */
+            if (apply_ellip && ellipsis_g)
+            {
+                draw_cp(font, ellipsis_cp, cx, cursor_y, &params->clip, params->color, italic);
                 if (bold)
-                    draw_cp(font, cp, cx + 1, cursor_y, &params->clip, params->color, italic);
-                cx += glyph_adv(font, cp, ls) + (bold ? 1 : 0);
+                    draw_cp(font, ellipsis_cp, cx + 1, cursor_y, &params->clip, params->color, italic);
             }
         }
-
-        /* Draw ellipsis glyph. */
-        if (apply_ellip && ellipsis_g)
+        else
         {
-            const int ecx = cursor_x + render_w;
-            draw_cp(font, ellipsis_cp, ecx, cursor_y, &params->clip, params->color, italic);
-            if (bold)
-                draw_cp(font, ellipsis_cp, ecx + 1, cursor_y, &params->clip, params->color, italic);
-        }
-
-        /* Text decoration (underline / line-through). */
-        if (params->text_decoration != ER_TEXT_DECORATION_NONE)
-        {
-            int dec_w = apply_ellip ? (render_w + ellipsis_px) : spans[i].px_width;
-            const int right_edge = params->clip.x + params->clip.w;
-            if (cursor_x + dec_w > right_edge)
-                dec_w = right_edge - cursor_x;
-            if (dec_w > 0)
+            /* ---- Single-run path (unchanged). ---- */
             {
-                int dec_y;
-                if (params->text_decoration == ER_TEXT_DECORATION_UNDERLINE)
-                    dec_y = cursor_y + (int)font->baseline + 1;
-                else /* LINE_THROUGH */
-                    dec_y = cursor_y + (int)font->baseline * 2 / 3;
+                const char* p = lines[i].start;
+                int cx = cursor_x;
+                while (p < render_end && *p)
+                {
+                    uint32_t cp = utf8_next(&p);
+                    draw_cp(font, cp, cx, cursor_y, &params->clip, params->color, italic);
+                    if (bold)
+                        draw_cp(font, cp, cx + 1, cursor_y, &params->clip, params->color, italic);
+                    cx += glyph_adv(font, cp, ls) + (bold ? 1 : 0);
+                }
+            }
 
-                if (dec_y >= params->clip.y && dec_y < params->clip.y + params->clip.h)
-                    er_blit_fill(params->color, cursor_x, dec_y, dec_w, 1);
+            if (apply_ellip && ellipsis_g)
+            {
+                const int ecx = cursor_x + render_w;
+                draw_cp(font, ellipsis_cp, ecx, cursor_y, &params->clip, params->color, italic);
+                if (bold)
+                    draw_cp(font, ellipsis_cp, ecx + 1, cursor_y, &params->clip, params->color, italic);
+            }
+
+            if (params->text_decoration != ER_TEXT_DECORATION_NONE)
+            {
+                int dec_w = apply_ellip ? (render_w + ellipsis_px) : lines[i].px_width;
+                const int right_edge = params->clip.x + params->clip.w;
+                if (cursor_x + dec_w > right_edge)
+                    dec_w = right_edge - cursor_x;
+                if (dec_w > 0)
+                {
+                    int dec_y;
+                    if (params->text_decoration == ER_TEXT_DECORATION_UNDERLINE)
+                        dec_y = cursor_y + (int)font->baseline + 1;
+                    else /* LINE_THROUGH */
+                        dec_y = cursor_y + (int)font->baseline * 2 / 3;
+
+                    if (dec_y >= params->clip.y && dec_y < params->clip.y + params->clip.h)
+                        er_blit_fill(params->color, cursor_x, dec_y, dec_w, 1);
+                }
             }
         }
     }

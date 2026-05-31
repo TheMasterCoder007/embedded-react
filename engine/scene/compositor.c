@@ -551,6 +551,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                 par.font_style = tp->font_style;
                 par.line_height = tp->line_height;
                 par.letter_spacing = tp->letter_spacing;
+                par.span_count = tp->span_count;
+                par.spans = (tp->span_count > 0) ? tp->spans : NULL;
                 er_text_render(&par);
                 break;
             }
@@ -994,6 +996,24 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text.text_decoration = props->text_decoration;
             node->props.text.line_height = props->line_height;
             node->props.text.letter_spacing = props->letter_spacing;
+            {
+                const uint8_t sc =
+                    (props->span_count < ER_TEXT_MAX_SPANS) ? props->span_count : (uint8_t)ER_TEXT_MAX_SPANS;
+                node->props.text.span_count = sc;
+                for (uint8_t si = 0; si < sc; si++)
+                {
+                    ERTextSpan* dst = &node->props.text.spans[si];
+                    const ERTextSpan* src = &props->spans[si];
+                    strncpy(dst->text, src->text, ER_SPAN_TEXT_MAX);
+                    dst->text[ER_SPAN_TEXT_MAX] = '\0';
+                    dst->color = src->color;
+                    dst->font_size = src->font_size;
+                    dst->font_weight = src->font_weight;
+                    dst->font_style = src->font_style;
+                    dst->text_decoration = src->text_decoration;
+                    dst->letter_spacing = src->letter_spacing;
+                }
+            }
             break;
         case ER_NODE_IMAGE:
             strncpy(node->props.image.image_name, props->image_name, ER_IMAGE_NAME_MAX);
@@ -1171,6 +1191,34 @@ void er_text_input_set_text(ERNode* node, const char* text)
         return;
     strncpy(node->input_text, text, ER_TEXT_MAX);
     node->input_text[ER_TEXT_MAX] = '\0';
+    er_mark_dirty_upward(node);
+}
+
+/**
+ * @brief Sets inline text spans on a Text node.
+ *
+ * @param[in] node   Text node to configure.
+ * @param[in] spans  Span descriptors; NULL to revert to single-string rendering.
+ * @param[in] count  Number of spans; clamped to ER_TEXT_MAX_SPANS.
+ */
+void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count)
+{
+    if (!node || node->type != ER_NODE_TEXT)
+        return;
+    const uint8_t n = (count < (uint8_t)ER_TEXT_MAX_SPANS) ? count : (uint8_t)ER_TEXT_MAX_SPANS;
+    node->props.text.span_count = (spans && n > 0) ? n : 0U;
+    for (uint8_t i = 0; i < node->props.text.span_count; i++)
+    {
+        ERTextSpan* dst = &node->props.text.spans[i];
+        strncpy(dst->text, spans[i].text, ER_SPAN_TEXT_MAX);
+        dst->text[ER_SPAN_TEXT_MAX] = '\0';
+        dst->color = spans[i].color;
+        dst->font_size = spans[i].font_size;
+        dst->font_weight = spans[i].font_weight;
+        dst->font_style = spans[i].font_style;
+        dst->text_decoration = spans[i].text_decoration;
+        dst->letter_spacing = spans[i].letter_spacing;
+    }
     er_mark_dirty_upward(node);
 }
 

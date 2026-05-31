@@ -113,6 +113,8 @@ typedef struct
     uint8_t text_decoration; /**< ERTextDecoration. */
     int16_t line_height;     /**< 0 = font default. */
     int16_t letter_spacing;
+    uint8_t span_count;                  /**< 0 = use text[]; >0 = use spans[]. */
+    ERTextSpan spans[ER_TEXT_MAX_SPANS]; /**< Inline span descriptors. */
 } ERTextProps;
 
 /**

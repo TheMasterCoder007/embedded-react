@@ -461,5 +461,135 @@ int main(void)
     if (tc.out_of_bounds != 0)
         return fail("bold-italic render emitted out-of-bounds pixels");
 
+    /* ---- Nested spans: two spans render the same total pixels as the merged plain string ---- */
+    {
+        /* Render the merged string in plain mode. */
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        memset(&par, 0, sizeof(par));
+        par.text = "HelloWorld";
+        par.clip = (ERRect){0, 0, FB_W, FB_H};
+        par.color = 0xFFFFFFFFU;
+        par.font_size = 14;
+        er_text_render(&par);
+        const int plain_pixels = tc.pixels_drawn;
+        const int plain_ops = tc.draw_ops;
+        if (plain_ops == 0)
+            return fail("span baseline: plain render produced no draw calls");
+
+        /* Render the same content via two spans — no style overrides (all inherit). */
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+
+        ERTextSpan sp[2];
+        memset(sp, 0, sizeof(sp));
+        /* Both spans inherit all style fields from the base params. */
+        sp[0].font_weight = 0xFFU;
+        sp[0].font_style = 0xFFU;
+        sp[0].text_decoration = 0xFFU;
+        sp[0].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(sp[0].text, "Hello", ER_SPAN_TEXT_MAX);
+
+        sp[1].font_weight = 0xFFU;
+        sp[1].font_style = 0xFFU;
+        sp[1].text_decoration = 0xFFU;
+        sp[1].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(sp[1].text, "World", ER_SPAN_TEXT_MAX);
+
+        memset(&par, 0, sizeof(par));
+        par.clip = (ERRect){0, 0, FB_W, FB_H};
+        par.color = 0xFFFFFFFFU;
+        par.font_size = 14;
+        par.span_count = 2;
+        par.spans = sp;
+        er_text_render(&par);
+
+        if (tc.draw_ops == 0)
+            return fail("span render produced no draw calls");
+        if (tc.out_of_bounds != 0)
+            return fail("span render emitted out-of-bounds pixels");
+        if (tc.pixels_drawn != plain_pixels)
+            return fail("two inherit-all spans did not match plain render pixel count");
+    }
+
+    /* ---- Span color override: second span must land at the same x as first-span end ---- */
+    {
+        /* Single-span in red produces some pixels. */
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+
+        ERTextSpan sp2[2];
+        memset(sp2, 0, sizeof(sp2));
+
+        sp2[0].font_weight = 0xFFU;
+        sp2[0].font_style = 0xFFU;
+        sp2[0].text_decoration = 0xFFU;
+        sp2[0].letter_spacing = ER_LAYOUT_AUTO;
+        sp2[0].color = 0xFFFF0000U; /* red */
+        strncpy(sp2[0].text, "AB", ER_SPAN_TEXT_MAX);
+
+        sp2[1].font_weight = 0xFFU;
+        sp2[1].font_style = 0xFFU;
+        sp2[1].text_decoration = 0xFFU;
+        sp2[1].letter_spacing = ER_LAYOUT_AUTO;
+        sp2[1].color = 0xFF0000FFU; /* blue */
+        strncpy(sp2[1].text, "CD", ER_SPAN_TEXT_MAX);
+
+        ERTextRenderParams par2;
+        memset(&par2, 0, sizeof(par2));
+        par2.clip = (ERRect){0, 0, FB_W, FB_H};
+        par2.color = 0xFFFFFFFFU; /* base color — ignored because both spans override */
+        par2.font_size = 14;
+        par2.span_count = 2;
+        par2.spans = sp2;
+        er_text_render(&par2);
+
+        if (tc.draw_ops == 0)
+            return fail("color-override span render produced no draw calls");
+        if (tc.out_of_bounds != 0)
+            return fail("color-override span render emitted out-of-bounds pixels");
+        if (tc.max_x <= 0)
+            return fail("color-override span render produced no x extent");
+    }
+
+    /* ---- Bold span: mixed-weight spans render in-bounds ---- */
+    {
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+
+        ERTextSpan sp3[2];
+        memset(sp3, 0, sizeof(sp3));
+
+        sp3[0].font_weight = 0U; /* normal */
+        sp3[0].font_style = 0xFFU;
+        sp3[0].text_decoration = 0xFFU;
+        sp3[0].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(sp3[0].text, "Normal", ER_SPAN_TEXT_MAX);
+
+        sp3[1].font_weight = 1U; /* bold */
+        sp3[1].font_style = 0xFFU;
+        sp3[1].text_decoration = 0xFFU;
+        sp3[1].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(sp3[1].text, "Bold", ER_SPAN_TEXT_MAX);
+
+        ERTextRenderParams par3;
+        memset(&par3, 0, sizeof(par3));
+        par3.clip = (ERRect){0, 0, FB_W, FB_H};
+        par3.color = 0xFFFFFFFFU;
+        par3.font_size = 14;
+        par3.span_count = 2;
+        par3.spans = sp3;
+        er_text_render(&par3);
+
+        if (tc.draw_ops == 0)
+            return fail("mixed-weight span render produced no draw calls");
+        if (tc.out_of_bounds != 0)
+            return fail("mixed-weight span render emitted out-of-bounds pixels");
+    }
+
     return EXIT_SUCCESS;
 }
