@@ -82,6 +82,11 @@ static ERNode* s_modal_node = NULL;      /**< Modal under test. */
 static ERNode* s_modal_open_btn_lbl = NULL;
 static bool s_modal_visible = false;
 
+/* Panel 6 — Animated Value (shared across three boxes) */
+static ERAnimValueHandle s_shared_anim_value = ER_ANIM_VALUE_INVALID;
+static ERNode* s_value_boxes[3] = {NULL, NULL, NULL};
+static bool s_value_forward = false;
+
 /* Panel 10 — Gradients */
 static ERNode* s_grad_angle_lbl = NULL; /**< Label showing current diagonal angle. */
 static float s_grad_angle = 45.0f;      /**< Current angle used by the diagonal gradient demo. */
@@ -645,6 +650,34 @@ static void on_stagger_press(ERNode* node, const EREventData* data, void* ctx)
     er_anim_stagger(entries, 4, 80U, NULL, NULL);
 }
 
+/**
+ * @brief ER_EVENT_PRESS callback for the "SLIDE TOGETHER" button in Panel 6.
+ *
+ * Animates the shared ERAnimValue with a spring, which simultaneously drives
+ * translateX on all three value-bound boxes, demonstrating the useNativeDriver
+ * binding model where one value update propagates to multiple node properties.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context pointer (unused).
+ */
+static void on_shared_value_press(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (s_shared_anim_value == ER_ANIM_VALUE_INVALID)
+        return;
+    s_value_forward = !s_value_forward;
+    const float target = s_value_forward ? (float)dp(56) : 0.0f;
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_SPRING;
+    cfg.stiffness = 180.0f;
+    cfg.damping = 14.0f;
+    cfg.mass = 1.0f;
+    er_anim_value_animate(s_shared_anim_value, target, &cfg);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — Panel 7 callbacks (Text Features)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1165,6 +1198,56 @@ static ERNode* build_spring_panel(void)
     }
     er_tree_append_child(col, stagger_row);
     er_tree_append_child(col, make_button("STAGGER IN / OUT", on_stagger_press));
+
+    /* ---- Divider ---- */
+    ERNode* div3 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(1);
+    p.background_color = 0xFF223344;
+    p.margin_top = dp(3);
+    p.margin_bottom = dp(3);
+    er_node_set_props(div3, &p);
+    er_tree_append_child(col, div3);
+
+    /* ---- ANIMATED VALUE ---- */
+    er_tree_append_child(col, make_section_header("ANIMATED VALUE"));
+    er_tree_append_child(col, make_caption("one value drives three boxes simultaneously  (useNativeDriver model)"));
+
+    /* Track: three boxes that all share the same ERAnimValue for translateX. */
+    ERNode* val_track = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(48);
+    p.background_color = 0xFF0F1E2D;
+    p.border_radius = dp(6);
+    p.overflow = ER_OVERFLOW_HIDDEN;
+    er_node_set_props(val_track, &p);
+
+    static const uint32_t k_val_colors[3] = {0xFF2A9D8F, 0xFFF4A261, 0xFFE94560};
+    for (int i = 0; i < 3; i++)
+    {
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = (int16_t)dp(8 + i * 40);
+        p.top = dp(8);
+        p.width = dp(30);
+        p.height = dp(30);
+        p.background_color = k_val_colors[i];
+        p.border_radius = dp(5);
+        er_node_set_props(box, &p);
+        s_value_boxes[i] = box;
+        er_tree_append_child(val_track, box);
+    }
+    er_tree_append_child(col, val_track);
+    er_tree_append_child(col, make_button("SLIDE TOGETHER", on_shared_value_press));
+
+    /* Create the shared ERAnimValue and bind all three boxes to translateX. */
+    s_shared_anim_value = er_anim_value_create(0.0f);
+    for (int i = 0; i < 3; i++)
+    {
+        if (s_value_boxes[i])
+            er_anim_value_bind(s_shared_anim_value, s_value_boxes[i], ER_PROP_TRANSLATE_X);
+    }
 
     return col;
 }
@@ -2809,7 +2892,7 @@ static void build_scene(int phys_w, int phys_h)
     panel_set_fixed_height(p_sv_left, dp(300));
     panel_set_fixed_height(p_sv_right, dp(200));
     panel_set_fixed_height(p_transforms, dp(260));
-    panel_set_fixed_height(p_spring, dp(420));
+    panel_set_fixed_height(p_spring, dp(660));
     panel_set_fixed_height(p_text, dp(570));
     panel_set_fixed_height(p_components, dp(460));
     panel_set_fixed_height(p_borders, dp(420));
@@ -2827,11 +2910,11 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(col_b, p_gradients);
 
     /* Bottom row height must encompass the tallest column.
-     * col_a: 300+420+420+36 = 1176; col_b: 200+570+440+36 = 1246 (tallest).
+     * col_a: 300+660+420 + 2×12 gaps = 1404 (tallest); col_b: 200+570+440 + 2×12 = 1234.
      * Pick a slightly larger value so columns can stretch without clipping. */
     ERNode* bot_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(1260);
+    p.height = dp(1420);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(12);

@@ -19,6 +19,14 @@
 #define ERUI_MAX_GROUP_ENTRIES 8
 #endif
 
+#ifndef ERUI_MAX_ANIM_VALUES
+#define ERUI_MAX_ANIM_VALUES 16
+#endif
+
+#ifndef ERUI_MAX_VALUE_BINDINGS
+#define ERUI_MAX_VALUE_BINDINGS 4
+#endif
+
 /** @brief Spring state considered settled when both |disp| and |vel| are below these thresholds. */
 #define SPRING_SETTLE_DISP 0.001f
 #define SPRING_SETTLE_VEL 0.01f
@@ -85,6 +93,8 @@ typedef struct
     /* Group back-reference */
     uint8_t group_slot; /**< Index into s_groups; UINT8_MAX = standalone animation. */
     uint8_t group_entry;
+    /* Value binding */
+    uint16_t value_handle; /**< Non-zero when this animation targets an ERAnimValue; node_tag unused. */
 } ERAnimation;
 
 /**
@@ -115,12 +125,39 @@ typedef struct
     void* on_complete_user_data;
 } ERAnimGroup;
 
+/**
+ * @brief One node-property pair bound to an ERAnimValue.
+ */
+typedef struct
+{
+    uint16_t node_tag;
+    ERAnimProp prop;
+    bool active;
+} ERValueBinding;
+
+/**
+ * @brief Standalone animatable float with optional node-property bindings.
+ *
+ * Models the React Native Animated.Value concept: one float can be animated and its
+ * current value pushed to multiple node properties without re-entering any higher-level
+ * layer per frame (useNativeDriver = true equivalent).
+ */
+typedef struct
+{
+    bool in_use;
+    uint16_t handle;
+    float current;
+    ERValueBinding bindings[ERUI_MAX_VALUE_BINDINGS];
+    uint8_t binding_count;
+} ERAnimValue;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static ERAnimation s_animations[ERUI_MAX_ANIMATIONS];
 static ERAnimGroup s_groups[ERUI_MAX_ANIM_GROUPS];
+static ERAnimValue s_anim_values[ERUI_MAX_ANIM_VALUES];
 static uint16_t s_next_handle = 1; /**< Monotonically increasing handle counter; wraps avoiding 0. */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -667,6 +704,69 @@ static ERAnimGroup* alloc_group(void)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — animatable values
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Finds an ERAnimValue slot by handle.
+ *
+ * @param[in] handle  Handle to look up.
+ *
+ * @return Pointer to the matching in-use slot, or NULL if not found.
+ */
+static ERAnimValue* find_value_slot(uint16_t handle)
+{
+    if (handle == 0U)
+        return NULL;
+    for (int i = 0; i < ERUI_MAX_ANIM_VALUES; i++)
+    {
+        if (s_anim_values[i].in_use && s_anim_values[i].handle == handle)
+            return &s_anim_values[i];
+    }
+    return NULL;
+}
+
+/**
+ * @brief Cancels any active animation slot that targets the given ERAnimValue handle.
+ *
+ * @param[in] value_handle  ERAnimValue handle whose animation should be cancelled.
+ */
+static void cancel_value_anim(uint16_t value_handle)
+{
+    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    {
+        ERAnimation* a = &s_animations[i];
+        if (a->active && a->value_handle == value_handle)
+        {
+            a->active = false;
+            if (a->on_complete)
+                a->on_complete(false, a->on_complete_user_data);
+        }
+    }
+}
+
+/**
+ * @brief Propagates an ERAnimValue's current float to all its bound node-property pairs.
+ *
+ * Each bound node is marked dirty so the compositor re-renders it on the next commit.
+ *
+ * @param[in] val  Value whose current float is pushed to every active binding.
+ */
+static void push_to_value_bindings(ERAnimValue* val)
+{
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (!val->bindings[b].active)
+            continue;
+        ERNode* n = er_get_node(val->bindings[b].node_tag);
+        if (!n)
+            continue;
+        (void)apply_numeric_value(n, val->bindings[b].prop, val->current);
+        er_mark_dirty_upward(n);
+    }
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — spring / decay tick helpers
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -1069,6 +1169,155 @@ ERAnimHandle er_anim_stagger(
     return grp->handle;
 }
 
+ERAnimValueHandle er_anim_value_create(float initial_value)
+{
+    for (int i = 0; i < ERUI_MAX_ANIM_VALUES; i++)
+    {
+        ERAnimValue* v = &s_anim_values[i];
+        if (!v->in_use)
+        {
+            memset(v, 0, sizeof(*v));
+            v->in_use = true;
+            v->handle = alloc_handle();
+            v->current = initial_value;
+            return v->handle;
+        }
+    }
+    return ER_ANIM_VALUE_INVALID;
+}
+
+void er_anim_value_destroy(ERAnimValueHandle handle)
+{
+    if (handle == ER_ANIM_VALUE_INVALID)
+        return;
+    cancel_value_anim(handle);
+    ERAnimValue* val = find_value_slot(handle);
+    if (val)
+        val->in_use = false;
+}
+
+void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
+{
+    if (handle == ER_ANIM_VALUE_INVALID || !node)
+        return;
+    ERAnimValue* val = find_value_slot(handle);
+    if (!val)
+        return;
+    /* Refuse duplicate bindings for the same node+prop pair. */
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+            return;
+    }
+    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+    {
+        if (!val->bindings[b].active)
+        {
+            val->bindings[b].node_tag = node->tag;
+            val->bindings[b].prop = prop;
+            val->bindings[b].active = true;
+            if ((uint8_t)(b + 1) > val->binding_count)
+                val->binding_count = (uint8_t)(b + 1);
+            return;
+        }
+    }
+}
+
+void er_anim_value_unbind_all(ERAnimValueHandle handle)
+{
+    ERAnimValue* val = find_value_slot(handle);
+    if (!val)
+        return;
+    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+        val->bindings[b].active = false;
+    val->binding_count = 0;
+}
+
+ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg)
+{
+    ERAnimValue* val = find_value_slot(handle);
+    if (!val)
+        return ER_ANIM_HANDLE_INVALID;
+
+    cancel_value_anim(handle);
+
+    const ERAnimType type = cfg ? cfg->type : ER_ANIM_TIMING;
+    const uint32_t dur = cfg ? cfg->duration_ms : 0U;
+    const uint32_t dly = cfg ? cfg->delay_ms : 0U;
+
+    /* Immediate-snap path: zero-duration timing with no delay. */
+    if (type == ER_ANIM_TIMING && dur == 0U && dly == 0U)
+    {
+        val->current = to_value;
+        push_to_value_bindings(val);
+        if (cfg && cfg->on_complete)
+            cfg->on_complete(true, cfg->on_complete_user_data);
+        return ER_ANIM_HANDLE_INVALID;
+    }
+
+    ERAnimation* anim = alloc_slot();
+    if (!anim)
+        return ER_ANIM_HANDLE_INVALID;
+
+    memset(anim, 0, sizeof(*anim));
+    anim->active = true;
+    anim->value_handle = handle;
+    anim->node_tag = 0xFFFFU; /* unused sentinel for value animations */
+    anim->handle = alloc_handle();
+    anim->prop = ER_PROP_OPACITY; /* unused placeholder */
+    anim->type = type;
+    anim->easing = cfg ? cfg->easing : ER_EASE_LINEAR;
+    anim->bezier_x1 = cfg ? cfg->bezier_x1 : 0.0f;
+    anim->bezier_y1 = cfg ? cfg->bezier_y1 : 0.0f;
+    anim->bezier_x2 = cfg ? cfg->bezier_x2 : 1.0f;
+    anim->bezier_y2 = cfg ? cfg->bezier_y2 : 1.0f;
+    anim->delay_ms = dly;
+    anim->in_delay = dly > 0U;
+    anim->duration_ms = dur;
+    anim->loop = cfg ? cfg->loop : false;
+    anim->color_value = false;
+    anim->from_value = val->current;
+    anim->to_value = to_value;
+    anim->on_complete = cfg ? cfg->on_complete : NULL;
+    anim->on_complete_user_data = cfg ? cfg->on_complete_user_data : NULL;
+    anim->group_slot = 0xFFU;
+    anim->group_entry = 0U;
+
+    if (type == ER_ANIM_SPRING)
+    {
+        anim->spring_stiffness = cfg ? cfg->stiffness : 0.0f;
+        anim->spring_damping = cfg ? cfg->damping : 0.0f;
+        anim->spring_mass = cfg ? cfg->mass : 0.0f;
+        const float range = to_value - val->current;
+        anim->spring_pos = 0.0f;
+        anim->spring_vel = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
+    }
+    else if (type == ER_ANIM_DECAY)
+    {
+        const float range = to_value - val->current;
+        anim->decay_velocity = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
+        anim->decay_deceleration = (cfg && cfg->deceleration > 0.0f) ? cfg->deceleration : DECAY_DEFAULT_DECELERATION;
+    }
+
+    return anim->handle;
+}
+
+void er_anim_value_set(ERAnimValueHandle handle, float value)
+{
+    ERAnimValue* val = find_value_slot(handle);
+    if (!val)
+        return;
+    cancel_value_anim(handle);
+    val->current = value;
+    push_to_value_bindings(val);
+}
+
+float er_anim_value_get(ERAnimValueHandle handle)
+{
+    const ERAnimValue* val = find_value_slot(handle);
+    return val ? val->current : 0.0f;
+}
+
 void er_anim_tick(uint32_t delta_ms)
 {
     for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
@@ -1076,6 +1325,99 @@ void er_anim_tick(uint32_t delta_ms)
         ERAnimation* anim = &s_animations[i];
         if (!anim->active)
             continue;
+
+        /* ---- Value-target animation (ERAnimValue — no specific node) ---- */
+        if (anim->value_handle != 0U)
+        {
+            ERAnimValue* val = find_value_slot(anim->value_handle);
+            if (!val)
+            {
+                anim->active = false;
+                continue;
+            }
+
+            uint32_t eff = delta_ms;
+            if (anim->in_delay)
+            {
+                anim->delay_elapsed_ms += delta_ms;
+                if (anim->delay_elapsed_ms < anim->delay_ms)
+                    continue;
+                eff = anim->delay_elapsed_ms - anim->delay_ms;
+                anim->in_delay = false;
+                anim->from_value = val->current;
+                if (anim->type == ER_ANIM_SPRING)
+                    anim->spring_pos = 0.0f;
+                else if (anim->type == ER_ANIM_DECAY)
+                    anim->decay_pos = 0.0f;
+            }
+
+            bool vfinished = false;
+            float result = anim->from_value;
+
+            if (anim->type == ER_ANIM_TIMING)
+            {
+                anim->elapsed_ms += eff;
+                float t = 1.0f;
+                if (anim->duration_ms > 0U && anim->elapsed_ms < anim->duration_ms)
+                    t = (float)anim->elapsed_ms / (float)anim->duration_ms;
+                const float et =
+                    apply_easing(t, anim->easing, anim->bezier_x1, anim->bezier_y1, anim->bezier_x2, anim->bezier_y2);
+                result = anim->from_value + (anim->to_value - anim->from_value) * et;
+                if (t >= 1.0f)
+                {
+                    if (anim->loop)
+                    {
+                        anim->elapsed_ms = 0U;
+                        const float tmp = anim->from_value;
+                        anim->from_value = anim->to_value;
+                        anim->to_value = tmp;
+                    }
+                    else
+                    {
+                        vfinished = true;
+                    }
+                }
+            }
+            else if (anim->type == ER_ANIM_SPRING)
+            {
+                const bool settled = tick_spring(anim, eff);
+                float pos = anim->spring_pos;
+                if (pos < -2.0f)
+                    pos = -2.0f;
+                if (pos > 3.0f)
+                    pos = 3.0f;
+                result = anim->from_value + (anim->to_value - anim->from_value) * pos;
+                if (settled)
+                {
+                    result = anim->to_value;
+                    vfinished = true;
+                }
+            }
+            else if (anim->type == ER_ANIM_DECAY)
+            {
+                const bool stopped = tick_decay(anim, eff);
+                result = anim->from_value + (anim->to_value - anim->from_value) * anim->decay_pos;
+                if (stopped)
+                    vfinished = true;
+            }
+
+            val->current = result;
+            push_to_value_bindings(val);
+
+            if (vfinished)
+            {
+                const ERAnimCompleteFn cb = anim->on_complete;
+                void* ud = anim->on_complete_user_data;
+                const uint8_t gs = anim->group_slot;
+                const uint8_t ge = anim->group_entry;
+                anim->active = false;
+                if (cb)
+                    cb(true, ud);
+                if (gs != 0xFFU)
+                    on_group_entry_complete(gs, ge);
+            }
+            continue;
+        }
 
         ERNode* node = er_get_node(anim->node_tag);
         if (!node)

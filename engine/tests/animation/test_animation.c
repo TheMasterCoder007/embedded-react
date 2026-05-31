@@ -648,5 +648,68 @@ int main(void)
     if (counts.last_fill_color != 0xFF0000FFU)
         return fail("render order: animated lower zIndex node rendered over higher sibling");
 
+    /* -----------------------------------------------------------------------
+     * ANIMATED VALUE: one value drives multiple node-property bindings
+     * ---------------------------------------------------------------------- */
+    {
+        /* Create two nodes; both will receive translateX updates from one value. */
+        ERNode* va = er_node_create(ER_NODE_VIEW);
+        ERNode* vb = er_node_create(ER_NODE_VIEW);
+
+        ERProps vp = props_default();
+        vp.width = 10;
+        vp.height = 10;
+        er_node_set_props(va, &vp);
+        er_node_set_props(vb, &vp);
+
+        /* Create the shared value at 0 and bind both nodes. */
+        ERAnimValueHandle vh = er_anim_value_create(0.0f);
+        if (vh == ER_ANIM_VALUE_INVALID)
+            return fail("anim_value: er_anim_value_create returned INVALID");
+
+        er_anim_value_bind(vh, va, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(vh, vb, ER_PROP_TRANSLATE_X);
+
+        /* Immediate snap to 50. */
+        er_anim_value_set(vh, 50.0f);
+        if (va->tp_translate_x < 49.9f || va->tp_translate_x > 50.1f)
+            return fail("anim_value: er_anim_value_set did not propagate to first binding");
+        if (vb->tp_translate_x < 49.9f || vb->tp_translate_x > 50.1f)
+            return fail("anim_value: er_anim_value_set did not propagate to second binding");
+        if (er_anim_value_get(vh) < 49.9f || er_anim_value_get(vh) > 50.1f)
+            return fail("anim_value: er_anim_value_get did not return snapped value");
+
+        /* Animate back to 0 over 100ms; verify midpoint drives both nodes. */
+        ERAnimConfig vc = {0};
+        vc.type = ER_ANIM_TIMING;
+        vc.duration_ms = 100U;
+        vc.easing = ER_EASE_LINEAR;
+        er_anim_value_animate(vh, 0.0f, &vc);
+
+        embedded_renderer_tick(50U);
+        /* At the midpoint both nodes should be near 25. */
+        if (va->tp_translate_x > 30.0f || va->tp_translate_x < 20.0f)
+            return fail("anim_value: first binding not at midpoint during animation");
+        if (vb->tp_translate_x > 30.0f || vb->tp_translate_x < 20.0f)
+            return fail("anim_value: second binding not at midpoint during animation");
+
+        embedded_renderer_tick(50U);
+        /* Animation complete; both should be at the target. */
+        if (va->tp_translate_x > 1.0f)
+            return fail("anim_value: first binding did not reach target at end");
+        if (vb->tp_translate_x > 1.0f)
+            return fail("anim_value: second binding did not reach target at end");
+
+        /* Duplicate bind is silently ignored — binding_count must not grow past 2. */
+        er_anim_value_bind(vh, va, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(vh, 10.0f);
+        if (va->tp_translate_x < 9.9f || va->tp_translate_x > 10.1f)
+            return fail("anim_value: duplicate bind guard broke propagation");
+
+        er_anim_value_destroy(vh);
+        er_node_destroy(va);
+        er_node_destroy(vb);
+    }
+
     return EXIT_SUCCESS;
 }

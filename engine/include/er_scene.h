@@ -342,6 +342,21 @@ extern "C"
 #define ER_ANIM_HANDLE_INVALID 0U
 
     /**
+     * @brief Opaque handle for a standalone animatable value (useNativeDriver binding model).
+     *
+     * A standalone value animates a single float that is decoupled from any specific node
+     * property.  One or more node-property pairs can be bound to the value; when the value
+     * changes every bound pair is updated automatically without re-entering any higher-level
+     * layer per frame — the engine-side equivalent of React Native's useNativeDriver: true.
+     *
+     * Obtain via er_anim_value_create(), release via er_anim_value_destroy().
+     */
+    typedef uint16_t ERAnimValueHandle;
+
+/** @brief Sentinel indicating an invalid or destroyed animatable value handle. */
+#define ER_ANIM_VALUE_INVALID 0U
+
+    /**
      * @brief Callback invoked when an animation or group finishes.
      *
      * @param[in] finished    true when the animation ran to completion; false when
@@ -795,6 +810,91 @@ extern "C"
      */
     ERAnimHandle er_anim_stagger(
         const ERAnimEntry* entries, uint16_t count, uint32_t stagger_ms, ERAnimCompleteFn on_complete, void* user_data);
+
+    /**
+     * @brief Creates a standalone animatable float value.
+     *
+     * The value is independent of any specific node or property until node-property pairs
+     * are registered with er_anim_value_bind().  When animated, every bound pair is updated
+     * on each engine tick without any higher-level involvement per frame.
+     *
+     * @param[in] initial_value  Starting float value.
+     *
+     * @return New handle, or ER_ANIM_VALUE_INVALID if the value pool is exhausted.
+     */
+    ERAnimValueHandle er_anim_value_create(float initial_value);
+
+    /**
+     * @brief Destroys a standalone animatable value and cancels any running animation on it.
+     *
+     * Any node-property bindings registered via er_anim_value_bind() are released.
+     * Passing ER_ANIM_VALUE_INVALID is a no-op.
+     *
+     * @param[in] handle  Handle returned by er_anim_value_create().
+     */
+    void er_anim_value_destroy(ERAnimValueHandle handle);
+
+    /**
+     * @brief Binds a node property to this value.
+     *
+     * From this point on, whenever the value changes (via er_anim_value_animate() or
+     * er_anim_value_set()), node->prop is updated automatically and the node is marked dirty.
+     * Duplicate bindings for the same node+prop pair are silently ignored.  The binding
+     * capacity per value is fixed at compile time (ERUI_MAX_VALUE_BINDINGS, default 4).
+     *
+     * @param[in] handle  Target animatable value.
+     * @param[in] node    Scene node to receive updates.
+     * @param[in] prop    Animatable property on the node to update.
+     */
+    void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop);
+
+    /**
+     * @brief Removes all node-property bindings from this value.
+     *
+     * The value itself is not destroyed; call er_anim_value_destroy() to free the slot.
+     *
+     * @param[in] handle  Target animatable value.
+     */
+    void er_anim_value_unbind_all(ERAnimValueHandle handle);
+
+    /**
+     * @brief Starts an animation that drives a standalone value toward to_value.
+     *
+     * All bound node-property pairs are updated on each tick as the value interpolates.
+     * Any previously running animation on this value is cancelled first.  If cfg is NULL a
+     * zero-duration snap is applied immediately.
+     *
+     * Supports the same animation types (timing/spring/decay), easing, delay, loop, and
+     * completion callback as er_anim_start().  Color properties are not supported for
+     * standalone values.
+     *
+     * @param[in] handle    Standalone value to animate.
+     * @param[in] to_value  Target float value.
+     * @param[in] cfg       Animation configuration, or NULL for an immediate snap.
+     *
+     * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
+     */
+    ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg);
+
+    /**
+     * @brief Immediately sets a standalone value and pushes it to all bound node properties.
+     *
+     * Any running animation on the value is cancelled before the new value is applied.
+     * Equivalent to er_anim_value_animate(handle, value, NULL).
+     *
+     * @param[in] handle  Target animatable value.
+     * @param[in] value   New float value to apply.
+     */
+    void er_anim_value_set(ERAnimValueHandle handle, float value);
+
+    /**
+     * @brief Returns the current float of a standalone animatable value.
+     *
+     * @param[in] handle  Target animatable value.
+     *
+     * @return Current value, or 0.0f if handle is invalid.
+     */
+    float er_anim_value_get(ERAnimValueHandle handle);
 
     /**
      * @brief Returns the axis-aligned bounding rectangle of all pixels repainted during the last er_commit().

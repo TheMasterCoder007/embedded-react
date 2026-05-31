@@ -204,10 +204,12 @@ opacity and the two color props.
 - [x] **`Animated.stagger`** — `er_anim_stagger()` adds i×stagger_ms delay to each entry.
 - [x] **Completion callback** — `ERAnimCompleteFn on_complete` in ERAnimConfig; fired with
   `finished=true` on natural end, `finished=false` via `er_anim_stop()`.
-- [ ] **`useNativeDriver: true` binding model** — bind a JS-owned `Animated.Value` ID to
-  a C-side float without re-entering JS each frame. Design lives in the bridge, but
-  the engine must support naming animatable values independently of nodes (or accept
-  that all native-driver animations go through `er_anim_start` directly).
+- [x] **`useNativeDriver: true` binding model** — `ERAnimValue` is a standalone animatable
+  float (pool size `ERUI_MAX_ANIM_VALUES`, default 16) with up to `ERUI_MAX_VALUE_BINDINGS`
+  (default 4) node-property subscriptions.  `er_anim_value_create/destroy/bind/unbind_all/
+  animate/set/get` form the public API.  When the value ticks, every bound node+prop pair
+  is updated in C without re-entering any higher-level layer — the engine-side foundation
+  for `useNativeDriver: true`.  Demo: Panel 6 "ANIMATED VALUE" section.
 - [ ] **Interpolation ranges** — `value.interpolate({inputRange, outputRange})`. Engine
   already lerps internally; the bridge may translate ranges into a sequence of
   `er_anim_start` calls, or this becomes an engine concept.
