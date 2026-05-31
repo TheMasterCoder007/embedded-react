@@ -77,6 +77,11 @@ static ERNode* s_modal_node = NULL;      /**< Modal under test. */
 static ERNode* s_modal_open_btn_lbl = NULL;
 static bool s_modal_visible = false;
 
+/* Panel 10 — Gradients */
+static ERNode* s_grad_angle_lbl = NULL; /**< Label showing current diagonal angle. */
+static float s_grad_angle = 45.0f;      /**< Current angle used by the diagonal gradient demo. */
+static ERNode* s_grad_diag_node = NULL; /**< Diagonal gradient card updated on button press. */
+
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
 static const uint32_t k_sv_h_colors[8] = {
@@ -1566,6 +1571,267 @@ static ERNode* build_components_panel(void)
     return col;
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 10 callbacks (Gradients)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "ROTATE ANGLE" button in Panel 10.
+ *
+ * Steps the diagonal gradient angle through 0°, 45°, 90°, 135°, rebuilding the
+ * card's ERProps so the change is visible immediately.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   User context (unused).
+ */
+static void on_grad_rotate(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_grad_diag_node || !s_grad_angle_lbl)
+        return;
+
+    static const float k_angles[] = {0.0f, 45.0f, 90.0f, 135.0f};
+    static int s_angle_idx = 1; /* Start at 45° */
+    s_angle_idx = (s_angle_idx + 1) % 4;
+    s_grad_angle = k_angles[s_angle_idx];
+
+    /* Rebuild the diagonal card with the new angle. */
+    ERProps p = props_default();
+    p.width = ER_LAYOUT_AUTO;
+    p.height = dp(52);
+    p.flex_grow = 1;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    p.gradient_type = ER_GRADIENT_LINEAR;
+    p.gradient_angle = s_grad_angle;
+    p.gradient_stop_count = 2;
+    p.gradient_stops[0].color = 0xFF9B59B6; /* purple */
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFF2A9D8F; /* teal */
+    p.gradient_stops[1].position = 1.0f;
+    er_node_set_props(s_grad_diag_node, &p);
+
+    /* Update the angle label. */
+    ERProps lp = props_default();
+    lp.color = 0xFFCCDDEE;
+    lp.font_size = (uint8_t)dp(11);
+    char buf[ER_TEXT_MAX + 1];
+    snprintf(buf, sizeof(buf), "%.0f°", s_grad_angle);
+    strncpy(lp.text, buf, ER_TEXT_MAX);
+    lp.text[ER_TEXT_MAX] = '\0';
+    er_node_set_props(s_grad_angle_lbl, &lp);
+}
+
+/**
+ * @brief Builds Panel 10 — Gradients.
+ *
+ * Demonstrates all gradient types:
+ *   - Vertical linear gradient (2 stops, top→bottom).
+ *   - Horizontal linear gradient (3 stops, left→right).
+ *   - Diagonal linear gradient (2 stops, user-rotatable angle).
+ *   - Radial gradient (2 stops, centre→edge) — shown only when ERUI_GRADIENT_RADIAL is set.
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_gradient_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    er_tree_append_child(col, make_section_header("GRADIENTS"));
+
+#if ERUI_GRADIENT
+
+    /* ---- Vertical gradient ---- */
+    er_tree_append_child(col, make_caption("vertical  (angle=0°)"));
+
+    ERNode* vert = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.gradient_type = ER_GRADIENT_LINEAR;
+    p.gradient_angle = 0.0f;
+    p.gradient_stop_count = 2;
+    p.gradient_stops[0].color = 0xFF2A9D8F; /* teal   */
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFF0A1520; /* near-black */
+    p.gradient_stops[1].position = 1.0f;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(vert, &p);
+
+    ERNode* vert_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "teal → dark", ER_TEXT_MAX);
+    er_node_set_props(vert_lbl, &p);
+    er_tree_append_child(vert, vert_lbl);
+    er_tree_append_child(col, vert);
+
+    /* ---- Horizontal 3-stop gradient ---- */
+    er_tree_append_child(col, make_caption("horizontal 3-stop  (angle=90°)"));
+
+    ERNode* horiz = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.gradient_type = ER_GRADIENT_LINEAR;
+    p.gradient_angle = 90.0f;
+    p.gradient_stop_count = 3;
+    p.gradient_stops[0].color = 0xFFE94560; /* red    */
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFFF4A261; /* orange */
+    p.gradient_stops[1].position = 0.5f;
+    p.gradient_stops[2].color = 0xFFE94560; /* red    */
+    p.gradient_stops[2].position = 1.0f;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(horiz, &p);
+
+    ERNode* horiz_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "red → orange → red", ER_TEXT_MAX);
+    er_node_set_props(horiz_lbl, &p);
+    er_tree_append_child(horiz, horiz_lbl);
+    er_tree_append_child(col, horiz);
+
+    /* ---- Diagonal gradient (user-rotatable) ---- */
+    er_tree_append_child(col, make_caption("diagonal  (press button to rotate)"));
+
+    ERNode* diag_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_direction = ER_FLEX_ROW;
+    p.height = dp(52);
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(6);
+    er_node_set_props(diag_row, &p);
+
+    ERNode* diag = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.gradient_type = ER_GRADIENT_LINEAR;
+    p.gradient_angle = s_grad_angle;
+    p.gradient_stop_count = 2;
+    p.gradient_stops[0].color = 0xFF9B59B6; /* purple */
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFF2A9D8F; /* teal   */
+    p.gradient_stops[1].position = 1.0f;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(diag, &p);
+    s_grad_diag_node = diag;
+
+    ERNode* diag_angle_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFCCDDEE;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "45°", ER_TEXT_MAX);
+    er_node_set_props(diag_angle_lbl, &p);
+    s_grad_angle_lbl = diag_angle_lbl;
+    er_tree_append_child(diag, diag_angle_lbl);
+
+    er_tree_append_child(diag_row, diag);
+    er_tree_append_child(diag_row, make_button("ROTATE", on_grad_rotate));
+    er_tree_append_child(col, diag_row);
+
+#if ERUI_GRADIENT_RADIAL
+
+    /* ---- Radial gradient ---- */
+    er_tree_append_child(col, make_caption("radial  (centre→edge)"));
+
+    ERNode* radial = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.gradient_type = ER_GRADIENT_RADIAL;
+    p.gradient_stop_count = 2;
+    p.gradient_stops[0].color = 0xFFF4A261; /* bright orange at centre */
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFF0A0820; /* near-black at edge */
+    p.gradient_stops[1].position = 1.0f;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(radial, &p);
+
+    ERNode* radial_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFFFFFFF;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "orange → dark", ER_TEXT_MAX);
+    er_node_set_props(radial_lbl, &p);
+    er_tree_append_child(radial, radial_lbl);
+    er_tree_append_child(col, radial);
+
+#endif /* ERUI_GRADIENT_RADIAL */
+
+    /* ---- 4-stop ocean gradient ---- */
+    er_tree_append_child(col, make_caption("4-stop  diagonal ocean"));
+
+    ERNode* ocean = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.gradient_type = ER_GRADIENT_LINEAR;
+    p.gradient_angle = 135.0f;
+    p.gradient_stop_count = 4;
+    p.gradient_stops[0].color = 0xFF264653;
+    p.gradient_stops[0].position = 0.0f;
+    p.gradient_stops[1].color = 0xFF2A9D8F;
+    p.gradient_stops[1].position = 0.33f;
+    p.gradient_stops[2].color = 0xFF457B9D;
+    p.gradient_stops[2].position = 0.67f;
+    p.gradient_stops[3].color = 0xFF1D3557;
+    p.gradient_stops[3].position = 1.0f;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(ocean, &p);
+
+    ERNode* ocean_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFEEF4FF;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "4-stop ocean palette", ER_TEXT_MAX);
+    er_node_set_props(ocean_lbl, &p);
+    er_tree_append_child(ocean, ocean_lbl);
+    er_tree_append_child(col, ocean);
+
+#else /* ERUI_GRADIENT == 0 */
+
+    er_tree_append_child(col, make_caption("ERUI_GRADIENT=0 — disabled at build time"));
+    ERNode* notice = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.background_color = 0xFF1A2D42;
+    p.border_radius = dp(6);
+    p.border_color = 0xFF334455;
+    p.border_width = dp(1);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(notice, &p);
+
+    ERNode* notice_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF556677;
+    p.font_size = (uint8_t)dp(11);
+    p.text_align = ER_TEXT_ALIGN_CENTER;
+    strncpy(p.text, "rebuild with\n-DERUI_GRADIENT=ON", ER_TEXT_MAX);
+    er_node_set_props(notice_lbl, &p);
+    er_tree_append_child(notice, notice_lbl);
+    er_tree_append_child(col, notice);
+
+#endif /* ERUI_GRADIENT */
+
+    return col;
+}
+
 /**
  * @brief Builds Panel 9 — Borders & Layout Additions.
  *
@@ -1796,7 +2062,8 @@ static ERNode* build_borders_layout_panel(void)
  *   Row 1 Panel 2 — Touch & Events: press/long-press/cancel, event coordinates, zIndex.
  *   Row 1 Panel 3 — Animation & Display:None: bg-color timing animation, display:none toggle.
  *   Row 2 Panel 4 — ScrollView: vertical + horizontal viewports, clip, gesture, momentum.
- *   Row 2 Panel 9 — Borders & Layout: per-corner radii, borderStyle, aspectRatio, flexBasis%, paddingH/V.
+ *   Row 2 Panel 9  — Borders & Layout: per-corner radii, borderStyle, aspectRatio, flexBasis%, paddingH/V.
+ *   Row 2 Panel 10 — Gradients: linear vertical/horizontal/diagonal + radial gradient cards.
  *
  * @param[in] phys_w  Physical framebuffer width in pixels.
  * @param[in] phys_h  Physical framebuffer height in pixels.
@@ -1851,11 +2118,11 @@ static void build_scene(int phys_w, int phys_h)
     p.font_size = (uint8_t)dp(12);
 #if ERUI_SHADOWS
     strncpy(p.text,
-            "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  text  —  press D = dirty rect overlay",
+            "C99  Yoga flexbox  SDL2  |  shadows  spring  sequence  text  gradients  —  press D = dirty rect",
             ER_TEXT_MAX);
 #else
     strncpy(p.text,
-            "C99  Yoga flexbox  SDL2  |  spring  sequence  text align  —  press D = dirty rect overlay",
+            "C99  Yoga flexbox  SDL2  |  spring  sequence  text  gradients  —  press D = dirty rect overlay",
             ER_TEXT_MAX);
 #endif
     er_node_set_props(hdr_sub, &p);
@@ -2328,6 +2595,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(sv_row, build_text_panel());
     er_tree_append_child(sv_row, build_components_panel());
     er_tree_append_child(sv_row, build_borders_layout_panel());
+    er_tree_append_child(sv_row, build_gradient_panel());
 
     /* =====================================================================
      * ASSEMBLE

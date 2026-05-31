@@ -1,6 +1,7 @@
 #include "image_scaler.h"
 #include "image_registry.h"
 #include "renderer_internal.h"
+#include <math.h>
 #include <stddef.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -45,12 +46,79 @@ static uint32_t apply_tint(uint32_t pixel, uint8_t tr, uint8_t tg, uint8_t tb)
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
+#if ERUI_BILINEAR_SCALE
+
+/**
+ * @brief Samples a premultiplied ARGB8888 source image at fractional pixel coordinates.
+ *
+ * Clamps to the source crop rectangle [src_x, src_x+src_w) × [src_y, src_y+src_h) before
+ * computing the four-tap bilinear weights. Bilinear interpolation on premultiplied values is
+ * mathematically exact (no alpha halo artefacts).
+ *
+ * @param[in] buf    Premultiplied ARGB8888 image buffer (row-major, img_w pixels wide).
+ * @param[in] img_w  Full image row stride in pixels.
+ * @param[in] src_x  Left edge of the valid crop region.
+ * @param[in] src_y  Top edge of the valid crop region.
+ * @param[in] src_w  Width of the valid crop region.
+ * @param[in] src_h  Height of the valid crop region.
+ * @param[in] sx_f   Fractional source X coordinate.
+ * @param[in] sy_f   Fractional source Y coordinate.
+ *
+ * @return Bilinearly sampled premultiplied ARGB8888 pixel.
+ */
+static uint32_t
+bilinear_sample(const uint32_t* buf, int img_w, int src_x, int src_y, int src_w, int src_h, float sx_f, float sy_f)
+{
+    /* Clamp to crop bounds. */
+    const float x_min = (float)src_x, x_max = (float)(src_x + src_w - 1);
+    const float y_min = (float)src_y, y_max = (float)(src_y + src_h - 1);
+    if (sx_f < x_min)
+        sx_f = x_min;
+    if (sx_f > x_max)
+        sx_f = x_max;
+    if (sy_f < y_min)
+        sy_f = y_min;
+    if (sy_f > y_max)
+        sy_f = y_max;
+
+    const int x0 = (int)sx_f, y0 = (int)sy_f;
+    int x1 = x0 + 1, y1 = y0 + 1;
+    if (x1 > src_x + src_w - 1)
+        x1 = src_x + src_w - 1;
+    if (y1 > src_y + src_h - 1)
+        y1 = src_y + src_h - 1;
+
+    const float tx = sx_f - (float)x0;
+    const float ty = sy_f - (float)y0;
+    const float w00 = (1.0f - tx) * (1.0f - ty);
+    const float w10 = tx * (1.0f - ty);
+    const float w01 = (1.0f - tx) * ty;
+    const float w11 = tx * ty;
+
+    const uint32_t p00 = buf[(size_t)y0 * (size_t)img_w + (size_t)x0];
+    const uint32_t p10 = buf[(size_t)y0 * (size_t)img_w + (size_t)x1];
+    const uint32_t p01 = buf[(size_t)y1 * (size_t)img_w + (size_t)x0];
+    const uint32_t p11 = buf[(size_t)y1 * (size_t)img_w + (size_t)x1];
+
+    const uint32_t a = (uint32_t)(((p00 >> 24) & 0xFFu) * w00 + ((p10 >> 24) & 0xFFu) * w10
+                                  + ((p01 >> 24) & 0xFFu) * w01 + ((p11 >> 24) & 0xFFu) * w11);
+    const uint32_t r = (uint32_t)(((p00 >> 16) & 0xFFu) * w00 + ((p10 >> 16) & 0xFFu) * w10
+                                  + ((p01 >> 16) & 0xFFu) * w01 + ((p11 >> 16) & 0xFFu) * w11);
+    const uint32_t g = (uint32_t)(((p00 >> 8) & 0xFFu) * w00 + ((p10 >> 8) & 0xFFu) * w10 + ((p01 >> 8) & 0xFFu) * w01
+                                  + ((p11 >> 8) & 0xFFu) * w11);
+    const uint32_t b =
+        (uint32_t)((p00 & 0xFFu) * w00 + (p10 & 0xFFu) * w10 + (p01 & 0xFFu) * w01 + (p11 & 0xFFu) * w11);
+    return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+#endif /* ERUI_BILINEAR_SCALE */
+
 /**
  * @brief Renders a source crop of an image to a destination rectangle.
  *
- * Uses nearest-neighbor sampling. When the source and destination sizes match and no
- * tint is applied, the original buffer rows are blended directly without copying into
- * the row scratch buffer.
+ * Uses bilinear sampling when ERUI_BILINEAR_SCALE is non-zero, otherwise nearest-neighbor.
+ * When the source and destination sizes match and no tint is applied, the original buffer
+ * rows are blended directly without copying into the row scratch buffer.
  *
  * @param[in] buf         Premultiplied ARGB8888 image data (row-major, img_w pixels wide).
  * @param[in] img_w       Total width of the source image in pixels.
@@ -99,11 +167,18 @@ static void render_region(const uint32_t* buf,
     const int capped_w = (dst_w <= ERUI_MAX_IMG_ROW_PIXELS) ? dst_w : ERUI_MAX_IMG_ROW_PIXELS;
     for (int dy = 0; dy < dst_h; dy++)
     {
-        const int sy = src_y + (dy * src_h) / dst_h;
         for (int dx = 0; dx < capped_w; dx++)
         {
+#if ERUI_BILINEAR_SCALE
+            /* Fractional source coords with half-pixel alignment for correct up-sampling. */
+            const float sx_f = (float)src_x + ((float)dx + 0.5f) * (float)src_w / (float)dst_w - 0.5f;
+            const float sy_f = (float)src_y + ((float)dy + 0.5f) * (float)src_h / (float)dst_h - 0.5f;
+            uint32_t p = bilinear_sample(buf, img_w, src_x, src_y, src_w, src_h, sx_f, sy_f);
+#else
+            const int sy = src_y + (dy * src_h) / dst_h;
             const int sx = src_x + (dx * src_w) / dst_w;
             uint32_t p = buf[(size_t)sy * (size_t)img_w + (size_t)sx];
+#endif
             if (has_tint)
                 p = apply_tint(p, tr, tg, tb);
             s_row_buf[dx] = p;

@@ -39,8 +39,9 @@ set(EMBEDDED_REACT_SOURCES
         # layout: Yoga 7-pass flexbox
         layout/layout_engine.c
 
-        # rendering: primitives (rounded rects, shadows, transforms, image, canvas)
+        # rendering: primitives (rounded rects, shadows, transforms, image, gradient, canvas)
         rendering/canvas_bindings.c
+        rendering/gradient.c
         rendering/image_registry.c
         rendering/image_scaler.c
         rendering/rrect.c

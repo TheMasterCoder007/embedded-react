@@ -210,6 +210,36 @@ extern "C"
         ER_BORDER_DOTTED = 2, /**< Small filled dots at regular intervals (3 px on, 3 px off). */
     } ERBorderStyle;
 
+/** @brief Maximum number of color stops in a gradient. */
+#define ER_GRADIENT_MAX_STOPS 4
+
+    /**
+     * @brief Type of gradient fill applied to a View-family node background.
+     *
+     * Requires ERUI_GRADIENT to be non-zero at build time. When ERUI_GRADIENT is 0 the
+     * gradient_type field is stored but has no rendering effect; background_color is used
+     * instead. ER_GRADIENT_RADIAL additionally requires ERUI_GRADIENT_RADIAL.
+     */
+    typedef enum
+    {
+        ER_GRADIENT_NONE = 0,   /**< No gradient — background_color is used (default). */
+        ER_GRADIENT_LINEAR = 1, /**< Linear gradient at a configurable angle. */
+        ER_GRADIENT_RADIAL = 2, /**< Radial gradient from the rect centre outward (requires ERUI_GRADIENT_RADIAL). */
+    } ERGradientType;
+
+    /**
+     * @brief One color stop in a gradient.
+     *
+     * Stops should be ordered by ascending position. The gradient is extrapolated with the
+     * first stop's color below stops[0].position and the last stop's color above the last
+     * stop's position.
+     */
+    typedef struct
+    {
+        uint32_t color; /**< Stop color in straight-alpha ARGB8888. */
+        float position; /**< Stop position along the gradient axis [0.0–1.0]. */
+    } ERGradientStop;
+
     /**
      * @brief Gesture responder query types used with er_responder_query_set().
      *
@@ -465,6 +495,12 @@ extern "C"
         /* --- Modal --- */
         uint8_t modal_visible;   /**< 1 = shown, 0 = hidden (default). */
         uint32_t backdrop_color; /**< Full-screen backdrop ARGB8888; 0 = 0x99000000. */
+
+        /* --- Gradient (View-family; requires ERUI_GRADIENT at build time) --- */
+        uint8_t gradient_type;       /**< ERGradientType — default ER_GRADIENT_NONE. */
+        float gradient_angle;        /**< Angle in degrees: 0 = top→bottom, 90 = left→right. */
+        uint8_t gradient_stop_count; /**< Number of valid entries in gradient_stops [0–ER_GRADIENT_MAX_STOPS]. */
+        ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */
     } ERProps;
 
     /**

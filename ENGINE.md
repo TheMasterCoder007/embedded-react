@@ -127,16 +127,16 @@ Everything else under `engine/rendering/` is a stub.
 - [x] **`er_image_load` actual implementation** — delegates to image registry.
 - [x] **Image registry** — name → (buf, w, h) lookup keyed like font registry.
 - [x] **Nearest-neighbor scaling** (default).
-- [ ] **Bilinear scaling** behind `ERUI_BILINEAR_SCALE`.
+- [x] **Bilinear scaling** behind `ERUI_BILINEAR_SCALE`.
 - [x] **`resizeMode`** — cover / contain / stretch / repeat / center.
 - [x] **`tintColor`** — modulate sampled RGB by tint color before blend.
 - [x] **Render path in compositor** — `ER_NODE_IMAGE` case added to `render_tree`.
 
 ### 4.6 Gradients
 
-- [ ] **Linear gradient** rasterizer (gated behind `ERUI_GRADIENT`).
-- [ ] **Radial gradient** rasterizer (gated behind `ERUI_GRADIENT_RADIAL`).
-- [ ] Gradient prop encoding in `ERProps` (stop list).
+- [x] **Linear gradient** rasterizer (gated behind `ERUI_GRADIENT`).
+- [x] **Radial gradient** rasterizer (gated behind `ERUI_GRADIENT_RADIAL`).
+- [x] Gradient prop encoding in `ERProps` (stop list).
 
 ### 4.7 Scratch buffer pool
 
@@ -248,10 +248,10 @@ remainder still lack guards or the underlying feature is not yet implemented.
 - [x] `ERUI_SHADOWS` — gate shadow code paths.
 - [x] `ERUI_BORDER_AA` — already wired in rrect.
 - [ ] `ERUI_3D_TRANSFORMS` — gate rotateX/Y/perspective.
-- [ ] `ERUI_BILINEAR_SCALE` — switch image scaler kernel.
-- [ ] `ERUI_GRADIENT` / `ERUI_GRADIENT_RADIAL` — gate gradient rasterizer.
+- [x] `ERUI_BILINEAR_SCALE` — switch image scaler kernel.
+- [x] `ERUI_GRADIENT` / `ERUI_GRADIENT_RADIAL` — gate gradient rasterizer.
 - [x] `ERUI_TRANSFORMS` — `FULL` vs `TRANSLATE_ONLY` paths (wired as `ERUI_TRANSFORMS_FULL`).
-- [ ] `ERUI_FONT_SIZES` — already drives baked font selection.
+- [x] `ERUI_FONT_SIZES` — already drives baked font selection.
 - [x] `ERUI_MAX_NODES` — already honored.
 - [x] `ERUI_MAX_OPACITY_DEPTH`, `ERUI_SCRATCH_W/H`, `ERUI_SCRATCH_POOL_DEPTH` — for the
   scratch pool work (4.7).
@@ -274,6 +274,7 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Opacity offscreen compositing**
 - [x] **Multi-line / ellipsize text**
 - [x] **Node pool free-slot reuse**
+- [x] **Gradient rasterizer** — vertical, horizontal, diagonal, 3-stop, radial, degenerate (stop_count < 2)
 
 ---
 
@@ -297,8 +298,9 @@ A path that keeps the engine demoable at each step:
 10. ~~**Dirty-rect tracking + node pool reuse**~~ — perf / longevity polish before MCU bring-up — **done**.
 11. ~~**Layout additions**~~ — `aspectRatio`, `marginHorizontal/Vertical`, `paddingHorizontal/Vertical`,
     `flexBasis %`, per-corner border radius, per-edge border width/color, `borderStyle` — **done**.
-12. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest
-    target build can drop them.
+12. ~~**Feature flag plumbing**~~ — gradient rasterizer (linear + radial, `ERUI_GRADIENT` /
+    `ERUI_GRADIENT_RADIAL`), bilinear image scaler (`ERUI_BILINEAR_SCALE`), all optional paths
+    wrapped in `#if` guards — **done**.
 13. **Test coverage** — fill the matrix in §10 as features land.
 
 After step 9 the engine surface in `er_scene.h` should be capable of hosting the

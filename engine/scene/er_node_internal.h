@@ -88,6 +88,12 @@ typedef struct
     float shadow_opacity;  /**< 0.0–1.0; 0 means no shadow. */
     uint8_t shadow_radius; /**< Blur radius in pixels. */
     uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
+
+    /* Gradient (requires ERUI_GRADIENT) */
+    uint8_t gradient_type;       /**< ERGradientType. */
+    float gradient_angle;        /**< Angle in degrees (0 = top→bottom, 90 = left→right). */
+    uint8_t gradient_stop_count; /**< Number of active stops [0–ER_GRADIENT_MAX_STOPS]. */
+    ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */
 } ERViewProps;
 
 /**

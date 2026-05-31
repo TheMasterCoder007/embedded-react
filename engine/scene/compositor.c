@@ -1,4 +1,5 @@
 #include "er_node_internal.h"
+#include "gradient.h"
 #include "image_scaler.h"
 #include "layout_engine.h"
 #include "native_renderer.h"
@@ -297,11 +298,20 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
     const uint32_t bc_r = vp->border_right_color ? vp->border_right_color : vp->border_color;
     const uint32_t bc_b = vp->border_bottom_color ? vp->border_bottom_color : vp->border_color;
 
+    /* When a gradient is active (type != NONE and at least 2 stops) it fills the background;
+     * skip background_color so gradient pixels remain visible beneath the border. */
+#if ERUI_GRADIENT
+    const uint32_t bg_color =
+        (vp->gradient_type != ER_GRADIENT_NONE && vp->gradient_stop_count >= 2u) ? 0u : vp->background_color;
+#else
+    const uint32_t bg_color = vp->background_color;
+#endif
+
     /* Fast path: uniform border width, color, radius, and solid style. */
     if (bw_l == bw_t && bw_t == bw_r && bw_r == bw_b && bc_l == bc_t && bc_t == bc_r && bc_r == bc_b && r_tl == r_tr
         && r_tr == r_br && r_br == r_bl && vp->border_style == 0)
     {
-        er_rrect_fill_bordered(vp->background_color, bc_l, bw_l, px, py, w, h, r_tl);
+        er_rrect_fill_bordered(bg_color, bc_l, bw_l, px, py, w, h, r_tl);
         return;
     }
 
@@ -323,12 +333,12 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
         const int ir_br = (r_br > bw_r) ? r_br - bw_r : 0;
         const int ir_bl = (r_bl > bw_l) ? r_bl - bw_l : 0;
         if (iw > 0 && ih > 0)
-            er_rrect_fill_corners(vp->background_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+            er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
     }
     else
     {
         /* Per-edge or styled borders: fill background shape first, then overlay each edge. */
-        er_rrect_fill_corners(vp->background_color, px, py, w, h, r_tl, r_tr, r_br, r_bl);
+        er_rrect_fill_corners(bg_color, px, py, w, h, r_tl, r_tr, r_br, r_bl);
         if (bw_t > 0 && (bc_t >> 24))
             er_rrect_border_edge(bc_t, vp->border_style, px, py, w, bw_t, 1);
         if (bw_b > 0 && (bc_b >> 24))
@@ -479,6 +489,9 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_PRESSABLE:
             case ER_NODE_FLAT_LIST:
             {
+#if ERUI_GRADIENT
+                er_gradient_render(&n->props.view, px, py, w, h);
+#endif
                 render_view_bg(&n->props.view, px, py, w, h);
                 break;
             }
@@ -494,6 +507,9 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
                 }
                 const ERViewProps* vp = &n->props.view;
+#if ERUI_GRADIENT
+                er_gradient_render(vp, px, py, w, h);
+#endif
                 render_view_bg(vp, px, py, w, h);
                 break;
             }
@@ -924,6 +940,11 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
+            node->props.view.gradient_type = props->gradient_type;
+            node->props.view.gradient_angle = props->gradient_angle;
+            node->props.view.gradient_stop_count = props->gradient_stop_count;
+            for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
+                node->props.view.gradient_stops[gi] = props->gradient_stops[gi];
             break;
         case ER_NODE_TEXT:
             strncpy(node->props.text.text, props->text, ER_TEXT_MAX);
@@ -1022,6 +1043,11 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
+            node->props.view.gradient_type = props->gradient_type;
+            node->props.view.gradient_angle = props->gradient_angle;
+            node->props.view.gradient_stop_count = props->gradient_stop_count;
+            for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
+                node->props.view.gradient_stops[gi] = props->gradient_stops[gi];
             break;
         default:
             break;

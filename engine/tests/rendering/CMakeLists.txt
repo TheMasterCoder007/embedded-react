@@ -24,3 +24,7 @@ add_executable(test_components test_components.c)
 target_link_libraries(test_components PRIVATE embedded-react)
 target_include_directories(test_components PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_components COMMAND test_components)
+
+add_executable(test_gradient test_gradient.c)
+target_link_libraries(test_gradient PRIVATE embedded-react)
+add_test(NAME rendering_gradient COMMAND test_gradient)
