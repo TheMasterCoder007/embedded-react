@@ -896,6 +896,76 @@ extern "C"
      */
     float er_anim_value_get(ERAnimValueHandle handle);
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Interpolation ranges
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Maximum number of breakpoints (input/output pairs) in an interpolation mapping. */
+#define ER_INTERPOLATE_MAX_POINTS 8
+
+    /**
+     * @brief Out-of-range behavior for an interpolation, mirroring React Native's `extrapolate`.
+     */
+    typedef enum ERExtrapolate
+    {
+        ER_EXTRAPOLATE_EXTEND = 0, /**< Continue the slope of the nearest segment past the range (default). */
+        ER_EXTRAPOLATE_CLAMP,      /**< Clamp to the nearest endpoint of the output range. */
+        ER_EXTRAPOLATE_IDENTITY    /**< Pass the raw input through unchanged outside the range. */
+    } ERExtrapolate;
+
+    /**
+     * @brief Piecewise-linear mapping from an input range to an output range.
+     *
+     * @details Mirrors React Native's `value.interpolate({ inputRange, outputRange, extrapolate })`.
+     * `input_range` must be monotonically increasing; `output_range` entries may be non-monotonic.
+     * `point_count` must be >= 2.  Inputs between two breakpoints are linearly interpolated.
+     * Inputs outside the range obey `extrapolate_left` / `extrapolate_right`.
+     */
+    typedef struct
+    {
+        float input_range[ER_INTERPOLATE_MAX_POINTS];  /**< Ascending input breakpoints. */
+        float output_range[ER_INTERPOLATE_MAX_POINTS]; /**< Output value at each breakpoint. */
+        uint8_t point_count;             /**< Number of valid breakpoints [2–ER_INTERPOLATE_MAX_POINTS]. */
+        ERExtrapolate extrapolate_left;  /**< Behavior for inputs below input_range[0]. */
+        ERExtrapolate extrapolate_right; /**< Behavior for inputs above the last breakpoint. */
+    } ERInterpolation;
+
+    /**
+     * @brief Maps a single float through a piecewise-linear interpolation.
+     *
+     * @param[in] input             Value to map.
+     * @param[in] input_range       Ascending input breakpoints (point_count entries).
+     * @param[in] output_range      Output values at each breakpoint (point_count entries).
+     * @param[in] point_count       Number of breakpoints; values < 2 return input unchanged.
+     * @param[in] extrapolate_left  Behavior for inputs below input_range[0].
+     * @param[in] extrapolate_right Behavior for inputs above the last breakpoint.
+     *
+     * @return The interpolated output value.
+     */
+    float er_interpolate(float input,
+                         const float* input_range,
+                         const float* output_range,
+                         int point_count,
+                         ERExtrapolate extrapolate_left,
+                         ERExtrapolate extrapolate_right);
+
+    /**
+     * @brief Binds a shared animatable value to a node property through an interpolation mapping.
+     *
+     * @details Like er_anim_value_bind(), but on every value change the raw float is first mapped
+     * through @p interp before being written to the property.  This is the engine-side equivalent
+     * of `value.interpolate({ inputRange, outputRange })` in React Native's useNativeDriver path.
+     *
+     * @param[in] handle  Animatable value to bind.
+     * @param[in] node    Target node.
+     * @param[in] prop    Property to drive.
+     * @param[in] interp  Interpolation mapping (copied; must have point_count >= 2).
+     */
+    void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
+                                         ERNode* node,
+                                         ERAnimProp prop,
+                                         const ERInterpolation* interp);
+
     /**
      * @brief Returns the axis-aligned bounding rectangle of all pixels repainted during the last er_commit().
      *

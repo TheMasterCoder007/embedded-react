@@ -669,7 +669,7 @@ static void on_shared_value_press(ERNode* node, const EREventData* data, void* c
     if (s_shared_anim_value == ER_ANIM_VALUE_INVALID)
         return;
     s_value_forward = !s_value_forward;
-    const float target = s_value_forward ? (float)dp(56) : 0.0f;
+    const float target = s_value_forward ? 1.0f : 0.0f;
     ERAnimConfig cfg = {0};
     cfg.type = ER_ANIM_SPRING;
     cfg.stiffness = 180.0f;
@@ -1211,7 +1211,7 @@ static ERNode* build_spring_panel(void)
 
     /* ---- ANIMATED VALUE ---- */
     er_tree_append_child(col, make_section_header("ANIMATED VALUE"));
-    er_tree_append_child(col, make_caption("one value drives three boxes simultaneously  (useNativeDriver model)"));
+    er_tree_append_child(col, make_caption("one 0→1 value drives three boxes via different interpolation mappings"));
 
     /* Track: three boxes that all share the same ERAnimValue for translateX. */
     ERNode* val_track = er_node_create(ER_NODE_VIEW);
@@ -1241,12 +1241,55 @@ static ERNode* build_spring_panel(void)
     er_tree_append_child(col, val_track);
     er_tree_append_child(col, make_button("SLIDE TOGETHER", on_shared_value_press));
 
-    /* Create the shared ERAnimValue and bind all three boxes to translateX. */
+    /* Create the shared ERAnimValue (driver range 0.0 → 1.0).
+     * Each box receives a different interpolation so one value produces three distinct effects. */
     s_shared_anim_value = er_anim_value_create(0.0f);
-    for (int i = 0; i < 3; i++)
+
+    /* Box 0 (teal): linear translateX — 0→1 maps to 0→dp(56) pixels. */
+    if (s_value_boxes[0])
     {
-        if (s_value_boxes[i])
-            er_anim_value_bind(s_shared_anim_value, s_value_boxes[i], ER_PROP_TRANSLATE_X);
+        ERInterpolation tx0;
+        memset(&tx0, 0, sizeof(tx0));
+        tx0.point_count = 2;
+        tx0.input_range[0] = 0.0f;
+        tx0.input_range[1] = 1.0f;
+        tx0.output_range[0] = 0.0f;
+        tx0.output_range[1] = (float)dp(56);
+        tx0.extrapolate_left = ER_EXTRAPOLATE_CLAMP;
+        tx0.extrapolate_right = ER_EXTRAPOLATE_CLAMP;
+        er_anim_value_bind_interpolated(s_shared_anim_value, s_value_boxes[0], ER_PROP_TRANSLATE_X, &tx0);
+    }
+
+    /* Box 1 (orange): 3-point translateX — 0→0.5→1 maps to 0→dp(56)→0 (triangle wave). */
+    if (s_value_boxes[1])
+    {
+        ERInterpolation tx1;
+        memset(&tx1, 0, sizeof(tx1));
+        tx1.point_count = 3;
+        tx1.input_range[0] = 0.0f;
+        tx1.input_range[1] = 0.5f;
+        tx1.input_range[2] = 1.0f;
+        tx1.output_range[0] = 0.0f;
+        tx1.output_range[1] = (float)dp(56);
+        tx1.output_range[2] = 0.0f;
+        tx1.extrapolate_left = ER_EXTRAPOLATE_CLAMP;
+        tx1.extrapolate_right = ER_EXTRAPOLATE_CLAMP;
+        er_anim_value_bind_interpolated(s_shared_anim_value, s_value_boxes[1], ER_PROP_TRANSLATE_X, &tx1);
+    }
+
+    /* Box 2 (red): opacity — 0→1 maps to 0.25→1.0 (fades in, never fully disappears). */
+    if (s_value_boxes[2])
+    {
+        ERInterpolation op;
+        memset(&op, 0, sizeof(op));
+        op.point_count = 2;
+        op.input_range[0] = 0.0f;
+        op.input_range[1] = 1.0f;
+        op.output_range[0] = 0.25f;
+        op.output_range[1] = 1.0f;
+        op.extrapolate_left = ER_EXTRAPOLATE_CLAMP;
+        op.extrapolate_right = ER_EXTRAPOLATE_CLAMP;
+        er_anim_value_bind_interpolated(s_shared_anim_value, s_value_boxes[2], ER_PROP_OPACITY, &op);
     }
 
     return col;

@@ -210,9 +210,12 @@ opacity and the two color props.
   animate/set/get` form the public API.  When the value ticks, every bound node+prop pair
   is updated in C without re-entering any higher-level layer — the engine-side foundation
   for `useNativeDriver: true`.  Demo: Panel 6 "ANIMATED VALUE" section.
-- [ ] **Interpolation ranges** — `value.interpolate({inputRange, outputRange})`. Engine
-  already lerps internally; the bridge may translate ranges into a sequence of
-  `er_anim_start` calls, or this becomes an engine concept.
+- [x] **Interpolation ranges** — `value.interpolate({inputRange, outputRange})`. Engine concept:
+  `er_interpolate()` is a pure piecewise-linear mapper (up to `ER_INTERPOLATE_MAX_POINTS` breakpoints,
+  per-side `ERExtrapolate` of EXTEND/CLAMP/IDENTITY). `er_anim_value_bind_interpolated()` attaches a
+  shared value to a node property through an `ERInterpolation`; the mapping is applied on every value
+  change (set + runtime tick) inside `push_to_value_bindings`. Demo: Panel 6 "ANIMATED VALUE" uses
+  three interpolated bindings (linear tx, triangle-wave tx, opacity) from one 0→1 driver value.
 - [ ] **`LayoutAnimation`** — observe layout deltas and animate computed rects with
   spring/timing (separate pass after layout, before render).
 
@@ -281,6 +284,8 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Multi-line / ellipsize text**
 - [x] **Node pool free-slot reuse**
 - [x] **Gradient rasterizer** — vertical, horizontal, diagonal, 3-stop, radial, degenerate (stop_count < 2)
+- [x] **Interpolation ranges** — two/three-point linear mapping, EXTEND/CLAMP/IDENTITY per-side extrapolation,
+  degenerate guards (point_count < 2, NULL arrays, zero-width segment)
 
 ---
 

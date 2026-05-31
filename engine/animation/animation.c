@@ -133,6 +133,8 @@ typedef struct
     uint16_t node_tag;
     ERAnimProp prop;
     bool active;
+    bool interpolated;      /**< When true, value is mapped through interp before being applied. */
+    ERInterpolation interp; /**< Mapping applied when interpolated is true. */
 } ERValueBinding;
 
 /**
@@ -756,12 +758,21 @@ static void push_to_value_bindings(ERAnimValue* val)
 {
     for (int b = 0; b < val->binding_count; b++)
     {
-        if (!val->bindings[b].active)
+        ERValueBinding* bind = &val->bindings[b];
+        if (!bind->active)
             continue;
-        ERNode* n = er_get_node(val->bindings[b].node_tag);
+        ERNode* n = er_get_node(bind->node_tag);
         if (!n)
             continue;
-        (void)apply_numeric_value(n, val->bindings[b].prop, val->current);
+        float v = val->current;
+        if (bind->interpolated)
+            v = er_interpolate(v,
+                               bind->interp.input_range,
+                               bind->interp.output_range,
+                               (int)bind->interp.point_count,
+                               bind->interp.extrapolate_left,
+                               bind->interp.extrapolate_right);
+        (void)apply_numeric_value(n, bind->prop, v);
         er_mark_dirty_upward(n);
     }
 }
@@ -1218,6 +1229,100 @@ void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
             val->bindings[b].active = true;
             if ((uint8_t)(b + 1) > val->binding_count)
                 val->binding_count = (uint8_t)(b + 1);
+            return;
+        }
+    }
+}
+
+float er_interpolate(float input,
+                     const float* input_range,
+                     const float* output_range,
+                     int point_count,
+                     ERExtrapolate extrapolate_left,
+                     ERExtrapolate extrapolate_right)
+{
+    if (!input_range || !output_range || point_count < 2)
+        return input;
+
+    const int last = point_count - 1;
+
+    if (input < input_range[0])
+    {
+        if (extrapolate_left == ER_EXTRAPOLATE_CLAMP)
+            return output_range[0];
+        if (extrapolate_left == ER_EXTRAPOLATE_IDENTITY)
+            return input;
+        /* EXTEND: continue the slope of the first segment. */
+        {
+            const float span = input_range[1] - input_range[0];
+            if (span == 0.0f)
+                return output_range[0];
+            return output_range[0] + (output_range[1] - output_range[0]) * ((input - input_range[0]) / span);
+        }
+    }
+
+    if (input > input_range[last])
+    {
+        if (extrapolate_right == ER_EXTRAPOLATE_CLAMP)
+            return output_range[last];
+        if (extrapolate_right == ER_EXTRAPOLATE_IDENTITY)
+            return input;
+        /* EXTEND: continue the slope of the last segment. */
+        {
+            const float span = input_range[last] - input_range[last - 1];
+            if (span == 0.0f)
+                return output_range[last];
+            return output_range[last - 1]
+                   + (output_range[last] - output_range[last - 1]) * ((input - input_range[last - 1]) / span);
+        }
+    }
+
+    for (int i = 1; i <= last; ++i)
+    {
+        if (input <= input_range[i])
+        {
+            const float span = input_range[i] - input_range[i - 1];
+            if (span == 0.0f)
+                return output_range[i - 1];
+            return output_range[i - 1]
+                   + (output_range[i] - output_range[i - 1]) * ((input - input_range[i - 1]) / span);
+        }
+    }
+    return output_range[last];
+}
+
+void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
+                                     ERNode* node,
+                                     ERAnimProp prop,
+                                     const ERInterpolation* interp)
+{
+    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u)
+        return;
+    ERAnimValue* val = find_value_slot(handle);
+    if (!val)
+        return;
+    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+    {
+        if (!val->bindings[b].active)
+        {
+            val->bindings[b].node_tag = node->tag;
+            val->bindings[b].prop = prop;
+            val->bindings[b].active = true;
+            val->bindings[b].interpolated = true;
+            val->bindings[b].interp = *interp;
+            if ((uint8_t)(b + 1) > val->binding_count)
+                val->binding_count = (uint8_t)(b + 1);
+            /* Apply immediately so the node reflects the current value on bind. */
+            {
+                const float v = er_interpolate(val->current,
+                                               interp->input_range,
+                                               interp->output_range,
+                                               (int)interp->point_count,
+                                               interp->extrapolate_left,
+                                               interp->extrapolate_right);
+                (void)apply_numeric_value(node, prop, v);
+                er_mark_dirty_upward(node);
+            }
             return;
         }
     }
