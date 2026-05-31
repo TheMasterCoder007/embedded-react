@@ -201,6 +201,19 @@ extern "C"
     } ERTextDecoration;
 
     /**
+     * @brief Font style applied to rendered glyphs.
+     *
+     * ER_FONT_STYLE_ITALIC produces a synthetic slant (horizontal shear) because the built-in
+     * font blob does not ship a separate italic face.  The effect is a per-row rightward shift
+     * proportional to distance from the glyph bottom, giving an ~11° slant.
+     */
+    typedef enum
+    {
+        ER_FONT_STYLE_NORMAL = 0, /**< Upright glyphs (default). */
+        ER_FONT_STYLE_ITALIC = 1, /**< Synthetic italic via horizontal shear. */
+    } ERFontStyle;
+
+    /**
      * @brief Stroke pattern applied to rendered border edges.
      */
     typedef enum
@@ -447,6 +460,7 @@ extern "C"
         uint32_t color;                           /**< Text ARGB8888; 0 defaults to white. */
         uint8_t font_size;                        /**< Font size in pixels. */
         uint8_t font_weight;                      /**< 0 = normal, 1 = bold. */
+        uint8_t font_style;                       /**< ERFontStyle — default ER_FONT_STYLE_NORMAL. */
         uint8_t text_align;                       /**< ERTextAlign — default ER_TEXT_ALIGN_LEFT. */
         uint8_t number_of_lines;                  /**< Maximum rendered lines; 0 = unlimited. */
         uint8_t ellipsize_mode;                   /**< ERTextEllipsize — used when number_of_lines truncates. */

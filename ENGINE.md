@@ -73,7 +73,7 @@ the props currently in `ERLayoutSpec`. Additions:
 - [x] **`flexBasis: '50%'` percent support** — `float flex_basis_pct` in `ERLayoutSpec`;
   resolved against parent main-axis size in Pass 1 (takes precedence over `flex_basis`).
 - [x] **`display: none`** node skip (see Scene Graph item).
-- [ ] **`overflow: scroll`** path that produces a virtual content size larger than the
+- [x] **`overflow: scroll`** path that produces a virtual content size larger than the
   computed rect, consumed by ScrollView.
 
 ## 4. Rendering
@@ -165,9 +165,10 @@ built-in Inter font at fixed sizes.
 - [x] **`textAlign`** — `left` / `center` / `right`; justify deferred.
 - [x] **`lineHeight`** override (default is font line_height).
 - [x] **`letterSpacing`**.
-- [ ] **`fontWeight: bold`** rendering path (already in `ERTextProps`, no glyph switch yet).
-- [ ] **`fontStyle: italic`** — needs italic font variants in the baked font blob or a
-  synthetic skew.
+- [x] **`fontWeight: bold`** rendering path — synthetic double-pass at cursor_x+1; advance
+  widens by 1 px per glyph.
+- [x] **`fontStyle: italic`** — synthetic horizontal shear (ITALIC_SLOPE = 0.2 ≈ 11°);
+  each row shifted right by (height − 1 − row) × slope, no extra font data needed.
 - [x] **`textDecorationLine`** — `underline` (below baseline) and `line-through` (mid-cap).
 - [ ] **Nested `<Text>` spans** — currently `ERTextProps.text` is one string. Either flatten
   at bridge layer or introduce text-run children.

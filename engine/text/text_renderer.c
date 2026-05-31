@@ -14,6 +14,9 @@
 /** @brief Maximum line count tracked per er_text_render() call. */
 #define TEXT_MAX_LINES 64
 
+/** @brief Per-row italic shear factor.  Each row shifts right by (g->height - 1 - row) * this value. */
+#define ITALIC_SLOPE 0.2f
+
 /** @brief UTF-8 encoding of U+2026 HORIZONTAL ELLIPSIS '…'. */
 #define ELLIPSIS_UTF8 "\xE2\x80\xA6"
 
@@ -118,7 +121,8 @@ static int glyph_adv(const BitmapFont* font, uint32_t cp, int letter_spacing)
  * @brief Draws a single glyph bitmap into the framebuffer via run-length fill calls.
  *
  * Pixels are emitted as horizontal runs of set bits using er_blit_fill(). All
- * output is clipped to the supplied clip rectangle.
+ * output is clipped to the supplied clip rectangle.  When italic is true each row
+ * is shifted right by (height - 1 - row) * ITALIC_SLOPE pixels producing a shear slant.
  *
  * @param[in] g         GlyphInfo describing the glyph dimensions and bitmap offset.
  * @param[in] bitmap    Pointer to the font's packed 1-bit-per-pixel bitmap data.
@@ -126,9 +130,15 @@ static int glyph_adv(const BitmapFont* font, uint32_t cp, int letter_spacing)
  * @param[in] cursor_y  Cursor Y origin (top of the line box) in framebuffer pixels.
  * @param[in] clip      Clipping rectangle; no pixels are drawn outside this area.
  * @param[in] color     Text color as straight-alpha ARGB8888.
+ * @param[in] italic    When true, apply a synthetic italic shear to each row.
  */
-static void
-draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
+static void draw_glyph(const GlyphInfo* g,
+                       const uint8_t* bitmap,
+                       int cursor_x,
+                       int cursor_y,
+                       const ERRect* clip,
+                       uint32_t color,
+                       bool italic)
 {
     if (g->width == 0U || g->height == 0U)
         return;
@@ -141,7 +151,7 @@ draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y
     const int clip_x2 = clip->x + clip->w;
     const int clip_y2 = clip->y + clip->h;
 
-    const int origin_x = cursor_x + g->x_offset;
+    const int base_origin_x = cursor_x + g->x_offset;
     const int origin_y = cursor_y + g->y_offset;
 
     for (int row = 0; row < g->height; row++)
@@ -149,6 +159,9 @@ draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y
         const int fy = origin_y + row;
         if (fy < clip_y1 || fy >= clip_y2)
             continue;
+
+        const int italic_dx = italic ? (int)((float)(g->height - 1 - row) * ITALIC_SLOPE) : 0;
+        const int origin_x = base_origin_x + italic_dx;
 
         const uint8_t* src_row = bmp + (size_t)row * (size_t)row_bytes;
         int run_start = -1;
@@ -188,6 +201,11 @@ draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y
  * ARGB8888 row buffer and composites it via er_blit_copy.
  * Output is clipped to the supplied clip rectangle.
  *
+ * When italic is true, a bilinear subpixel shear is applied per row: source pixel at
+ * column s contributes (1 − frac) to destination column (s + shift_int) and frac to
+ * (s + shift_int + 1), where shift = (height − 1 − row) × ITALIC_SLOPE.  This
+ * eliminates the staircase edge artefact produced by integer-only shifts.
+ *
  * @param[in] g         GlyphInfo describing the glyph dimensions and bitmap offset.
  * @param[in] bitmap    Pointer to the font's packed grayscale bitmap data.
  * @param[in] bpp       Bits per pixel of the font bitmap (2, 4, or 8).
@@ -195,6 +213,7 @@ draw_glyph(const GlyphInfo* g, const uint8_t* bitmap, int cursor_x, int cursor_y
  * @param[in] cursor_y  Cursor Y origin (top of the line box) in framebuffer pixels.
  * @param[in] clip      Clipping rectangle; no pixels are drawn outside this area.
  * @param[in] color     Text color as straight-alpha ARGB8888.
+ * @param[in] italic    When true, apply a smooth subpixel italic shear to each row.
  */
 static void draw_glyph_aa(const GlyphInfo* g,
                           const uint8_t* bitmap,
@@ -202,7 +221,8 @@ static void draw_glyph_aa(const GlyphInfo* g,
                           int cursor_x,
                           int cursor_y,
                           const ERRect* clip,
-                          uint32_t color)
+                          uint32_t color,
+                          bool italic)
 {
     if (g->width == 0U || g->height == 0U)
         return;
@@ -217,12 +237,18 @@ static void draw_glyph_aa(const GlyphInfo* g,
     const int clip_y1 = clip->y;
     const int clip_x2 = clip->x + clip->w;
     const int clip_y2 = clip->y + clip->h;
-    const int origin_x = cursor_x + g->x_offset;
+    const int base_origin_x = cursor_x + g->x_offset;
     const int origin_y = cursor_y + g->y_offset;
 
     const int row_stride = (bpp == 8) ? (int)g->width : (bpp == 4) ? ((int)g->width + 1) / 2 : ((int)g->width + 3) / 4;
 
-    uint32_t row_buf[256];
+    /* Scratch buffers: cov_buf holds unpacked source coverage; out_cov holds the
+     * (optionally blended) coverage that feeds the final premultiplied row; row_buf
+     * is the premultiplied ARGB output passed to er_blit_copy.  All sized for the
+     * maximum glyph width (256) plus one extra slot for the italic fractional tail. */
+    uint8_t cov_buf[256];
+    uint8_t out_cov_buf[257];
+    uint32_t row_buf[257];
 
     for (int row = 0; row < (int)g->height; row++)
     {
@@ -230,13 +256,16 @@ static void draw_glyph_aa(const GlyphInfo* g,
         if (fy < clip_y1 || fy >= clip_y2)
             continue;
 
-        const int col_start = (clip_x1 > origin_x) ? clip_x1 - origin_x : 0;
-        const int col_end = (clip_x2 < origin_x + (int)g->width) ? clip_x2 - origin_x : (int)g->width;
-        if (col_start >= col_end)
-            continue;
+        /* Per-row italic shift: integer part moves origin_x; fractional part feeds
+         * the bilinear blend below. */
+        const float italic_shift_f = italic ? (float)(g->height - 1 - row) * ITALIC_SLOPE : 0.0f;
+        const int shift_int = (int)italic_shift_f;
+        const float shift_frac = italic_shift_f - (float)shift_int;
+        const int origin_x = base_origin_x + shift_int;
 
+        /* Step 1 — unpack source coverage for the entire glyph row. */
         const uint8_t* src_row = bmp + (size_t)row * (size_t)row_stride;
-        for (int col = col_start; col < col_end; col++)
+        for (int col = 0; col < (int)g->width; col++)
         {
             uint8_t cov;
             if (bpp == 8)
@@ -253,12 +282,49 @@ static void draw_glyph_aa(const GlyphInfo* g,
                 const uint8_t pair = (src_row[col >> 2] >> (6U - ((uint8_t)col & 3U) * 2U)) & 0x03U;
                 cov = pair * 85U;
             }
+            cov_buf[col] = cov;
+        }
 
-            const uint8_t a = (uint8_t)(((uint32_t)src_a * cov + 127U) / 255U);
+        /* Step 2 — bilinear subpixel blend for italic (no-op when shift_frac ≈ 0).
+         *
+         * Destination column d receives:
+         *   out_cov[d] = cov[d] * (1 - frac) + cov[d-1] * frac
+         * where cov[x] = 0 for x outside [0, width-1].
+         *
+         * This distributes each source pixel between its two nearest destination
+         * columns, producing anti-aliased shear edges instead of a staircase. */
+        const uint8_t* out_cov;
+        int out_width;
+        if (!italic || shift_frac < 0.005f)
+        {
+            out_cov = cov_buf;
+            out_width = (int)g->width;
+        }
+        else
+        {
+            out_width = (int)g->width + 1;
+            for (int d = 0; d < out_width; d++)
+            {
+                const float cv_prev = (d > 0) ? (float)cov_buf[d - 1] : 0.0f;
+                const float cv_curr = (d < (int)g->width) ? (float)cov_buf[d] : 0.0f;
+                out_cov_buf[d] = (uint8_t)(cv_curr * (1.0f - shift_frac) + cv_prev * shift_frac + 0.5f);
+            }
+            out_cov = out_cov_buf;
+        }
+
+        /* Step 3 — clip and build premultiplied output row, then blit. */
+        const int col_start = (clip_x1 > origin_x) ? clip_x1 - origin_x : 0;
+        const int col_end = (clip_x2 < origin_x + out_width) ? clip_x2 - origin_x : out_width;
+        if (col_start >= col_end)
+            continue;
+
+        for (int d = col_start; d < col_end; d++)
+        {
+            const uint8_t a = (uint8_t)(((uint32_t)src_a * out_cov[d] + 127U) / 255U);
             const uint8_t pr = (uint8_t)(((uint32_t)src_r * a + 127U) / 255U);
             const uint8_t pg = (uint8_t)(((uint32_t)src_g * a + 127U) / 255U);
             const uint8_t pb = (uint8_t)(((uint32_t)src_b * a + 127U) / 255U);
-            row_buf[col - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) | ((uint32_t)pg << 8) | (uint32_t)pb;
+            row_buf[d - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) | ((uint32_t)pg << 8) | (uint32_t)pb;
         }
 
         er_blit_copy(
@@ -275,14 +341,16 @@ static void draw_glyph_aa(const GlyphInfo* g,
  * @param[in] cursor_y  Cursor Y origin (top of line box) in framebuffer pixels.
  * @param[in] clip      Clipping rectangle.
  * @param[in] color     Straight-alpha ARGB8888 text color.
+ * @param[in] italic    When true, apply a synthetic italic shear.
  */
-static void draw_cp(const BitmapFont* font, uint32_t cp, int cursor_x, int cursor_y, const ERRect* clip, uint32_t color)
+static void draw_cp(
+    const BitmapFont* font, uint32_t cp, int cursor_x, int cursor_y, const ERRect* clip, uint32_t color, bool italic)
 {
     const GlyphInfo* g = font_glyph(font, cp);
     if (font->format != ERUI_FONT_FMT_1BIT)
-        draw_glyph_aa(g, font->bitmap, font->format, cursor_x, cursor_y, clip, color);
+        draw_glyph_aa(g, font->bitmap, font->format, cursor_x, cursor_y, clip, color, italic);
     else
-        draw_glyph(g, font->bitmap, cursor_x, cursor_y, clip, color);
+        draw_glyph(g, font->bitmap, cursor_x, cursor_y, clip, color, italic);
 }
 
 /**
@@ -450,6 +518,8 @@ void er_text_render(const ERTextRenderParams* params)
 
     const int lh = (params->line_height > 0) ? (int)params->line_height : (int)font->line_height;
     const int ls = (int)params->letter_spacing;
+    const bool bold = (params->font_weight != 0U);
+    const bool italic = (params->font_style != 0U);
 
     /* Build line spans. */
     LineSpan spans[TEXT_MAX_LINES];
@@ -470,7 +540,7 @@ void er_text_render(const ERTextRenderParams* params)
         const char* ep = ELLIPSIS_UTF8;
         ellipsis_cp = utf8_next(&ep);
         ellipsis_g = font_glyph(font, ellipsis_cp);
-        ellipsis_px = (int)ellipsis_g->advance + ls;
+        ellipsis_px = (int)ellipsis_g->advance + ls + (bold ? 1 : 0);
     }
 
     /* Render each line. */
@@ -498,7 +568,7 @@ void er_text_render(const ERTextRenderParams* params)
             {
                 const char* cps = p;
                 uint32_t cp = utf8_next(&p);
-                const int adv = glyph_adv(font, cp, ls);
+                const int adv = glyph_adv(font, cp, ls) + (bold ? 1 : 0);
                 if (w + adv > avail)
                 {
                     p = cps;
@@ -535,8 +605,10 @@ void er_text_render(const ERTextRenderParams* params)
             while (p < render_end && *p)
             {
                 uint32_t cp = utf8_next(&p);
-                draw_cp(font, cp, cx, cursor_y, &params->clip, params->color);
-                cx += glyph_adv(font, cp, ls);
+                draw_cp(font, cp, cx, cursor_y, &params->clip, params->color, italic);
+                if (bold)
+                    draw_cp(font, cp, cx + 1, cursor_y, &params->clip, params->color, italic);
+                cx += glyph_adv(font, cp, ls) + (bold ? 1 : 0);
             }
         }
 
@@ -544,7 +616,9 @@ void er_text_render(const ERTextRenderParams* params)
         if (apply_ellip && ellipsis_g)
         {
             const int ecx = cursor_x + render_w;
-            draw_cp(font, ellipsis_cp, ecx, cursor_y, &params->clip, params->color);
+            draw_cp(font, ellipsis_cp, ecx, cursor_y, &params->clip, params->color, italic);
+            if (bold)
+                draw_cp(font, ellipsis_cp, ecx + 1, cursor_y, &params->clip, params->color, italic);
         }
 
         /* Text decoration (underline / line-through). */

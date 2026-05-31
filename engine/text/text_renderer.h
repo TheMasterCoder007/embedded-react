@@ -25,6 +25,8 @@ typedef struct ERTextRenderParams
     uint8_t number_of_lines; /**< Maximum rendered lines; 0 = unlimited. */
     uint8_t ellipsize_mode;  /**< ERTextEllipsize — applied when number_of_lines truncates. */
     uint8_t text_decoration; /**< ERTextDecoration — default none. */
+    uint8_t font_weight;     /**< 0 = normal, 1 = bold (synthetic double-pass). */
+    uint8_t font_style;      /**< ERFontStyle — 0 = normal, 1 = italic (synthetic shear). */
     int16_t line_height;     /**< Line height in pixels; 0 = use the font's natural value. */
     int16_t letter_spacing;  /**< Extra pixels added to each glyph advance; may be negative. */
 } ERTextRenderParams;

@@ -308,63 +308,72 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
 
     /*--------------------------------------------------------------------------
      * Pass 3 — per line: resolve flex_grow / flex_shrink against free space.
+     *
+     * For overflow:scroll containers the main axis is unbounded: children keep
+     * their natural sizes instead of growing or shrinking to fit the viewport.
+     * This matches React Native's ScrollView behaviour where content overflows
+     * the viewport to produce a scrollable virtual content size.
      *------------------------------------------------------------------------*/
-    for (int ln = 0; ln < n_lines; ln++)
+    const bool is_scroll = (L->overflow == ER_OVERFLOW_SCROLL);
+    if (!is_scroll)
     {
-        int32_t used = 0;
-        int count = 0;
-        int32_t total_grow = 0;
-        int32_t total_shrink_scaled = 0;
-        for (int i = 0; i < n_inflow; i++)
+        for (int ln = 0; ln < n_lines; ln++)
         {
-            if (s_scratch[i].line != ln)
-                continue;
-            used += s_scratch[i].main + s_scratch[i].margin_main_start + s_scratch[i].margin_main_end;
-            count++;
-            total_grow += s_scratch[i].flex_grow;
-            total_shrink_scaled += (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
-        }
-        if (count > 1)
-            used += (count - 1) * main_gap;
-        const int32_t free_space = (int32_t)main_size - used;
-
-        if (free_space > 0 && total_grow > 0)
-        {
+            int32_t used = 0;
+            int count = 0;
+            int32_t total_grow = 0;
+            int32_t total_shrink_scaled = 0;
             for (int i = 0; i < n_inflow; i++)
             {
-                if (s_scratch[i].line != ln || s_scratch[i].flex_grow == 0)
+                if (s_scratch[i].line != ln)
                     continue;
-                const int32_t delta = (free_space * s_scratch[i].flex_grow) / total_grow;
-                int32_t v = s_scratch[i].main + delta;
-                const ERNode* c = er_get_node(s_scratch[i].tag);
-                if (c)
-                {
-                    const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
-                    const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
-                    v = clamp_size((int16_t)v, mn, mx);
-                }
-                s_scratch[i].main = (int16_t)v;
+                used += s_scratch[i].main + s_scratch[i].margin_main_start + s_scratch[i].margin_main_end;
+                count++;
+                total_grow += s_scratch[i].flex_grow;
+                total_shrink_scaled += (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
             }
-        }
-        else if (free_space < 0 && total_shrink_scaled > 0)
-        {
-            for (int i = 0; i < n_inflow; i++)
+            if (count > 1)
+                used += (count - 1) * main_gap;
+            const int32_t free_space = (int32_t)main_size - used;
+
+            if (free_space > 0 && total_grow > 0)
             {
-                if (s_scratch[i].line != ln || s_scratch[i].flex_shrink == 0)
-                    continue;
-                const int32_t factor = (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
-                const int32_t delta = (free_space * factor) / total_shrink_scaled;
-                int32_t v = s_scratch[i].main + delta;
-                if (v < 0)
-                    v = 0;
-                const ERNode* c = er_get_node(s_scratch[i].tag);
-                if (c)
+                for (int i = 0; i < n_inflow; i++)
                 {
-                    const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
-                    const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
-                    v = clamp_size((int16_t)v, mn, mx);
+                    if (s_scratch[i].line != ln || s_scratch[i].flex_grow == 0)
+                        continue;
+                    const int32_t delta = (free_space * s_scratch[i].flex_grow) / total_grow;
+                    int32_t v = s_scratch[i].main + delta;
+                    const ERNode* c = er_get_node(s_scratch[i].tag);
+                    if (c)
+                    {
+                        const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
+                        const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
+                        v = clamp_size((int16_t)v, mn, mx);
+                    }
+                    s_scratch[i].main = (int16_t)v;
                 }
-                s_scratch[i].main = (int16_t)v;
+            }
+            else if (free_space < 0 && total_shrink_scaled > 0)
+            {
+                for (int i = 0; i < n_inflow; i++)
+                {
+                    if (s_scratch[i].line != ln || s_scratch[i].flex_shrink == 0)
+                        continue;
+                    const int32_t factor = (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
+                    const int32_t delta = (free_space * factor) / total_shrink_scaled;
+                    int32_t v = s_scratch[i].main + delta;
+                    if (v < 0)
+                        v = 0;
+                    const ERNode* c = er_get_node(s_scratch[i].tag);
+                    if (c)
+                    {
+                        const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
+                        const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
+                        v = clamp_size((int16_t)v, mn, mx);
+                    }
+                    s_scratch[i].main = (int16_t)v;
+                }
             }
         }
     }

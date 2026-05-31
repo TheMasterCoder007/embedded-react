@@ -527,6 +527,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                 par.number_of_lines = tp->number_of_lines;
                 par.ellipsize_mode = tp->ellipsize_mode;
                 par.text_decoration = tp->text_decoration;
+                par.font_weight = tp->font_weight;
+                par.font_style = tp->font_style;
                 par.line_height = tp->line_height;
                 par.letter_spacing = tp->letter_spacing;
                 er_text_render(&par);
@@ -954,6 +956,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text.color = props->color;
             node->props.text.font_size = props->font_size;
             node->props.text.font_weight = props->font_weight;
+            node->props.text.font_style = props->font_style;
             node->props.text.text_align = props->text_align;
             node->props.text.number_of_lines = props->number_of_lines;
             node->props.text.ellipsize_mode = props->ellipsize_mode;

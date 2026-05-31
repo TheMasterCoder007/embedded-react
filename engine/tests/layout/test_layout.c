@@ -363,5 +363,63 @@ int main(void)
         er_node_destroy(ph_root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Test: overflow:scroll — flex_shrink does not squish children to viewport.
+     *
+     * ScrollView 200×100 (flex_direction=col) contains 3 children each h=60.
+     * Total content = 180 px, viewport = 100 px.  With flex_shrink=1 on each
+     * child, the old code would shrink each child to ~33 px.  With the fix
+     * children must keep their explicit 60 px height and the content size must
+     * be reported as 180 px.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
+        ERProps sp = props_default();
+        sp.width = 200;
+        sp.height = 100;
+        sp.flex_direction = ER_FLEX_COL;
+        sp.overflow = ER_OVERFLOW_SCROLL;
+        er_node_set_props(sv, &sp);
+
+        ERNode* kids[3];
+        ERRect krect[3];
+        for (int i = 0; i < 3; i++)
+        {
+            kids[i] = er_node_create(ER_NODE_VIEW);
+            ERProps kp = props_default();
+            kp.width = 200;
+            kp.height = 60;
+            kp.flex_shrink = 1; /* would shrink without the overflow:scroll fix */
+            er_node_set_props(kids[i], &kp);
+            krect[i] = (ERRect){-1, -1, -1, -1};
+            er_event_set(kids[i], ER_EVENT_LAYOUT, on_layout_rect, &krect[i]);
+            er_tree_append_child(sv, kids[i]);
+        }
+
+        er_tree_set_root(sv);
+        er_commit();
+
+        /* Each child must keep its explicit 60 px height (no shrinking). */
+        for (int i = 0; i < 3; i++)
+        {
+            if (krect[i].h != 60)
+                return fail("overflow:scroll: child was shrunk to fit the viewport (flex_shrink not suppressed)");
+        }
+        /* Children stack starting at y=0 (ScrollView is root, placed at origin). */
+        if (krect[0].y != 0)
+            return fail("overflow:scroll: first child y should be 0");
+        if (krect[1].y != 60)
+            return fail("overflow:scroll: second child y should be 60");
+        if (krect[2].y != 120)
+            return fail("overflow:scroll: third child y should be 120");
+
+        for (int i = 0; i < 3; i++)
+        {
+            er_tree_remove_child(sv, kids[i]);
+            er_node_destroy(kids[i]);
+        }
+        er_node_destroy(sv);
+    }
+
     return EXIT_SUCCESS;
 }

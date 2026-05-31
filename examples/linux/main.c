@@ -15,7 +15,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define SCREEN_W 1440
-#define SCREEN_H 1024
+#define SCREEN_H 1100
 
 #define CYCLE_COUNT 5
 
@@ -1286,7 +1286,7 @@ static ERNode* build_text_panel(void)
 
     ERNode* align_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(56);
+    p.height = dp(40);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_STRETCH;
     p.gap = dp(4);
@@ -1299,63 +1299,44 @@ static ERNode* build_text_panel(void)
 
     /* ---- Section: numberOfLines + ellipsis ---- */
     er_tree_append_child(col, make_section_header("NUMBER OF LINES"));
-    er_tree_append_child(col, make_caption("1-line  +  tail ellipsis"));
 
-    /* Fixed-height boxes so multi-line text has room to render. */
+    /* Two-line box with tail ellipsis — demonstrates both 1-line and 2-line caps. */
     ERNode* ellip_box = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(34);
-    p.background_color = 0xFF0F1E2D;
-    p.border_radius = dp(5);
-    p.padding_left = p.padding_right = dp(6);
-    p.align_items = ER_ALIGN_STRETCH;      /* text fills width → left-adjusted */
-    p.justify_content = ER_JUSTIFY_CENTER; /* vertically centre the single line */
-    er_node_set_props(ellip_box, &p);
-
-    ERNode* ellip_txt = er_node_create(ER_NODE_TEXT);
-    p = props_default();
-    p.color = 0xFFF4A261;
-    p.font_size = (uint8_t)dp(13);
-    p.number_of_lines = 1;
-    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
-    strncpy(p.text, "Long sentence intentionally exceeds the box width so tail ellipsis fires", ER_TEXT_MAX);
-    er_node_set_props(ellip_txt, &p);
-    er_tree_append_child(ellip_box, ellip_txt);
-    er_tree_append_child(col, ellip_box);
-
-    /* 2-line version: a VIEW with height:auto does not yet size to its children in the
-     * engine, so the box is given an explicit height tall enough for two lines + padding. */
-    er_tree_append_child(col, make_caption("2-line cap  +  ellipsis"));
-
-    ERNode* ellip2_box = er_node_create(ER_NODE_VIEW);
-    p = props_default();
-    p.height = dp(54);
+    p.height = dp(44);
     p.background_color = 0xFF0F1E2D;
     p.border_radius = dp(5);
     p.padding = dp(6);
-    er_node_set_props(ellip2_box, &p);
+    er_node_set_props(ellip_box, &p);
 
-    ERNode* ellip2_txt = er_node_create(ER_NODE_TEXT);
+    ERNode* ellip_txt = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFF2A9D8F;
     p.font_size = (uint8_t)dp(13);
     p.number_of_lines = 2;
     p.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
     strncpy(p.text,
-            "This longer paragraph wraps across several lines and is then capped at two lines so the tail "
-            "ellipsis truncates the remaining overflow text",
+            "This paragraph wraps and is capped at two lines so the tail ellipsis fires on the overflow text",
             ER_TEXT_MAX);
-    er_node_set_props(ellip2_txt, &p);
-    er_tree_append_child(ellip2_box, ellip2_txt);
-    er_tree_append_child(col, ellip2_box);
+    er_node_set_props(ellip_txt, &p);
+    er_tree_append_child(ellip_box, ellip_txt);
+    er_tree_append_child(col, ellip_box);
 
     /* ---- Section: letterSpacing ---- */
     er_tree_append_child(col, make_section_header("LETTER SPACING"));
 
-    /* Fixed height so the label never wraps and always reads clearly. */
-    ERNode* ls_box = er_node_create(ER_NODE_VIEW);
+    /* Label + cycle button side-by-side to save vertical space. */
+    ERNode* ls_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
     p.height = dp(34);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(8);
+    er_node_set_props(ls_row, &p);
+
+    ERNode* ls_box = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
     p.background_color = 0xFF0F1E2D;
     p.border_radius = dp(5);
     p.padding_left = p.padding_right = dp(6);
@@ -1365,21 +1346,43 @@ static ERNode* build_text_panel(void)
     ERNode* ls_lbl = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFEEF4FF;
-    p.font_size = (uint8_t)dp(13);
+    p.font_size = (uint8_t)dp(12);
     p.letter_spacing = 0;
     strncpy(p.text, "SPACING  (0 px)", ER_TEXT_MAX);
     er_node_set_props(ls_lbl, &p);
     s_ls_lbl = ls_lbl;
     er_tree_append_child(ls_box, ls_lbl);
-    er_tree_append_child(col, ls_box);
-    er_tree_append_child(col, make_button("CYCLE SPACING", on_ls_cycle));
+    er_tree_append_child(ls_row, ls_box);
+
+    ERNode* ls_btn = er_node_create(ER_NODE_PRESSABLE);
+    p = props_default();
+    p.background_color = 0xFF243447;
+    p.border_radius = dp(6);
+    p.padding_left = p.padding_right = dp(10);
+    p.align_items = ER_ALIGN_STRETCH;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(ls_btn, &p);
+    er_event_set(ls_btn, ER_EVENT_PRESS, on_ls_cycle, NULL);
+    ERNode* ls_btn_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFDDEEFF;
+    p.font_size = (uint8_t)dp(12);
+    p.text_align = ER_TEXT_ALIGN_CENTER;
+    p.number_of_lines = 1;
+    p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    strncpy(p.text, "CYCLE", ER_TEXT_MAX);
+    er_node_set_props(ls_btn_lbl, &p);
+    er_tree_append_child(ls_btn, ls_btn_lbl);
+    er_tree_append_child(ls_row, ls_btn);
+
+    er_tree_append_child(col, ls_row);
 
     /* ---- Section: textDecoration ---- */
     er_tree_append_child(col, make_section_header("TEXT DECORATION"));
 
     ERNode* deco_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
-    p.height = dp(36);
+    p.height = dp(30);
     p.flex_direction = ER_FLEX_ROW;
     p.align_items = ER_ALIGN_CENTER;
     p.gap = dp(12);
@@ -1388,7 +1391,7 @@ static ERNode* build_text_panel(void)
     ERNode* under_lbl = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFF2A9D8F;
-    p.font_size = (uint8_t)dp(14);
+    p.font_size = (uint8_t)dp(13);
     p.text_decoration = ER_TEXT_DECORATION_UNDERLINE;
     strncpy(p.text, "underline", ER_TEXT_MAX);
     er_node_set_props(under_lbl, &p);
@@ -1397,13 +1400,45 @@ static ERNode* build_text_panel(void)
     ERNode* strike_lbl = er_node_create(ER_NODE_TEXT);
     p = props_default();
     p.color = 0xFFE94560;
-    p.font_size = (uint8_t)dp(14);
+    p.font_size = (uint8_t)dp(13);
     p.text_decoration = ER_TEXT_DECORATION_LINE_THROUGH;
     strncpy(p.text, "line-through", ER_TEXT_MAX);
     er_node_set_props(strike_lbl, &p);
     er_tree_append_child(deco_row, strike_lbl);
 
     er_tree_append_child(col, deco_row);
+
+    /* ---- Section: fontWeight / fontStyle — one line per variant ---- */
+    er_tree_append_child(col, make_section_header("FONT WEIGHT & STYLE"));
+
+    {
+        static const struct
+        {
+            const char* text;
+            uint32_t color;
+            uint8_t weight;
+            uint8_t style;
+        } k_ws[4] = {
+            {"Normal — the quick brown fox", 0xFFEEF4FF, 0, ER_FONT_STYLE_NORMAL},
+            {"Bold — the quick brown fox", 0xFFF4A261, 1, ER_FONT_STYLE_NORMAL},
+            {"Italic — the quick brown fox", 0xFF2A9D8F, 0, ER_FONT_STYLE_ITALIC},
+            {"Bold Italic — the quick brown fox", 0xFFE94560, 1, ER_FONT_STYLE_ITALIC},
+        };
+        for (int wi = 0; wi < 4; wi++)
+        {
+            ERNode* ws_lbl = er_node_create(ER_NODE_TEXT);
+            p = props_default();
+            p.color = k_ws[wi].color;
+            p.font_size = (uint8_t)dp(13);
+            p.font_weight = k_ws[wi].weight;
+            p.font_style = k_ws[wi].style;
+            p.number_of_lines = 1;
+            p.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+            strncpy(p.text, k_ws[wi].text, ER_TEXT_MAX);
+            er_node_set_props(ws_lbl, &p);
+            er_tree_append_child(col, ws_lbl);
+        }
+    }
 
     return col;
 }

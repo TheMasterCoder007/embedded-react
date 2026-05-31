@@ -406,5 +406,60 @@ int main(void)
     if (trailing_ws_max_x > one_word_max_x + 2)
         return fail("trailing whitespace was not trimmed at end-of-string");
 
+    /* ---- fontWeight bold: bold text must render wider than normal ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Bold";
+    par.clip = (ERRect){0, 0, FB_W, FB_H};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.font_weight = 1;
+    er_text_render(&par);
+    const int bold_max_x = tc.max_x;
+    if (tc.draw_ops == 0)
+        return fail("bold render produced no draw calls");
+    if (tc.out_of_bounds != 0)
+        return fail("bold render emitted out-of-bounds pixels");
+
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.font_weight = 0;
+    er_text_render(&par);
+    const int normal_max_x = tc.max_x;
+
+    if (bold_max_x <= normal_max_x)
+        return fail("bold text did not render wider than normal text");
+
+    /* ---- fontStyle italic: italic must render in-bounds ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    memset(&par, 0, sizeof(par));
+    par.text = "Italic";
+    par.clip = (ERRect){0, 0, FB_W, FB_H};
+    par.color = 0xFFFFFFFFU;
+    par.font_size = 14;
+    par.font_style = 1;
+    er_text_render(&par);
+    if (tc.draw_ops == 0)
+        return fail("italic render produced no draw calls");
+    if (tc.out_of_bounds != 0)
+        return fail("italic render emitted out-of-bounds pixels");
+
+    /* ---- bold-italic: combined must also render in-bounds ---- */
+    ctx_reset(&tc);
+    be.ctx = &tc;
+    embedded_renderer_set_backend(&be);
+    par.font_weight = 1;
+    par.font_style = 1;
+    er_text_render(&par);
+    if (tc.draw_ops == 0)
+        return fail("bold-italic render produced no draw calls");
+    if (tc.out_of_bounds != 0)
+        return fail("bold-italic render emitted out-of-bounds pixels");
+
     return EXIT_SUCCESS;
 }
