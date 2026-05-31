@@ -120,6 +120,19 @@ static int fail(const char* msg)
 }
 
 /**
+ * @brief ER_EVENT_LAYOUT handler that records a node's full computed rect.
+ *
+ * @param[in] node       Node that fired the event (unused).
+ * @param[in] data       Event payload carrying data->layout_rect.
+ * @param[in] user_data  Pointer to an ERRect that receives the computed rectangle.
+ */
+static void on_layout_rect(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    *(ERRect*)user_data = data->layout_rect;
+}
+
+/**
  * @brief Builds an ERProps with all layout fields set to ER_LAYOUT_AUTO.
  *
  * @return Zero-initialised ERProps with AUTO layout sentinels and opacity 255.
@@ -133,8 +146,10 @@ static ERProps props_default(void)
     p.min_height = p.max_height = ER_LAYOUT_AUTO;
     p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
     p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
+    p.padding_horizontal = p.padding_vertical = ER_LAYOUT_AUTO;
     p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
     p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
+    p.margin_horizontal = p.margin_vertical = ER_LAYOUT_AUTO;
     p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
     p.flex_basis = ER_LAYOUT_AUTO;
     p.opacity = 255U;
@@ -210,6 +225,143 @@ int main(void)
     /* Two lines should be roughly twice one line; allow generous tolerance. */
     if (s_two_line_h < s_one_line_h + s_one_line_h / 2)
         return fail("two-line height is not close to twice the one-line height");
+
+    /* -----------------------------------------------------------------------
+     * Test: aspectRatio — child derives height from explicit width.
+     * Container: row 200×200.  Child: width=100, aspect_ratio=2.0 → height=50.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ar_root = er_node_create(ER_NODE_VIEW);
+        ERProps ap = props_default();
+        ap.width = 200;
+        ap.height = 200;
+        ap.flex_direction = ER_FLEX_ROW;
+        ap.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(ar_root, &ap);
+
+        ERNode* ar_child = er_node_create(ER_NODE_VIEW);
+        ERRect ar_rect = {-1, -1, -1, -1};
+        ap = props_default();
+        ap.width = 100;
+        ap.aspect_ratio = 2.0f; /* width/height = 2 → height = 50 */
+        er_node_set_props(ar_child, &ap);
+        er_event_set(ar_child, ER_EVENT_LAYOUT, on_layout_rect, &ar_rect);
+
+        er_tree_append_child(ar_root, ar_child);
+        er_tree_set_root(ar_root);
+        er_commit();
+
+        if (ar_rect.w != 100)
+            return fail("aspectRatio: child width should be 100");
+        if (ar_rect.h != 50)
+            return fail("aspectRatio: child height should be 50 (width/ratio=100/2)");
+
+        er_tree_remove_child(ar_root, ar_child);
+        er_node_destroy(ar_child);
+        er_node_destroy(ar_root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: flex_basis_pct — child claims 50% of parent's main axis.
+     * Container: row 200×80.  Child: flex_basis_pct=50 → width=100.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* pct_root = er_node_create(ER_NODE_VIEW);
+        ERProps pp = props_default();
+        pp.width = 200;
+        pp.height = 80;
+        pp.flex_direction = ER_FLEX_ROW;
+        pp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(pct_root, &pp);
+
+        ERNode* pct_child = er_node_create(ER_NODE_VIEW);
+        ERRect pct_rect = {-1, -1, -1, -1};
+        pp = props_default();
+        pp.flex_basis_pct = 50.0f;
+        er_node_set_props(pct_child, &pp);
+        er_event_set(pct_child, ER_EVENT_LAYOUT, on_layout_rect, &pct_rect);
+
+        er_tree_append_child(pct_root, pct_child);
+        er_tree_set_root(pct_root);
+        er_commit();
+
+        if (pct_rect.w != 100)
+            return fail("flex_basis_pct: 50% of 200px parent should yield width=100");
+
+        er_tree_remove_child(pct_root, pct_child);
+        er_node_destroy(pct_child);
+        er_node_destroy(pct_root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: marginHorizontal — expands to margin_left + margin_right.
+     * Container: col 200×200.  Child: marginHorizontal=20 → x=20, width=160.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* mh_root = er_node_create(ER_NODE_VIEW);
+        ERProps mp = props_default();
+        mp.width = 200;
+        mp.height = 200;
+        mp.flex_direction = ER_FLEX_COL;
+        mp.align_items = ER_ALIGN_STRETCH;
+        er_node_set_props(mh_root, &mp);
+
+        ERNode* mh_child = er_node_create(ER_NODE_VIEW);
+        ERRect mh_rect = {-1, -1, -1, -1};
+        mp = props_default();
+        mp.height = 40;
+        mp.margin_horizontal = 20;
+        er_node_set_props(mh_child, &mp);
+        er_event_set(mh_child, ER_EVENT_LAYOUT, on_layout_rect, &mh_rect);
+
+        er_tree_append_child(mh_root, mh_child);
+        er_tree_set_root(mh_root);
+        er_commit();
+
+        if (mh_rect.x != 20)
+            return fail("marginHorizontal: child should be offset 20px from parent left");
+        if (mh_rect.w != 160)
+            return fail("marginHorizontal: child width should be 160 (200 - 20*2)");
+
+        er_tree_remove_child(mh_root, mh_child);
+        er_node_destroy(mh_child);
+        er_node_destroy(mh_root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: paddingHorizontal — adds padding to both left and right.
+     * Container: col 200×200, paddingHorizontal=15. Child: stretch → x=15, w=170.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ph_root = er_node_create(ER_NODE_VIEW);
+        ERProps php = props_default();
+        php.width = 200;
+        php.height = 200;
+        php.flex_direction = ER_FLEX_COL;
+        php.align_items = ER_ALIGN_STRETCH;
+        php.padding_horizontal = 15;
+        er_node_set_props(ph_root, &php);
+
+        ERNode* ph_child = er_node_create(ER_NODE_VIEW);
+        ERRect ph_rect = {-1, -1, -1, -1};
+        php = props_default();
+        php.height = 40;
+        er_node_set_props(ph_child, &php);
+        er_event_set(ph_child, ER_EVENT_LAYOUT, on_layout_rect, &ph_rect);
+
+        er_tree_append_child(ph_root, ph_child);
+        er_tree_set_root(ph_root);
+        er_commit();
+
+        if (ph_rect.x != 15)
+            return fail("paddingHorizontal: child should start at x=15");
+        if (ph_rect.w != 170)
+            return fail("paddingHorizontal: child width should be 170 (200 - 15*2)");
+
+        er_tree_remove_child(ph_root, ph_child);
+        er_node_destroy(ph_child);
+        er_node_destroy(ph_root);
+    }
 
     return EXIT_SUCCESS;
 }

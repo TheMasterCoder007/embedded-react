@@ -61,6 +61,8 @@ static void init_layout_defaults(ERLayoutSpec* L)
     L->align_self = ER_ALIGN_AUTO;
     L->justify_content = ER_JUSTIFY_FLEX_START;
     L->position = ER_POS_RELATIVE;
+    L->aspect_ratio = 0.0f;
+    L->flex_basis_pct = 0.0f;
 }
 
 /**
@@ -263,6 +265,82 @@ void er_mark_dirty_upward(ERNode* node)
 }
 
 /**
+ * @brief Renders the background and border of a View-family node.
+ *
+ * Resolves per-corner radii, per-edge widths/colors, and border style from ERViewProps,
+ * then dispatches to er_rrect_fill_bordered (fast uniform path) or the general
+ * per-corner/per-edge path using er_rrect_fill_corners and er_rrect_border_edge.
+ *
+ * @param[in] vp  Visual properties of the node.
+ * @param[in] px  Left edge of the node in framebuffer pixels (after scroll offset).
+ * @param[in] py  Top edge of the node in framebuffer pixels.
+ * @param[in] w   Node width in pixels.
+ * @param[in] h   Node height in pixels.
+ */
+static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
+{
+    /* Resolve per-corner radii (0 = fall back to uniform border_radius). */
+    const int r_tl = vp->border_tl_radius > 0 ? (int)vp->border_tl_radius : (int)vp->border_radius;
+    const int r_tr = vp->border_tr_radius > 0 ? (int)vp->border_tr_radius : (int)vp->border_radius;
+    const int r_br = vp->border_br_radius > 0 ? (int)vp->border_br_radius : (int)vp->border_radius;
+    const int r_bl = vp->border_bl_radius > 0 ? (int)vp->border_bl_radius : (int)vp->border_radius;
+
+    /* Resolve per-edge widths (0 = fall back to uniform border_width). */
+    const int bw_l = vp->border_left_width > 0 ? (int)vp->border_left_width : (int)vp->border_width;
+    const int bw_t = vp->border_top_width > 0 ? (int)vp->border_top_width : (int)vp->border_width;
+    const int bw_r = vp->border_right_width > 0 ? (int)vp->border_right_width : (int)vp->border_width;
+    const int bw_b = vp->border_bottom_width > 0 ? (int)vp->border_bottom_width : (int)vp->border_width;
+
+    /* Resolve per-edge colors (0 = fall back to uniform border_color). */
+    const uint32_t bc_l = vp->border_left_color ? vp->border_left_color : vp->border_color;
+    const uint32_t bc_t = vp->border_top_color ? vp->border_top_color : vp->border_color;
+    const uint32_t bc_r = vp->border_right_color ? vp->border_right_color : vp->border_color;
+    const uint32_t bc_b = vp->border_bottom_color ? vp->border_bottom_color : vp->border_color;
+
+    /* Fast path: uniform border width, color, radius, and solid style. */
+    if (bw_l == bw_t && bw_t == bw_r && bw_r == bw_b && bc_l == bc_t && bc_t == bc_r && bc_r == bc_b && r_tl == r_tr
+        && r_tr == r_br && r_br == r_bl && vp->border_style == 0)
+    {
+        er_rrect_fill_bordered(vp->background_color, bc_l, bw_l, px, py, w, h, r_tl);
+        return;
+    }
+
+    const bool has_border = (bw_l > 0 || bw_t > 0 || bw_r > 0 || bw_b > 0);
+    const bool uniform_bw = (bw_l == bw_t && bw_t == bw_r && bw_r == bw_b);
+    const bool uniform_bc = (bc_l == bc_t && bc_t == bc_r && bc_r == bc_b);
+
+    if (has_border && uniform_bw && uniform_bc && vp->border_style == 0 && (bc_l >> 24))
+    {
+        /* Uniform solid border with per-corner radii: outer → background inset. */
+        er_rrect_fill_corners(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl);
+        const int ix = px + bw_l;
+        const int iy = py + bw_t;
+        const int iw = w - bw_l - bw_r;
+        const int ih = h - bw_t - bw_b;
+        /* Inset radii: shrink each corner by the adjacent border width. */
+        const int ir_tl = (r_tl > bw_l) ? r_tl - bw_l : 0;
+        const int ir_tr = (r_tr > bw_r) ? r_tr - bw_r : 0;
+        const int ir_br = (r_br > bw_r) ? r_br - bw_r : 0;
+        const int ir_bl = (r_bl > bw_l) ? r_bl - bw_l : 0;
+        if (iw > 0 && ih > 0)
+            er_rrect_fill_corners(vp->background_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+    }
+    else
+    {
+        /* Per-edge or styled borders: fill background shape first, then overlay each edge. */
+        er_rrect_fill_corners(vp->background_color, px, py, w, h, r_tl, r_tr, r_br, r_bl);
+        if (bw_t > 0 && (bc_t >> 24))
+            er_rrect_border_edge(bc_t, vp->border_style, px, py, w, bw_t, 1);
+        if (bw_b > 0 && (bc_b >> 24))
+            er_rrect_border_edge(bc_b, vp->border_style, px, py + h - bw_b, w, bw_b, 1);
+        if (bw_l > 0 && (bc_l >> 24))
+            er_rrect_border_edge(bc_l, vp->border_style, px, py + bw_t, bw_l, h - bw_t - bw_b, 0);
+        if (bw_r > 0 && (bc_r >> 24))
+            er_rrect_border_edge(bc_r, vp->border_style, px + w - bw_r, py + bw_t, bw_r, h - bw_t - bw_b, 0);
+    }
+}
+
+/**
  * @brief Recursively renders a node and its children depth-first.
  *
  * translate_x / translate_y accumulate the total scroll offset contributed by all
@@ -401,9 +479,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_PRESSABLE:
             case ER_NODE_FLAT_LIST:
             {
-                const ERViewProps* vp = &n->props.view;
-                er_rrect_fill_bordered(
-                    vp->background_color, vp->border_color, vp->border_width, px, py, w, h, vp->border_radius);
+                render_view_bg(&n->props.view, px, py, w, h);
                 break;
             }
             case ER_NODE_MODAL:
@@ -418,8 +494,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
                 }
                 const ERViewProps* vp = &n->props.view;
-                er_rrect_fill_bordered(
-                    vp->background_color, vp->border_color, vp->border_width, px, py, w, h, vp->border_radius);
+                render_view_bg(vp, px, py, w, h);
                 break;
             }
             case ER_NODE_TEXT:
@@ -756,15 +831,33 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->min_height = props->min_height;
     L->max_height = props->max_height;
     L->padding = props->padding;
-    L->padding_left = props->padding_left;
-    L->padding_top = props->padding_top;
-    L->padding_right = props->padding_right;
-    L->padding_bottom = props->padding_bottom;
+    /* paddingHorizontal/Vertical expand into per-edge; per-edge wins over shorthand. */
+    L->padding_left = (props->padding_left != ER_LAYOUT_AUTO)         ? props->padding_left
+                      : (props->padding_horizontal != ER_LAYOUT_AUTO) ? props->padding_horizontal
+                                                                      : ER_LAYOUT_AUTO;
+    L->padding_right = (props->padding_right != ER_LAYOUT_AUTO)        ? props->padding_right
+                       : (props->padding_horizontal != ER_LAYOUT_AUTO) ? props->padding_horizontal
+                                                                       : ER_LAYOUT_AUTO;
+    L->padding_top = (props->padding_top != ER_LAYOUT_AUTO)        ? props->padding_top
+                     : (props->padding_vertical != ER_LAYOUT_AUTO) ? props->padding_vertical
+                                                                   : ER_LAYOUT_AUTO;
+    L->padding_bottom = (props->padding_bottom != ER_LAYOUT_AUTO)     ? props->padding_bottom
+                        : (props->padding_vertical != ER_LAYOUT_AUTO) ? props->padding_vertical
+                                                                      : ER_LAYOUT_AUTO;
     L->margin = props->margin;
-    L->margin_left = props->margin_left;
-    L->margin_top = props->margin_top;
-    L->margin_right = props->margin_right;
-    L->margin_bottom = props->margin_bottom;
+    /* marginHorizontal/Vertical expand into per-edge; per-edge wins over shorthand. */
+    L->margin_left = (props->margin_left != ER_LAYOUT_AUTO)         ? props->margin_left
+                     : (props->margin_horizontal != ER_LAYOUT_AUTO) ? props->margin_horizontal
+                                                                    : ER_LAYOUT_AUTO;
+    L->margin_right = (props->margin_right != ER_LAYOUT_AUTO)        ? props->margin_right
+                      : (props->margin_horizontal != ER_LAYOUT_AUTO) ? props->margin_horizontal
+                                                                     : ER_LAYOUT_AUTO;
+    L->margin_top = (props->margin_top != ER_LAYOUT_AUTO)        ? props->margin_top
+                    : (props->margin_vertical != ER_LAYOUT_AUTO) ? props->margin_vertical
+                                                                 : ER_LAYOUT_AUTO;
+    L->margin_bottom = (props->margin_bottom != ER_LAYOUT_AUTO)     ? props->margin_bottom
+                       : (props->margin_vertical != ER_LAYOUT_AUTO) ? props->margin_vertical
+                                                                    : ER_LAYOUT_AUTO;
     L->gap = props->gap;
     L->row_gap = props->row_gap;
     L->column_gap = props->column_gap;
@@ -779,6 +872,8 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->position = props->position;
     L->display = props->display;
     L->overflow = props->overflow;
+    L->aspect_ratio = props->aspect_ratio;
+    L->flex_basis_pct = props->flex_basis_pct;
     node->z_index = props->z_index;
     node->pointer_events = props->pointer_events;
     node->hit_slop_left = props->hit_slop_left;
@@ -809,6 +904,19 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.border_color = props->border_color;
             node->props.view.border_width = props->border_width;
             node->props.view.border_radius = props->border_radius;
+            node->props.view.border_tl_radius = props->border_top_left_radius;
+            node->props.view.border_tr_radius = props->border_top_right_radius;
+            node->props.view.border_br_radius = props->border_bottom_right_radius;
+            node->props.view.border_bl_radius = props->border_bottom_left_radius;
+            node->props.view.border_left_width = props->border_left_width;
+            node->props.view.border_top_width = props->border_top_width;
+            node->props.view.border_right_width = props->border_right_width;
+            node->props.view.border_bottom_width = props->border_bottom_width;
+            node->props.view.border_left_color = props->border_left_color;
+            node->props.view.border_top_color = props->border_top_color;
+            node->props.view.border_right_color = props->border_right_color;
+            node->props.view.border_bottom_color = props->border_bottom_color;
+            node->props.view.border_style = props->border_style;
             node->props.view.opacity = props->opacity;
             node->props.view.shadow_color = props->shadow_color;
             node->props.view.shadow_offset_x = props->shadow_offset_x;

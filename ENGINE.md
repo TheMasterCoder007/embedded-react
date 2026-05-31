@@ -66,11 +66,12 @@ the props currently in `ERLayoutSpec`. Additions:
 - [x] margin, padding (shorthand + per-edge), gap
 - [x] absolute positioning
 - [x] min/max width/height
-- [ ] **`aspectRatio`** prop — declared in PLAN.md, not in `ERLayoutSpec` yet.
-- [ ] **`marginHorizontal` / `marginVertical` / `paddingHorizontal` / `paddingVertical`** —
-  either expand in the prop-copy step or add fields.
-- [ ] **`flexBasis: '50%'` percent support** — currently int16_t pixels only. Decide on a
-  sentinel encoding or a separate percent field, document in `er_scene.h`.
+- [x] **`aspectRatio`** prop — `float aspect_ratio` in `ERLayoutSpec`; layout engine derives
+  the auto dimension using `width/height` semantics in Pass 1.
+- [x] **`marginHorizontal` / `marginVertical` / `paddingHorizontal` / `paddingVertical`** —
+  added to `ERProps`; expanded to per-edge fields in `er_node_set_props()`.
+- [x] **`flexBasis: '50%'` percent support** — `float flex_basis_pct` in `ERLayoutSpec`;
+  resolved against parent main-axis size in Pass 1 (takes precedence over `flex_basis`).
 - [x] **`display: none`** node skip (see Scene Graph item).
 - [ ] **`overflow: scroll`** path that produces a virtual content size larger than the
   computed rect, consumed by ScrollView.
@@ -85,12 +86,14 @@ Everything else under `engine/rendering/` is a stub.
 - [x] Rounded-rect fill (scanline)
 - [x] Anti-aliased corner edges (`ERUI_BORDER_AA`)
 - [x] Solid border ring
-- [ ] **Per-corner `borderRadius`** (`borderTopLeftRadius`, etc.) — currently single
-  `border_radius`.
-- [ ] **Per-edge `borderWidth`** (`borderLeftWidth`, etc.) — currently single
-  `border_width`.
-- [ ] **`borderStyle`** — `solid` / `dashed` / `dotted`.
-- [ ] **Per-edge `borderColor`** (`borderLeftColor`, etc.).
+- [x] **Per-corner `borderRadius`** (`borderTopLeftRadius`, etc.) — four fields in `ERProps`
+  and `ERViewProps`; `er_rrect_fill_corners()` renders with per-corner AA scanlines.
+- [x] **Per-edge `borderWidth`** (`borderLeftWidth`, etc.) — four fields in `ERProps`
+  and `ERViewProps`; `render_view_bg()` dispatches to per-edge path when non-uniform.
+- [x] **`borderStyle`** — `ER_BORDER_SOLID` / `ER_BORDER_DASHED` / `ER_BORDER_DOTTED`;
+  `er_rrect_border_edge()` renders dashed/dotted patterns (solid path unchanged).
+- [x] **Per-edge `borderColor`** (`borderLeftColor`, etc.) — four fields in `ERProps`
+  and `ERViewProps`; resolved with fallback to `border_color` in `render_view_bg()`.
 
 ### 4.2 Shadows ([shadow.c](engine/rendering/shadow.c))
 
@@ -258,6 +261,7 @@ remainder still lack guards or the underlying feature is not yet implemented.
 Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 - [x] animation, input, layout, text, rrect
+- [x] **aspectRatio**, **flex_basis_pct**, **marginHorizontal/Vertical**, **paddingHorizontal/Vertical** layout tests
 - [x] **Hit-test under opacity / display:none** (covered by existing tests)
 - [x] **Hit-test under transforms**
 - [x] **Scroll gesture + momentum**
@@ -291,9 +295,11 @@ A path that keeps the engine demoable at each step:
 8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`, `textDecorationLine` — **done**.
 9. ~~**Remaining components**~~ — TextInput, Switch, ActivityIndicator, Modal, FlatList — **done**.
 10. ~~**Dirty-rect tracking + node pool reuse**~~ — perf / longevity polish before MCU bring-up — **done**.
-11. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest
+11. ~~**Layout additions**~~ — `aspectRatio`, `marginHorizontal/Vertical`, `paddingHorizontal/Vertical`,
+    `flexBasis %`, per-corner border radius, per-edge border width/color, `borderStyle` — **done**.
+12. **Feature flag plumbing** — wrap the optional code paths in `#if` so the smallest
     target build can drop them.
-12. **Test coverage** — fill the matrix in §10 as features land.
+13. **Test coverage** — fill the matrix in §10 as features land.
 
 After step 9 the engine surface in `er_scene.h` should be capable of hosting the
 `bridges/quickjs/` reconciler against any sample React app written for the documented

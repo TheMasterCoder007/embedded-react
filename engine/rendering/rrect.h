@@ -47,4 +47,40 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius);
 void er_rrect_fill_bordered(
     uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius);
 
+/**
+ * @brief Fills a rounded rectangle with independent per-corner radii.
+ *
+ * Each corner radius is clamped to prevent opposite arcs from overlapping.
+ * A radius of 0 on a corner produces a right-angle corner for that corner only.
+ * Anti-aliased edges are blended when ERUI_BORDER_AA is non-zero.
+ *
+ * @param[in] argb  Fill color (straight-alpha ARGB8888).
+ * @param[in] x     Left edge in framebuffer pixels.
+ * @param[in] y     Top edge in framebuffer pixels.
+ * @param[in] w     Width in pixels.
+ * @param[in] h     Height in pixels.
+ * @param[in] r_tl  Top-left corner radius in pixels.
+ * @param[in] r_tr  Top-right corner radius in pixels.
+ * @param[in] r_br  Bottom-right corner radius in pixels.
+ * @param[in] r_bl  Bottom-left corner radius in pixels.
+ */
+void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl);
+
+/**
+ * @brief Draws a single border edge with an optional dash or dot pattern.
+ *
+ * The edge is oriented horizontally when horizontal != 0, vertically otherwise.
+ * style == 0 renders a solid fill; style == 1 dashes (8 px on, 6 px off);
+ * style == 2 dots (3 px on, 3 px off).
+ *
+ * @param[in] argb        Fill color (straight-alpha ARGB8888).
+ * @param[in] style       0 = solid, 1 = dashed, 2 = dotted.
+ * @param[in] x           Left edge in framebuffer pixels.
+ * @param[in] y           Top edge in framebuffer pixels.
+ * @param[in] w           Width in pixels.
+ * @param[in] h           Height in pixels.
+ * @param[in] horizontal  Non-zero to dash along the X axis; zero to dash along Y.
+ */
+void er_rrect_border_edge(uint32_t argb, uint8_t style, int x, int y, int w, int h, int horizontal);
+
 #endif

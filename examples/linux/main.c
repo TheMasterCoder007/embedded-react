@@ -14,7 +14,7 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SCREEN_W 1280
+#define SCREEN_W 1440
 #define SCREEN_H 1024
 
 #define CYCLE_COUNT 5
@@ -153,8 +153,10 @@ static ERProps props_default(void)
     p.min_height = p.max_height = ER_LAYOUT_AUTO;
     p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
     p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
+    p.padding_horizontal = p.padding_vertical = ER_LAYOUT_AUTO;
     p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
     p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
+    p.margin_horizontal = p.margin_vertical = ER_LAYOUT_AUTO;
     p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
     p.flex_basis = ER_LAYOUT_AUTO;
     p.opacity = 255U;
@@ -1565,6 +1567,228 @@ static ERNode* build_components_panel(void)
 }
 
 /**
+ * @brief Builds Panel 9 — Borders & Layout Additions.
+ *
+ * Demonstrates the new layout and border features:
+ *   - Per-corner border radii (borderTopLeftRadius, etc.)
+ *   - borderStyle: solid, dashed, and dotted
+ *   - aspectRatio: a 1:1 square derived purely from width
+ *   - flex_basis_pct: two boxes each claiming 50% of the row
+ *   - paddingHorizontal / marginHorizontal shorthands
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_borders_layout_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    er_tree_append_child(col, make_section_header("BORDER STYLES"));
+    er_tree_append_child(col, make_caption("solid  /  dashed  /  dotted"));
+
+    /* Row: three boxes demonstrating each border style. */
+    ERNode* style_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_direction = ER_FLEX_ROW;
+    p.height = dp(38);
+    p.gap = dp(6);
+    er_node_set_props(style_row, &p);
+
+    const uint8_t styles[3] = {ER_BORDER_SOLID, ER_BORDER_DASHED, ER_BORDER_DOTTED};
+    const char* style_labels[3] = {"solid", "dashed", "dotted"};
+    for (int i = 0; i < 3; i++)
+    {
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.flex_grow = 1;
+        p.align_items = ER_ALIGN_CENTER;
+        p.justify_content = ER_JUSTIFY_CENTER;
+        p.background_color = 0xFF1A2D42;
+        p.border_color = 0xFF4499DD;
+        p.border_width = dp(2);
+        p.border_style = styles[i];
+        er_node_set_props(box, &p);
+
+        ERNode* lbl = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFF88BBDD;
+        p.font_size = (uint8_t)dp(11);
+        strncpy(p.text, style_labels[i], ER_TEXT_MAX);
+        er_node_set_props(lbl, &p);
+        er_tree_append_child(box, lbl);
+        er_tree_append_child(style_row, box);
+    }
+    er_tree_append_child(col, style_row);
+
+    er_tree_append_child(col, make_section_header("PER-CORNER RADIUS"));
+
+    /* Card: top corners rounded only (banner / tab style). */
+    ERNode* card_top = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(38);
+    p.background_color = 0xFF2A3D52;
+    p.border_color = 0xFF3A9D8F;
+    p.border_width = dp(1);
+    p.border_top_left_radius = dp(14);
+    p.border_top_right_radius = dp(14);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(card_top, &p);
+
+    ERNode* card_top_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFCCEEDD;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "TL:14  TR:14  BR:0  BL:0", ER_TEXT_MAX);
+    er_node_set_props(card_top_lbl, &p);
+    er_tree_append_child(card_top, card_top_lbl);
+    er_tree_append_child(col, card_top);
+
+    /* Card: asymmetric radii (diagonal corners). */
+    ERNode* card_asym = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(38);
+    p.background_color = 0xFF2A2040;
+    p.border_color = 0xFF9B59B6;
+    p.border_width = dp(1);
+    p.border_top_left_radius = dp(2);
+    p.border_top_right_radius = dp(14);
+    p.border_bottom_right_radius = dp(2);
+    p.border_bottom_left_radius = dp(14);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(card_asym, &p);
+
+    ERNode* card_asym_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFFDDBBFF;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "TL:2  TR:14  BR:2  BL:14", ER_TEXT_MAX);
+    er_node_set_props(card_asym_lbl, &p);
+    er_tree_append_child(card_asym, card_asym_lbl);
+    er_tree_append_child(col, card_asym);
+
+    er_tree_append_child(col, make_section_header("ASPECT RATIO  +  FLEX BASIS %"));
+
+    /* Row: 1:1 aspect-ratio box + two flex-basis 50% boxes. */
+    ERNode* ar_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_CENTER;
+    p.gap = dp(8);
+    p.height = dp(64);
+    er_node_set_props(ar_row, &p);
+
+    /* 1:1 square: explicit width, height derived from aspect_ratio. */
+    ERNode* square = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.width = dp(48);
+    p.aspect_ratio = 1.0f;
+    p.background_color = 0xFFF4A261;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(square, &p);
+
+    ERNode* square_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF111111;
+    p.font_size = (uint8_t)dp(10);
+    strncpy(p.text, "1:1", ER_TEXT_MAX);
+    er_node_set_props(square_lbl, &p);
+    er_tree_append_child(square, square_lbl);
+    er_tree_append_child(ar_row, square);
+
+    /* Flex-basis 50% container (the remainder after the square).
+     * align_self = STRETCH is required here: the parent ar_row uses align_items = CENTER
+     * so that the square stays at its aspect-ratio height; without an explicit STRETCH
+     * override, flex_row would resolve to zero cross-axis size and its children would
+     * have zero height and invisible backgrounds.
+     * No gap: two children at 50% each already fill exactly 100% of the container,
+     * and adding a gap would cause overflow (flex_shrink defaults to 0). */
+    ERNode* flex_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.align_self = ER_ALIGN_STRETCH;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    er_node_set_props(flex_row, &p);
+
+    for (int i = 0; i < 2; i++)
+    {
+        const uint32_t pct_colors[2] = {0xFF2A9D8F, 0xFFE94560};
+        ERNode* half = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.flex_basis_pct = 50.0f;
+        p.background_color = pct_colors[i];
+        p.border_radius = dp(5);
+        p.align_items = ER_ALIGN_CENTER;
+        p.justify_content = ER_JUSTIFY_CENTER;
+        er_node_set_props(half, &p);
+
+        ERNode* half_lbl = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFFFFFFFF;
+        p.font_size = (uint8_t)dp(11);
+        strncpy(p.text, "50%", ER_TEXT_MAX);
+        er_node_set_props(half_lbl, &p);
+        er_tree_append_child(half, half_lbl);
+        er_tree_append_child(flex_row, half);
+    }
+    er_tree_append_child(ar_row, flex_row);
+    er_tree_append_child(col, ar_row);
+
+    er_tree_append_child(col, make_section_header("MARGIN/PADDING H/V SHORTHANDS"));
+
+    /* Three items with paddingHorizontal + marginHorizontal. */
+    ERNode* hv_col = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_direction = ER_FLEX_COL;
+    p.gap = dp(5);
+    er_node_set_props(hv_col, &p);
+
+    const char* hv_labels[3] = {"paddingH:12  marginH:8", "paddingV:4   marginV:6", "pV:6 pH:10 mH:16"};
+    for (int i = 0; i < 3; i++)
+    {
+        ERNode* item = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.background_color = 0xFF172840;
+        p.border_radius = dp(5);
+        p.border_color = 0xFF334455;
+        p.border_width = dp(1);
+        if (i == 0)
+        {
+            p.padding_horizontal = dp(12);
+            p.margin_horizontal = dp(8);
+        }
+        else if (i == 1)
+        {
+            p.padding_vertical = dp(4);
+            p.margin_vertical = dp(6);
+        }
+        else
+        {
+            p.padding_vertical = dp(6);
+            p.padding_horizontal = dp(10);
+            p.margin_horizontal = dp(16);
+        }
+        er_node_set_props(item, &p);
+
+        ERNode* item_lbl = er_node_create(ER_NODE_TEXT);
+        p = props_default();
+        p.color = 0xFF8899AA;
+        p.font_size = (uint8_t)dp(10);
+        strncpy(p.text, hv_labels[i], ER_TEXT_MAX);
+        er_node_set_props(item_lbl, &p);
+        er_tree_append_child(item, item_lbl);
+        er_tree_append_child(hv_col, item);
+    }
+    er_tree_append_child(col, hv_col);
+
+    return col;
+}
+
+/**
  * @brief Builds the demo scene.
  *
  * Two rows demonstrate every engine feature that is currently working:
@@ -1572,6 +1796,7 @@ static ERNode* build_components_panel(void)
  *   Row 1 Panel 2 — Touch & Events: press/long-press/cancel, event coordinates, zIndex.
  *   Row 1 Panel 3 — Animation & Display:None: bg-color timing animation, display:none toggle.
  *   Row 2 Panel 4 — ScrollView: vertical + horizontal viewports, clip, gesture, momentum.
+ *   Row 2 Panel 9 — Borders & Layout: per-corner radii, borderStyle, aspectRatio, flexBasis%, paddingH/V.
  *
  * @param[in] phys_w  Physical framebuffer width in pixels.
  * @param[in] phys_h  Physical framebuffer height in pixels.
@@ -2102,6 +2327,7 @@ static void build_scene(int phys_w, int phys_h)
     er_tree_append_child(sv_row, build_spring_panel());
     er_tree_append_child(sv_row, build_text_panel());
     er_tree_append_child(sv_row, build_components_panel());
+    er_tree_append_child(sv_row, build_borders_layout_panel());
 
     /* =====================================================================
      * ASSEMBLE

@@ -42,6 +42,8 @@ typedef struct
     uint8_t position;        /**< ERPositionType   */
     uint8_t display;         /**< ERDisplayMode    */
     uint8_t overflow;        /**< EROverflow       */
+    float aspect_ratio;      /**< Width/height ratio; 0.0 = not set. */
+    float flex_basis_pct;    /**< flex_basis as % of parent main-axis; 0.0 = not set. */
 } ERLayoutSpec;
 
 /**
@@ -58,10 +60,26 @@ typedef struct
 typedef struct
 {
     uint32_t background_color; /**< ARGB8888; 0x00000000 = transparent. */
-    uint32_t border_color;     /**< ARGB8888. */
-    int16_t border_width;
-    int16_t border_radius;
-    uint8_t opacity; /**< 0–255. */
+    uint32_t border_color;     /**< ARGB8888 uniform border color. */
+    int16_t border_width;      /**< Uniform border width in pixels. */
+    int16_t border_radius;     /**< Uniform corner radius in pixels. */
+    /* Per-corner radii (0 = fall back to border_radius). */
+    int16_t border_tl_radius;
+    int16_t border_tr_radius;
+    int16_t border_br_radius;
+    int16_t border_bl_radius;
+    /* Per-edge border widths (0 = fall back to border_width). */
+    int16_t border_left_width;
+    int16_t border_top_width;
+    int16_t border_right_width;
+    int16_t border_bottom_width;
+    /* Per-edge border colors (0 = fall back to border_color). */
+    uint32_t border_left_color;
+    uint32_t border_top_color;
+    uint32_t border_right_color;
+    uint32_t border_bottom_color;
+    uint8_t border_style; /**< ERBorderStyle: 0=solid, 1=dashed, 2=dotted. */
+    uint8_t opacity;      /**< 0–255. */
 
     /* Shadow */
     uint32_t shadow_color; /**< ARGB8888; default 0xFF000000 (black). */

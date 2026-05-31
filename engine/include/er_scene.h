@@ -201,6 +201,16 @@ extern "C"
     } ERTextDecoration;
 
     /**
+     * @brief Stroke pattern applied to rendered border edges.
+     */
+    typedef enum
+    {
+        ER_BORDER_SOLID = 0,  /**< Continuous solid border (default). */
+        ER_BORDER_DASHED = 1, /**< Alternating filled and empty dashes (8 px on, 6 px off). */
+        ER_BORDER_DOTTED = 2, /**< Small filled dots at regular intervals (3 px on, 3 px off). */
+    } ERBorderStyle;
+
+    /**
      * @brief Gesture responder query types used with er_responder_query_set().
      *
      * Capture queries (root→leaf) are evaluated before bubble queries (leaf→root).
@@ -361,15 +371,38 @@ extern "C"
         uint8_t justify_content; /**< ERFlexJustify  — default ER_JUSTIFY_FLEX_START. */
         uint8_t position;        /**< ERPositionType — default ER_POS_RELATIVE. */
         uint8_t display;         /**< ERDisplayMode  — default ER_DISPLAY_FLEX. */
+        float aspect_ratio; /**< Width/height ratio (0.0 = not set). When one dimension is auto the other is derived. */
+        int16_t
+            margin_horizontal;   /**< Shorthand for margin_left and margin_right; overridden by the per-edge fields. */
+        int16_t margin_vertical; /**< Shorthand for margin_top and margin_bottom; overridden by the per-edge fields. */
+        int16_t
+            padding_horizontal; /**< Shorthand for padding_left and padding_right; overridden by the per-edge fields. */
+        int16_t
+            padding_vertical; /**< Shorthand for padding_top and padding_bottom; overridden by the per-edge fields. */
+        float flex_basis_pct; /**< flex_basis as a percentage of the parent's main-axis size [0.0–100.0]; 0.0 = not set.
+                                 Takes precedence over flex_basis. */
 
         /* --- View visual --- */
-        uint32_t background_color; /**< ARGB8888; 0x00000000 = transparent. */
-        uint32_t border_color;     /**< ARGB8888. */
-        int16_t border_width;      /**< Border width in pixels. */
-        int16_t border_radius;     /**< Corner radius in pixels. */
-        int16_t z_index;           /**< Sibling stacking order; higher values render and hit-test above lower values. */
-        uint8_t opacity;           /**< Node opacity 0–255 (255 = fully opaque). */
-        uint8_t overflow;          /**< EROverflow — default ER_OVERFLOW_VISIBLE. */
+        uint32_t background_color;          /**< ARGB8888; 0x00000000 = transparent. */
+        uint32_t border_color;              /**< ARGB8888 border color for all edges. */
+        int16_t border_width;               /**< Uniform border width in pixels; overridden by per-edge widths. */
+        int16_t border_radius;              /**< Uniform corner radius in pixels; overridden by per-corner radii. */
+        int16_t border_top_left_radius;     /**< Top-left corner radius in pixels; 0 = use border_radius. */
+        int16_t border_top_right_radius;    /**< Top-right corner radius in pixels; 0 = use border_radius. */
+        int16_t border_bottom_left_radius;  /**< Bottom-left corner radius in pixels; 0 = use border_radius. */
+        int16_t border_bottom_right_radius; /**< Bottom-right corner radius in pixels; 0 = use border_radius. */
+        int16_t border_left_width;          /**< Left border width in pixels; 0 = use border_width. */
+        int16_t border_top_width;           /**< Top border width in pixels; 0 = use border_width. */
+        int16_t border_right_width;         /**< Right border width in pixels; 0 = use border_width. */
+        int16_t border_bottom_width;        /**< Bottom border width in pixels; 0 = use border_width. */
+        uint32_t border_left_color;         /**< Left edge border ARGB8888; 0 = use border_color. */
+        uint32_t border_top_color;          /**< Top edge border ARGB8888; 0 = use border_color. */
+        uint32_t border_right_color;        /**< Right edge border ARGB8888; 0 = use border_color. */
+        uint32_t border_bottom_color;       /**< Bottom edge border ARGB8888; 0 = use border_color. */
+        uint8_t border_style;               /**< ERBorderStyle — default ER_BORDER_SOLID. */
+        int16_t z_index;  /**< Sibling stacking order; higher values render and hit-test above lower values. */
+        uint8_t opacity;  /**< Node opacity 0–255 (255 = fully opaque). */
+        uint8_t overflow; /**< EROverflow — default ER_OVERFLOW_VISIBLE. */
 
         /* --- Interaction --- */
         uint8_t pointer_events;  /**< ERPointerEvents — default ER_POINTER_EVENTS_AUTO. */

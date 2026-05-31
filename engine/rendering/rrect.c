@@ -148,6 +148,178 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
     }
 }
 
+/**
+ * @brief Computes the solid arc half-width at distance dy from a corner arc centre.
+ *
+ * Uses the same pixel-centre SDF sampling as er_rrect_fill so that
+ * er_rrect_fill_corners and er_rrect_fill produce identical edges when all four
+ * radii are equal.
+ *
+ * @param[in] r   Corner radius in pixels.
+ * @param[in] dy  Distance from arc centre row (1 = outermost corner row).
+ *
+ * @return Number of solid pixels inward from the arc centre column.
+ */
+static int corner_dx(int r, int dy)
+{
+    float r05 = (float)r - 0.5f;
+    float cy = (float)dy - 0.5f;
+    float val = r05 * r05 - cy * cy;
+    if (val < 0.0f)
+        return 0;
+    return (int)(sqrtf(val) + 0.5f);
+}
+
+void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
+{
+    if (w <= 0 || h <= 0 || (argb >> 24) == 0)
+        return;
+
+    /* Clamp so opposite corner arcs do not overlap horizontally or vertically. */
+    if (r_tl + r_tr > w)
+    {
+        int s = r_tl + r_tr;
+        r_tl = r_tl * w / s;
+        r_tr = r_tr * w / s;
+    }
+    if (r_bl + r_br > w)
+    {
+        int s = r_bl + r_br;
+        r_bl = r_bl * w / s;
+        r_br = r_br * w / s;
+    }
+    if (r_tl + r_bl > h)
+    {
+        int s = r_tl + r_bl;
+        r_tl = r_tl * h / s;
+        r_bl = r_bl * h / s;
+    }
+    if (r_tr + r_br > h)
+    {
+        int s = r_tr + r_br;
+        r_tr = r_tr * h / s;
+        r_br = r_br * h / s;
+    }
+
+    for (int row = 0; row < h; row++)
+    {
+        int left_x = x;
+        int right_x = x + w;
+
+        /* Resolve left-edge corner radius for this row. */
+        int left_r = 0;
+        int left_dy = 0;
+        if (row < r_tl)
+        {
+            left_r = r_tl;
+            left_dy = r_tl - row;
+        }
+        else if (r_bl > 0 && row >= h - r_bl)
+        {
+            left_r = r_bl;
+            left_dy = row - (h - r_bl) + 1;
+        }
+
+        int left_dx = 0;
+        if (left_r > 0)
+        {
+            left_dx = corner_dx(left_r, left_dy);
+            left_x = x + left_r - left_dx;
+        }
+
+        /* Resolve right-edge corner radius for this row. */
+        int right_r = 0;
+        int right_dy = 0;
+        if (row < r_tr)
+        {
+            right_r = r_tr;
+            right_dy = r_tr - row;
+        }
+        else if (r_br > 0 && row >= h - r_br)
+        {
+            right_r = r_br;
+            right_dy = row - (h - r_br) + 1;
+        }
+
+        int right_dx = 0;
+        if (right_r > 0)
+        {
+            right_dx = corner_dx(right_r, right_dy);
+            right_x = x + w - right_r + right_dx;
+        }
+
+        fill_span(argb, y + row, left_x, right_x);
+
+#if ERUI_BORDER_AA
+        /* AA fringe on the left corner edge. */
+        if (left_r > 0)
+        {
+            float cy = (float)left_dy - 0.5f;
+            for (int k = 0;; k++)
+            {
+                float cx = (float)left_dx + (float)k + 0.5f;
+                float dist = sqrtf(cx * cx + cy * cy);
+                float cov = (float)left_r + 0.5f - dist;
+                if (cov <= 0.0f)
+                    break;
+                if (cov < 1.0f)
+                {
+                    int ax = x + left_r - left_dx - 1 - k;
+                    if (ax >= x)
+                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                }
+            }
+        }
+
+        /* AA fringe on the right corner edge. */
+        if (right_r > 0)
+        {
+            float cy = (float)right_dy - 0.5f;
+            for (int k = 0;; k++)
+            {
+                float cx = (float)right_dx + (float)k + 0.5f;
+                float dist = sqrtf(cx * cx + cy * cy);
+                float cov = (float)right_r + 0.5f - dist;
+                if (cov <= 0.0f)
+                    break;
+                if (cov < 1.0f)
+                {
+                    int ax = x + w - right_r + right_dx + k;
+                    if (ax < x + w)
+                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                }
+            }
+        }
+#endif
+    }
+}
+
+void er_rrect_border_edge(uint32_t argb, uint8_t style, int x, int y, int w, int h, int horizontal)
+{
+    if (w <= 0 || h <= 0 || (argb >> 24) == 0)
+        return;
+    if (style == 0)
+    {
+        er_blit_fill(argb, x, y, w, h);
+        return;
+    }
+    /* style == 1 → dashed (8 px on, 6 px off); style == 2 → dotted (3 px on, 3 px off). */
+    const int on = (style == 1) ? 8 : 3;
+    const int off = (style == 1) ? 6 : 3;
+    const int step = on + off;
+    const int span = horizontal ? w : h;
+    for (int pos = 0; pos < span; pos += step)
+    {
+        int fill = on < (span - pos) ? on : (span - pos);
+        if (fill <= 0)
+            break;
+        if (horizontal)
+            er_blit_fill(argb, x + pos, y, fill, h);
+        else
+            er_blit_fill(argb, x, y + pos, w, fill);
+    }
+}
+
 void er_rrect_fill_bordered(
     uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius)
 {

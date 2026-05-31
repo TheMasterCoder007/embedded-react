@@ -208,9 +208,13 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 intr_h = (int16_t)(line_h * lines);
             }
 
-            /* Base main size. */
+            /* Base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > intrinsic. */
             int16_t hypo_main;
-            if (cl->flex_basis != ER_LAYOUT_AUTO)
+            if (cl->flex_basis_pct > 0.0f)
+            {
+                hypo_main = (int16_t)((float)main_size * cl->flex_basis_pct / 100.0f + 0.5f);
+            }
+            else if (cl->flex_basis != ER_LAYOUT_AUTO)
             {
                 hypo_main = cl->flex_basis;
             }
@@ -236,6 +240,18 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             else
                 hypo_cross = is_row ? intr_h : intr_w;
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
+
+            /* aspect_ratio: if the cross dimension is auto, derive it from the main.
+             * aspect_ratio == width / height, so:
+             *   row  direction: cross (height) = main (width)  / aspect_ratio
+             *   col  direction: cross (width)  = main (height) * aspect_ratio
+             */
+            if (cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO)
+            {
+                const float new_cross =
+                    is_row ? (float)hypo_main / cl->aspect_ratio : (float)hypo_main * cl->aspect_ratio;
+                hypo_cross = clamp_size((int16_t)(new_cross + 0.5f), cross_mn, cross_mx);
+            }
 
             /* Per-edge margins. */
             const int16_t ml = edge_or(cl->margin_left, cl->margin);
