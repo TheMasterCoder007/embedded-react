@@ -9,14 +9,22 @@ set(CMAKE_C_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 # Feature flags ("Compile-Time Feature Flags" — see /PLAN.md appendix)
 # ---------------------------------------------------------------------------
-option(ERUI_SHADOWS "Enable box shadow rasterizer" OFF)
-option(ERUI_BORDER_AA "Anti-aliased border radius edges" ON)
-option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective" OFF)
-option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor)" OFF)
-option(ERUI_GRADIENT "Enable gradient rasterizer" ON)
-option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" ON)
+# ---------------------------------------------------------------------------
+# Defaults are tuned for resource-constrained MCUs (minimum flash / RAM).
+# You build should override these as needed — see examples/linux/CMakeLists.txt
+# for a reference configuration that enables everything.
+# ---------------------------------------------------------------------------
+option(ERUI_SHADOWS "Enable box shadow rasterizer (significant flash + scratch RAM)" OFF)
+option(ERUI_BORDER_AA "Anti-aliased corner edges on rounded rects" ON)
+option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRANSFORMS=FULL)" OFF)
+option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
+option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
+option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
 
-set(ERUI_TRANSFORMS "FULL" CACHE STRING "FULL or TRANSLATE_ONLY")
+# TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
+# FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
+# Set to FULL on desktop or any target that can afford the scratch RAM.
+set(ERUI_TRANSFORMS "TRANSLATE_ONLY" CACHE STRING "FULL or TRANSLATE_ONLY")
 set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")

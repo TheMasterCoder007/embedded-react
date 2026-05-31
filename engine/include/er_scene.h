@@ -282,6 +282,8 @@ extern "C"
         ER_PROP_SCALE_X,          /**< Horizontal scale factor. */
         ER_PROP_SCALE_Y,          /**< Vertical scale factor. */
         ER_PROP_ROTATE_Z,         /**< Rotation around the Z axis in degrees. */
+        ER_PROP_ROTATE_X,         /**< Rotation around the X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        ER_PROP_ROTATE_Y,         /**< Rotation around the Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
         ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
         ER_PROP_COLOR,            /**< Foreground ARGB8888 color packed as float bits. */
         ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
@@ -481,6 +483,10 @@ extern "C"
         float transform_rotate_z;    /**< Clockwise rotation in degrees (0 = none). */
         float transform_origin_x;    /**< Fractional X pivot [0.0–1.0]; negative = center (0.5). */
         float transform_origin_y;    /**< Fractional Y pivot [0.0–1.0]; negative = center (0.5). */
+        float transform_rotate_x;    /**< Rotation around X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        float transform_rotate_y;    /**< Rotation around Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        float transform_perspective; /**< Perspective distance in pixels; 0 = orthographic (3D; requires
+                                        ERUI_3D_TRANSFORMS). */
 
         /* --- Shadow (View-family only; requires ERUI_SHADOWS at build time) --- */
         uint32_t shadow_color; /**< ARGB8888; default 0xFF000000 (opaque black). */

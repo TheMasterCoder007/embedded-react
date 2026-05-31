@@ -219,6 +219,12 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
         case ER_PROP_ROTATE_Z:
             *value = node->tp_rotate_z;
             return true;
+        case ER_PROP_ROTATE_X:
+            *value = node->tp_rotate_x;
+            return true;
+        case ER_PROP_ROTATE_Y:
+            *value = node->tp_rotate_y;
+            return true;
         case ER_PROP_SWITCH_THUMB:
             if (node->type != ER_NODE_SWITCH)
                 return false;
@@ -268,7 +274,8 @@ static bool read_color_value(const ERNode* node, ERAnimProp prop, uint32_t* colo
 static void update_has_transform(ERNode* node)
 {
     node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
-                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f);
+                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
+                           || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
 }
 
 /**
@@ -318,6 +325,14 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
              * so the affine-transform render path does not try to rasterize it into scratch. */
             if (node->type != ER_NODE_ACTIVITY_INDICATOR)
                 update_has_transform(node);
+            return true;
+        case ER_PROP_ROTATE_X:
+            node->tp_rotate_x = value;
+            update_has_transform(node);
+            return true;
+        case ER_PROP_ROTATE_Y:
+            node->tp_rotate_y = value;
+            update_has_transform(node);
             return true;
         case ER_PROP_SWITCH_THUMB:
             if (node->type != ER_NODE_SWITCH)

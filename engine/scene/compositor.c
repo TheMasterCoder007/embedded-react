@@ -379,17 +379,37 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     const int w = n->computed.w;
     const int h = n->computed.h;
 
-    /* --- 2D transform application --- */
+    /* --- 2D/3D transform application --- */
     bool doing_affine = false;
+    bool doing_3d = false;
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
+#if ERUI_3D_TRANSFORMS
+    float xf_inv_H[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+#endif
 
     /* ActivityIndicator uses tp_rotate_z as its internal spin angle — skip the affine
      * transform path which would rasterize the whole node into a scratch buffer. */
     if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR)
     {
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+        if (er_transform_is_3d(n))
+        {
+            /* 3D perspective path: compute homography, render into scratch, back-project blit. */
+            float H[9];
+            er_transform_compute_homography_3d(n, px, py, w, h, H);
+            er_transform_aabb_3d(px, py, w, h, H, &dst_x, &dst_y, &dst_w, &dst_h);
+
+            if (er_transform_homography_invert(H, xf_inv_H) && er_transform_source_begin(px, py, w, h))
+            {
+                doing_affine = true;
+                doing_3d = true;
+            }
+        }
+        else
+#endif
 #if ERUI_TRANSFORMS_FULL
-        if (!er_transform_is_translate_only(n))
+            if (!er_transform_is_translate_only(n))
         {
             /* Full affine: render into scratch, then inverse-map blit. */
             float a, b, c, d, ftx, fty;
@@ -646,10 +666,17 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     if (use_scratch)
         er_scratch_pop_blend(node_opacity, px, py, w, h);
 
-    /* Affine transform: end source capture and blit the transformed result. */
+    /* Affine/perspective transform: end source capture and blit the transformed result. */
     if (doing_affine)
-        er_transform_source_end_blit(
-            px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+    {
+#if ERUI_3D_TRANSFORMS
+        if (doing_3d)
+            er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
+        else
+#endif
+            er_transform_source_end_blit(
+                px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+    }
 }
 
 /**
@@ -907,9 +934,13 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->tp_rotate_z = props->transform_rotate_z;
     node->tp_origin_x = props->transform_origin_x;
     node->tp_origin_y = props->transform_origin_y;
-    node->has_transform =
-        (props->transform_translate_x != 0.0f || props->transform_translate_y != 0.0f
-         || props->transform_scale_x != 0.0f || props->transform_scale_y != 0.0f || props->transform_rotate_z != 0.0f);
+    node->tp_rotate_x = props->transform_rotate_x;
+    node->tp_rotate_y = props->transform_rotate_y;
+    node->tp_perspective = props->transform_perspective;
+    node->has_transform = (props->transform_translate_x != 0.0f || props->transform_translate_y != 0.0f
+                           || props->transform_scale_x != 0.0f || props->transform_scale_y != 0.0f
+                           || props->transform_rotate_z != 0.0f || props->transform_rotate_x != 0.0f
+                           || props->transform_rotate_y != 0.0f || props->transform_perspective != 0.0f);
 
     /* Copy type-specific visual props. */
     switch (node->type)

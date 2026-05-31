@@ -108,7 +108,7 @@ Everything else under `engine/rendering/` is a stub.
 - [x] **Translate-only fast path** — pure integer offset, no rasterization (`ERUI_TRANSFORMS=TRANSLATE_ONLY`).
 - [x] **2D affine pass** — `scaleX/Y`, `rotateZ`, `translateX/Y`, `transformOrigin`. Rasterize
   transformed subtree into a scratch slot, blend to parent.
-- [ ] **3D pass** — `rotateX`, `rotateY`, `perspective` — gated behind `ERUI_3D_TRANSFORMS`.
+- [x] **3D pass** — `rotateX`, `rotateY`, `perspective` — gated behind `ERUI_3D_TRANSFORMS`.
 - [x] **Transform matrix propagation** during render and during hit-test (inverse mapping).
 - [x] Add transform fields to `ERProps` (currently animatable via `ERAnimProp` enum but
   no static prop fields exist).
@@ -248,7 +248,7 @@ remainder still lack guards or the underlying feature is not yet implemented.
 
 - [x] `ERUI_SHADOWS` — gate shadow code paths.
 - [x] `ERUI_BORDER_AA` — already wired in rrect.
-- [ ] `ERUI_3D_TRANSFORMS` — gate rotateX/Y/perspective.
+- [x] `ERUI_3D_TRANSFORMS` — gate rotateX/Y/perspective.
 - [x] `ERUI_BILINEAR_SCALE` — switch image scaler kernel.
 - [x] `ERUI_GRADIENT` / `ERUI_GRADIENT_RADIAL` — gate gradient rasterizer.
 - [x] `ERUI_TRANSFORMS` — `FULL` vs `TRANSLATE_ONLY` paths (wired as `ERUI_TRANSFORMS_FULL`).

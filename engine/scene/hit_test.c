@@ -156,8 +156,27 @@ static bool point_inside_transformed_with_slop(const ERNode* node, int x, int y)
     int qx = x, qy = y;
     if (node->has_transform)
     {
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+        if (er_transform_is_3d(node))
+        {
+            float H[9], inv_H[9];
+            er_transform_compute_homography_3d(
+                node, node->computed.x, node->computed.y, node->computed.w, node->computed.h, H);
+            if (!er_transform_homography_invert(H, inv_H))
+                return false;
+            /* Back-project screen point through the inverse homography. */
+            const float sx_f = (float)x, sy_f = (float)y;
+            const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
+            if (Wp <= 0.0f)
+                return false;
+            qx = (int)((inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp);
+            qy = (int)((inv_H[3] * sx_f + inv_H[4] * sy_f + inv_H[5]) / Wp);
+        }
+        else
+
+#endif
 #if ERUI_TRANSFORMS_FULL
-        if (!er_transform_is_translate_only(node))
+            if (!er_transform_is_translate_only(node))
         {
             float a, b, c, d, ftx, fty;
             er_transform_compute_matrix(node,

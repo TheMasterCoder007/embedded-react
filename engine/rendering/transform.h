@@ -136,6 +136,93 @@ void er_transform_map_point(float ia,
                             int* layout_x,
                             int* layout_y);
 
+#if ERUI_3D_TRANSFORMS
+
+/**
+ * @brief Returns true when the node has any non-zero 3D-specific transform props.
+ *
+ * Used by the compositor to choose between the 2D affine path and the 3D
+ * perspective-homography path. A node may have both 2D and 3D props; when
+ * any 3D prop is set, the 3D path handles the entire transform.
+ *
+ * @param[in] n  Node to inspect.
+ *
+ * @return true when tp_rotate_x, tp_rotate_y, or tp_perspective is non-zero.
+ */
+bool er_transform_is_3d(const ERNode* n);
+
+/**
+ * @brief Computes a 3×3 homography mapping layout-space source pixels to screen space.
+ *
+ * The source plane is z=0 in local space. The homography H maps homogeneous
+ * source coordinates (u, v, 1) to homogeneous screen coordinates (X, Y, W)
+ * such that screen_x = X/W, screen_y = Y/W.
+ *
+ * The full transform sequence (applied innermost first) is:
+ *   Translate to pivot → ScaleXY → RotZ → RotX → RotY →
+ *   Translate back + user translate → Perspective(tp_perspective).
+ *
+ * @param[in]  n      Node whose tp_* fields supply the parameters.
+ * @param[in]  ref_x  Layout-space X origin (computed.x after scroll offset).
+ * @param[in]  ref_y  Layout-space Y origin.
+ * @param[in]  w      Node width in pixels.
+ * @param[in]  h      Node height in pixels.
+ * @param[out] H      9-element row-major homography: [H00 H01 H02 H10 H11 H12 H20 H21 H22].
+ */
+void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, int w, int h, float H[9]);
+
+/**
+ * @brief Inverts a 3×3 homography.
+ *
+ * @param[in]  H    Input 9-element row-major homography.
+ * @param[out] inv  Inverted 9-element row-major homography.
+ *
+ * @return true on success; false when H is singular (determinant near zero).
+ */
+bool er_transform_homography_invert(const float H[9], float inv[9]);
+
+/**
+ * @brief Computes the screen-space AABB of a source rectangle projected through a homography.
+ *
+ * Projects the four corners (ref_x,ref_y), (ref_x+w,ref_y), (ref_x+w,ref_y+h),
+ * (ref_x,ref_y+h) and returns their bounding box.  Corners that project behind the
+ * viewer (W ≤ 0) are skipped; the AABB is (0,0,0,0) when all corners are behind.
+ *
+ * @param[in]  ref_x   Source rectangle left edge.
+ * @param[in]  ref_y   Source rectangle top edge.
+ * @param[in]  w       Source rectangle width.
+ * @param[in]  h       Source rectangle height.
+ * @param[in]  H       9-element row-major forward homography.
+ * @param[out] out_x   AABB left edge.
+ * @param[out] out_y   AABB top edge.
+ * @param[out] out_w   AABB width (always ≥ 0).
+ * @param[out] out_h   AABB height (always ≥ 0).
+ */
+void er_transform_aabb_3d(
+    int ref_x, int ref_y, int w, int h, const float H[9], int* out_x, int* out_y, int* out_w, int* out_h);
+
+/**
+ * @brief Ends the 3D transform source capture and blits the result through the homography.
+ *
+ * For each pixel in the destination AABB, back-projects using the inverse homography
+ * to find the source UV, then samples the source scratch with bilinear filtering.
+ * The resulting image is blended into the current render target.
+ *
+ * @param[in] src_x   World-space X origin of the source buffer (matches er_transform_source_begin).
+ * @param[in] src_y   World-space Y origin.
+ * @param[in] src_w   Logical source width.
+ * @param[in] src_h   Logical source height.
+ * @param[in] inv_H   9-element row-major inverse homography (from er_transform_homography_invert).
+ * @param[in] dst_x   Screen-space AABB left edge.
+ * @param[in] dst_y   Screen-space AABB top edge.
+ * @param[in] dst_w   Screen-space AABB width (must be ≤ ERUI_SCRATCH_W).
+ * @param[in] dst_h   Screen-space AABB height (must be ≤ ERUI_SCRATCH_H).
+ */
+void er_transform_source_end_blit_3d(
+    int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h);
+
+#endif /* ERUI_3D_TRANSFORMS */
+
 /**
  * @brief Begins capturing render output for a full-affine transform into an internal buffer.
  *

@@ -56,6 +56,10 @@ static ERNode* s_xform_translate = NULL;
 static ERNode* s_xform_rotate = NULL;
 static ERNode* s_xform_scale = NULL;
 static ERNode* s_opacity_node = NULL;
+#if ERUI_3D_TRANSFORMS
+static ERNode* s_xform_rotate_x = NULL;
+static ERNode* s_xform_rotate_y = NULL;
+#endif
 
 /* Panel 6 — Spring, Sequence, Stagger */
 static ERNode* s_spring_box = NULL;                          /**< Box that springs on button press. */
@@ -1262,6 +1266,21 @@ static ERNode* build_transforms_panel(void)
     er_tree_append_child(row2, make_xform_demo("scale", 0xFFF4A261, &s_xform_scale));
     er_tree_append_child(row2, make_xform_demo("opacity", 0xFF9B59B6, &s_opacity_node));
     er_tree_append_child(col, row2);
+
+#if ERUI_3D_TRANSFORMS
+    /* Row 3 — 3D transforms */
+    ERNode* row3 = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(6);
+    er_node_set_props(row3, &p);
+
+    er_tree_append_child(row3, make_xform_demo("rotateX", 0xFF26A65B, &s_xform_rotate_x));
+    er_tree_append_child(row3, make_xform_demo("rotateY", 0xFF1E90FF, &s_xform_rotate_y));
+    er_tree_append_child(col, row3);
+#endif
 
     return col;
 }
@@ -2874,6 +2893,34 @@ int main(void)
     }
     if (s_opacity_node)
         anim_loop(s_opacity_node, ER_PROP_OPACITY, 0.15f, 1100);
+#if ERUI_3D_TRANSFORMS
+    if (s_xform_rotate_x)
+    {
+        ERProps rp3d = props_default();
+        rp3d.width = dp(44);
+        rp3d.height = dp(44);
+        rp3d.background_color = 0xFF26A65B;
+        rp3d.border_radius = dp(6);
+        rp3d.transform_perspective = 300.0f;
+        rp3d.transform_origin_x = -1.0f;
+        rp3d.transform_origin_y = -1.0f;
+        er_node_set_props(s_xform_rotate_x, &rp3d);
+        anim_loop(s_xform_rotate_x, ER_PROP_ROTATE_X, 60.0f, 1000);
+    }
+    if (s_xform_rotate_y)
+    {
+        ERProps rp3d = props_default();
+        rp3d.width = dp(44);
+        rp3d.height = dp(44);
+        rp3d.background_color = 0xFF1E90FF;
+        rp3d.border_radius = dp(6);
+        rp3d.transform_perspective = 300.0f;
+        rp3d.transform_origin_x = -1.0f;
+        rp3d.transform_origin_y = -1.0f;
+        er_node_set_props(s_xform_rotate_y, &rp3d);
+        anim_loop(s_xform_rotate_y, ER_PROP_ROTATE_Y, 60.0f, 1200);
+    }
+#endif
 
     bool running = true;
     uint32_t prev = SDL_GetTicks();

@@ -325,6 +325,122 @@ int main(void)
         er_node_destroy(root);
     }
 
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+    /* -------------------------------------------------------------------
+     * rotateY(45°) with perspective(200): a 16×16 red square centred in
+     * the framebuffer, rotated 45° around Y with a perspective distance of
+     * 200 px.  The left and right edges of the source square project closer
+     * together, so the rendered width in screen space is narrower than 16px.
+     * We verify:
+     *   1. The centre pixel of the node is red (the front face is visible).
+     *   2. The untransformed right edge pixel (centre_x+8, centre_y) is
+     *      transparent — the foreshortened image does not reach that far.
+     *   3. Hit-test at the visible centre hits the node; hit-test at the
+     *      original right-edge position misses (or hits the root, not child).
+     * ------------------------------------------------------------------ */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFF000000U; /* black background */
+        er_node_set_props(root, &rp);
+
+        /* Place a 16×16 red square in the middle of the framebuffer. */
+        const int cx = FB_W / 2;
+        const int cy = FB_H / 2;
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.position = ER_POS_ABSOLUTE;
+        cp.left = (int16_t)(cx - 8);
+        cp.top = (int16_t)(cy - 8);
+        cp.width = 16;
+        cp.height = 16;
+        cp.background_color = 0xFFFF0000U; /* red */
+        /* Rotate 45° around Y with perspective 200; origin defaults to center. */
+        cp.transform_rotate_y = 45.0f;
+        cp.transform_perspective = 200.0f;
+        cp.transform_origin_x = -1.0f; /* center (negative = 0.5) */
+        cp.transform_origin_y = -1.0f;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(root, child);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* Centre pixel must be red (the projected face covers the pivot). */
+        if (px(&tc, cx, cy) != 0xFFFF0000U)
+            return fail("3D rotateY: centre pixel should be red");
+
+        /* The untransformed right edge of the source is at cx+8 from the centre.
+         * With a 45° Y-rotation and perspective=200, the foreshortened projected width is
+         * ≈ 11 px, so the pixel at cx+8 should remain the black background (no red bleed). */
+        if ((px(&tc, cx + 8, cy) & 0x00FF0000U) != 0u)
+            return fail("3D rotateY: red channel at cx+8 should be zero — projected width is foreshortened");
+
+        er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_node_destroy(root);
+    }
+
+    /* -------------------------------------------------------------------
+     * Hit-test under 3D rotateY: same layout.
+     * Touch at the visible projected centre should hit the child.
+     * ------------------------------------------------------------------ */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        const int cx = FB_W / 2;
+        const int cy = FB_H / 2;
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.position = ER_POS_ABSOLUTE;
+        cp.left = (int16_t)(cx - 8);
+        cp.top = (int16_t)(cy - 8);
+        cp.width = 16;
+        cp.height = 16;
+        cp.background_color = 0xFFFF0000U;
+        cp.transform_rotate_y = 45.0f;
+        cp.transform_perspective = 200.0f;
+        cp.transform_origin_x = -1.0f;
+        cp.transform_origin_y = -1.0f;
+        er_node_set_props(child, &cp);
+
+        static int s_3d_hits;
+        s_3d_hits = 0;
+        void press_3d(ERNode * n, const EREventData* d, void* u)
+        {
+            (void)n;
+            (void)d;
+            (void)u;
+            s_3d_hits++;
+        }
+        er_event_set(child, ER_EVENT_PRESS, press_3d, NULL);
+
+        er_tree_append_child(root, child);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* Touch at exact centre — must hit the child. */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, cx, cy);
+        embedded_renderer_touch(0, ER_TOUCH_UP, cx, cy);
+        if (s_3d_hits == 0)
+            return fail("3D hit-test: touch at projected centre should hit the child");
+
+        er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_node_destroy(root);
+    }
+#endif /* ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL */
+
 #if ERUI_TRANSFORMS_FULL
     /* -------------------------------------------------------------------
      * Scale 2×: a 4×4 red square with scale_x=2, scale_y=2.
