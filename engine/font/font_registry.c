@@ -105,11 +105,44 @@ bool font_registry_add(const char* name, const BitmapFont* font)
     }
 
     RegistryEntry* e = &s_entries[family_slot];
+
+    /* Replace in place when a size entry with the same pixel_size already exists, so that
+     * re-registering the same (name, size) is idempotent rather than creating a duplicate
+     * entry that would make pick_closest() ambiguous and waste a size slot. */
+    for (uint8_t i = 0; i < e->size_count; i++)
+    {
+        if (e->sizes[i] != NULL && e->sizes[i]->pixel_size == font->pixel_size)
+        {
+            e->sizes[i] = font;
+            return true;
+        }
+    }
+
     if (e->size_count >= FONT_FAMILY_MAX_SIZES)
         return false;
 
     e->sizes[e->size_count++] = font;
     return true;
+}
+
+const BitmapFont* font_registry_get_exact(const char* name, uint8_t pixel_size)
+{
+    if (!s_initialised || !name || name[0] == '\0')
+        return NULL;
+
+    for (int i = 0; i < (int)FONT_REGISTRY_MAX; i++)
+    {
+        if (s_entries[i].in_use && strncmp(s_entries[i].name, name, FONT_NAME_MAX) == 0)
+        {
+            for (uint8_t j = 0; j < s_entries[i].size_count; j++)
+            {
+                if (s_entries[i].sizes[j] != NULL && s_entries[i].sizes[j]->pixel_size == pixel_size)
+                    return s_entries[i].sizes[j];
+            }
+            return NULL;
+        }
+    }
+    return NULL;
 }
 
 const BitmapFont* font_registry_get(const char* name, uint8_t pixel_size)

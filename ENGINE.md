@@ -256,8 +256,15 @@ in the props union, any per-node state.
 - [x] Runtime `er_font_load` (`ERUI_FONT_POOL_BYTES`)
 - [x] **Image registry** — analogous to font registry; `er_image_load` populates, the
   Image node looks up by name.
-- [ ] **Resource teardown / replace** — `er_font_load`/`er_image_load` re-registering the
-  same name should release the prior entry's pool bytes (or document that it leaks).
+- [x] **Resource teardown / replace** — `er_image_load` replaces an existing name in place
+  (buffers are caller-owned, so nothing leaks). `er_font_load`/`font_blob_register` replace a
+  same-`pixel_size` entry in place via `font_registry_add` (new `font_registry_get_exact`
+  helper); the blob loader repacks into the prior pool footprint when the new blob fits
+  (no bytes consumed) and only falls back to a fresh bump allocation when it does not — that
+  fallback case is documented as leaking until `font_blob_init()`/`font_registry_init()`
+  reclaim the whole pool. Covered by the `resources` CTest suite (image replace, registry
+  replace, blob reuse vs. fresh-alloc). The pool footprint tracking compiles out entirely
+  when `ERUI_FONT_POOL_BYTES == 0`.
 
 ## 9. Compile-Time Feature Flags
 

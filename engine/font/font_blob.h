@@ -62,6 +62,14 @@ uint32_t font_blob_used_bytes(void);
  * The blob data is copied into the static font pool (if ERUI_FONT_POOL_BYTES > 0),
  * and a BitmapFont entry is added to the registry under the given name.
  *
+ * Re-registration of the same family name with a new pixel size simply appends another
+ * size to the family (the normal multi-size workflow). Re-registration with a pixel size
+ * that is already present replaces that size in place: when the new blob fits within the
+ * byte footprint reserved by the prior registration it is repacked into the same pool
+ * region (no extra bytes consumed); when it does not fit, fresh pool bytes are allocated
+ * and the prior region's bytes are NOT reclaimed (the bump allocator has no free list).
+ * Call font_blob_init() (alongside font_registry_init()) to reclaim the entire pool at once.
+ *
  * @param[in] name       Null-terminated font family name.
  * @param[in] blob       Pointer to the FONT wire-format data.
  * @param[in] blob_size  Size of the blob in bytes.

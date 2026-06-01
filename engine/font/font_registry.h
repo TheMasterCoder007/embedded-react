@@ -28,10 +28,16 @@
 void font_registry_init(void);
 
 /**
- * @brief Adds a BitmapFont to the registry under the given family name.
+ * @brief Adds or replaces a BitmapFont in the registry under the given family name.
  *
- * If a family with this name already exists, a new size entry is appended to it.
- * If the name is new, a fresh family slot is allocated.
+ * If a family with this name already exists and it already holds a size entry with the
+ * same pixel_size, that entry is replaced in place (no new slot is consumed). Otherwise
+ * the font is appended as a new size for the family. If the name is new, a fresh family
+ * slot is allocated.
+ *
+ * Note: replacing a size entry only swaps the registry's pointer; it does not reclaim any
+ * font-pool bytes the prior BitmapFont occupied. See font_blob_register() for how the
+ * blob loader reuses pool bytes on re-registration.
  *
  * @param[in] name  Null-terminated font family name (max FONT_NAME_MAX characters).
  * @param[in] font  Pointer to the BitmapFont to register.
@@ -39,6 +45,20 @@ void font_registry_init(void);
  * @return true on success, false if the registry or the family's size table is full.
  */
 bool font_registry_add(const char* name, const BitmapFont* font);
+
+/**
+ * @brief Looks up the exact BitmapFont registered for a family name and pixel size.
+ *
+ * Unlike font_registry_get(), this performs no closest-size matching and no fallback to
+ * the built-in font: it returns a hit only when an entry with precisely the requested
+ * pixel_size exists for the named family.
+ *
+ * @param[in] name        Null-terminated font family name.
+ * @param[in] pixel_size  Exact pixel size to match.
+ *
+ * @return Pointer to the matching BitmapFont, or NULL if none is registered.
+ */
+const BitmapFont* font_registry_get_exact(const char* name, uint8_t pixel_size);
 
 /**
  * @brief Retrieves the best-matching BitmapFont for a given family name and pixel size.

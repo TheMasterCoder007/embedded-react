@@ -737,6 +737,12 @@ extern "C"
     /**
      * @brief Registers a baked bitmap font blob under a name for use by Text nodes.
      *
+     * The blob is copied into the engine's static font pool (sized by ERUI_FONT_POOL_BYTES;
+     * when that is 0 this call is a no-op). Loading the same name with a new size adds that
+     * size to the family. Loading the same name and size again replaces it: the pool bytes
+     * are reused in place when the new blob fits the prior footprint, otherwise fresh bytes
+     * are consumed and the old ones are not reclaimed. Load each font once where possible.
+     *
      * @param[in] name  Null-terminated font family name (e.g. "Inter").
      * @param[in] buf   Pointer to the font blob data (FONT wire format v1).
      * @param[in] len   Size of the blob in bytes.
@@ -745,6 +751,11 @@ extern "C"
 
     /**
      * @brief Registers a premultiplied ARGB8888 image under a name for use by Image nodes.
+     *
+     * The pixel buffer is caller-owned and referenced by pointer, never copied, so it must
+     * stay live for as long as any Image node uses the name. Registering an existing name
+     * replaces its buffer/dimensions in place (no engine-side memory is leaked); each
+     * distinct name occupies one of IMAGE_REGISTRY_MAX slots.
      *
      * @param[in] name      Null-terminated image asset name.
      * @param[in] argb_buf  Pointer to the premultiplied ARGB8888 pixel data (row-major).
