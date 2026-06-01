@@ -350,6 +350,7 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
 void embedded_renderer_tick(uint32_t delta_ms)
 {
     er_anim_tick(delta_ms);
+    er_layout_anim_tick(delta_ms);
     er_input_tick(delta_ms);
     er_tick(delta_ms);
 }

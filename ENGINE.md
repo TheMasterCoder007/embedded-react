@@ -216,8 +216,18 @@ opacity and the two color props.
   shared value to a node property through an `ERInterpolation`; the mapping is applied on every value
   change (set + runtime tick) inside `push_to_value_bindings`. Demo: Panel 6 "ANIMATED VALUE" uses
   three interpolated bindings (linear tx, triangle-wave tx, opacity) from one 0→1 driver value.
-- [ ] **`LayoutAnimation`** — observe layout deltas and animate computed rects with
-  spring/timing (separate pass after layout, before render).
+- [x] **`LayoutAnimation`** — observe layout deltas and animate computed rects with
+  spring/timing (separate pass after layout, before render). Engine concept:
+  `er_layout_anim_configure_next()` sets a one-shot config (ERLayoutAnimConfig: type, duration,
+  easing, spring k/c/m); on the next `er_commit()` every node whose computed rect changed from
+  its current display rect starts a layout animation (`ERLayoutAnim` pool, up to
+  `ERUI_MAX_LAYOUT_ANIMS` = 16 simultaneous). `er_layout_anim_tick()` (called from
+  `embedded_renderer_tick()`) advances all active slots and writes `node->animated`; the
+  compositor reads `animated` instead of `computed` for pixel positions. Retarget-in-flight
+  (layout changes again mid-animation) restarts from the current display position.
+  Preset constants: `ER_LAYOUT_ANIM_EASE_IN_EASE_OUT`, `ER_LAYOUT_ANIM_LINEAR`,
+  `ER_LAYOUT_ANIM_SPRING`. Demo: Panel 11 "LAYOUT ANIMATION" shows three boxes (two
+  explicit-width, one flex_grow=1) resizing simultaneously with TIMING/SPRING toggle.
 
 ## 7. Components
 
@@ -312,7 +322,7 @@ A path that keeps the engine demoable at each step:
 12. ~~**Feature flag plumbing**~~ — gradient rasterizer (linear + radial, `ERUI_GRADIENT` /
     `ERUI_GRADIENT_RADIAL`), bilinear image scaler (`ERUI_BILINEAR_SCALE`), all optional paths
     wrapped in `#if` guards — **done**.
-13. **Test coverage** — fill the matrix in §10 as features land.
+13. ~~**Test coverage**~~ — fill the matrix in §10 as features land — **done** (animation_layout_anim suite added; all 15 suites green).
 
 After step 9 the engine surface in `er_scene.h` should be capable of hosting the
 `bridges/quickjs/` reconciler against any sample React app written for the documented

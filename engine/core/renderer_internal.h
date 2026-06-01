@@ -108,6 +108,16 @@ void er_tick(uint32_t delta_ms);
 void er_anim_tick(uint32_t delta_ms);
 
 /**
+ * @brief Advances all active layout animations by delta_ms milliseconds.
+ *
+ * Updates node->animated for every node with a running layout animation and marks
+ * it dirty so the next er_commit() re-renders it at the interpolated position.
+ *
+ * @param[in] delta_ms  Milliseconds elapsed since the last tick.
+ */
+void er_layout_anim_tick(uint32_t delta_ms);
+
+/**
  * @brief Clears input gesture state.
  */
 void er_input_reset(void);

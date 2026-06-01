@@ -60,8 +60,9 @@ set(EMBEDDED_REACT_SOURCES
         # text: UTF-8 + glyph blits
         text/text_renderer.c
 
-        # animation: Animated.Value engine
+        # animation: Animated.Value engine + layout transitions
         animation/animation.c
+        animation/layout_anim.c
 
         # resources: fonts (built-in + runtime loader)
         font/font_bitmap.c

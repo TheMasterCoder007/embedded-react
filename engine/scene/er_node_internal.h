@@ -210,6 +210,7 @@ struct ERNode
     ERLayoutSpec layout;
     ERLayoutRect computed;
     ERLayoutRect prev_computed; /**< Computed rect from the previous commit, used to detect layout changes. */
+    ERLayoutRect animated;      /**< Current display rect; updated by layout animations; equals computed when idle. */
     float scroll_offset_x;      /**< Horizontal scroll position in pixels (ScrollView only). */
     float scroll_offset_y;      /**< Vertical scroll position in pixels (ScrollView only). */
     float scroll_vel_x;         /**< Momentum velocity X in px/ms (positive = content moving right). */

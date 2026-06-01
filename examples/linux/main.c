@@ -92,6 +92,14 @@ static ERNode* s_grad_angle_lbl = NULL; /**< Label showing current diagonal angl
 static float s_grad_angle = 45.0f;      /**< Current angle used by the diagonal gradient demo. */
 static ERNode* s_grad_diag_node = NULL; /**< Diagonal gradient card updated on button press. */
 
+/* Panel 11 — Layout Animation */
+static ERNode* s_la_box_a = NULL;    /**< Left box whose width animates. */
+static ERNode* s_la_box_b = NULL;    /**< Centre box that fills remaining space. */
+static ERNode* s_la_box_c = NULL;    /**< Right box whose width animates. */
+static ERNode* s_la_type_lbl = NULL; /**< Caption showing current animation type. */
+static bool s_la_wide = false;       /**< Toggle: narrow (40 dp each) vs. wide (80 dp each). */
+static bool s_la_use_spring = false; /**< Toggle: timing easeInOut vs. spring. */
+
 static const uint32_t k_sv_v_colors[6] = {0xFF2A9D8F, 0xFFE94560, 0xFFF4A261, 0xFF9B59B6, 0xFF3498DB, 0xFF2ECC71};
 
 static const uint32_t k_sv_h_colors[8] = {
@@ -1943,6 +1951,204 @@ static void on_grad_rotate(ERNode* node, const EREventData* data, void* ctx)
     er_node_set_props(s_grad_angle_lbl, &lp);
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Panel 11 callbacks (Layout Animation)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "RESIZE" button in Panel 11.
+ *
+ * Configures a LayoutAnimation for the next er_commit() and toggles the explicit width of
+ * the two side boxes between 40 dp (narrow) and 80 dp (wide), causing both side boxes and
+ * the fill-box in the centre to animate their new computed rects.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   Opaque context (unused).
+ */
+static void on_la_resize(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_la_box_a || !s_la_box_c)
+        return;
+
+    s_la_wide = !s_la_wide;
+    const int16_t side_w = s_la_wide ? dp(80) : dp(40);
+
+    if (s_la_use_spring)
+    {
+        ERLayoutAnimConfig cfg = {0};
+        cfg.type = ER_ANIM_SPRING;
+        cfg.stiffness = 180.0f;
+        cfg.damping = 22.0f;
+        cfg.mass = 1.0f;
+        er_layout_anim_configure_next(&cfg);
+    }
+    else
+    {
+        ERLayoutAnimConfig cfg = {0};
+        cfg.type = ER_ANIM_TIMING;
+        cfg.duration_ms = 350U;
+        cfg.easing = ER_EASE_EASE_IN_OUT;
+        er_layout_anim_configure_next(&cfg);
+    }
+
+    ERProps p = props_default();
+    p.width = side_w;
+    p.height = dp(52);
+    p.background_color = 0xFF2A9D8F;
+    p.border_radius = dp(6);
+    er_node_set_props(s_la_box_a, &p);
+
+    p.background_color = 0xFF457B9D;
+    er_node_set_props(s_la_box_c, &p);
+}
+
+/**
+ * @brief ER_EVENT_PRESS callback for the "TIMING / SPRING" toggle in Panel 11.
+ *
+ * Switches the animation mode between timing (ease-in-out, 350 ms) and spring physics
+ * and updates the caption label.
+ *
+ * @param[in] node  Node that received the event (unused).
+ * @param[in] data  Event payload (unused).
+ * @param[in] ctx   Opaque context (unused).
+ */
+static void on_la_toggle_type(ERNode* node, const EREventData* data, void* ctx)
+{
+    (void)node;
+    (void)data;
+    (void)ctx;
+    if (!s_la_type_lbl)
+        return;
+
+    s_la_use_spring = !s_la_use_spring;
+
+    ERProps lp = props_default();
+    lp.color = 0xFF99AABB;
+    lp.font_size = (uint8_t)dp(11);
+    strncpy(lp.text, s_la_use_spring ? "spring  180 / 22 / 1" : "timing  easeInOut  350 ms", ER_TEXT_MAX);
+    er_node_set_props(s_la_type_lbl, &lp);
+}
+
+/**
+ * @brief Builds Panel 11 — Layout Animation.
+ *
+ * Demonstrates er_layout_anim_configure_next():
+ *   - Three boxes in a flex row: two side boxes with explicit widths and one fill box.
+ *   - RESIZE button toggles the side boxes between 40 dp and 80 dp wide; all three
+ *     boxes animate their new computed rects simultaneously.
+ *   - TIMING/SPRING toggle switches between a 350 ms ease-in-out and spring physics.
+ *
+ * @return Fully populated panel VIEW node.
+ */
+static ERNode* build_layout_anim_panel(void)
+{
+    ERNode* col = make_panel();
+    ERProps p;
+
+    er_tree_append_child(col, make_section_header("LAYOUT ANIMATION"));
+
+    /* Three boxes in a row: A (explicit width), B (flex_grow=1), C (explicit width). */
+    ERNode* box_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(52);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(6);
+    er_node_set_props(box_row, &p);
+
+    ERNode* box_a = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.width = dp(40);
+    p.background_color = 0xFF2A9D8F;
+    p.border_radius = dp(6);
+    er_node_set_props(box_a, &p);
+    s_la_box_a = box_a;
+
+    ERNode* box_b = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.flex_grow = 1;
+    p.background_color = 0xFF1A3A5C;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_CENTER;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(box_b, &p);
+    s_la_box_b = box_b;
+
+    ERNode* box_b_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF8899BB;
+    p.font_size = (uint8_t)dp(10);
+    strncpy(p.text, "fill", ER_TEXT_MAX);
+    er_node_set_props(box_b_lbl, &p);
+    er_tree_append_child(box_b, box_b_lbl);
+
+    ERNode* box_c = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.width = dp(40);
+    p.background_color = 0xFF457B9D;
+    p.border_radius = dp(6);
+    er_node_set_props(box_c, &p);
+    s_la_box_c = box_c;
+
+    er_tree_append_child(box_row, box_a);
+    er_tree_append_child(box_row, box_b);
+    er_tree_append_child(box_row, box_c);
+    er_tree_append_child(col, box_row);
+
+    /* Button row.  A VIEW inside a flex-col has no intrinsic height (only Text nodes
+     * are measured), so it must declare an explicit height or it collapses to 0 px —
+     * which would stack the following labels on top of the buttons and break hit-testing. */
+    ERNode* btn_row = er_node_create(ER_NODE_VIEW);
+    p = props_default();
+    p.height = dp(36);
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_STRETCH;
+    p.gap = dp(8);
+    er_node_set_props(btn_row, &p);
+
+    ERNode* btn_resize = make_button("RESIZE", on_la_resize);
+    p = props_default();
+    p.flex_grow = 1;
+    p.height = dp(36);
+    p.background_color = 0xFF243447;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_STRETCH;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(btn_resize, &p);
+
+    ERNode* btn_type = make_button("TIMING / SPRING", on_la_toggle_type);
+    p = props_default();
+    p.flex_grow = 1;
+    p.height = dp(36);
+    p.background_color = 0xFF243447;
+    p.border_radius = dp(6);
+    p.align_items = ER_ALIGN_STRETCH;
+    p.justify_content = ER_JUSTIFY_CENTER;
+    er_node_set_props(btn_type, &p);
+
+    er_tree_append_child(btn_row, btn_resize);
+    er_tree_append_child(btn_row, btn_type);
+    er_tree_append_child(col, btn_row);
+
+    /* Caption showing current animation config. */
+    ERNode* type_lbl = er_node_create(ER_NODE_TEXT);
+    p = props_default();
+    p.color = 0xFF99AABB;
+    p.font_size = (uint8_t)dp(11);
+    strncpy(p.text, "timing  easeInOut  350 ms", ER_TEXT_MAX);
+    er_node_set_props(type_lbl, &p);
+    s_la_type_lbl = type_lbl;
+    er_tree_append_child(col, type_lbl);
+
+    er_tree_append_child(col, make_caption("er_layout_anim_configure_next()"));
+
+    return col;
+}
+
 /**
  * @brief Builds Panel 10 — Gradients.
  *
@@ -2931,6 +3137,7 @@ static void build_scene(int phys_w, int phys_h)
     ERNode* p_components = build_components_panel();
     ERNode* p_borders = build_borders_layout_panel();
     ERNode* p_gradients = build_gradient_panel();
+    ERNode* p_layout_anim = build_layout_anim_panel();
 
     panel_set_fixed_height(p_sv_left, dp(300));
     panel_set_fixed_height(p_sv_right, dp(200));
@@ -2940,6 +3147,7 @@ static void build_scene(int phys_w, int phys_h)
     panel_set_fixed_height(p_components, dp(460));
     panel_set_fixed_height(p_borders, dp(420));
     panel_set_fixed_height(p_gradients, dp(440));
+    panel_set_fixed_height(p_layout_anim, dp(220));
 
     er_tree_append_child(col_a, p_sv_left);
     er_tree_append_child(col_b, p_sv_right);
@@ -2951,10 +3159,11 @@ static void build_scene(int phys_w, int phys_h)
 
     er_tree_append_child(col_a, p_borders);
     er_tree_append_child(col_b, p_gradients);
+    er_tree_append_child(col_c, p_layout_anim);
 
     /* Bottom row height must encompass the tallest column.
-     * col_a: 300+660+420 + 2×12 gaps = 1404 (tallest); col_b: 200+570+440 + 2×12 = 1234.
-     * Pick a slightly larger value so columns can stretch without clipping. */
+     * col_a: 300+660+420 + 2×12 gaps = 1404 (tallest); col_b: 200+570+440 + 2×12 = 1234;
+     * col_c: 260+460+220 + 2×12 = 964. */
     ERNode* bot_row = er_node_create(ER_NODE_VIEW);
     p = props_default();
     p.height = dp(1420);

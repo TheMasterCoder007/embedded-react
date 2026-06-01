@@ -1,6 +1,7 @@
 #include "er_node_internal.h"
 #include "gradient.h"
 #include "image_scaler.h"
+#include "layout_anim.h"
 #include "layout_engine.h"
 #include "native_renderer.h"
 #include "renderer_internal.h"
@@ -373,11 +374,13 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     const bool should_render = n->dirty || parent_dirty;
 
-    /* Actual screen position after applying all ancestor scroll offsets. */
-    int px = n->computed.x - translate_x;
-    int py = n->computed.y - translate_y;
-    const int w = n->computed.w;
-    const int h = n->computed.h;
+    /* Actual screen position after applying all ancestor scroll offsets.
+     * Use node->animated rather than node->computed so that LayoutAnimation
+     * transitions show intermediate positions during the animation. */
+    int px = n->animated.x - translate_x;
+    int py = n->animated.y - translate_y;
+    const int w = n->animated.w;
+    const int h = n->animated.h;
 
     /* --- 2D/3D transform application --- */
     bool doing_affine = false;
@@ -1406,6 +1409,7 @@ void er_commit(void)
 
     er_layout_compute(s_root_tag, rw, rh);
     refresh_scroll_content_sizes(root);
+    er_layout_anim_post_layout(root);
     dispatch_layout_events(root);
     render_tree(root, false, 0, 0);
 }

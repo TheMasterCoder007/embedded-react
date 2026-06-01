@@ -591,6 +591,31 @@ extern "C"
     } ERAnimConfig;
 
     /**
+     * @brief Configuration for a layout animation applied to nodes whose computed rect changes.
+     *
+     * Pass to er_layout_anim_configure_next() before calling er_commit().  On the next commit
+     * every node whose computed layout rectangle changed will animate from its current display
+     * position to the new computed position using this config.  The config is consumed by the
+     * first commit after it is registered and has no effect on subsequent commits.
+     *
+     * Convenience presets: ER_LAYOUT_ANIM_EASE_IN_EASE_OUT, ER_LAYOUT_ANIM_LINEAR,
+     * ER_LAYOUT_ANIM_SPRING.
+     */
+    typedef struct ERLayoutAnimConfig
+    {
+        ERAnimType type;      /**< ER_ANIM_TIMING or ER_ANIM_SPRING. */
+        uint16_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring. */
+        ERAnimEasing easing;  /**< Easing curve for ER_ANIM_TIMING; ignored for spring. */
+        float stiffness;      /**< Spring stiffness k (ER_ANIM_SPRING; 0 = default 100). */
+        float damping;        /**< Spring damping c (ER_ANIM_SPRING; 0 = default 10). */
+        float mass;           /**< Spring mass m (ER_ANIM_SPRING; 0 = default 1). */
+        float bezier_x1;      /**< Bezier CP1 X for ER_EASE_BEZIER. */
+        float bezier_y1;      /**< Bezier CP1 Y for ER_EASE_BEZIER. */
+        float bezier_x2;      /**< Bezier CP2 X for ER_EASE_BEZIER. */
+        float bezier_y2;      /**< Bezier CP2 Y for ER_EASE_BEZIER. */
+    } ERLayoutAnimConfig;
+
+    /**
      * @brief Single entry in an animation group (er_anim_sequence / parallel / stagger).
      */
     typedef struct
@@ -1081,6 +1106,47 @@ extern "C"
      * @param[in] count  Number of spans; clamped to ER_TEXT_MAX_SPANS.
      */
     void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count);
+
+    /*----------------------------------------------------------------------------------------------------------------------
+     - Layout animation
+     ---------------------------------------------------------------------------------------------------------------------*/
+
+    /**
+     * @brief 300 ms timing animation with ease-in-out cubic.
+     *
+     * Mirrors React Native's LayoutAnimation.Presets.easeInEaseOut.
+     */
+    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_EASE_IN_EASE_OUT;
+
+    /**
+     * @brief 300 ms timing animation with linear easing.
+     *
+     * Mirrors React Native's LayoutAnimation.Presets.linear.
+     */
+    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_LINEAR;
+
+    /**
+     * @brief Spring animation using the default React Native spring parameters.
+     *
+     * Mirrors React Native's LayoutAnimation.Presets.spring.
+     */
+    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_SPRING;
+
+    /**
+     * @brief Registers a layout animation config to apply on the next er_commit().
+     *
+     * On the next commit every node whose computed layout rectangle changed from the
+     * previous commit will animate from its current display position to the new computed
+     * position using this config.  The config is consumed after one commit and has no
+     * effect on subsequent commits unless er_layout_anim_configure_next() is called again.
+     *
+     * Nodes that are appearing for the first time (prev computed rect was zero-size) are
+     * snapped to their target immediately without animation; they are treated as creations
+     * rather than updates.
+     *
+     * @param[in] cfg  Layout animation config. NULL is a no-op.
+     */
+    void er_layout_anim_configure_next(const ERLayoutAnimConfig* cfg);
 
 #ifdef __cplusplus
 }
