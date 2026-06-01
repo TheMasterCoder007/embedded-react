@@ -1,20 +1,26 @@
-# Engine Completion Plan
+# Engine Feature Reference & Roadmap
 
-Checklist of everything the C engine still needs before a React app can run end-to-end
-on top of it. Items are grouped by subsystem and ordered roughly by dependency. Items
-already implemented are checked. Each unchecked box is deliverable; cross them off as
-they land.
+A subsystem-by-subsystem map of what the C engine implements, with notes on how each
+feature is wired. This began as a build checklist; every box is now checked, so it reads
+as a feature inventory rather than a to-do list. Implementation notes on each item double
+as a quick orientation guide to the renderer internals.
+
+The forward-looking work that remains is collected in **[Future Work](#future-work)** at
+the bottom — nothing in the checklists below is outstanding.
 
 The engine surface that React (via `bridges/quickjs/`) targets is `engine/include/er_scene.h`
 and `engine/include/native_renderer.h`. Anything React-facing must reduce to those calls.
 
+Checkbox convention: `[x]` marks a shipped, tested feature. The few intentionally deferred
+items are described in prose (not as unchecked boxes) and summarized under Future Work.
+
 ---
 
-## 1. Input & Touch (resume point)
+## 1. Input & Touch
 
-Touch dispatch is partially wired in [hit_test.c](engine/scene/hit_test.c). Single-finger
-press, long-press, press-in/out, touch start/move/end, cancel, bubbling, and zIndex-aware
-hit-testing are working. The remaining work is everything above raw events.
+Touch dispatch is handled in [hit_test.c](engine/scene/hit_test.c). Single-finger press,
+long-press, press-in/out, touch start/move/end, cancel, bubbling, and zIndex-aware
+hit-testing all work, along with the higher-level gesture/responder layer below.
 
 - [x] Press / press-in / press-out / long-press
 - [x] Raw touch start / move / end / cancel + bubbling through ancestors
@@ -207,9 +213,9 @@ opacity and the two color props.
 - [x] **`useNativeDriver: true` binding model** — `ERAnimValue` is a standalone animatable
   float (pool size `ERUI_MAX_ANIM_VALUES`, default 16) with up to `ERUI_MAX_VALUE_BINDINGS`
   (default 4) node-property subscriptions.  `er_anim_value_create/destroy/bind/unbind_all/
-  animate/set/get` form the public API.  When the value ticks, every bound node+prop pair
+  animate/set/get` form the public API. When the value ticks, every bound node+prop pair
   is updated in C without re-entering any higher-level layer — the engine-side foundation
-  for `useNativeDriver: true`.  Demo: Panel 6 "ANIMATED VALUE" section.
+  for `useNativeDriver: true`. Demo: Panel 6 "ANIMATED VALUE" section.
 - [x] **Interpolation ranges** — `value.interpolate({inputRange, outputRange})`. Engine concept:
   `er_interpolate()` is a pure piecewise-linear mapper (up to `ER_INTERPOLATE_MAX_POINTS` breakpoints,
   per-side `ERExtrapolate` of EXTEND/CLAMP/IDENTITY). `er_anim_value_bind_interpolated()` attaches a
@@ -234,18 +240,18 @@ opacity and the two color props.
 The switch in `render_tree` in [compositor.c](engine/scene/compositor.c) falls through
 for several node types declared in `ERNodeType`.
 
-| Node                         | Status          | What's needed                                                          |
-|------------------------------|-----------------|------------------------------------------------------------------------|
-| `ER_NODE_VIEW`               | working         | -                                                                      |
-| `ER_NODE_PRESSABLE`          | working         | -                                                                      |
-| `ER_NODE_MODAL`              | working         | Visible/hidden via `modal_visible`; backdrop fill; z-index 1000 layer  |
-| `ER_NODE_TEXT`               | working         | (see Text section)                                                     |
-| `ER_NODE_IMAGE`              | working         | -                                                                      |
-| `ER_NODE_SCROLL_VIEW`        | working         | -                                                                      |
-| `ER_NODE_FLAT_LIST`          | working         | Scrolls like ScrollView; virtualisation still TODO                     |
-| `ER_NODE_TEXT_INPUT`         | working         | Auto-focus on press; key input via `embedded_renderer_key`; cursor blink|
-| `ER_NODE_ACTIVITY_INDICATOR` | working         | 8-dot fading ring driven by built-in looping `rotate_z` animation      |
-| `ER_NODE_SWITCH`             | working         | Pill track + animated thumb; value prop drives 200 ms ease-in-out      |
+| Node                         | Status  | What's needed                                                            |
+|------------------------------|---------|--------------------------------------------------------------------------|
+| `ER_NODE_VIEW`               | working | -                                                                        |
+| `ER_NODE_PRESSABLE`          | working | -                                                                        |
+| `ER_NODE_MODAL`              | working | Visible/hidden via `modal_visible`; backdrop fill; z-index 1000 layer    |
+| `ER_NODE_TEXT`               | working | (see Text section)                                                       |
+| `ER_NODE_IMAGE`              | working | -                                                                        |
+| `ER_NODE_SCROLL_VIEW`        | working | -                                                                        |
+| `ER_NODE_FLAT_LIST`          | working | Scrolls like ScrollView; virtualisation still TODO                       |
+| `ER_NODE_TEXT_INPUT`         | working | Auto-focus on press; key input via `embedded_renderer_key`; cursor blink |
+| `ER_NODE_ACTIVITY_INDICATOR` | working | 8-dot fading ring driven by built-in looping `rotate_z` animation        |
+| `ER_NODE_SWITCH`             | working | Pill track + animated thumb; value prop drives 200 ms ease-in-out        |
 
 Each entry corresponds to an item to land: render case, prop fields in `ERProps`, type
 in the props union, any per-node state.
@@ -306,9 +312,30 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 ---
 
-## Suggested Order
+## Future Work
 
-A path that keeps the engine demoable at each step:
+Everything in the checklists above is shipped and tested. The items below are intentionally
+deferred — they are not regressions or gaps in the documented v1 surface, just the natural
+next steps if the engine grows.
+
+- **FlatList virtualisation** — `ER_NODE_FLAT_LIST` currently scrolls like a ScrollView and
+  renders all children. Windowing (mounting only the visible range + overscan) is the next
+  step for large lists on constrained RAM. See the component table in §7.
+- **Canvas API** ([canvas_bindings.c](engine/rendering/canvas_bindings.c)) — deliberately a
+  stub (§4.8). Land an immediate-mode drawing surface only if a bundled React surface needs
+  it; it is out of scope for the documented component + style subset.
+- **Additional ellipsize modes** — text truncation supports `tail` and `clip`; `head` and
+  `middle` are deferred (§5).
+- **`textAlign: justify`** — left/center/right ship; justified text is deferred (§5).
+
+When picking up any of these, add the feature to the relevant subsystem section above (with
+the same implementation-note style) and extend the §10 test matrix.
+
+---
+
+## Build History
+
+The order the engine was built in, kept for context. Each step kept the engine demoable:
 
 1. ~~**Finish touch**~~ — `display:none` / `opacity:0` hit-rejection, `pointerEvents`, layout
    event dispatch — **done**.
@@ -321,7 +348,8 @@ A path that keeps the engine demoable at each step:
 6. ~~**Shadows**~~ — straightforward once the scratch pool exists — **done**.
 7. ~~**Animation engine completion**~~ — spring, decay, easing, transform properties,
    sequence/parallel, completion callbacks — **done**.
-8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`, `textDecorationLine` — **done**.
+8. ~~**Text upgrades**~~ — word-wrap, `numberOfLines`, `textAlign`, `ellipsizeMode`, `letterSpacing`,
+   `textDecorationLine` — **done**.
 9. ~~**Remaining components**~~ — TextInput, Switch, ActivityIndicator, Modal, FlatList — **done**.
 10. ~~**Dirty-rect tracking + node pool reuse**~~ — perf / longevity polish before MCU bring-up — **done**.
 11. ~~**Layout additions**~~ — `aspectRatio`, `marginHorizontal/Vertical`, `paddingHorizontal/Vertical`,
@@ -329,8 +357,9 @@ A path that keeps the engine demoable at each step:
 12. ~~**Feature flag plumbing**~~ — gradient rasterizer (linear + radial, `ERUI_GRADIENT` /
     `ERUI_GRADIENT_RADIAL`), bilinear image scaler (`ERUI_BILINEAR_SCALE`), all optional paths
     wrapped in `#if` guards — **done**.
-13. ~~**Test coverage**~~ — fill the matrix in §10 as features land — **done** (animation_layout_anim suite added; all 15 suites green).
+13. ~~**Test coverage**~~ — fill the matrix in §10 as features land — **done** (16 CTest suites green, including
+    `animation_layout_anim` and `resources`).
 
-After step 9 the engine surface in `er_scene.h` should be capable of hosting the
+With all steps landed, the engine surface in `er_scene.h` is capable of hosting the
 `bridges/quickjs/` reconciler against any sample React app written for the documented
 component + style subset.
