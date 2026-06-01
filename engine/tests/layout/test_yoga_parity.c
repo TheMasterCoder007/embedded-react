@@ -605,6 +605,107 @@ static void fixture_align_content_stretch(void)
     teardown_wrap3(root, kids);
 }
 
+/** @brief Percentage width on the main axis: 50% of a 200px row → 100px. */
+static void fixture_pct_width_main(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 80;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect r0;
+    ERProps p = props_default();
+    p.width_pct = 50.0f;
+    p.height = 40;
+    ERNode* c0 = mk(p, &r0);
+    er_tree_append_child(root, c0);
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("pct-width-main", "c0", EXPECT, r0, 0, 0, 100, 40);
+
+    kill_child(root, c0);
+    er_node_destroy(root);
+}
+
+/** @brief Percentage height on the main axis: 25% of a 200px column → 50px. */
+static void fixture_pct_height_main(void)
+{
+    ERProps rp = props_default();
+    rp.width = 100;
+    rp.height = 200;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect r0;
+    ERProps p = props_default();
+    p.width = 30;
+    p.height_pct = 25.0f;
+    ERNode* c0 = mk(p, &r0);
+    er_tree_append_child(root, c0);
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("pct-height-main", "c0", EXPECT, r0, 0, 0, 30, 50);
+
+    kill_child(root, c0);
+    er_node_destroy(root);
+}
+
+/** @brief Percentage width on the cross axis: 50% of a 200px-wide column → 100px. */
+static void fixture_pct_width_cross(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect r0;
+    ERProps p = props_default();
+    p.width_pct = 50.0f;
+    p.height = 20;
+    ERNode* c0 = mk(p, &r0);
+    er_tree_append_child(root, c0);
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("pct-width-cross", "c0", EXPECT, r0, 0, 0, 100, 20);
+
+    kill_child(root, c0);
+    er_node_destroy(root);
+}
+
+/** @brief Percentages resolve against the parent's content box: 50% of (200 − 2×20 padding) = 80. */
+static void fixture_pct_content_box(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 80;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect r0;
+    ERProps p = props_default();
+    p.width_pct = 50.0f;
+    p.height = 40;
+    ERNode* c0 = mk(p, &r0);
+    er_tree_append_child(root, c0);
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("pct-content-box", "c0", EXPECT, r0, 20, 20, 80, 40);
+
+    kill_child(root, c0);
+    er_node_destroy(root);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -632,6 +733,10 @@ int main(void)
     fixture_align_content_center();
     fixture_align_content_between();
     fixture_align_content_stretch();
+    fixture_pct_width_main();
+    fixture_pct_height_main();
+    fixture_pct_width_cross();
+    fixture_pct_content_box();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -657,7 +762,8 @@ int main(void)
  * Known divergences not yet expressible through ERProps (add fixtures when the props/fields land):
  *
  *   - margin: auto centering: margins are fixed pixels; ER_LAYOUT_AUTO margin is treated as 0.
- *   - percentage width/height/padding/margin: only flex_basis has a percent field.
+ *   - percentage padding/margin/min/max/position: width%, height% and flex_basis% have fields
+ *     (width%/height% covered by the pct-* fixtures above); the rest do not yet.
  *   - width-aware text wrapping / auto height: Text uses single-line measurement unless
  *     number_of_lines is set, so an auto-height container under-sizes wrapped text. (Needs a
  *     width-aware measure pass; the expected height is font-dependent, so a tolerance-based

@@ -483,6 +483,10 @@ extern "C"
             padding_vertical; /**< Shorthand for padding_top and padding_bottom; overridden by the per-edge fields. */
         float flex_basis_pct; /**< flex_basis as a percentage of the parent's main-axis size [0.0–100.0]; 0.0 = not set.
                                  Takes precedence over flex_basis. */
+        float width_pct;  /**< width as a percentage of the parent's content width [0.0–100.0]; 0.0 = not set.
+                             Takes precedence over width. */
+        float height_pct; /**< height as a percentage of the parent's content height [0.0–100.0]; 0.0 = not set.
+                             Takes precedence over height. */
 
         /* --- View visual --- */
         uint32_t background_color;          /**< ARGB8888; 0x00000000 = transparent. */

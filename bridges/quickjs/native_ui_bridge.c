@@ -984,6 +984,50 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst obj, ERProps* p)
 }
 
 /**
+ * @brief Reads a dimension key that may be a number (pixels) or a percentage string.
+ *
+ * A numeric value sets the px field; a `"N%"` string sets the percent field (which the engine
+ * resolves against the parent's content size and which takes precedence over the px field).
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  obj  Source props object.
+ * @param[in]  key  Property name (e.g. "width").
+ * @param[out] px   Receives the pixel value when the JS value is numeric.
+ * @param[out] pct  Receives the percentage when the JS value is a `"N%"` string.
+ */
+static void apply_dim_pct(JSContext* ctx, JSValueConst obj, const char* key, int16_t* px, float* pct)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, key, &v))
+    {
+        return;
+    }
+    if (JS_IsNumber(v))
+    {
+        int16_t d;
+        if (to_dim(ctx, v, &d))
+        {
+            *px = d;
+        }
+    }
+    else if (JS_IsString(v))
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (s)
+        {
+            char* end = NULL;
+            const double p = strtod(s, &end);
+            if (end != s && *end == '%')
+            {
+                *pct = (float)p;
+            }
+            JS_FreeCString(ctx, s);
+        }
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
  * @brief Reads `fontWeight` (string keyword, numeric, or numeric string) into a 0/1 weight.
  *
  * @param[in]     ctx  QuickJS context.
@@ -1288,8 +1332,8 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     props_init_defaults(&p);
 
     /* Layout — dimensions and box model. */
-    ER_DIM("width", width);
-    ER_DIM("height", height);
+    apply_dim_pct(ctx, obj, "width", &p.width, &p.width_pct);
+    apply_dim_pct(ctx, obj, "height", &p.height, &p.height_pct);
     ER_DIM("minWidth", min_width);
     ER_DIM("maxWidth", max_width);
     ER_DIM("minHeight", min_height);

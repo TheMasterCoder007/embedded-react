@@ -324,7 +324,10 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             else
             {
                 const int16_t mainsz = is_row ? cl->width : cl->height;
-                if (mainsz != ER_LAYOUT_AUTO)
+                const float main_pct = is_row ? cl->width_pct : cl->height_pct;
+                if (main_pct > 0.0f)
+                    hypo_main = (int16_t)((float)main_size * main_pct / 100.0f + 0.5f);
+                else if (mainsz != ER_LAYOUT_AUTO)
                     hypo_main = mainsz;
                 else
                     hypo_main = is_row ? intr_w : intr_h;
@@ -335,21 +338,24 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
 
             /* Base cross size (stretch may override later if still auto). */
             const int16_t crosssz = is_row ? cl->height : cl->width;
+            const float cross_pct = is_row ? cl->height_pct : cl->width_pct;
             const int16_t cross_mn = is_row ? cl->min_height : cl->min_width;
             const int16_t cross_mx = is_row ? cl->max_height : cl->max_width;
             int16_t hypo_cross;
-            if (crosssz != ER_LAYOUT_AUTO)
+            if (cross_pct > 0.0f)
+                hypo_cross = (int16_t)((float)cross_avail * cross_pct / 100.0f + 0.5f);
+            else if (crosssz != ER_LAYOUT_AUTO)
                 hypo_cross = crosssz;
             else
                 hypo_cross = is_row ? intr_h : intr_w;
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
 
-            /* aspect_ratio: if the cross dimension is auto, derive it from the main.
-             * aspect_ratio == width / height, so:
+            /* aspect_ratio: if the cross dimension is auto (no explicit size or percentage),
+             * derive it from the main. aspect_ratio == width / height, so:
              *   row  direction: cross (height) = main (width)  / aspect_ratio
              *   col  direction: cross (width)  = main (height) * aspect_ratio
              */
-            if (cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO)
+            if (cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO && cross_pct <= 0.0f)
             {
                 const float new_cross =
                     is_row ? (float)hypo_main / cl->aspect_ratio : (float)hypo_main * cl->aspect_ratio;
@@ -705,12 +711,13 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             {
                 case ER_ALIGN_STRETCH:
                 {
-                    /* Stretch fills cross-axis only when size was auto. */
+                    /* Stretch fills cross-axis only when size was auto (no explicit px or %). */
                     const ERNode* c = er_get_node(s_scratch[i].tag);
                     if (c)
                     {
                         const int16_t cz = is_row ? c->layout.height : c->layout.width;
-                        if (cz == ER_LAYOUT_AUTO)
+                        const float cz_pct = is_row ? c->layout.height_pct : c->layout.width_pct;
+                        if (cz == ER_LAYOUT_AUTO && cz_pct <= 0.0f)
                         {
                             const int16_t mn = is_row ? c->layout.min_height : c->layout.min_width;
                             const int16_t mx = is_row ? c->layout.max_height : c->layout.max_width;

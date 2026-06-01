@@ -74,8 +74,8 @@ one prop family verified against a JS value.
 
 - [x] Color parser: `'#rgb'` / `'#rrggbb'` / `'#rrggbbaa'` / `'rgba()'` / `'rgb()'` / 12 named
   colors + raw numbers → straight-alpha `uint32_t` ARGB8888
-- [x] Dimension coercer: JS number → `int16_t` px; `flexBasis: '50%'` → `flex_basis_pct`.
-  `width/height: '%'` still has no field (Open Decisions #4)
+- [x] Dimension coercer: JS number → `int16_t` px; percent strings → the matching `_pct` field
+  (`flexBasis: '50%'`, `width: '50%'`, `height: '100%'`). Padding/margin/min/max % still pixels-only
 - [x] Angle coercer: `'45deg'` / `'Nrad'` / number → degrees float
 - [x] Enum string maps: all 16 done — `flexDirection`, `flexWrap`, `justifyContent`,
   `alignItems`, `alignSelf`, `alignContent`, `position`, `display`, `overflow`, `resizeMode`,
@@ -258,10 +258,10 @@ Resolve these as we reach them; each blocks a checklist item above.
    GC finalizer and avoids finalizer-ordering traps.
 3. **Color parsing scope** — full CSS color set vs. the subset RN actually documents
    (`#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, named). *Leaning: RN subset.*
-4. **Percentage dimensions** — only `flexBasis: '%'` has an `ERProps` field today
-   (`flex_basis_pct`). `width: '50%'` / `height: '50%'` have no field. Decide: document as
-   unsupported, or revisit with the engine owner. (Engine change — out of bounds for this doc
-   without sign-off.)
+4. **Percentage dimensions** — ✅ **RESOLVED: `width`/`height` percentages implemented.** Added
+   `width_pct`/`height_pct` to `ERProps`/`ERLayoutSpec`, resolved against the parent's content box
+   in layout Pass 1 (and respected by Pass 5 stretch), plus bridge marshalling and parity
+   fixtures. Percentage padding/margin/min/max/position are still pixels-only (lower frequency).
 5. **`alignContent`** — ✅ **RESOLVED: implemented.** Added the `ERAlignContent` enum + `ERProps`/
    `ERLayoutSpec` field + Pass 4/5 cross-line distribution in the engine, plus `alignContent`
    marshalling and parity fixtures (center / space-between / stretch).
@@ -284,7 +284,7 @@ engine's computed rects against Yoga/Chrome-correct values. Each assertion is ta
 (must match — catches regressions) or `XFAIL` (known divergence — stays green while broken, but
 turns the suite **red when the engine starts matching**, as a reminder to promote it). Add a
 `fixture_*()` per case. This is how we make divergences deterministic instead of eyeballing the
-demo. Current: 27 EXPECT pass, 0 XFAIL.
+demo. Current: 31 EXPECT pass, 0 XFAIL.
 
 - ✅ **FIXED — container auto cross/main-size.** A `flexDirection: 'row'` View with no explicit
   `height`, whose children set their own height, collapsed to `height: 0` instead of sizing to
@@ -311,8 +311,13 @@ demo. Current: 27 EXPECT pass, 0 XFAIL.
   cross-line distribution between Pass 4 and Pass 5 (offset / between-line spacing / per-line
   stretch). Bridge marshals `alignContent`. All suites pass.
 
+- ✅ **FIXED — percentage `width`/`height`** (parity `pct-width-main` / `pct-height-main` /
+  `pct-width-cross` / `pct-content-box`). Added `width_pct`/`height_pct` (`ERProps`/`ERLayoutSpec`
+  + compositor), resolved against the parent content box in Pass 1, respected by Pass 5 stretch;
+  bridge marshals `'N%'` strings. Percentage padding/margin/min/max/position still pixels-only.
+
 - ⏳ **OPEN — not yet expressible via `ERProps`** (need fields/props first, so not in the harness
-  yet): `margin: auto`, percentage `width`/`height`/padding/margin, width-aware text wrapping /
+  yet): `margin: auto`, percentage padding/margin/min/max/position, width-aware text wrapping /
   auto-height, `alignItems: baseline`. Listed at the foot of the parity test.
 
 ---

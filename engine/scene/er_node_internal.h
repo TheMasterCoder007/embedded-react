@@ -45,6 +45,8 @@ typedef struct
     uint8_t overflow;        /**< EROverflow       */
     float aspect_ratio;      /**< Width/height ratio; 0.0 = not set. */
     float flex_basis_pct;    /**< flex_basis as % of parent main-axis; 0.0 = not set. */
+    float width_pct;         /**< width as % of parent content width; 0.0 = not set. */
+    float height_pct;        /**< height as % of parent content height; 0.0 = not set. */
 } ERLayoutSpec;
 
 /**
