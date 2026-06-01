@@ -24,7 +24,7 @@ hit-testing all work, along with the higher-level gesture/responder layer below.
 
 - [x] Press / press-in / press-out / long-press
 - [x] Raw touch start / move / end / cancel + bubbling through ancestors
-- [x] Multitouch (up to 5 fingers)
+- [x] Multitouch (up to five fingers)
 - [x] zIndex-aware hit-testing
 - [x] **Hit-test rejection for `display: none` and `opacity == 0` nodes** — currently any
   sized node is hittable regardless of visibility.
@@ -69,7 +69,7 @@ the props currently in `ERLayoutSpec`. Additions:
 
 - [x] flex direction / wrap / grow / shrink / basis
 - [x] justify / align-items / align-self
-- [x] margin, padding (shorthand + per-edge), gap
+- [x] margin, padding (shorthand and per-edge), gap
 - [x] absolute positioning
 - [x] min/max width/height
 - [x] **`aspectRatio`** prop — `float aspect_ratio` in `ERLayoutSpec`; layout engine derives
@@ -197,7 +197,7 @@ opacity and the two color props.
   (cubic-bezier with four control points). Newton's-method solver used for bezier X→t.
 - [x] **Spring animations** (`ER_ANIM_SPRING`) — Euler-integrated damped harmonic oscillator
   using `stiffness` / `damping` / `mass` / initial velocity; settles with dual threshold.
-- [x] **Decay animations** (`ER_ANIM_DECAY`) — per-ms exponential friction; `velocity` /
+- [x] **Decay animations** (`ER_ANIM_DECAY`) — per ms exponential friction; `velocity` /
   `deceleration`; stops when |velocity| < DECAY_VEL_STOP.
 - [x] **Translate/scale/rotate property support** — `apply_numeric_value` handles translateX/Y,
   scaleX/Y, rotateZ; `update_has_transform` keeps the dirty flag correct.
@@ -220,7 +220,7 @@ opacity and the two color props.
   `er_interpolate()` is a pure piecewise-linear mapper (up to `ER_INTERPOLATE_MAX_POINTS` breakpoints,
   per-side `ERExtrapolate` of EXTEND/CLAMP/IDENTITY). `er_anim_value_bind_interpolated()` attaches a
   shared value to a node property through an `ERInterpolation`; the mapping is applied on every value
-  change (set + runtime tick) inside `push_to_value_bindings`. Demo: Panel 6 "ANIMATED VALUE" uses
+  change (set and runtime tick) inside `push_to_value_bindings`. Demo: Panel 6 "ANIMATED VALUE" uses
   three interpolated bindings (linear tx, triangle-wave tx, opacity) from one 0→1 driver value.
 - [x] **`LayoutAnimation`** — observe layout deltas and animate computed rects with
   spring/timing (separate pass after layout, before render). Engine concept:
@@ -258,7 +258,7 @@ in the props union, any per-node state.
 
 ## 8. Resources & Registries
 
-- [x] Font registry + built-in Inter blob
+- [x] Font registry and built-in Inter blob
 - [x] Runtime `er_font_load` (`ERUI_FONT_POOL_BYTES`)
 - [x] **Image registry** — analogous to font registry; `er_image_load` populates, the
   Image node looks up by name.
@@ -309,6 +309,9 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 - [x] **Gradient rasterizer** — vertical, horizontal, diagonal, 3-stop, radial, degenerate (stop_count < 2)
 - [x] **Interpolation ranges** — two/three-point linear mapping, EXTEND/CLAMP/IDENTITY per-side extrapolation,
   degenerate guards (point_count < 2, NULL arrays, zero-width segment)
+- [x] **Layout-dirty fast path** (§11.1) — `er_layout_pass_count()` confirms: first commit runs a pass,
+  idle commits and an opacity animation skip it, prop changes / `LayoutAnimation.configureNext` force a
+  pass, and ER_EVENT_LAYOUT does not fire on skipped commits (in the `layout` suite)
 
 ---
 
@@ -332,28 +335,34 @@ Severity legend: 🔴 high (affects every frame / every node, or dominates RAM),
 
 ### 11.1 Per-frame redundant work (the dirty model stops at render, not layout)
 
-- 🔴 **Layout is recomputed in full on every `er_commit()`.** `er_commit()` calls
-  `er_layout_compute()` unconditionally ([compositor.c:1410](engine/scene/compositor.c#L1410)),
-  which runs the whole 7-pass flex solver over the entire tree
-  ([layout_engine.c:127](engine/layout/layout_engine.c#L127)) even when no layout-affecting
-  prop changed since the last commit. The scene graph already tracks `dirty` for rendering,
-  but there is **no layout-dirty flag**. A screen that is merely animating a color, or not
-  changing at all, still re-solves flex for every node, every frame. *Fix:* add a
-  `layout_dirty` flag set by `er_node_set_props`/tree mutations, skip `er_layout_compute` when
-  the root subtree is layout-clean, and ideally re-solve only dirty containers rather than the
-  whole tree.
+- [x] **Layout-dirty flag — DONE.** `er_commit()` now gates the entire layout block (flex solve +
+  text measure + the post-layout passes below) behind a module-level `s_layout_dirty`
+  ([compositor.c](engine/scene/compositor.c)). The flag is raised by `mark_layout_dirty()` from
+  every mutation that can move a computed rect — `er_node_set_props`, `er_node_set_text_spans`,
+  `er_tree_append_child`/`remove_child`/`set_root`, and `er_node_destroy` — and lowered after a
+  pass run. Animations mutate render-only props (opacity, color, transform) directly via
+  `apply_numeric_value` and never raise it, so a static or animation-only frame skips the whole
+  pass and just repaints dirty nodes. A pending `LayoutAnimation` (`er_layout_anim_has_pending()`)
+  also forces a pass so `configureNext` keeps its "evaluate on the next commit" contract. The new
+  public `er_layout_pass_count()` exposes how often layout actually ran, for profiling and tests;
+  the `layout` CTest suite asserts idle/animation commits skip and prop/tree/LayoutAnimation
+  changes trigger a pass. *Remaining refinement (deferred):* the flag is whole-tree and
+  conservative — `er_node_set_props` raises it even when only a visual prop changed. The next
+  step is per-container layout-dirty (re-solve only changed subtrees) and comparing the
+  layout-relevant fields in `set_props` so a pure color change does not relayout.
 
 - 🔴 **Text is re-measured on every layout pass.** Pass 1 calls `er_text_measure()` for every
   `ER_NODE_TEXT` child ([layout_engine.c:191](engine/layout/layout_engine.c#L191)), which
   walks the whole UTF-8 string doing a glyph lookup per codepoint
-  ([text_renderer.c:763](engine/text/text_renderer.c#L763)). Combined with 11.1 above, a static
-  label is fully re-measured 30–60×/second. *Fix:* cache the measured `(w, h)` on the node and
-  invalidate only when the text/font/size/spacing props change.
+  ([text_renderer.c:763](engine/text/text_renderer.c#L763)). The layout-dirty flag above means
+  this no longer runs on idle/animation frames, but it still re-measures every Text node on any
+  commit that runs layout (e.g., a single unrelated prop change). *Fix:* cache the measured
+  `(w, h)` on the node and invalidate only when the text/font/size/spacing props change.
 
-- 🟡 **`dispatch_layout_events()` and `refresh_scroll_content_sizes()` walk the whole tree every
-  commit** ([compositor.c:753](engine/scene/compositor.c#L753),
-  [compositor.c:728](engine/scene/compositor.c#L728)) even when layout did not change. Once a
-  layout-dirty flag exists (11.1), both passes should be gated on it.
+- [x] **`dispatch_layout_events()` and `refresh_scroll_content_sizes()` walk the whole tree —
+  now gated.** Both are inside the `s_layout_dirty` block in `er_commit()`, so they only run on
+  commits that actually recompute layout. (Safe because they read `computed`, which is unchanged
+  when layout is skipped — same results, simply not recomputed.)
 
 - 🟡 **The render traversal descends the entire tree every frame even when nothing is dirty.**
   `render_tree()` must visit every node to discover whether any descendant is dirty, and at
@@ -401,8 +410,8 @@ ancestor* is dirty).
 - 🔴 **Anti-aliased rounded-corner fringes blit one pixel at a time.** Both `er_rrect_fill` and
   `er_rrect_fill_corners` emit individual `1×1 er_blit_fill()` calls for each AA edge pixel
   ([rrect.c:134](engine/rendering/rrect.c#L134),
-  [rrect.c:269](engine/rendering/rrect.c#L269)). Every one pays the full `apply_clip` + backend
-  dispatch cost for a single pixel. Across four corners of every rounded view this is dozens of
+  [rrect.c:269](engine/rendering/rrect.c#L269)). Everyone pays the full `apply_clip` + backend
+  dispatch cost for a single pixel. Across four corners of every rounded view there are dozens of
   one-pixel calls per node. *Fix:* accumulate each scanline's coverage into a small row buffer and
   flush it with one `er_blit_copy`/`blend` per row, the way the AA glyph path already does
   ([text_renderer.c:330](engine/text/text_renderer.c#L330)).
@@ -419,7 +428,7 @@ ancestor* is dirty).
   pixels twice. For a full-screen background with a border that is a screen-sized overdraw. *Fix:*
   draw only the border ring (four edge spans / arc fringes) and fill the interior once.
 
-- 🟡 **Software compositing does a bounds check per pixel instead of clamping the loop.** The
+- 🟡 **Software compositing does a bound check per pixel instead of clamping the loop.** The
   scratch blend/fill/copy inner loops test `col < 0 || col >= s_scratch_w` for every pixel
   ([native_renderer.c:116](engine/core/native_renderer.c#L116),
   [native_renderer.c:161](engine/core/native_renderer.c#L161)). *Fix:* clamp the loop start/end
@@ -448,14 +457,14 @@ mid-range MCUs:
 
 Together that is **~1.4 MB of static scratch RAM** before the node pool, font pool, or backend
 framebuffer. *Directions to explore:* (a) document the real cost of `ERUI_SCRATCH_W/H` and
-`ERUI_MAX_OPACITY_DEPTH` so integrators can shrink them — the effective transformed/opacity-
-composited node size is capped by these dimensions; (b) allow the scratch slots to be sized to
+`ERUI_MAX_OPACITY_DEPTH` so integrators can shrink them — the effective transformed/opacity-composited
+node size is capped by these dimensions; (b) allow the scratch slots to be sized to
 the largest composited node rather than the full screen; (c) tile large transformed/opacity
 subtrees through a smaller scratch instead of requiring one that holds the whole node; (d) share
 one arena between the transform, opacity, and shadow buffers since they are not all live
 simultaneously.
 
-Also worth a pass: every scratch acquisition `memset`s the **entire** slot, not just the active
+Also, worth a pass: every scratch acquisition `memset`s the **entire** slot, not just the active
 region — `er_scratch_push` clears all 240×240 px even for a 20×20 node
 ([scratch_pool.c:78](engine/rendering/scratch_pool.c#L78)), and the transform source clears the
 full buffer too ([transform.c:418](engine/rendering/transform.c#L418)). Clearing only `w×h` (or
@@ -471,7 +480,7 @@ stack at **every level of recursion**:
 - `er_dispatch_touch` → `chain[ERUI_MAX_NODES]` ([hit_test.c:803](engine/scene/hit_test.c#L803),
   [hit_test.c:857](engine/scene/hit_test.c#L857))
 
-🟡 A deep tree multiplies this by depth (e.g. 12 levels deep ≈ 12 KB of transient stack just for
+🟡 A deep tree multiplies this by depth (e.g., 12 levels deep ≈ 12 KB of transient stack just for
 child arrays), which is significant on an MCU with an 8–16 KB stack. *Fix:* size these to the
 actual child count, walk the sibling list in place, or use a single shared scratch indexed by
 recursion depth.
@@ -516,28 +525,31 @@ opens — each is a reconciliation burst, and they stress exactly the paths abov
 - 🟡 Each `er_node_set_props` copies **every** layout field and the full type-specific prop block
   and then calls `er_mark_dirty_upward` ([compositor.c:866](engine/scene/compositor.c#L866)). With
   no layout-dirty separation (11.1), a state update that re-props N nodes forces a full-tree
-  layout re-solve on the next commit no matter how localized the change was. The 11.1/11.6 fixes
+  layout resolve on the next commit no matter how localized the change was. The 11.1/11.6 fixes
   (layout-dirty flag, O(1) append) are what keep a large screen's updates smooth on the MCU.
 - 🟢 Consider a batched "begin/end commit" boundary so the bridge can apply a whole tree diff and
-  trigger exactly one layout + one paint, instead of relying on per-mutation dirty marking to
+  trigger exactly one layout and one paint, instead of relying on per-mutation dirty marking to
   coalesce. (`er_commit()` is already the natural barrier — the point is to make the per-mutation
   work between barriers cheap.)
 
 ### 11.8 Suggested order of attack
 
-1. **Layout-dirty flag (11.1)** — the single biggest win; makes static and lightly-animated screens
-   nearly free and keeps on-device state updates (11.7) smooth.
+1. ~~**Layout-dirty flag (11.1)**~~ — **done.** The single biggest win; static and animation-only
+   frames now skip the flex + text-measure pass entirely. Added `er_layout_pass_count()` and
+   `layout` test coverage. (Whole-tree, conservative; per-container refinement still open — see 11.1.)
 2. **Result caches for shadow / gradient / image / text-measure (11.1, 11.2)** — removes the
-   largest per-frame recompute spikes.
+   largest per-frame recompute spikes. (Text-measure caching is now the top remaining layout cost,
+   since it still re-measures every Text node on any commit that runs layout.)
 3. **Scratch RAM sizing + partial clears (11.4)** — what actually decides whether the engine fits
    on a given MCU; pairs well with documenting the `ERUI_SCRATCH_*` trade-offs.
 4. **Batch the per-pixel blit loops (11.3)** — AA fringes, 1-bit glyphs, bordered overdraw.
-5. **O(1) child append + skip-sort + bounded input scan (11.5, 11.6)** — cheap structural wins.
+5. **O(1) child append + skip-sort + bounded input scan (11.5, 11.6)** — inexpensive structural wins.
 
-None of these change the engine's public surface (`er_scene.h` / `native_renderer.h`); they are
-internal optimisations that preserve current behaviour and visual output. Each should land with a
-before/after measurement (frame time on the SDL/software backend, and static RAM from the map
-file) and, where behaviour-preserving, a test asserting identical pixels/metrics to today.
+One small exception to "no public-surface change": the layout-dirty work added a read-only
+diagnostic, `er_layout_pass_count()` — it does not alter behavior or the React-facing API. The
+remaining items are internal optimizations that preserve current behavior and visual output. Each
+should land with a before/after measurement (frame time on the SDL/software backend, and static RAM
+from the map file) and, where behavior-preserving, a test asserting identical pixels/metrics to today.
 
 ---
 
@@ -552,7 +564,7 @@ next steps if the engine grows.
   step for large lists on constrained RAM. See the component table in §7.
 - **Canvas API** ([canvas_bindings.c](engine/rendering/canvas_bindings.c)) — deliberately a
   stub (§4.8). Land an immediate-mode drawing surface only if a bundled React surface needs
-  it; it is out of scope for the documented component + style subset.
+  it; it is out of scope for the documented component and style subset.
 - **Additional ellipsize modes** — text truncation supports `tail` and `clip`; `head` and
   `middle` are deferred (§5).
 - **`textAlign: justify`** — left/center/right ship; justified text is deferred (§5).
@@ -573,7 +585,7 @@ The order the engine was built in, kept for context. Each step kept the engine d
 3. ~~**ScrollView**~~ — clip + gesture + momentum. Most apps need this before they look real — **done**.
 4. ~~**Opacity compositing + scratch pool**~~ — required by shadows and transforms; small
    self-contained landing — **done**.
-5. ~~**Transforms (2D)**~~ — translate fast path + affine pass + hit-test inverse — **done**.
+5. ~~**Transforms (2D)**~~ — translate the fast path + affine pass + hit-test inverse — **done**.
 6. ~~**Shadows**~~ — straightforward once the scratch pool exists — **done**.
 7. ~~**Animation engine completion**~~ — spring, decay, easing, transform properties,
    sequence/parallel, completion callbacks — **done**.
@@ -583,7 +595,7 @@ The order the engine was built in, kept for context. Each step kept the engine d
 10. ~~**Dirty-rect tracking + node pool reuse**~~ — perf / longevity polish before MCU bring-up — **done**.
 11. ~~**Layout additions**~~ — `aspectRatio`, `marginHorizontal/Vertical`, `paddingHorizontal/Vertical`,
     `flexBasis %`, per-corner border radius, per-edge border width/color, `borderStyle` — **done**.
-12. ~~**Feature flag plumbing**~~ — gradient rasterizer (linear + radial, `ERUI_GRADIENT` /
+12. ~~**Feature flag plumbing**~~ — gradient rasterizer (linear and radial, `ERUI_GRADIENT` /
     `ERUI_GRADIENT_RADIAL`), bilinear image scaler (`ERUI_BILINEAR_SCALE`), all optional paths
     wrapped in `#if` guards — **done**.
 13. ~~**Test coverage**~~ — fill the matrix in §10 as features land — **done** (16 CTest suites green, including

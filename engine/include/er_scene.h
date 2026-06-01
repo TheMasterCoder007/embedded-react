@@ -724,8 +724,24 @@ extern "C"
 
     /**
      * @brief Commits all pending tree mutations: runs the Yoga layout pass then paints dirty nodes.
+     *
+     * The layout pass is recomputed only when a prop set or tree mutation changed something that
+     * can affect a computed rect since the last commit (or when a LayoutAnimation is pending).
+     * Static frames and frames that only advance animations skip the flex + text-measure pass and
+     * just repaint dirty nodes. Use er_layout_pass_count() to observe how often layout actually ran.
      */
     void er_commit(void);
+
+    /**
+     * @brief Returns how many times er_commit() has actually run the layout pass.
+     *
+     * Increments once per commit that recomputes layout, and stays unchanged on commits that take
+     * the static/animation-only fast path. Intended for diagnostics and profiling — e.g. confirming
+     * that an idle screen is not re-solving flex every frame.
+     *
+     * @return Monotonic count of executed layout passes since process start.
+     */
+    uint32_t er_layout_pass_count(void);
 
     /**
      * @brief Returns the number of milliseconds elapsed since embedded_renderer_set_backend() was called.

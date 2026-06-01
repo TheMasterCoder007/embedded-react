@@ -505,6 +505,11 @@ void er_layout_anim_post_layout(ERNode* root)
     s_pending_active = false;
 }
 
+bool er_layout_anim_has_pending(void)
+{
+    return s_pending_active;
+}
+
 void er_layout_anim_tick(uint32_t delta_ms)
 {
     for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)

@@ -23,4 +23,15 @@
  */
 void er_layout_anim_post_layout(ERNode* root);
 
+/**
+ * @brief Reports whether a one-shot LayoutAnimation config is awaiting the next commit.
+ *
+ * er_commit() consults this so that a pending er_layout_anim_configure_next() forces a
+ * layout pass even when no layout-affecting prop changed, preserving the "evaluate on the
+ * next commit" contract while the layout-dirty fast path skips static frames.
+ *
+ * @return true when a config set by er_layout_anim_configure_next() has not yet been consumed.
+ */
+bool er_layout_anim_has_pending(void);
+
 #endif

@@ -421,5 +421,102 @@ int main(void)
         er_node_destroy(sv);
     }
 
+    /* -----------------------------------------------------------------------
+     * Test: layout-dirty fast path — er_commit() re-runs layout only when a
+     * prop set, tree mutation, or LayoutAnimation requires it. Static frames
+     * and animation-only frames must skip the flex + text-measure pass.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* d_root = er_node_create(ER_NODE_VIEW);
+        ERProps dp = props_default();
+        dp.width = 200;
+        dp.height = 200;
+        dp.flex_direction = ER_FLEX_COL;
+        dp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(d_root, &dp);
+
+        ERNode* d_child = er_node_create(ER_NODE_VIEW);
+        ERRect d_rect = {-1, -1, -1, -1};
+        dp = props_default();
+        dp.width = 80;
+        dp.height = 40;
+        er_node_set_props(d_child, &dp);
+        er_event_set(d_child, ER_EVENT_LAYOUT, on_layout_rect, &d_rect);
+
+        er_tree_append_child(d_root, d_child);
+        er_tree_set_root(d_root);
+
+        /* First commit must run a layout pass (tree was just built). */
+        const uint32_t c0 = er_layout_pass_count();
+        er_commit();
+        const uint32_t c1 = er_layout_pass_count();
+        if (c1 != c0 + 1)
+            return fail("layout-dirty: first commit did not run exactly one layout pass");
+        if (d_rect.w != 80 || d_rect.h != 40)
+            return fail("layout-dirty: child rect wrong after first commit");
+
+        /* A commit with no mutations must take the fast path (no layout pass). */
+        er_commit();
+        if (er_layout_pass_count() != c1)
+            return fail("layout-dirty: static commit re-ran layout instead of skipping");
+
+        /* Several idle commits in a row stay on the fast path. */
+        er_commit();
+        er_commit();
+        if (er_layout_pass_count() != c1)
+            return fail("layout-dirty: repeated idle commits re-ran layout");
+
+        /* Computed rect must survive the skipped commits unchanged. */
+        d_rect = (ERRect){-1, -1, -1, -1};
+        er_event_set(d_child, ER_EVENT_LAYOUT, on_layout_rect, &d_rect);
+        /* (No layout fired during skips, so d_rect stays at the sentinel — that itself
+         * confirms ER_EVENT_LAYOUT did not fire when layout was skipped.) */
+        if (d_rect.w != -1)
+            return fail("layout-dirty: ER_EVENT_LAYOUT fired on a skipped commit");
+
+        /* An animation mutates render-only props; it must NOT trigger a layout pass. */
+        ERAnimConfig acfg;
+        memset(&acfg, 0, sizeof(acfg));
+        acfg.type = ER_ANIM_TIMING;
+        acfg.duration_ms = 100U;
+        er_anim_start(d_child, ER_PROP_OPACITY, 0.0f, &acfg);
+        const uint32_t c_before_anim = er_layout_pass_count();
+        for (int f = 0; f < 5; f++)
+        {
+            embedded_renderer_tick(16U); /* advances the animation */
+            er_commit();
+        }
+        if (er_layout_pass_count() != c_before_anim)
+            return fail("layout-dirty: an opacity animation forced a layout pass");
+
+        /* Changing a layout-affecting prop must request a fresh layout pass. */
+        ERProps grow = props_default();
+        grow.width = 120;
+        grow.height = 50;
+        er_node_set_props(d_child, &grow);
+        const uint32_t c_before_mut = er_layout_pass_count();
+        er_commit();
+        if (er_layout_pass_count() != c_before_mut + 1)
+            return fail("layout-dirty: prop change did not trigger a layout pass");
+        if (d_rect.w != 120 || d_rect.h != 50)
+            return fail("layout-dirty: child rect did not update after prop change");
+
+        /* Back to idle — no further layout passes. */
+        er_commit();
+        if (er_layout_pass_count() != c_before_mut + 1)
+            return fail("layout-dirty: commit after prop-change relayout did not return to fast path");
+
+        /* A pending LayoutAnimation must force a layout pass even with no prop change. */
+        const uint32_t c_before_la = er_layout_pass_count();
+        er_layout_anim_configure_next(&ER_LAYOUT_ANIM_EASE_IN_EASE_OUT);
+        er_commit();
+        if (er_layout_pass_count() != c_before_la + 1)
+            return fail("layout-dirty: pending LayoutAnimation did not force a layout pass");
+
+        er_tree_remove_child(d_root, d_child);
+        er_node_destroy(d_child);
+        er_node_destroy(d_root);
+    }
+
     return EXIT_SUCCESS;
 }

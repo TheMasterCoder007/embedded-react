@@ -34,6 +34,17 @@ static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen
 static ERRect s_dirty_rect;
 static bool s_has_dirty = false;
 
+/* Layout-dirty gate: er_commit() re-runs the flex + text-measure layout pass only when
+ * something that can change a computed rect has happened since the last commit (a prop set,
+ * a tree mutation, or a node destroy). Animations mutate render-only props and never set this,
+ * so a static or purely animation-driven frame skips the entire layout pass. Initialised true
+ * so the first commit always lays out. */
+static bool s_layout_dirty = true;
+
+/* Diagnostic: number of times the layout pass has actually run inside er_commit(). Exposed via
+ * er_layout_pass_count() so callers (and tests) can confirm static frames skip layout. */
+static uint32_t s_layout_pass_count = 0;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -264,6 +275,19 @@ void er_mark_dirty_upward(ERNode* node)
         node->dirty = true;
         node = er_get_node(node->parent_tag);
     }
+}
+
+/**
+ * @brief Flags the scene as needing a layout pass on the next er_commit().
+ *
+ * Called from every mutation that can change a node's computed rect: prop sets, text-span
+ * changes, tree append/remove, root changes, and node destruction. Render-only mutations
+ * (animations, scroll offset, cursor blink) deliberately do NOT call this, so frames that
+ * only repaint without moving anything skip the layout pass entirely.
+ */
+static void mark_layout_dirty(void)
+{
+    s_layout_dirty = true;
 }
 
 /**
@@ -858,6 +882,8 @@ void er_node_destroy(ERNode* node)
         return;
     node->in_use = false;
     node->dirty = false;
+    /* A destroyed node that was still linked into the tree changes its siblings' layout. */
+    mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */
     if (s_free_count < (uint16_t)ERUI_MAX_NODES)
         s_free_list[s_free_count++] = node->tag;
@@ -1110,6 +1136,10 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             break;
     }
 
+    /* Props may change layout inputs (size, flex, margins, text content/font). Conservatively
+     * request a layout pass; a future refinement could compare the layout-relevant fields and
+     * skip when only a visual prop (color, shadow, …) changed. */
+    mark_layout_dirty();
     er_mark_dirty_upward(node);
 }
 
@@ -1222,6 +1252,8 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
         dst->text_decoration = spans[i].text_decoration;
         dst->letter_spacing = spans[i].letter_spacing;
     }
+    /* Span text feeds the Text node's intrinsic-width measurement during layout. */
+    mark_layout_dirty();
     er_mark_dirty_upward(node);
 }
 
@@ -1323,6 +1355,7 @@ void er_tree_append_child(ERNode* parent, ERNode* child)
 
     child->next_sibling_tag = ER_INVALID_TAG;
     parent->dirty = true;
+    mark_layout_dirty();
 }
 
 void er_tree_remove_child(ERNode* parent, ERNode* child)
@@ -1354,6 +1387,7 @@ void er_tree_remove_child(ERNode* parent, ERNode* child)
     child->parent_tag = ER_INVALID_TAG;
     child->next_sibling_tag = ER_INVALID_TAG;
     parent->dirty = true;
+    mark_layout_dirty();
 }
 
 void er_tree_set_root(ERNode* root)
@@ -1361,9 +1395,11 @@ void er_tree_set_root(ERNode* root)
     if (!root)
     {
         s_root_tag = ER_INVALID_TAG;
+        mark_layout_dirty();
         return;
     }
     s_root_tag = root->tag;
+    mark_layout_dirty();
 }
 
 void er_commit(void)
@@ -1404,14 +1440,33 @@ void er_commit(void)
         s_last_cursor_phase = 2U;
     }
 
-    const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
-    const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
+    /* Layout fast path: the flex solver and per-Text-node measurement only run when something
+     * that affects a computed rect changed since the last commit (mark_layout_dirty), or when a
+     * LayoutAnimation config is pending and must be evaluated against fresh rects. Animations
+     * mutate render-only props and never move computed rects, so a static or animation-only frame
+     * skips this whole block — the computed rects from the previous layout remain valid, and the
+     * post-layout passes that read them would produce identical results, so they are simply not
+     * re-run. render_tree() below still runs every commit to repaint dirty nodes. */
+    if (s_layout_dirty || er_layout_anim_has_pending())
+    {
+        const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
+        const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
-    er_layout_compute(s_root_tag, rw, rh);
-    refresh_scroll_content_sizes(root);
-    er_layout_anim_post_layout(root);
-    dispatch_layout_events(root);
+        er_layout_compute(s_root_tag, rw, rh);
+        refresh_scroll_content_sizes(root);
+        er_layout_anim_post_layout(root);
+        dispatch_layout_events(root);
+
+        s_layout_dirty = false;
+        s_layout_pass_count++;
+    }
+
     render_tree(root, false, 0, 0);
+}
+
+uint32_t er_layout_pass_count(void)
+{
+    return s_layout_pass_count;
 }
 
 uint32_t er_now_ms(void)
