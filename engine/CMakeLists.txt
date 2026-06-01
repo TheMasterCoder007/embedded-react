@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(embedded-react C)
+project(embedded-react-engine C)
 include(CTest)
 
 set(CMAKE_C_STANDARD 99)

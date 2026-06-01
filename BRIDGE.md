@@ -10,9 +10,9 @@ Every React-facing concept must reduce to a call already declared in
 [er_scene.h](engine/include/er_scene.h). If something can't, that's a gap to record in
 [Open Decisions](#open-decisions), not a reason to edit the engine.
 
-Checkbox convention: `[x]` = shipped and exercised by a running JS program; `[ ]` =
-outstanding. Deferred-on-purpose items are described in prose under
-[Out of Scope (for now)](#out-of-scope-for-now), never as unchecked boxes.
+Checkbox convention: `[x]` = shipped and exercised by a running JS program; `[~]` = partially
+landed (the parenthetical says what remains); `[ ]` = outstanding. Deferred-on-purpose items are
+described in prose under [Out of Scope (for now)](#out-of-scope-for-now), never as unchecked boxes.
 
 ---
 
@@ -23,11 +23,15 @@ end-to-end on `backends/sdl/`. This de-risks the marshalling layer before we inv
 reconciler and build tooling. No React, no JSX, no bundler yet — just a hardcoded JS string
 calling the bridge directly.
 
-- [ ] QuickJS compiles and links into `examples/linux`
-- [ ] A `NativeUI` global is reachable from JS
-- [ ] A hardcoded JS string builds a tree: one `View` root with a child `View` and a `Text`
-- [ ] `NativeUI.commit()` drives `er_commit()` and the SDL window shows the result
-- [ ] `console.log` from JS reaches stdout
+- [x] QuickJS compiles and links against the engine — proven by the `er-bridge-quickjs-smoke`
+  target (QuickJS-ng v0.15.0 via FetchContent). Still to be folded into the `examples/linux`
+  SDL host once the `NativeUI` surface exists.
+- [x] A `NativeUI` global is reachable from JS (`typeof NativeUI === 'object'`)
+- [x] A hardcoded JS string builds a tree: one `View` root with a child `View` and a `Text`
+  (smoke test builds + commits it; layout produces the expected 200×120 root rect)
+- [~] `NativeUI.commit()` drives `er_commit()` — proven headlessly (1 layout pass, dirty rect
+  200×120 via a no-op backend). The **SDL window** half is pending the examples/linux host.
+- [x] `console.log` from JS reaches stdout (smoke-test shim; host shim proper in §2)
 - [ ] One `onPress` round-trips: SDL touch → engine hit-test → JS callback fires → JS mutates
   a prop → next commit repaints
 
@@ -46,17 +50,17 @@ C in the whole bridge. Keep the engine ABI as the hard boundary — this file ma
 
 ### 1.1 Lifecycle & node handle model
 
-- [ ] Decide the JS→`ERNode*` handle representation (opaque JS object w/ pointer vs. integer
-  handle table) — see [Open Decisions](#open-decisions)
-- [ ] `NativeUI.createNode(typeString)` → `er_node_create`; map `"View"`/`"Text"`/… to `ERNodeType`
-- [ ] `NativeUI.destroyNode(node)` → `er_node_destroy`
-- [ ] `NativeUI.appendChild(parent, child)` → `er_tree_append_child`
-- [ ] `NativeUI.insertBefore(parent, child, beforeChild)` — reconciler needs ordered insert;
-  engine has append+remove only, so implement as remove-tail-and-reappend or record the gap
-- [ ] `NativeUI.removeChild(parent, child)` → `er_tree_remove_child`
-- [ ] `NativeUI.setRoot(node)` → `er_tree_set_root`
-- [ ] `NativeUI.commit()` → `er_commit`
-- [ ] `NativeUI.now()` → `er_now_ms`
+- [x] Decide the JS→`ERNode*` handle representation — **integer handle table** (Open Decisions #2)
+- [x] `NativeUI.createNode(typeString)` → `er_node_create`; all 10 `ERNodeType`s mapped
+- [x] `NativeUI.destroyNode(node)` → `er_node_destroy` (frees the handle slot)
+- [x] `NativeUI.appendChild(parent, child)` → `er_tree_append_child`
+- [ ] `NativeUI.insertBefore(parent, child, beforeChild)` — engine has append+remove only.
+  Plan: JS reconciler re-appends the tail (it owns child order); revisit if an engine
+  `er_tree_insert_before` primitive proves cheaper. Not needed for static trees.
+- [x] `NativeUI.removeChild(parent, child)` → `er_tree_remove_child`
+- [x] `NativeUI.setRoot(node)` → `er_tree_set_root`
+- [x] `NativeUI.commit()` → `er_commit`
+- [x] `NativeUI.now()` → `er_now_ms`
 
 ### 1.2 Props marshaling — `propsObject → ERProps`
 
@@ -67,73 +71,78 @@ one prop family verified against a JS value.
 
 **Shared value coercers (build these first — everything else depends on them):**
 
-- [ ] Color parser: `'#rgb'` / `'#rrggbb'` / `'#rrggbbaa'` / `'rgba(r,g,b,a)'` / `'rgb()'` /
-  named colors → `uint32_t` ARGB8888. Note engine convention: `fill_rect` argb is
-  straight-alpha `0xAARRGGBB`; `ERProps` color fields are straight-alpha too
-- [ ] Dimension coercer: JS number → `int16_t` px; `'50%'` strings → record as a gap except
-  where a `_pct` field exists (`flex_basis_pct`)
-- [ ] Angle coercer: `'45deg'` / number → degrees float
-- [ ] Enum string maps: `flexDirection`, `justifyContent`, `alignItems`, `alignSelf`,
-  `position`, `display`, `overflow`, `resizeMode`, `textAlign`, `fontStyle`, `borderStyle`,
-  `ellipsizeMode`, `textDecorationLine`, `pointerEvents` → their `ER_*` enums
+- [x] Color parser: `'#rgb'` / `'#rrggbb'` / `'#rrggbbaa'` / `'rgba()'` / `'rgb()'` / 12 named
+  colors + raw numbers → straight-alpha `uint32_t` ARGB8888
+- [x] Dimension coercer: JS number → `int16_t` px; `flexBasis: '50%'` → `flex_basis_pct`.
+  `width/height: '%'` still has no field (Open Decisions #4)
+- [x] Angle coercer: `'45deg'` / `'Nrad'` / number → degrees float
+- [x] Enum string maps: all 15 done — `flexDirection`, `flexWrap`, `justifyContent`,
+  `alignItems`, `alignSelf`, `position`, `display`, `overflow`, `resizeMode`, `textAlign`,
+  `fontStyle`, `borderStyle`, `ellipsizeMode`, `textDecorationLine`, `pointerEvents`
 
 **Layout (Yoga) — maps onto the layout block of `ERProps`:**
 
-- [ ] `flex` shorthand → expand to `flex_grow`/`flex_shrink`/`flex_basis` with RN semantics
+- [x] `flex` shorthand → expand to `flex_grow`/`flex_shrink`/`flex_basis` with RN semantics
   (positive flex = grow:flex, shrink:1, basis:0)
-- [ ] `flexGrow` / `flexShrink` / `flexBasis` (+ `flexBasis: '50%'` → `flex_basis_pct`)
-- [ ] `flexDirection` / `flexWrap`
-- [ ] `justifyContent` / `alignItems` / `alignSelf` (note: `alignContent` has no `ERProps`
-  field — record gap)
-- [ ] `position` + `top` / `right` / `bottom` / `left`
-- [ ] `width` / `height` / `minWidth` / `maxWidth` / `minHeight` / `maxHeight`
-- [ ] `aspectRatio` → `float aspect_ratio`
-- [ ] `margin` (+ per-edge, `marginHorizontal`, `marginVertical`)
-- [ ] `padding` (+ per-edge, `paddingHorizontal`, `paddingVertical`)
-- [ ] `gap` / `rowGap` / `columnGap`
-- [ ] `display` / `overflow`
+- [x] `flexGrow` / `flexShrink` / `flexBasis` (+ `flexBasis: '50%'` → `flex_basis_pct`)
+- [x] `flexDirection` / `flexWrap`
+- [x] `justifyContent` / `alignItems` / `alignSelf` (note: `alignContent` has no `ERProps`
+  field — Open Decisions #5)
+- [x] `position` + `top` / `right` / `bottom` / `left`
+- [x] `width` / `height` / `minWidth` / `maxWidth` / `minHeight` / `maxHeight`
+- [x] `aspectRatio` → `float aspect_ratio`
+- [x] `margin` (+ per-edge, `marginHorizontal`, `marginVertical`)
+- [x] `padding` (+ per-edge, `paddingHorizontal`, `paddingVertical`)
+- [x] `gap` / `rowGap` / `columnGap`
+- [x] `display` / `overflow`
 
 **View visual:**
 
-- [ ] `backgroundColor` / `opacity` (RN `0.0–1.0` float → `ERProps.opacity` `uint8 0–255`)
-- [ ] `borderRadius` (+ four per-corner radii)
-- [ ] `borderWidth` (+ four per-edge widths) / `borderColor` (+ four per-edge colors)
-- [ ] `borderStyle`
-- [ ] `zIndex`
-- [ ] `shadowColor` / `shadowOffset` (`{width,height}` object → `shadow_offset_x/y`) /
-  `shadowOpacity` / `shadowRadius` / `elevation` (gated on `ERUI_SHADOWS`)
+- [x] `backgroundColor` / `opacity` (RN `0.0–1.0` float → `ERProps.opacity` `uint8 0–255`)
+- [x] `borderRadius` (+ four per-corner radii)
+- [x] `borderWidth` (+ four per-edge widths) / `borderColor` (+ four per-edge colors)
+- [x] `borderStyle`
+- [x] `zIndex`
+- [x] `shadowColor` / `shadowOffset` (`{width,height}` object → `shadow_offset_x/y`) /
+  `shadowOpacity` / `shadowRadius` / `elevation` (marshalled; rendered only when `ERUI_SHADOWS`)
 
 **Text (some are props, not style, in RN):**
 
-- [ ] Text content: `<Text>` string children → `ERProps.text`
-- [ ] `color` / `fontSize` / `fontFamily` / `fontWeight` (`'normal'|'bold'|'100'..'900'` →
-  `uint8 0/1`) / `fontStyle`
-- [ ] `lineHeight` / `letterSpacing` / `textAlign` / `textDecorationLine`
-- [ ] `numberOfLines` / `ellipsizeMode`
+- [x] Text content: passed via a flat `text` key → `ERProps.text` (reconciler will route
+  `<Text>` string children to it)
+- [x] `color` / `fontSize` / `fontFamily` / `fontWeight` / `fontStyle`
+- [x] `lineHeight` / `letterSpacing` / `textAlign` / `textDecorationLine`
+- [x] `numberOfLines` / `ellipsizeMode`
 - [ ] Nested `<Text>` spans → `er_node_set_text_spans` (`ERTextSpan[]`, max 4)
 
 **Image:**
 
-- [ ] `source` asset name → `ERProps.image_name` (+ asset registration via `er_image_load`)
-- [ ] `resizeMode` / `tintColor`
+- [~] `imageName` key → `ERProps.image_name` done; `source`-object resolution + `er_image_load`
+  registration pending (§1.5)
+- [x] `resizeMode` / `tintColor`
 
 **Transforms — RN `transform` is an array of single-key objects:**
 
-- [ ] Flatten `[{translateX:5},{rotate:'45deg'},{scale:2}]` into `transform_*` fields
-- [ ] `translateX` / `translateY` / `scaleX` / `scaleY` / `scale` (→ both scale fields)
-- [ ] `rotate` / `rotateZ` (angle); `rotateX` / `rotateY` / `perspective` (gated on
-  `ERUI_3D_TRANSFORMS`)
-- [ ] `transformOrigin` → `transform_origin_x/y`
+- [x] Flatten `[{translateX:5},{rotate:'45deg'},{scale:2}]` into `transform_*` fields
+- [x] `translateX` / `translateY` / `scaleX` / `scaleY` / `scale` (→ both scale fields)
+- [x] `rotate` / `rotateZ` (angle); `rotateX` / `rotateY` / `perspective` — marshaled into the
+  fields regardless; engine honors scale/rotate only with `ERUI_TRANSFORMS=FULL`, and
+  `rotateX/Y`/`perspective` only with `ERUI_3D_TRANSFORMS`
+- [x] `transformOrigin` → `transform_origin_x/y` (two-element `[x, y]` fractional array; default
+  pivot seeded to 0.5/0.5 to match RN's centre origin)
 
 **Component-specific props:**
 
-- [ ] `ActivityIndicator`: `color` → `indicator_color`, `animating`
-- [ ] `Switch`: `value` → `switch_value`, `trackColor` (`{false,true}`) → `track_color_*`,
+- [x] `ActivityIndicator`: `color` → `indicator_color`, `animating` (defaults to 1)
+- [x] `Switch`: `value` → `switch_value`, `trackColor` (`{false,true}`) → `track_color_*`,
   `thumbColor`
-- [ ] `TextInput`: `placeholder` / `placeholderTextColor` / `value` / `editable` / cursor color
-- [ ] `Modal`: `visible` → `modal_visible`, backdrop color, `transparent`
+- [~] `TextInput`: `placeholder` / `placeholderTextColor` / `editable` / `cursorColor` done;
+  controlled `value` deferred — it routes through `er_text_input_set_text`, not `ERProps` (lands
+  with events/controlled input)
+- [~] `Modal`: `visible` → `modal_visible`, `backdropColor` done; `transparent` has no `ERProps`
+  field (handle via backdrop alpha at the JS layer, or record as a gap)
 - [ ] Gradient (engine extra, no RN equivalent): `gradient_type` / `gradient_angle` /
-  `gradient_stops` — expose via a custom style key, decide name in Open Decisions
+  `gradient_stops` — needs a custom style-key decision (Open Decisions #6)
 
 ### 1.3 Events — JS callbacks over `er_event_set`
 

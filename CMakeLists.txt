@@ -1,22 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
-project(embedded-react C)
+
+# No language is enabled: this root project compiles nothing (no compiler probe).
+# The name is intentionally distinct from the engine's `embedded-react` so an IDE
+# never confuses this utility project with the engine subproject.
+project(embedded-react-tools NONE)
 
 # ---------------------------------------------------------------------------
 # Monorepo top-level
 # ---------------------------------------------------------------------------
-# The engine builds the C99 static library that backends, bridges, and examples
-# all link against. Backends, bridges, and examples are intentionally NOT
-# add_subdirectory'd from here — each example pins one backend + one bridge in
-# its own CMakeLists.txt. This keeps the engine build self-contained and lets
-# downstream consumers (firmware projects pulling embedded-react via
-# FetchContent) opt into only the pieces they want.
+# Each component is a self-contained CMake project that configures and builds on
+# its own: `engine/`, `bridges/quickjs/`, and each `examples/<target>/`. None are
+# add_subdirectory'd from here — open or configure whichever component you're
+# working on directly (see each folder's CMakeLists.txt). The bridge and examples
+# pull the engine in themselves via a relative add_subdirectory fallback.
+#
+# This root file exists only for repo-wide developer utilities (the clang-format
+# targets below). It deliberately builds none of the components, so an IDE rooted
+# here stays neutral and you load each subproject explicitly.
 # ---------------------------------------------------------------------------
-
-if (BUILD_TESTING AND CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
-    enable_testing()
-endif ()
-
-add_subdirectory(engine)
 
 find_program(CLANG_FORMAT_EXE clang-format)
 

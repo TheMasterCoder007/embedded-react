@@ -1,3 +1,1638 @@
+#include "native_ui_bridge.h"
+
 #include "er_scene.h"
 
-/* QuickJS bridge adapter — implementation pending. */
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Capacity of the JS→ERNode* handle table.
+ *
+ * Should be >= the engine's ERUI_MAX_NODES so a handle exists for every node the engine
+ * can allocate. Handle 0 is reserved as the invalid sentinel; usable handles are [1, N).
+ */
+#ifndef ER_BRIDGE_MAX_HANDLES
+#define ER_BRIDGE_MAX_HANDLES 1024
+#endif
+
+/** @brief Invalid handle sentinel returned by createNode on failure. */
+#define ER_BRIDGE_HANDLE_INVALID 0
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Slot -> node map. Index 0 is reserved (invalid handle); NULL means free. */
+static ERNode* s_node_by_handle[ER_BRIDGE_MAX_HANDLES];
+
+/** @brief Stack of freed slot indices available for reuse. */
+static int32_t s_free_stack[ER_BRIDGE_MAX_HANDLES];
+
+/** @brief Number of indices currently on the free stack. */
+static int s_free_top = 0;
+
+/** @brief Next never-yet-allocated slot index; starts at 1 (0 is the invalid sentinel). */
+static int s_high_water = 1;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — handle table
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Allocates a handle slot and binds it to a node.
+ *
+ * @param[in] node  Node to bind (must be non-NULL).
+ *
+ * @return Handle in [1, ER_BRIDGE_MAX_HANDLES), or ER_BRIDGE_HANDLE_INVALID if the table is full.
+ */
+static int32_t handle_alloc(ERNode* node)
+{
+    int32_t slot;
+    if (s_free_top > 0)
+    {
+        slot = s_free_stack[--s_free_top];
+    }
+    else if (s_high_water < ER_BRIDGE_MAX_HANDLES)
+    {
+        slot = s_high_water++;
+    }
+    else
+    {
+        return ER_BRIDGE_HANDLE_INVALID;
+    }
+    s_node_by_handle[slot] = node;
+    return slot;
+}
+
+/**
+ * @brief Releases a handle slot, returning it to the free stack.
+ *
+ * @param[in] handle  Handle previously returned by handle_alloc().
+ */
+static void handle_free(int32_t handle)
+{
+    if (handle <= 0 || handle >= ER_BRIDGE_MAX_HANDLES || s_node_by_handle[handle] == NULL)
+    {
+        return;
+    }
+    s_node_by_handle[handle] = NULL;
+    s_free_stack[s_free_top++] = handle;
+}
+
+/**
+ * @brief Resolves a handle to its bound node.
+ *
+ * @param[in] handle  Handle to resolve.
+ *
+ * @return Bound node, or NULL if the handle is out of range or unbound.
+ */
+static ERNode* handle_node(int32_t handle)
+{
+    if (handle <= 0 || handle >= ER_BRIDGE_MAX_HANDLES)
+    {
+        return NULL;
+    }
+    return s_node_by_handle[handle];
+}
+
+/**
+ * @brief Resolves a JS argument to its bound node.
+ *
+ * @param[in] ctx  QuickJS context.
+ * @param[in] v    JS value holding an integer handle.
+ *
+ * @return Bound node, or NULL if the value is not a valid handle.
+ */
+static ERNode* node_arg(JSContext* ctx, JSValueConst v)
+{
+    int32_t h = 0;
+    if (JS_ToInt32(ctx, &h, v) != 0)
+    {
+        return NULL;
+    }
+    return handle_node(h);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — value coercers
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Fetches a property, treating undefined/null/exception as "absent".
+ *
+ * On success the caller owns *out and must JS_FreeValue() it.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  obj  Object to read from.
+ * @param[in]  key  Property name.
+ * @param[out] out  Receives the property value when present.
+ *
+ * @return true when the property is present and meaningful; false otherwise.
+ */
+static bool prop_get(JSContext* ctx, JSValueConst obj, const char* key, JSValue* out)
+{
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    if (JS_IsUndefined(v) || JS_IsNull(v) || JS_IsException(v))
+    {
+        JS_FreeValue(ctx, v);
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+/**
+ * @brief Coerces a numeric JS value to a clamped int16 pixel dimension.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  v    JS value (expected numeric).
+ * @param[out] out  Receives the clamped dimension.
+ *
+ * @return true on a numeric value; false for strings (e.g. percentages) handled elsewhere.
+ */
+static bool to_dim(JSContext* ctx, JSValueConst v, int16_t* out)
+{
+    if (!JS_IsNumber(v))
+    {
+        return false;
+    }
+    double d = 0.0;
+    if (JS_ToFloat64(ctx, &d, v) != 0)
+    {
+        return false;
+    }
+    if (d < INT16_MIN)
+    {
+        d = INT16_MIN;
+    }
+    if (d > INT16_MAX)
+    {
+        d = INT16_MAX;
+    }
+    *out = (int16_t)d;
+    return true;
+}
+
+/**
+ * @brief Maps a single hex character to its 0–15 value.
+ *
+ * @param[in] c  ASCII hex digit.
+ *
+ * @return Nibble value, or -1 if c is not a hex digit.
+ */
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F')
+    {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/**
+ * @brief Clamps an int to the 0–255 channel range.
+ *
+ * @param[in] v  Value to clamp.
+ *
+ * @return v clamped to [0, 255].
+ */
+static int clamp_u8(int v)
+{
+    if (v < 0)
+    {
+        return 0;
+    }
+    if (v > 255)
+    {
+        return 255;
+    }
+    return v;
+}
+
+/**
+ * @brief Parses a CSS hex color body (the text after '#') into straight-alpha ARGB8888.
+ *
+ * Accepts #rgb, #rrggbb, and #rrggbbaa forms. Three- and six-digit forms imply full alpha.
+ *
+ * @param[in]  s    Hex digits (without the leading '#').
+ * @param[out] out  Receives the ARGB8888 color.
+ *
+ * @return true on a valid hex color; false otherwise.
+ */
+static bool parse_hex_color(const char* s, uint32_t* out)
+{
+    const size_t n = strlen(s);
+    int r, g, b, a = 255;
+
+    if (n == 3)
+    {
+        const int r1 = hex_nibble(s[0]);
+        const int g1 = hex_nibble(s[1]);
+        const int b1 = hex_nibble(s[2]);
+        if (r1 < 0 || g1 < 0 || b1 < 0)
+        {
+            return false;
+        }
+        r = r1 * 17;
+        g = g1 * 17;
+        b = b1 * 17;
+    }
+    else if (n == 6 || n == 8)
+    {
+        int v[8];
+        for (size_t i = 0; i < n; i++)
+        {
+            v[i] = hex_nibble(s[i]);
+            if (v[i] < 0)
+            {
+                return false;
+            }
+        }
+        r = v[0] * 16 + v[1];
+        g = v[2] * 16 + v[3];
+        b = v[4] * 16 + v[5];
+        if (n == 8)
+        {
+            a = v[6] * 16 + v[7];
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    *out = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    return true;
+}
+
+/**
+ * @brief Parses a CSS rgb()/rgba() function string into straight-alpha ARGB8888.
+ *
+ * @param[in]  s    String beginning with "rgb" or "rgba".
+ * @param[out] out  Receives the ARGB8888 color.
+ *
+ * @return true on a valid functional color; false otherwise.
+ */
+static bool parse_rgb_func(const char* s, uint32_t* out)
+{
+    const char* p = strchr(s, '(');
+    if (!p)
+    {
+        return false;
+    }
+    p++;
+
+    double vals[4];
+    int count = 0;
+    while (count < 4)
+    {
+        char* end = NULL;
+        const double d = strtod(p, &end);
+        if (end == p)
+        {
+            break;
+        }
+        vals[count++] = d;
+        p = end;
+        while (*p == ' ' || *p == ',')
+        {
+            p++;
+        }
+        if (*p == ')' || *p == '\0')
+        {
+            break;
+        }
+    }
+    if (count < 3)
+    {
+        return false;
+    }
+
+    const int r = clamp_u8((int)(vals[0] + 0.5));
+    const int g = clamp_u8((int)(vals[1] + 0.5));
+    const int b = clamp_u8((int)(vals[2] + 0.5));
+    const int a = count >= 4 ? clamp_u8((int)(vals[3] * 255.0 + 0.5)) : 255;
+    *out = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    return true;
+}
+
+/**
+ * @brief Parses a CSS color string (hex, rgb/rgba, or a small set of named colors).
+ *
+ * @param[in]  s    Color string.
+ * @param[out] out  Receives straight-alpha ARGB8888.
+ *
+ * @return true when the string was recognised; false otherwise.
+ */
+static bool parse_css_color(const char* s, uint32_t* out)
+{
+    while (*s == ' ')
+    {
+        s++;
+    }
+    if (*s == '#')
+    {
+        return parse_hex_color(s + 1, out);
+    }
+    if (strncmp(s, "rgb", 3) == 0)
+    {
+        return parse_rgb_func(s, out);
+    }
+
+    /* Minimal named-color set; extend as needed (BRIDGE.md Open Decisions #3). */
+    static const struct
+    {
+        const char* name;
+        uint32_t argb;
+    } k_named[] = {
+        {"transparent", 0x00000000U},
+        {"black", 0xFF000000U},
+        {"white", 0xFFFFFFFFU},
+        {"red", 0xFFFF0000U},
+        {"green", 0xFF008000U},
+        {"blue", 0xFF0000FFU},
+        {"gray", 0xFF808080U},
+        {"grey", 0xFF808080U},
+        {"yellow", 0xFFFFFF00U},
+        {"cyan", 0xFF00FFFFU},
+        {"magenta", 0xFFFF00FFU},
+        {"orange", 0xFFFFA500U},
+    };
+    for (size_t i = 0; i < sizeof(k_named) / sizeof(k_named[0]); i++)
+    {
+        if (strcmp(s, k_named[i].name) == 0)
+        {
+            *out = k_named[i].argb;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Coerces a JS color value (number or CSS string) to straight-alpha ARGB8888.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  v    JS value (number is taken as a raw 0xAARRGGBB word).
+ * @param[out] out  Receives the ARGB8888 color.
+ *
+ * @return true on success; false if the value could not be interpreted as a color.
+ */
+static bool to_color(JSContext* ctx, JSValueConst v, uint32_t* out)
+{
+    if (JS_IsNumber(v))
+    {
+        int64_t n = 0;
+        if (JS_ToInt64(ctx, &n, v) != 0)
+        {
+            return false;
+        }
+        *out = (uint32_t)n;
+        return true;
+    }
+    if (JS_IsString(v))
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (!s)
+        {
+            return false;
+        }
+        const bool ok = parse_css_color(s, out);
+        JS_FreeCString(ctx, s);
+        return ok;
+    }
+    return false;
+}
+
+/**
+ * @brief Coerces a JS angle value (number in degrees, or a "Ndeg"/"Nrad" string) to degrees.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  v    JS value to coerce.
+ * @param[out] out  Receives the angle in degrees.
+ *
+ * @return true on success; false if the value is not a recognisable angle.
+ */
+static bool to_angle(JSContext* ctx, JSValueConst v, float* out)
+{
+    if (JS_IsNumber(v))
+    {
+        double d = 0.0;
+        if (JS_ToFloat64(ctx, &d, v) != 0)
+        {
+            return false;
+        }
+        *out = (float)d;
+        return true;
+    }
+    if (JS_IsString(v))
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (!s)
+        {
+            return false;
+        }
+        char* end = NULL;
+        double d = strtod(s, &end);
+        bool ok = end != s;
+        if (ok && strstr(end, "rad") != NULL)
+        {
+            d = d * 180.0 / 3.14159265358979323846;
+        }
+        JS_FreeCString(ctx, s);
+        if (ok)
+        {
+            *out = (float)d;
+        }
+        return ok;
+    }
+    return false;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — enum string maps
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Maps a flexDirection string to ERFlexDirection. @param[in] s String. @return Enum value. */
+static uint8_t map_flex_direction(const char* s)
+{
+    if (strcmp(s, "row") == 0)
+    {
+        return ER_FLEX_ROW;
+    }
+    if (strcmp(s, "row-reverse") == 0)
+    {
+        return ER_FLEX_ROW_REVERSE;
+    }
+    if (strcmp(s, "column-reverse") == 0)
+    {
+        return ER_FLEX_COL_REVERSE;
+    }
+    return ER_FLEX_COL;
+}
+
+/** @brief Maps a justifyContent string to ERFlexJustify. @param[in] s String. @return Enum value. */
+static uint8_t map_justify(const char* s)
+{
+    if (strcmp(s, "center") == 0)
+    {
+        return ER_JUSTIFY_CENTER;
+    }
+    if (strcmp(s, "flex-end") == 0)
+    {
+        return ER_JUSTIFY_FLEX_END;
+    }
+    if (strcmp(s, "space-between") == 0)
+    {
+        return ER_JUSTIFY_SPACE_BETWEEN;
+    }
+    if (strcmp(s, "space-around") == 0)
+    {
+        return ER_JUSTIFY_SPACE_AROUND;
+    }
+    if (strcmp(s, "space-evenly") == 0)
+    {
+        return ER_JUSTIFY_SPACE_EVENLY;
+    }
+    return ER_JUSTIFY_FLEX_START;
+}
+
+/** @brief Maps an align string to ERFlexAlign. @param[in] s String. @return Enum value. */
+static uint8_t map_align(const char* s)
+{
+    if (strcmp(s, "stretch") == 0)
+    {
+        return ER_ALIGN_STRETCH;
+    }
+    if (strcmp(s, "flex-start") == 0)
+    {
+        return ER_ALIGN_FLEX_START;
+    }
+    if (strcmp(s, "center") == 0)
+    {
+        return ER_ALIGN_CENTER;
+    }
+    if (strcmp(s, "flex-end") == 0)
+    {
+        return ER_ALIGN_FLEX_END;
+    }
+    return ER_ALIGN_AUTO;
+}
+
+/** @brief Maps a position string to ERPositionType. @param[in] s String. @return Enum value. */
+static uint8_t map_position(const char* s)
+{
+    return strcmp(s, "absolute") == 0 ? ER_POS_ABSOLUTE : ER_POS_RELATIVE;
+}
+
+/** @brief Maps a display string to ERDisplayMode. @param[in] s String. @return Enum value. */
+static uint8_t map_display(const char* s)
+{
+    return strcmp(s, "none") == 0 ? ER_DISPLAY_NONE : ER_DISPLAY_FLEX;
+}
+
+/** @brief Maps an overflow string to EROverflow. @param[in] s String. @return Enum value. */
+static uint8_t map_overflow(const char* s)
+{
+    if (strcmp(s, "hidden") == 0)
+    {
+        return ER_OVERFLOW_HIDDEN;
+    }
+    if (strcmp(s, "scroll") == 0)
+    {
+        return ER_OVERFLOW_SCROLL;
+    }
+    return ER_OVERFLOW_VISIBLE;
+}
+
+/** @brief Maps a textAlign string to ERTextAlign. @param[in] s String. @return Enum value. */
+static uint8_t map_text_align(const char* s)
+{
+    if (strcmp(s, "center") == 0)
+    {
+        return ER_TEXT_ALIGN_CENTER;
+    }
+    if (strcmp(s, "right") == 0)
+    {
+        return ER_TEXT_ALIGN_RIGHT;
+    }
+    return ER_TEXT_ALIGN_LEFT;
+}
+
+/** @brief Maps a resizeMode string to ERResizeMode. @param[in] s String. @return Enum value. */
+static uint8_t map_resize_mode(const char* s)
+{
+    if (strcmp(s, "contain") == 0)
+    {
+        return ER_RESIZE_CONTAIN;
+    }
+    if (strcmp(s, "stretch") == 0)
+    {
+        return ER_RESIZE_STRETCH;
+    }
+    if (strcmp(s, "repeat") == 0)
+    {
+        return ER_RESIZE_REPEAT;
+    }
+    if (strcmp(s, "center") == 0)
+    {
+        return ER_RESIZE_CENTER;
+    }
+    return ER_RESIZE_COVER;
+}
+
+/** @brief Maps a flexWrap string to ERFlexWrap. @param[in] s String. @return Enum value. */
+static uint8_t map_flex_wrap(const char* s)
+{
+    if (strcmp(s, "wrap") == 0)
+    {
+        return ER_WRAP_WRAP;
+    }
+    if (strcmp(s, "wrap-reverse") == 0)
+    {
+        return ER_WRAP_WRAP_REVERSE;
+    }
+    return ER_WRAP_NOWRAP;
+}
+
+/** @brief Maps a fontStyle string to ERFontStyle. @param[in] s String. @return Enum value. */
+static uint8_t map_font_style(const char* s)
+{
+    return strcmp(s, "italic") == 0 ? ER_FONT_STYLE_ITALIC : ER_FONT_STYLE_NORMAL;
+}
+
+/** @brief Maps a borderStyle string to ERBorderStyle. @param[in] s String. @return Enum value. */
+static uint8_t map_border_style(const char* s)
+{
+    if (strcmp(s, "dashed") == 0)
+    {
+        return ER_BORDER_DASHED;
+    }
+    if (strcmp(s, "dotted") == 0)
+    {
+        return ER_BORDER_DOTTED;
+    }
+    return ER_BORDER_SOLID;
+}
+
+/** @brief Maps an ellipsizeMode string to ERTextEllipsize. @param[in] s String. @return Enum value. */
+static uint8_t map_ellipsize(const char* s)
+{
+    if (strcmp(s, "head") == 0)
+    {
+        return ER_TEXT_ELLIPSIZE_HEAD;
+    }
+    if (strcmp(s, "middle") == 0)
+    {
+        return ER_TEXT_ELLIPSIZE_MIDDLE;
+    }
+    if (strcmp(s, "clip") == 0)
+    {
+        return ER_TEXT_ELLIPSIZE_CLIP;
+    }
+    return ER_TEXT_ELLIPSIZE_TAIL;
+}
+
+/** @brief Maps a textDecorationLine string to ERTextDecoration. @param[in] s String. @return Enum value. */
+static uint8_t map_text_decoration(const char* s)
+{
+    if (strcmp(s, "underline") == 0)
+    {
+        return ER_TEXT_DECORATION_UNDERLINE;
+    }
+    if (strcmp(s, "line-through") == 0)
+    {
+        return ER_TEXT_DECORATION_LINE_THROUGH;
+    }
+    return ER_TEXT_DECORATION_NONE;
+}
+
+/** @brief Maps a pointerEvents string to ERPointerEvents. @param[in] s String. @return Enum value. */
+static uint8_t map_pointer_events(const char* s)
+{
+    if (strcmp(s, "none") == 0)
+    {
+        return ER_POINTER_EVENTS_NONE;
+    }
+    if (strcmp(s, "box-only") == 0)
+    {
+        return ER_POINTER_EVENTS_BOX_ONLY;
+    }
+    if (strcmp(s, "box-none") == 0)
+    {
+        return ER_POINTER_EVENTS_BOX_NONE;
+    }
+    return ER_POINTER_EVENTS_AUTO;
+}
+
+/** @brief Maps a node-type string to ERNodeType. @param[in] s String. @return Enum value (View on miss). */
+static ERNodeType map_node_type(const char* s)
+{
+    if (strcmp(s, "Text") == 0)
+    {
+        return ER_NODE_TEXT;
+    }
+    if (strcmp(s, "Image") == 0)
+    {
+        return ER_NODE_IMAGE;
+    }
+    if (strcmp(s, "ScrollView") == 0)
+    {
+        return ER_NODE_SCROLL_VIEW;
+    }
+    if (strcmp(s, "FlatList") == 0)
+    {
+        return ER_NODE_FLAT_LIST;
+    }
+    if (strcmp(s, "Pressable") == 0)
+    {
+        return ER_NODE_PRESSABLE;
+    }
+    if (strcmp(s, "TextInput") == 0)
+    {
+        return ER_NODE_TEXT_INPUT;
+    }
+    if (strcmp(s, "ActivityIndicator") == 0)
+    {
+        return ER_NODE_ACTIVITY_INDICATOR;
+    }
+    if (strcmp(s, "Switch") == 0)
+    {
+        return ER_NODE_SWITCH;
+    }
+    if (strcmp(s, "Modal") == 0)
+    {
+        return ER_NODE_MODAL;
+    }
+    return ER_NODE_VIEW;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — props marshalling
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Initialises an ERProps to engine defaults (layout fields auto, fully opaque).
+ *
+ * A zero-initialised ERProps would set every layout field to 0 (a valid explicit value) and
+ * opacity to 0 (fully transparent), so the layout-auto fields are reset to ER_LAYOUT_AUTO and
+ * opacity to 255 to match a freshly created node.
+ *
+ * @param[out] p  Props to initialise.
+ */
+static void props_init_defaults(ERProps* p)
+{
+    memset(p, 0, sizeof(*p));
+
+    int16_t* const auto_fields[] = {
+        &p->left,
+        &p->top,
+        &p->right,
+        &p->bottom,
+        &p->width,
+        &p->height,
+        &p->min_width,
+        &p->max_width,
+        &p->min_height,
+        &p->max_height,
+        &p->padding,
+        &p->padding_left,
+        &p->padding_top,
+        &p->padding_right,
+        &p->padding_bottom,
+        &p->margin,
+        &p->margin_left,
+        &p->margin_top,
+        &p->margin_right,
+        &p->margin_bottom,
+        &p->gap,
+        &p->row_gap,
+        &p->column_gap,
+        &p->flex_grow,
+        &p->flex_shrink,
+        &p->flex_basis,
+        &p->margin_horizontal,
+        &p->margin_vertical,
+        &p->padding_horizontal,
+        &p->padding_vertical,
+    };
+    for (size_t i = 0; i < sizeof(auto_fields) / sizeof(auto_fields[0]); i++)
+    {
+        *auto_fields[i] = ER_LAYOUT_AUTO;
+    }
+
+    p->opacity = 255;
+
+    /* RN defaults the transform pivot to the node centre; the engine treats 0.0 as a literal
+       top-left pivot, so seed the fractional origin to 0.5/0.5 (overridden by transformOrigin). */
+    p->transform_origin_x = 0.5f;
+    p->transform_origin_y = 0.5f;
+
+    /* Type-specific fields whose engine default is non-zero. Harmless for other node types,
+       since er_node_set_props() only applies fields relevant to the node's type. */
+    p->editable = 1;               /* TextInput editable by default. */
+    p->animating = 1;              /* ActivityIndicator spins by default. */
+    p->shadow_color = 0xFF000000U; /* Opaque black shadow unless overridden. */
+}
+
+/* Marshalling convenience macros — each reads one key from `obj` into the ERProps `p`.
+   They share the locals (ctx, obj, p) of apply_props() and are #undef'd at its end. */
+
+#define ER_DIM(key, field)                                                                                             \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValue _v;                                                                                                    \
+        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        {                                                                                                              \
+            int16_t _d;                                                                                                \
+            if (to_dim(ctx, _v, &_d))                                                                                  \
+            {                                                                                                          \
+                p.field = _d;                                                                                          \
+            }                                                                                                          \
+            JS_FreeValue(ctx, _v);                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+#define ER_COL(key, field)                                                                                             \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValue _v;                                                                                                    \
+        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        {                                                                                                              \
+            uint32_t _c;                                                                                               \
+            if (to_color(ctx, _v, &_c))                                                                                \
+            {                                                                                                          \
+                p.field = _c;                                                                                          \
+            }                                                                                                          \
+            JS_FreeValue(ctx, _v);                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+#define ER_ENUM(key, field, fn)                                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValue _v;                                                                                                    \
+        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        {                                                                                                              \
+            const char* _s = JS_ToCString(ctx, _v);                                                                    \
+            if (_s)                                                                                                    \
+            {                                                                                                          \
+                p.field = fn(_s);                                                                                      \
+                JS_FreeCString(ctx, _s);                                                                               \
+            }                                                                                                          \
+            JS_FreeValue(ctx, _v);                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+#define ER_U8(key, field)                                                                                              \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValue _v;                                                                                                    \
+        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        {                                                                                                              \
+            int32_t _n;                                                                                                \
+            if (JS_ToInt32(ctx, &_n, _v) == 0)                                                                         \
+            {                                                                                                          \
+                p.field = (uint8_t)clamp_u8(_n);                                                                       \
+            }                                                                                                          \
+            JS_FreeValue(ctx, _v);                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+#define ER_STR(key, field, maxlen)                                                                                     \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValue _v;                                                                                                    \
+        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        {                                                                                                              \
+            const char* _s = JS_ToCString(ctx, _v);                                                                    \
+            if (_s)                                                                                                    \
+            {                                                                                                          \
+                strncpy(p.field, _s, (maxlen));                                                                        \
+                p.field[(maxlen)] = '\0';                                                                              \
+                JS_FreeCString(ctx, _s);                                                                               \
+            }                                                                                                          \
+            JS_FreeValue(ctx, _v);                                                                                     \
+        }                                                                                                              \
+    } while (0)
+
+/**
+ * @brief Reads the `flex` shorthand and expands it to grow/shrink/basis with RN semantics.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_flex_shorthand(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "flex", &v))
+    {
+        return;
+    }
+    double d = 0.0;
+    if (JS_ToFloat64(ctx, &d, v) == 0)
+    {
+        if (d > 0.0)
+        {
+            p->flex_grow = (int16_t)d;
+            p->flex_shrink = 1;
+            p->flex_basis = 0;
+        }
+        else if (d == 0.0)
+        {
+            p->flex_grow = 0;
+            p->flex_shrink = 0;
+        }
+        else
+        {
+            p->flex_grow = 0;
+            p->flex_shrink = 1;
+        }
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads `flexBasis`, supporting both numeric pixels and percentage strings.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_flex_basis(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "flexBasis", &v))
+    {
+        return;
+    }
+    if (JS_IsNumber(v))
+    {
+        int16_t d;
+        if (to_dim(ctx, v, &d))
+        {
+            p->flex_basis = d;
+        }
+    }
+    else if (JS_IsString(v))
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (s)
+        {
+            char* end = NULL;
+            const double pct = strtod(s, &end);
+            if (end != s && *end == '%')
+            {
+                p->flex_basis_pct = (float)pct;
+            }
+            JS_FreeCString(ctx, s);
+        }
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads `fontWeight` (string keyword, numeric, or numeric string) into a 0/1 weight.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_font_weight(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "fontWeight", &v))
+    {
+        return;
+    }
+    if (JS_IsNumber(v))
+    {
+        int32_t n = 0;
+        if (JS_ToInt32(ctx, &n, v) == 0)
+        {
+            p->font_weight = n >= 600 ? 1 : 0;
+        }
+    }
+    else
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (s)
+        {
+            p->font_weight = (strcmp(s, "bold") == 0 || atoi(s) >= 600) ? 1 : 0;
+            JS_FreeCString(ctx, s);
+        }
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads `opacity` (RN 0.0–1.0 float) into the engine's 0–255 byte opacity.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_opacity(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "opacity", &v))
+    {
+        return;
+    }
+    double d = 1.0;
+    if (JS_ToFloat64(ctx, &d, v) == 0)
+    {
+        if (d < 0.0)
+        {
+            d = 0.0;
+        }
+        if (d > 1.0)
+        {
+            d = 1.0;
+        }
+        p->opacity = (uint8_t)(d * 255.0 + 0.5);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads a float-valued key from a transform-list item.
+ *
+ * @param[in]  ctx   QuickJS context.
+ * @param[in]  item  Transform list element (single-key object).
+ * @param[in]  key   Key to read.
+ * @param[out] out   Receives the float value when present.
+ *
+ * @return true when the key is present and numeric; false otherwise.
+ */
+static bool item_f32(JSContext* ctx, JSValueConst item, const char* key, float* out)
+{
+    JSValue v;
+    if (!prop_get(ctx, item, key, &v))
+    {
+        return false;
+    }
+    double d = 0.0;
+    const bool ok = JS_ToFloat64(ctx, &d, v) == 0;
+    if (ok)
+    {
+        *out = (float)d;
+    }
+    JS_FreeValue(ctx, v);
+    return ok;
+}
+
+/**
+ * @brief Reads an angle-valued key (number or "Ndeg"/"Nrad") from a transform-list item.
+ *
+ * @param[in]  ctx   QuickJS context.
+ * @param[in]  item  Transform list element (single-key object).
+ * @param[in]  key   Key to read.
+ * @param[out] out   Receives the angle in degrees when present.
+ *
+ * @return true when the key is present and a recognisable angle; false otherwise.
+ */
+static bool item_angle(JSContext* ctx, JSValueConst item, const char* key, float* out)
+{
+    JSValue v;
+    if (!prop_get(ctx, item, key, &v))
+    {
+        return false;
+    }
+    const bool ok = to_angle(ctx, v, out);
+    JS_FreeValue(ctx, v);
+    return ok;
+}
+
+/**
+ * @brief Flattens the RN `transform` array (list of single-key objects) into transform_* fields.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_transform(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue arr;
+    if (!prop_get(ctx, obj, "transform", &arr))
+    {
+        return;
+    }
+    if (JS_IsArray(arr))
+    {
+        JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, len_val);
+        JS_FreeValue(ctx, len_val);
+
+        for (int32_t i = 0; i < len; i++)
+        {
+            JSValue item = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+            if (JS_IsObject(item))
+            {
+                float f;
+                if (item_f32(ctx, item, "translateX", &f))
+                {
+                    p->transform_translate_x = f;
+                }
+                if (item_f32(ctx, item, "translateY", &f))
+                {
+                    p->transform_translate_y = f;
+                }
+                if (item_f32(ctx, item, "scale", &f))
+                {
+                    p->transform_scale_x = f;
+                    p->transform_scale_y = f;
+                }
+                if (item_f32(ctx, item, "scaleX", &f))
+                {
+                    p->transform_scale_x = f;
+                }
+                if (item_f32(ctx, item, "scaleY", &f))
+                {
+                    p->transform_scale_y = f;
+                }
+                if (item_angle(ctx, item, "rotate", &f))
+                {
+                    p->transform_rotate_z = f;
+                }
+                if (item_angle(ctx, item, "rotateZ", &f))
+                {
+                    p->transform_rotate_z = f;
+                }
+                if (item_angle(ctx, item, "rotateX", &f))
+                {
+                    p->transform_rotate_x = f;
+                }
+                if (item_angle(ctx, item, "rotateY", &f))
+                {
+                    p->transform_rotate_y = f;
+                }
+                if (item_f32(ctx, item, "perspective", &f))
+                {
+                    p->transform_perspective = f;
+                }
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+}
+
+/**
+ * @brief Reads `transformOrigin` as a two-element [x, y] array of fractional pivots [0–1].
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_transform_origin(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "transformOrigin", &v))
+    {
+        return;
+    }
+    if (JS_IsArray(v))
+    {
+        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+        double ox = 0.0;
+        double oy = 0.0;
+        if (JS_ToFloat64(ctx, &ox, e0) == 0)
+        {
+            p->transform_origin_x = (float)ox;
+        }
+        if (JS_ToFloat64(ctx, &oy, e1) == 0)
+        {
+            p->transform_origin_y = (float)oy;
+        }
+        JS_FreeValue(ctx, e0);
+        JS_FreeValue(ctx, e1);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads `shadowOffset` ({width, height}) into the shadow_offset_x/y fields.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_shadow_offset(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "shadowOffset", &v))
+    {
+        return;
+    }
+    if (JS_IsObject(v))
+    {
+        JSValue w = JS_GetPropertyStr(ctx, v, "width");
+        JSValue h = JS_GetPropertyStr(ctx, v, "height");
+        double dw = 0.0;
+        double dh = 0.0;
+        if (JS_ToFloat64(ctx, &dw, w) == 0)
+        {
+            p->shadow_offset_x = (float)dw;
+        }
+        if (JS_ToFloat64(ctx, &dh, h) == 0)
+        {
+            p->shadow_offset_y = (float)dh;
+        }
+        JS_FreeValue(ctx, w);
+        JS_FreeValue(ctx, h);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads `trackColor` ({false, true}) into the Switch track_color_false/true fields.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Source props object.
+ * @param[in,out] p    Props to update.
+ */
+static void apply_track_color(JSContext* ctx, JSValueConst obj, ERProps* p)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, "trackColor", &v))
+    {
+        return;
+    }
+    if (JS_IsObject(v))
+    {
+        JSValue f = JS_GetPropertyStr(ctx, v, "false");
+        JSValue t = JS_GetPropertyStr(ctx, v, "true");
+        uint32_t c;
+        if (to_color(ctx, f, &c))
+        {
+            p->track_color_false = c;
+        }
+        if (to_color(ctx, t, &c))
+        {
+            p->track_color_true = c;
+        }
+        JS_FreeValue(ctx, f);
+        JS_FreeValue(ctx, t);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Translates a flat JS props object into an ERProps and applies it to a node.
+ *
+ * Reads a single flat object (the JS layer merges resolved style + props before calling).
+ * Unrecognised keys are ignored; unspecified props fall back to engine defaults.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] node  Target node.
+ * @param[in] obj   Flat props object.
+ */
+static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
+{
+    ERProps p;
+    props_init_defaults(&p);
+
+    /* Layout — dimensions and box model. */
+    ER_DIM("width", width);
+    ER_DIM("height", height);
+    ER_DIM("minWidth", min_width);
+    ER_DIM("maxWidth", max_width);
+    ER_DIM("minHeight", min_height);
+    ER_DIM("maxHeight", max_height);
+    ER_DIM("top", top);
+    ER_DIM("left", left);
+    ER_DIM("right", right);
+    ER_DIM("bottom", bottom);
+    ER_DIM("margin", margin);
+    ER_DIM("marginTop", margin_top);
+    ER_DIM("marginRight", margin_right);
+    ER_DIM("marginBottom", margin_bottom);
+    ER_DIM("marginLeft", margin_left);
+    ER_DIM("marginHorizontal", margin_horizontal);
+    ER_DIM("marginVertical", margin_vertical);
+    ER_DIM("padding", padding);
+    ER_DIM("paddingTop", padding_top);
+    ER_DIM("paddingRight", padding_right);
+    ER_DIM("paddingBottom", padding_bottom);
+    ER_DIM("paddingLeft", padding_left);
+    ER_DIM("paddingHorizontal", padding_horizontal);
+    ER_DIM("paddingVertical", padding_vertical);
+    ER_DIM("gap", gap);
+    ER_DIM("rowGap", row_gap);
+    ER_DIM("columnGap", column_gap);
+
+    /* Layout — flex. flex shorthand first; explicit grow/shrink/basis override it. */
+    apply_flex_shorthand(ctx, obj, &p);
+    ER_DIM("flexGrow", flex_grow);
+    ER_DIM("flexShrink", flex_shrink);
+    apply_flex_basis(ctx, obj, &p);
+    ER_ENUM("flexDirection", flex_direction, map_flex_direction);
+    ER_ENUM("flexWrap", flex_wrap, map_flex_wrap);
+    ER_ENUM("justifyContent", justify_content, map_justify);
+    ER_ENUM("alignItems", align_items, map_align);
+    ER_ENUM("alignSelf", align_self, map_align);
+    ER_ENUM("position", position, map_position);
+    ER_ENUM("display", display, map_display);
+    ER_ENUM("overflow", overflow, map_overflow);
+    ER_ENUM("pointerEvents", pointer_events, map_pointer_events);
+
+    {
+        JSValue v;
+        if (prop_get(ctx, obj, "aspectRatio", &v))
+        {
+            double d = 0.0;
+            if (JS_ToFloat64(ctx, &d, v) == 0)
+            {
+                p.aspect_ratio = (float)d;
+            }
+            JS_FreeValue(ctx, v);
+        }
+    }
+
+    /* View visual. */
+    ER_COL("backgroundColor", background_color);
+    apply_opacity(ctx, obj, &p);
+    ER_DIM("borderRadius", border_radius);
+    ER_DIM("borderTopLeftRadius", border_top_left_radius);
+    ER_DIM("borderTopRightRadius", border_top_right_radius);
+    ER_DIM("borderBottomLeftRadius", border_bottom_left_radius);
+    ER_DIM("borderBottomRightRadius", border_bottom_right_radius);
+    ER_DIM("borderWidth", border_width);
+    ER_DIM("borderLeftWidth", border_left_width);
+    ER_DIM("borderTopWidth", border_top_width);
+    ER_DIM("borderRightWidth", border_right_width);
+    ER_DIM("borderBottomWidth", border_bottom_width);
+    ER_COL("borderColor", border_color);
+    ER_COL("borderLeftColor", border_left_color);
+    ER_COL("borderTopColor", border_top_color);
+    ER_COL("borderRightColor", border_right_color);
+    ER_COL("borderBottomColor", border_bottom_color);
+    ER_ENUM("borderStyle", border_style, map_border_style);
+    ER_DIM("zIndex", z_index);
+
+    /* Text. */
+    ER_STR("text", text, ER_TEXT_MAX);
+    ER_STR("fontFamily", font_family, ER_FONT_FAMILY_MAX);
+    ER_COL("color", color);
+    ER_U8("fontSize", font_size);
+    apply_font_weight(ctx, obj, &p);
+    ER_ENUM("fontStyle", font_style, map_font_style);
+    ER_ENUM("textAlign", text_align, map_text_align);
+    ER_ENUM("textDecorationLine", text_decoration, map_text_decoration);
+    ER_U8("numberOfLines", number_of_lines);
+    ER_ENUM("ellipsizeMode", ellipsize_mode, map_ellipsize);
+    ER_DIM("lineHeight", line_height);
+    ER_DIM("letterSpacing", letter_spacing);
+
+    /* Image. */
+    ER_STR("imageName", image_name, ER_IMAGE_NAME_MAX);
+    ER_ENUM("resizeMode", resize_mode, map_resize_mode);
+    ER_COL("tintColor", tint_color);
+
+    /* Transforms. */
+    apply_transform(ctx, obj, &p);
+    apply_transform_origin(ctx, obj, &p);
+
+    /* Shadow (View-family; rendered only when ERUI_SHADOWS and shadow_opacity > 0). */
+    ER_COL("shadowColor", shadow_color);
+    apply_shadow_offset(ctx, obj, &p);
+    {
+        JSValue v;
+        if (prop_get(ctx, obj, "shadowOpacity", &v))
+        {
+            double d = 0.0;
+            if (JS_ToFloat64(ctx, &d, v) == 0)
+            {
+                p.shadow_opacity = (float)d;
+            }
+            JS_FreeValue(ctx, v);
+        }
+    }
+    ER_U8("shadowRadius", shadow_radius);
+    ER_U8("elevation", elevation);
+
+    /* ActivityIndicator (RN uses `color` for the spinner tint). */
+    ER_COL("color", indicator_color);
+    ER_U8("animating", animating);
+
+    /* Switch. */
+    ER_U8("value", switch_value);
+    apply_track_color(ctx, obj, &p);
+    ER_COL("thumbColor", thumb_color);
+
+    /* TextInput. */
+    ER_STR("placeholder", placeholder, ER_PLACEHOLDER_MAX);
+    ER_COL("placeholderTextColor", placeholder_color);
+    ER_COL("cursorColor", cursor_color);
+    ER_U8("editable", editable);
+
+    /* Modal. */
+    ER_U8("visible", modal_visible);
+    ER_COL("backdropColor", backdrop_color);
+
+    er_node_set_props(node, &p);
+}
+
+#undef ER_DIM
+#undef ER_COL
+#undef ER_ENUM
+#undef ER_U8
+#undef ER_STR
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — NativeUI methods
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief NativeUI.createNode(typeString) — creates a node and returns its handle.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node type string.
+ *
+ * @return Integer handle, or 0 on failure.
+ */
+static JSValue js_create_node(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
+    }
+
+    const char* type_str = JS_ToCString(ctx, argv[0]);
+    if (!type_str)
+    {
+        return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
+    }
+    ERNode* node = er_node_create(map_node_type(type_str));
+    JS_FreeCString(ctx, type_str);
+
+    if (!node)
+    {
+        return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
+    }
+    const int32_t handle = handle_alloc(node);
+    if (handle == ER_BRIDGE_HANDLE_INVALID)
+    {
+        er_node_destroy(node);
+        return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
+    }
+    return JS_NewInt32(ctx, handle);
+}
+
+/**
+ * @brief NativeUI.destroyNode(handle) — destroys a node and frees its handle.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node handle.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_destroy_node(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t h = 0;
+    if (JS_ToInt32(ctx, &h, argv[0]) == 0)
+    {
+        ERNode* node = handle_node(h);
+        if (node)
+        {
+            er_node_destroy(node);
+            handle_free(h);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.appendChild(parent, child) — appends child to parent.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = parent handle, argv[1] = child handle.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_append_child(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* parent = node_arg(ctx, argv[0]);
+    ERNode* child = node_arg(ctx, argv[1]);
+    if (parent && child)
+    {
+        er_tree_append_child(parent, child);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.removeChild(parent, child) — removes child from parent.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = parent handle, argv[1] = child handle.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_remove_child(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* parent = node_arg(ctx, argv[0]);
+    ERNode* child = node_arg(ctx, argv[1]);
+    if (parent && child)
+    {
+        er_tree_remove_child(parent, child);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.setRoot(handle) — sets the scene root.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = root node handle.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_root(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    if (node)
+    {
+        er_tree_set_root(node);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.setProps(handle, propsObject) — marshals and applies props to a node.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node handle, argv[1] = props object.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_props(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    if (node && JS_IsObject(argv[1]))
+    {
+        apply_props(ctx, node, argv[1]);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.commit() — runs layout + paint for all pending mutations.
+ *
+ * @param[in] ctx   QuickJS context (unused).
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count (unused).
+ * @param[in] argv  Arguments (unused).
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_commit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_commit();
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.now() — returns the engine's monotonic millisecond clock.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count (unused).
+ * @param[in] argv  Arguments (unused).
+ *
+ * @return Milliseconds since the backend was set, as a JS number.
+ */
+static JSValue js_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt64(ctx, (int64_t)er_now_ms());
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Installs the NativeUI bridge object into a QuickJS global scope.
+ *
+ * @param[in] ctx  QuickJS context to install the bridge into.
+ */
+void er_bridge_install(JSContext* ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue native_ui = JS_NewObject(ctx);
+
+    JS_SetPropertyStr(ctx, native_ui, "createNode", JS_NewCFunction(ctx, js_create_node, "createNode", 1));
+    JS_SetPropertyStr(ctx, native_ui, "destroyNode", JS_NewCFunction(ctx, js_destroy_node, "destroyNode", 1));
+    JS_SetPropertyStr(ctx, native_ui, "appendChild", JS_NewCFunction(ctx, js_append_child, "appendChild", 2));
+    JS_SetPropertyStr(ctx, native_ui, "removeChild", JS_NewCFunction(ctx, js_remove_child, "removeChild", 2));
+    JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
+    JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
+    JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
+    JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
+
+    /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
+    JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);
+    JS_FreeValue(ctx, global);
+}

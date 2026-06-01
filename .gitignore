@@ -3,6 +3,7 @@
 
 # CMake build directories
 build/
+build-bridge/
 cmake-build-*/
 out/
 
