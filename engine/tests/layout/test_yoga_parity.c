@@ -518,6 +518,93 @@ static void fixture_flex_max_redistribute(void)
     er_node_destroy(root);
 }
 
+/**
+ * @brief Builds a wrapping row of three 50×20 items (one per line) under the given alignContent.
+ *
+ * Container is 50 wide so each item wraps onto its own line; `height` controls the leftover cross
+ * space. Captures the three item rects for the caller to assert.
+ */
+static void
+build_wrap3(uint8_t align_content, int16_t height, int16_t item_h, ERNode** root_out, ERNode** kids_out, ERRect* rects)
+{
+    ERProps rp = props_default();
+    rp.width = 50;
+    rp.height = height;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.flex_wrap = ER_WRAP_WRAP;
+    rp.align_content = align_content;
+    ERNode* root = mk(rp, NULL);
+
+    for (int i = 0; i < 3; i++)
+    {
+        ERProps p = props_default();
+        p.width = 50;
+        if (item_h != ER_LAYOUT_AUTO)
+        {
+            p.height = item_h;
+        }
+        kids_out[i] = mk(p, &rects[i]);
+        er_tree_append_child(root, kids_out[i]);
+    }
+    er_tree_set_root(root);
+    *root_out = root;
+}
+
+/** @brief Tears down a wrap3 fixture. */
+static void teardown_wrap3(ERNode* root, ERNode** kids)
+{
+    for (int i = 0; i < 3; i++)
+    {
+        kill_child(root, kids[i]);
+    }
+    er_node_destroy(root);
+}
+
+/** @brief alignContent: center — leftover cross space splits evenly above and below the lines. */
+static void fixture_align_content_center(void)
+{
+    ERNode* root;
+    ERNode* kids[3];
+    ERRect r[3];
+    /* 3 lines × 20 = 60 used of 100 → 40 free; center → 20px leading offset. */
+    build_wrap3(ER_ALIGN_CONTENT_CENTER, 100, 20, &root, kids, r);
+    er_commit();
+    pcheck("aligncontent-center", "l0", EXPECT, r[0], 0, 20, 50, 20);
+    pcheck("aligncontent-center", "l1", EXPECT, r[1], 0, 40, 50, 20);
+    pcheck("aligncontent-center", "l2", EXPECT, r[2], 0, 60, 50, 20);
+    teardown_wrap3(root, kids);
+}
+
+/** @brief alignContent: space-between — leftover cross space goes between lines, none at edges. */
+static void fixture_align_content_between(void)
+{
+    ERNode* root;
+    ERNode* kids[3];
+    ERRect r[3];
+    /* 40 free / (3-1) = 20px between lines. */
+    build_wrap3(ER_ALIGN_CONTENT_SPACE_BETWEEN, 100, 20, &root, kids, r);
+    er_commit();
+    pcheck("aligncontent-between", "l0", EXPECT, r[0], 0, 0, 50, 20);
+    pcheck("aligncontent-between", "l1", EXPECT, r[1], 0, 40, 50, 20);
+    pcheck("aligncontent-between", "l2", EXPECT, r[2], 0, 80, 50, 20);
+    teardown_wrap3(root, kids);
+}
+
+/** @brief alignContent: stretch — each line grows equally; auto-height items fill their line. */
+static void fixture_align_content_stretch(void)
+{
+    ERNode* root;
+    ERNode* kids[3];
+    ERRect r[3];
+    /* Auto-height items: base line cross 0, 120 free / 3 lines = 40px tall lines; items stretch. */
+    build_wrap3(ER_ALIGN_CONTENT_STRETCH, 120, ER_LAYOUT_AUTO, &root, kids, r);
+    er_commit();
+    pcheck("aligncontent-stretch", "l0", EXPECT, r[0], 0, 0, 50, 40);
+    pcheck("aligncontent-stretch", "l1", EXPECT, r[1], 0, 40, 50, 40);
+    pcheck("aligncontent-stretch", "l2", EXPECT, r[2], 0, 80, 50, 40);
+    teardown_wrap3(root, kids);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -542,6 +629,9 @@ int main(void)
     fixture_auto_cross_row();
     fixture_auto_main_column();
     fixture_flex_max_redistribute();
+    fixture_align_content_center();
+    fixture_align_content_between();
+    fixture_align_content_stretch();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -566,7 +656,6 @@ int main(void)
 /*----------------------------------------------------------------------------------------------------------------------
  * Known divergences not yet expressible through ERProps (add fixtures when the props/fields land):
  *
- *   - alignContent (multi-line cross distribution): no ERProps field.
  *   - margin: auto centering: margins are fixed pixels; ER_LAYOUT_AUTO margin is treated as 0.
  *   - percentage width/height/padding/margin: only flex_basis has a percent field.
  *   - width-aware text wrapping / auto height: Text uses single-line measurement unless

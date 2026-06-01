@@ -38,6 +38,7 @@ typedef struct
     uint8_t flex_wrap;       /**< ERFlexWrap       */
     uint8_t align_items;     /**< ERFlexAlign      */
     uint8_t align_self;      /**< ERFlexAlign      */
+    uint8_t align_content;   /**< ERAlignContent   */
     uint8_t justify_content; /**< ERFlexJustify    */
     uint8_t position;        /**< ERPositionType   */
     uint8_t display;         /**< ERDisplayMode    */

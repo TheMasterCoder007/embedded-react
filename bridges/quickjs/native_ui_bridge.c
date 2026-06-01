@@ -544,6 +544,32 @@ static uint8_t map_align(const char* s)
     return ER_ALIGN_AUTO;
 }
 
+/** @brief Maps an alignContent string to ERAlignContent. @param[in] s String. @return Enum value. */
+static uint8_t map_align_content(const char* s)
+{
+    if (strcmp(s, "flex-end") == 0)
+    {
+        return ER_ALIGN_CONTENT_FLEX_END;
+    }
+    if (strcmp(s, "center") == 0)
+    {
+        return ER_ALIGN_CONTENT_CENTER;
+    }
+    if (strcmp(s, "stretch") == 0)
+    {
+        return ER_ALIGN_CONTENT_STRETCH;
+    }
+    if (strcmp(s, "space-between") == 0)
+    {
+        return ER_ALIGN_CONTENT_SPACE_BETWEEN;
+    }
+    if (strcmp(s, "space-around") == 0)
+    {
+        return ER_ALIGN_CONTENT_SPACE_AROUND;
+    }
+    return ER_ALIGN_CONTENT_FLEX_START;
+}
+
 /** @brief Maps a position string to ERPositionType. @param[in] s String. @return Enum value. */
 static uint8_t map_position(const char* s)
 {
@@ -1300,6 +1326,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_ENUM("justifyContent", justify_content, map_justify);
     ER_ENUM("alignItems", align_items, map_align);
     ER_ENUM("alignSelf", align_self, map_align);
+    ER_ENUM("alignContent", align_content, map_align_content);
     ER_ENUM("position", position, map_position);
     ER_ENUM("display", display, map_display);
     ER_ENUM("overflow", overflow, map_overflow);

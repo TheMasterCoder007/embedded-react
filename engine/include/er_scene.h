@@ -107,6 +107,23 @@ extern "C"
     } ERFlexJustify;
 
     /**
+     * @brief Cross-axis distribution of wrap lines within a multi-line flex container.
+     *
+     * Mirrors React Native / Yoga `alignContent`. Has no effect on a single-line (nowrap)
+     * container or when the lines already fill the container's cross size. Default is
+     * ER_ALIGN_CONTENT_FLEX_START (Yoga's default).
+     */
+    typedef enum
+    {
+        ER_ALIGN_CONTENT_FLEX_START = 0,    /**< Pack lines toward the cross-start (default). */
+        ER_ALIGN_CONTENT_FLEX_END = 1,      /**< Pack lines toward the cross-end. */
+        ER_ALIGN_CONTENT_CENTER = 2,        /**< Center lines on the cross axis. */
+        ER_ALIGN_CONTENT_STRETCH = 3,       /**< Grow each line equally to fill the cross size. */
+        ER_ALIGN_CONTENT_SPACE_BETWEEN = 4, /**< Equal space between lines; none at the edges. */
+        ER_ALIGN_CONTENT_SPACE_AROUND = 5,  /**< Equal space around each line. */
+    } ERAlignContent;
+
+    /**
      * @brief Line-wrapping behaviour for flex containers.
      */
     typedef enum
@@ -452,6 +469,7 @@ extern "C"
         uint8_t flex_wrap;       /**< ERFlexWrap     — default ER_WRAP_NOWRAP. */
         uint8_t align_items;     /**< ERFlexAlign    — default ER_ALIGN_STRETCH. */
         uint8_t align_self;      /**< ERFlexAlign    — default ER_ALIGN_AUTO. */
+        uint8_t align_content;   /**< ERAlignContent — default ER_ALIGN_CONTENT_FLEX_START. */
         uint8_t justify_content; /**< ERFlexJustify  — default ER_JUSTIFY_FLEX_START. */
         uint8_t position;        /**< ERPositionType — default ER_POS_RELATIVE. */
         uint8_t display;         /**< ERDisplayMode  — default ER_DISPLAY_FLEX. */

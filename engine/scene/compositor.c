@@ -72,6 +72,7 @@ static void init_layout_defaults(ERLayoutSpec* L)
     L->flex_wrap = ER_WRAP_NOWRAP;
     L->align_items = ER_ALIGN_STRETCH;
     L->align_self = ER_ALIGN_AUTO;
+    L->align_content = ER_ALIGN_CONTENT_FLEX_START;
     L->justify_content = ER_JUSTIFY_FLEX_START;
     L->position = ER_POS_RELATIVE;
     L->aspect_ratio = 0.0f;
@@ -944,6 +945,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->flex_wrap = props->flex_wrap;
     L->align_items = props->align_items;
     L->align_self = props->align_self;
+    L->align_content = props->align_content;
     L->justify_content = props->justify_content;
     L->position = props->position;
     L->display = props->display;

@@ -561,9 +561,58 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     }
 
     /*--------------------------------------------------------------------------
+     * alignContent — distribute leftover cross space among wrap lines.
+     *
+     * Only meaningful for a multi-line (wrap) container whose lines do not already fill the
+     * cross axis. STRETCH grows each line equally; the other modes add a leading offset
+     * (ac_offset) and/or extra spacing between lines (ac_between) consumed in Pass 5.
+     *------------------------------------------------------------------------*/
+    int16_t ac_offset = 0;
+    int16_t ac_between = 0;
+    if (L->flex_wrap != ER_WRAP_NOWRAP && n_lines > 1)
+    {
+        int16_t free_cross = (int16_t)(cross_avail - total_cross);
+        if (free_cross < 0)
+            free_cross = 0;
+
+        if (free_cross > 0)
+        {
+            switch (L->align_content)
+            {
+                case ER_ALIGN_CONTENT_FLEX_END:
+                    ac_offset = free_cross;
+                    break;
+                case ER_ALIGN_CONTENT_CENTER:
+                    ac_offset = (int16_t)(free_cross / 2);
+                    break;
+                case ER_ALIGN_CONTENT_SPACE_BETWEEN:
+                    ac_between = (int16_t)(free_cross / (n_lines - 1));
+                    break;
+                case ER_ALIGN_CONTENT_SPACE_AROUND:
+                {
+                    const int16_t unit = (int16_t)(free_cross / n_lines);
+                    ac_offset = (int16_t)(unit / 2);
+                    ac_between = unit;
+                    break;
+                }
+                case ER_ALIGN_CONTENT_STRETCH:
+                {
+                    const int16_t add = (int16_t)(free_cross / n_lines);
+                    for (int ln = 0; ln < n_lines; ln++)
+                        s_line_cross[ln] = (int16_t)(s_line_cross[ln] + add);
+                    total_cross = (int16_t)(total_cross + (int16_t)(add * n_lines));
+                    break;
+                }
+                default: /* ER_ALIGN_CONTENT_FLEX_START — lines packed at the cross-start. */
+                    break;
+            }
+        }
+    }
+
+    /*--------------------------------------------------------------------------
      * Pass 5 — main-axis positions (justifyContent) + cross-axis (alignSelf).
      *------------------------------------------------------------------------*/
-    int16_t line_cross_offset = 0;
+    int16_t line_cross_offset = ac_offset;
     for (int ln = 0; ln < n_lines; ln++)
     {
         int32_t line_used = 0;
@@ -688,7 +737,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             s_scratch[i].cross_pos = (int16_t)(s_scratch[i].cross_pos + line_cross_offset);
         }
 
-        line_cross_offset = (int16_t)(line_cross_offset + this_cross + cross_gap);
+        line_cross_offset = (int16_t)(line_cross_offset + this_cross + cross_gap + ac_between);
     }
 
     /* wrap-reverse: mirror all lines along the cross-axis. */

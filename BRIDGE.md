@@ -77,9 +77,9 @@ one prop family verified against a JS value.
 - [x] Dimension coercer: JS number → `int16_t` px; `flexBasis: '50%'` → `flex_basis_pct`.
   `width/height: '%'` still has no field (Open Decisions #4)
 - [x] Angle coercer: `'45deg'` / `'Nrad'` / number → degrees float
-- [x] Enum string maps: all 15 done — `flexDirection`, `flexWrap`, `justifyContent`,
-  `alignItems`, `alignSelf`, `position`, `display`, `overflow`, `resizeMode`, `textAlign`,
-  `fontStyle`, `borderStyle`, `ellipsizeMode`, `textDecorationLine`, `pointerEvents`
+- [x] Enum string maps: all 16 done — `flexDirection`, `flexWrap`, `justifyContent`,
+  `alignItems`, `alignSelf`, `alignContent`, `position`, `display`, `overflow`, `resizeMode`,
+  `textAlign`, `fontStyle`, `borderStyle`, `ellipsizeMode`, `textDecorationLine`, `pointerEvents`
 
 **Layout (Yoga) — maps onto the layout block of `ERProps`:**
 
@@ -87,8 +87,7 @@ one prop family verified against a JS value.
   (positive flex = grow:flex, shrink:1, basis:0)
 - [x] `flexGrow` / `flexShrink` / `flexBasis` (+ `flexBasis: '50%'` → `flex_basis_pct`)
 - [x] `flexDirection` / `flexWrap`
-- [x] `justifyContent` / `alignItems` / `alignSelf` (note: `alignContent` has no `ERProps`
-  field — Open Decisions #5)
+- [x] `justifyContent` / `alignItems` / `alignSelf` / `alignContent`
 - [x] `position` + `top` / `right` / `bottom` / `left`
 - [x] `width` / `height` / `minWidth` / `maxWidth` / `minHeight` / `maxHeight`
 - [x] `aspectRatio` → `float aspect_ratio`
@@ -263,8 +262,9 @@ Resolve these as we reach them; each blocks a checklist item above.
    (`flex_basis_pct`). `width: '50%'` / `height: '50%'` have no field. Decide: document as
    unsupported, or revisit with the engine owner. (Engine change — out of bounds for this doc
    without sign-off.)
-5. **`alignContent`** — listed in PLAN.md's style table but has no `ERProps` field. Same
-   choice as #4.
+5. **`alignContent`** — ✅ **RESOLVED: implemented.** Added the `ERAlignContent` enum + `ERProps`/
+   `ERLayoutSpec` field + Pass 4/5 cross-line distribution in the engine, plus `alignContent`
+   marshalling and parity fixtures (center / space-between / stretch).
 6. **Gradient style key** — gradients are an engine feature with no RN prop. Pick a custom
    style key (`experimental_gradient`?) and shape so app authors can reach it.
 7. **Non-native-driver animation** — `Animated` without `useNativeDriver` needs a JS-side rAF
@@ -284,7 +284,7 @@ engine's computed rects against Yoga/Chrome-correct values. Each assertion is ta
 (must match — catches regressions) or `XFAIL` (known divergence — stays green while broken, but
 turns the suite **red when the engine starts matching**, as a reminder to promote it). Add a
 `fixture_*()` per case. This is how we make divergences deterministic instead of eyeballing the
-demo. Current: 18 EXPECT pass, 0 XFAIL.
+demo. Current: 27 EXPECT pass, 0 XFAIL.
 
 - ✅ **FIXED — container auto cross/main-size.** A `flexDirection: 'row'` View with no explicit
   `height`, whose children set their own height, collapsed to `height: 0` instead of sizing to
@@ -306,9 +306,14 @@ demo. Current: 18 EXPECT pass, 0 XFAIL.
   free space over unfrozen items, freeze any that hit a bound, redistribute the remainder, repeat
   (bounded by child count). Found and promoted via the parity harness (XFAIL → PROMOTE → EXPECT).
 
+- ✅ **FIXED — `alignContent`** (parity `aligncontent-center` / `-between` / `-stretch`). Added
+  the `ERAlignContent` enum, the `ERProps`/`ERLayoutSpec` field (+ compositor copy/default), and
+  cross-line distribution between Pass 4 and Pass 5 (offset / between-line spacing / per-line
+  stretch). Bridge marshals `alignContent`. All suites pass.
+
 - ⏳ **OPEN — not yet expressible via `ERProps`** (need fields/props first, so not in the harness
-  yet): `alignContent`, `margin: auto`, percentage `width`/`height`/padding/margin, width-aware
-  text wrapping / auto-height, `alignItems: baseline`. Listed at the foot of the parity test.
+  yet): `margin: auto`, percentage `width`/`height`/padding/margin, width-aware text wrapping /
+  auto-height, `alignItems: baseline`. Listed at the foot of the parity test.
 
 ---
 
