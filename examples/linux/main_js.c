@@ -57,7 +57,7 @@ static const char* k_default_app =
     "NativeUI.setProps(title, { text: 'Hello from QuickJS', color: 'white', fontSize: 24 });\n"
     "NativeUI.appendChild(root, title);\n"
     "const subtitle = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(subtitle, { text: 'JS -> NativeUI -> er_scene.h', color: '#9aa5b1', fontSize: 16 });\n"
+    "NativeUI.setProps(subtitle, { text: 'Tap a card', color: '#9aa5b1', fontSize: 16 });\n"
     "NativeUI.appendChild(root, subtitle);\n"
     "const row = NativeUI.createNode('View');\n"
     "NativeUI.setProps(row, { flexDirection: 'row', gap: 12, marginTop: 8 });\n"
@@ -66,9 +66,14 @@ static const char* k_default_app =
     "                { label: 'MEM', color: '#e94560' },\n"
     "                { label: 'NET', color: '#f4a261' } ];\n"
     "for (let i = 0; i < cards.length; i++) {\n"
-    "    const card = NativeUI.createNode('View');\n"
+    "    const card = NativeUI.createNode('Pressable');\n"
     "    NativeUI.setProps(card, { flex: 1, height: 120, backgroundColor: cards[i].color,\n"
     "                              borderRadius: 10, padding: 12, justifyContent: 'flex-end' });\n"
+    "    NativeUI.setEvent(card, 'onPress', () => {\n"
+    "        NativeUI.setProps(subtitle, { text: 'Pressed ' + cards[i].label,\n"
+    "                                      color: '#ffd166', fontSize: 16 });\n"
+    "        console.log('pressed', cards[i].label);\n"
+    "    });\n"
     "    const lbl = NativeUI.createNode('Text');\n"
     "    NativeUI.setProps(lbl, { text: cards[i].label, color: 'white', fontSize: 20, fontWeight: 'bold' });\n"
     "    NativeUI.appendChild(card, lbl);\n"
@@ -76,7 +81,7 @@ static const char* k_default_app =
     "}\n"
     "NativeUI.setRoot(root);\n"
     "NativeUI.commit();\n"
-    "console.log('App built UI at', W + 'x' + H);\n";
+    "console.log('App built UI at', W + 'x' + H, '- tap a card');\n";
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — host helpers
@@ -330,7 +335,7 @@ int main(int argc, char** argv)
     }
 
     /* Frame loop. The app already built + committed its tree; the loop keeps painting and
-       advancing animations. Touch is forwarded for when event wiring lands (BRIDGE.md §1.3). */
+       advancing animations and forwards touch input to the engine. */
     bool running = true;
     uint32_t prev = SDL_GetTicks();
     while (running)

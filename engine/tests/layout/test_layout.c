@@ -518,5 +518,74 @@ int main(void)
         er_node_destroy(d_root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Test: container auto cross-size — a row with no explicit height grows to
+     * fit its children instead of collapsing to 0.  Regression for the Flow A
+     * demo where a row of cards rendered but was not hit-testable because the
+     * row had height 0 (hit-testing descends through the row's empty bounds).
+     *
+     * Column root 200×200 (align stretch).  Child "row" (flex_direction=row, no
+     * height) holds two children with flex:1 (flex_basis 0) and height=60.  The
+     * row must report height 60 and stretch to width 200, and each child must
+     * land within the row's vertical bounds.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ac_root = er_node_create(ER_NODE_VIEW);
+        ERProps acp = props_default();
+        acp.width = 200;
+        acp.height = 200;
+        acp.flex_direction = ER_FLEX_COL;
+        acp.align_items = ER_ALIGN_STRETCH;
+        er_node_set_props(ac_root, &acp);
+
+        ERNode* ac_row = er_node_create(ER_NODE_VIEW);
+        ERRect ac_row_rect = {-1, -1, -1, -1};
+        acp = props_default();
+        acp.flex_direction = ER_FLEX_ROW; /* no height — must be derived from children */
+        er_node_set_props(ac_row, &acp);
+        er_event_set(ac_row, ER_EVENT_LAYOUT, on_layout_rect, &ac_row_rect);
+        er_tree_append_child(ac_root, ac_row);
+
+        ERNode* ac_kids[2];
+        ERRect ac_krect[2];
+        for (int i = 0; i < 2; i++)
+        {
+            ac_kids[i] = er_node_create(ER_NODE_VIEW);
+            ERProps kp = props_default();
+            kp.flex_grow = 1;
+            kp.flex_shrink = 1;
+            kp.flex_basis = 0;
+            kp.height = 60;
+            er_node_set_props(ac_kids[i], &kp);
+            ac_krect[i] = (ERRect){-1, -1, -1, -1};
+            er_event_set(ac_kids[i], ER_EVENT_LAYOUT, on_layout_rect, &ac_krect[i]);
+            er_tree_append_child(ac_row, ac_kids[i]);
+        }
+
+        er_tree_set_root(ac_root);
+        er_commit();
+
+        if (ac_row_rect.h != 60)
+            return fail("auto cross-size: row should grow to its children's height (60), not collapse to 0");
+        if (ac_row_rect.w != 200)
+            return fail("auto cross-size: row should stretch to the column's width (200)");
+        for (int i = 0; i < 2; i++)
+        {
+            if (ac_krect[i].h != 60)
+                return fail("auto cross-size: child height should be 60");
+            if (ac_krect[i].y < ac_row_rect.y || ac_krect[i].y + ac_krect[i].h > ac_row_rect.y + ac_row_rect.h)
+                return fail("auto cross-size: child falls outside the row's bounds (not hit-testable)");
+        }
+
+        for (int i = 0; i < 2; i++)
+        {
+            er_tree_remove_child(ac_row, ac_kids[i]);
+            er_node_destroy(ac_kids[i]);
+        }
+        er_tree_remove_child(ac_root, ac_row);
+        er_node_destroy(ac_row);
+        er_node_destroy(ac_root);
+    }
+
     return EXIT_SUCCESS;
 }

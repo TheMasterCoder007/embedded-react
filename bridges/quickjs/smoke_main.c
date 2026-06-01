@@ -143,22 +143,30 @@ int main(void)
         "const root = NativeUI.createNode('View');\n"
         "NativeUI.setProps(root, { width: 200, height: 120, flexDirection: 'row', flexWrap: 'wrap',\n"
         "                          padding: 8, backgroundColor: '#202020' });\n"
-        "const box = NativeUI.createNode('View');\n"
+        "globalThis.pressCount = 0;\n"
+        "const capturedTag = 'CPU';\n" /* top-level const captured by the handler closure */
+        "const box = NativeUI.createNode('Pressable');\n"
         "NativeUI.setProps(box, { width: 50, height: 50, backgroundColor: '#e94560', borderRadius: 8,\n"
-        "                         borderWidth: 2, borderColor: 'white', borderStyle: 'dashed',\n"
-        "                         transform: [{ translateX: 4 }, { translateY: 2 }] });\n"
+        "                         borderWidth: 2, borderColor: 'white', borderStyle: 'dashed' });\n"
+        "NativeUI.setEvent(box, 'onPress', (e) => {\n"
+        "    globalThis.pressCount++;\n"
+        "    NativeUI.setProps(label, { text: 'tapped', color: 'white', fontSize: 16 });\n" /* setProps from handler */
+        "    globalThis.capturedTag = capturedTag;\n" /* only set if the setProps line above did not throw */
+        "    console.log('onPress fired:', e.type, 'at', e.x + ',' + e.y, 'count', globalThis.pressCount);\n"
+        "});\n"
         "NativeUI.appendChild(root, box);\n"
         "const label = NativeUI.createNode('Text');\n"
         "NativeUI.setProps(label, { text: 'Hi', color: 'white', fontSize: 16, marginLeft: 12,\n"
         "                           fontStyle: 'italic', textDecorationLine: 'underline' });\n"
         "NativeUI.appendChild(root, label);\n"
-        "// Exercise object-valued + component-specific marshalling (detached, then freed).\n"
+        "// Exercise object-valued + component-specific + transform marshalling (detached, then freed).\n"
         "const sw = NativeUI.createNode('Switch');\n"
         "NativeUI.setProps(sw, { value: true, trackColor: { false: '#767577', true: '#81b0ff' },\n"
         "                        thumbColor: 'white' });\n"
         "const card = NativeUI.createNode('View');\n"
         "NativeUI.setProps(card, { width: 40, height: 40, shadowColor: '#000', shadowOpacity: 0.5,\n"
-        "                          shadowOffset: { width: 2, height: 3 }, shadowRadius: 4 });\n"
+        "                          shadowOffset: { width: 2, height: 3 }, shadowRadius: 4,\n"
+        "                          transform: [{ translateX: 4 }, { rotate: '10deg' }] });\n"
         "NativeUI.destroyNode(sw);\n"
         "NativeUI.destroyNode(card);\n"
         "NativeUI.setRoot(root);\n"
@@ -206,6 +214,44 @@ int main(void)
         else if (dirty.w > SMOKE_SCREEN_W || dirty.h > SMOKE_SCREEN_H)
         {
             fprintf(stderr, "FAIL: dirty rect exceeds screen bounds\n");
+            status = 1;
+        }
+    }
+
+    /* Event round-trip: tap the Pressable (laid out at 8,8 50x50 -> centre 33,33) and confirm
+       the JS onPress handler ran by reading the global counter it increments. */
+    if (status == 0)
+    {
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 33, 33);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 33, 33);
+
+        JSValue g = JS_GetGlobalObject(ctx);
+        JSValue pc = JS_GetPropertyStr(ctx, g, "pressCount");
+        int32_t press_count = 0;
+        JS_ToInt32(ctx, &press_count, pc);
+        JS_FreeValue(ctx, pc);
+        JS_FreeValue(ctx, g);
+
+        JSValue g2 = JS_GetGlobalObject(ctx);
+        JSValue tagv = JS_GetPropertyStr(ctx, g2, "capturedTag");
+        const char* tag = JS_ToCString(ctx, tagv);
+        printf("pressCount after tap: %d, capturedTag = %s\n", press_count, tag ? tag : "(unset)");
+        const bool captured_ok = tag && strcmp(tag, "CPU") == 0;
+        if (tag)
+        {
+            JS_FreeCString(ctx, tag);
+        }
+        JS_FreeValue(ctx, tagv);
+        JS_FreeValue(ctx, g2);
+
+        if (press_count < 1)
+        {
+            fprintf(stderr, "FAIL: onPress did not round-trip to JS\n");
+            status = 1;
+        }
+        else if (!captured_ok)
+        {
+            fprintf(stderr, "FAIL: handler closure could not read a top-level const\n");
             status = 1;
         }
     }

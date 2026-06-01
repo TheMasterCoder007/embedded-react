@@ -32,8 +32,9 @@ calling the bridge directly.
   `embedded-react-desktop-js` target boots QuickJS, runs a JS app, and paints it via the SDL
   backend (verified: app evaluates, builds the tree, frame loop presents)
 - [x] `console.log` from JS reaches stdout (smoke-test shim; host shim proper in §2)
-- [ ] One `onPress` round-trips: SDL touch → engine hit-test → JS callback fires → JS mutates
-  a prop → next commit repaints
+- [x] One `onPress` round-trips: touch → engine hit-test → JS callback fires → JS mutates a
+  prop → next commit repaints (smoke verifies it headlessly: tap → `onPress` → JS counter
+  increments; desktop demo cards are `Pressable`s that update the subtitle on tap)
 
 Hitting this milestone proves the five hard problems are solved in miniature: QuickJS
 embedding, the `NativeUI` surface, `ERProps` marshalling, the frame loop, and the
@@ -146,18 +147,19 @@ one prop family verified against a JS value.
 
 ### 1.3 Events — JS callbacks over `er_event_set`
 
-- [ ] C trampoline: a single `EREventFn` that looks up the registered `JSValue` callback for
-  `(node, eventType)` and calls it with a marshalled `EREventData` JS object
-- [ ] GC rooting: `JS_DupValue` callbacks on register, `JS_FreeValue` on replace/node-destroy —
-  prevents the collector from reclaiming a live handler
-- [ ] `NativeUI.setEvent(node, eventName, fn)` → `er_event_set`; `null` fn removes
-- [ ] Map RN handler names → `EREventType`: `onPress`/`onLongPress`/`onPressIn`/`onPressOut`,
+- [x] C trampoline: a single `EREventFn` looks up the JS callback for `(node, eventType)`
+  (the pair is encoded in `er_event_set`'s `user_data`) and calls it with a marshalled event
+  object; handler exceptions are reported and swallowed, not unwound through the engine
+- [x] GC rooting: callbacks stored in a `NativeUI.__er_event_handlers` registry object owned by
+  the global graph; `JS_DupValue` on register, replaced/cleared entries release their ref;
+  `destroyNode` clears a node's handlers
+- [x] `NativeUI.setEvent(node, eventName, fn)` → `er_event_set`; a non-function fn clears it
+- [x] Map RN handler names → `EREventType`: all of `onPress`/`onLongPress`/`onPressIn`/`onPressOut`,
   `onTouchStart`/`onTouchMove`/`onTouchEnd`/`onTouchCancel`, `onScroll`, `onChangeText`,
   `onSubmitEditing`, `onFocus`/`onBlur`, `onLayout`
-- [ ] Marshal `EREventData` → JS object (`x`, `y`, `dx`, `dy`, `scroll_x/y`, `layout_rect`,
-  `changed_text`)
-- [ ] Gesture responder queries (`er_responder_query_set`) — defer until PanResponder lands;
-  note here so it isn't forgotten
+- [x] Marshal `EREventData` → JS object (`type`, `x`, `y`, `dx`, `dy`; `scrollX/Y` for scroll,
+  `layout` rect for layout, `text` for changeText)
+- [ ] Gesture responder queries (`er_responder_query_set`) — deferred until PanResponder lands
 
 ### 1.4 Animated (useNativeDriver path) over `ERAnimValueHandle`
 
@@ -268,6 +270,45 @@ Resolve these as we reach them; each blocks a checklist item above.
 7. **Non-native-driver animation** — `Animated` without `useNativeDriver` needs a JS-side rAF
    loop calling `setValue` each frame. Confirm we support it at all, or require
    `useNativeDriver: true` (which RN-on-MCU wants regardless).
+
+---
+
+## Engine Gaps Found via Flow A
+
+Behaviors in the engine that diverged from React Native parity, surfaced while building the
+bridge. Policy (per project owner): **fix them in the engine as we hit them** — nobody is on the
+old behavior yet. **None were bridge bugs.**
+
+**Parity harness:** `engine/tests/layout/test_yoga_parity.c` (CTest `yoga_parity`) compares the
+engine's computed rects against Yoga/Chrome-correct values. Each assertion is tagged `EXPECT`
+(must match — catches regressions) or `XFAIL` (known divergence — stays green while broken, but
+turns the suite **red when the engine starts matching**, as a reminder to promote it). Add a
+`fixture_*()` per case. This is how we make divergences deterministic instead of eyeballing the
+demo. Current: 18 EXPECT pass, 0 XFAIL.
+
+- ✅ **FIXED — container auto cross/main-size.** A `flexDirection: 'row'` View with no explicit
+  `height`, whose children set their own height, collapsed to `height: 0` instead of sizing to
+  the tallest child (and the column analogue didn't sum children's heights). Root cause: the
+  layout engine only computed intrinsic size for `ER_NODE_TEXT` leaves; every other node defaulted
+  to intrinsic 0, so an auto-sized container with no `flex_basis` got `hypo_main = 0`. Children
+  still rendered (overflowing the 0-height parent) but were **not hit-testable** (hit-testing
+  descends through the parent's empty bounds first) — why the desktop demo's card row wasn't
+  clickable. **Fix:** added `measure_content()` in `engine/layout/layout_engine.c` — a
+  self-contained (no `s_scratch`) recursive content-size measure used by Pass 1 for all node
+  types; a container now sums children along its main axis and takes the max along its cross axis
+  (+ padding). Covered by `tests/layout` (`auto cross-size`) and parity fixtures
+  `auto-cross-row` / `auto-main-col`. All engine CTest suites pass; the demo needs no workaround.
+
+- ✅ **FIXED — iterative flex resolution (parity `flex-max-redist`, now `EXPECT`).** When a flex
+  child hits its `min`/`max`, Yoga freezes it and **redistributes** the freed space to other
+  growable siblings; the engine previously did a single grow/shrink pass and left the space unused.
+  **Fix:** rewrote Pass 3 in `layout_engine.c` as Yoga's resolve-flexible-lengths loop — distribute
+  free space over unfrozen items, freeze any that hit a bound, redistribute the remainder, repeat
+  (bounded by child count). Found and promoted via the parity harness (XFAIL → PROMOTE → EXPECT).
+
+- ⏳ **OPEN — not yet expressible via `ERProps`** (need fields/props first, so not in the harness
+  yet): `alignContent`, `margin: auto`, percentage `width`/`height`/padding/margin, width-aware
+  text wrapping / auto-height, `alignItems: baseline`. Listed at the foot of the parity test.
 
 ---
 

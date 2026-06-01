@@ -3,6 +3,7 @@
 #include "er_scene.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -38,6 +39,17 @@ static int s_free_top = 0;
 
 /** @brief Next never-yet-allocated slot index; starts at 1 (0 is the invalid sentinel). */
 static int s_high_water = 1;
+
+/** @brief Context the bridge was installed into; used by the event trampoline. */
+static JSContext* s_bridge_ctx = NULL;
+
+/**
+ * @brief JS object mapping encoded (handle, eventType) keys to JS handler functions.
+ *
+ * Borrowed reference: the object is owned by the NativeUI global (so it lives for the
+ * context lifetime and is freed at teardown). Keys are handle * ER_EVENT_TYPE_COUNT_ + type.
+ */
+static JSValue s_event_handlers;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — handle table
@@ -1397,6 +1409,160 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
 #undef ER_STR
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — events
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Event-type names exposed on JS event objects, indexed by EREventType. */
+static const char* const k_event_names[ER_EVENT_TYPE_COUNT_] = {
+    "press",
+    "longPress",
+    "pressIn",
+    "pressOut",
+    "touchStart",
+    "touchMove",
+    "touchEnd",
+    "touchCancel",
+    "scroll",
+    "responderGrant",
+    "responderReject",
+    "responderMove",
+    "responderRelease",
+    "responderTerminate",
+    "layout",
+    "changeText",
+    "submitEditing",
+    "focus",
+    "blur",
+};
+
+/**
+ * @brief Maps an RN handler prop name (onPress, onChangeText, …) to an EREventType.
+ *
+ * @param[in]  name  Handler prop name.
+ * @param[out] out   Receives the event type when recognised.
+ *
+ * @return true when the name maps to a supported event; false otherwise.
+ */
+static bool event_type_from_name(const char* name, EREventType* out)
+{
+    static const struct
+    {
+        const char* name;
+        EREventType type;
+    } k_map[] = {
+        {"onPress", ER_EVENT_PRESS},
+        {"onLongPress", ER_EVENT_LONG_PRESS},
+        {"onPressIn", ER_EVENT_PRESS_IN},
+        {"onPressOut", ER_EVENT_PRESS_OUT},
+        {"onTouchStart", ER_EVENT_TOUCH_START},
+        {"onTouchMove", ER_EVENT_TOUCH_MOVE},
+        {"onTouchEnd", ER_EVENT_TOUCH_END},
+        {"onTouchCancel", ER_EVENT_TOUCH_CANCEL},
+        {"onScroll", ER_EVENT_SCROLL},
+        {"onChangeText", ER_EVENT_CHANGE_TEXT},
+        {"onSubmitEditing", ER_EVENT_SUBMIT_EDITING},
+        {"onFocus", ER_EVENT_FOCUS},
+        {"onBlur", ER_EVENT_BLUR},
+        {"onLayout", ER_EVENT_LAYOUT},
+    };
+    for (size_t i = 0; i < sizeof(k_map) / sizeof(k_map[0]); i++)
+    {
+        if (strcmp(name, k_map[i].name) == 0)
+        {
+            *out = k_map[i].type;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Builds the JS event object handed to a handler from an engine EREventData payload.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] type  Event type that fired.
+ * @param[in] data  Engine event payload.
+ *
+ * @return A new JS object the caller owns (must JS_FreeValue).
+ */
+static JSValue build_event_object(JSContext* ctx, EREventType type, const EREventData* data)
+{
+    JSValue ev = JS_NewObject(ctx);
+    if (type < ER_EVENT_TYPE_COUNT_)
+    {
+        JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, k_event_names[type]));
+    }
+    JS_SetPropertyStr(ctx, ev, "x", JS_NewInt32(ctx, data->x));
+    JS_SetPropertyStr(ctx, ev, "y", JS_NewInt32(ctx, data->y));
+    JS_SetPropertyStr(ctx, ev, "dx", JS_NewInt32(ctx, data->dx));
+    JS_SetPropertyStr(ctx, ev, "dy", JS_NewInt32(ctx, data->dy));
+
+    if (type == ER_EVENT_SCROLL)
+    {
+        JS_SetPropertyStr(ctx, ev, "scrollX", JS_NewFloat64(ctx, (double)data->scroll_x));
+        JS_SetPropertyStr(ctx, ev, "scrollY", JS_NewFloat64(ctx, (double)data->scroll_y));
+    }
+    else if (type == ER_EVENT_LAYOUT)
+    {
+        JSValue r = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, data->layout_rect.x));
+        JS_SetPropertyStr(ctx, r, "y", JS_NewInt32(ctx, data->layout_rect.y));
+        JS_SetPropertyStr(ctx, r, "width", JS_NewInt32(ctx, data->layout_rect.w));
+        JS_SetPropertyStr(ctx, r, "height", JS_NewInt32(ctx, data->layout_rect.h));
+        JS_SetPropertyStr(ctx, ev, "layout", r);
+    }
+    else if (type == ER_EVENT_CHANGE_TEXT && data->changed_text)
+    {
+        JS_SetPropertyStr(ctx, ev, "text", JS_NewString(ctx, data->changed_text));
+    }
+    return ev;
+}
+
+/**
+ * @brief Engine event callback: dispatches to the JS handler registered for (node, type).
+ *
+ * The (handle, type) pair is encoded in user_data and the JS function is looked up in the
+ * handler registry. Any exception thrown by the handler is reported to stderr and swallowed
+ * so it does not unwind through the engine's C call stack.
+ *
+ * @param[in] node       Node that fired the event (unused; key carries the handle).
+ * @param[in] data       Event payload.
+ * @param[in] user_data  Encoded key: handle * ER_EVENT_TYPE_COUNT_ + type.
+ */
+static void bridge_event_trampoline(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    if (!s_bridge_ctx)
+    {
+        return;
+    }
+    JSContext* ctx = s_bridge_ctx;
+    const uint32_t key = (uint32_t)(uintptr_t)user_data;
+    const EREventType type = (EREventType)(key % ER_EVENT_TYPE_COUNT_);
+
+    JSValue cb = JS_GetPropertyUint32(ctx, s_event_handlers, key);
+    if (JS_IsFunction(ctx, cb))
+    {
+        JSValue ev = build_event_object(ctx, type, data);
+        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
+        if (JS_IsException(ret))
+        {
+            JSValue exc = JS_GetException(ctx);
+            const char* msg = JS_ToCString(ctx, exc);
+            fprintf(stderr, "JS event handler exception: %s\n", msg ? msg : "(unknown)");
+            if (msg)
+            {
+                JS_FreeCString(ctx, msg);
+            }
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, ev);
+    }
+    JS_FreeValue(ctx, cb);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — NativeUI methods
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -1463,6 +1629,14 @@ static JSValue js_destroy_node(JSContext* ctx, JSValueConst this_val, int argc, 
         if (node)
         {
             er_node_destroy(node);
+            /* Release any JS handlers registered for this node so their refs don't leak. */
+            if (s_bridge_ctx)
+            {
+                for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
+                {
+                    JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)h * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
+                }
+            }
             handle_free(h);
         }
     }
@@ -1609,6 +1783,65 @@ static JSValue js_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_NewInt64(ctx, (int64_t)er_now_ms());
 }
 
+/**
+ * @brief NativeUI.setEvent(node, eventName, fn) — registers or clears a JS event handler.
+ *
+ * eventName is an RN handler prop name (e.g. "onPress"). A function registers a handler; a
+ * non-function (null/undefined) clears it. The handler is stored in the registry and invoked
+ * by the engine via the bridge trampoline when the event fires.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node handle, argv[1] = event name, argv[2] = handler or null.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_event(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 3)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t handle = 0;
+    if (JS_ToInt32(ctx, &handle, argv[0]) != 0)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = handle_node(handle);
+    if (!node)
+    {
+        return JS_UNDEFINED;
+    }
+    const char* name = JS_ToCString(ctx, argv[1]);
+    if (!name)
+    {
+        return JS_UNDEFINED;
+    }
+    EREventType type;
+    const bool ok = event_type_from_name(name, &type);
+    JS_FreeCString(ctx, name);
+    if (!ok)
+    {
+        return JS_UNDEFINED;
+    }
+
+    const uint32_t key = (uint32_t)handle * ER_EVENT_TYPE_COUNT_ + (uint32_t)type;
+    if (JS_IsFunction(ctx, argv[2]))
+    {
+        JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_DupValue(ctx, argv[2]));
+        er_event_set(node, type, bridge_event_trampoline, (void*)(uintptr_t)key);
+    }
+    else
+    {
+        /* Storing undefined releases the previously held handler reference. */
+        JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_UNDEFINED);
+        er_event_set(node, type, NULL, NULL);
+    }
+    return JS_UNDEFINED;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1620,6 +1853,8 @@ static JSValue js_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
  */
 void er_bridge_install(JSContext* ctx)
 {
+    s_bridge_ctx = ctx;
+
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native_ui = JS_NewObject(ctx);
 
@@ -1629,8 +1864,15 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "removeChild", JS_NewCFunction(ctx, js_remove_child, "removeChild", 2));
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
+    JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
+
+    /* Event-handler registry: a plain object owned by NativeUI, so it lives for the context
+       lifetime and is freed at teardown. We keep a borrowed reference for C-side lookup. */
+    JSValue handlers = JS_NewObject(ctx);
+    s_event_handlers = handlers;
+    JS_SetPropertyStr(ctx, native_ui, "__er_event_handlers", handlers);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);

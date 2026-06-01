@@ -30,8 +30,11 @@ typedef struct
     int16_t cross_pos; /**< Offset within parent content along the cross-axis. */
     int16_t flex_grow;
     int16_t flex_shrink;
-    uint8_t line;  /**< Wrap-line index. */
-    uint8_t align; /**< Resolved align (auto → parent align_items). */
+    int16_t main_min; /**< Main-axis min constraint (ER_LAYOUT_AUTO = none). */
+    int16_t main_max; /**< Main-axis max constraint (ER_LAYOUT_AUTO = none). */
+    uint8_t line;     /**< Wrap-line index. */
+    uint8_t align;    /**< Resolved align (auto → parent align_items). */
+    uint8_t frozen;   /**< Pass 3: 1 once the item's flexed main size is final. */
 } FlexChild;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -104,6 +107,126 @@ static bool is_row_dir(const uint8_t d)
 static bool is_reverse_dir(const uint8_t d)
 {
     return d == ER_FLEX_ROW_REVERSE || d == ER_FLEX_COL_REVERSE;
+}
+
+/**
+ * @brief Computes a node's intrinsic content size, independent of the space its parent allocates.
+ *
+ * Leaf Text nodes measure their glyph run. Container nodes recurse into in-flow children and
+ * combine per the container's flex_direction: the main axis sums child outer sizes (plus gaps),
+ * the cross axis takes the largest child outer size; the node's own padding is then added. An
+ * explicit width/height short-circuits measurement on that axis.
+ *
+ * This gives Pass 1 a non-zero hypothetical size for auto-sized containers, so a container with
+ * no explicit size on an axis grows to fit its children instead of collapsing to zero — e.g. a
+ * `flexDirection: row` View with no height reports the height of its tallest child rather than 0.
+ * Flex grow/shrink is intentionally ignored here (this is max-content sizing); the parent applies
+ * flex distribution later against the available space.
+ *
+ * The walk is self-contained — it never reads or writes s_scratch / s_line_cross — so it is safe
+ * to call from within compute_layout's Pass 1 without disturbing the in-progress layout state.
+ *
+ * @param[in]  tag    Tag of the node to measure.
+ * @param[out] out_w  Receives the intrinsic width in pixels.
+ * @param[out] out_h  Receives the intrinsic height in pixels.
+ */
+static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
+{
+    ERNode* n = er_get_node(tag);
+    if (!n)
+    {
+        *out_w = 0;
+        *out_h = 0;
+        return;
+    }
+
+    const ERLayoutSpec* L = &n->layout;
+    const int16_t exp_w = L->width;
+    const int16_t exp_h = L->height;
+
+    /* Text leaf: measure the glyph run (mirrors the Text branch of Pass 1). */
+    if (n->type == ER_NODE_TEXT)
+    {
+        int measured_w = 0, measured_h = 0;
+        er_text_measure(n->props.text.text,
+                        n->props.text.font_size,
+                        n->props.text.font_family,
+                        n->props.text.letter_spacing,
+                        &measured_w,
+                        &measured_h);
+        const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
+        const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
+        const int16_t tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)measured_w;
+        const int16_t th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines);
+        *out_w = clamp_size(tw, L->min_width, L->max_width);
+        *out_h = clamp_size(th, L->min_height, L->max_height);
+        return;
+    }
+
+    /* Container / leaf View: derive content size from in-flow children (only when an axis is auto). */
+    int16_t content_w = 0, content_h = 0;
+    if (n->first_child_tag != ER_INVALID_TAG && (exp_w == ER_LAYOUT_AUTO || exp_h == ER_LAYOUT_AUTO))
+    {
+        const bool is_row = is_row_dir(L->flex_direction);
+        const int16_t main_gap = is_row ? edge_or(L->column_gap, L->gap) : edge_or(L->row_gap, L->gap);
+        int32_t main_sum = 0;
+        int16_t cross_max = 0;
+        int count = 0;
+        for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
+        {
+            ERNode* c = er_get_node(ct);
+            if (!c)
+                break;
+            if (c->layout.position != ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
+            {
+                int16_t cw = 0, ch = 0;
+                measure_content(ct, &cw, &ch);
+                const ERLayoutSpec* cl = &c->layout;
+                const int16_t outer_w =
+                    (int16_t)(cw + edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
+                const int16_t outer_h =
+                    (int16_t)(ch + edge_or(cl->margin_top, cl->margin) + edge_or(cl->margin_bottom, cl->margin));
+                if (is_row)
+                {
+                    main_sum += outer_w;
+                    if (outer_h > cross_max)
+                        cross_max = outer_h;
+                }
+                else
+                {
+                    main_sum += outer_h;
+                    if (outer_w > cross_max)
+                        cross_max = outer_w;
+                }
+                count++;
+            }
+            ct = c->next_sibling_tag;
+        }
+        if (count > 1)
+            main_sum += (int32_t)main_gap * (count - 1);
+        if (main_sum > INT16_MAX)
+            main_sum = INT16_MAX;
+        if (is_row)
+        {
+            content_w = (int16_t)main_sum;
+            content_h = cross_max;
+        }
+        else
+        {
+            content_h = (int16_t)main_sum;
+            content_w = cross_max;
+        }
+    }
+
+    const int16_t pl = edge_or(L->padding_left, L->padding);
+    const int16_t pr = edge_or(L->padding_right, L->padding);
+    const int16_t pt = edge_or(L->padding_top, L->padding);
+    const int16_t pb = edge_or(L->padding_bottom, L->padding);
+
+    const int16_t iw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(content_w + pl + pr);
+    const int16_t ih = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(content_h + pt + pb);
+    *out_w = clamp_size(iw, L->min_width, L->max_width);
+    *out_h = clamp_size(ih, L->min_height, L->max_height);
 }
 
 /**
@@ -183,30 +306,10 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         {
             const ERLayoutSpec* cl = &c->layout;
 
-            /* Intrinsic size — Text nodes measure their content; others default to 0. */
+            /* Intrinsic content size — Text measures its glyph run; containers measure their
+             * children (so an auto-sized container fits its content instead of collapsing to 0). */
             int16_t intr_w = 0, intr_h = 0;
-            if (c->type == ER_NODE_TEXT)
-            {
-                int measured_w = 0, measured_h = 0;
-                er_text_measure(c->props.text.text,
-                                c->props.text.font_size,
-                                c->props.text.font_family,
-                                c->props.text.letter_spacing,
-                                &measured_w,
-                                &measured_h);
-                intr_w = (int16_t)measured_w;
-
-                /* Height of one line: explicit line_height override, else measured line height. */
-                const int16_t line_h =
-                    (c->props.text.line_height > 0) ? c->props.text.line_height : (int16_t)measured_h;
-
-                /* Reserve vertical room for every line the node may render.  number_of_lines
-                 * gives a deterministic cap; without it the single-line measurement is used
-                 * (true wrap-to-content height needs a width-aware measure pass — not yet
-                 * implemented). */
-                const int lines = (c->props.text.number_of_lines > 1) ? (int)c->props.text.number_of_lines : 1;
-                intr_h = (int16_t)(line_h * lines);
-            }
+            measure_content(ct, &intr_w, &intr_h);
 
             /* Base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > intrinsic. */
             int16_t hypo_main;
@@ -269,6 +372,9 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             fc->margin_cross_end = is_row ? mb : mr;
             fc->flex_grow = cl->flex_grow;
             fc->flex_shrink = cl->flex_shrink;
+            fc->main_min = main_mn;
+            fc->main_max = main_mx;
+            fc->frozen = 0U;
             fc->line = 0;
             fc->align = (cl->align_self != ER_ALIGN_AUTO) ? cl->align_self : L->align_items;
             if (fc->align == ER_ALIGN_AUTO)
@@ -319,61 +425,109 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     {
         for (int ln = 0; ln < n_lines; ln++)
         {
-            int32_t used = 0;
+            /* Free space against the children's hypothetical (base) main sizes. */
+            int32_t base_used = 0;
             int count = 0;
-            int32_t total_grow = 0;
-            int32_t total_shrink_scaled = 0;
             for (int i = 0; i < n_inflow; i++)
             {
                 if (s_scratch[i].line != ln)
                     continue;
-                used += s_scratch[i].main + s_scratch[i].margin_main_start + s_scratch[i].margin_main_end;
+                base_used += s_scratch[i].main + s_scratch[i].margin_main_start + s_scratch[i].margin_main_end;
                 count++;
-                total_grow += s_scratch[i].flex_grow;
-                total_shrink_scaled += (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
             }
             if (count > 1)
-                used += (count - 1) * main_gap;
-            const int32_t free_space = (int32_t)main_size - used;
+                base_used += (count - 1) * main_gap;
+            const int32_t free0 = (int32_t)main_size - base_used;
+            if (free0 == 0)
+                continue;
 
-            if (free_space > 0 && total_grow > 0)
+            /* Positive free space grows (flex_grow); negative shrinks (flex_shrink). Items with
+             * no factor in the active direction are frozen at their base size from the start. */
+            const bool growing = free0 > 0;
+            for (int i = 0; i < n_inflow; i++)
             {
-                for (int i = 0; i < n_inflow; i++)
-                {
-                    if (s_scratch[i].line != ln || s_scratch[i].flex_grow == 0)
-                        continue;
-                    const int32_t delta = (free_space * s_scratch[i].flex_grow) / total_grow;
-                    int32_t v = s_scratch[i].main + delta;
-                    const ERNode* c = er_get_node(s_scratch[i].tag);
-                    if (c)
-                    {
-                        const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
-                        const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
-                        v = clamp_size((int16_t)v, mn, mx);
-                    }
-                    s_scratch[i].main = (int16_t)v;
-                }
+                if (s_scratch[i].line != ln)
+                    continue;
+                s_scratch[i].frozen =
+                    (uint8_t)(growing ? (s_scratch[i].flex_grow == 0) : (s_scratch[i].flex_shrink == 0));
             }
-            else if (free_space < 0 && total_shrink_scaled > 0)
+
+            /* Yoga's resolve-flexible-lengths loop: distribute the remaining free space over the
+             * unfrozen items; any that hit a min/max bound freeze at the clamped size and their
+             * freed space is redistributed to the rest on the next round. Each round freezes at
+             * least one item or commits and exits, so it runs at most `count` times. */
+            for (int guard = 0; guard <= count; guard++)
             {
+                int32_t used = 0;
+                int32_t total_grow = 0;
+                int64_t total_shrink_scaled = 0;
+                int unfrozen = 0;
                 for (int i = 0; i < n_inflow; i++)
                 {
-                    if (s_scratch[i].line != ln || s_scratch[i].flex_shrink == 0)
+                    if (s_scratch[i].line != ln)
                         continue;
-                    const int32_t factor = (int32_t)s_scratch[i].flex_shrink * s_scratch[i].main;
-                    const int32_t delta = (free_space * factor) / total_shrink_scaled;
+                    used += s_scratch[i].main + s_scratch[i].margin_main_start + s_scratch[i].margin_main_end;
+                    if (!s_scratch[i].frozen)
+                    {
+                        total_grow += s_scratch[i].flex_grow;
+                        total_shrink_scaled += (int64_t)s_scratch[i].flex_shrink * s_scratch[i].main;
+                        unfrozen++;
+                    }
+                }
+                if (count > 1)
+                    used += (count - 1) * main_gap;
+                const int32_t remaining = (int32_t)main_size - used;
+
+                if (unfrozen == 0 || remaining == 0)
+                    break;
+                if (growing && total_grow == 0)
+                    break;
+                if (!growing && total_shrink_scaled == 0)
+                    break;
+
+                /* First pass: detect and freeze min/max violations without committing the others. */
+                bool froze_one = false;
+                for (int i = 0; i < n_inflow; i++)
+                {
+                    if (s_scratch[i].line != ln || s_scratch[i].frozen)
+                        continue;
+                    int32_t delta;
+                    if (growing)
+                        delta = (remaining * s_scratch[i].flex_grow) / total_grow;
+                    else
+                        delta = (int32_t)(((int64_t)remaining * ((int64_t)s_scratch[i].flex_shrink * s_scratch[i].main))
+                                          / total_shrink_scaled);
                     int32_t v = s_scratch[i].main + delta;
                     if (v < 0)
                         v = 0;
-                    const ERNode* c = er_get_node(s_scratch[i].tag);
-                    if (c)
+                    const int16_t clamped = clamp_size((int16_t)v, s_scratch[i].main_min, s_scratch[i].main_max);
+                    if (clamped != v)
                     {
-                        const int16_t mn = is_row ? c->layout.min_width : c->layout.min_height;
-                        const int16_t mx = is_row ? c->layout.max_width : c->layout.max_height;
-                        v = clamp_size((int16_t)v, mn, mx);
+                        s_scratch[i].main = clamped;
+                        s_scratch[i].frozen = 1U;
+                        froze_one = true;
                     }
-                    s_scratch[i].main = (int16_t)v;
                 }
+                if (froze_one)
+                    continue;
+
+                /* No violations: commit the distributed sizes to every remaining flexible item. */
+                for (int i = 0; i < n_inflow; i++)
+                {
+                    if (s_scratch[i].line != ln || s_scratch[i].frozen)
+                        continue;
+                    int32_t delta;
+                    if (growing)
+                        delta = (remaining * s_scratch[i].flex_grow) / total_grow;
+                    else
+                        delta = (int32_t)(((int64_t)remaining * ((int64_t)s_scratch[i].flex_shrink * s_scratch[i].main))
+                                          / total_shrink_scaled);
+                    int32_t v = s_scratch[i].main + delta;
+                    if (v < 0)
+                        v = 0;
+                    s_scratch[i].main = clamp_size((int16_t)v, s_scratch[i].main_min, s_scratch[i].main_max);
+                }
+                break;
             }
         }
     }
