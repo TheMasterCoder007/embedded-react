@@ -73,6 +73,16 @@ target_link_libraries(embedded-react-desktop-js
         er-bridge-quickjs
 )
 
+# Copy the React bundle next to the desktop-js executable so it runs by default (no CLI arg).
+# The bundle is built out-of-band (`npm run build` in bridges/quickjs/js); if it's absent the
+# example falls back to its built-in demo. copy_bundle.cmake no-ops when the bundle is missing.
+add_custom_command(TARGET embedded-react-desktop-js POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+        -DBUNDLE_SRC=${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist/app.bundle.js
+        -DBUNDLE_DST=$<TARGET_FILE_DIR:embedded-react-desktop-js>/app.bundle.js
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/copy_bundle.cmake
+)
+
 # On Windows, copy SDL2.dll next to each executable after build so the binaries can be
 # run directly from the build output directory (CLion, Explorer, etc.)
 if (WIN32)

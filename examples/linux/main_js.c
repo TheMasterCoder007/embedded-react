@@ -302,7 +302,11 @@ int main(int argc, char** argv)
     host_install_screen(ctx, phys_w, phys_h, s_dpi_scale);
     er_bridge_install(ctx);
 
-    /* Load the app: a file path if given, otherwise the built-in demo. */
+    /* Choose the app to run, in priority order:
+     *   1. an explicit path on the command line,
+     *   2. the bundled React app (app.bundle.js) copied next to the executable by the build,
+     *   3. the built-in hand-written JS demo.
+     */
     char* loaded = NULL;
     const char* app_src = k_default_app;
     const char* app_name = "<builtin-app>";
@@ -317,6 +321,22 @@ int main(int argc, char** argv)
         else
         {
             SDL_Log("could not read '%s'; falling back to the built-in app", argv[1]);
+        }
+    }
+    if (!loaded)
+    {
+        char* base = SDL_GetBasePath();
+        if (base)
+        {
+            char bundle_path[1024];
+            snprintf(bundle_path, sizeof(bundle_path), "%sapp.bundle.js", base);
+            SDL_free(base);
+            loaded = read_file(bundle_path);
+            if (loaded)
+            {
+                app_src = loaded;
+                app_name = "app.bundle.js";
+            }
         }
     }
 

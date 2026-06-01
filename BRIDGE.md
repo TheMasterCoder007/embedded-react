@@ -208,20 +208,23 @@ C scene with "run the JS bundle, then tick."
 
 ## 3. React Reconciler — JS host config
 
-Pure JS. A `react-reconciler` host config mapping React's mutation API onto `NativeUI.*`.
-Mostly ported from React Native's renderer; lives entirely on the JS side, no C.
+Pure JS in `bridges/quickjs/js/` (react 18.3 + react-reconciler 0.29, bundled with esbuild to a
+single IIFE the QuickJS host runs). **Initial render is proven end-to-end** — `<App/>` mounts
+through the reconciler and the engine lays it out (a `flex:1` root filled the 480×320 screen).
 
-- [ ] Vendor `react` + `react-reconciler` into the JS toolchain
-- [ ] `createInstance(type, props)` → `NativeUI.createNode` + initial `setProps`
-- [ ] `createTextInstance` — raw text only legal inside `<Text>`; handle string children
-- [ ] `appendChild` / `appendInitialChild` / `appendChildToContainer`
-- [ ] `insertBefore` / `removeChild` / `removeChildFromContainer`
-- [ ] `prepareUpdate` / `commitUpdate` — diff prop bag → `NativeUI.setProps`
-- [ ] `commitTextUpdate` for `<Text>` content changes
-- [ ] `finalizeInitialChildren`, `shouldSetTextContent`, host-context stubs
-- [ ] `prepareForCommit` / `resetAfterCommit` → call `NativeUI.commit()` once per React commit
-- [ ] Event prop wiring: reconciler routes `onPress`-style props to `NativeUI.setEvent`
-- [ ] `render(<App/>, container)` entry point creates the root container node
+- [x] Vendor `react` + `react-reconciler` (npm; `bridges/quickjs/js/package.json`)
+- [x] `createInstance(type, props)` → `NativeUI.createNode` + `setProps` (style flattened, on* routed)
+- [x] `createTextInstance` — fallback Text node; `<Text>string</Text>` handled via `shouldSetTextContent`
+- [x] `appendChild` / `appendInitialChild` / `appendChildToContainer`
+- [~] `removeChild` / `removeChildFromContainer` done; **`insertBefore` host hooks call
+  `NativeUI.insertBefore`, which the bridge does NOT implement yet** — unused on initial mount
+  (append-only), but reordering/mid-insert needs an engine `er_tree_insert_before` + bridge method
+- [x] `prepareUpdate` / `commitUpdate` → `NativeUI.setProps`
+- [x] `commitTextUpdate` for `<Text>` content changes
+- [x] `finalizeInitialChildren`, `shouldSetTextContent`, host-context stubs
+- [x] `prepareForCommit` / `resetAfterCommit` → `NativeUI.commit()` once per React commit
+- [x] Event prop wiring: `on*` props → `NativeUI.setEvent` (set on create/update, cleared when removed)
+- [x] `createRoot(props).render(<App/>)` entry — screen-sized container set as scene root, LegacyRoot (sync)
 
 ---
 
