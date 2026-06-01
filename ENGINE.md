@@ -312,6 +312,235 @@ Host CTest suites in [engine/tests/](engine/tests/) are green for what exists.
 
 ---
 
+## 11. Performance & Efficiency Backlog
+
+Everything in §1–§10 is shipped, tested, and **correct**. This section is the opposite of a
+to-do list of missing features: it is a catalogue of places where the current implementation
+is correct but does **more work than it needs to**. None of these are bugs. They are the items
+to attack to make the engine run smoothly on a constrained MCU: think a few hundred KB of RAM,
+no FPU or a slow one, an LCD pushed over SPI/DMA. (Hot reload is not the engine's concern — that
+lives in the React/Metro tooling and the browser preview during development. The engine's job is
+to render the committed tree fast and small on-device.)
+
+The guiding principle for every item below is the same: **the engine recomputes per-frame
+things that only change when a prop changes.** A static screen — the common case on an
+embedded panel — should cost almost nothing to keep on screen. Today several subsystems pay
+full freight every commit regardless of what actually changed.
+
+Severity legend: 🔴 high (affects every frame / every node, or dominates RAM), 🟡 medium
+(affects a feature when it is used), 🟢 low (polish, measurable only under stress).
+
+### 11.1 Per-frame redundant work (the dirty model stops at render, not layout)
+
+- 🔴 **Layout is recomputed in full on every `er_commit()`.** `er_commit()` calls
+  `er_layout_compute()` unconditionally ([compositor.c:1410](engine/scene/compositor.c#L1410)),
+  which runs the whole 7-pass flex solver over the entire tree
+  ([layout_engine.c:127](engine/layout/layout_engine.c#L127)) even when no layout-affecting
+  prop changed since the last commit. The scene graph already tracks `dirty` for rendering,
+  but there is **no layout-dirty flag**. A screen that is merely animating a color, or not
+  changing at all, still re-solves flex for every node, every frame. *Fix:* add a
+  `layout_dirty` flag set by `er_node_set_props`/tree mutations, skip `er_layout_compute` when
+  the root subtree is layout-clean, and ideally re-solve only dirty containers rather than the
+  whole tree.
+
+- 🔴 **Text is re-measured on every layout pass.** Pass 1 calls `er_text_measure()` for every
+  `ER_NODE_TEXT` child ([layout_engine.c:191](engine/layout/layout_engine.c#L191)), which
+  walks the whole UTF-8 string doing a glyph lookup per codepoint
+  ([text_renderer.c:763](engine/text/text_renderer.c#L763)). Combined with 11.1 above, a static
+  label is fully re-measured 30–60×/second. *Fix:* cache the measured `(w, h)` on the node and
+  invalidate only when the text/font/size/spacing props change.
+
+- 🟡 **`dispatch_layout_events()` and `refresh_scroll_content_sizes()` walk the whole tree every
+  commit** ([compositor.c:753](engine/scene/compositor.c#L753),
+  [compositor.c:728](engine/scene/compositor.c#L728)) even when layout did not change. Once a
+  layout-dirty flag exists (11.1), both passes should be gated on it.
+
+- 🟡 **The render traversal descends the entire tree every frame even when nothing is dirty.**
+  `render_tree()` must visit every node to discover whether any descendant is dirty, and at
+  *every* node it unconditionally runs `collect_children()` + `sort_children_by_z_index()`
+  ([compositor.c:655-657](engine/scene/compositor.c#L655)). For a clean subtree this is pure
+  waste. *Fix:* track a `subtree_dirty` bit so a clean subtree can be skipped without descending,
+  and cache the sorted child order (see 11.6).
+
+### 11.2 Missing result caches (recompute-from-scratch on every repaint)
+
+These subsystems produce an output that is a pure function of a node's props and size, yet
+recompute it from zero every time the node is repainted (which happens whenever the node *or any
+ancestor* is dirty).
+
+- 🔴 **Shadows are fully re-blurred every repaint.** `er_shadow_render()` rasterises the
+  silhouette (`O(w·h)`), runs two separable box-blur passes (`O(sw·sh)`), and tints the result
+  every call ([shadow.c:152](engine/rendering/shadow.c#L152)). The blurred alpha depends only on
+  `(w, h, radius, corner)`. A static shadowed card that repaints because a child animated pays
+  the entire blur cost each frame. *Fix:* cache the blurred alpha buffer keyed on its geometry;
+  only re-blur when those change.
+
+- 🟡 **Gradients evaluate stops per pixel with no LUT.** `render_linear`/`render_radial` call
+  `eval_stops()` (a linear scan over stops) plus `premul()` for **every pixel**, every frame
+  ([gradient.c:159](engine/rendering/gradient.c#L159),
+  [gradient.c:202](engine/rendering/gradient.c#L202)); the radial path also does a `sqrtf` per
+  pixel ([gradient.c:199](engine/rendering/gradient.c#L199)). *Fix:* precompute a 256-entry
+  premultiplied color LUT from the stops once, then index it by quantised `t`. For axis-aligned
+  linear gradients the per-row value is constant, so a single row can be computed and repeated.
+
+- 🟡 **Scaled images are re-sampled every repaint.** `er_image_render()` rescales (and re-tints)
+  the source into the destination on every paint ([image_scaler.c:199](engine/rendering/image_scaler.c#L199));
+  nothing caches the scaled result. The nearest path also does an integer divide per pixel
+  (`(dx * src_w) / dst_w`, [image_scaler.c:179](engine/rendering/image_scaler.c#L179)) and the
+  bilinear path a float divide per pixel. *Fix:* replace per-pixel division with a fixed-point
+  DDA step (`src_step = (src_w << 16) / dst_w`, accumulate), and optionally cache the scaled
+  bitmap when the node size is stable.
+
+- 🟢 **Font lookup is a `strncmp` registry scan per text op.** `font_registry_get()` linearly
+  scans the registry comparing family names on every `er_text_render` and every
+  `er_text_measure` ([font_registry.c:148](engine/font/font_registry.c#L148)). *Fix:* resolve
+  the `BitmapFont*` once when text props are set and cache it on the node.
+
+### 11.3 Per-pixel hot loops that emit one backend call per pixel/run
+
+- 🔴 **Anti-aliased rounded-corner fringes blit one pixel at a time.** Both `er_rrect_fill` and
+  `er_rrect_fill_corners` emit individual `1×1 er_blit_fill()` calls for each AA edge pixel
+  ([rrect.c:134](engine/rendering/rrect.c#L134),
+  [rrect.c:269](engine/rendering/rrect.c#L269)). Every one pays the full `apply_clip` + backend
+  dispatch cost for a single pixel. Across four corners of every rounded view this is dozens of
+  one-pixel calls per node. *Fix:* accumulate each scanline's coverage into a small row buffer and
+  flush it with one `er_blit_copy`/`blend` per row, the way the AA glyph path already does
+  ([text_renderer.c:330](engine/text/text_renderer.c#L330)).
+
+- 🔴 **1-bit glyphs blit one run per set-bit span.** `draw_glyph()` emits an `er_blit_fill()` per
+  horizontal run of lit pixels, per row, per glyph ([text_renderer.c:182](engine/text/text_renderer.c#L182)).
+  A paragraph of text becomes thousands of tiny fill calls. *Fix:* assemble a premultiplied row
+  buffer and blit once per row (the AA path already does this); or have the backend expose a
+  1-bit mask blit.
+
+- 🟡 **Bordered rounded rects overdraw their entire interior.** `er_rrect_fill_bordered()` fills
+  the whole rect in the border color, then fills the inset interior again in the background color
+  ([rrect.c:328-337](engine/rendering/rrect.c#L328)). Every bordered view writes most of its
+  pixels twice. For a full-screen background with a border that is a screen-sized overdraw. *Fix:*
+  draw only the border ring (four edge spans / arc fringes) and fill the interior once.
+
+- 🟡 **Software compositing does a bounds check per pixel instead of clamping the loop.** The
+  scratch blend/fill/copy inner loops test `col < 0 || col >= s_scratch_w` for every pixel
+  ([native_renderer.c:116](engine/core/native_renderer.c#L116),
+  [native_renderer.c:161](engine/core/native_renderer.c#L161)). *Fix:* clamp the loop start/end
+  once per row and drop the per-pixel branch. These loops also use a `/255U` per channel per
+  pixel; the standard `(x*257+257)>>16` (or `x + (x>>8)` rounding) approximation removes the
+  divide.
+
+- 🟡 **Affine/3D transforms do float matrix-multiplies + a bilinear sample per output pixel.**
+  `er_transform_source_end_blit()` inverse-maps every destination pixel with two float muls and
+  a 4-tap bilerp ([transform.c:460-478](engine/rendering/transform.c#L460)), recomputed every
+  frame for an animating transform. *Fix:* step the source coordinate incrementally per row/col
+  (add the matrix column once per pixel instead of a full mul), and consider fixed-point sampling
+  on FPU-less targets.
+
+### 11.4 Static RAM footprint (the headline embedded constraint)
+
+The compositing scratch buffers are sized for a 240×240 panel and allocated at module scope.
+They dominate the engine's RAM budget and, at the defaults, exceed the total SRAM of many
+mid-range MCUs:
+
+- 🔴 **Opacity scratch pool:** `ERUI_MAX_OPACITY_DEPTH (4) × ERUI_SCRATCH_W·H (240×240) × 4 B
+  ≈ 900 KB** ([scratch_pool.c:33](engine/rendering/scratch_pool.c#L33)).
+- 🔴 **Transform buffers:** `s_xform_src + s_xform_dst = 2 × 240×240 × 4 B ≈ 450 KB`
+  (transform.c module scope).
+- 🟡 **Shadow buffer:** `s_alpha = 240×240 ≈ 57 KB` ([shadow.c:19](engine/rendering/shadow.c#L19)).
+
+Together that is **~1.4 MB of static scratch RAM** before the node pool, font pool, or backend
+framebuffer. *Directions to explore:* (a) document the real cost of `ERUI_SCRATCH_W/H` and
+`ERUI_MAX_OPACITY_DEPTH` so integrators can shrink them — the effective transformed/opacity-
+composited node size is capped by these dimensions; (b) allow the scratch slots to be sized to
+the largest composited node rather than the full screen; (c) tile large transformed/opacity
+subtrees through a smaller scratch instead of requiring one that holds the whole node; (d) share
+one arena between the transform, opacity, and shadow buffers since they are not all live
+simultaneously.
+
+Also worth a pass: every scratch acquisition `memset`s the **entire** slot, not just the active
+region — `er_scratch_push` clears all 240×240 px even for a 20×20 node
+([scratch_pool.c:78](engine/rendering/scratch_pool.c#L78)), and the transform source clears the
+full buffer too ([transform.c:418](engine/rendering/transform.c#L418)). Clearing only `w×h` (or
+the AABB) turns a fixed ~230 KB clear into a few hundred bytes for small nodes.
+
+### 11.5 Per-call stack usage in recursion
+
+Several recursive walkers allocate a `uint16_t[ERUI_MAX_NODES]` (1 KB at the default 512) on the
+stack at **every level of recursion**:
+
+- `render_tree` → `child_tags[ERUI_MAX_NODES]` ([compositor.c:655](engine/scene/compositor.c#L655))
+- `hit_test_node` → `child_tags[ERUI_MAX_NODES]` ([hit_test.c:389](engine/scene/hit_test.c#L389))
+- `er_dispatch_touch` → `chain[ERUI_MAX_NODES]` ([hit_test.c:803](engine/scene/hit_test.c#L803),
+  [hit_test.c:857](engine/scene/hit_test.c#L857))
+
+🟡 A deep tree multiplies this by depth (e.g. 12 levels deep ≈ 12 KB of transient stack just for
+child arrays), which is significant on an MCU with an 8–16 KB stack. *Fix:* size these to the
+actual child count, walk the sibling list in place, or use a single shared scratch indexed by
+recursion depth.
+
+### 11.6 Algorithmic / data-structure costs
+
+- 🟡 **`er_tree_append_child` is O(n) per append → O(n²) to build a sibling list.** It walks the
+  entire sibling chain to find the tail on every append
+  ([compositor.c:1296](engine/scene/compositor.c#L1296)). When the React reconciler mounts or
+  re-renders, large lists are built child-by-child, making initial mount and big diffs quadratic.
+  *Fix:* keep a
+  `last_child_tag` on the parent (and a `prev_sibling`/`parent` back-pointer would also speed
+  `er_tree_remove_child`, currently also an O(n) scan at
+  [compositor.c:1328](engine/scene/compositor.c#L1328)).
+
+- 🟡 **zIndex insertion-sort runs every frame for every node with children**, in both render
+  ([compositor.c:657](engine/scene/compositor.c#L657)) and hit-test
+  ([hit_test.c:391](engine/scene/hit_test.c#L391)) — even when no child sets a non-zero `zIndex`
+  (the common case). *Fix:* skip the sort when all children share `zIndex == 0`, or cache the
+  sorted order and only re-sort when children/zIndex change.
+
+- 🟡 **Input tick scans all `ERUI_MAX_NODES` slots twice for momentum.** `er_input_tick` loops over
+  the full pool (512 by default) every tick to find ScrollViews with non-zero velocity
+  ([hit_test.c:728](engine/scene/hit_test.c#L728)); `er_input_reset` does the same
+  ([hit_test.c:691](engine/scene/hit_test.c#L691)). This cost is paid every tick even when nothing
+  is scrolling and most slots are empty. *Fix:* keep a small active-scroller list, or track
+  `s_next_tag` as the scan bound instead of the full capacity.
+
+- 🟢 **`accumulate_scroll_offsets` re-walks ancestors on every touch move** and is called multiple
+  times per `ER_TOUCH_MOVE` ([hit_test.c:277](engine/scene/hit_test.c#L277)). Minor (touch is not
+  per-frame) but easy to hoist to one call per event.
+
+### 11.7 Reconciliation bursts (on-device tree updates)
+
+This is **not** about hot reload — hot reload happens in the React/Metro tooling and the browser
+preview during development, never on the device. But the same code path that a reload would
+exercise runs on-device every time app state changes: React re-renders, and the
+`bridges/quickjs/` reconciler pushes a burst of `er_node_set_props` / append / remove calls
+through the engine before the next commit. A list that grows, a screen that swaps, a modal that
+opens — each is a reconciliation burst, and they stress exactly the paths above.
+
+- 🟡 Each `er_node_set_props` copies **every** layout field and the full type-specific prop block
+  and then calls `er_mark_dirty_upward` ([compositor.c:866](engine/scene/compositor.c#L866)). With
+  no layout-dirty separation (11.1), a state update that re-props N nodes forces a full-tree
+  layout re-solve on the next commit no matter how localized the change was. The 11.1/11.6 fixes
+  (layout-dirty flag, O(1) append) are what keep a large screen's updates smooth on the MCU.
+- 🟢 Consider a batched "begin/end commit" boundary so the bridge can apply a whole tree diff and
+  trigger exactly one layout + one paint, instead of relying on per-mutation dirty marking to
+  coalesce. (`er_commit()` is already the natural barrier — the point is to make the per-mutation
+  work between barriers cheap.)
+
+### 11.8 Suggested order of attack
+
+1. **Layout-dirty flag (11.1)** — the single biggest win; makes static and lightly-animated screens
+   nearly free and keeps on-device state updates (11.7) smooth.
+2. **Result caches for shadow / gradient / image / text-measure (11.1, 11.2)** — removes the
+   largest per-frame recompute spikes.
+3. **Scratch RAM sizing + partial clears (11.4)** — what actually decides whether the engine fits
+   on a given MCU; pairs well with documenting the `ERUI_SCRATCH_*` trade-offs.
+4. **Batch the per-pixel blit loops (11.3)** — AA fringes, 1-bit glyphs, bordered overdraw.
+5. **O(1) child append + skip-sort + bounded input scan (11.5, 11.6)** — cheap structural wins.
+
+None of these change the engine's public surface (`er_scene.h` / `native_renderer.h`); they are
+internal optimisations that preserve current behaviour and visual output. Each should land with a
+before/after measurement (frame time on the SDL/software backend, and static RAM from the map
+file) and, where behaviour-preserving, a test asserting identical pixels/metrics to today.
+
+---
+
 ## Future Work
 
 Everything in the checklists above is shipped and tested. The items below are intentionally
