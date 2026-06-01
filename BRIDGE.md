@@ -23,14 +23,14 @@ end-to-end on `backends/sdl/`. This de-risks the marshalling layer before we inv
 reconciler and build tooling. No React, no JSX, no bundler yet — just a hardcoded JS string
 calling the bridge directly.
 
-- [x] QuickJS compiles and links against the engine — proven by the `er-bridge-quickjs-smoke`
-  target (QuickJS-ng v0.15.0 via FetchContent). Still to be folded into the `examples/linux`
-  SDL host once the `NativeUI` surface exists.
+- [x] QuickJS compiles and links against the engine — `er-bridge-quickjs-smoke` (headless) and
+  now the `embedded-react-desktop-js` SDL host (QuickJS-ng v0.15.0 via FetchContent)
 - [x] A `NativeUI` global is reachable from JS (`typeof NativeUI === 'object'`)
 - [x] A hardcoded JS string builds a tree: one `View` root with a child `View` and a `Text`
   (smoke test builds + commits it; layout produces the expected 200×120 root rect)
-- [~] `NativeUI.commit()` drives `er_commit()` — proven headlessly (1 layout pass, dirty rect
-  200×120 via a no-op backend). The **SDL window** half is pending the examples/linux host.
+- [x] `NativeUI.commit()` drives `er_commit()` and the **SDL window shows the result** — the
+  `embedded-react-desktop-js` target boots QuickJS, runs a JS app, and paints it via the SDL
+  backend (verified: app evaluates, builds the tree, frame loop presents)
 - [x] `console.log` from JS reaches stdout (smoke-test shim; host shim proper in §2)
 - [ ] One `onPress` round-trips: SDL touch → engine hit-test → JS callback fires → JS mutates
   a prop → next commit repaints
@@ -187,19 +187,21 @@ Embed the interpreter and drive it from the existing SDL frame loop. The SDL bac
 `embedded_renderer_tick()` loop you already have stay unchanged; we replace the hand-built
 C scene with "run the JS bundle, then tick."
 
-- [ ] Pull in QuickJS — vendored vs. FetchContent ([Open Decisions](#open-decisions))
-- [ ] `JSRuntime` / `JSContext` init with a configured heap size; teardown on exit
-- [ ] Register the `NativeUI` bridge into the global object at startup
-- [ ] `console.log` / `console.warn` / `console.error` shims → stdout/stderr
+- [x] Pull in QuickJS — FetchContent, pinned v0.15.0 (the bridge's CMakeLists; the example
+  `add_subdirectory`s it)
+- [x] `JSRuntime` / `JSContext` init + teardown on exit (`main_js.c`)
+- [x] Register the `NativeUI` bridge into the global object at startup
+- [x] `console.log` / `console.warn` / `console.error` shims → stdout
 - [ ] Pump the QuickJS job queue (Promises/microtasks) once per frame
 - [ ] `setTimeout` / `setInterval` shim driven off `er_now_ms` (needed for non-native-driver
   `Animated` and React scheduling)
-- [ ] Load + evaluate a JS bundle from a file path (dev), then from an embedded byte array
-  (firmware parity)
+- [x] Load + evaluate a JS app from a file path (`argv[1]`) with a built-in default app;
+  embedded-byte-array / bytecode parity still to come
 - [ ] Bytecode path: precompile bundle → `qjsc` bytecode, embed as a C array, load on boot
-- [ ] Frame loop order per tick: drain JS jobs → `embedded_renderer_tick(dt)` → SDL present
-- [ ] Feed SDL touch/keyboard into `embedded_renderer_touch` (already wired in the C demo)
-- [ ] Error reporting: surface uncaught JS exceptions with stack traces to stderr
+- [~] Frame loop: `er_commit()` → `er_sdl_present()` → `embedded_renderer_tick(dt)` each frame;
+  **JS-job drain** still to add (needed once Promises/timers are used)
+- [~] Feed SDL touch into `embedded_renderer_touch` (mouse→touch wired); keyboard feed still TODO
+- [x] Error reporting: uncaught JS exceptions printed to stderr with `.stack`
 
 ---
 

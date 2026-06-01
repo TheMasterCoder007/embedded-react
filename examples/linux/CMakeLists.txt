@@ -47,19 +47,40 @@ add_subdirectory(
         ${CMAKE_CURRENT_BINARY_DIR}/backends/sdl
 )
 
-add_executable(embedded-react-desktop main.c)
+# QuickJS bridge (Flow A). The engine target already exists from above, so the bridge's
+# own CMakeLists skips re-adding it. We don't need the bridge's smoke executable here.
+set(ER_BRIDGE_QUICKJS_SMOKE OFF CACHE BOOL "" FORCE)
+add_subdirectory(
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs
+        ${CMAKE_CURRENT_BINARY_DIR}/bridges/quickjs
+)
 
+# ---------------------------------------------------------------------------
+# Two desktop targets share the engine + SDL backend:
+#   embedded-react-desktop     — the hand-written C engine showcase (main.c)
+#   embedded-react-desktop-js  — Flow A: a JS app drives the engine via QuickJS (main_js.c)
+# ---------------------------------------------------------------------------
+add_executable(embedded-react-desktop main.c)
 target_link_libraries(embedded-react-desktop
         PRIVATE
         er-backend-sdl
 )
 
-# On Windows, copy SDL2.dll next to the executable after each build so the
-# binary can be run directly from the build output directory (CLion, Explorer, etc.)
+add_executable(embedded-react-desktop-js main_js.c)
+target_link_libraries(embedded-react-desktop-js
+        PRIVATE
+        er-backend-sdl
+        er-bridge-quickjs
+)
+
+# On Windows, copy SDL2.dll next to each executable after build so the binaries can be
+# run directly from the build output directory (CLion, Explorer, etc.)
 if (WIN32)
-    add_custom_command(TARGET embedded-react-desktop POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:SDL2::SDL2>
-            $<TARGET_FILE_DIR:embedded-react-desktop>
-    )
+    foreach (er_desktop_target embedded-react-desktop embedded-react-desktop-js)
+        add_custom_command(TARGET ${er_desktop_target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL2::SDL2>
+                $<TARGET_FILE_DIR:${er_desktop_target}>
+        )
+    endforeach ()
 endif ()
