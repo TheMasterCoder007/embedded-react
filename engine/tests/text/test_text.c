@@ -176,12 +176,12 @@ int main(void)
 {
     /* ---- Measurement basics ---- */
     int w = 0, h = 0;
-    er_text_measure("Hello", 14, NULL, 0, &w, &h);
+    er_text_measure("Hello", 14, NULL, 0, 0, &w, &h);
     if (w <= 0 || h <= 0)
         return fail("measure produced non-positive size");
 
     int w2 = 0, h2 = 0;
-    er_text_measure("HelloHello", 14, NULL, 0, &w2, &h2);
+    er_text_measure("HelloHello", 14, NULL, 0, 0, &w2, &h2);
     if (w2 <= w)
         return fail("longer string did not measure wider");
     if (h2 != h)
@@ -189,18 +189,55 @@ int main(void)
 
     /* letter_spacing widens a non-empty string. */
     int w_nols = 0, w_ls = 0, dummy = 0;
-    er_text_measure("Hello", 14, NULL, 0, &w_nols, &dummy);
-    er_text_measure("Hello", 14, NULL, 2, &w_ls, &dummy);
+    er_text_measure("Hello", 14, NULL, 0, 0, &w_nols, &dummy);
+    er_text_measure("Hello", 14, NULL, 2, 0, &w_ls, &dummy);
     if (w_ls <= w_nols)
         return fail("letter_spacing=2 did not produce wider measure");
 
+    /* Bold measures wider than normal: the synthetic faux-bold adds 1px per glyph, which the
+       renderer applies to the cursor advance.  "Hello" (5 glyphs) must measure exactly +5. */
+    int w_bold = 0;
+    er_text_measure("Hello", 14, NULL, 0, 1, &w_bold, &dummy);
+    if (w_bold != w_nols + 5)
+        return fail("bold measure did not add 1px per glyph");
+
+    /* Span measurement matches: a single inherit-everything span equals the plain measure; a bold
+       span equals the bold measure — so an auto-sized Text fits its styled runs without clipping. */
+    ERTextSpan span_plain = {0};
+    span_plain.font_weight = 0xFFU;
+    span_plain.font_style = 0xFFU;
+    span_plain.text_decoration = 0xFFU;
+    span_plain.letter_spacing = ER_LAYOUT_AUTO;
+    memcpy(span_plain.text, "Hello", 6);
+    int w_span = 0;
+    er_text_measure_spans(&span_plain, 1, 14, NULL, 0, 0, &w_span, &dummy);
+    if (w_span != w_nols)
+        return fail("inherit-everything span did not match the plain measure");
+
+    ERTextSpan span_bold = span_plain;
+    span_bold.font_weight = 1U;
+    int w_span_bold = 0;
+    er_text_measure_spans(&span_bold, 1, 14, NULL, 0, 0, &w_span_bold, &dummy);
+    if (w_span_bold != w_bold)
+        return fail("bold span did not match the bold plain measure");
+
+    /* Two spans concatenate: "Hel" + "lo" must equal "Hello". */
+    ERTextSpan two[2] = {span_plain, span_plain};
+    memcpy(two[0].text, "Hel", 4);
+    memcpy(two[1].text, "lo", 3);
+    int w_two = 0;
+    er_text_measure_spans(two, 2, 14, NULL, 0, 0, &w_two, &dummy);
+    if (w_two != w_nols)
+        return fail("two spans did not measure the same as the joined string");
+
     /* UTF-8: 2-byte sequence measures wider than the plain ASCII baseline. */
     int w_plain = 0, w_sym = 0;
-    er_text_measure("23C", 16, NULL, 0, &w_plain, &dummy);
+    er_text_measure("23C", 16, NULL, 0, 0, &w_plain, &dummy);
     er_text_measure("23\xC2\xB0"
                     "C",
                     16,
                     NULL,
+                    0,
                     0,
                     &w_sym,
                     &dummy);
@@ -209,15 +246,15 @@ int main(void)
 
     /* UTF-8: 3-byte sequence. */
     int w_ascii = 0, w_arrow = 0;
-    er_text_measure("X", 16, NULL, 0, &w_ascii, &dummy);
-    er_text_measure("\xE2\x86\x92", 16, NULL, 0, &w_arrow, &dummy);
+    er_text_measure("X", 16, NULL, 0, 0, &w_ascii, &dummy);
+    er_text_measure("\xE2\x86\x92", 16, NULL, 0, 0, &w_arrow, &dummy);
     if (w_arrow <= 0)
         return fail("U+2192 right-arrow measured zero width");
 
     /* UTF-8: 4-byte sequence falls back to '?'. */
     int w_q = 0, w_emoji = 0;
-    er_text_measure("?", 16, NULL, 0, &w_q, &dummy);
-    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, 0, &w_emoji, &dummy);
+    er_text_measure("?", 16, NULL, 0, 0, &w_q, &dummy);
+    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, 0, 0, &w_emoji, &dummy);
     if (w_emoji != w_q)
         return fail("4-byte UTF-8 (emoji) did not fall back to '?'");
 

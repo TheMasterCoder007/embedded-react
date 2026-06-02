@@ -646,7 +646,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                 if (n->is_focused && !show_ph && (s_now_ms % 1000U < 500U))
                 {
                     int text_w = 0, text_h = 0;
-                    er_text_measure(n->input_text, par.font_size, tip->font_family, 0, &text_w, &text_h);
+                    er_text_measure(n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
                     int cursor_x = px + pad_h + text_w;
                     const int max_cx = px + w - pad_h - 2;
                     if (cursor_x > max_cx)

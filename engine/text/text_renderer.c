@@ -742,6 +742,7 @@ void er_text_measure(const char* text,
                      uint8_t font_size,
                      const char* font_family,
                      int16_t letter_spacing,
+                     uint8_t font_weight,
                      int* out_width,
                      int* out_height)
 {
@@ -760,6 +761,9 @@ void er_text_measure(const char* text,
         return;
     }
 
+    /* Bold is synthesised by drawing each glyph twice 1px apart, which the renderer accounts for
+       in the cursor advance (+1px/glyph).  Measure the same way so the box fits the drawn text. */
+    const int bold_extra = (font_weight != 0U) ? 1 : 0;
     long width = 0;
     if (text)
     {
@@ -769,7 +773,59 @@ void er_text_measure(const char* text,
             const uint32_t cp = utf8_next(&p);
             if (cp == (uint32_t)'\n')
                 continue;
-            width += glyph_adv(font, cp, (int)letter_spacing);
+            width += glyph_adv(font, cp, (int)letter_spacing) + bold_extra;
+        }
+    }
+    if (width > INT_MAX)
+        width = INT_MAX;
+
+    if (out_width)
+        *out_width = (int)width;
+    if (out_height)
+        *out_height = (int)font->line_height;
+}
+
+void er_text_measure_spans(const ERTextSpan* spans,
+                           uint8_t span_count,
+                           uint8_t font_size,
+                           const char* font_family,
+                           int16_t base_letter_spacing,
+                           uint8_t base_font_weight,
+                           int* out_width,
+                           int* out_height)
+{
+    if (font_size < 8U)
+        font_size = 8U;
+    if (font_size > 96U)
+        font_size = 96U;
+
+    const BitmapFont* font = font_registry_get(font_family, font_size);
+    if (!font || !spans || span_count == 0U)
+    {
+        if (out_width)
+            *out_width = 0;
+        if (out_height)
+            *out_height = font ? (int)font->line_height : (int)font_size;
+        return;
+    }
+
+    const bool base_bold = (base_font_weight != 0U);
+    long width = 0;
+    for (uint8_t si = 0; si < span_count; si++)
+    {
+        const ERTextSpan* sp = &spans[si];
+        /* Resolve per-span style from sentinels exactly as the renderer does. */
+        const bool seg_bold = (sp->font_weight == 0xFFU) ? base_bold : (sp->font_weight != 0U);
+        const int seg_ls = (sp->letter_spacing == ER_LAYOUT_AUTO) ? (int)base_letter_spacing : (int)sp->letter_spacing;
+        const int bold_extra = seg_bold ? 1 : 0;
+
+        const char* p = sp->text;
+        while (*p)
+        {
+            const uint32_t cp = utf8_next(&p);
+            if (cp == (uint32_t)'\n')
+                continue;
+            width += glyph_adv(font, cp, seg_ls) + bold_extra;
         }
     }
     if (width > INT_MAX)

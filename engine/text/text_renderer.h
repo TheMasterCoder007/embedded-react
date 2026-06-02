@@ -59,6 +59,8 @@ void er_text_render(const ERTextRenderParams* params);
  * @param[in]  font_size      Desired font size in pixels (clamped to [8, 96]).
  * @param[in]  font_family    Font family name, or NULL for the built-in default.
  * @param[in]  letter_spacing Extra pixels per glyph advance (same as ERTextRenderParams).
+ * @param[in]  font_weight    0 = normal; non-zero = bold (adds the faux-bold +1px/glyph the
+ *                            renderer applies, so the measured width matches what is drawn).
  * @param[out] out_width      Receives the measured width in pixels.
  * @param[out] out_height     Receives the font's line height in pixels.
  */
@@ -66,7 +68,34 @@ void er_text_measure(const char* text,
                      uint8_t font_size,
                      const char* font_family,
                      int16_t letter_spacing,
+                     uint8_t font_weight,
                      int* out_width,
                      int* out_height);
+
+/**
+ * @brief Measures inline text spans the way they are rendered (single line, base font).
+ *
+ * Mirrors the span renderer: every span uses the node's base font (per-span font_size is not
+ * applied to advances), with per-span letter_spacing and bold resolved from sentinels against the
+ * base values.  This keeps an auto-sized Text node wide enough for bold/styled runs so trailing
+ * glyphs are not clipped.
+ *
+ * @param[in]  spans               Span array (as set via er_node_set_text_spans).
+ * @param[in]  span_count          Number of spans.
+ * @param[in]  font_size           Base font size in pixels (clamped to [8, 96]).
+ * @param[in]  font_family         Base font family name, or NULL for the built-in default.
+ * @param[in]  base_letter_spacing Node letter_spacing; a span inherits it when its own is AUTO.
+ * @param[in]  base_font_weight    0 = normal; non-zero = bold; a span inherits it when weight is 0xFF.
+ * @param[out] out_width           Receives the measured width in pixels.
+ * @param[out] out_height          Receives the font's line height in pixels.
+ */
+void er_text_measure_spans(const ERTextSpan* spans,
+                           uint8_t span_count,
+                           uint8_t font_size,
+                           const char* font_family,
+                           int16_t base_letter_spacing,
+                           uint8_t base_font_weight,
+                           int* out_width,
+                           int* out_height);
 
 #endif

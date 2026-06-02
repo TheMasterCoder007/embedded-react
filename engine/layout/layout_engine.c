@@ -148,12 +148,29 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
     if (n->type == ER_NODE_TEXT)
     {
         int measured_w = 0, measured_h = 0;
-        er_text_measure(n->props.text.text,
-                        n->props.text.font_size,
-                        n->props.text.font_family,
-                        n->props.text.letter_spacing,
-                        &measured_w,
-                        &measured_h);
+        if (n->props.text.span_count > 0U)
+        {
+            /* Styled spans render with per-run weight/spacing — measure them the same way so a
+               bold/styled run does not overflow an auto-sized node and clip its trailing glyphs. */
+            er_text_measure_spans(n->props.text.spans,
+                                  n->props.text.span_count,
+                                  n->props.text.font_size,
+                                  n->props.text.font_family,
+                                  n->props.text.letter_spacing,
+                                  n->props.text.font_weight,
+                                  &measured_w,
+                                  &measured_h);
+        }
+        else
+        {
+            er_text_measure(n->props.text.text,
+                            n->props.text.font_size,
+                            n->props.text.font_family,
+                            n->props.text.letter_spacing,
+                            n->props.text.font_weight,
+                            &measured_w,
+                            &measured_h);
+        }
         const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
         const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
         const int16_t tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)measured_w;
