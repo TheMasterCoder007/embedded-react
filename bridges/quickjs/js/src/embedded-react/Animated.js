@@ -33,7 +33,11 @@ export class AnimatedValue {
   }
 }
 
-/** A value derived from a parent Animated.Value through a piecewise-linear interpolation. */
+/**
+ * A value derived from a parent Animated.Value through a piecewise-linear interpolation.
+ * config = { inputRange, outputRange, extrapolate?, extrapolateLeft?, extrapolateRight? }; the
+ * extrapolate tokens ('extend' | 'clamp' | 'identity') control behavior outside the input range.
+ */
 export class AnimatedInterpolation {
   constructor(parent, config) {
     this.__animated = true;

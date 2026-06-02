@@ -184,8 +184,11 @@ prop lets the engine advance the animation each frame with **no per-frame JS**. 
   (marshals `ERAnimConfig`: type timing/spring/decay, easing token or bezier, duration, spring
   stiffness/damping/mass/velocity, decay deceleration, delay, loop)
 - [x] `NativeUI.animValueSet` / `animValueGet` → `er_anim_value_set` / `_get`; `animStop`; `tick`
-- [x] Interpolation: `value.interpolate({inputRange, outputRange})` →
-  `er_anim_value_bind_interpolated`. `extrapolate` clamp/identity not wired yet (defaults extend)
+- [x] Interpolation: `value.interpolate({inputRange, outputRange, extrapolate?, extrapolateLeft?,
+  extrapolateRight?})` → `er_anim_value_bind_interpolated`. `extrapolate` token ('extend' default /
+  'clamp' / 'identity') sets both ends; per-end keys override. The config flows straight through the
+  JS layer; the bridge marshals the tokens to `ERExtrapolate`. Math covered by engine
+  `test_interpolate`; bridge path by `interpolate-extrapolate.runtime.test.js`
 - [x] Map animatable prop names → `ERAnimProp` (opacity, translateX/Y, scaleX/Y, scale, rotate/Z/X/Y,
   backgroundColor, color)
 - [x] JS `Animated.View` / `.Text` / `.Image` — `createAnimatedComponent` splits animated style
@@ -367,6 +370,13 @@ demo. Current: 31 EXPECT pass, 0 XFAIL.
   `pct-width-cross` / `pct-content-box`). Added `width_pct`/`height_pct` (`ERProps`/`ERLayoutSpec`
   + compositor), resolved against the parent content box in Pass 1, respected by Pass 5 stretch;
   bridge marshals `'N%'` strings. Percentage padding/margin/min/max/position still pixels-only.
+
+- ✅ **FIXED — `er_layout_anim_has_pending()` was internal-only.** It was declared in
+  `engine/animation/layout_anim.h` but not the public `er_scene.h`, so the bridge (which may include
+  only `er_scene.h`) calling it triggered an implicit-declaration warning and crossed the engine
+  boundary. **Fix:** promoted the declaration into `er_scene.h` as the public companion to
+  `er_layout_anim_configure_next()` (the function was already implemented + engine-tested). One-line
+  header addition, fully backward compatible.
 
 - ✅ **FIXED — bold / span text measured narrower than rendered (trailing-glyph clipping).**
   `er_text_measure` summed plain glyph advances, but the renderer synthesises **bold** by drawing

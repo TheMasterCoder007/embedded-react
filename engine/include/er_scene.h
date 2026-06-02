@@ -1210,6 +1210,17 @@ extern "C"
      */
     void er_layout_anim_configure_next(const ERLayoutAnimConfig* cfg);
 
+    /**
+     * @brief Reports whether a layout-animation config is armed for the next commit.
+     *
+     * Returns true between an er_layout_anim_configure_next() call and the er_commit() that
+     * consumes it; false otherwise.  Useful for coordinating layout transitions (e.g. avoid
+     * arming a second config before the first is consumed).
+     *
+     * @return true when a configured layout animation has not yet been consumed by a commit.
+     */
+    bool er_layout_anim_has_pending(void);
+
 #ifdef __cplusplus
 }
 #endif

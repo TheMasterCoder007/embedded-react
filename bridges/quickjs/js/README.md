@@ -121,6 +121,8 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   tweens every node whose computed rect moved on the next commit (in C — no per-frame JS). `Presets`
   / `create` / `Types` / `Properties` and the `easeInEaseOut`/`linear`/`spring` shorthands. Covered
   by `layout-animation` unit + `layout-anim.runtime.test.jsx`.
-- ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
-  extend); the rest of `interpolate({ inputRange, outputRange })` works.
+- ✅ **Interpolate `extrapolate`.** `interpolate({ inputRange, outputRange, extrapolate })` supports
+  `'extend'` (default) / `'clamp'` / `'identity'`, with per-end `extrapolateLeft`/`extrapolateRight`
+  overrides. Math is engine-tested (`test_interpolate`); the bridge path by
+  `interpolate-extrapolate.runtime.test.js`.
 - ⏳ **`qjsc` bytecode** path + `create-embedded-react` scaffold — still to come (§4).

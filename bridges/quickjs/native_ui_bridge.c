@@ -2816,11 +2816,51 @@ static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
+/** @brief Maps an extrapolate token to ERExtrapolate. @param[in] s String. @return Enum (default extend). */
+static ERExtrapolate extrapolate_from_name(const char* s)
+{
+    if (strcmp(s, "clamp") == 0)
+    {
+        return ER_EXTRAPOLATE_CLAMP;
+    }
+    if (strcmp(s, "identity") == 0)
+    {
+        return ER_EXTRAPOLATE_IDENTITY;
+    }
+    return ER_EXTRAPOLATE_EXTEND;
+}
+
+/**
+ * @brief Reads an extrapolate token from obj[key] into *out (left unchanged if absent/invalid).
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     obj  Config object.
+ * @param[in]     key  Property name (e.g. "extrapolate").
+ * @param[in,out] out  Receives the mapped ERExtrapolate when the key is a string.
+ */
+static void read_extrapolate(JSContext* ctx, JSValueConst obj, const char* key, ERExtrapolate* out)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, key, &v))
+    {
+        return;
+    }
+    const char* s = JS_ToCString(ctx, v);
+    if (s)
+    {
+        *out = extrapolate_from_name(s);
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, v);
+}
+
 /**
  * @brief NativeUI.animValueBindInterpolated(valueHandle, nodeHandle, propName, interp) —
  *        binds a value to a node prop through a piecewise-linear interpolation.
  *
- * interp = { inputRange:[…], outputRange:[…], extrapolateLeft?, extrapolateRight? }.
+ * interp = { inputRange:[…], outputRange:[…], extrapolate?, extrapolateLeft?, extrapolateRight? }.
+ * `extrapolate` sets both ends; the per-end keys override it. Tokens: "extend" (default), "clamp",
+ * "identity".
  *
  * @return JS_UNDEFINED.
  */
@@ -2859,6 +2899,12 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     memset(&interp, 0, sizeof(interp));
     interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
     interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
+
+    /* `extrapolate` applies to both ends; the per-end keys override it (RN semantics). */
+    read_extrapolate(ctx, argv[3], "extrapolate", &interp.extrapolate_left);
+    interp.extrapolate_right = interp.extrapolate_left;
+    read_extrapolate(ctx, argv[3], "extrapolateLeft", &interp.extrapolate_left);
+    read_extrapolate(ctx, argv[3], "extrapolateRight", &interp.extrapolate_right);
 
     /* Read inputRange / outputRange arrays (clamped to ER_INTERPOLATE_MAX_POINTS). */
     JSValue in = JS_GetPropertyStr(ctx, argv[3], "inputRange");
