@@ -87,3 +87,14 @@ if (ER_BRIDGE_QUICKJS_SMOKE)
     add_executable(er-bridge-quickjs-smoke smoke_main.c)
     target_link_libraries(er-bridge-quickjs-smoke PRIVATE er-bridge-quickjs)
 endif ()
+
+# ---------------------------------------------------------------------------
+# Headless runtime-test harness — loads a bundled JS test (esbuild output) and runs it under the
+# bridge + engine with a no-op backend, no window. Driven by `npm run test:runtime` in js/.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_RUNTEST "Build the headless runtime-test harness" ON)
+
+if (ER_BRIDGE_QUICKJS_RUNTEST)
+    add_executable(er-bridge-quickjs-runtest runtest_main.c)
+    target_link_libraries(er-bridge-quickjs-runtest PRIVATE er-bridge-quickjs)
+endif ()

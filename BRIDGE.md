@@ -85,7 +85,11 @@ one prop family verified against a JS value.
 
 - [x] `flex` shorthand → expand to `flex_grow`/`flex_shrink`/`flex_basis` with RN semantics
   (positive flex = grow:flex, shrink:1, basis:0)
-- [x] `flexGrow` / `flexShrink` / `flexBasis` (+ `flexBasis: '50%'` → `flex_basis_pct`)
+- [x] `flexGrow` / `flexShrink` / `flexBasis` (+ `flexBasis: '50%'` → `flex_basis_pct`).
+  ⚠️ Fixed a marshaling bug here: `props_init_defaults` was seeding `flex_grow`/`flex_shrink` to
+  `ER_LAYOUT_AUTO` (`INT16_MIN`) instead of **0**. The engine reads any non-zero `flex_grow` as a
+  real factor, so *every* node without explicit flex silently grew to fill its parent (a fixed-size
+  child filled the root; un-flexed siblings each grabbed 1/N). `flex_grow`/`flex_shrink` now default 0
 - [x] `flexDirection` / `flexWrap`
 - [x] `justifyContent` / `alignItems` / `alignSelf` / `alignContent`
 - [x] `position` + `top` / `right` / `bottom` / `left`
@@ -209,16 +213,17 @@ C scene with "run the JS bundle, then tick."
 ## 3. React Reconciler — JS host config
 
 Pure JS in `bridges/quickjs/js/` (react 18.3 + react-reconciler 0.29, bundled with esbuild to a
-single IIFE the QuickJS host runs). **Initial render is proven end-to-end** — `<App/>` mounts
-through the reconciler and the engine lays it out (a `flex:1` root filled the 480×320 screen).
+single IIFE the QuickJS host runs). **Proven end-to-end** — `<App/>` mounts through the reconciler,
+state updates re-render (counter), and keyed-list **reordering** moves nodes correctly. The desktop
+demo (`embedded-react-desktop-js`) runs the bundle by default and is interactive.
 
 - [x] Vendor `react` + `react-reconciler` (npm; `bridges/quickjs/js/package.json`)
 - [x] `createInstance(type, props)` → `NativeUI.createNode` + `setProps` (style flattened, on* routed)
 - [x] `createTextInstance` — fallback Text node; `<Text>string</Text>` handled via `shouldSetTextContent`
 - [x] `appendChild` / `appendInitialChild` / `appendChildToContainer`
-- [~] `removeChild` / `removeChildFromContainer` done; **`insertBefore` host hooks call
-  `NativeUI.insertBefore`, which the bridge does NOT implement yet** — unused on initial mount
-  (append-only), but reordering/mid-insert needs an engine `er_tree_insert_before` + bridge method
+- [x] `insertBefore` / `removeChild` / `removeChildFromContainer` — `NativeUI.insertBefore` added,
+  backed by engine `er_tree_insert_before`; append/insert/remove are move-safe (detach-then-splice).
+  Verified by a keyed-list reverse-driving correct node moves (`src/reorder-test.jsx`)
 - [x] `prepareUpdate` / `commitUpdate` → `NativeUI.setProps`
 - [x] `commitTextUpdate` for `<Text>` content changes
 - [x] `finalizeInitialChildren`, `shouldSetTextContent`, host-context stubs

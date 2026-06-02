@@ -775,6 +775,9 @@ static void props_init_defaults(ERProps* p)
 {
     memset(p, 0, sizeof(*p));
 
+    /* NOTE: flex_grow and flex_shrink are deliberately NOT in this list — their default is 0
+     * ("no grow / no shrink", the RN default), and the layout engine reads any non-zero value
+     * (including the ER_LAYOUT_AUTO sentinel) as a real flex factor. flex_basis stays AUTO. */
     int16_t* const auto_fields[] = {
         &p->left,
         &p->top,
@@ -799,8 +802,6 @@ static void props_init_defaults(ERProps* p)
         &p->gap,
         &p->row_gap,
         &p->column_gap,
-        &p->flex_grow,
-        &p->flex_shrink,
         &p->flex_basis,
         &p->margin_horizontal,
         &p->margin_vertical,
@@ -1741,6 +1742,33 @@ static JSValue js_append_child(JSContext* ctx, JSValueConst this_val, int argc, 
 }
 
 /**
+ * @brief NativeUI.insertBefore(parent, child, beforeChild) — inserts/moves child before a sibling.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = parent, argv[1] = child, argv[2] = sibling to insert before.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_insert_before(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 3)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* parent = node_arg(ctx, argv[0]);
+    ERNode* child = node_arg(ctx, argv[1]);
+    ERNode* before = node_arg(ctx, argv[2]); /* NULL handle → append (handled by the engine). */
+    if (parent && child)
+    {
+        er_tree_insert_before(parent, child, before);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
  * @brief NativeUI.removeChild(parent, child) — removes child from parent.
  *
  * @param[in] ctx   QuickJS context.
@@ -1932,6 +1960,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "createNode", JS_NewCFunction(ctx, js_create_node, "createNode", 1));
     JS_SetPropertyStr(ctx, native_ui, "destroyNode", JS_NewCFunction(ctx, js_destroy_node, "destroyNode", 1));
     JS_SetPropertyStr(ctx, native_ui, "appendChild", JS_NewCFunction(ctx, js_append_child, "appendChild", 2));
+    JS_SetPropertyStr(ctx, native_ui, "insertBefore", JS_NewCFunction(ctx, js_insert_before, "insertBefore", 3));
     JS_SetPropertyStr(ctx, native_ui, "removeChild", JS_NewCFunction(ctx, js_remove_child, "removeChild", 2));
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
