@@ -4,51 +4,7 @@
 // wrapper objects — the engine owns the scene graph, the handle is the identity.
 import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
-
-// Top-level props NativeUI understands directly (not part of `style`). Everything else style-ish
-// is expected inside props.style. Event handlers (on*) are routed separately via setEvent.
-const PASSTHROUGH = [
-  'numberOfLines',
-  'ellipsizeMode',
-  'value',
-  'placeholder',
-  'placeholderTextColor',
-  'editable',
-  'animating',
-  'visible',
-  'resizeMode',
-  'tintColor',
-  'imageName',
-];
-
-/**
- * Flattens RN-style `style` (object or nested array) into a single object.
- */
-function flattenStyle(style, out) {
-  if (!style) return;
-  if (Array.isArray(style)) {
-    for (const s of style) flattenStyle(s, out);
-  } else {
-    Object.assign(out, style);
-  }
-}
-
-/**
- * Builds the flat prop bag NativeUI.setProps expects: resolved style + passthrough props + text.
- */
-function buildProps(type, props) {
-  const flat = {};
-  flattenStyle(props.style, flat);
-  for (const k of PASSTHROUGH) {
-    if (props[k] !== undefined) flat[k] = props[k];
-  }
-  // <Text>string</Text>: the string child is the node's text (see shouldSetTextContent).
-  if (type === 'Text') {
-    const c = props.children;
-    if (typeof c === 'string' || typeof c === 'number') flat.text = String(c);
-  }
-  return flat;
-}
+import { buildProps, isEventProp } from './props.js';
 
 /**
  * Registers/clears on* event handlers. A handler present in old but not new props is cleared.
@@ -66,10 +22,6 @@ function applyEvents(handle, prevProps, nextProps) {
       NativeUI.setEvent(handle, key, nextProps[key]);
     }
   }
-}
-
-function isEventProp(key, value) {
-  return key.length > 2 && key[0] === 'o' && key[1] === 'n' && key[2] >= 'A' && key[2] <= 'Z' && typeof value === 'function';
 }
 
 export const hostConfig = {

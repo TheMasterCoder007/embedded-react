@@ -4,7 +4,7 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['src/index.jsx'],
+  entryPoints: ['app/index.jsx'],
   bundle: true,
   format: 'iife',
   outfile: 'dist/app.bundle.js',

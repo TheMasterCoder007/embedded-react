@@ -5,13 +5,17 @@
   "type": "module",
   "description": "React reconciler + host config that drives the embedded-react engine through the QuickJS NativeUI bridge (Flow A).",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:runtime": "node test/runtime/run.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
     "react-reconciler": "0.29.2"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.24.0",
+    "vitest": "^2.1.0"
   }
 }

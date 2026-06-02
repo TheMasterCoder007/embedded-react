@@ -10,14 +10,26 @@ React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scen
 
 ## Layout
 
-| File | Role |
-|---|---|
-| `src/host-config.js` | The reconciler host config — `createInstance`/`appendChild`/`commitUpdate`/… → `NativeUI.*`. Flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*` handlers to `setEvent`, and uses `shouldSetTextContent` so `<Text>string</Text>` becomes the node's `text`. |
-| `src/renderer.js` | `createRoot(props).render(<App/>)`. Creates a screen-sized container View, sets it as the scene root, and drives a **LegacyRoot (synchronous)** reconciler so the first render flushes without the async scheduler. |
-| `src/components.js` | Host components — string tags (`View`, `Text`, `Pressable`, …) that map to `ERNodeType`. |
-| `src/native-ui.js` | Re-exports the `globalThis.NativeUI` the C bridge installs. |
-| `src/App.jsx`, `src/index.jsx` | Sample app + bundle entry. |
-| `build.mjs` | esbuild → `dist/app.bundle.js` (IIFE, production React, JSX automatic). |
+```
+src/                       the library (the future 'embedded-react' runtime)
+  host-config.js           reconciler host config → NativeUI.*
+  renderer.js              createRoot(props).render(<App/>); LegacyRoot (sync)
+  components.js            host component tags (View, Text, … → ERNodeType)
+  props.js                 pure prop helpers (flattenStyle / buildProps / isEventProp)
+  native-ui.js             re-exports globalThis.NativeUI (installed by the C bridge)
+  __tests__/               co-located UNIT tests (Vitest, *.unit.test.js, no engine)
+app/                       the demo app (App.jsx, index.jsx) — bundle entry, not the library
+test/runtime/              e2e tests that need the real engine host
+  *.runtime.test.jsx       run inside QuickJS + engine via the headless harness
+  harness.js               check()/report() — records failures for the C runner
+  run.mjs                  bundles each runtime test + runs er-bridge-quickjs-runtest
+build.mjs                  esbuild app/index.jsx → dist/app.bundle.js (IIFE, production React)
+vitest.config.js           unit test config
+```
+
+The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
+handlers to `setEvent`, and uses `shouldSetTextContent` so `<Text>string</Text>` becomes the
+node's `text`.
 
 ## Build
 
@@ -40,17 +52,34 @@ App resolution order: explicit CLI path → `app.bundle.js` next to the exe → 
 C host injects the globals the bundle expects: `NativeUI` (the bridge), `screen`
 (`{ width, height, scale }`), and `console`.
 
-> Iteration loop: edit `src/*` → `npm run build` → rebuild `embedded-react-desktop-js` (re-copies
-> the bundle) → run.
+> Iteration loop: edit `src/*` or `app/*` → `npm run build` → rebuild `embedded-react-desktop-js`
+> (re-copies the bundle) → run.
+
+## Tests
+
+Two tiers, by what they need:
+
+```
+npm test            # unit: Vitest over src/**/__tests__/*.unit.test.js (pure JS, no engine)
+npm run test:runtime  # e2e: bundles test/runtime/*.runtime.test.jsx, runs each in the headless
+                      #      QuickJS+engine harness (no window) and checks the result
+```
+
+The runtime tier needs the harness exe built once (no SDL):
+
+```
+cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest
+```
+
+Pick the tier by what the code touches: pure marshalling/logic → a co-located `*.unit.test.js`;
+anything that exercises the reconciler → engine pipeline → a `test/runtime/*.runtime.test.jsx`.
 
 ## Status & known gaps
 
-- ✅ **Initial render works end-to-end** — `<App/>` mounts through the reconciler and the engine
-  lays it out (verified: a `flex: 1` root fills the 480×320 screen).
-- ⏳ **`NativeUI.insertBefore` is not implemented in the bridge yet.** Initial mount only uses
-  `appendChild`, so it isn't hit today — but reordering / mid-list insertion will call it. Needs an
-  engine `er_tree_insert_before` primitive + a bridge method. Until then, dynamic list reordering
-  is unsupported.
+- ✅ **Render, state updates, and keyed-list reordering all work end-to-end.** `<App/>` mounts,
+  taps re-render via `setState`, and reversing a keyed list moves the nodes (`insertBefore` /
+  `appendChild`, backed by engine `er_tree_insert_before`). Covered by
+  `test/runtime/reorder.runtime.test.jsx`.
 - ⏳ **Multi-child `<Text>`** (interpolation like `Hi {name}`, nested `<Text>` spans) — only a
   single string/number child is supported (`shouldSetTextContent`). Spans land with §1.2 span work.
 - ⏳ **Bundler/toolchain (§4)** — this is a hand-run esbuild step; the Metro-compatible

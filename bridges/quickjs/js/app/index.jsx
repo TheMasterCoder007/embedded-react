@@ -1,6 +1,6 @@
 // Bundle entry point. The C host injects `screen` ({ width, height, scale }) and `NativeUI`
 // before running this, then drives the frame loop after it returns.
-import { createRoot } from './renderer.js';
+import { createRoot } from '../src/renderer.js';
 import { App } from './App.jsx';
 
 const root = createRoot({
