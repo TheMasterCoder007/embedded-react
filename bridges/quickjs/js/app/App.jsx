@@ -22,8 +22,12 @@ export function App() {
   const toggle = () => {
     const next = !on;
     setOn(next);
-    Animated.timing(opacity, { toValue: next ? 0.25 : 1, duration: 400, easing: Easing.easeInOut }).start();
-    Animated.spring(tx, { toValue: next ? 130 : 0, stiffness: 130, damping: 13 }).start();
+    // Compose the two animations with Animated.parallel and observe completion via .start(cb) —
+    // both legs still run in C (native driver); only the start + completion log are JS.
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: next ? 0.25 : 1, duration: 400, easing: Easing.easeInOut }),
+      Animated.spring(tx, { toValue: next ? 130 : 0, stiffness: 130, damping: 13 }),
+    ]).start(({ finished }) => console.log('animation', finished ? 'finished' : 'interrupted'));
   };
 
   return (

@@ -109,8 +109,11 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   `clearInterval` and the Promise job queue are serviced each frame by the host pump
   (`er_bridge_pump`, off the engine clock). React passive effects (`useEffect`) flush on the pump.
   Covered by `timers.runtime.test.js` and `effects.runtime.test.jsx`.
-- ⏳ **Animated composition** — `timing`/`spring`/`decay`/`interpolate` done; `sequence`/`parallel`/
-  `loop`/`stagger`/`delay`, `.start(callback)`, and interpolate `extrapolate: 'clamp'` not yet.
+- ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
+  `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with
+  completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.
+- ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
+  extend); the rest of `interpolate({ inputRange, outputRange })` works.
 - ⏳ **Multi-child `<Text>`** (interpolation like `Hi {name}`, nested `<Text>` spans) — only a
   single string/number child is supported (`shouldSetTextContent`). Spans land with §1.2 span work.
 - ⏳ **`qjsc` bytecode** path + `create-embedded-react` scaffold — still to come (§4).

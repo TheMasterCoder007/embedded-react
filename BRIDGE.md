@@ -184,8 +184,13 @@ prop lets the engine advance the animation each frame with **no per-frame JS**. 
   backgroundColor, color)
 - [x] JS `Animated.View` / `.Text` / `.Image` — `createAnimatedComponent` splits animated style
   props (incl. `transform` array) and binds them via a host-instance ref on mount
-- [~] `Animated.timing` / `spring` / `decay` done; `sequence` / `parallel` / `loop` / `stagger` /
-  `delay` and `.start(callback)` completion not wired yet (fire-and-forget)
+- [x] `Animated.timing` / `spring` / `decay`, plus composition: `sequence` / `parallel` (with
+  `stopTogether`) / `stagger` / `delay` / `loop` (with `iterations`, resets the value per
+  iteration). `.start(callback)` completion is wired through the engine's `on_complete` via a
+  bridge trampoline (4th arg to `animValueAnimate`): `{ finished }` is `true` on natural end, `false`
+  when superseded by a new animation or `stop()`. Composition is pure JS over each child's
+  start/stop + the §2 timer globals; every leg still runs in C (native driver). Verified by
+  `anim-compose.runtime.test.js`
 - [ ] LayoutAnimation: `NativeUI.configureNextLayoutAnimation(cfg)` →
   `er_layout_anim_configure_next`
 
@@ -264,8 +269,8 @@ Vitest with no aliases. Public surface lives in `src/embedded-react/`.
 
 - [x] `'embedded-react'` module: re-export `View`, `Text`, `Image`, `ScrollView`, `FlatList`,
   `Pressable`, `TouchableOpacity`, `TextInput`, `ActivityIndicator`, `Switch`, `Modal`
-- [~] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` done
-  (§1.4); `sequence` / `parallel` / `loop` / `stagger` / `delay` still to come
+- [x] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` +
+  composition (`sequence` / `parallel` / `stagger` / `delay` / `loop`) and `.start(callback)` (§1.4)
 - [x] `Easing` module — tokens mapping to `ERAnimEasing` (+ `Easing.bezier`)
 - [ ] `useAnimatedValue` hook over the native value handle
 - [x] `StyleSheet.create` (identity pass-through) + `flatten`; also `Platform.OS`/`select`

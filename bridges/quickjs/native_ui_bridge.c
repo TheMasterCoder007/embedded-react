@@ -91,6 +91,27 @@ static int32_t s_next_timer_id = 1;
  */
 static JSValue s_timer_handlers;
 
+/**
+ * @brief Max concurrently-pending Animated `.start(cb)` completion callbacks.
+ *
+ * Should be >= the engine's concurrent-animation cap so every value animation can carry a JS
+ * completion callback. Excess animations still run; they just don't notify JS on completion.
+ */
+#ifndef ER_BRIDGE_MAX_ANIM_COMPLETIONS
+#define ER_BRIDGE_MAX_ANIM_COMPLETIONS 64
+#endif
+
+/** @brief Per-slot "in use" flags for pending animation-completion callbacks. */
+static bool s_anim_complete_active[ER_BRIDGE_MAX_ANIM_COMPLETIONS];
+
+/**
+ * @brief JS object mapping a completion slot index to the `.start()` callback.
+ *
+ * Same ownership trick as the event/timer registries: owned by NativeUI, GC-rooted, freed at
+ * teardown. The slot index is the engine animation's on_complete user_data.
+ */
+static JSValue s_anim_complete_handlers;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — handle table
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -2632,7 +2653,52 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
 }
 
 /**
- * @brief NativeUI.animValueAnimate(valueHandle, toValue, config) — animates a value to toValue.
+ * @brief Engine completion callback for a value animation: dispatches to the registered JS handler.
+ *
+ * user_data is the completion slot index. The handler is one-shot: it is captured (owned) and the
+ * slot freed before the JS call, so a handler that chains the next animation can safely reuse this
+ * slot. Runs inside er_anim_tick (the engine deactivates the finished animation before calling
+ * this), so starting a new animation from the handler is safe. Handler exceptions are swallowed.
+ *
+ * @param[in] finished   true if the animation ran to completion; false if interrupted/stopped.
+ * @param[in] user_data  Completion slot index (as uintptr_t).
+ */
+static void bridge_anim_complete_trampoline(bool finished, void* user_data)
+{
+    if (!s_bridge_ctx)
+    {
+        return;
+    }
+    JSContext* ctx = s_bridge_ctx;
+    const int slot = (int)(uintptr_t)user_data;
+    if (slot < 0 || slot >= ER_BRIDGE_MAX_ANIM_COMPLETIONS)
+    {
+        return;
+    }
+
+    JSValue cb = JS_GetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot); /* owned */
+    s_anim_complete_active[slot] = false;
+    JS_SetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot, JS_UNDEFINED);
+
+    if (JS_IsFunction(ctx, cb))
+    {
+        JSValue arg = JS_NewBool(ctx, finished);
+        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &arg);
+        if (JS_IsException(ret))
+        {
+            bridge_report_exception(ctx, "animation completion callback");
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, arg);
+    }
+    JS_FreeValue(ctx, cb);
+}
+
+/**
+ * @brief NativeUI.animValueAnimate(valueHandle, toValue, config, onComplete?) — animates to toValue.
+ *
+ * If onComplete is a function it is invoked with a single boolean `finished` when the animation
+ * ends (true = ran to completion, false = interrupted by a new animation or animStop).
  *
  * @return The animation handle as a JS integer.
  */
@@ -2651,6 +2717,34 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
     }
     ERAnimConfig cfg;
     marshal_anim_config(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &cfg);
+
+    /* Optional completion callback (argv[3]): grab a slot, root the callback, and route the
+       engine's on_complete through the trampoline. Must be registered BEFORE er_anim_value_animate,
+       which may synchronously cancel a superseded animation (firing that one's callback). */
+    if (argc > 3 && JS_IsFunction(ctx, argv[3]))
+    {
+        int slot = -1;
+        for (int i = 0; i < ER_BRIDGE_MAX_ANIM_COMPLETIONS; i++)
+        {
+            if (!s_anim_complete_active[i])
+            {
+                slot = i;
+                break;
+            }
+        }
+        if (slot >= 0)
+        {
+            s_anim_complete_active[slot] = true;
+            JS_SetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot, JS_DupValue(ctx, argv[3]));
+            cfg.on_complete = bridge_anim_complete_trampoline;
+            cfg.on_complete_user_data = (void*)(uintptr_t)slot;
+        }
+        else
+        {
+            fprintf(stderr, "animValueAnimate: completion pool full (%d)\n", ER_BRIDGE_MAX_ANIM_COMPLETIONS);
+        }
+    }
+
     const ERAnimHandle ah = er_anim_value_animate((ERAnimValueHandle)vh, (float)to_value, &cfg);
     return JS_NewInt32(ctx, (int32_t)ah);
 }
@@ -2737,6 +2831,10 @@ void er_bridge_install(JSContext* ctx)
         s_timers[i].active = false;
     }
     s_next_timer_id = 1;
+    for (int i = 0; i < ER_BRIDGE_MAX_ANIM_COMPLETIONS; i++)
+    {
+        s_anim_complete_active[i] = false;
+    }
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native_ui = JS_NewObject(ctx);
@@ -2780,6 +2878,11 @@ void er_bridge_install(JSContext* ctx)
     JSValue timer_handlers = JS_NewObject(ctx);
     s_timer_handlers = timer_handlers;
     JS_SetPropertyStr(ctx, native_ui, "__er_timer_handlers", timer_handlers);
+
+    /* Animation completion-callback registry (Animated `.start(cb)`); same ownership trick. */
+    JSValue anim_complete_handlers = JS_NewObject(ctx);
+    s_anim_complete_handlers = anim_complete_handlers;
+    JS_SetPropertyStr(ctx, native_ui, "__er_anim_complete_handlers", anim_complete_handlers);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);
