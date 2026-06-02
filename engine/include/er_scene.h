@@ -730,6 +730,19 @@ extern "C"
     void er_tree_append_child(ERNode* parent, ERNode* child);
 
     /**
+     * @brief Inserts a child into a parent's child list immediately before another child.
+     *
+     * If @p child is already a child of @p parent it is first detached from its current position,
+     * so this also reorders (moves) an existing child. When @p before is NULL, or is not a child of
+     * @p parent, the child is appended at the end (matching append semantics).
+     *
+     * @param[in] parent  Parent node.
+     * @param[in] child   Child node to insert or move.
+     * @param[in] before  Sibling to insert before, or NULL to append.
+     */
+    void er_tree_insert_before(ERNode* parent, ERNode* child, ERNode* before);
+
+    /**
      * @brief Removes a child node from its parent's child list.
      *
      * @param[in] parent  Parent node.

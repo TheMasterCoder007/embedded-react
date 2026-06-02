@@ -1331,11 +1331,54 @@ void er_text_input_key(uint32_t keycode, const char* utf8_char)
     }
 }
 
+/**
+ * @brief Unlinks a child from its current parent's sibling list, if it has one.
+ *
+ * Leaves child->parent_tag set (callers reassign it). Makes append/insert move-safe: a child that
+ * is already attached is removed from its old position before being re-spliced, so re-appending or
+ * reordering an existing node cannot corrupt the sibling chain.
+ *
+ * @param[in] child  Node to detach from its parent's child list.
+ */
+static void tree_detach(ERNode* child)
+{
+    if (child->parent_tag == ER_INVALID_TAG)
+        return;
+    ERNode* parent = er_get_node(child->parent_tag);
+    if (!parent)
+        return;
+
+    if (parent->first_child_tag == child->tag)
+    {
+        parent->first_child_tag = child->next_sibling_tag;
+    }
+    else
+    {
+        uint16_t cur = parent->first_child_tag;
+        while (cur != ER_INVALID_TAG)
+        {
+            ERNode* cur_n = er_get_node(cur);
+            if (!cur_n)
+                break;
+            if (cur_n->next_sibling_tag == child->tag)
+            {
+                cur_n->next_sibling_tag = child->next_sibling_tag;
+                break;
+            }
+            cur = cur_n->next_sibling_tag;
+        }
+    }
+    child->next_sibling_tag = ER_INVALID_TAG;
+}
+
 void er_tree_append_child(ERNode* parent, ERNode* child)
 {
     if (!parent || !child)
         return;
 
+    /* Move-safe: detach from any current position so re-appending an existing child (React
+     * reorders keyed children with appendChild) doesn't corrupt the sibling chain. */
+    tree_detach(child);
     child->parent_tag = parent->tag;
 
     if (parent->first_child_tag == ER_INVALID_TAG)
@@ -1364,14 +1407,27 @@ void er_tree_append_child(ERNode* parent, ERNode* child)
     mark_layout_dirty();
 }
 
-void er_tree_remove_child(ERNode* parent, ERNode* child)
+void er_tree_insert_before(ERNode* parent, ERNode* child, ERNode* before)
 {
     if (!parent || !child)
         return;
 
-    if (parent->first_child_tag == child->tag)
+    /* No anchor → append (also covers inserting before a non-child). */
+    if (!before)
     {
-        parent->first_child_tag = child->next_sibling_tag;
+        er_tree_append_child(parent, child);
+        return;
+    }
+
+    /* Move-safe: unlink from any current position (this or another parent) before splicing. */
+    tree_detach(child);
+    child->parent_tag = parent->tag;
+
+    /* Splice immediately before `before`. */
+    if (parent->first_child_tag == before->tag)
+    {
+        child->next_sibling_tag = before->tag;
+        parent->first_child_tag = child->tag;
     }
     else
     {
@@ -1381,17 +1437,33 @@ void er_tree_remove_child(ERNode* parent, ERNode* child)
             ERNode* cur_n = er_get_node(cur);
             if (!cur_n)
                 break;
-            if (cur_n->next_sibling_tag == child->tag)
+            if (cur_n->next_sibling_tag == before->tag)
             {
-                cur_n->next_sibling_tag = child->next_sibling_tag;
+                child->next_sibling_tag = before->tag;
+                cur_n->next_sibling_tag = child->tag;
                 break;
             }
             cur = cur_n->next_sibling_tag;
         }
+        /* `before` is not a child of parent → append instead. */
+        if (cur == ER_INVALID_TAG)
+        {
+            er_tree_append_child(parent, child);
+            return;
+        }
     }
 
+    parent->dirty = true;
+    mark_layout_dirty();
+}
+
+void er_tree_remove_child(ERNode* parent, ERNode* child)
+{
+    if (!parent || !child)
+        return;
+
+    tree_detach(child);
     child->parent_tag = ER_INVALID_TAG;
-    child->next_sibling_tag = ER_INVALID_TAG;
     parent->dirty = true;
     mark_layout_dirty();
 }

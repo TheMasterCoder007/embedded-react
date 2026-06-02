@@ -587,5 +587,126 @@ int main(void)
         er_node_destroy(ac_root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Test: er_tree_insert_before — ordered insertion, reordering (move), and
+     * the NULL/non-child append fallback. Order is observed through the stacked
+     * y positions of a column's children.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ib_root = er_node_create(ER_NODE_VIEW);
+        ERProps ibp = props_default();
+        ibp.width = 100;
+        ibp.height = 100;
+        ibp.flex_direction = ER_FLEX_COL;
+        ibp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(ib_root, &ibp);
+
+        ERNode* a = er_node_create(ER_NODE_VIEW);
+        ERNode* b = er_node_create(ER_NODE_VIEW);
+        ERNode* c = er_node_create(ER_NODE_VIEW);
+        ERNode* d = er_node_create(ER_NODE_VIEW);
+        ERRect ra = {0}, rb = {0}, rc = {0}, rd = {0};
+        ibp = props_default();
+        ibp.width = 40;
+        ibp.height = 20;
+        er_node_set_props(a, &ibp);
+        er_node_set_props(b, &ibp);
+        er_node_set_props(c, &ibp);
+        er_node_set_props(d, &ibp);
+        er_event_set(a, ER_EVENT_LAYOUT, on_layout_rect, &ra);
+        er_event_set(b, ER_EVENT_LAYOUT, on_layout_rect, &rb);
+        er_event_set(c, ER_EVENT_LAYOUT, on_layout_rect, &rc);
+        er_event_set(d, ER_EVENT_LAYOUT, on_layout_rect, &rd);
+
+        /* Insert c before b in [a, b] → order a, c, b. */
+        er_tree_append_child(ib_root, a);
+        er_tree_append_child(ib_root, b);
+        er_tree_insert_before(ib_root, c, b);
+        er_tree_set_root(ib_root);
+        er_commit();
+        if (ra.y != 0 || rc.y != 20 || rb.y != 40)
+            return fail("insert_before: ordered insert produced wrong order (expected a,c,b)");
+
+        /* Move existing b before a → order b, a, c. */
+        er_tree_insert_before(ib_root, b, a);
+        er_commit();
+        if (rb.y != 0 || ra.y != 20 || rc.y != 40)
+            return fail("insert_before: move of existing child produced wrong order (expected b,a,c)");
+
+        /* before == NULL appends → order b, a, c, d. */
+        er_tree_insert_before(ib_root, d, NULL);
+        er_commit();
+        if (rd.y != 60)
+            return fail("insert_before: NULL anchor should append at the end");
+
+        er_tree_remove_child(ib_root, a);
+        er_tree_remove_child(ib_root, b);
+        er_tree_remove_child(ib_root, c);
+        er_tree_remove_child(ib_root, d);
+        er_node_destroy(a);
+        er_node_destroy(b);
+        er_node_destroy(c);
+        er_node_destroy(d);
+        er_node_destroy(ib_root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: nested explicit sizes — a fixed-size child of the root keeps its
+     * height, and its grandchildren stack at their own heights (regression for
+     * the reconciler reorder demo where a 100x200 child filled the 480x320 root
+     * and its 20px items spread to ~106px each).
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ne_root = er_node_create(ER_NODE_VIEW);
+        ERProps nep = props_default();
+        nep.width = 480;
+        nep.height = 320;
+        nep.flex_direction = ER_FLEX_COL;
+        er_node_set_props(ne_root, &nep);
+
+        ERNode* ne_a = er_node_create(ER_NODE_VIEW);
+        ERRect ne_a_rect = {0};
+        nep = props_default();
+        nep.width = 100;
+        nep.height = 200;
+        nep.flex_direction = ER_FLEX_COL;
+        er_node_set_props(ne_a, &nep);
+        er_event_set(ne_a, ER_EVENT_LAYOUT, on_layout_rect, &ne_a_rect);
+        er_tree_append_child(ne_root, ne_a);
+
+        ERNode* ne_b[3];
+        ERRect ne_brect[3];
+        for (int i = 0; i < 3; i++)
+        {
+            ne_b[i] = er_node_create(ER_NODE_VIEW);
+            ERProps bp = props_default();
+            bp.width = 40;
+            bp.height = 20;
+            er_node_set_props(ne_b[i], &bp);
+            ne_brect[i] = (ERRect){-1, -1, -1, -1};
+            er_event_set(ne_b[i], ER_EVENT_LAYOUT, on_layout_rect, &ne_brect[i]);
+            er_tree_append_child(ne_a, ne_b[i]);
+        }
+
+        er_tree_set_root(ne_root);
+        er_commit();
+
+        if (ne_a_rect.h != 200)
+            return fail("nested explicit size: fixed-height child should stay 200, not fill the root");
+        if (ne_brect[0].y != 0 || ne_brect[1].y != 20 || ne_brect[2].y != 40)
+            return fail("nested explicit size: grandchildren should stack at 0,20,40");
+        if (ne_brect[0].h != 20)
+            return fail("nested explicit size: grandchild height should stay 20");
+
+        for (int i = 0; i < 3; i++)
+        {
+            er_tree_remove_child(ne_a, ne_b[i]);
+            er_node_destroy(ne_b[i]);
+        }
+        er_tree_remove_child(ne_root, ne_a);
+        er_node_destroy(ne_a);
+        er_node_destroy(ne_root);
+    }
+
     return EXIT_SUCCESS;
 }
