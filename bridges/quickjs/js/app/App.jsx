@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, Pressable, Animated, Easing } from 'embedded-react';
+import { View, Text, Pressable, Animated, Easing, LayoutAnimation } from 'embedded-react';
 
 // Demo: a box whose opacity + translateX are driven by Animated.Values bound to the engine. Tapping
 // "Animate" starts timing/spring animations that run entirely in C (native driver) — the only JS
@@ -12,6 +12,7 @@ export function App() {
   const [opacity] = useState(() => new Animated.Value(1));
   const [tx] = useState(() => new Animated.Value(0));
   const [on, setOn] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [uptime, setUptime] = useState(0);
 
   useEffect(() => {
@@ -28,6 +29,13 @@ export function App() {
       Animated.timing(opacity, { toValue: next ? 0.25 : 1, duration: 400, easing: Easing.easeInOut }),
       Animated.spring(tx, { toValue: next ? 130 : 0, stiffness: 130, damping: 13 }),
     ]).start(({ finished }) => console.log('animation', finished ? 'finished' : 'interrupted'));
+  };
+
+  const resize = () => {
+    // Arm a layout animation, then change a layout prop: the box resizes and the rest of the column
+    // reflows smoothly (tweened in C), instead of snapping.
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded((e) => !e);
   };
 
   return (
@@ -48,8 +56,8 @@ export function App() {
       </Text>
       <Animated.View
         style={{
-          width: 84,
-          height: 84,
+          width: expanded ? 160 : 84,
+          height: expanded ? 160 : 84,
           backgroundColor: '#2a9d8f',
           borderRadius: 16,
           opacity,
@@ -68,6 +76,19 @@ export function App() {
         }}
       >
         <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' }}>Animate</Text>
+      </Pressable>
+      <Pressable
+        onPress={resize}
+        style={{
+          backgroundColor: '#264653',
+          borderRadius: 10,
+          paddingHorizontal: 22,
+          height: 44,
+          width: 200,
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' }}>Resize (layout)</Text>
       </Pressable>
     </View>
   );

@@ -2617,6 +2617,102 @@ static void marshal_anim_config(JSContext* ctx, JSValueConst obj, ERAnimConfig* 
 }
 
 /**
+ * @brief NativeUI.configureNextLayoutAnimation(config) — arms a layout animation for the next commit.
+ *
+ * On the next er_commit() (driven by the reconciler's resetAfterCommit), every node whose computed
+ * rect changed animates from its current display position to the new one. Recognized config keys:
+ * type ("timing"|"spring"), duration, easing (token string or {x1,y1,x2,y2} bezier), and spring
+ * stiffness/damping/mass (0 = engine default). The config is consumed by that single commit.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = config object (optional; defaults to a 300ms ease-in-out).
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+
+    ERLayoutAnimConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.type = ER_ANIM_TIMING;
+    cfg.easing = ER_EASE_EASE_IN_OUT;
+    cfg.duration_ms = 300U;
+
+    JSValueConst obj = (argc > 0) ? argv[0] : JS_UNDEFINED;
+    if (JS_IsObject(obj))
+    {
+        JSValue v;
+        if (prop_get(ctx, obj, "type", &v))
+        {
+            const char* s = JS_ToCString(ctx, v);
+            if (s)
+            {
+                if (strcmp(s, "spring") == 0)
+                {
+                    cfg.type = ER_ANIM_SPRING;
+                }
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, obj, "duration", &v))
+        {
+            int32_t n = 0;
+            if (JS_ToInt32(ctx, &n, v) == 0 && n > 0)
+            {
+                cfg.duration_ms = (uint16_t)(n > 65535 ? 65535 : n);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, obj, "easing", &v))
+        {
+            if (JS_IsString(v))
+            {
+                const char* s = JS_ToCString(ctx, v);
+                if (s)
+                {
+                    cfg.easing = easing_from_name(s);
+                    JS_FreeCString(ctx, s);
+                }
+            }
+            else if (JS_IsObject(v))
+            {
+                cfg.easing = ER_EASE_BEZIER;
+                obj_f32(ctx, v, "x1", &cfg.bezier_x1);
+                obj_f32(ctx, v, "y1", &cfg.bezier_y1);
+                obj_f32(ctx, v, "x2", &cfg.bezier_x2);
+                obj_f32(ctx, v, "y2", &cfg.bezier_y2);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        obj_f32(ctx, obj, "stiffness", &cfg.stiffness);
+        obj_f32(ctx, obj, "damping", &cfg.damping);
+        obj_f32(ctx, obj, "mass", &cfg.mass);
+    }
+
+    er_layout_anim_configure_next(&cfg);
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.hasPendingLayoutAnimation() — true while a layout animation is in flight.
+ *
+ * Lets an app (or a test) tell whether the engine is mid-transition, e.g. to defer expensive work.
+ *
+ * @return JS boolean.
+ */
+static JSValue js_has_pending_layout_animation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewBool(ctx, er_layout_anim_has_pending());
+}
+
+/**
  * @brief NativeUI.animValueCreate(initial) — creates a standalone animatable value.
  *
  * @param[in] ctx   QuickJS context.
@@ -3001,6 +3097,14 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
     JS_SetPropertyStr(ctx, native_ui, "tick", JS_NewCFunction(ctx, js_tick, "tick", 1));
+    JS_SetPropertyStr(ctx,
+                      native_ui,
+                      "configureNextLayoutAnimation",
+                      JS_NewCFunction(ctx, js_configure_next_layout_animation, "configureNextLayoutAnimation", 1));
+    JS_SetPropertyStr(ctx,
+                      native_ui,
+                      "hasPendingLayoutAnimation",
+                      JS_NewCFunction(ctx, js_has_pending_layout_animation, "hasPendingLayoutAnimation", 0));
 
     /* Animated (er_anim_value_* — native-driver animation). */
     JS_SetPropertyStr(

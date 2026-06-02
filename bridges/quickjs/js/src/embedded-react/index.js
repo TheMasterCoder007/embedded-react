@@ -4,8 +4,7 @@
 //   import { useState } from 'react';
 //   import { View, Text, StyleSheet, AppRegistry } from 'embedded-react';
 //
-// Resolves as a Node package self-reference (see package.json "name"/"exports"). Animated and Easing
-// are not exported yet — they land with the Animated work (BRIDGE.md §1.4).
+// Resolves as a Node package self-reference (see package.json "name"/"exports").
 export {
   View,
   Text,
@@ -24,3 +23,4 @@ export { Platform } from './Platform.js';
 export { AppRegistry } from './AppRegistry.js';
 export { Animated } from './Animated.js';
 export { Easing } from './Easing.js';
+export { LayoutAnimation } from './LayoutAnimation.js';

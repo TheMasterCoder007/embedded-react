@@ -113,12 +113,14 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
 - ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
   `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with
   completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.
-- ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
-  extend); the rest of `interpolate({ inputRange, outputRange })` works.
 - ✅ **Multi-child `<Text>` + nested spans.** Interpolation (`Hi {name}`) and nested styled
   `<Text>` runs both work — a flattenable `<Text>` owns its subtree and renders as the node's text
   plus, when runs differ in style, an inline span array (`NativeUI.setTextSpans`, max 4). Covered by
   `text-spans` unit + runtime tests.
+- ✅ **LayoutAnimation.** `LayoutAnimation.configureNext(...)` before a layout-changing state update
+  tweens every node whose computed rect moved on the next commit (in C — no per-frame JS). `Presets`
+  / `create` / `Types` / `Properties` and the `easeInEaseOut`/`linear`/`spring` shorthands. Covered
+  by `layout-animation` unit + `layout-anim.runtime.test.jsx`.
 - ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
   extend); the rest of `interpolate({ inputRange, outputRange })` works.
 - ⏳ **`qjsc` bytecode** path + `create-embedded-react` scaffold — still to come (§4).

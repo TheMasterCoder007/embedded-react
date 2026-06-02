@@ -197,8 +197,15 @@ prop lets the engine advance the animation each frame with **no per-frame JS**. 
   when superseded by a new animation or `stop()`. Composition is pure JS over each child's
   start/stop + the §2 timer globals; every leg still runs in C (native driver). Verified by
   `anim-compose.runtime.test.js`
-- [ ] LayoutAnimation: `NativeUI.configureNextLayoutAnimation(cfg)` →
-  `er_layout_anim_configure_next`
+- [x] LayoutAnimation: `NativeUI.configureNextLayoutAnimation(cfg)` → `er_layout_anim_configure_next`
+  (marshals type timing/spring, duration, easing token|bezier, spring stiffness/damping/mass). JS
+  `LayoutAnimation` module — `configureNext(config, onDone?)`, `create()`, `Presets`
+  (easeInEaseOut/linear/spring), `Types`/`Properties`, and the `easeInEaseOut`/`linear`/`spring`
+  shorthands. Call before the state update that changes layout; the engine tweens every node whose
+  computed rect moved on the next commit (in C, no per-frame JS). `onAnimationDidEnd` is approximated
+  with a §2 timer; `NativeUI.hasPendingLayoutAnimation()` reports a config armed for the next commit.
+  Verified by `layout-animation` unit (config mapping) + `layout-anim.runtime.test.jsx` (arm →
+  consume → correct final layout); the tween itself is covered by the engine's `test_layout_anim`.
 
 Engine touch (no-regression): `er_anim_value_bind` now applies the value's current value on bind
 (matching the interpolated path); the interpolated bind gained the same duplicate-(node,prop) guard
