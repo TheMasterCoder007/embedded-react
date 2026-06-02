@@ -777,6 +777,37 @@ static void push_to_value_bindings(ERAnimValue* val)
     }
 }
 
+void er_anim_reapply_bound(ERNode* node)
+{
+    if (!node)
+        return;
+    /* Re-push the current animated value to every prop of this node that is bound to an
+     * ERAnimValue. Called after er_node_set_props so a declarative prop update (React commitUpdate)
+     * does not clobber a native-driver animation: setProps writes the static value, then this
+     * restores the animated value — within the same commit, before the frame is painted. */
+    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    {
+        ERAnimValue* val = &s_anim_values[s];
+        if (!val->in_use)
+            continue;
+        for (int b = 0; b < val->binding_count; b++)
+        {
+            ERValueBinding* bind = &val->bindings[b];
+            if (!bind->active || bind->node_tag != node->tag)
+                continue;
+            float v = val->current;
+            if (bind->interpolated)
+                v = er_interpolate(v,
+                                   bind->interp.input_range,
+                                   bind->interp.output_range,
+                                   (int)bind->interp.point_count,
+                                   bind->interp.extrapolate_left,
+                                   bind->interp.extrapolate_right);
+            (void)apply_numeric_value(node, bind->prop, v);
+        }
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — spring / decay tick helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1229,6 +1260,11 @@ void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
             val->bindings[b].active = true;
             if ((uint8_t)(b + 1) > val->binding_count)
                 val->binding_count = (uint8_t)(b + 1);
+            /* Apply immediately so the node reflects the current value on bind (matches the
+             * interpolated path) — keeps a freshly-bound node from showing its default until the
+             * value next changes. */
+            (void)apply_numeric_value(node, prop, val->current);
+            er_mark_dirty_upward(node);
             return;
         }
     }
@@ -1301,6 +1337,13 @@ void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
     ERAnimValue* val = find_value_slot(handle);
     if (!val)
         return;
+    /* Refuse duplicate bindings for the same node+prop pair (the reconciler may re-bind on every
+     * render). Without this, re-renders would exhaust the binding pool. */
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+            return;
+    }
     for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
     {
         if (!val->bindings[b].active)

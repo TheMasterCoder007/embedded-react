@@ -1142,6 +1142,11 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             break;
     }
 
+    /* Native-driver props (opacity/transform/color animated via an ERAnimValue) are owned by the
+     * animation, not this declarative update — restore them so a React commitUpdate doesn't snap
+     * the node back to its static value mid-animation. No-op when nothing is bound to this node. */
+    er_anim_reapply_bound(node);
+
     /* Props may change layout inputs (size, flex, margins, text content/font). Conservatively
      * request a layout pass; a future refinement could compare the layout-relevant fields and
      * skip when only a visual prop (color, shadow, …) changed. */

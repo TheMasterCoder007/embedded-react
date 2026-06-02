@@ -711,5 +711,45 @@ int main(void)
         er_node_destroy(vb);
     }
 
+    /* -----------------------------------------------------------------------
+     * CLOBBER GUARD: a declarative er_node_set_props() must not reset a prop
+     * that is currently owned by an ERAnimValue binding.
+     *
+     * React re-renders call commitUpdate → er_node_set_props with the static
+     * style (translateX absent → 0), which used to clobber the bound animated
+     * translateX until the next tick re-pushed it. er_node_set_props now
+     * re-applies bound values, so the animated transform survives the
+     * declarative update within the same commit.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* clobber = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 10;
+        cp.height = 10;
+        er_node_set_props(clobber, &cp);
+
+        ERAnimValueHandle ch = er_anim_value_create(0.0f);
+        if (ch == ER_ANIM_VALUE_INVALID)
+            return fail("clobber: er_anim_value_create returned INVALID");
+
+        er_anim_value_bind(ch, clobber, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(ch, 80.0f);
+        if (clobber->tp_translate_x < 79.9f || clobber->tp_translate_x > 80.1f)
+            return fail("clobber: bound value did not apply before re-render");
+
+        /* Simulate a React re-render: the static props carry no transform (0). */
+        ERProps cp2 = props_default();
+        cp2.width = 10;
+        cp2.height = 10;
+        er_node_set_props(clobber, &cp2);
+
+        /* Without the re-apply guard this would now be 0 (the jump-to-middle). */
+        if (clobber->tp_translate_x < 79.9f || clobber->tp_translate_x > 80.1f)
+            return fail("clobber: er_node_set_props reset the animated translateX");
+
+        er_anim_value_destroy(ch);
+        er_node_destroy(clobber);
+    }
+
     return EXIT_SUCCESS;
 }

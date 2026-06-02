@@ -3,6 +3,9 @@
 
 #include "native_renderer.h"
 
+/* Forward declaration (full definition in er_node_internal.h) */
+struct ERNode;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -106,6 +109,17 @@ void er_tick(uint32_t delta_ms);
  * @param[in] delta_ms  Milliseconds elapsed since the last tick.
  */
 void er_anim_tick(uint32_t delta_ms);
+
+/**
+ * @brief Re-applies the current value of every ERAnimValue bound to this node.
+ *
+ * Call after er_node_set_props so a declarative prop update does not clobber a native-driver
+ * animation — setProps writes the static value, then this restores the animated one in the same
+ * commit. No-op for nodes with no animated bindings.
+ *
+ * @param[in] node  Node whose animated-bound props should be restored.
+ */
+void er_anim_reapply_bound(struct ERNode* node);
 
 /**
  * @brief Advances all active layout animations by delta_ms milliseconds.
