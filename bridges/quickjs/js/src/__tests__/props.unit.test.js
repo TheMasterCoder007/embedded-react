@@ -51,8 +51,8 @@ describe('buildProps', () => {
     expect(buildProps('View', { children: 'hi' })).toEqual({});
   });
 
-  it('does not set text for multi-child Text (interpolation/spans not yet supported)', () => {
-    expect(buildProps('Text', { children: ['a', 'b'] })).toEqual({});
+  it('concatenates multi-child Text into the node text (interpolation)', () => {
+    expect(buildProps('Text', { children: ['a', 'b'] })).toEqual({ text: 'ab' });
   });
 
   it('PASSTHROUGH is a non-empty list of strings', () => {

@@ -41,7 +41,11 @@ export function App() {
         alignItems: 'center',
       }}
     >
-      <Text style={{ color: '#9aa5b1', fontSize: 14 }}>{`uptime: ${uptime}s`}</Text>
+      {/* Multi-child interpolation (no template string needed) + a nested styled span. */}
+      <Text style={{ color: '#9aa5b1', fontSize: 14 }}>
+        uptime{' '}
+        <Text style={{ color: '#ffd166', fontWeight: 'bold' }}>{uptime}s</Text>
+      </Text>
       <Animated.View
         style={{
           width: 84,

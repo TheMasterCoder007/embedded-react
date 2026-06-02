@@ -117,7 +117,13 @@ one prop family verified against a JS value.
 - [x] `color` / `fontSize` / `fontFamily` / `fontWeight` / `fontStyle`
 - [x] `lineHeight` / `letterSpacing` / `textAlign` / `textDecorationLine`
 - [x] `numberOfLines` / `ellipsizeMode`
-- [ ] Nested `<Text>` spans → `er_node_set_text_spans` (`ERTextSpan[]`, max 4)
+- [x] Multi-child `<Text>` + nested spans → `er_node_set_text_spans` (`ERTextSpan[]`, max 4).
+  `shouldSetTextContent` now owns any flattenable `<Text>` subtree (strings, interpolation,
+  nested `<Text>`); the host config flattens it into the node's `text` (full string) plus, when the
+  runs differ in style, a span array marshalled by `NativeUI.setTextSpans` (per-span color / fontSize
+  / fontWeight / fontStyle / textDecorationLine / letterSpacing, sentinels inherit the base). Uniform
+  text takes the plain-text path (no spans). A non-`Text` element child falls back to mounted
+  instances. Verified by `text-spans` unit (14 cases) + runtime tests
 
 **Image:**
 
@@ -355,9 +361,17 @@ demo. Current: 31 EXPECT pass, 0 XFAIL.
   + compositor), resolved against the parent content box in Pass 1, respected by Pass 5 stretch;
   bridge marshals `'N%'` strings. Percentage padding/margin/min/max/position still pixels-only.
 
-- ⏳ **OPEN — not yet expressible via `ERProps`** (need fields/props first, so not in the harness
-  yet): `margin: auto`, percentage padding/margin/min/max/position, width-aware text wrapping /
-  auto-height, `alignItems: baseline`. Listed at the foot of the parity test.
+- ✅ **FIXED — bold / span text measured narrower than rendered (trailing-glyph clipping).**
+  `er_text_measure` summed plain glyph advances, but the renderer synthesises **bold** by drawing
+  each glyph twice 1px apart and advances the cursor `+1px/glyph` to match — so a bold (or bold-span)
+  run rendered wider than its measured box and the last glyph(s) clipped. Surfaced by the demo's
+  `uptime <Text bold>{n}s</Text>`: the trailing "s" dropped as the digit count grew. **Fix
+  (engine/text):** `er_text_measure` gained a `font_weight` arg and adds the same `+1px/glyph` for
+  bold; new `er_text_measure_spans()` measures a span run exactly as the renderer draws it (base
+  font, per-span weight/letter-spacing from sentinels). `measure_content` (layout) now calls the
+  span-aware path when `span_count > 0`, else the weight-aware plain path; the TextInput cursor
+  measure passes its weight too. Covered by `test_text` (bold = normal + glyph-count; span == plain;
+  bold-span == bold; two-span == joined). No `ERProps`/API surface change beyond the measure args.
 
 ---
 

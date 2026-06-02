@@ -52,9 +52,10 @@ vitest.config.js           unit test config
 ```
 
 The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
-handlers to `setEvent`, and uses `shouldSetTextContent` so `<Text>string</Text>` becomes the
-node's `text`. `Animated`, `Easing`, and the web timer globals (`setTimeout` / `setInterval`) are
-all available; `useEffect` flushes via the host pump (BRIDGE.md §1.4, §2).
+handlers to `setEvent`, and uses `shouldSetTextContent` so a flattenable `<Text>` subtree (a string,
+interpolation like `Hi {name}`, or nested `<Text>` runs) becomes the node's `text` + inline spans.
+`Animated`, `Easing`, and the web timer globals (`setTimeout` / `setInterval`) are all available;
+`useEffect` flushes via the host pump (BRIDGE.md §1.2, §1.4, §2).
 
 ## Build
 
@@ -114,6 +115,10 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.
 - ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
   extend); the rest of `interpolate({ inputRange, outputRange })` works.
-- ⏳ **Multi-child `<Text>`** (interpolation like `Hi {name}`, nested `<Text>` spans) — only a
-  single string/number child is supported (`shouldSetTextContent`). Spans land with §1.2 span work.
+- ✅ **Multi-child `<Text>` + nested spans.** Interpolation (`Hi {name}`) and nested styled
+  `<Text>` runs both work — a flattenable `<Text>` owns its subtree and renders as the node's text
+  plus, when runs differ in style, an inline span array (`NativeUI.setTextSpans`, max 4). Covered by
+  `text-spans` unit + runtime tests.
+- ⏳ **Interpolate `extrapolate`** — `'clamp'`/`'identity'` not wired yet (the engine defaults to
+  extend); the rest of `interpolate({ inputRange, outputRange })` works.
 - ⏳ **`qjsc` bytecode** path + `create-embedded-react` scaffold — still to come (§4).

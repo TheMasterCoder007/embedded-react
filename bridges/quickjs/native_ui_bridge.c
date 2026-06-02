@@ -2154,6 +2154,156 @@ static JSValue js_set_props(JSContext* ctx, JSValueConst this_val, int argc, JSV
 }
 
 /**
+ * @brief NativeUI.setTextSpans(handle, spans) — sets inline styled text spans on a Text node.
+ *
+ * `spans` is an array of segment objects `{ text, color?, fontSize?, fontWeight?, fontStyle?,
+ * textDecorationLine?, letterSpacing? }`. Omitted style fields inherit from the node's base style
+ * (sentinel values). An empty/absent array reverts the node to single-string (`text`) rendering.
+ * The array is clamped to ER_TEXT_MAX_SPANS and each fragment to ER_SPAN_TEXT_MAX bytes.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node handle, argv[1] = array of span objects.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_text_spans(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    if (!node)
+    {
+        return JS_UNDEFINED;
+    }
+    if (argc < 2 || !JS_IsArray(argv[1]))
+    {
+        er_node_set_text_spans(node, NULL, 0);
+        return JS_UNDEFINED;
+    }
+
+    JSValue len_val = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t len = 0;
+    JS_ToInt32(ctx, &len, len_val);
+    JS_FreeValue(ctx, len_val);
+    if (len <= 0)
+    {
+        er_node_set_text_spans(node, NULL, 0);
+        return JS_UNDEFINED;
+    }
+    if (len > ER_TEXT_MAX_SPANS)
+    {
+        len = ER_TEXT_MAX_SPANS;
+    }
+
+    ERTextSpan spans[ER_TEXT_MAX_SPANS];
+    for (int32_t i = 0; i < len; i++)
+    {
+        ERTextSpan* sp = &spans[i];
+        memset(sp, 0, sizeof(*sp));
+        /* Sentinels: every style field inherits from the base node unless overridden below. */
+        sp->font_weight = 0xFFU;
+        sp->font_style = 0xFFU;
+        sp->text_decoration = 0xFFU;
+        sp->letter_spacing = ER_LAYOUT_AUTO;
+
+        JSValue seg = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        JSValue v;
+
+        if (prop_get(ctx, seg, "text", &v))
+        {
+            const char* s = JS_ToCString(ctx, v);
+            if (s)
+            {
+                size_t n = strlen(s);
+                if (n > ER_SPAN_TEXT_MAX)
+                {
+                    n = ER_SPAN_TEXT_MAX;
+                }
+                memcpy(sp->text, s, n);
+                sp->text[n] = '\0';
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "color", &v))
+        {
+            uint32_t c = 0;
+            if (to_color(ctx, v, &c))
+            {
+                sp->color = c;
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "fontSize", &v))
+        {
+            int32_t fs = 0;
+            if (JS_ToInt32(ctx, &fs, v) == 0 && fs > 0)
+            {
+                sp->font_size = (uint8_t)(fs > 255 ? 255 : fs);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "fontWeight", &v))
+        {
+            if (JS_IsNumber(v))
+            {
+                int32_t w = 0;
+                JS_ToInt32(ctx, &w, v);
+                sp->font_weight = w >= 600 ? 1U : 0U;
+            }
+            else
+            {
+                const char* s = JS_ToCString(ctx, v);
+                if (s)
+                {
+                    sp->font_weight = (strcmp(s, "bold") == 0 || atoi(s) >= 600) ? 1U : 0U;
+                    JS_FreeCString(ctx, s);
+                }
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "fontStyle", &v))
+        {
+            const char* s = JS_ToCString(ctx, v);
+            if (s)
+            {
+                sp->font_style = map_font_style(s);
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "textDecorationLine", &v))
+        {
+            const char* s = JS_ToCString(ctx, v);
+            if (s)
+            {
+                sp->text_decoration = map_text_decoration(s);
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, v);
+        }
+        if (prop_get(ctx, seg, "letterSpacing", &v))
+        {
+            int32_t ls = 0;
+            if (JS_ToInt32(ctx, &ls, v) == 0)
+            {
+                sp->letter_spacing = (int16_t)ls;
+            }
+            JS_FreeValue(ctx, v);
+        }
+        JS_FreeValue(ctx, seg);
+    }
+
+    er_node_set_text_spans(node, spans, (uint8_t)len);
+    return JS_UNDEFINED;
+}
+
+/**
  * @brief NativeUI.commit() — runs layout + paint for all pending mutations.
  *
  * @param[in] ctx   QuickJS context (unused).
@@ -2846,6 +2996,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "removeChild", JS_NewCFunction(ctx, js_remove_child, "removeChild", 2));
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
+    JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
