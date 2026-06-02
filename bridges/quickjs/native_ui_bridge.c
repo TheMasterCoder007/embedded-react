@@ -25,6 +25,16 @@
 /** @brief Invalid handle sentinel returned by createNode on failure. */
 #define ER_BRIDGE_HANDLE_INVALID 0
 
+/**
+ * @brief Maximum number of concurrently scheduled timers (setTimeout + setInterval).
+ *
+ * Fixed pool — no heap growth, matching the embedded ethos. The React scheduler uses at
+ * most a couple at a time; app code rarely needs more than a handful.
+ */
+#ifndef ER_BRIDGE_MAX_TIMERS
+#define ER_BRIDGE_MAX_TIMERS 64
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -51,6 +61,35 @@ static JSContext* s_bridge_ctx = NULL;
  * context lifetime and is freed at teardown). Keys are handle * ER_EVENT_TYPE_COUNT_ + type.
  */
 static JSValue s_event_handlers;
+
+/**
+ * @brief One scheduled timer slot. Index into s_timers[] doubles as the registry key.
+ *
+ * The JS callback and any bound extra args live in s_timer_handlers[slot] (a JS array
+ * [callback, ...args]); only the scheduling metadata is kept C-side.
+ */
+typedef struct
+{
+    bool active;          /**< Slot is in use. */
+    int32_t id;           /**< User-facing id returned to JS (monotonic, > 0). */
+    uint32_t due_ms;      /**< er_now_ms() value at which the callback should next fire. */
+    uint32_t interval_ms; /**< Repeat period in ms; 0 = one-shot (setTimeout). */
+    int nargs;            /**< Count of extra args forwarded to the callback. */
+} ERBridgeTimer;
+
+/** @brief Fixed timer pool. Slot index is the key into s_timer_handlers. */
+static ERBridgeTimer s_timers[ER_BRIDGE_MAX_TIMERS];
+
+/** @brief Next id handed out by setTimeout/setInterval; starts at 1 (0 = "no timer"). */
+static int32_t s_next_timer_id = 1;
+
+/**
+ * @brief JS object mapping a slot index to that timer's [callback, ...args] array.
+ *
+ * Borrowed reference, owned by the NativeUI global (freed at context teardown), exactly like
+ * s_event_handlers. Keeping the callbacks in the JS graph means no C-side ref leaks at shutdown.
+ */
+static JSValue s_timer_handlers;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — handle table
@@ -1636,6 +1675,254 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — timers & job queue
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Prints a pending JS exception (message + stack) to stderr and clears it.
+ *
+ * @param[in] ctx    Context whose current exception should be reported.
+ * @param[in] where  Short label for the failure site (e.g. "timer callback").
+ */
+static void bridge_report_exception(JSContext* ctx, const char* where)
+{
+    JSValue exc = JS_GetException(ctx);
+    const char* msg = JS_ToCString(ctx, exc);
+    fprintf(stderr, "JS %s exception: %s\n", where, msg ? msg : "(unknown)");
+    if (msg)
+    {
+        JS_FreeCString(ctx, msg);
+    }
+    JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+    if (!JS_IsUndefined(stack))
+    {
+        const char* st = JS_ToCString(ctx, stack);
+        if (st)
+        {
+            fprintf(stderr, "%s\n", st);
+            JS_FreeCString(ctx, st);
+        }
+    }
+    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, exc);
+}
+
+/**
+ * @brief Deactivates a timer slot and releases its callback array from the registry.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] slot  Slot index in s_timers / s_timer_handlers.
+ */
+static void timer_clear_slot(JSContext* ctx, int slot)
+{
+    s_timers[slot].active = false;
+    JS_SetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot, JS_UNDEFINED);
+}
+
+/**
+ * @brief Shared implementation for setTimeout / setInterval.
+ *
+ * @param[in] ctx          QuickJS context.
+ * @param[in] argc         Argument count (argv[0]=callback, argv[1]=delay ms, argv[2..]=extra args).
+ * @param[in] argv         Argument values.
+ * @param[in] is_interval  true for setInterval (repeating), false for setTimeout (one-shot).
+ *
+ * @return JS integer timer id (> 0), or 0 if the callback is not a function or the pool is full.
+ */
+static JSValue timer_register(JSContext* ctx, int argc, JSValueConst* argv, bool is_interval)
+{
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
+    {
+        return JS_NewInt32(ctx, 0);
+    }
+
+    int32_t delay = 0;
+    if (argc > 1)
+    {
+        JS_ToInt32(ctx, &delay, argv[1]);
+    }
+    if (delay < 0)
+    {
+        delay = 0;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    {
+        if (!s_timers[i].active)
+        {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0)
+    {
+        fprintf(stderr, "setTimeout/setInterval: timer pool full (%d)\n", ER_BRIDGE_MAX_TIMERS);
+        return JS_NewInt32(ctx, 0);
+    }
+
+    /* Stash [callback, ...extraArgs] in the JS-owned registry so it is GC-rooted and freed at
+       teardown. The extra args (argv[2..]) are forwarded to the callback per the web spec. */
+    const int nargs = argc > 2 ? argc - 2 : 0;
+    JSValue bundle = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, bundle, 0, JS_DupValue(ctx, argv[0]));
+    for (int k = 0; k < nargs; k++)
+    {
+        JS_SetPropertyUint32(ctx, bundle, (uint32_t)(k + 1), JS_DupValue(ctx, argv[2 + k]));
+    }
+    JS_SetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot, bundle);
+
+    ERBridgeTimer* t = &s_timers[slot];
+    t->active = true;
+    t->id = s_next_timer_id++;
+    t->nargs = nargs;
+    /* setInterval clamps to a 1ms floor so due_ms strictly advances (no per-pump busy-fire). */
+    t->interval_ms = is_interval ? (uint32_t)(delay < 1 ? 1 : delay) : 0U;
+    t->due_ms = er_now_ms() + (uint32_t)delay;
+    return JS_NewInt32(ctx, t->id);
+}
+
+/**
+ * @brief setTimeout(callback, delayMs, ...args) — schedules a one-shot timer.
+ *
+ * @return Integer timer id for clearTimeout, or 0 on failure.
+ */
+static JSValue js_set_timeout(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    return timer_register(ctx, argc, argv, false);
+}
+
+/**
+ * @brief setInterval(callback, periodMs, ...args) — schedules a repeating timer.
+ *
+ * @return Integer timer id for clearInterval, or 0 on failure.
+ */
+static JSValue js_set_interval(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    return timer_register(ctx, argc, argv, true);
+}
+
+/**
+ * @brief clearTimeout(id) / clearInterval(id) — cancels a scheduled timer by id.
+ *
+ * @return JS_UNDEFINED. Unknown / already-fired ids are ignored.
+ */
+static JSValue js_clear_timer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t id = 0;
+    if (JS_ToInt32(ctx, &id, argv[0]) != 0 || id <= 0)
+    {
+        return JS_UNDEFINED;
+    }
+    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    {
+        if (s_timers[i].active && s_timers[i].id == id)
+        {
+            timer_clear_slot(ctx, i);
+            break;
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief Drains the QuickJS job queue (Promise reactions / microtasks) to completion.
+ *
+ * @param[in] ctx  Any context on the runtime; pending jobs across the runtime are executed.
+ */
+static void bridge_run_microtasks(JSContext* ctx)
+{
+    JSRuntime* rt = JS_GetRuntime(ctx);
+    for (;;)
+    {
+        JSContext* job_ctx = NULL;
+        const int rc = JS_ExecutePendingJob(rt, &job_ctx);
+        if (rc == 0)
+        {
+            break; /* no more pending jobs */
+        }
+        if (rc < 0 && job_ctx)
+        {
+            bridge_report_exception(job_ctx, "promise job");
+        }
+    }
+}
+
+/**
+ * @brief Fires every timer whose deadline has passed, in a single bounded pass.
+ *
+ * One-shot timers are removed before their callback runs; intervals are rescheduled to
+ * now + period (so they cannot re-fire within this pass). The callback array is captured
+ * (owned) before invocation, so a callback that cancels its own timer cannot free the
+ * function out from under the in-flight call.
+ *
+ * @param[in] ctx  QuickJS context.
+ */
+static void bridge_fire_due_timers(JSContext* ctx)
+{
+    const uint32_t now = er_now_ms();
+    for (int slot = 0; slot < ER_BRIDGE_MAX_TIMERS; slot++)
+    {
+        ERBridgeTimer* t = &s_timers[slot];
+        if (!t->active)
+        {
+            continue;
+        }
+        /* Wrap-safe "due_ms <= now" comparison on the monotonic engine clock. */
+        if ((int32_t)(now - t->due_ms) < 0)
+        {
+            continue;
+        }
+
+        JSValue bundle = JS_GetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot); /* owned */
+        const int nargs = t->nargs;
+
+        if (t->interval_ms > 0U)
+        {
+            t->due_ms = now + t->interval_ms;
+        }
+        else
+        {
+            timer_clear_slot(ctx, slot);
+        }
+
+        if (JS_IsObject(bundle))
+        {
+            JSValue fn = JS_GetPropertyUint32(ctx, bundle, 0);
+            JSValue* callv = NULL;
+            if (nargs > 0)
+            {
+                callv = (JSValue*)malloc(sizeof(JSValue) * (size_t)nargs);
+                for (int k = 0; k < nargs; k++)
+                {
+                    callv[k] = JS_GetPropertyUint32(ctx, bundle, (uint32_t)(k + 1));
+                }
+            }
+            JSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, nargs, callv);
+            if (JS_IsException(ret))
+            {
+                bridge_report_exception(ctx, "timer callback");
+            }
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, fn);
+            for (int k = 0; k < nargs; k++)
+            {
+                JS_FreeValue(ctx, callv[k]);
+            }
+            free(callv);
+        }
+        JS_FreeValue(ctx, bundle);
+    }
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — NativeUI methods
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -2405,12 +2692,35 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
         delta = 0;
     }
     embedded_renderer_tick((uint32_t)delta);
+    /* Advancing the engine clock can make timers due; pump so a JS-driven loop or test that
+       only calls tick() still runs Promises and setTimeout/setInterval callbacks. */
+    er_bridge_pump(ctx);
     return JS_UNDEFINED;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Runs one host pump: drains microtasks, fires due timers, then drains again.
+ *
+ * Drains before and after firing so a Promise that schedules a timer, and a timer callback
+ * that resolves a Promise, both settle within the same pump. Call once per frame from the
+ * host loop (after advancing the engine clock).
+ *
+ * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
+ */
+void er_bridge_pump(JSContext* ctx)
+{
+    if (!ctx)
+    {
+        return;
+    }
+    bridge_run_microtasks(ctx);
+    bridge_fire_due_timers(ctx);
+    bridge_run_microtasks(ctx);
+}
 
 /**
  * @brief Installs the NativeUI bridge object into a QuickJS global scope.
@@ -2420,6 +2730,13 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 void er_bridge_install(JSContext* ctx)
 {
     s_bridge_ctx = ctx;
+
+    /* Start every context with an empty timer pool (statics persist across re-install in tests). */
+    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    {
+        s_timers[i].active = false;
+    }
+    s_next_timer_id = 1;
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native_ui = JS_NewObject(ctx);
@@ -2458,7 +2775,21 @@ void er_bridge_install(JSContext* ctx)
     s_event_handlers = handlers;
     JS_SetPropertyStr(ctx, native_ui, "__er_event_handlers", handlers);
 
+    /* Timer-callback registry: same ownership trick as the event handlers, so each timer's
+       [callback, ...args] array is GC-rooted and reclaimed with the context. */
+    JSValue timer_handlers = JS_NewObject(ctx);
+    s_timer_handlers = timer_handlers;
+    JS_SetPropertyStr(ctx, native_ui, "__er_timer_handlers", timer_handlers);
+
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);
+
+    /* Standard web timer globals, driven by the host pump (er_bridge_pump) off the engine clock.
+       Promises use QuickJS's native job queue; the pump drains it each frame. */
+    JS_SetPropertyStr(ctx, global, "setTimeout", JS_NewCFunction(ctx, js_set_timeout, "setTimeout", 2));
+    JS_SetPropertyStr(ctx, global, "setInterval", JS_NewCFunction(ctx, js_set_interval, "setInterval", 2));
+    JS_SetPropertyStr(ctx, global, "clearTimeout", JS_NewCFunction(ctx, js_clear_timer, "clearTimeout", 1));
+    JS_SetPropertyStr(ctx, global, "clearInterval", JS_NewCFunction(ctx, js_clear_timer, "clearInterval", 1));
+
     JS_FreeValue(ctx, global);
 }

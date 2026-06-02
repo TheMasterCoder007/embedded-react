@@ -343,6 +343,12 @@ int main(int argc, char** argv)
     const bool app_ok = host_eval(ctx, app_src, app_name);
     free(loaded);
 
+    /* Settle any Promises / mount-time microtasks the app queued before the first paint. */
+    if (app_ok)
+    {
+        er_bridge_pump(ctx);
+    }
+
     if (!app_ok)
     {
         JS_FreeContext(ctx);
@@ -384,6 +390,11 @@ int main(int argc, char** argv)
                 embedded_renderer_touch(0, ER_TOUCH_MOVE, event_px(ev.motion.x), event_px(ev.motion.y));
             }
         }
+
+        /* Service Promises and setTimeout/setInterval before painting, so timer/async-driven
+           state updates land in this frame's commit. The engine clock used by timers was
+           advanced by last frame's embedded_renderer_tick. */
+        er_bridge_pump(ctx);
 
         er_commit();
         er_sdl_present();

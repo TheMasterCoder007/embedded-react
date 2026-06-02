@@ -213,14 +213,20 @@ C scene with "run the JS bundle, then tick."
 - [x] `JSRuntime` / `JSContext` init + teardown on exit (`main_js.c`)
 - [x] Register the `NativeUI` bridge into the global object at startup
 - [x] `console.log` / `console.warn` / `console.error` shims → stdout
-- [ ] Pump the QuickJS job queue (Promises/microtasks) once per frame
-- [ ] `setTimeout` / `setInterval` shim driven off `er_now_ms` (needed for non-native-driver
-  `Animated` and React scheduling)
+- [x] Pump the QuickJS job queue (Promises/microtasks) once per frame — `er_bridge_pump()` drains
+  `JS_ExecutePendingJob` before and after firing timers; called by the desktop loop and by
+  `NativeUI.tick()` (so JS-driven loops / tests pump too)
+- [x] `setTimeout` / `setInterval` shim driven off `er_now_ms` — fixed timer pool in the bridge,
+  callbacks GC-rooted in a `__er_timer_handlers` registry (auto-freed at teardown). `setTimeout` /
+  `setInterval` / `clearTimeout` / `clearInterval` installed as globals; extra args forwarded.
+  Verified by `timers.runtime.test.js` and `effects.runtime.test.jsx` (**`useEffect` now flushes** —
+  mount, deps, no-spurious-rerun, cleanup-on-unmount)
 - [x] Load + evaluate a JS app from a file path (`argv[1]`) with a built-in default app;
   embedded-byte-array / bytecode parity still to come
 - [ ] Bytecode path: precompile bundle → `qjsc` bytecode, embed as a C array, load on boot
-- [~] Frame loop: `er_commit()` → `er_sdl_present()` → `embedded_renderer_tick(dt)` each frame;
-  **JS-job drain** still to add (needed once Promises/timers are used)
+- [x] Frame loop: `er_bridge_pump()` → `er_commit()` → `er_sdl_present()` → `embedded_renderer_tick(dt)`
+  each frame; the pump services Promises + timers before painting so async/timer state lands in the
+  same frame's commit
 - [~] Feed SDL touch into `embedded_renderer_touch` (mouse→touch wired); keyboard feed still TODO
 - [x] Error reporting: uncaught JS exceptions printed to stderr with `.stack`
 

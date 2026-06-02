@@ -25,6 +25,19 @@ extern "C"
      */
     void er_bridge_install(JSContext* ctx);
 
+    /**
+     * @brief Services the JS event loop for one host frame.
+     *
+     * Drains the QuickJS job queue (Promise reactions / microtasks) and fires any
+     * `setTimeout`/`setInterval` callbacks whose deadline has passed on the engine clock
+     * (`er_now_ms`). Call once per frame from the host loop, after advancing the clock with
+     * `embedded_renderer_tick`. `NativeUI.tick()` performs the same pump for JS-driven loops
+     * and tests, so a host that only ticks via JS need not call this directly.
+     *
+     * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
+     */
+    void er_bridge_pump(JSContext* ctx);
+
 #ifdef __cplusplus
 }
 #endif

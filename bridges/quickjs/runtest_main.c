@@ -214,6 +214,14 @@ int main(int argc, char** argv)
     }
     JS_FreeValue(ctx, result);
 
+    /* Drain any Promise jobs the test queued at top level so async assertions are recorded
+       before we read the failure counter. Timer-based tests advance the clock via NativeUI.tick,
+       which pumps on its own. */
+    if (status == 0)
+    {
+        er_bridge_pump(ctx);
+    }
+
     /* Read globalThis.__runtime_failed (the harness.js failure counter). */
     if (status == 0)
     {

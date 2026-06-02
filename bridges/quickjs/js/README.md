@@ -53,7 +53,8 @@ vitest.config.js           unit test config
 
 The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
 handlers to `setEvent`, and uses `shouldSetTextContent` so `<Text>string</Text>` becomes the
-node's `text`. `Animated` and `Easing` are not exported yet (BRIDGE.md §1.4).
+node's `text`. `Animated`, `Easing`, and the web timer globals (`setTimeout` / `setInterval`) are
+all available; `useEffect` flushes via the host pump (BRIDGE.md §1.4, §2).
 
 ## Build
 
@@ -104,6 +105,10 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   re-render via `setState`, keyed reorder moves nodes (`insertBefore`/`appendChild`), and
   `Animated.View` runs **native-driver** animations in the engine (no per-frame JS). Covered by
   `test/runtime/reorder.runtime.test.jsx` and `animated.runtime.test.jsx`.
+- ✅ **Timers, Promises, and `useEffect` work.** `setTimeout`/`setInterval`/`clearTimeout`/
+  `clearInterval` and the Promise job queue are serviced each frame by the host pump
+  (`er_bridge_pump`, off the engine clock). React passive effects (`useEffect`) flush on the pump.
+  Covered by `timers.runtime.test.js` and `effects.runtime.test.jsx`.
 - ⏳ **Animated composition** — `timing`/`spring`/`decay`/`interpolate` done; `sequence`/`parallel`/
   `loop`/`stagger`/`delay`, `.start(callback)`, and interpolate `extrapolate: 'clamp'` not yet.
 - ⏳ **Multi-child `<Text>`** (interpolation like `Hi {name}`, nested `<Text>` spans) — only a
