@@ -236,20 +236,24 @@ demo (`embedded-react-desktop-js`) runs the bundle by default and is interactive
 ## 4. `'embedded-react'` Module + Bundler
 
 The developer-facing JS package and the build step that turns `App.jsx` into something
-QuickJS runs. This is what makes `import { View } from 'embedded-react'` resolve.
+QuickJS runs. `import { View } from 'embedded-react'` resolves via a Node **package
+self-reference** (`package.json` `name: "embedded-react"` + `exports`) — works in esbuild and
+Vitest with no aliases. Public surface lives in `src/embedded-react/`.
 
-- [ ] `'embedded-react'` module: re-export `View`, `Text`, `Image`, `ScrollView`, `FlatList`,
+- [x] `'embedded-react'` module: re-export `View`, `Text`, `Image`, `ScrollView`, `FlatList`,
   `Pressable`, `TouchableOpacity`, `TextInput`, `ActivityIndicator`, `Switch`, `Modal`
 - [ ] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` /
-  `sequence` / `parallel` / `loop` / `stagger` / `delay`
-- [ ] `Easing` module mapping to `ERAnimEasing`
-- [ ] `useAnimatedValue` hook over the native value handle
-- [ ] `StyleSheet.create` (identity/validate pass-through)
-- [ ] Hooks come from React core (`useState`/`useEffect`/`useRef`/`useMemo`/`useCallback`/
-  `useContext`) — verify they run under QuickJS unmodified
-- [ ] Babel config: JSX transform + RN preset subset
-- [ ] Metro-compatible bundler resolving `'embedded-react'` to the module shim, emitting one
-  bundle
+  `sequence` / `parallel` / `loop` / `stagger` / `delay` (lands with §1.4)
+- [ ] `Easing` module mapping to `ERAnimEasing` (lands with §1.4)
+- [ ] `useAnimatedValue` hook over the native value handle (lands with §1.4)
+- [x] `StyleSheet.create` (identity pass-through) + `flatten`; also `Platform.OS`/`select`
+- [x] Hooks come from React core (`useState` verified running under QuickJS); apps import hooks
+  from `react`, components/APIs from `embedded-react` (RN convention)
+- [x] JSX transform — esbuild `jsx: 'automatic'` (no Babel needed)
+- [x] Bundler resolving `'embedded-react'` → single IIFE (esbuild self-reference; the
+  Metro-compatible story can layer on later, but esbuild covers the bundle role now)
+- [x] `AppRegistry.registerComponent(name, () => App)` entry (RN idiom; mounts into a
+  screen-sized root immediately, since running the bundle = starting the app)
 - [ ] `qjsc` bytecode compile step wired into the example build
 - [ ] `npx create-embedded-react` scaffold (last — nice-to-have, not slice-critical)
 

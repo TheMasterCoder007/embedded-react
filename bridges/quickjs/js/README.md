@@ -8,13 +8,34 @@ C engine**. Bundled to a single classic script that QuickJS runs with a plain `J
 React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scene.h (engine)
 ```
 
+## What an app imports
+
+The package is the React Native analog — same idiom (hooks from `react`, everything else here):
+
+```jsx
+import { useState } from 'react';
+import { View, Text, Pressable, StyleSheet, AppRegistry } from 'embedded-react';
+
+function App() { /* ... */ }
+AppRegistry.registerComponent('demo', () => App);
+```
+
+`embedded-react` resolves as a Node **package self-reference** (`package.json` `name` + `exports`),
+so esbuild and Vitest find it with no aliases.
+
 ## Layout
 
 ```
-src/                       the library (the future 'embedded-react' runtime)
-  host-config.js           reconciler host config → NativeUI.*
-  renderer.js              createRoot(props).render(<App/>); LegacyRoot (sync)
-  components.js            host component tags (View, Text, … → ERNodeType)
+src/
+  embedded-react/          the public package surface (what apps import)
+    index.js               barrel: components, StyleSheet, Platform, AppRegistry
+    components.js          host component tags (View, Text, … → ERNodeType)
+    StyleSheet.js          create() / flatten()
+    Platform.js            { OS: 'embedded', select }
+    AppRegistry.js         registerComponent(...) → mounts into a screen-sized root
+    __tests__/             co-located UNIT tests for the pure surface
+  host-config.js           reconciler host config → NativeUI.* (internal runtime)
+  renderer.js              createRoot(props).render(...); LegacyRoot (sync) (internal)
   props.js                 pure prop helpers (flattenStyle / buildProps / isEventProp)
   native-ui.js             re-exports globalThis.NativeUI (installed by the C bridge)
   __tests__/               co-located UNIT tests (Vitest, *.unit.test.js, no engine)
@@ -29,7 +50,7 @@ vitest.config.js           unit test config
 
 The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
 handlers to `setEvent`, and uses `shouldSetTextContent` so `<Text>string</Text>` becomes the
-node's `text`.
+node's `text`. `Animated` and `Easing` are not exported yet (BRIDGE.md §1.4).
 
 ## Build
 

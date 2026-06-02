@@ -172,6 +172,87 @@ changes.
 
 ---
 
+## Distribution & Developer Experience
+
+How the pieces ship and how a developer goes from `npx` to a running screen. The shape
+mirrors React Native's: a component package they `import`, a CLI that scaffolds a project,
+and a fast preview environment — adapted to the reality that JSX is cross-compiled into
+firmware rather than served to a device at runtime.
+
+### Two kinds of artifacts
+
+The project splits cleanly along the JS / C line, and the two halves are distributed
+differently:
+
+| Artifact                               | Contents                                                                                                                          | Distribution                                                                          | RN analog                                |
+|----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|------------------------------------------|
+| **`embedded-react`** (npm)             | Component surface (`View`/`Text`/…), `StyleSheet`, `Animated`, `Easing`, `Platform`, `AppRegistry`, **and the Flow A reconciler** | npm package                                                                           | `react-native`                           |
+| **`@embedded-react/cli`** (npm)        | `create-embedded-react`, the bundler + `qjsc` bytecode step, build/flash commands                                                 | npm package                                                                           | `@react-native-community/cli` / Expo CLI |
+| **engine + QuickJS bridge + backends** | The pure-C runtime and host glue                                                                                                  | **Source**, via CMake `FetchContent` and `idf_component.yml` (Decision 1) — *not* npm | the native runtime baked into a RN app   |
+
+The reconciler is **not** a standalone package. Like RN's renderer, it lives *inside*
+`embedded-react` and is an implementation detail app authors never import. (Under Flow B it
+moves to build time as part of the AOT compiler — the component API stays the same either
+way, which is why it, not the reconciler, is the stable public surface.)
+
+### What an app author writes
+
+Same idiom as React Native — hooks from `react`, everything else from `embedded-react`:
+
+```jsx
+import { useState } from 'react';
+import { View, Text, Pressable, StyleSheet, AppRegistry } from 'embedded-react';
+
+function App() { /* … */ }
+AppRegistry.registerComponent('my-app', () => App);
+```
+
+### Project scaffold (`create-embedded-react`)
+
+Because the JSX is cross-compiled into firmware, a project is a **hybrid: a JS app plus a
+firmware C project**, glued by the CLI. The scaffold generates both halves for the chosen
+board:
+
+```
+my-app/
+  src/App.jsx            # the developer writes this
+  src/index.jsx          # AppRegistry.registerComponent(...)
+  app.config.js          # target board, screen size, engine feature flags
+  firmware/              # generated C project
+    CMakeLists.txt       # FetchContent: engine + quickjs bridge + the board's backend
+    main.c               # boots QuickJS, installs NativeUI + backend, runs the bytecode
+  package.json           # deps: react, embedded-react, @embedded-react/cli
+```
+
+```
+npx create-embedded-react my-app --target esp32-s3
+cd my-app
+npm run build     # JSX → bundle → qjsc bytecode → embedded as a C array in firmware/
+npm run flash     # cmake / idf.py builds the firmware image + flashes it
+```
+
+### The desktop host is the simulator
+
+The single biggest DX risk on embedded is a slow edit→flash→wait loop. The answer is the
+SDL desktop host (`examples/linux`, target `embedded-react-desktop-js`): it boots the same
+QuickJS bridge + engine and runs the same bundle in a window. It is the analog of the iOS
+Simulator / Android emulator / Expo Go.
+
+The intended loop is **develop on desktop, deploy to device**: edit JSX → bundle → run the
+desktop host (instant), then flash the *same* bundle to the MCU with only a backend swap.
+On-device hot reload (pushing fresh bytecode over serial/OTA) is a later luxury, not the
+first story.
+
+### Monorepo → published packages
+
+Today the JS layer incubates in-repo at `bridges/quickjs/js` (co-located with the bridge it
+drives), already shaped as the package: `src/embedded-react/` is the public surface, resolved
+as a Node package self-reference. When the surface stabilizes it gets extracted into published
+workspace packages (`packages/embedded-react`, `packages/cli`) — the in-repo version is the
+incubator, not the final form.
+
+---
+
 ## Component & Style API
 
 What the React developer writes. All imports come from `'embedded-react'`.
@@ -423,8 +504,8 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 
 **Today (engine)**
 
-- Scene graph + Yoga flexbox layout — implemented
-- Text renderer (multi-byte UTF-8, run-length glyph blits) — implemented
+- Scene graph and Yoga flexbox layout — implemented
+- Text renderer (multibyte UTF-8, run-length glyph blits) — implemented
 - Pressable/touch event dispatch — implemented (press in/out, press, long press, cancel, bubbling, multitouch, zIndex)
 - Timing animations for existing color/opacity props — implemented
 - Built-in Inter font at 10/12/16/20/24/32/48 px + symbol set — implemented
@@ -583,7 +664,7 @@ The library is re-entrant as long as the caller serializes calls to
    no React, JS, Lua, or any frontend assumptions. `er_scene.h` is a pure C ABI; the
    React reconciler that translates JSX into `er_*` calls lives in `bridges/quickjs/`.
    This keeps Flow A (runtime reconciler) and Flow B (build-time AOT compiler) cleanly
-   layered against the same C surface, and leaves the door open for non-React frontends
+   layered against the same C surface and leaves the door open for non-React frontends
    later (Lua UI, JSON UI, visual editor) without forking the engine. The project's
    identity is still "React Native for embedded MCUs" — React is the supported
    developer path; other frontends are an architectural possibility, not a roadmap

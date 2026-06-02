@@ -1,9 +1,12 @@
 {
-  "name": "embedded-react-quickjs-js",
+  "name": "embedded-react",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "React reconciler + host config that drives the embedded-react engine through the QuickJS NativeUI bridge (Flow A).",
+  "description": "React Native-style component package + reconciler that drives the embedded-react C engine through the QuickJS NativeUI bridge (Flow A).",
+  "exports": {
+    ".": "./src/embedded-react/index.js"
+  },
   "scripts": {
     "build": "node build.mjs",
     "test": "vitest run",

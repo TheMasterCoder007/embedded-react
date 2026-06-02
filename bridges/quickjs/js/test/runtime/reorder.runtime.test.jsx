@@ -2,7 +2,7 @@
 // appendChild) correctly. Renders a keyed list, re-renders it reversed, and reads each item's
 // computed y via onLayout to assert the order reversed. Runs in the QuickJS + engine host.
 import { createRoot } from '../../src/renderer.js';
-import { View } from '../../src/components.js';
+import { View } from 'embedded-react';
 import { check, report } from './harness.js';
 
 const ys = {};

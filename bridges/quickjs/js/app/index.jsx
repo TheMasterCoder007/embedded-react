@@ -1,13 +1,7 @@
-// Bundle entry point. The C host injects `screen` ({ width, height, scale }) and `NativeUI`
-// before running this, then drives the frame loop after it returns.
-import { createRoot } from '../src/renderer.js';
+// Bundle entry point — the React Native idiom. The C host injects `screen` and `NativeUI` before
+// running this; AppRegistry mounts the app into a screen-sized root.
+import { AppRegistry } from 'embedded-react';
 import { App } from './App.jsx';
 
-const root = createRoot({
-  width: screen.width,
-  height: screen.height,
-  backgroundColor: '#111927',
-});
-
-root.render(<App />);
+AppRegistry.registerComponent('demo', () => App);
 console.log('React mounted at', screen.width + 'x' + screen.height);

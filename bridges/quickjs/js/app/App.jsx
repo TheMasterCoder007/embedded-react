@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { View, Text, Pressable } from '../src/components.js';
+import { View, Text, Pressable } from 'embedded-react';
 
 // Demo: a keyed list that reverses on tap. Reversing reorders the keyed children, which React
-// commits as node moves (insertBefore / appendChild) — exercising state, events, and the tree
+// commits as the node moves (insertBefore / appendChild) — exercising state, events, and the tree
 // mutation path all at once.
 const ITEMS = [
   { key: 'a', label: 'Alpha', color: '#2a9d8f' },
