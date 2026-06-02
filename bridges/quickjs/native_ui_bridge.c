@@ -1,6 +1,7 @@
 #include "native_ui_bridge.h"
 
 #include "er_scene.h"
+#include "native_renderer.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1942,6 +1943,472 @@ static JSValue js_set_event(JSContext* ctx, JSValueConst this_val, int argc, JSV
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — Animated (er_anim_value_*)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Reads a numeric property from an object into a float.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  obj  Object to read from.
+ * @param[in]  key  Property name.
+ * @param[out] out  Receives the value when present and numeric.
+ *
+ * @return true when the property was present and read.
+ */
+static bool obj_f32(JSContext* ctx, JSValueConst obj, const char* key, float* out)
+{
+    JSValue v;
+    if (!prop_get(ctx, obj, key, &v))
+    {
+        return false;
+    }
+    double d = 0.0;
+    const bool ok = JS_ToFloat64(ctx, &d, v) == 0;
+    if (ok)
+    {
+        *out = (float)d;
+    }
+    JS_FreeValue(ctx, v);
+    return ok;
+}
+
+/**
+ * @brief Maps an animatable prop name (opacity, translateX, rotate, …) to an ERAnimProp.
+ *
+ * @param[in]  s    Prop name.
+ * @param[out] out  Receives the ERAnimProp when recognised.
+ *
+ * @return true when the name maps to a supported animatable prop.
+ */
+static bool anim_prop_from_name(const char* s, ERAnimProp* out)
+{
+    static const struct
+    {
+        const char* name;
+        ERAnimProp prop;
+    } k[] = {
+        {"opacity", ER_PROP_OPACITY},
+        {"translateX", ER_PROP_TRANSLATE_X},
+        {"translateY", ER_PROP_TRANSLATE_Y},
+        {"scaleX", ER_PROP_SCALE_X},
+        {"scaleY", ER_PROP_SCALE_Y},
+        {"rotate", ER_PROP_ROTATE_Z},
+        {"rotateZ", ER_PROP_ROTATE_Z},
+        {"rotateX", ER_PROP_ROTATE_X},
+        {"rotateY", ER_PROP_ROTATE_Y},
+        {"backgroundColor", ER_PROP_BACKGROUND_COLOR},
+        {"color", ER_PROP_COLOR},
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+    {
+        if (strcmp(s, k[i].name) == 0)
+        {
+            *out = k[i].prop;
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief Maps an easing token to ERAnimEasing. @param[in] s String. @return Enum value (default ease). */
+static ERAnimEasing easing_from_name(const char* s)
+{
+    if (strcmp(s, "linear") == 0)
+    {
+        return ER_EASE_LINEAR;
+    }
+    if (strcmp(s, "easeIn") == 0)
+    {
+        return ER_EASE_EASE_IN;
+    }
+    if (strcmp(s, "easeOut") == 0)
+    {
+        return ER_EASE_EASE_OUT;
+    }
+    if (strcmp(s, "easeInOut") == 0)
+    {
+        return ER_EASE_EASE_IN_OUT;
+    }
+    if (strcmp(s, "quadIn") == 0)
+    {
+        return ER_EASE_QUAD_IN;
+    }
+    if (strcmp(s, "quadOut") == 0)
+    {
+        return ER_EASE_QUAD_OUT;
+    }
+    if (strcmp(s, "quadInOut") == 0)
+    {
+        return ER_EASE_QUAD_IN_OUT;
+    }
+    if (strcmp(s, "cubicIn") == 0)
+    {
+        return ER_EASE_CUBIC_IN;
+    }
+    if (strcmp(s, "cubicOut") == 0)
+    {
+        return ER_EASE_CUBIC_OUT;
+    }
+    if (strcmp(s, "cubicInOut") == 0)
+    {
+        return ER_EASE_CUBIC_IN_OUT;
+    }
+    if (strcmp(s, "bounceOut") == 0)
+    {
+        return ER_EASE_BOUNCE_OUT;
+    }
+    if (strcmp(s, "elasticOut") == 0)
+    {
+        return ER_EASE_ELASTIC_OUT;
+    }
+    return ER_EASE_EASE;
+}
+
+/**
+ * @brief Marshals a JS animation config object into an ERAnimConfig.
+ *
+ * Recognised keys: type ("timing"|"spring"|"decay"), duration, delay, loop, easing (string token or
+ * a {x1,y1,x2,y2} bezier object), spring stiffness/damping/mass/velocity, decay deceleration/velocity.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  obj  Config object (may be undefined).
+ * @param[out] cfg  Zero-initialised then populated.
+ */
+static void marshal_anim_config(JSContext* ctx, JSValueConst obj, ERAnimConfig* cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->type = ER_ANIM_TIMING;
+    cfg->easing = ER_EASE_EASE;
+    cfg->duration_ms = 300U;
+
+    if (!JS_IsObject(obj))
+    {
+        return;
+    }
+
+    JSValue v;
+    if (prop_get(ctx, obj, "type", &v))
+    {
+        const char* s = JS_ToCString(ctx, v);
+        if (s)
+        {
+            if (strcmp(s, "spring") == 0)
+            {
+                cfg->type = ER_ANIM_SPRING;
+            }
+            else if (strcmp(s, "decay") == 0)
+            {
+                cfg->type = ER_ANIM_DECAY;
+            }
+            JS_FreeCString(ctx, s);
+        }
+        JS_FreeValue(ctx, v);
+    }
+    if (prop_get(ctx, obj, "duration", &v))
+    {
+        int32_t n = 0;
+        if (JS_ToInt32(ctx, &n, v) == 0 && n >= 0)
+        {
+            cfg->duration_ms = (uint32_t)n;
+        }
+        JS_FreeValue(ctx, v);
+    }
+    if (prop_get(ctx, obj, "delay", &v))
+    {
+        int32_t n = 0;
+        if (JS_ToInt32(ctx, &n, v) == 0 && n >= 0)
+        {
+            cfg->delay_ms = (uint32_t)n;
+        }
+        JS_FreeValue(ctx, v);
+    }
+    if (prop_get(ctx, obj, "easing", &v))
+    {
+        if (JS_IsString(v))
+        {
+            const char* s = JS_ToCString(ctx, v);
+            if (s)
+            {
+                cfg->easing = easing_from_name(s);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        else if (JS_IsObject(v))
+        {
+            cfg->easing = ER_EASE_BEZIER;
+            obj_f32(ctx, v, "x1", &cfg->bezier_x1);
+            obj_f32(ctx, v, "y1", &cfg->bezier_y1);
+            obj_f32(ctx, v, "x2", &cfg->bezier_x2);
+            obj_f32(ctx, v, "y2", &cfg->bezier_y2);
+        }
+        JS_FreeValue(ctx, v);
+    }
+
+    obj_f32(ctx, obj, "stiffness", &cfg->stiffness);
+    obj_f32(ctx, obj, "damping", &cfg->damping);
+    obj_f32(ctx, obj, "mass", &cfg->mass);
+    obj_f32(ctx, obj, "velocity", &cfg->velocity);
+    obj_f32(ctx, obj, "deceleration", &cfg->deceleration);
+
+    if (prop_get(ctx, obj, "loop", &v))
+    {
+        cfg->loop = JS_ToBool(ctx, v) != 0;
+        JS_FreeValue(ctx, v);
+    }
+}
+
+/**
+ * @brief NativeUI.animValueCreate(initial) — creates a standalone animatable value.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = initial float value.
+ *
+ * @return The value handle as a JS integer.
+ */
+static JSValue js_anim_value_create(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    double initial = 0.0;
+    if (argc > 0)
+    {
+        JS_ToFloat64(ctx, &initial, argv[0]);
+    }
+    return JS_NewInt32(ctx, (int32_t)er_anim_value_create((float)initial));
+}
+
+/** @brief NativeUI.animValueDestroy(handle). @return JS_UNDEFINED. */
+static JSValue js_anim_value_destroy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t h = 0;
+    if (JS_ToInt32(ctx, &h, argv[0]) == 0)
+    {
+        er_anim_value_destroy((ERAnimValueHandle)h);
+    }
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.animValueSet(handle, value). @return JS_UNDEFINED. */
+static JSValue js_anim_value_set(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t h = 0;
+    double value = 0.0;
+    if (JS_ToInt32(ctx, &h, argv[0]) == 0 && JS_ToFloat64(ctx, &value, argv[1]) == 0)
+    {
+        er_anim_value_set((ERAnimValueHandle)h, (float)value);
+    }
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.animValueGet(handle) → current float. @return JS number. */
+static JSValue js_anim_value_get(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_NewFloat64(ctx, 0.0);
+    }
+    int32_t h = 0;
+    if (JS_ToInt32(ctx, &h, argv[0]) != 0)
+    {
+        return JS_NewFloat64(ctx, 0.0);
+    }
+    return JS_NewFloat64(ctx, (double)er_anim_value_get((ERAnimValueHandle)h));
+}
+
+/**
+ * @brief NativeUI.animValueBind(valueHandle, nodeHandle, propName) — binds a value to a node prop.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 3)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t vh = 0;
+    if (JS_ToInt32(ctx, &vh, argv[0]) != 0)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[1]);
+    const char* name = JS_ToCString(ctx, argv[2]);
+    if (node && name)
+    {
+        ERAnimProp prop;
+        if (anim_prop_from_name(name, &prop))
+        {
+            er_anim_value_bind((ERAnimValueHandle)vh, node, prop);
+        }
+    }
+    if (name)
+    {
+        JS_FreeCString(ctx, name);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.animValueBindInterpolated(valueHandle, nodeHandle, propName, interp) —
+ *        binds a value to a node prop through a piecewise-linear interpolation.
+ *
+ * interp = { inputRange:[…], outputRange:[…], extrapolateLeft?, extrapolateRight? }.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 4)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t vh = 0;
+    if (JS_ToInt32(ctx, &vh, argv[0]) != 0)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[1]);
+    const char* name = JS_ToCString(ctx, argv[2]);
+    if (!node || !name || !JS_IsObject(argv[3]))
+    {
+        if (name)
+        {
+            JS_FreeCString(ctx, name);
+        }
+        return JS_UNDEFINED;
+    }
+
+    ERAnimProp prop;
+    const bool prop_ok = anim_prop_from_name(name, &prop);
+    JS_FreeCString(ctx, name);
+    if (!prop_ok)
+    {
+        return JS_UNDEFINED;
+    }
+
+    ERInterpolation interp;
+    memset(&interp, 0, sizeof(interp));
+    interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
+    interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
+
+    /* Read inputRange / outputRange arrays (clamped to ER_INTERPOLATE_MAX_POINTS). */
+    JSValue in = JS_GetPropertyStr(ctx, argv[3], "inputRange");
+    JSValue out = JS_GetPropertyStr(ctx, argv[3], "outputRange");
+    if (JS_IsArray(in) && JS_IsArray(out))
+    {
+        JSValue len_val = JS_GetPropertyStr(ctx, in, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, len_val);
+        JS_FreeValue(ctx, len_val);
+        if (len > ER_INTERPOLATE_MAX_POINTS)
+        {
+            len = ER_INTERPOLATE_MAX_POINTS;
+        }
+        for (int32_t i = 0; i < len; i++)
+        {
+            JSValue iv = JS_GetPropertyUint32(ctx, in, (uint32_t)i);
+            JSValue ov = JS_GetPropertyUint32(ctx, out, (uint32_t)i);
+            double di = 0.0;
+            double dovv = 0.0;
+            JS_ToFloat64(ctx, &di, iv);
+            JS_ToFloat64(ctx, &dovv, ov);
+            interp.input_range[i] = (float)di;
+            interp.output_range[i] = (float)dovv;
+            JS_FreeValue(ctx, iv);
+            JS_FreeValue(ctx, ov);
+        }
+        interp.point_count = (uint8_t)len;
+    }
+    JS_FreeValue(ctx, in);
+    JS_FreeValue(ctx, out);
+
+    if (interp.point_count >= 2)
+    {
+        er_anim_value_bind_interpolated((ERAnimValueHandle)vh, node, prop, &interp);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.animValueAnimate(valueHandle, toValue, config) — animates a value to toValue.
+ *
+ * @return The animation handle as a JS integer.
+ */
+static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_NewInt32(ctx, 0);
+    }
+    int32_t vh = 0;
+    double to_value = 0.0;
+    if (JS_ToInt32(ctx, &vh, argv[0]) != 0 || JS_ToFloat64(ctx, &to_value, argv[1]) != 0)
+    {
+        return JS_NewInt32(ctx, 0);
+    }
+    ERAnimConfig cfg;
+    marshal_anim_config(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &cfg);
+    const ERAnimHandle ah = er_anim_value_animate((ERAnimValueHandle)vh, (float)to_value, &cfg);
+    return JS_NewInt32(ctx, (int32_t)ah);
+}
+
+/** @brief NativeUI.animStop(animHandle) — stops a running animation. @return JS_UNDEFINED. */
+static JSValue js_anim_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    int32_t ah = 0;
+    if (JS_ToInt32(ctx, &ah, argv[0]) == 0)
+    {
+        er_anim_stop((ERAnimHandle)ah);
+    }
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.tick(deltaMs) — advances animations and input by deltaMs.
+ *
+ * The device host normally drives this from its frame loop; exposing it lets a JS-driven loop (or a
+ * test) advance native-driver animations without re-entering JS per frame.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    int32_t delta = 0;
+    if (argc > 0)
+    {
+        JS_ToInt32(ctx, &delta, argv[0]);
+    }
+    if (delta < 0)
+    {
+        delta = 0;
+    }
+    embedded_renderer_tick((uint32_t)delta);
+    return JS_UNDEFINED;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -1967,6 +2434,23 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
+    JS_SetPropertyStr(ctx, native_ui, "tick", JS_NewCFunction(ctx, js_tick, "tick", 1));
+
+    /* Animated (er_anim_value_* — native-driver animation). */
+    JS_SetPropertyStr(
+        ctx, native_ui, "animValueCreate", JS_NewCFunction(ctx, js_anim_value_create, "animValueCreate", 1));
+    JS_SetPropertyStr(
+        ctx, native_ui, "animValueDestroy", JS_NewCFunction(ctx, js_anim_value_destroy, "animValueDestroy", 1));
+    JS_SetPropertyStr(ctx, native_ui, "animValueSet", JS_NewCFunction(ctx, js_anim_value_set, "animValueSet", 2));
+    JS_SetPropertyStr(ctx, native_ui, "animValueGet", JS_NewCFunction(ctx, js_anim_value_get, "animValueGet", 1));
+    JS_SetPropertyStr(ctx, native_ui, "animValueBind", JS_NewCFunction(ctx, js_anim_value_bind, "animValueBind", 3));
+    JS_SetPropertyStr(ctx,
+                      native_ui,
+                      "animValueBindInterpolated",
+                      JS_NewCFunction(ctx, js_anim_value_bind_interpolated, "animValueBindInterpolated", 4));
+    JS_SetPropertyStr(
+        ctx, native_ui, "animValueAnimate", JS_NewCFunction(ctx, js_anim_value_animate, "animValueAnimate", 3));
+    JS_SetPropertyStr(ctx, native_ui, "animStop", JS_NewCFunction(ctx, js_anim_stop, "animStop", 1));
 
     /* Event-handler registry: a plain object owned by NativeUI, so it lives for the context
        lifetime and is freed at teardown. We keep a borrowed reference for C-side lookup. */

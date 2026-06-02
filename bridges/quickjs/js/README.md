@@ -28,11 +28,14 @@ so esbuild and Vitest find it with no aliases.
 ```
 src/
   embedded-react/          the public package surface (what apps import)
-    index.js               barrel: components, StyleSheet, Platform, AppRegistry
+    index.js               barrel: components, StyleSheet, Platform, AppRegistry, Animated, Easing
     components.js          host component tags (View, Text, … → ERNodeType)
     StyleSheet.js          create() / flatten()
     Platform.js            { OS: 'embedded', select }
     AppRegistry.js         registerComponent(...) → mounts into a screen-sized root
+    Animated.js            Value / timing / spring / decay / View|Text|Image / interpolate
+    Easing.js              easing tokens (+ bezier) → engine curves
+    split-style.js         pure: split style into static props + animated bindings
     __tests__/             co-located UNIT tests for the pure surface
   host-config.js           reconciler host config → NativeUI.* (internal runtime)
   renderer.js              createRoot(props).render(...); LegacyRoot (sync) (internal)
@@ -97,11 +100,12 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
 
 ## Status & known gaps
 
-- ✅ **Render, state updates, and keyed-list reordering all work end-to-end.** `<App/>` mounts,
-  taps re-render via `setState`, and reversing a keyed list moves the nodes (`insertBefore` /
-  `appendChild`, backed by engine `er_tree_insert_before`). Covered by
-  `test/runtime/reorder.runtime.test.jsx`.
+- ✅ **Render, state, keyed-list reorder, and Animated all work end-to-end.** `<App/>` mounts, taps
+  re-render via `setState`, keyed reorder moves nodes (`insertBefore`/`appendChild`), and
+  `Animated.View` runs **native-driver** animations in the engine (no per-frame JS). Covered by
+  `test/runtime/reorder.runtime.test.jsx` and `animated.runtime.test.jsx`.
+- ⏳ **Animated composition** — `timing`/`spring`/`decay`/`interpolate` done; `sequence`/`parallel`/
+  `loop`/`stagger`/`delay`, `.start(callback)`, and interpolate `extrapolate: 'clamp'` not yet.
 - ⏳ **Multi-child `<Text>`** (interpolation like `Hi {name}`, nested `<Text>` spans) — only a
   single string/number child is supported (`shouldSetTextContent`). Spans land with §1.2 span work.
-- ⏳ **Bundler/toolchain (§4)** — this is a hand-run esbuild step; the Metro-compatible
-  `'embedded-react'` package + `qjsc` bytecode path are still to come.
+- ⏳ **`qjsc` bytecode** path + `create-embedded-react` scaffold — still to come (§4).

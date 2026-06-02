@@ -166,17 +166,33 @@ one prop family verified against a JS value.
 
 ### 1.4 Animated (useNativeDriver path) over `ERAnimValueHandle`
 
-- [ ] `NativeUI.createAnimatedValue(initial)` → `er_anim_value_create`
-- [ ] `NativeUI.bindAnimatedValue(handle, node, propName)` → `er_anim_value_bind`
-- [ ] `NativeUI.animateValue(handle, toValue, configObj)` → `er_anim_value_animate`
-  (marshal `ERAnimConfig`: type, easing, duration, spring stiffness/damping/mass, delay, loop)
-- [ ] `NativeUI.setAnimatedValue` / `getAnimatedValue` → `er_anim_value_set` / `_get`
-- [ ] Interpolation: `value.interpolate({inputRange, outputRange, extrapolate})` →
-  `er_anim_value_bind_interpolated` (marshal `ERInterpolation`)
-- [ ] Map animatable prop names → `ERAnimProp` (opacity, translateX/Y, scaleX/Y, rotateZ,
-  backgroundColor, color, …)
+Native driver: the JS `Animated.Value` is a handle to an engine-side float; binding it to a node
+prop lets the engine advance the animation each frame with **no per-frame JS**. JS module:
+`src/embedded-react/Animated.js` + `Easing.js`. Verified by `animated.runtime.test.jsx` (linear
+0→100 advances to mid=50, end=100 via `NativeUI.tick`).
+
+- [x] `NativeUI.animValueCreate(initial)` → `er_anim_value_create`
+- [x] `NativeUI.animValueBind(handle, node, propName)` → `er_anim_value_bind`;
+  `animValueBindInterpolated(...)` → `er_anim_value_bind_interpolated`
+- [x] `NativeUI.animValueAnimate(handle, toValue, configObj)` → `er_anim_value_animate`
+  (marshals `ERAnimConfig`: type timing/spring/decay, easing token or bezier, duration, spring
+  stiffness/damping/mass/velocity, decay deceleration, delay, loop)
+- [x] `NativeUI.animValueSet` / `animValueGet` → `er_anim_value_set` / `_get`; `animStop`; `tick`
+- [x] Interpolation: `value.interpolate({inputRange, outputRange})` →
+  `er_anim_value_bind_interpolated`. `extrapolate` clamp/identity not wired yet (defaults extend)
+- [x] Map animatable prop names → `ERAnimProp` (opacity, translateX/Y, scaleX/Y, scale, rotate/Z/X/Y,
+  backgroundColor, color)
+- [x] JS `Animated.View` / `.Text` / `.Image` — `createAnimatedComponent` splits animated style
+  props (incl. `transform` array) and binds them via a host-instance ref on mount
+- [~] `Animated.timing` / `spring` / `decay` done; `sequence` / `parallel` / `loop` / `stagger` /
+  `delay` and `.start(callback)` completion not wired yet (fire-and-forget)
 - [ ] LayoutAnimation: `NativeUI.configureNextLayoutAnimation(cfg)` →
   `er_layout_anim_configure_next`
+
+Engine touch (no-regression): `er_anim_value_bind` now applies the value's current value on bind
+(matching the interpolated path); the interpolated bind gained the same duplicate-(node,prop) guard
+the plain bind had — so the reconciler can re-bind on every render without flicker or pool
+exhaustion.
 
 ### 1.5 Asset & font registration
 
@@ -242,10 +258,10 @@ Vitest with no aliases. Public surface lives in `src/embedded-react/`.
 
 - [x] `'embedded-react'` module: re-export `View`, `Text`, `Image`, `ScrollView`, `FlatList`,
   `Pressable`, `TouchableOpacity`, `TextInput`, `ActivityIndicator`, `Switch`, `Modal`
-- [ ] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` /
-  `sequence` / `parallel` / `loop` / `stagger` / `delay` (lands with §1.4)
-- [ ] `Easing` module mapping to `ERAnimEasing` (lands with §1.4)
-- [ ] `useAnimatedValue` hook over the native value handle (lands with §1.4)
+- [~] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` done
+  (§1.4); `sequence` / `parallel` / `loop` / `stagger` / `delay` still to come
+- [x] `Easing` module — tokens mapping to `ERAnimEasing` (+ `Easing.bezier`)
+- [ ] `useAnimatedValue` hook over the native value handle
 - [x] `StyleSheet.create` (identity pass-through) + `flatten`; also `Platform.OS`/`select`
 - [x] Hooks come from React core (`useState` verified running under QuickJS); apps import hooks
   from `react`, components/APIs from `embedded-react` (RN convention)

@@ -22,3 +22,5 @@ export {
 export { StyleSheet } from './StyleSheet.js';
 export { Platform } from './Platform.js';
 export { AppRegistry } from './AppRegistry.js';
+export { Animated } from './Animated.js';
+export { Easing } from './Easing.js';
