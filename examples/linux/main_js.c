@@ -102,11 +102,12 @@ static int event_px(int logical)
 /**
  * @brief Reads an entire file into a newly allocated, null-terminated buffer.
  *
- * @param[in] path  Filesystem path to read.
+ * @param[in]  path     Filesystem path to read.
+ * @param[out] out_len  Receives the byte length (excluding the appended terminator).
  *
  * @return Heap buffer the caller must free(), or NULL if the file could not be read.
  */
-static char* read_file(const char* path)
+static char* read_file(const char* path, size_t* out_len)
 {
     FILE* f = fopen(path, "rb");
     if (!f)
@@ -130,7 +131,21 @@ static char* read_file(const char* path)
     const size_t rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
+    *out_len = rd;
     return buf;
+}
+
+/**
+ * @brief Returns true when a path ends in ".qbc" (a compiled bytecode blob).
+ *
+ * @param[in] path  File path.
+ *
+ * @return true for a bytecode path, false for JS source.
+ */
+static bool is_bytecode_path(const char* path)
+{
+    const size_t n = strlen(path);
+    return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
 }
 
 /**
@@ -199,17 +214,15 @@ static void host_install_screen(JSContext* ctx, int width, int height, float sca
 }
 
 /**
- * @brief Evaluates a JS program, reporting any uncaught exception to stderr.
+ * @brief Reports an uncaught JS exception (message + stack) to stderr and frees the result.
  *
- * @param[in] ctx   QuickJS context.
- * @param[in] src   Null-terminated JS source.
- * @param[in] name  Display name used in stack traces.
+ * @param[in] ctx     QuickJS context.
+ * @param[in] result  The value returned by JS_Eval / er_bridge_run_bytecode (consumed).
  *
  * @return true on clean evaluation; false if an exception propagated.
  */
-static bool host_eval(JSContext* ctx, const char* src, const char* name)
+static bool host_report(JSContext* ctx, JSValue result)
 {
-    JSValue result = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_GLOBAL);
     bool ok = true;
     if (JS_IsException(result))
     {
@@ -236,6 +249,24 @@ static bool host_eval(JSContext* ctx, const char* src, const char* name)
     }
     JS_FreeValue(ctx, result);
     return ok;
+}
+
+/**
+ * @brief Runs an app from either JS source or a compiled bytecode blob, reporting exceptions.
+ *
+ * @param[in] ctx       QuickJS context.
+ * @param[in] src       Source text, or bytecode bytes when is_bytecode is true.
+ * @param[in] len       Byte length of src.
+ * @param[in] name      Display name used in stack traces (source path).
+ * @param[in] bytecode  true to load src as a QuickJS bytecode blob (JS_ReadObject).
+ *
+ * @return true on clean evaluation; false if an exception propagated.
+ */
+static bool host_run(JSContext* ctx, const char* src, size_t len, const char* name, bool bytecode)
+{
+    JSValue result = bytecode ? er_bridge_run_bytecode(ctx, (const uint8_t*)src, len)
+                              : JS_Eval(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
+    return host_report(ctx, result);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -303,24 +334,31 @@ int main(int argc, char** argv)
     er_bridge_install(ctx);
 
     /* Choose the app to run, in priority order:
-     *   1. an explicit path on the command line,
-     *   2. the bundled React app (app.bundle.js) copied next to the executable by the build,
-     *   3. the built-in hand-written JS demo.
+     *   1. an explicit path on the command line (.qbc = bytecode, else source),
+     *   2. the compiled bytecode bundle (app.bundle.qbc) next to the executable — the MCU load path,
+     *   3. the source bundle (app.bundle.js) next to the executable,
+     *   4. the built-in hand-written JS demo.
      */
     char* loaded = NULL;
     const char* app_src = k_default_app;
+    size_t app_len = strlen(k_default_app);
     const char* app_name = "<builtin-app>";
+    bool app_bytecode = false;
+
     if (argc > 1)
     {
-        loaded = read_file(argv[1]);
+        size_t len = 0;
+        loaded = read_file(argv[1], &len);
         if (loaded)
         {
             app_src = loaded;
+            app_len = len;
             app_name = argv[1];
+            app_bytecode = is_bytecode_path(argv[1]);
         }
         else
         {
-            SDL_Log("could not read '%s'; falling back to the built-in app", argv[1]);
+            SDL_Log("could not read '%s'; falling back to the bundled app", argv[1]);
         }
     }
     if (!loaded)
@@ -328,19 +366,38 @@ int main(int argc, char** argv)
         char* base = SDL_GetBasePath();
         if (base)
         {
-            char bundle_path[1024];
-            snprintf(bundle_path, sizeof(bundle_path), "%sapp.bundle.js", base);
-            SDL_free(base);
-            loaded = read_file(bundle_path);
+            char path[1024];
+            size_t len = 0;
+            /* Prefer the compiled bytecode blob (no parser, faster boot) over the source bundle. */
+            snprintf(path, sizeof(path), "%sapp.bundle.qbc", base);
+            loaded = read_file(path, &len);
             if (loaded)
             {
                 app_src = loaded;
-                app_name = "app.bundle.js";
+                app_len = len;
+                app_name = "app.bundle.qbc";
+                app_bytecode = true;
             }
+            else
+            {
+                snprintf(path, sizeof(path), "%sapp.bundle.js", base);
+                loaded = read_file(path, &len);
+                if (loaded)
+                {
+                    app_src = loaded;
+                    app_len = len;
+                    app_name = "app.bundle.js";
+                }
+            }
+            SDL_free(base);
         }
     }
 
-    const bool app_ok = host_eval(ctx, app_src, app_name);
+    /* Make the chosen path explicit — otherwise a silent fall-back from bytecode to source (e.g.
+       the precompiler wasn't built, so app.bundle.qbc is missing) looks identical at runtime. */
+    SDL_Log("running %s (%s)", app_name, app_bytecode ? "bytecode" : "source");
+
+    const bool app_ok = host_run(ctx, app_src, app_len, app_name, app_bytecode);
     free(loaded);
 
     /* Settle any Promises / mount-time microtasks the app queued before the first paint. */

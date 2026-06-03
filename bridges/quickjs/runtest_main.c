@@ -121,11 +121,12 @@ static void rt_install_globals(JSContext* ctx)
 /**
  * @brief Reads a whole file into a newly allocated, null-terminated buffer.
  *
- * @param[in] path  File path.
+ * @param[in]  path     File path.
+ * @param[out] out_len  Receives the byte length (excluding the appended terminator).
  *
  * @return Heap buffer the caller must free(), or NULL on failure.
  */
-static char* read_file(const char* path)
+static char* read_file(const char* path, size_t* out_len)
 {
     FILE* f = fopen(path, "rb");
     if (!f)
@@ -149,7 +150,21 @@ static char* read_file(const char* path)
     const size_t rd = fread(buf, 1, (size_t)n, f);
     fclose(f);
     buf[rd] = '\0';
+    *out_len = rd;
     return buf;
+}
+
+/**
+ * @brief Returns true when a path ends in ".qbc" (a compiled bytecode blob).
+ *
+ * @param[in] path  File path.
+ *
+ * @return true for a bytecode path, false for JS source.
+ */
+static bool is_bytecode_path(const char* path)
+{
+    const size_t n = strlen(path);
+    return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -172,12 +187,14 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    char* src = read_file(argv[1]);
+    size_t src_len = 0;
+    char* src = read_file(argv[1], &src_len);
     if (!src)
     {
         fprintf(stderr, "could not read '%s'\n", argv[1]);
         return 2;
     }
+    const bool bytecode = is_bytecode_path(argv[1]);
 
     static const EmbeddedRenderBackend backend = {noop_fill, noop_copy, noop_blend, NULL, NULL, NULL};
     embedded_renderer_set_backend(&backend);
@@ -188,7 +205,8 @@ int main(int argc, char** argv)
     er_bridge_install(ctx);
 
     int status = 0;
-    JSValue result = JS_Eval(ctx, src, strlen(src), argv[1], JS_EVAL_TYPE_GLOBAL);
+    JSValue result = bytecode ? er_bridge_run_bytecode(ctx, (const uint8_t*)src, src_len)
+                              : JS_Eval(ctx, src, strlen(src), argv[1], JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result))
     {
         JSValue exc = JS_GetException(ctx);

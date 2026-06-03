@@ -12,13 +12,24 @@ const here = path.dirname(fileURLToPath(import.meta.url)); // .../js/test/runtim
 const jsRoot = path.resolve(here, '../..'); // .../js
 const outDir = path.join(jsRoot, 'dist', 'runtime');
 
-// The harness exe is built by the standalone bridge build (no SDL).
-const exeName = process.platform === 'win32' ? 'er-bridge-quickjs-runtest.exe' : 'er-bridge-quickjs-runtest';
-const exe = path.resolve(jsRoot, '..', 'build', exeName); // .../bridges/quickjs/build/<exe>
+// --bytecode: precompile each bundle to a QuickJS bytecode blob (.qbc) and run THAT instead of the
+// source — exercises the bytecode load path the MCU hosts use (er-bridge-quickjs-compile +
+// JS_ReadObject). The QuickJS VM still runs it; this is Flow A, not the Flow B AOT compiler.
+const bytecodeMode = process.argv.includes('--bytecode');
+
+const bridgeBuild = path.resolve(jsRoot, '..', 'build');
+const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+const exe = path.join(bridgeBuild, `er-bridge-quickjs-runtest${exeSuffix}`);
+const compileExe = path.join(bridgeBuild, `er-bridge-quickjs-compile${exeSuffix}`);
 
 if (!existsSync(exe)) {
   console.error(`Runtime test harness not found at:\n  ${exe}\n`);
   console.error('Build it first:\n  cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest');
+  process.exit(2);
+}
+if (bytecodeMode && !existsSync(compileExe)) {
+  console.error(`Bytecode compiler not found at:\n  ${compileExe}\n`);
+  console.error('Build it first:\n  cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile');
   process.exit(2);
 }
 
@@ -46,9 +57,16 @@ for (const test of tests) {
     logLevel: 'warning',
   });
 
-  process.stdout.write(`\n=== ${test} ===\n`);
+  // In bytecode mode, precompile the bundle and run the blob instead of the source.
+  let runArg = bundle;
+  if (bytecodeMode) {
+    runArg = bundle.replace(/\.bundle\.js$/, '.bundle.qbc');
+    execFileSync(compileExe, [bundle, runArg]);
+  }
+
+  process.stdout.write(`\n=== ${test}${bytecodeMode ? ' [bytecode]' : ''} ===\n`);
   try {
-    const out = execFileSync(exe, [bundle], { encoding: 'utf8' });
+    const out = execFileSync(exe, [runArg], { encoding: 'utf8' });
     process.stdout.write(out);
   } catch (e) {
     if (e.stdout) process.stdout.write(e.stdout);
@@ -58,5 +76,5 @@ for (const test of tests) {
   }
 }
 
-console.log(`\nRuntime tests: ${tests.length - failed}/${tests.length} passed`);
+console.log(`\nRuntime tests${bytecodeMode ? ' [bytecode]' : ''}: ${tests.length - failed}/${tests.length} passed`);
 process.exit(failed === 0 ? 0 : 1);

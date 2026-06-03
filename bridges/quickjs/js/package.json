@@ -11,7 +11,8 @@
     "build": "node build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:runtime": "node test/runtime/run.mjs"
+    "test:runtime": "node test/runtime/run.mjs",
+    "test:bytecode": "node test/runtime/run.mjs --bytecode"
   },
   "dependencies": {
     "react": "18.3.1",

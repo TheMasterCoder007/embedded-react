@@ -3109,6 +3109,26 @@ void er_bridge_pump(JSContext* ctx)
 }
 
 /**
+ * @brief Loads and runs a precompiled QuickJS bytecode blob (see header).
+ *
+ * @param[in] ctx  QuickJS context.
+ * @param[in] buf  Bytecode bytes.
+ * @param[in] len  Byte count.
+ *
+ * @return Evaluation result or a JS exception value (caller frees).
+ */
+JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* buf, size_t len)
+{
+    JSValue obj = JS_ReadObject(ctx, buf, len, JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(obj))
+    {
+        return obj;
+    }
+    /* JS_EvalFunction consumes obj and returns the program result (or an exception). */
+    return JS_EvalFunction(ctx, obj);
+}
+
+/**
  * @brief Installs the NativeUI bridge object into a QuickJS global scope.
  *
  * @param[in] ctx  QuickJS context to install the bridge into.

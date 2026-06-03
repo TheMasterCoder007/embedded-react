@@ -98,3 +98,18 @@ if (ER_BRIDGE_QUICKJS_RUNTEST)
     add_executable(er-bridge-quickjs-runtest runtest_main.c)
     target_link_libraries(er-bridge-quickjs-runtest PRIVATE er-bridge-quickjs)
 endif ()
+
+# ---------------------------------------------------------------------------
+# Bytecode precompiler — turns the esbuild bundle into a QuickJS bytecode blob (or a C array for
+# embedding in MCU flash). Links only `qjs` (no engine/bridge needed to compile). Hosts load the
+# blob with JS_ReadObject instead of parsing source — the §4 boot/RAM lever for ESP32-S3 / STM32H7.
+# NOTE: this is a parse-time optimization for Flow A; the QuickJS VM still runs the bytecode. It is
+# NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see PLAN.md.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_COMPILE "Build the QuickJS bytecode precompiler tool" ON)
+
+if (ER_BRIDGE_QUICKJS_COMPILE)
+    add_executable(er-bridge-quickjs-compile compile_main.c)
+    target_link_libraries(er-bridge-quickjs-compile PRIVATE qjs)
+    target_include_directories(er-bridge-quickjs-compile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+endif ()

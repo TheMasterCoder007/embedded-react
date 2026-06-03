@@ -242,9 +242,16 @@ C scene with "run the JS bundle, then tick."
   `setInterval` / `clearTimeout` / `clearInterval` installed as globals; extra args forwarded.
   Verified by `timers.runtime.test.js` and `effects.runtime.test.jsx` (**`useEffect` now flushes** —
   mount, deps, no-spurious-rerun, cleanup-on-unmount)
-- [x] Load + evaluate a JS app from a file path (`argv[1]`) with a built-in default app;
-  embedded-byte-array / bytecode parity still to come
-- [ ] Bytecode path: precompile bundle → `qjsc` bytecode, embed as a C array, load on boot
+- [x] Load + evaluate a JS app from a file path (`argv[1]`), a `.qbc` bytecode blob, or the
+  built-in default app
+- [x] Bytecode path: `er-bridge-quickjs-compile` (bytecode **precompiler**, links only `qjs`) turns
+  the esbuild bundle into a QuickJS bytecode blob (raw `.qbc`, or a C array for embedding in MCU
+  flash); `er_bridge_run_bytecode()` loads it via `JS_ReadObject` + `JS_EvalFunction` — no parser, no
+  source text shipped. The desktop build compiles `app.bundle.qbc` next to the exe and the host
+  **prefers it over source**. Validated by `npm run test:bytecode` (the whole runtime suite,
+  precompiled, passes identically). This is the §4 MCU boot/RAM lever for ESP32-S3 / STM32H7.
+  **Scope:** this is a Flow A parse-time optimization — the QuickJS VM still interprets the bytecode
+  at runtime. It is *not* the Flow B AOT compiler (which compiles JSX → C and removes QuickJS)
 - [x] Frame loop: `er_bridge_pump()` → `er_commit()` → `er_sdl_present()` → `embedded_renderer_tick(dt)`
   each frame; the pump services Promises + timers before painting so async/timer state lands in the
   same frame's commit
@@ -297,7 +304,8 @@ Vitest with no aliases. Public surface lives in `src/embedded-react/`.
   Metro-compatible story can layer on later, but esbuild covers the bundle role now)
 - [x] `AppRegistry.registerComponent(name, () => App)` entry (RN idiom; mounts into a
   screen-sized root immediately, since running the bundle = starting the app)
-- [ ] `qjsc` bytecode compile step wired into the example build
+- [x] Bytecode compile step wired into the example build — the desktop POST_BUILD runs
+  `er-bridge-quickjs-compile` on `app.bundle.js` → `app.bundle.qbc`; the host loads it by default
 - [ ] `npx create-embedded-react` scaffold (last — nice-to-have, not slice-critical)
 
 ---

@@ -83,6 +83,18 @@ add_custom_command(TARGET embedded-react-desktop-js POST_BUILD
         -P ${CMAKE_CURRENT_SOURCE_DIR}/copy_bundle.cmake
 )
 
+# Also precompile the bundle to a QuickJS bytecode blob (app.bundle.qbc) next to the exe. The host
+# prefers it over the source bundle — the same JS_ReadObject load path the MCU hosts use (Flow A;
+# QuickJS still runs it). Requires the bytecode precompiler tool, so depend on it to build it first.
+add_dependencies(embedded-react-desktop-js er-bridge-quickjs-compile)
+add_custom_command(TARGET embedded-react-desktop-js POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+        -DCOMPILE_EXE=$<TARGET_FILE:er-bridge-quickjs-compile>
+        -DBUNDLE_SRC=${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist/app.bundle.js
+        -DBYTECODE_DST=$<TARGET_FILE_DIR:embedded-react-desktop-js>/app.bundle.qbc
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/compile_bytecode.cmake
+)
+
 # On Windows, copy SDL2.dll next to each executable after build so the binaries can be
 # run directly from the build output directory (CLion, Explorer, etc.)
 if (WIN32)

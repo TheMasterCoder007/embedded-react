@@ -74,8 +74,11 @@ examples/linux/build/embedded-react-desktop-js          # runs this React app
 examples/linux/build/embedded-react-desktop-js  other.js # or an explicit bundle path
 ```
 
-App resolution order: explicit CLI path → `app.bundle.js` next to the exe → built-in C demo. The
-C host injects the globals the bundle expects: `NativeUI` (the bridge), `screen`
+App resolution order: explicit CLI path (`.qbc` = bytecode, else source) → `app.bundle.qbc`
+(compiled bytecode, preferred) → `app.bundle.js` (source) → built-in C demo. The desktop build
+compiles the bundle to `app.bundle.qbc` next to the exe, so it boots from **bytecode** by default —
+the same `JS_ReadObject` load path the MCU hosts use (no parser, faster boot, source not shipped).
+The C host injects the globals the bundle expects: `NativeUI` (the bridge), `screen`
 (`{ width, height, scale }`), and `console`.
 
 > Iteration loop: edit `src/*` or `app/*` → `npm run build` → rebuild `embedded-react-desktop-js`
@@ -89,12 +92,14 @@ Two tiers, by what they need:
 npm test            # unit: Vitest over src/**/__tests__/*.unit.test.js (pure JS, no engine)
 npm run test:runtime  # e2e: bundles test/runtime/*.runtime.test.jsx, runs each in the headless
                       #      QuickJS+engine harness (no window) and checks the result
+npm run test:bytecode # same suite, but each bundle is precompiled to a .qbc bytecode blob and run
+                      #      via the bytecode path (JS_ReadObject) — proves the MCU load path
 ```
 
-The runtime tier needs the harness exe built once (no SDL):
+The runtime tiers need the harness exe built once (no SDL); `test:bytecode` also needs the compiler:
 
 ```
-cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest
+cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest er-bridge-quickjs-compile
 ```
 
 Pick the tier by what the code touches: pure marshalling/logic → a co-located `*.unit.test.js`;

@@ -38,6 +38,23 @@ extern "C"
      */
     void er_bridge_pump(JSContext* ctx);
 
+    /**
+     * @brief Loads and runs a precompiled QuickJS bytecode blob.
+     *
+     * Reads the blob (produced by er-bridge-quickjs-compile) with JS_ReadObject and runs it with
+     * JS_EvalFunction — the parser and source text never run, which is the point on MCU. The QuickJS
+     * VM still interprets the bytecode (this is not the Flow B AOT compiler). The blob must come from
+     * the SAME QuickJS build/version the host links. Only feed trusted input.
+     *
+     * @param[in] ctx  QuickJS context (bridge + host globals installed beforehand).
+     * @param[in] buf  Bytecode bytes.
+     * @param[in] len  Byte count.
+     *
+     * @return The evaluation result, or a JS exception value (check with JS_IsException). The caller
+     *         owns the returned value and must JS_FreeValue it.
+     */
+    JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif
