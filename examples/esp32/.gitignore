@@ -1,0 +1,20 @@
+# ESP-IDF build output + generated config
+/build/
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+
+# Generated app bytecode — produced from the JS source (npm run build + er-bridge-quickjs-compile).
+# Not committed: it's a reproducible build artifact (its input, dist/app.bundle.js, is also ignored).
+/main/app.bundle.qbc
+
+# Build/flash logs (from idf.py wrapper runs)
+*.log
+
+# ESP-IDF Component Manager artifacts (created if managed dependencies are added later)
+dependencies.lock
+/managed_components/
+
+# IDE / stray CMake configure dirs (FetchContent caches its downloads under these)
+/cmake-build-*/
+/.idea/

@@ -1,0 +1,31 @@
+# Defaults for the Waveshare ESP32-S3-Touch-LCD-7 (ESP32-S3, 8MB octal PSRAM, 16MB flash).
+# These seed sdkconfig on first build; tweak via `idf.py menuconfig` after.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- Octal PSRAM (the JS heap lives here; framebuffer will in Phase 2) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Small allocations stay in fast internal RAM; large ones (the JS heap via heap_caps_malloc) use PSRAM.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# Allow placing .bss in external PSRAM — the engine maps its ~1.5MB of static pools (node pool +
+# compositor scratch) there via components/engine/linker_psram.lf (they don't fit internal DRAM).
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# --- Big main-task stack: QuickJS + the React reconciler recurse deeply ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+
+# --- 16 MB flash + a custom partition table (the app image holds ~1 MB of bytecode) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Performance ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Larger UART log buffer so long JS stack traces aren't truncated.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

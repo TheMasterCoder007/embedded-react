@@ -1,0 +1,13 @@
+# Place the engine's static pools (.bss) in external PSRAM instead of internal DRAM.
+#
+# The engine pre-allocates its scene-graph node pool (~640 KB) and compositor scratch buffers
+# (~900 KB) as static arrays sized by the ERUI_* limits. That's ~1.5 MB — far more than the S3's
+# ~320 KB internal DRAM. This board has 8 MB PSRAM, so map the whole engine archive's BSS there.
+# Requires CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (set in sdkconfig.defaults).
+#
+# Note: PSRAM is cache-fronted and slower than internal SRAM; if compositing perf needs it later,
+# shrink ERUI_SCRATCH_W/H or keep hot buffers internal. For bring-up, correctness first.
+[mapping:engine_psram_bss]
+archive: libengine.a
+entries:
+    * (extram_bss)
