@@ -97,7 +97,7 @@ static uint32_t utf8_next(const char** pp)
             return '?';
         }
         if (!beyond_bmp)
-            cp = cp << 6 | b & 0x3FU;
+            cp = (cp << 6) | (b & 0x3FU);
     }
     *pp = (const char*)(p + n);
     return beyond_bmp ? (uint32_t)'?' : cp;
