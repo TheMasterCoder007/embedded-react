@@ -75,7 +75,12 @@ bool er_scratch_push(int x, int y, int w, int h)
         return false;
 
     uint32_t* slot = s_pool[s_depth];
-    memset(slot, 0, (size_t)ERUI_SCRATCH_W * (size_t)ERUI_SCRATCH_H * sizeof(uint32_t));
+    /* Clear only the node's w×h footprint, not the whole slot. The slot is begun with origin (x,y),
+     * so the node renders into scratch-local [0,0,w,h], and er_scratch_pop_blend reads back exactly
+     * that region (er_blit_blend only advances into the slot by the clip delta, never past
+     * [0,0,w,h]); anything a child overflows beyond it is never blended back. */
+    for (int row = 0; row < h; row++)
+        memset(slot + (size_t)row * (size_t)ERUI_SCRATCH_W, 0, (size_t)w * sizeof(uint32_t));
     s_meta[s_depth].ox = x;
     s_meta[s_depth].oy = y;
     s_depth++;

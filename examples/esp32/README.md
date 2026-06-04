@@ -120,35 +120,8 @@ links exactly that version, so it's automatic as long as both come from this rep
   match `bridges/quickjs/CMakeLists.txt` and the version that compiled `app.bundle.qbc`. Bump all
   three together if you ever change it, or the bytecode won't load.
 
-## Performance
-
-The S3 runs the CPU at 240 MHz but the JS heap, engine pools, and framebuffers all live in 80 MHz
-PSRAM, so the whole pipeline is memory-bound. What makes it smooth (~45 fps animation, tear-free):
-
-- **Damage-clipped rendering** (engine). `er_commit()` scissors the paint walk to just the screen
-  rects that actually changed — each changed/moved node's new rect ∪ the rect it was painted at last
-  frame (so a moving box's trail is erased), plus any removed node's footprint. Both the software
-  compositing and the panel flush shrink from 800×480 to the changed region. A full repaint only
-  happens on the first frame or when the framebuffer is invalidated.
-- **Identical-props gate** (engine). React re-renders allocate fresh inline-style objects, so the
-  reconciler re-commits every node even when nothing changed. `er_node_set_props` hashes the incoming
-  props and skips the layout/repaint invalidation when they're byte-identical — one leaf update no
-  longer drags the whole screen into a repaint.
-- **Double-buffered, tear-free flush** (`backends/esp32-lcd`). With `num_fbs=2` the backend converts
-  the changed region straight into the **off-screen** framebuffer and lets `draw_bitmap` swap it in at
-  vsync — the displayed buffer is never written mid-scanout. Because each buffer is two presents
-  stale, the present pushes the union of this frame's and last frame's damage.
-- **Bigger CPU caches** (`sdkconfig.defaults`). 64 KB data + 32 KB instruction cache (64 B lines) cut
-  the PSRAM miss/stall rate ~2.4× across pump, layout, and flush. (PSRAM stays at 80 MHz — 120 MHz
-  octal needs the flash at 120 MHz too, which this board isn't rated for.)
-- **App patterns** (`bridges/quickjs/js/app/App.jsx`). The once-a-second uptime counter is its own
-  leaf component (its `setState` re-renders only itself, not the whole tree) and static styles use
-  `StyleSheet.create` (stable identity → the reconciler skips unchanged nodes). Standard React
-  performance hygiene, and it matters a lot more when each JS op is a PSRAM round-trip.
-
 ## Possible next steps
 
 1. Multitouch / gestures (the engine has `er_responder_query_set`), 
 2. Asset/font loading (`loadImage`/`loadFont`, needs PNG decode), 
-3. Shrinking the per-frame opacity-scratch clear, or factoring `board.c` into a reusable BSP so other ESP32 boards
-can drop in.
+3. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
