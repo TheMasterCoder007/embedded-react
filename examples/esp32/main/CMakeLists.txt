@@ -1,6 +1,7 @@
-# Phase-1 host (headless): boots QuickJS in PSRAM, loads the embedded bytecode, runs the React app
-# with a no-op backend, and prints over UART. The bytecode blob is embedded via EMBED_FILES, giving
-# the linker symbols _binary_app_bundle_qbc_start / _end (see main.c).
+# Phase-2 host (RGB display): boots QuickJS in PSRAM, loads the embedded bytecode, brings up the
+# Waveshare 7" RGB panel (board.c) and draws the React app to it via the esp32-lcd backend (falling
+# back to a no-op backend + UART logging if the panel fails). The bytecode blob is embedded via
+# EMBED_FILES, giving the linker symbols _binary_app_bundle_qbc_start / _end (see main.c).
 #
 # app.bundle.qbc is the precompiled bytecode of the app — a generated artifact, NOT committed (see
 # .gitignore). Generate it before building (and whenever the JS app changes):
@@ -18,8 +19,9 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/app.bundle.qbc")
 endif()
 
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.c" "board.c"
     INCLUDE_DIRS "."
-    REQUIRES engine er-bridge-quickjs quickjs esp_psram esp_timer
+    REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
+             esp_psram esp_timer esp_lcd esp_driver_i2c
     EMBED_FILES "app.bundle.qbc"
 )

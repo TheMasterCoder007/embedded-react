@@ -1,22 +1,23 @@
 /*
- * embedded-react — ESP32-S3 host, Phase 1 (headless bring-up).
+ * embedded-react — ESP32-S3 host, Phase 2 (RGB display).
  *
  * Boots a QuickJS runtime with its heap in PSRAM, installs the NativeUI bridge + host globals,
- * loads the precompiled bytecode bundle (embedded in flash), and runs the React app against a
- * NO-OP render backend. Nothing is drawn yet — the goal of this phase is to prove the whole JS
- * stack runs on the S3: QuickJS interprets the bytecode, the engine lays out the tree, the bridge
- * marshals it, and console.log / animations / timers all work, observed over the UART monitor.
+ * loads the precompiled bytecode bundle (embedded in flash), brings up the Waveshare 7" RGB panel
+ * (board.c), and runs the React app drawing to it via the esp32-lcd backend. If the panel fails to
+ * init, it falls back to a no-op backend so the JS stack still runs and logs over UART.
  *
- * Phase 2 swaps the no-op backend for the RGB LCD backend (backends/esp32-lcd) to get pixels on
- * the Waveshare ESP32-S3-Touch-LCD-7; Phase 3 adds GT911 touch. See ../README.md.
+ * Phase 3 adds GT911 touch. See ../README.md.
  */
 
+#include "board.h"
 #include "er_scene.h"
+#include "esp32_lcd_backend.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
 #include "quickjs.h"
 
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -169,7 +170,7 @@ static void report_exception(JSContext* ctx)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
- - No-op render backend (Phase 1)
+ - No-op render backend (display fallback)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
@@ -220,7 +221,20 @@ static uint32_t now_ms(void)
  */
 static void run_app(void)
 {
-    embedded_renderer_set_backend(&k_noop_backend);
+    /* Bring up the RGB panel and draw to it; fall back to the no-op backend if it fails so the JS
+       stack still runs (and logs why) over UART. */
+    esp_lcd_panel_handle_t panel = NULL;
+    const bool display =
+        board_display_init(&panel) && er_esp32_lcd_backend_init(panel, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    if (display)
+    {
+        ESP_LOGI(TAG, "display backend active");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
+        embedded_renderer_set_backend(&k_noop_backend);
+    }
 
     JSRuntime* rt = JS_NewRuntime2(&er_js_mf, NULL);
     if (!rt)
@@ -250,6 +264,10 @@ static void run_app(void)
 
     /* Prove layout + paint ran by reporting the painted region of the first commit. */
     er_commit();
+    if (display)
+    {
+        er_esp32_lcd_present(); /* push the mount's paint to the panel (engine doesn't auto-present) */
+    }
     ERRect dirty = {0, 0, 0, 0};
     const bool painted = er_get_dirty_rect(&dirty);
     ESP_LOGI(TAG, "first commit painted=%d dirty=%d,%d %dx%d", (int)painted, dirty.x, dirty.y, dirty.w, dirty.h);
@@ -258,13 +276,17 @@ static void run_app(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
-    /* Frame loop: pump JS (promises + timers), commit, advance animations. No present yet. */
+    /* Frame loop: pump JS (promises + timers), commit, present the painted region, advance animations. */
     uint32_t prev = now_ms();
     uint32_t frame = 0;
     while (true)
     {
         er_bridge_pump(ctx);
         er_commit();
+        if (display)
+        {
+            er_esp32_lcd_present(); /* flush the painted region to the panel each frame */
+        }
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
@@ -281,7 +303,7 @@ static void run_app(void)
 /** @brief IDF entry point. */
 void app_main(void)
 {
-    ESP_LOGI(TAG, "embedded-react ESP32-S3 host — Phase 1 (headless)");
+    ESP_LOGI(TAG, "embedded-react ESP32-S3 host — Phase 2 (RGB display)");
     ESP_LOGI(TAG,
              "PSRAM free: %u bytes, internal free: %u bytes",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
