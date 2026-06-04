@@ -52,6 +52,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/gradient.c
         rendering/image_registry.c
         rendering/image_scaler.c
+        rendering/perf_overlay.c
         rendering/rrect.c
         rendering/scratch_pool.c
         rendering/shadow.c

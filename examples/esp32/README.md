@@ -120,6 +120,24 @@ links exactly that version, so it's automatic as long as both come from this rep
   match `bridges/quickjs/CMakeLists.txt` and the version that compiled `app.bundle.qbc`. Bump all
   three together if you ever change it, or the bytecode won't load.
 
+## Performance overlay
+
+A built-in LVGL-style metrics panel (FPS, CPU load, free PSRAM / internal RAM) can be drawn in the
+bottom-right corner for on-device diagnostics. It's gated by the `ER_PERF_OVERLAY` preprocessor
+define (in `engine/include/perf_overlay.h`), **off by default** — flip it to `1` (or build with
+`-DER_PERF_OVERLAY=1`) and reflash:
+
+```c
+#define ER_PERF_OVERLAY 1   // engine/include/perf_overlay.h
+```
+
+When off, it compiles out completely (zero cost). The engine renders the panel with its own font via
+the active backend; the host (`main.c`) gathers the metrics and feeds it formatted lines once every
+~500 ms. **CPU** is the share of the wall-clock the frame loop spends working vs. idling (so it climbs
+during animation); **FPS** is the loop's iteration rate (idle it free-runs well above the panel's
+~51 Hz refresh; under load it drops). Turn it off for final/representative measurements — the
+overlay itself adds a little flush cost.
+
 ## Possible next steps
 
 1. Multitouch / gestures (the engine has `er_responder_query_set`), 

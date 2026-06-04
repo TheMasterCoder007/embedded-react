@@ -15,6 +15,7 @@ idf_component_register(
         "${E}/rendering/gradient.c"
         "${E}/rendering/image_registry.c"
         "${E}/rendering/image_scaler.c"
+        "${E}/rendering/perf_overlay.c"
         "${E}/rendering/rrect.c"
         "${E}/rendering/scratch_pool.c"
         "${E}/rendering/shadow.c"

@@ -15,6 +15,7 @@
 #include "esp32_lcd_backend.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
+#include "perf_overlay.h"
 #include "quickjs.h"
 
 #include "esp_heap_caps.h"
@@ -217,6 +218,67 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
+#if ER_PERF_OVERLAY
+/*----------------------------------------------------------------------------------------------------------------------
+ - Performance overlay metrics (gathered host-side; ER_PERF_OVERLAY only)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+static char s_perf_buf[4][24];
+static const char* s_perf_lines[4] = {s_perf_buf[0], s_perf_buf[1], s_perf_buf[2], s_perf_buf[3]};
+static int s_perf_nlines = 0;
+static uint32_t s_perf_busy_us = 0; /* the previous frame's full work time (pump+commit+present) */
+
+/**
+ * @brief Accumulates frame stats and refreshes the overlay text ~twice a second.
+ *
+ * CPU load is the share of wall-clock the loop spends working vs. idling in vTaskDelay (LVGL-style),
+ * averaged over the window. Returns true only on the frame the text changed, so the caller redraws
+ * the panel then and leaves it persistent (and the per-frame flush tight) the rest of the time.
+ *
+ * @param[in] frame_start_us  esp_timer timestamp captured at the top of this frame.
+ *
+ * @return true when the displayed metrics were just updated.
+ */
+static bool perf_overlay_refresh(int64_t frame_start_us)
+{
+    static int64_t window_start = 0;
+    static uint32_t frames = 0;
+    static uint64_t busy_sum = 0;
+
+    if (window_start == 0)
+    {
+        window_start = frame_start_us;
+    }
+    frames++;
+    busy_sum += s_perf_busy_us;
+
+    const int64_t elapsed = frame_start_us - window_start;
+    if (elapsed < 500000)
+    {
+        return false;
+    }
+
+    const uint32_t fps = (uint32_t)((uint64_t)frames * 1000000ULL / (uint64_t)elapsed);
+    uint32_t cpu = (uint32_t)(busy_sum * 100ULL / (uint64_t)elapsed);
+    if (cpu > 100U)
+    {
+        cpu = 100U;
+    }
+    const uint32_t spiram_k = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024U);
+    const uint32_t iram_k = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024U);
+    snprintf(s_perf_buf[0], sizeof(s_perf_buf[0]), "FPS %u", (unsigned)fps);
+    snprintf(s_perf_buf[1], sizeof(s_perf_buf[1]), "CPU %u%%", (unsigned)cpu);
+    snprintf(s_perf_buf[2], sizeof(s_perf_buf[2]), "PSRAM %uK", (unsigned)spiram_k);
+    snprintf(s_perf_buf[3], sizeof(s_perf_buf[3]), "IRAM %uK", (unsigned)iram_k);
+    s_perf_nlines = 4;
+
+    frames = 0;
+    busy_sum = 0;
+    window_start = frame_start_us;
+    return true;
+}
+#endif
+
 /**
  * @brief Boots QuickJS + the engine, runs the embedded bytecode app, then drives the frame loop.
  */
@@ -315,12 +377,26 @@ static void run_app(void)
             }
         }
 
+#if ER_PERF_OVERLAY
+        const int64_t perf_frame_start = esp_timer_get_time();
+#endif
         er_bridge_pump(ctx); /* drain JS promises + fire due timers */
         er_commit();         /* lay out (if needed) + paint the changed region into the backend */
+#if ER_PERF_OVERLAY
+        /* Draw the overlay on top of the app only when the metrics changed (~twice a second), so it
+           stays persistent and the per-frame flush stays tight between updates. */
+        if (display && perf_overlay_refresh(perf_frame_start))
+        {
+            er_perf_overlay_draw(SCREEN_W, SCREEN_H, s_perf_lines, s_perf_nlines);
+        }
+#endif
         if (display)
         {
             er_esp32_lcd_present(); /* flush the painted region to the panel */
         }
+#if ER_PERF_OVERLAY
+        s_perf_busy_us = (uint32_t)(esp_timer_get_time() - perf_frame_start);
+#endif
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
