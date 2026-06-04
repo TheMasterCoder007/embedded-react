@@ -13,12 +13,13 @@ that drives the LCD reset / backlight / touch-reset lines.
 |-------|-----------|--------|
 | **1. Headless** | QuickJS in PSRAM + bytecode + engine + bridge, **no-op backend**, output over UART | ✅ done |
 | **2. Display** | RGB panel (CH422G init, 800×480 timings) + ARGB8888→RGB565 dirty-rect flush | ✅ done |
-| **3. Touch** | GT911 over I²C → `embedded_renderer_touch` | ⏳ next |
+| **3. Touch** | GT911 over I²C → `embedded_renderer_touch` (buttons are interactive) | ✅ done |
 
 Phase 1 proved the **whole JS stack runs on the S3** before any panel work — `console.log` and the
 first-commit dirty rect over UART meant the hard part was done and the display was a contained
 problem. **Phase 2** lights the 7" panel: the React UI (navy background, live uptime clock, animated
-box, buttons) renders on real hardware.
+box, buttons) renders on real hardware. **Phase 3** wires the GT911 touch controller, so tapping the
+on-screen buttons drives React `onPress` → state → re-render — a fully interactive embedded app.
 
 ## Self-contained via fetch
 
@@ -32,9 +33,9 @@ CMakeLists.txt            top-level IDF project — FetchContent of QuickJS + em
 sdkconfig.defaults        ESP32-S3, octal PSRAM, 16MB flash, big task stack
 partitions.csv            roomy factory partition (~1MB bytecode in the image)
 main/
-  main.c                  host: PSRAM JS heap, bytecode load, frame loop + present
-  board.c                 Waveshare 7" bring-up: CH422G expander + RGB panel (pins/timings)
-  board.h                 board resolution + board_display_init()
+  main.c                  host: PSRAM JS heap, bytecode load, frame loop + present + touch
+  board.c                 Waveshare 7" bring-up: CH422G expander + RGB panel + GT911 touch
+  board.h                 board resolution + board_display_init() + board_touch_*()
   app.bundle.qbc          precompiled bytecode of THE APP — GENERATED, not committed (see Build)
 components/
   quickjs/                CMakeLists only — compiles the fetched QuickJS sources
@@ -114,6 +115,11 @@ links exactly that version, so it's automatic as long as both come from this rep
 - **CH422G expander.** The backlight/DISP, LCD-reset and touch-reset lines hang off the CH422G I²C
   IO expander (hand-driven in `board.c`, no maintained standalone IDF component). If the backlight
   stays off, the config byte / output mask there is what to check.
+- **GT911 touch.** Shares the panel's I²C bus (SDA=8/SCL=9); INT=GPIO4, RST=CH422G EXIO1. The reset
+  sequence in `board.c` holds INT low across the RST rising edge to latch address **0x5D**. Point
+  coordinates start at reg `0x8150` as `[xLo, xHi, yLo, yHi]` — the track-id is the *prior* register
+  (`0x814F`), so reading from `0x8150` gives x/y directly (an off-by-one here yields wild coords). If
+  taps land in the wrong place, dump the raw point bytes and check for an axis swap/mirror.
 - **Task stack.** QuickJS + the React reconciler recurse deeply. The main task stack is bumped to
   64 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) and `JS_SetMaxStackSize` to 48 KB. If you see a JS
   "stack overflow" or a FreeRTOS stack-overflow panic, raise both together.
@@ -140,8 +146,19 @@ links exactly that version, so it's automatic as long as both come from this rep
 - **`main.c`** wires them together (`board_display_init` → `er_esp32_lcd_backend_init`) and calls
   `er_esp32_lcd_present()` after every `er_commit()`.
 
-## Next (Phase 3 — touch)
+## How Phase 3 works (touch)
 
-Bring up the **GT911** capacitive controller over the shared I²C bus (its reset is the CH422G
-`TP_RST` line, already de-asserted in `board.c`), poll touch points, and feed them to the engine via
-`embedded_renderer_touch` so the on-screen buttons become interactive.
+- **`board.c`** also brings up the **GT911** on the shared I²C bus: `board_touch_init()` runs the
+  reset sequence (INT=GPIO4 held low across the CH422G `TP_RST` rising edge → address 0x5D) and
+  probes the controller; `board_touch_read()` polls the buffer-status register and returns the latest
+  point (panel pixels) only when a fresh sample is ready.
+- **`main.c`** polls `board_touch_read()` at the top of each frame and runs a small press state
+  machine that turns snapshots into `embedded_renderer_touch(0, ER_TOUCH_{DOWN,MOVE,UP}, x, y)` — so
+  a tap reaches the engine's hit-test → fires the React `onPress` → state update → re-render, all in
+  the same frame.
+
+## Possible next steps
+
+The three-phase bring-up is complete. Beyond it: multi-touch / gestures (the engine has
+`er_responder_query_set`), asset/font loading (`loadImage`/`loadFont`, needs PNG decode), or
+factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.

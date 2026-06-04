@@ -1,12 +1,13 @@
 /*
- * embedded-react — ESP32-S3 host, Phase 2 (RGB display).
+ * embedded-react — ESP32-S3 host, Phase 3 (RGB display + GT911 touch).
  *
  * Boots a QuickJS runtime with its heap in PSRAM, installs the NativeUI bridge + host globals,
  * loads the precompiled bytecode bundle (embedded in flash), brings up the Waveshare 7" RGB panel
- * (board.c), and runs the React app drawing to it via the esp32-lcd backend. If the panel fails to
- * init, it falls back to a no-op backend so the JS stack still runs and logs over UART.
+ * (board.c), and runs the React app drawing to it via the esp32-lcd backend. Polls the GT911 touch
+ * controller each frame and feeds presses to the engine (so the on-screen buttons work). If the
+ * panel fails to init, it falls back to a no-op backend so the JS stack still runs and logs over UART.
  *
- * Phase 3 adds GT911 touch. See ../README.md.
+ * See ../README.md.
  */
 
 #include "board.h"
@@ -236,6 +237,13 @@ static void run_app(void)
         embedded_renderer_set_backend(&k_noop_backend);
     }
 
+    /* Bring up touch (shares the panel's I2C bus). Optional: the UI still renders without it. */
+    const bool touch = display && board_touch_init();
+    if (display && !touch)
+    {
+        ESP_LOGW(TAG, "touch init failed — display works but input is disabled");
+    }
+
     JSRuntime* rt = JS_NewRuntime2(&er_js_mf, NULL);
     if (!rt)
     {
@@ -276,11 +284,37 @@ static void run_app(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
-    /* Frame loop: pump JS (promises + timers), commit, present the painted region, advance animations. */
+    /* Frame loop: poll touch, pump JS (promises + timers), commit, present, advance animations. */
     uint32_t prev = now_ms();
     uint32_t frame = 0;
+    bool touch_down = false; /* press state machine: turns GT911 snapshots into down/move/up */
+    int touch_x = 0;
+    int touch_y = 0;
     while (true)
     {
+        /* Forward touch to the engine before pumping so a press lands in the same frame's render. */
+        if (touch)
+        {
+            int tx = 0;
+            int ty = 0;
+            bool pressed = false;
+            if (board_touch_read(&tx, &ty, &pressed))
+            {
+                if (pressed)
+                {
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    touch_down = true;
+                    touch_x = tx;
+                    touch_y = ty;
+                }
+                else if (touch_down)
+                {
+                    embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
+                    touch_down = false;
+                }
+            }
+        }
+
         er_bridge_pump(ctx);
         er_commit();
         if (display)

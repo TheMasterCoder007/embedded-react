@@ -22,6 +22,6 @@ idf_component_register(
     SRCS "main.c" "board.c"
     INCLUDE_DIRS "."
     REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
-             esp_psram esp_timer esp_lcd esp_driver_i2c
+             esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
     EMBED_FILES "app.bundle.qbc"
 )
