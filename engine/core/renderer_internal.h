@@ -38,6 +38,14 @@ void er_push_clip_rect(int x, int y, int w, int h);
 void er_pop_clip_rect(void);
 
 /**
+ * @brief Forces the next er_commit() to repaint the whole screen (no damage clipping).
+ *
+ * Call after anything that invalidates the persistent framebuffer's contents — e.g. installing a
+ * new render backend — so the first commit fully redraws instead of only the changed region.
+ */
+void er_force_full_repaint(void);
+
+/**
  * @brief Fills a rectangle with a solid ARGB color via the active backend.
  *
  * @param[in] argb  ARGB8888 color value (straight alpha).

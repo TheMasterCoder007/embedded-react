@@ -34,6 +34,16 @@ static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen
 static ERRect s_dirty_rect;
 static bool s_has_dirty = false;
 
+/* Damage-clipped rendering: when true the next commit repaints the whole screen (first frame, an
+ * invalidated framebuffer, or a new root). Otherwise render_tree is scissored to just the rects that
+ * actually changed, so a small animation flushes a small region instead of all 800x480. */
+static bool s_force_full_repaint = true;
+
+/* Pending damage from removed/destroyed nodes (their last painted rects): merged into the next
+ * commit's clip so the vacated pixels are erased without a full-screen repaint. */
+static ERRect s_removed_damage;
+static bool s_have_removed_damage = false;
+
 /* Layout-dirty gate: er_commit() re-runs the flex + text-measure layout pass only when
  * something that can change a computed rect has happened since the last commit (a prop set,
  * a tree mutation, or a node destroy). Animations mutate render-only props and never set this,
@@ -265,6 +275,11 @@ static void union_dirty_rect(int x, int y, int w, int h)
  *
  * @param[in,out] node  Node whose ancestor chain should be invalidated.
  */
+void er_force_full_repaint(void)
+{
+    s_force_full_repaint = true;
+}
+
 void er_mark_dirty_upward(ERNode* node)
 {
     /* Mark only the initiating node as source_dirty so the dirty-rect
@@ -379,6 +394,105 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
 }
 
 /**
+ * @brief Grows an accumulator rect to include (x,y,w,h). Skips empty inputs; seeds on first union.
+ *
+ * @param[in,out] acc   Accumulator rectangle.
+ * @param[in,out] have  Whether @p acc has been seeded yet.
+ * @param[in]     x,y,w,h  Rectangle to merge in.
+ */
+static void damage_union(ERRect* acc, bool* have, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0)
+        return;
+    if (!*have)
+    {
+        acc->x = x;
+        acc->y = y;
+        acc->w = w;
+        acc->h = h;
+        *have = true;
+        return;
+    }
+    const int x2 = acc->x + acc->w;
+    const int y2 = acc->y + acc->h;
+    const int nx2 = x + w;
+    const int ny2 = y + h;
+    if (x < acc->x)
+        acc->x = x;
+    if (y < acc->y)
+        acc->y = y;
+    acc->w = (nx2 > x2 ? nx2 : x2) - acc->x;
+    acc->h = (ny2 > y2 ? ny2 : y2) - acc->y;
+}
+
+/**
+ * @brief Accumulates a removed subtree's last-painted rects into the pending removal damage.
+ *
+ * Called while the subtree is still intact (before detach). The next er_commit() merges this into its
+ * clip so the vacated pixels are repainted (erased) without forcing a full-screen redraw.
+ *
+ * @param[in] n  Root of the subtree being removed.
+ */
+static void note_removed_subtree(const ERNode* n)
+{
+    if (!n)
+        return;
+    if (n->has_last_paint)
+        damage_union(&s_removed_damage,
+                     &s_have_removed_damage,
+                     (int)n->last_paint_rect.x,
+                     (int)n->last_paint_rect.y,
+                     (int)n->last_paint_rect.w,
+                     (int)n->last_paint_rect.h);
+    uint16_t c = n->first_child_tag;
+    while (c != ER_INVALID_TAG)
+    {
+        const ERNode* ch = er_get_node(c);
+        if (!ch)
+            break;
+        note_removed_subtree(ch);
+        c = ch->next_sibling_tag;
+    }
+}
+
+/**
+ * @brief Computes a node's current screen rect for damage tracking.
+ *
+ * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
+ * plus the translate-transform offset. Returns false for non-translate transforms (rotate/scale/3D)
+ * whose painted bounding box this fast path can't reproduce — the caller then repaints in full.
+ *
+ * @param[in]  n             Node to measure.
+ * @param[out] rx,ry,rw,rh   Receive the node's screen rectangle.
+ *
+ * @return true if the rect was computed; false if the node needs a full repaint instead.
+ */
+static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
+{
+#if ERUI_TRANSFORMS_FULL
+    if (n->has_transform && !er_transform_is_translate_only(n))
+        return false;
+#endif
+    int sx = 0;
+    int sy = 0;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
+        {
+            sx += (int)a->scroll_offset_x;
+            sy += (int)a->scroll_offset_y;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+    *rx = (int)n->animated.x - sx + (int)n->tp_translate_x;
+    *ry = (int)n->animated.y - sy + (int)n->tp_translate_y;
+    *rw = (int)n->animated.w;
+    *rh = (int)n->animated.h;
+    return true;
+}
+
+/**
  * @brief Recursively renders a node and its children depth-first.
  *
  * translate_x / translate_y accumulate the total scroll offset contributed by all
@@ -461,6 +575,17 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             px += (int)n->tp_translate_x;
             py += (int)n->tp_translate_y;
         }
+    }
+
+    /* Record where this node is painted so the next commit can damage-clip a move: the old rect
+     * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint. */
+    if (should_render)
+    {
+        n->last_paint_rect.x = (int16_t)(doing_affine ? dst_x : px);
+        n->last_paint_rect.y = (int16_t)(doing_affine ? dst_y : py);
+        n->last_paint_rect.w = (int16_t)(doing_affine ? dst_w : w);
+        n->last_paint_rect.h = (int16_t)(doing_affine ? dst_h : h);
+        n->has_last_paint = true;
     }
 
     /* Shadow: rendered before opacity scratch so the shadow lands in the outer destination
@@ -884,6 +1009,15 @@ void er_node_destroy(ERNode* node)
 {
     if (!node || !node->in_use)
         return;
+    /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
+    if (node->has_last_paint)
+        damage_union(&s_removed_damage,
+                     &s_have_removed_damage,
+                     (int)node->last_paint_rect.x,
+                     (int)node->last_paint_rect.y,
+                     (int)node->last_paint_rect.w,
+                     (int)node->last_paint_rect.h);
+
     node->in_use = false;
     node->dirty = false;
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
@@ -893,10 +1027,32 @@ void er_node_destroy(ERNode* node)
         s_free_list[s_free_count++] = node->tag;
 }
 
+/** @brief 64-bit FNV-1a hash of an ERProps (zero-initialised by the bridge, so identical props hash equal). */
+static uint64_t props_hash(const ERProps* p)
+{
+    const uint8_t* b = (const uint8_t*)p;
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < sizeof(ERProps); i++)
+    {
+        h ^= b[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 void er_node_set_props(ERNode* node, const ERProps* props)
 {
     if (!node || !props)
         return;
+
+    /* Skip the layout/repaint invalidation when the props are byte-identical to what's already
+     * applied (e.g. React re-running a render with freshly-allocated but equal inline-style objects).
+     * The field copies below still run so all derived state stays correct; only the expensive dirty
+     * marking is gated, so an unchanged node doesn't drag the whole screen into a repaint. */
+    const uint64_t h = props_hash(props);
+    const bool props_changed = !node->has_props_hash || h != node->props_hash;
+    node->props_hash = h;
+    node->has_props_hash = true;
 
     /* Copy all layout fields. */
     ERLayoutSpec* L = &node->layout;
@@ -1149,10 +1305,13 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     er_anim_reapply_bound(node);
 
     /* Props may change layout inputs (size, flex, margins, text content/font). Conservatively
-     * request a layout pass; a future refinement could compare the layout-relevant fields and
-     * skip when only a visual prop (color, shadow, …) changed. */
-    mark_layout_dirty();
-    er_mark_dirty_upward(node);
+     * request a layout pass; only when something actually changed (see the props_hash gate above) —
+     * an identical setProps invalidates nothing. */
+    if (props_changed)
+    {
+        mark_layout_dirty();
+        er_mark_dirty_upward(node);
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1468,6 +1627,10 @@ void er_tree_remove_child(ERNode* parent, ERNode* child)
     if (!parent || !child)
         return;
 
+    /* Record the removed subtree's footprint (while it's still intact) so the next commit erases
+     * those pixels — damage-clipped, not a full-screen repaint. */
+    note_removed_subtree(child);
+
     tree_detach(child);
     child->parent_tag = ER_INVALID_TAG;
     parent->dirty = true;
@@ -1484,6 +1647,7 @@ void er_tree_set_root(ERNode* root)
     }
     s_root_tag = root->tag;
     mark_layout_dirty();
+    er_force_full_repaint(); /* whole new scene: repaint everything */
 }
 
 void er_commit(void)
@@ -1531,7 +1695,8 @@ void er_commit(void)
      * skips this whole block — the computed rects from the previous layout remain valid, and the
      * post-layout passes that read them would produce identical results, so they are simply not
      * re-run. render_tree() below still runs every commit to repaint dirty nodes. */
-    if (s_layout_dirty || er_layout_anim_has_pending())
+    const bool layout_ran = (s_layout_dirty || er_layout_anim_has_pending());
+    if (layout_ran)
     {
         const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
         const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
@@ -1545,7 +1710,94 @@ void er_commit(void)
         s_layout_pass_count++;
     }
 
+    /* Damage-clipped render. Unless we must repaint everything (first frame, an invalidated
+     * framebuffer, a removed node, or a changing node with a transform we can't bound), scissor
+     * render_tree() to the union of every changed-or-moved node's new screen rect and the rect it was
+     * painted at last commit (so a moved node's trail is erased). A node counts if it was directly
+     * dirtied (source_dirty) or its screen rect differs from where it was last painted (layout reflow
+     * or a translate animation) — propagated-dirty ancestors are excluded so the damage stays tight.
+     * The persistent framebuffer keeps the untouched pixels, so the compositor and the backend's flush
+     * both shrink from full-screen to just the changed region. */
+    bool clipped = false;
+    if (s_force_full_repaint)
+    {
+        root->dirty = true; /* force the whole tree to repaint into the fresh/invalidated framebuffer */
+    }
+    else
+    {
+        ERRect clip = {0, 0, 0, 0};
+        bool have = false;
+        bool trackable = true;
+        /* Seed with any pixels vacated by removed/destroyed nodes since the last commit. */
+        if (s_have_removed_damage)
+            damage_union(&clip, &have, s_removed_damage.x, s_removed_damage.y, s_removed_damage.w, s_removed_damage.h);
+        for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+        {
+            ERNode* n = er_get_node(tag);
+            if (!n)
+                continue;
+            int rx, ry, rw, rh;
+            if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
+            {
+                /* Complex transform: only forces a full repaint if this node is actually changing. */
+                if (n->source_dirty)
+                {
+                    trackable = false;
+                    break;
+                }
+                continue;
+            }
+            const bool moved = n->has_last_paint
+                               && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
+                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
+            if (!n->source_dirty && !moved)
+                continue;                               /* unchanged and in place: contributes nothing to the damage */
+            damage_union(&clip, &have, rx, ry, rw, rh); /* new position */
+            if (n->has_last_paint)
+                damage_union(&clip,
+                             &have,
+                             (int)n->last_paint_rect.x,
+                             (int)n->last_paint_rect.y,
+                             (int)n->last_paint_rect.w,
+                             (int)n->last_paint_rect.h); /* old position (erase trail) */
+        }
+        if (trackable && have)
+        {
+            /* Pad for anti-aliased / sub-pixel edges, then clamp to the root rect. */
+            const int margin = 2;
+            int cx0 = clip.x - margin;
+            int cy0 = clip.y - margin;
+            int cx1 = clip.x + clip.w + margin;
+            int cy1 = clip.y + clip.h + margin;
+            const int rx0 = root->computed.x;
+            const int ry0 = root->computed.y;
+            const int rx1 = root->computed.x + root->computed.w;
+            const int ry1 = root->computed.y + root->computed.h;
+            if (cx0 < rx0)
+                cx0 = rx0;
+            if (cy0 < ry0)
+                cy0 = ry0;
+            if (cx1 > rx1)
+                cx1 = rx1;
+            if (cy1 > ry1)
+                cy1 = ry1;
+            if (cx1 > cx0 && cy1 > cy0)
+            {
+                er_push_clip_rect(cx0, cy0, cx1 - cx0, cy1 - cy0);
+                clipped = true;
+            }
+        }
+        /* trackable && !have: nothing is dirty this commit, render_tree() repaints nothing anyway.
+         * !trackable: leave unclipped for a full repaint. */
+    }
+
     render_tree(root, false, 0, 0);
+
+    if (clipped)
+        er_pop_clip_rect();
+
+    s_force_full_repaint = false;
+    s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
 }
 
 uint32_t er_layout_pass_count(void)

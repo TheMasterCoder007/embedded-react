@@ -345,6 +345,7 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
     font_blob_init(0);
     image_registry_init();
     er_input_reset();
+    er_force_full_repaint(); /* fresh framebuffer: first commit must fully repaint, not damage-clip */
 }
 
 void embedded_renderer_tick(uint32_t delta_ms)
