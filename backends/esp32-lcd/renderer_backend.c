@@ -15,6 +15,7 @@
 #include "native_renderer.h"
 
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
 
 #include <stdlib.h>
@@ -31,10 +32,15 @@ typedef struct
     esp_lcd_panel_handle_t panel;
     int w;
     int h;
-    uint32_t* fb;   /**< ARGB8888 framebuffer (PSRAM), w*h. Stores opaque 0xFFRRGGBB after compositing. */
-    uint16_t* line; /**< RGB565 staging buffer for the flush (PSRAM), w*h. */
-    /* Dirty bounding box (inclusive); x1 < x0 means "empty". */
+    uint32_t* fb;     /**< ARGB8888 framebuffer (PSRAM), w*h. Authoritative full frame (0xFFRRGGBB). */
+    uint16_t* fbp[2]; /**< The panel's two RGB565 framebuffers (double-buffer mode); NULL = copy mode. */
+    int back;         /**< Index of the off-screen framebuffer to draw next (double-buffer mode). */
+    uint16_t* line;   /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
+    /* Current dirty bounding box (inclusive); x1 < x0 means "empty". */
     int dx0, dy0, dx1, dy1;
+    /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
+    int pdx0, pdy0, pdx1, pdy1;
+    int present_count; /**< First two presents draw full-screen to initialise both framebuffers. */
 } ERLcdBackend;
 
 static ERLcdBackend s_be;
@@ -215,36 +221,117 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
 /** @brief Converts the dirty region to RGB565 and pushes it to the panel framebuffer. */
 void er_esp32_lcd_present(void)
 {
-    if (s_be.dx1 < s_be.dx0 || s_be.dy1 < s_be.dy0)
-    {
-        return; /* nothing changed */
-    }
-    const int x0 = s_be.dx0;
-    const int y0 = s_be.dy0;
-    const int rw = s_be.dx1 - s_be.dx0 + 1;
-    const int rh = s_be.dy1 - s_be.dy0 + 1;
+    const bool dbl = (s_be.fbp[0] != NULL);
+    /* First two presents in double-buffer mode draw the whole frame so both framebuffers start valid. */
+    const bool full = dbl && s_be.present_count < 2;
 
-    /* Pack the dirty region as RGB565 (row-tight) into the staging buffer. */
-    for (int row = 0; row < rh; row++)
+    /* Region to push. In double-buffer mode the back framebuffer is two presents stale, so union the
+     * current and previous dirty boxes; in copy mode draw_bitmap writes the live framebuffer, so only
+     * the current box is needed. */
+    bool have = false;
+    int x0 = 0, y0 = 0, x1 = -1, y1 = -1;
+    if (full)
     {
-        const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
-        uint16_t* o = s_be.line + (size_t)row * rw;
-        for (int col = 0; col < rw; col++)
+        x0 = 0;
+        y0 = 0;
+        x1 = s_be.w - 1;
+        y1 = s_be.h - 1;
+        have = true;
+    }
+    else
+    {
+        if (s_be.dx1 >= s_be.dx0 && s_be.dy1 >= s_be.dy0)
         {
-            const uint32_t p = s[col];
-            const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-            const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-            const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-            o[col] = (uint16_t)(r | g | b);
+            x0 = s_be.dx0;
+            y0 = s_be.dy0;
+            x1 = s_be.dx1;
+            y1 = s_be.dy1;
+            have = true;
+        }
+        if (dbl && s_be.pdx1 >= s_be.pdx0 && s_be.pdy1 >= s_be.pdy0)
+        {
+            if (!have)
+            {
+                x0 = s_be.pdx0;
+                y0 = s_be.pdy0;
+                x1 = s_be.pdx1;
+                y1 = s_be.pdy1;
+                have = true;
+            }
+            else
+            {
+                if (s_be.pdx0 < x0)
+                    x0 = s_be.pdx0;
+                if (s_be.pdy0 < y0)
+                    y0 = s_be.pdy0;
+                if (s_be.pdx1 > x1)
+                    x1 = s_be.pdx1;
+                if (s_be.pdy1 > y1)
+                    y1 = s_be.pdy1;
+            }
         }
     }
-    esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x0 + rw, y0 + rh, s_be.line);
 
-    /* Reset the dirty box. */
+    /* Roll current → previous, then reset the current box (we've captured everything we need above). */
+    s_be.pdx0 = s_be.dx0;
+    s_be.pdy0 = s_be.dy0;
+    s_be.pdx1 = s_be.dx1;
+    s_be.pdy1 = s_be.dy1;
     s_be.dx0 = s_be.w;
     s_be.dy0 = s_be.h;
     s_be.dx1 = -1;
     s_be.dy1 = -1;
+    if (full)
+    {
+        s_be.present_count++;
+    }
+    if (!have)
+    {
+        return; /* nothing changed this present (or last) */
+    }
+
+    const int rw = x1 - x0 + 1;
+    const int rh = y1 - y0 + 1;
+
+    if (dbl)
+    {
+        /* Convert straight into the off-screen framebuffer (full-width rows), then swap to it. */
+        uint16_t* dst_fb = s_be.fbp[s_be.back];
+        for (int row = 0; row < rh; row++)
+        {
+            const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+            uint16_t* o = dst_fb + (size_t)(y0 + row) * s_be.w + x0;
+            for (int col = 0; col < rw; col++)
+            {
+                const uint32_t p = s[col];
+                const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+                const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+                const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+                o[col] = (uint16_t)(r | g | b);
+            }
+        }
+        /* color_data == one of the panel's framebuffers → draw_bitmap flips to it at vsync (no copy). */
+        esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, dst_fb);
+        s_be.back ^= 1;
+    }
+    else
+    {
+        /* Copy mode: pack row-tight into the staging buffer; draw_bitmap copies it into the live fb. */
+        for (int row = 0; row < rh; row++)
+        {
+            const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+            uint16_t* o = s_be.line + (size_t)row * rw;
+            for (int col = 0; col < rw; col++)
+            {
+                const uint32_t p = s[col];
+                const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+                const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+                const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+                o[col] = (uint16_t)(r | g | b);
+            }
+        }
+        esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, s_be.line);
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -260,13 +347,41 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     s_be.dy0 = height;
     s_be.dx1 = -1;
     s_be.dy1 = -1;
+    s_be.pdx0 = width;
+    s_be.pdy0 = height;
+    s_be.pdx1 = -1;
+    s_be.pdy1 = -1;
+    s_be.present_count = 0;
 
     s_be.fb = (uint32_t*)heap_caps_malloc((size_t)width * height * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    s_be.line = (uint16_t*)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    if (!s_be.fb || !s_be.line)
+    if (!s_be.fb)
     {
-        ESP_LOGE(TAG, "framebuffer alloc failed (need %d KB PSRAM)", (int)((size_t)width * height * 6 / 1024));
+        ESP_LOGE(TAG, "framebuffer alloc failed (need %d KB PSRAM)", (int)((size_t)width * height * 4 / 1024));
         return false;
+    }
+
+    /* Tear-free path: if the panel exposes two framebuffers (num_fbs=2), draw straight into the
+     * off-screen one and let draw_bitmap swap it in at vsync. Otherwise fall back to a staging buffer
+     * that draw_bitmap copies into the live framebuffer (single-buffered; can tear). */
+    void* fb0 = NULL;
+    void* fb1 = NULL;
+    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK && fb0 && fb1 && fb0 != fb1)
+    {
+        s_be.fbp[0] = (uint16_t*)fb0;
+        s_be.fbp[1] = (uint16_t*)fb1;
+        s_be.back = 1; /* fb0 is displayed first; draw into fb1 */
+        s_be.line = NULL;
+    }
+    else
+    {
+        s_be.fbp[0] = NULL;
+        s_be.fbp[1] = NULL;
+        s_be.line = (uint16_t*)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!s_be.line)
+        {
+            ESP_LOGE(TAG, "staging buffer alloc failed");
+            return false;
+        }
     }
     /* Clear the framebuffer to opaque black so the first frame composites over a known background. */
     for (size_t i = 0; i < (size_t)width * height; i++)
