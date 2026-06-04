@@ -315,11 +315,11 @@ static void run_app(void)
             }
         }
 
-        er_bridge_pump(ctx);
-        er_commit();
+        er_bridge_pump(ctx); /* drain JS promises + fire due timers */
+        er_commit();         /* lay out (if needed) + paint the changed region into the backend */
         if (display)
         {
-            er_esp32_lcd_present(); /* flush the painted region to the panel each frame */
+            er_esp32_lcd_present(); /* flush the painted region to the panel */
         }
 
         const uint32_t now = now_ms();

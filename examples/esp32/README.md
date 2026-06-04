@@ -1,25 +1,11 @@
-# examples/esp32 — ESP32-S3 host (Flow A)
+# examples/esp32 — ESP32-S3 host (Flow A – QuickJS)
 
 Runs the embedded-react Flow A stack on an **ESP32-S3**: QuickJS interprets the precompiled
-bytecode bundle, the C engine lays out + paints, and (Phase 2+) an LCD backend pushes pixels.
+bytecode bundle, the C engine lays out and paints, and an LCD backend pushes pixels.
 
 **Target board:** Waveshare **ESP32-S3-Touch-LCD-7** — 7" **800×480 RGB-parallel** IPS panel,
 8 MB octal PSRAM, 16 MB flash, **GT911** capacitive touch (I²C), and a **CH422G** I²C IO-expander
 that drives the LCD reset / backlight / touch-reset lines.
-
-## Bring-up is staged
-
-| Phase | What runs | Status |
-|-------|-----------|--------|
-| **1. Headless** | QuickJS in PSRAM + bytecode + engine + bridge, **no-op backend**, output over UART | ✅ done |
-| **2. Display** | RGB panel (CH422G init, 800×480 timings) + ARGB8888→RGB565 dirty-rect flush | ✅ done |
-| **3. Touch** | GT911 over I²C → `embedded_renderer_touch` (buttons are interactive) | ✅ done |
-
-Phase 1 proved the **whole JS stack runs on the S3** before any panel work — `console.log` and the
-first-commit dirty rect over UART meant the hard part was done and the display was a contained
-problem. **Phase 2** lights the 7" panel: the React UI (navy background, live uptime clock, animated
-box, buttons) renders on real hardware. **Phase 3** wires the GT911 touch controller, so tapping the
-on-screen buttons drives React `onPress` → state → re-render — a fully interactive embedded app.
 
 ## Self-contained via fetch
 
@@ -134,31 +120,35 @@ links exactly that version, so it's automatic as long as both come from this rep
   match `bridges/quickjs/CMakeLists.txt` and the version that compiled `app.bundle.qbc`. Bump all
   three together if you ever change it, or the bytecode won't load.
 
-## How Phase 2 works (display)
+## Performance
 
-- **`board.c`** (board-specific) brings up the Waveshare 7": the CH422G I²C expander releases LCD
-  reset and enables the DISP/backlight line, then `esp_lcd_new_rgb_panel` configures the 800×480
-  16-bit RGB panel (data/sync pins + porches per the Waveshare schematic) with its framebuffer in
-  PSRAM. It returns an `esp_lcd_panel_handle_t`.
-- **`backends/esp32-lcd/renderer_backend.c`** (board-agnostic) keeps an ARGB8888 framebuffer in PSRAM
-  that the engine composites into via fill/copy/blend, tracking a dirty bounding box. `er_esp32_lcd_present()`
-  converts just that dirty region to RGB565 and pushes it to the panel with `esp_lcd_panel_draw_bitmap`.
-- **`main.c`** wires them together (`board_display_init` → `er_esp32_lcd_backend_init`) and calls
-  `er_esp32_lcd_present()` after every `er_commit()`.
+The S3 runs the CPU at 240 MHz but the JS heap, engine pools, and framebuffers all live in 80 MHz
+PSRAM, so the whole pipeline is memory-bound. What makes it smooth (~45 fps animation, tear-free):
 
-## How Phase 3 works (touch)
-
-- **`board.c`** also brings up the **GT911** on the shared I²C bus: `board_touch_init()` runs the
-  reset sequence (INT=GPIO4 held low across the CH422G `TP_RST` rising edge → address 0x5D) and
-  probes the controller; `board_touch_read()` polls the buffer-status register and returns the latest
-  point (panel pixels) only when a fresh sample is ready.
-- **`main.c`** polls `board_touch_read()` at the top of each frame and runs a small press state
-  machine that turns snapshots into `embedded_renderer_touch(0, ER_TOUCH_{DOWN,MOVE,UP}, x, y)` — so
-  a tap reaches the engine's hit-test → fires the React `onPress` → state update → re-render, all in
-  the same frame.
+- **Damage-clipped rendering** (engine). `er_commit()` scissors the paint walk to just the screen
+  rects that actually changed — each changed/moved node's new rect ∪ the rect it was painted at last
+  frame (so a moving box's trail is erased), plus any removed node's footprint. Both the software
+  compositing and the panel flush shrink from 800×480 to the changed region. A full repaint only
+  happens on the first frame or when the framebuffer is invalidated.
+- **Identical-props gate** (engine). React re-renders allocate fresh inline-style objects, so the
+  reconciler re-commits every node even when nothing changed. `er_node_set_props` hashes the incoming
+  props and skips the layout/repaint invalidation when they're byte-identical — one leaf update no
+  longer drags the whole screen into a repaint.
+- **Double-buffered, tear-free flush** (`backends/esp32-lcd`). With `num_fbs=2` the backend converts
+  the changed region straight into the **off-screen** framebuffer and lets `draw_bitmap` swap it in at
+  vsync — the displayed buffer is never written mid-scanout. Because each buffer is two presents
+  stale, the present pushes the union of this frame's and last frame's damage.
+- **Bigger CPU caches** (`sdkconfig.defaults`). 64 KB data + 32 KB instruction cache (64 B lines) cut
+  the PSRAM miss/stall rate ~2.4× across pump, layout, and flush. (PSRAM stays at 80 MHz — 120 MHz
+  octal needs the flash at 120 MHz too, which this board isn't rated for.)
+- **App patterns** (`bridges/quickjs/js/app/App.jsx`). The once-a-second uptime counter is its own
+  leaf component (its `setState` re-renders only itself, not the whole tree) and static styles use
+  `StyleSheet.create` (stable identity → the reconciler skips unchanged nodes). Standard React
+  performance hygiene, and it matters a lot more when each JS op is a PSRAM round-trip.
 
 ## Possible next steps
 
-The three-phase bring-up is complete. Beyond it: multi-touch / gestures (the engine has
-`er_responder_query_set`), asset/font loading (`loadImage`/`loadFont`, needs PNG decode), or
-factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
+1. Multitouch / gestures (the engine has `er_responder_query_set`), 
+2. Asset/font loading (`loadImage`/`loadFont`, needs PNG decode), 
+3. Shrinking the per-frame opacity-scratch clear, or factoring `board.c` into a reusable BSP so other ESP32 boards
+can drop in.

@@ -3,7 +3,7 @@
 
 CONFIG_IDF_TARGET="esp32s3"
 
-# --- Octal PSRAM (the JS heap lives here; framebuffer will in Phase 2) ---
+# --- Octal PSRAM (the JS heap + engine pools + framebuffers live here) ---
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
@@ -26,6 +26,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # --- Performance ---
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Bigger CPU caches: the working set (JS heap during React reconcile, the framebuffer during paint)
+# lives in PSRAM, so a larger cache cuts the miss/stall rate. Internal SRAM is mostly free since the
+# big engine pools were pushed to PSRAM. Max out both: 64 KB data cache + 32 KB instruction cache.
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 
 # Larger UART log buffer so long JS stack traces aren't truncated.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
