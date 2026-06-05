@@ -42,14 +42,18 @@ src/
   props.js                 pure prop helpers (flattenStyle / buildProps / isEventProp)
   native-ui.js             re-exports globalThis.NativeUI (installed by the C bridge)
   __tests__/               co-located UNIT tests (Vitest, *.unit.test.js, no engine)
-app/                       the demo app (App.jsx, index.jsx) — bundle entry, not the library
 test/runtime/              e2e tests that need the real engine host
   *.runtime.test.jsx       run inside QuickJS + engine via the headless harness
   harness.js               check()/report() — records failures for the C runner
   run.mjs                  bundles each runtime test + runs er-bridge-quickjs-runtest
-build.mjs                  esbuild app/index.jsx → dist/app.bundle.js (IIFE, production React)
+build.mjs                  esbuild a demo's index.jsx → dist/app.bundle.js (IIFE, production React)
 vitest.config.js           unit test config
 ```
+
+The demo apps themselves live in the top-level **`demos/`** folder (one folder per demo), *not*
+here — this package is the library + reconciler + tests. `build.mjs` bundles a selected demo and
+resolves its `'embedded-react'` import to `src/embedded-react/index.js` via an esbuild alias. See
+[`demos/README.md`](../../../demos/README.md).
 
 The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
 handlers to `setEvent`, and uses `shouldSetTextContent` so a flattenable `<Text>` subtree (a string,
@@ -61,7 +65,8 @@ interpolation like `Hi {name}`, or nested `<Text>` runs) becomes the node's `tex
 
 ```
 npm install
-npm run build      # → dist/app.bundle.js
+npm run build               # bundles the default demo (demos/thermostat) → dist/app.bundle.js
+npm run build -- marine-dash  # bundle a specific demo (demos/<name>) instead
 ```
 
 ## Run (desktop)
@@ -81,8 +86,8 @@ the same `JS_ReadObject` load path the MCU hosts use (no parser, faster boot, so
 The C host injects the globals the bundle expects: `NativeUI` (the bridge), `screen`
 (`{ width, height, scale }`), and `console`.
 
-> Iteration loop: edit `src/*` or `app/*` → `npm run build` → rebuild `embedded-react-desktop-js`
-> (re-copies the bundle) → run.
+> Iteration loop: edit `src/*` (library) or `demos/<name>/*` (app) → `npm run build` → rebuild
+> `embedded-react-desktop-js` (re-copies the bundle) → run.
 
 ## Tests
 

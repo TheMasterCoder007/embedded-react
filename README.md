@@ -13,7 +13,7 @@ toolchain hides the firmware build behind a `react-native`-style developer flow.
 
 ## Repo layout
 
-This is a monorepo with four top-level concerns:
+This is a monorepo with five top-level concerns:
 
 ```
 engine/      Pure C99 runtime — scene graph, layout, rendering, text, animation.
@@ -26,9 +26,11 @@ bridges/     Frontends that drive the engine. quickjs/ hosts a React reconciler
              — the supported developer path. Others (Lua, JSON UI, visual
              editor, AOT compiler) can be added later without touching the engine.
 
-examples/    End-to-end sample apps — one engine + one backend + one bridge,
-             packaged for a specific board (stm32h7, esp32, raspberry-pi,
-             linux, dashboard-demo, marine-display).
+demos/       JSX demo apps written against the public `embedded-react` API — one
+             folder per demo (thermostat, …). The bundler picks one; the examples run it.
+
+examples/    End-to-end host integrations — one engine + one backend + one bridge,
+             packaged for a specific board (stm32h7, esp32, raspberry-pi, linux).
 ```
 
 Each top-level folder has its own README with more detail. Engine contributors should
@@ -153,8 +155,7 @@ possibilities the layering enables, not roadmap items.
 - Metro-compatible bundler that emits a QuickJS bytecode payload + JS bundle
 - React reconciler hosted in QuickJS, calling `er_scene.h`
 - `examples/linux/` end-to-end — write JSX, run on desktop
-- `examples/stm32h7/` — first MCU bring-up (LTDC + DMA2D)
-- `examples/esp32/` — ESP32-S3 bring-up
+- `examples/esp32/esp32-s3/` — ESP32-S3 (+PSRAM) bring-up, working end-to-end
 
 **Flow B — React as a compile target** (later)
 

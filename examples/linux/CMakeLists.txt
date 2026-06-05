@@ -74,8 +74,9 @@ target_link_libraries(embedded-react-desktop-js
 )
 
 # Copy the React bundle next to the desktop-js executable so it runs by default (no CLI arg).
-# The bundle is built out-of-band (`npm run build` in bridges/quickjs/js); if it's absent the
-# example falls back to its built-in demo. copy_bundle.cmake no-ops when the bundle is missing.
+# The bundle is built out-of-band (`npm run build` in bridges/quickjs/js, which bundles a demo from
+# the top-level demos/ folder); if it's absent the example falls back to its built-in demo.
+# copy_bundle.cmake no-ops when the bundle is missing.
 add_custom_command(TARGET embedded-react-desktop-js POST_BUILD
         COMMAND ${CMAKE_COMMAND}
         -DBUNDLE_SRC=${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist/app.bundle.js

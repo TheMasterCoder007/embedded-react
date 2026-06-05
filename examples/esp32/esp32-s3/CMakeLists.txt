@@ -49,7 +49,8 @@ FetchContent_MakeAvailable(quickjs)
 set(QUICKJS_SRC_DIR "${quickjs_SOURCE_DIR}" CACHE INTERNAL "QuickJS-ng source dir")
 
 # --- embedded-react engine + bridge (local in-repo, else fetched) ----------------------------------
-set(_er_local "${CMAKE_CURRENT_LIST_DIR}/../..")
+# ../../.. = repo root (this project lives at examples/esp32/esp32-s3/).
+set(_er_local "${CMAKE_CURRENT_LIST_DIR}/../../..")
 if(EXISTS "${_er_local}/engine/include/er_scene.h")
     set(EMBEDDED_REACT_SRC_DIR "${_er_local}" CACHE INTERNAL "embedded-react source (local monorepo)")
     message(STATUS "embedded-react: using local monorepo source at ${_er_local}")
