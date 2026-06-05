@@ -30,12 +30,25 @@ extern "C"
      *
      * Compiles to a no-op when ER_PERF_OVERLAY == 0.
      *
-     * @param[in] screen_w     Framebuffer width in pixels.
-     * @param[in] screen_h     Framebuffer height in pixels.
-     * @param[in] lines        Array of null-terminated text lines, drawn top to bottom.
-     * @param[in] line_count   Number of lines in @p lines.
+     * @param[in]  screen_w     Framebuffer width in pixels.
+     * @param[in]  screen_h     Framebuffer height in pixels.
+     * @param[in]  lines        Array of null-terminated text lines, drawn top to bottom.
+     * @param[in]  line_count   Number of lines in @p lines.
+     * @param[out] out_x        Receives the drawn panel's left edge (NULL to ignore).
+     * @param[out] out_y        Receives the drawn panel's top edge (NULL to ignore).
+     * @param[out] out_w        Receives the drawn panel's width (NULL to ignore).
+     * @param[out] out_h        Receives the drawn panel's height (NULL to ignore). 0 when nothing was
+     *                          drawn. The host can use this rect to snapshot the overlay and
+     *                          re-composite it each frame without re-rendering the text.
      */
-    void er_perf_overlay_draw(int screen_w, int screen_h, const char* const* lines, int line_count);
+    void er_perf_overlay_draw(int screen_w,
+                              int screen_h,
+                              const char* const* lines,
+                              int line_count,
+                              int* out_x,
+                              int* out_y,
+                              int* out_w,
+                              int* out_h);
 
 #ifdef __cplusplus
 }

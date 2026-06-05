@@ -41,6 +41,17 @@ typedef struct
     /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
     int pdx0, pdy0, pdx1, pdy1;
     int present_count; /**< First two presents draw full-screen to initialise both framebuffers. */
+    /* Persistent overlay: an RGB565 snapshot (see er_esp32_lcd_overlay_capture) re-composited on top
+     * of every present, so a small always-on overlay stays consistent across both framebuffers and is
+     * flushed as its own tight region — not unioned into (and ballooning) the app's dirty box. */
+    uint16_t* ov_cache;
+    int ov_cap; /**< Allocated capacity of ov_cache in pixels. */
+    int ovx, ovy, ovw, ovh;
+    bool ov_active;
+    /* Saved dirty box around an overlay draw (er_esp32_lcd_overlay_begin): drawing the overlay into
+     * the framebuffer to snapshot it must not leave the overlay's rect in the APP dirty box, or it
+     * would balloon the app's per-frame flush (overlay corner unioned with far-away app damage). */
+    int sdx0, sdy0, sdx1, sdy1;
 } ERLcdBackend;
 
 static ERLcdBackend s_be;
@@ -118,6 +129,17 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sp)
     const uint32_t g = sg + (dg * inv + 127U) / 255U;
     const uint32_t b = sb + (db * inv + 127U) / 255U;
     return 0xFF000000U | (r << 16) | (g << 8) | b;
+}
+
+/** @brief Copies the cached RGB565 overlay on top of a full-frame RGB565 destination buffer. */
+static void blit_overlay(uint16_t* dst)
+{
+    for (int row = 0; row < s_be.ovh; row++)
+    {
+        const uint16_t* s = s_be.ov_cache + (size_t)row * s_be.ovw;
+        uint16_t* o = dst + (size_t)(s_be.ovy + row) * s_be.w + s_be.ovx;
+        memcpy(o, s, (size_t)s_be.ovw * sizeof(uint16_t));
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -218,16 +240,16 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     mark_dirty(x, y, w, h);
 }
 
-/** @brief Converts the dirty region to RGB565 and pushes it to the panel framebuffer. */
+/** @brief Converts the dirty region to RGB565 and pushes it to the panel, re-compositing the overlay. */
 void er_esp32_lcd_present(void)
 {
     const bool dbl = (s_be.fbp[0] != NULL);
     /* First two presents in double-buffer mode draw the whole frame so both framebuffers start valid. */
     const bool full = dbl && s_be.present_count < 2;
 
-    /* Region to push. In double-buffer mode the back framebuffer is two presents stale, so union the
-     * current and previous dirty boxes; in copy mode draw_bitmap writes the live framebuffer, so only
-     * the current box is needed. */
+    /* App dirty region to push. In double-buffer mode the back framebuffer is two presents stale, so
+     * union the current and previous dirty boxes; in copy mode draw_bitmap writes the live framebuffer,
+     * so only the current box is needed. */
     bool have = false;
     int x0 = 0, y0 = 0, x1 = -1, y1 = -1;
     if (full)
@@ -285,53 +307,163 @@ void er_esp32_lcd_present(void)
     {
         s_be.present_count++;
     }
-    if (!have)
+    /* Present when the app changed, OR there's an overlay to keep current on this frame's buffer. */
+    if (!have && !s_be.ov_active)
     {
-        return; /* nothing changed this present (or last) */
+        return;
     }
-
-    const int rw = x1 - x0 + 1;
-    const int rh = y1 - y0 + 1;
 
     if (dbl)
     {
-        /* Convert straight into the off-screen framebuffer (full-width rows), then swap to it. */
         uint16_t* dst_fb = s_be.fbp[s_be.back];
-        for (int row = 0; row < rh; row++)
+        /* App region: convert straight into the off-screen framebuffer (full-width rows). */
+        if (have)
         {
-            const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
-            uint16_t* o = dst_fb + (size_t)(y0 + row) * s_be.w + x0;
-            for (int col = 0; col < rw; col++)
+            const int rw = x1 - x0 + 1;
+            const int rh = y1 - y0 + 1;
+            for (int row = 0; row < rh; row++)
             {
-                const uint32_t p = s[col];
-                const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-                const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-                const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-                o[col] = (uint16_t)(r | g | b);
+                const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+                uint16_t* o = dst_fb + (size_t)(y0 + row) * s_be.w + x0;
+                for (int col = 0; col < rw; col++)
+                {
+                    const uint32_t p = s[col];
+                    const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+                    const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+                    const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+                    o[col] = (uint16_t)(r | g | b);
+                }
             }
         }
-        /* color_data == one of the panel's framebuffers → draw_bitmap flips to it at vsync (no copy). */
-        esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, dst_fb);
+        /* Overlay: re-composite the cached RGB565 panel on top (its own tight region — not unioned
+         * into the app's dirty box, so a small corner overlay never enlarges the app flush). */
+        if (s_be.ov_active)
+        {
+            blit_overlay(dst_fb);
+        }
+        /* draw_bitmap flips the whole framebuffer at vsync; the bounds are an informational hint, so
+         * pass the union of the app + overlay regions (the per-region conversions above stay tight). */
+        int bx0 = x0, by0 = y0, bx1 = x1, by1 = y1;
+        if (s_be.ov_active)
+        {
+            const int ox1 = s_be.ovx + s_be.ovw - 1;
+            const int oy1 = s_be.ovy + s_be.ovh - 1;
+            if (!have)
+            {
+                bx0 = s_be.ovx;
+                by0 = s_be.ovy;
+                bx1 = ox1;
+                by1 = oy1;
+            }
+            else
+            {
+                if (s_be.ovx < bx0)
+                    bx0 = s_be.ovx;
+                if (s_be.ovy < by0)
+                    by0 = s_be.ovy;
+                if (ox1 > bx1)
+                    bx1 = ox1;
+                if (oy1 > by1)
+                    by1 = oy1;
+            }
+        }
+        esp_lcd_panel_draw_bitmap(s_be.panel, bx0, by0, bx1 + 1, by1 + 1, dst_fb);
         s_be.back ^= 1;
     }
     else
     {
         /* Copy mode: pack row-tight into the staging buffer; draw_bitmap copies it into the live fb. */
-        for (int row = 0; row < rh; row++)
+        if (have)
         {
-            const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
-            uint16_t* o = s_be.line + (size_t)row * rw;
-            for (int col = 0; col < rw; col++)
+            const int rw = x1 - x0 + 1;
+            const int rh = y1 - y0 + 1;
+            for (int row = 0; row < rh; row++)
             {
-                const uint32_t p = s[col];
-                const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-                const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-                const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-                o[col] = (uint16_t)(r | g | b);
+                const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+                uint16_t* o = s_be.line + (size_t)row * rw;
+                for (int col = 0; col < rw; col++)
+                {
+                    const uint32_t p = s[col];
+                    const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+                    const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+                    const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+                    o[col] = (uint16_t)(r | g | b);
+                }
             }
+            esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, s_be.line);
         }
-        esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, s_be.line);
+        if (s_be.ov_active)
+        {
+            esp_lcd_panel_draw_bitmap(
+                s_be.panel, s_be.ovx, s_be.ovy, s_be.ovx + s_be.ovw, s_be.ovy + s_be.ovh, s_be.ov_cache);
+        }
     }
+}
+
+/** @brief Saves the current dirty box before an overlay is drawn into the framebuffer (see capture). */
+void er_esp32_lcd_overlay_begin(void)
+{
+    s_be.sdx0 = s_be.dx0;
+    s_be.sdy0 = s_be.dy0;
+    s_be.sdx1 = s_be.dx1;
+    s_be.sdy1 = s_be.dy1;
+}
+
+/** @brief Snapshots a framebuffer rect as the persistent overlay re-composited on every present. */
+void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0 || !clip_rect(&x, &y, &w, &h))
+    {
+        s_be.ov_active = false;
+        /* Still roll back the dirty box: the overlay was drawn (dirtying its rect) but is composited
+         * separately, so it must not enlarge the app's flush. */
+        s_be.dx0 = s_be.sdx0;
+        s_be.dy0 = s_be.sdy0;
+        s_be.dx1 = s_be.sdx1;
+        s_be.dy1 = s_be.sdy1;
+        return;
+    }
+    const int need = w * h;
+    if (need > s_be.ov_cap)
+    {
+        uint16_t* nc = (uint16_t*)heap_caps_malloc((size_t)need * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!nc)
+        {
+            s_be.ov_active = false;
+            return;
+        }
+        if (s_be.ov_cache)
+        {
+            heap_caps_free(s_be.ov_cache);
+        }
+        s_be.ov_cache = nc;
+        s_be.ov_cap = need;
+    }
+    for (int row = 0; row < h; row++)
+    {
+        const uint32_t* s = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        uint16_t* o = s_be.ov_cache + (size_t)row * w;
+        for (int col = 0; col < w; col++)
+        {
+            const uint32_t p = s[col];
+            const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+            const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+            const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+            o[col] = (uint16_t)(r | g | b);
+        }
+    }
+    s_be.ovx = x;
+    s_be.ovy = y;
+    s_be.ovw = w;
+    s_be.ovh = h;
+    s_be.ov_active = true;
+
+    /* Roll the dirty box back to its pre-overlay state: the overlay's rect is composited every present
+     * from the cache, so it must not stay in (and balloon) the app's per-frame dirty region. */
+    s_be.dx0 = s_be.sdx0;
+    s_be.dy0 = s_be.sdy0;
+    s_be.dx1 = s_be.sdx1;
+    s_be.dy1 = s_be.sdy1;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -352,6 +484,7 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     s_be.pdx1 = -1;
     s_be.pdy1 = -1;
     s_be.present_count = 0;
+    s_be.ov_active = false;
 
     s_be.fb = (uint32_t*)heap_caps_malloc((size_t)width * height * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
     if (!s_be.fb)

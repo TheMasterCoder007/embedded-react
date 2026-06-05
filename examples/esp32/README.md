@@ -131,12 +131,11 @@ define (in `engine/include/perf_overlay.h`), **off by default** — flip it to `
 #define ER_PERF_OVERLAY 1   // engine/include/perf_overlay.h
 ```
 
-When off, it compiles out completely (zero cost). The engine renders the panel with its own font via
-the active backend; the host (`main.c`) gathers the metrics and feeds it formatted lines once every
-~500 ms. **CPU** is the share of the wall-clock the frame loop spends working vs. idling (so it climbs
-during animation); **FPS** is the loop's iteration rate (idle it free-runs well above the panel's
-~51 Hz refresh; under load it drops). Turn it off for final/representative measurements — the
-overlay itself adds a little flush cost.
+## Frame pacing
+
+The loop paces itself with an adaptive `vTaskDelay`: it sleeps only the time remaining up to a ~20 ms
+target (≈50 fps, just over the panel's ~51 Hz), so a heavy frame isn't taxed by a fixed delay and runs
+as fast as the work allows. It always blocks at least one tick so the idle task is fed.
 
 ## Possible next steps
 

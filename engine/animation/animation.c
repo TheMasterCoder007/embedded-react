@@ -324,7 +324,10 @@ static void update_has_transform(ERNode* node)
  * @param[in]     prop   Property to update.
  * @param[in]     value  Numeric value.
  *
- * @return true if the property was applied.
+ * @return true if the stored value actually CHANGED (so the caller should mark the node dirty);
+ *         false if the property was invalid for this node or the value was already current. Callers
+ *         that repaint per frame gate er_mark_dirty_upward() on this so a plateaued native-driver
+ *         animation (e.g. a wave box resting at translateY 0) does not force a needless repaint.
  */
 static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
 {
@@ -334,31 +337,46 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
     switch (prop)
     {
         case ER_PROP_OPACITY:
+        {
             if (!is_view_node(node))
                 return false;
             if (value < 0.0f)
                 value = 0.0f;
             if (value > 1.0f)
                 value = 1.0f;
-            node->props.view.opacity = (uint8_t)(value * 255.0f + 0.5f);
+            const uint8_t o = (uint8_t)(value * 255.0f + 0.5f);
+            if (node->props.view.opacity == o)
+                return false;
+            node->props.view.opacity = o;
             return true;
+        }
         case ER_PROP_TRANSLATE_X:
+            if (node->tp_translate_x == value)
+                return false;
             node->tp_translate_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_TRANSLATE_Y:
+            if (node->tp_translate_y == value)
+                return false;
             node->tp_translate_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SCALE_X:
+            if (node->tp_scale_x == value)
+                return false;
             node->tp_scale_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SCALE_Y:
+            if (node->tp_scale_y == value)
+                return false;
             node->tp_scale_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_Z:
+            if (node->tp_rotate_z == value)
+                return false;
             node->tp_rotate_z = value;
             /* ActivityIndicator uses rotate_z as its internal spin angle; skip has_transform
              * so the affine-transform render path does not try to rasterize it into scratch. */
@@ -366,22 +384,30 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
                 update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_X:
+            if (node->tp_rotate_x == value)
+                return false;
             node->tp_rotate_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_Y:
+            if (node->tp_rotate_y == value)
+                return false;
             node->tp_rotate_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SWITCH_THUMB:
+        {
             if (node->type != ER_NODE_SWITCH)
                 return false;
             if (value < 0.0f)
                 value = 0.0f;
             if (value > 1.0f)
                 value = 1.0f;
+            if (node->switch_thumb_t == value)
+                return false;
             node->switch_thumb_t = value;
             return true;
+        }
         default:
             return false;
     }
@@ -750,7 +776,10 @@ static void cancel_value_anim(uint16_t value_handle)
 /**
  * @brief Propagates an ERAnimValue's current float to all its bound node-property pairs.
  *
- * Each bound node is marked dirty so the compositor re-renders it on the next commit.
+ * A bound node is marked dirty ONLY when the applied value actually changed it. This keeps a value
+ * with many bindings cheap when most of them are momentarily unchanged (e.g. a "ripple" wave where
+ * only the boxes under the moving band are displaced; the resting boxes apply the same value and are
+ * not repainted), so the per-frame damage stays localized instead of covering every bound node.
  *
  * @param[in] val  Value whose current float is pushed to every active binding.
  */
@@ -772,8 +801,8 @@ static void push_to_value_bindings(ERAnimValue* val)
                                (int)bind->interp.point_count,
                                bind->interp.extrapolate_left,
                                bind->interp.extrapolate_right);
-        (void)apply_numeric_value(n, bind->prop, v);
-        er_mark_dirty_upward(n);
+        if (apply_numeric_value(n, bind->prop, v))
+            er_mark_dirty_upward(n);
     }
 }
 

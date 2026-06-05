@@ -24,8 +24,24 @@
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_perf_overlay_draw(int screen_w, int screen_h, const char* const* lines, int line_count)
+void er_perf_overlay_draw(int screen_w,
+                          int screen_h,
+                          const char* const* lines,
+                          int line_count,
+                          int* out_x,
+                          int* out_y,
+                          int* out_w,
+                          int* out_h)
 {
+    if (out_x)
+        *out_x = 0;
+    if (out_y)
+        *out_y = 0;
+    if (out_w)
+        *out_w = 0;
+    if (out_h)
+        *out_h = 0;
+
     if (!lines || line_count <= 0 || screen_w <= 0 || screen_h <= 0)
     {
         return;
@@ -76,7 +92,18 @@ void er_perf_overlay_draw(int screen_w, int screen_h, const char* const* lines, 
     const int panel_x = screen_w - panel_w - ER_PERF_MARGIN;
     const int panel_y = screen_h - panel_h - ER_PERF_MARGIN;
 
-    /* Translucent background, composited over whatever the app drew. */
+    /* Report the drawn rect so the host can snapshot exactly this region (e.g. to re-composite the
+     * overlay every frame without re-rendering the text). */
+    if (out_x)
+        *out_x = panel_x;
+    if (out_y)
+        *out_y = panel_y;
+    if (out_w)
+        *out_w = panel_w;
+    if (out_h)
+        *out_h = panel_h;
+
+    /* Opaque background, composited over whatever the app drew. */
     er_blit_fill(ER_PERF_BG, panel_x, panel_y, panel_w, panel_h);
 
     /* One render call per line so each sits on its own baseline. */
@@ -102,12 +129,27 @@ void er_perf_overlay_draw(int screen_w, int screen_h, const char* const* lines, 
 
 #else /* ER_PERF_OVERLAY == 0 : compiled out */
 
-void er_perf_overlay_draw(int screen_w, int screen_h, const char* const* lines, int line_count)
+void er_perf_overlay_draw(int screen_w,
+                          int screen_h,
+                          const char* const* lines,
+                          int line_count,
+                          int* out_x,
+                          int* out_y,
+                          int* out_w,
+                          int* out_h)
 {
     (void)screen_w;
     (void)screen_h;
     (void)lines;
     (void)line_count;
+    if (out_x)
+        *out_x = 0;
+    if (out_y)
+        *out_y = 0;
+    if (out_w)
+        *out_w = 0;
+    if (out_h)
+        *out_h = 0;
 }
 
 #endif

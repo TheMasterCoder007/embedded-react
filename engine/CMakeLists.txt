@@ -32,6 +32,8 @@ set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compo
 set(ERUI_SCRATCH_H "240" CACHE STRING "Scratch buffer height in pixels (max compositable node height)")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
 set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
+set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
+set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
 
 # ---------------------------------------------------------------------------
 # Sources — grouped by subsystem to match the engine/ folder layout
@@ -107,6 +109,8 @@ target_compile_definitions(embedded-react PUBLIC
 target_compile_definitions(embedded-react PRIVATE
         ERUI_FONT_POOL_BYTES=${ERUI_FONT_POOL_BYTES}
         ERUI_MAX_IMG_ROW_PIXELS=${ERUI_MAX_IMG_ROW_PIXELS}
+        ERUI_MAX_ANIM_VALUES=${ERUI_MAX_ANIM_VALUES}
+        ERUI_MAX_VALUE_BINDINGS=${ERUI_MAX_VALUE_BINDINGS}
 )
 
 target_link_libraries(embedded-react PUBLIC m)

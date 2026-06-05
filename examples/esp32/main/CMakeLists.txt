@@ -25,3 +25,8 @@ idf_component_register(
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
     EMBED_FILES "app.bundle.qbc"
 )
+
+# Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side
+# metric gathering on ER_PERF_OVERLAY; the engine component sets the same flag so the renderer draws
+# the panel. Set here too so the host wiring is enabled regardless of requirement propagation order.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=1)

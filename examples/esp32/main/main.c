@@ -279,6 +279,11 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
 }
 #endif
 
+/* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).
+ * Light frames sleep the remainder up to this; heavy frames yield the minimum and run as fast as the
+ * work allows. The real win needs fine ticks — see CONFIG_FREERTOS_HZ=1000 in sdkconfig.defaults. */
+#define ER_TARGET_FRAME_MS 20U
+
 /**
  * @brief Boots QuickJS + the engine, runs the embedded bytecode app, then drives the frame loop.
  */
@@ -377,26 +382,27 @@ static void run_app(void)
             }
         }
 
-#if ER_PERF_OVERLAY
-        const int64_t perf_frame_start = esp_timer_get_time();
-#endif
+        const int64_t frame_start_us = esp_timer_get_time();
         er_bridge_pump(ctx); /* drain JS promises + fire due timers */
         er_commit();         /* lay out (if needed) + paint the changed region into the backend */
 #if ER_PERF_OVERLAY
-        /* Draw the overlay on top of the app only when the metrics changed (~twice a second), so it
-           stays persistent and the per-frame flush stays tight between updates. */
-        if (display && perf_overlay_refresh(perf_frame_start))
+        /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
+           expensive part) and snapshot that region. The backend then re-composites the snapshot on top
+           of EVERY present (a cheap RGB565 copy), so the overlay stays flicker-free over the
+           double-buffered panel without per-frame text rendering, and as its own tight region so it
+           never enlarges the app's per-frame dirty box. */
+        if (display && perf_overlay_refresh(frame_start_us))
         {
-            er_perf_overlay_draw(SCREEN_W, SCREEN_H, s_perf_lines, s_perf_nlines);
+            int ox = 0, oy = 0, ow = 0, oh = 0;
+            er_esp32_lcd_overlay_begin(); /* save the app dirty box; capture restores it */
+            er_perf_overlay_draw(SCREEN_W, SCREEN_H, s_perf_lines, s_perf_nlines, &ox, &oy, &ow, &oh);
+            er_esp32_lcd_overlay_capture(ox, oy, ow, oh);
         }
 #endif
         if (display)
         {
-            er_esp32_lcd_present(); /* flush the painted region to the panel */
+            er_esp32_lcd_present(); /* flush the app region + re-composite the overlay */
         }
-#if ER_PERF_OVERLAY
-        s_perf_busy_us = (uint32_t)(esp_timer_get_time() - perf_frame_start);
-#endif
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
@@ -406,7 +412,22 @@ static void run_app(void)
         {
             ESP_LOGI(TAG, "alive: %u frames, %u ms uptime", (unsigned)frame, (unsigned)now);
         }
-        vTaskDelay(pdMS_TO_TICKS(16));
+
+        /* Adaptive pacing: sleep only the remainder up to ER_TARGET_FRAME_MS so heavy frames are not
+           taxed by a fixed delay (the old fixed 16 ms was ~10 ms at 100 Hz ticks — pure overhead on a
+           30 ms frame). Always block at least one tick so the idle task runs (watchdog); that floor is
+           10 ms at 100 Hz but 1 ms at 1000 Hz, which is why sdkconfig.defaults sets CONFIG_FREERTOS_HZ. */
+        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);
+#if ER_PERF_OVERLAY
+        s_perf_busy_us = used_ms * 1000U; /* work time (excl. sleep) for the CPU-load metric */
+#endif
+        const uint32_t sleep_ms = (used_ms >= ER_TARGET_FRAME_MS) ? 0U : (ER_TARGET_FRAME_MS - used_ms);
+        TickType_t sleep_ticks = pdMS_TO_TICKS(sleep_ms);
+        if (sleep_ticks == 0U)
+        {
+            sleep_ticks = 1U; /* always yield >= 1 tick so the idle task is fed */
+        }
+        vTaskDelay(sleep_ticks);
     }
 }
 

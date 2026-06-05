@@ -36,6 +36,32 @@ extern "C"
      */
     void er_esp32_lcd_present(void);
 
+    /**
+     * @brief Snapshots a rectangle of the framebuffer as the persistent "overlay" region.
+     *
+     * Captures the given rect (already composited in the framebuffer, e.g. the perf overlay) into an
+     * internal RGB565 cache. Every subsequent er_esp32_lcd_present() re-composites that cache on top
+     * of the panel, so a small always-on overlay can be drawn (expensively) just a couple of times a
+     * second yet stay flicker-free over a double-buffered panel — without enlarging the app's per-frame
+     * dirty region. Pass w<=0 or h<=0 to disable re-compositing.
+     *
+     * @param[in] x  Left edge of the overlay rect in framebuffer pixels.
+     * @param[in] y  Top edge of the overlay rect.
+     * @param[in] w  Width in pixels (<=0 disables the overlay).
+     * @param[in] h  Height in pixels (<=0 disables the overlay).
+     */
+    void er_esp32_lcd_overlay_capture(int x, int y, int w, int h);
+
+    /**
+     * @brief Saves the dirty box before the host draws the overlay into the framebuffer.
+     *
+     * Call immediately before rendering the overlay (whose draw dirties its rect) and pair with
+     * er_esp32_lcd_overlay_capture(), which restores the dirty box afterwards. This keeps the overlay
+     * out of the app's per-frame dirty region (it is composited separately each present), so a small
+     * corner overlay never balloons the app flush.
+     */
+    void er_esp32_lcd_overlay_begin(void);
+
 #ifdef __cplusplus
 }
 #endif

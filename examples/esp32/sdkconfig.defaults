@@ -26,6 +26,11 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # --- Performance ---
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# 1 kHz scheduler tick (default is 100 Hz). The frame loop paces itself with vTaskDelay of the
+# remaining time to the target frame; at 100 Hz the minimum non-zero delay is a full 10 ms tick, which
+# taxes heavy frames. 1 ms ticks let it yield ~1 ms instead, so heavy frames run as fast as the work
+# allows while still feeding the idle task.
+CONFIG_FREERTOS_HZ=1000
 # Bigger CPU caches: the working set (JS heap during React reconcile, the framebuffer during paint)
 # lives in PSRAM, so a larger cache cuts the miss/stall rate. Internal SRAM is mostly free since the
 # big engine pools were pushed to PSRAM. Max out both: 64 KB data cache + 32 KB instruction cache.
