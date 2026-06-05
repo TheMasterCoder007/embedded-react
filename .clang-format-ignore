@@ -1,3 +1,13 @@
+# Files clang-format must never touch.
+# NOTE: .clang-format-ignore is only honored by clang-format >= 18. On older versions it is silently
+# ignored — the repo's `format` CMake target (root CMakeLists.txt) does the same exclusions itself so
+# formatting is version-proof. Keep the two in sync.
+
+# Generated font blob (huge, machine-generated)
 **/font_data.c
-build/
-cmake-build-*/
+
+# Build trees + FetchContent deps (third-party QuickJS lives here) + IDE build dirs
+**/build/**
+**/cmake-build*/**
+**/_deps/**
+**/node_modules/**

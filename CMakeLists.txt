@@ -34,6 +34,16 @@ if (CLANG_FORMAT_EXE)
             "${CMAKE_SOURCE_DIR}/bridges/*.h"
     )
 
+    # GLOB_RECURSE descends into EVERY subdirectory, including the gitignored build trees where
+    # FetchContent clones QuickJS (build/_deps/) and where CMake/CLion drop generated probe files
+    # (build/, cmake-build-*/). Without these excludes, `format` rewrites ~150 third-party/generated
+    # files. (.clang-format-ignore would also cover this, but only on clang-format >= 18 — older
+    # versions silently ignore that file, so the filtering must happen here to be version-proof.)
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/build/")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/cmake-build")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/_deps/")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/node_modules/")
+
     # Exclude generated files
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX ".*/font_data\\.c$")
 
