@@ -51,12 +51,23 @@ Prerequisites: **ESP-IDF v5.x** installed and exported (`. $IDF_PATH/export.sh`)
 of the JS app). From the repo root:
 
 ```bash
+# 1. Build the JS bundle. (This cd leaves you in js/ — cd back to the repo root afterwards.)
 cd bridges/quickjs/js && npm run build                  # → dist/app.bundle.js
-cmake --build ../../bridges/quickjs/build --target er-bridge-quickjs-compile   # build the precompiler once
+cd ../../..                                              # back to repo root
+
+# 2. Configure + build the precompiler ONCE. (It FetchContents QuickJS-ng; needs a host compiler.
+#    On Windows use the MinGW Makefiles generator; on Linux/macOS drop the -G line.)
+cmake -S bridges/quickjs -B bridges/quickjs/build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile
+
+# 3. Compile the bundle to bytecode. (The tool is er-bridge-quickjs-compile.exe on Windows.)
 bridges/quickjs/build/er-bridge-quickjs-compile \
     bridges/quickjs/js/dist/app.bundle.js \
     examples/esp32/main/app.bundle.qbc
 ```
+
+Steps 1 and 3 paths are relative to the **repo root**; the precompiler only needs configuring once
+(step 2) — after that, regenerating bytecode is just steps 1 + 3.
 
 (If you skip this, the build stops with a message telling you to do it.)
 

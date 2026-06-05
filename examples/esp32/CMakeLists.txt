@@ -69,3 +69,16 @@ set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/components")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(embedded-react-esp32)
+
+# --- distclean -------------------------------------------------------------------------------------
+# `idf.py fullclean` deletes build/ with Python's shutil.rmtree, which on Windows CANNOT unlink the
+# read-only git packfiles that FetchContent's clone of QuickJS-ng leaves under
+# build/_deps/quickjs-src/.git/objects/pack/ — it aborts with "[WinError 5] Access is denied" and
+# leaves a half-wiped build/. This target removes that FetchContent cache the read-only-safe way
+# (`cmake -E rm -rf` clears the attribute, unlike shutil.rmtree); the next configure re-fetches it
+# cleanly, and a subsequent `idf.py fullclean` then succeeds too. Run it when the deps cache wedges:
+#
+#     cmake --build build --target distclean
+add_custom_target(distclean
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/_deps"
+    COMMENT "distclean: removing FetchContent deps cache (${CMAKE_BINARY_DIR}/_deps)")
