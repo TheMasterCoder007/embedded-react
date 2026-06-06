@@ -60,6 +60,15 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_MAX_IMG_ROW_PIXELS=800
 )
 
+# Performance overlay (FPS/CPU/memory, bottom-right). The actual drawing lives in this component's
+# perf_overlay.c, which is a no-op stub unless ER_PERF_OVERLAY=1 reaches it — so it must be set HERE,
+# not only on the main component (which gathers the host-side metrics). Keep this in sync with
+# main/CMakeLists.txt; set both to 0 to compile the overlay out entirely.
+if(NOT DEFINED ER_PERF_OVERLAY)
+    set(ER_PERF_OVERLAY 1)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=${ER_PERF_OVERLAY})
+
 # The engine is platform-neutral C99 developed against desktop GCC; the xtensa GCC 14 toolchain is
 # stricter and IDF builds with -Werror. Don't let IDF's policy fail the build on the engine's
 # (warning-level) diagnostics — keep them as warnings rather than escalate engine code here.

@@ -14,10 +14,13 @@ extern "C"
     /**
      * @brief Initialises the ESP32 LCD render backend and registers it with the engine.
      *
-     * Board-agnostic: it keeps an ARGB8888 framebuffer in PSRAM that the engine's fill/copy/blend
-     * composite into, and on each frame flushes the changed (dirty) region as RGB565 to the supplied
-     * esp_lcd panel via esp_lcd_panel_draw_bitmap. The caller owns the panel (init it first — pins,
-     * timings, reset, backlight) and must keep it alive for the backend's lifetime.
+     * Board-agnostic: it keeps a persistent "canonical" framebuffer in PSRAM that the engine's
+     * fill/copy/blend composite into, and on each frame flushes the changed (dirty) region to the
+     * supplied esp_lcd panel via esp_lcd_panel_draw_bitmap. The canonical framebuffer's pixel format
+     * is selectable with ER_LCD_FB_RGB565 (default 1): RGB565 makes present a plain 565→565 copy (no
+     * per-frame ARGB→565 conversion, half the bandwidth/footprint); ARGB8888 (0) keeps a full-precision
+     * buffer and converts at present. The caller owns the panel (init it first — pins, timings, reset,
+     * backlight) and must keep it alive for the backend's lifetime.
      *
      * @param[in] panel   An initialised esp_lcd panel handle (e.g. an RGB panel).
      * @param[in] width   Panel width in pixels (must match the engine's root width).

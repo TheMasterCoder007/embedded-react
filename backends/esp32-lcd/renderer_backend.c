@@ -1,11 +1,29 @@
 /*
  * ESP32 LCD render backend — board-agnostic software framebuffer + RGB565 flush.
  *
- * The engine renders ARGB8888 (straight-alpha fills, premultiplied copy/blend). This backend keeps a
- * persistent ARGB8888 framebuffer in PSRAM, composites every fill/copy/blend into it (premultiplied
- * over an opaque background), tracks the dirty bounding box, and on frame_ready converts just that
- * region to RGB565 and pushes it to the esp_lcd panel. The panel keeps its own framebuffer that its
- * LCD peripheral DMAs to the display, so only the changed region needs to be copied each frame.
+ * The engine always hands this backend ARGB8888 sources (straight-alpha fills, premultiplied
+ * copy/blend). The backend keeps a persistent "canonical" framebuffer in PSRAM that those
+ * fill/copy/blend composite into (premultiplied over an opaque background), tracks the dirty
+ * bounding box, and on present pushes just that region to the esp_lcd panel (which is always
+ * RGB565).
+ *
+ * PIXEL FORMAT OF THE CANONICAL FRAMEBUFFER is selectable via ER_LCD_FB_RGB565 (default 1):
+ *   - 1 (RGB565): the canonical fb is itself RGB565. Compositing unpacks the dst to 8-bit, blends
+ *     in full precision, and packs back to 565. Present is then a plain 565→565 copy of the dirty
+ *     region into the panel framebuffer — the per-frame ARGB→RGB565 CONVERSION PASS IS GONE, the
+ *     canonical fb is half the size (2 B/px), and per-pixel compositing bandwidth roughly halves.
+ *     This is the device default (the panel is physically 565, so this only moves the 565 rounding
+ *     a step earlier; quality is effectively unchanged for flat UI).
+ *   - 0 (ARGB8888): the canonical fb is ARGB8888 and present converts the dirty region to RGB565.
+ *     Full-precision intermediate (no per-blend banding); useful as an A/B reference or on hosts
+ *     that are not PSRAM-bandwidth-bound.
+ *
+ * Note on "zero-copy": the canonical fb stays the always-complete source the double-buffered,
+ * incremental, read-modify-write blend model needs (each panel fb is two presents stale, so present
+ * replays current ∪ previous damage to converge it). Compositing straight into the alternating panel
+ * fbs — eliminating even the present copy — would require the engine to repaint the union damage into
+ * the target every frame (an engine change) or accept tearing; the 565 canonical here removes the
+ * conversion and halves the bandwidth/footprint, which is the bulk of the win.
  *
  * Board specifics (RGB timings, pins, the CH422G expander for reset/backlight) live in the host that
  * creates the panel — this file only needs the panel handle.
@@ -21,6 +39,79 @@
 #include <stdlib.h>
 #include <string.h>
 
+/** @brief 1 = canonical framebuffer is RGB565 (no convert pass); 0 = ARGB8888 (convert at present). */
+#ifndef ER_LCD_FB_RGB565
+#define ER_LCD_FB_RGB565 1
+#endif
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Pixel-format abstraction (canonical framebuffer)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#if ER_LCD_FB_RGB565
+
+typedef uint16_t fbpx_t; /**< Canonical framebuffer pixel: RGB565. */
+
+/** @brief Packs an opaque ARGB8888 (0xFFRRGGBB) into an RGB565 framebuffer pixel. */
+static inline fbpx_t fb_store(uint32_t argb)
+{
+    const uint16_t r = (uint16_t)(((argb >> 16) & 0xF8U) << 8);
+    const uint16_t g = (uint16_t)(((argb >> 8) & 0xFCU) << 3);
+    const uint16_t b = (uint16_t)((argb & 0xF8U) >> 3);
+    return (uint16_t)(r | g | b);
+}
+
+/** @brief Unpacks an RGB565 framebuffer pixel to opaque ARGB8888, replicating high bits for accuracy. */
+static inline uint32_t fb_load(fbpx_t p)
+{
+    const uint32_t r5 = (p >> 11) & 0x1FU;
+    const uint32_t g6 = (p >> 5) & 0x3FU;
+    const uint32_t b5 = p & 0x1FU;
+    const uint32_t r = (r5 << 3) | (r5 >> 2);
+    const uint32_t g = (g6 << 2) | (g6 >> 4);
+    const uint32_t b = (b5 << 3) | (b5 >> 2);
+    return 0xFF000000U | (r << 16) | (g << 8) | b;
+}
+
+/** @brief Emits n canonical pixels to an RGB565 output row — a straight copy (already 565). */
+static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
+{
+    memcpy(dst, src, (size_t)n * sizeof(uint16_t));
+}
+
+#define FB_CLEAR_PX ((fbpx_t)0x0000) /* opaque black */
+
+#else /* ARGB8888 canonical */
+
+typedef uint32_t fbpx_t; /**< Canonical framebuffer pixel: ARGB8888 (0xFFRRGGBB). */
+
+static inline fbpx_t fb_store(uint32_t argb)
+{
+    return 0xFF000000U | (argb & 0x00FFFFFFU);
+}
+
+static inline uint32_t fb_load(fbpx_t p)
+{
+    return p;
+}
+
+/** @brief Converts n ARGB8888 canonical pixels to an RGB565 output row. */
+static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
+{
+    for (int i = 0; i < n; i++)
+    {
+        const uint32_t p = src[i];
+        const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+        const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+        const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+        dst[i] = (uint16_t)(r | g | b);
+    }
+}
+
+#define FB_CLEAR_PX ((fbpx_t)0xFF000000U) /* opaque black */
+
+#endif /* ER_LCD_FB_RGB565 */
+
 /*----------------------------------------------------------------------------------------------------------------------
  - State
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -32,7 +123,7 @@ typedef struct
     esp_lcd_panel_handle_t panel;
     int w;
     int h;
-    uint32_t* fb;     /**< ARGB8888 framebuffer (PSRAM), w*h. Authoritative full frame (0xFFRRGGBB). */
+    fbpx_t* fb;       /**< Canonical framebuffer (PSRAM), w*h. Authoritative full frame. */
     uint16_t* fbp[2]; /**< The panel's two RGB565 framebuffers (double-buffer mode); NULL = copy mode. */
     int back;         /**< Index of the off-screen framebuffer to draw next (double-buffer mode). */
     uint16_t* line;   /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
@@ -98,14 +189,14 @@ static void mark_dirty(int x, int y, int w, int h)
 }
 
 /**
- * @brief Composites one premultiplied ARGB8888 source pixel over an opaque dst pixel.
+ * @brief Composites one premultiplied ARGB8888 source pixel over an opaque dst pixel (8-bit precision).
  *
  * out_rgb = src_rgb + dst_rgb * (255 - src_a) / 255   (premultiplied "over"; dst alpha is implicitly 1)
  *
- * @param[in] dst  Existing framebuffer pixel (0xFFRRGGBB).
+ * @param[in] dst  Existing pixel unpacked to opaque ARGB8888 (0xFFRRGGBB).
  * @param[in] sp   Premultiplied source pixel (0xAARRGGBB, RGB already scaled by alpha).
  *
- * @return The composited opaque pixel.
+ * @return The composited opaque pixel (0xFFRRGGBB), ready to pack via fb_store.
  */
 static inline uint32_t over_premul(uint32_t dst, uint32_t sp)
 {
@@ -160,23 +251,23 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
     const uint32_t pg = (((argb >> 8) & 0xFFU) * a + 127U) / 255U;
     const uint32_t pb = ((argb & 0xFFU) * a + 127U) / 255U;
     const uint32_t sp = (a << 24) | (pr << 16) | (pg << 8) | pb;
+    const fbpx_t opaque_px = fb_store(0xFF000000U | (argb & 0x00FFFFFFU));
 
     for (int row = 0; row < h; row++)
     {
-        uint32_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         if (a == 255U)
         {
-            const uint32_t opaque = 0xFF000000U | (argb & 0x00FFFFFFU);
             for (int col = 0; col < w; col++)
             {
-                d[col] = opaque;
+                d[col] = opaque_px;
             }
         }
         else
         {
             for (int col = 0; col < w; col++)
             {
-                d[col] = over_premul(d[col], sp);
+                d[col] = fb_store(over_premul(fb_load(d[col]), sp));
             }
         }
     }
@@ -197,10 +288,10 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
     for (int row = 0; row < h; row++)
     {
         const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
-        uint32_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         for (int col = 0; col < w; col++)
         {
-            d[col] = over_premul(d[col], s[col]);
+            d[col] = fb_store(over_premul(fb_load(d[col]), s[col]));
         }
     }
     mark_dirty(x, y, w, h);
@@ -225,7 +316,7 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     for (int row = 0; row < h; row++)
     {
         const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
-        uint32_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         for (int col = 0; col < w; col++)
         {
             /* Scale the premultiplied source by the global alpha (both rgb and a), then over. */
@@ -234,13 +325,13 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
             const uint32_t sr = (((p >> 16) & 0xFFU) * ga + 127U) / 255U;
             const uint32_t sg = (((p >> 8) & 0xFFU) * ga + 127U) / 255U;
             const uint32_t sb = ((p & 0xFFU) * ga + 127U) / 255U;
-            d[col] = over_premul(d[col], (sa << 24) | (sr << 16) | (sg << 8) | sb);
+            d[col] = fb_store(over_premul(fb_load(d[col]), (sa << 24) | (sr << 16) | (sg << 8) | sb));
         }
     }
     mark_dirty(x, y, w, h);
 }
 
-/** @brief Converts the dirty region to RGB565 and pushes it to the panel, re-compositing the overlay. */
+/** @brief Pushes the painted (dirty) region to the panel, re-compositing the overlay. */
 void er_esp32_lcd_present(void)
 {
     const bool dbl = (s_be.fbp[0] != NULL);
@@ -316,23 +407,17 @@ void er_esp32_lcd_present(void)
     if (dbl)
     {
         uint16_t* dst_fb = s_be.fbp[s_be.back];
-        /* App region: convert straight into the off-screen framebuffer (full-width rows). */
+        /* App region: emit straight into the off-screen framebuffer (full-width rows). In RGB565 mode
+         * this is a plain 565→565 copy; in ARGB mode it converts. */
         if (have)
         {
             const int rw = x1 - x0 + 1;
             const int rh = y1 - y0 + 1;
             for (int row = 0; row < rh; row++)
             {
-                const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+                const fbpx_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
                 uint16_t* o = dst_fb + (size_t)(y0 + row) * s_be.w + x0;
-                for (int col = 0; col < rw; col++)
-                {
-                    const uint32_t p = s[col];
-                    const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-                    const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-                    const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-                    o[col] = (uint16_t)(r | g | b);
-                }
+                fb_to_565_row(o, s, rw);
             }
         }
         /* Overlay: re-composite the cached RGB565 panel on top (its own tight region — not unioned
@@ -379,16 +464,9 @@ void er_esp32_lcd_present(void)
             const int rh = y1 - y0 + 1;
             for (int row = 0; row < rh; row++)
             {
-                const uint32_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
+                const fbpx_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
                 uint16_t* o = s_be.line + (size_t)row * rw;
-                for (int col = 0; col < rw; col++)
-                {
-                    const uint32_t p = s[col];
-                    const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-                    const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-                    const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-                    o[col] = (uint16_t)(r | g | b);
-                }
+                fb_to_565_row(o, s, rw);
             }
             esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, s_be.line);
         }
@@ -441,16 +519,9 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
     }
     for (int row = 0; row < h; row++)
     {
-        const uint32_t* s = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        const fbpx_t* s = s_be.fb + (size_t)(y + row) * s_be.w + x;
         uint16_t* o = s_be.ov_cache + (size_t)row * w;
-        for (int col = 0; col < w; col++)
-        {
-            const uint32_t p = s[col];
-            const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-            const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-            const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-            o[col] = (uint16_t)(r | g | b);
-        }
+        fb_to_565_row(o, s, w);
     }
     s_be.ovx = x;
     s_be.ovy = y;
@@ -486,10 +557,11 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     s_be.present_count = 0;
     s_be.ov_active = false;
 
-    s_be.fb = (uint32_t*)heap_caps_malloc((size_t)width * height * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    s_be.fb = (fbpx_t*)heap_caps_malloc((size_t)width * height * sizeof(fbpx_t), MALLOC_CAP_SPIRAM);
     if (!s_be.fb)
     {
-        ESP_LOGE(TAG, "framebuffer alloc failed (need %d KB PSRAM)", (int)((size_t)width * height * 4 / 1024));
+        ESP_LOGE(
+            TAG, "framebuffer alloc failed (need %d KB PSRAM)", (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
         return false;
     }
 
@@ -519,7 +591,7 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     /* Clear the framebuffer to opaque black so the first frame composites over a known background. */
     for (size_t i = 0; i < (size_t)width * height; i++)
     {
-        s_be.fb[i] = 0xFF000000U;
+        s_be.fb[i] = FB_CLEAR_PX;
     }
 
     static EmbeddedRenderBackend backend;
@@ -532,10 +604,10 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     embedded_renderer_set_backend(&backend);
 
     ESP_LOGI(TAG,
-             "LCD backend ready: %dx%d (fb %d KB + rgb565 %d KB in PSRAM)",
+             "LCD backend ready: %dx%d, canonical fb %s (%d KB PSRAM)",
              width,
              height,
-             (int)((size_t)width * height * 4 / 1024),
-             (int)((size_t)width * height * 2 / 1024));
+             ER_LCD_FB_RGB565 ? "RGB565" : "ARGB8888",
+             (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
     return true;
 }
