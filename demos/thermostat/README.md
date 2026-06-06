@@ -1,9 +1,12 @@
 # thermostat
 
-The default demo, and the one we're growing into a real **thermostat / climate-control UI**.
+A climate-control demo built around a draggable **270° arc dial** (a physical-thermostat metaphor).
+Dragging the handle around the arc sets the target temperature; a −/+ stepper and a Heat/Cool/Auto/Off
+mode selector round it out, with Humidity / Outdoor / Next-change metric cards beneath.
 
-> Currently, it's still the starter features tour (it began life as `basic`); it will be reworked
-> into a thermostat screen.
+It's the default demo and is **responsive**: every dimension derives from the host-injected `screen`
+global, so one source flexes between the 800×480 panel (ESP32-S3 / Flow A) and the 240×320 panel
+(no-PSRAM ESP32 / Flow B). A `width < 400` breakpoint selects the compact layout.
 
 ## Build & run
 
