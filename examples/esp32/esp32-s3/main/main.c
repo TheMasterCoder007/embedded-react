@@ -13,6 +13,7 @@
 #include "board.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
+#include "image_data.h" /* generated: er_register_baked_images() — the demo's weather icons */
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
 #include "perf_overlay.h"
@@ -303,6 +304,10 @@ static void run_app(void)
         ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
         embedded_renderer_set_backend(&k_noop_backend);
     }
+
+    /* Register the demo's baked weather icons now that the backend (and image registry) is up, before
+     * the app mounts and creates <Image> nodes that look them up by name. */
+    er_register_baked_images();
 
     /* Bring up touch (shares the panel's I2C bus). Optional: the UI still renders without it. */
     const bool touch = display && board_touch_init();

@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useCallback, memo } from 'react';
-import { View, Text, Pressable, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
+import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
 
 // Thermostat arc dial — a climate control built around a draggable 270° arc (a physical-thermostat
 // metaphor). Dragging the handle around the arc sets the target temperature.
@@ -237,11 +237,42 @@ const ModeButton = memo(function ModeButton({ item, active, onSelect }) {
   );
 });
 
-const Metric = memo(function Metric({ label, value }) {
+// 4-day outlook — each day maps to one of the baked weather icons (registered by name at boot via the
+// generated image_data.c; see tools/image-converter/gen_image.py).
+const FORECAST = [
+  { day: 'Thu', icon: 'wx_sun', hi: 58 },
+  { day: 'Fri', icon: 'wx_cloud', hi: 52 },
+  { day: 'Sat', icon: 'wx_rain', hi: 49 },
+  { day: 'Sun', icon: 'wx_partly', hi: 55 },
+];
+
+// Weather panel — the demo's showcase for baked <Image> assets. Static content; memoised so the dial
+// drag never reconciles it.
+const WeatherPanel = memo(function WeatherPanel() {
   return (
-    <View style={styles.metric}>
-      <Text style={{ color: theme.subtext, fontSize: SZ.label }}>{label}</Text>
-      <Text style={{ color: theme.text, fontSize: SZ.metric, fontWeight: '500' }}>{value}</Text>
+    <View style={styles.weatherCard}>
+      <Text style={styles.wxTitle}>Outside</Text>
+
+      {/* Current conditions: a big icon next to the reading. */}
+      <View style={styles.wxNow}>
+        <Image imageName="wx_partly" resizeMode="contain" style={styles.wxNowIcon} />
+        <View style={styles.wxNowText}>
+          <Text style={styles.wxNowTemp}>54°</Text>
+          <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>Partly cloudy</Text>
+          <Text style={{ color: theme.subtext, fontSize: SZ.label }}>Humidity 44%</Text>
+        </View>
+      </View>
+
+      {/* 4-day forecast: a small baked icon per day. */}
+      <View style={styles.wxForecast}>
+        {FORECAST.map((f) => (
+          <View key={f.day} style={styles.wxDay}>
+            <Text style={{ color: theme.subtext, fontSize: SZ.label }}>{f.day}</Text>
+            <Image imageName={f.icon} resizeMode="contain" style={styles.wxDayIcon} />
+            <Text style={{ color: theme.text, fontSize: SZ.metric, fontWeight: '500' }}>{f.hi}°</Text>
+          </View>
+        ))}
+      </View>
     </View>
   );
 });
@@ -276,35 +307,40 @@ export function App() {
   const dec = useCallback(() => setValue((v) => clamp(Math.round(v) - STEP, MIN, MAX)), []);
   const inc = useCallback(() => setValue((v) => clamp(Math.round(v) + STEP, MIN, MAX)), []);
 
+  // The thermostat column (left): header + the dial card. Its old metric row now lives in the weather
+  // panel on the right.
+  const thermostat = (
+    <View style={styles.thermo}>
+      <Header />
+      <View style={styles.card}>
+        <Dial value={value} current={CURRENT} mode={mode} color={color} onValue={setValue} />
+
+        {/* Stepper row */}
+        <View style={styles.stepRow}>
+          <StepButton label="−" onPress={dec} />
+          <StepButton label="+" onPress={inc} />
+        </View>
+
+        {/* Mode selector */}
+        <View style={styles.modeRow}>
+          {MODES.map((m) => (
+            <ModeButton key={m.key} item={m} active={mode === m.key} onSelect={selectMode} />
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+
+  // Wide screens (e.g. the 800×480 panel) place the thermostat on the left and the weather panel on the
+  // right; the narrow layout drops the weather panel and just shows the thermostat.
+  if (compact) {
+    return <View style={styles.root}>{thermostat}</View>;
+  }
   return (
     <View style={styles.root}>
-      <View style={styles.content}>
-        <Header />
-
-        {/* Dial card */}
-        <View style={styles.card}>
-          <Dial value={value} current={CURRENT} mode={mode} color={color} onValue={setValue} />
-
-          {/* Stepper row */}
-          <View style={styles.stepRow}>
-            <StepButton label="−" onPress={dec} />
-            <StepButton label="+" onPress={inc} />
-          </View>
-
-          {/* Mode selector */}
-          <View style={styles.modeRow}>
-            {MODES.map((m) => (
-              <ModeButton key={m.key} item={m} active={mode === m.key} onSelect={selectMode} />
-            ))}
-          </View>
-        </View>
-
-        {/* Metric row */}
-        <View style={styles.metricRow}>
-          <Metric label="Humidity" value="44%" />
-          <Metric label="Outdoor" value="54°" />
-          <Metric label="Next change" value="64° at 11pm" />
-        </View>
+      <View style={styles.row}>
+        {thermostat}
+        <WeatherPanel />
       </View>
     </View>
   );
@@ -319,8 +355,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: compact ? 'flex-start' : 'center',
   },
-  // Cap the column width on the wide screen so it reads as a tidy panel rather than stretching.
-  content: { width: compact ? '100%' : 440, gap: GAP },
+  // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
+  row: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start' },
+  thermo: { width: compact ? '100%' : 400, gap: GAP },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   pill: {
     backgroundColor: theme.metricBg,
@@ -358,12 +395,30 @@ const styles = StyleSheet.create({
   },
   modeIdle: { borderWidth: 1, borderColor: theme.modeBorder },
   modeActive: { backgroundColor: theme.modeActiveBg },
-  metricRow: { flexDirection: 'row', gap: compact ? 6 : 10 },
-  metric: {
+
+  // --- Weather panel (right column) ---
+  weatherCard: {
+    width: 344,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.cardBorder,
+    borderRadius: 12,
+    padding: 16,
+    gap: GAP,
+  },
+  wxTitle: { color: theme.text, fontSize: SZ.title, fontWeight: '500' },
+  wxNow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  wxNowIcon: { width: 88, height: 88 },
+  wxNowText: { gap: 2 },
+  wxNowTemp: { color: theme.text, fontSize: SZ.big, fontWeight: '500' },
+  wxForecast: { flexDirection: 'row', gap: 8 },
+  wxDay: {
     flex: 1,
+    alignItems: 'center',
     backgroundColor: theme.metricBg,
     borderRadius: 8,
-    padding: compact ? 8 : 12,
-    gap: 2,
+    paddingVertical: 8,
+    gap: 4,
   },
+  wxDayIcon: { width: 44, height: 44 },
 });

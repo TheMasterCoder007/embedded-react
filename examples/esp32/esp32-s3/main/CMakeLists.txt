@@ -18,9 +18,14 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/app.bundle.qbc")
         "    3) er-bridge-quickjs-compile bridges/quickjs/js/dist/app.bundle.js examples/esp32/esp32-s3/main/app.bundle.qbc")
 endif()
 
+# The thermostat demo's baked weather icons (premultiplied ARGB8888 in flash). image_data.c is a
+# generated artifact (tools/image-converter/gen_image.py); main.c calls er_register_baked_images() at
+# boot to hand its buffers to the engine image registry.
+set(ER_DEMO_ASSETS "${CMAKE_CURRENT_LIST_DIR}/../../../../demos/thermostat/assets")
+
 idf_component_register(
-    SRCS "main.c" "board.c"
-    INCLUDE_DIRS "."
+    SRCS "main.c" "board.c" "${ER_DEMO_ASSETS}/image_data.c"
+    INCLUDE_DIRS "." "${ER_DEMO_ASSETS}"
     REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
     EMBED_FILES "app.bundle.qbc"

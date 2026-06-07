@@ -17,6 +17,7 @@
 #define SDL_MAIN_HANDLED
 
 #include "er_scene.h"
+#include "image_data.h" /* generated: er_register_baked_images() — the demo's weather icons */
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
 #include "quickjs.h"
@@ -325,6 +326,9 @@ int main(int argc, char** argv)
         SDL_Quit();
         return 1;
     }
+
+    /* Hand the demo's baked weather icons to the image registry (the backend init above set it up). */
+    er_register_baked_images();
 
     /* Boot QuickJS and publish the bridge + host globals. */
     JSRuntime* rt = JS_NewRuntime();
