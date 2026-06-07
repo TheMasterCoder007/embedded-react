@@ -59,6 +59,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/scratch_pool.c
         rendering/shadow.c
         rendering/transform.c
+        rendering/vector.c
 
         # text: UTF-8 + glyph blits
         text/text_renderer.c

@@ -68,7 +68,53 @@ extern "C"
         ER_NODE_ACTIVITY_INDICATOR, /**< Spinning activity indicator. */
         ER_NODE_SWITCH,             /**< Boolean toggle switch. */
         ER_NODE_MODAL,              /**< Full-screen modal overlay. */
+        ER_NODE_VECTOR,             /**< Vector graphics surface (Svg): rasterized path op-tape. */
     } ERNodeType;
+
+    /*
+     * Vector node contract (ER_NODE_VECTOR). A vector node carries a flat float "op-tape" plus a paint
+     * table; the JS/SVG layer compiles its shapes into this form and the engine rasterizes it. The JS
+     * mirror of these opcodes must stay in sync. Tape coordinates are node-local pixels; each op is an
+     * opcode float followed by a fixed argument count:
+     *   ER_VOP_SHAPE  paint_index            begin a shape; following path ops use paints[index]
+     *   ER_VOP_MOVE   x y                     start a subpath
+     *   ER_VOP_LINE   x y                     line to
+     *   ER_VOP_QUAD   cx cy x y               quadratic bezier
+     *   ER_VOP_CUBIC  c1x c1y c2x c2y x y     cubic bezier
+     *   ER_VOP_ARC    cx cy r a0 a1 ccw       circular arc (radians, clockwise-from-+X; ccw!=0 reverses)
+     *   ER_VOP_CLOSE                          close the current subpath
+     */
+#define ER_VOP_SHAPE 0.0f
+#define ER_VOP_MOVE 1.0f
+#define ER_VOP_LINE 2.0f
+#define ER_VOP_QUAD 3.0f
+#define ER_VOP_CUBIC 4.0f
+#define ER_VOP_ARC 5.0f
+#define ER_VOP_CLOSE 6.0f
+
+#define ER_VCAP_BUTT 0
+#define ER_VCAP_ROUND 1
+#define ER_VCAP_SQUARE 2
+#define ER_VJOIN_MITER 0
+#define ER_VJOIN_ROUND 1
+#define ER_VJOIN_BEVEL 2
+#define ER_VFILL_NONZERO 0
+#define ER_VFILL_EVENODD 1
+
+    /**
+     * @brief Paint for one vector shape. Colors are exact uint32 ARGB8888 (never floats — a 32-bit
+     *        float cannot hold a 32-bit color losslessly).
+     */
+    typedef struct
+    {
+        uint32_t fill;     /**< Fill ARGB8888; alpha 0 => no fill. */
+        uint32_t stroke;   /**< Stroke ARGB8888; alpha 0 => no stroke. */
+        float stroke_w;    /**< Stroke width in px; <= 0 => no stroke. */
+        float miter;       /**< Miter limit; <= 0 => default 4. */
+        uint8_t cap;       /**< ER_VCAP_*. */
+        uint8_t join;      /**< ER_VJOIN_*. */
+        uint8_t fill_rule; /**< ER_VFILL_*. */
+    } ERVectorPaint;
 
     /**
      * @brief Main-axis direction for a flex container.
@@ -1168,6 +1214,21 @@ extern "C"
      * @param[in] count  Number of spans; clamped to ER_TEXT_MAX_SPANS.
      */
     void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count);
+
+    /**
+     * @brief Sets the vector op-tape and paint table on an ER_NODE_VECTOR (Svg) node.
+     *
+     * The node re-rasterizes its shapes into its layout box on the next paint. The op-tape and paints
+     * are copied into engine-owned storage (bounded; excess is dropped). Passing n_ops == 0 clears the
+     * node's geometry. The node takes its size from its layout/style (width/height), not the tape.
+     *
+     * @param[in] node      Vector node to configure (no-op for other node types).
+     * @param[in] ops       Flat op-tape (see the ER_VOP_* contract above).
+     * @param[in] n_ops     Number of floats in @p ops.
+     * @param[in] paints    Paint table (one ERVectorPaint per shape).
+     * @param[in] n_paints  Number of paint entries.
+     */
+    void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints);
 
     /*----------------------------------------------------------------------------------------------------------------------
      - Layout animation

@@ -17,7 +17,16 @@ export {
   Switch,
   ActivityIndicator,
   Modal,
+  Svg,
+  Path,
+  Circle,
+  Ellipse,
+  Rect,
+  Line,
+  G,
+  Arc,
 } from './components.js';
+export { updateVector, updateText } from './imperative.js';
 export { StyleSheet } from './StyleSheet.js';
 export { Platform } from './Platform.js';
 export { AppRegistry } from './AppRegistry.js';

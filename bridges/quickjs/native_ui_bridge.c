@@ -816,6 +816,10 @@ static ERNodeType map_node_type(const char* s)
     {
         return ER_NODE_MODAL;
     }
+    if (strcmp(s, "Svg") == 0)
+    {
+        return ER_NODE_VECTOR;
+    }
     return ER_NODE_VIEW;
 }
 
@@ -2303,6 +2307,102 @@ static JSValue js_set_text_spans(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+/* Bridge-side caps; the engine clamps again to its own storage limits. */
+#define VEC_BRIDGE_MAX_OPS 1024
+#define VEC_BRIDGE_MAX_PAINTS 16
+
+/**
+ * @brief NativeUI.setVectorOps(handle, ops, paints) — sets the path geometry on an Svg node.
+ *
+ * @p ops is a flat number array (the op-tape; see the ER_VOP_* contract). @p paints is a flat number
+ * array of 7 fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule, ...] where
+ * fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly). A missing/empty ops array clears the
+ * node's geometry.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    if (!node)
+    {
+        return JS_UNDEFINED;
+    }
+    if (argc < 2 || !JS_IsArray(argv[1]))
+    {
+        er_node_set_vector_ops(node, NULL, 0, NULL, 0);
+        return JS_UNDEFINED;
+    }
+
+    /* Op-tape. Static (the bridge is single-threaded) to keep it off the stack. */
+    static float ops[VEC_BRIDGE_MAX_OPS];
+    JSValue olv = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t olen = 0;
+    JS_ToInt32(ctx, &olen, olv);
+    JS_FreeValue(ctx, olv);
+    if (olen <= 0)
+    {
+        er_node_set_vector_ops(node, NULL, 0, NULL, 0);
+        return JS_UNDEFINED;
+    }
+    if (olen > VEC_BRIDGE_MAX_OPS)
+    {
+        olen = VEC_BRIDGE_MAX_OPS;
+    }
+    for (int32_t i = 0; i < olen; i++)
+    {
+        JSValue e = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        double d = 0.0;
+        JS_ToFloat64(ctx, &d, e);
+        ops[i] = (float)d;
+        JS_FreeValue(ctx, e);
+    }
+
+    /* Paint table: 7 numbers per entry. */
+    ERVectorPaint paints[VEC_BRIDGE_MAX_PAINTS];
+    int np = 0;
+    if (argc >= 3 && JS_IsArray(argv[2]))
+    {
+        JSValue plv = JS_GetPropertyStr(ctx, argv[2], "length");
+        int32_t plen = 0;
+        JS_ToInt32(ctx, &plen, plv);
+        JS_FreeValue(ctx, plv);
+        np = plen / 7;
+        if (np > VEC_BRIDGE_MAX_PAINTS)
+        {
+            np = VEC_BRIDGE_MAX_PAINTS;
+        }
+        for (int i = 0; i < np; i++)
+        {
+            double f[7];
+            for (int j = 0; j < 7; j++)
+            {
+                JSValue e = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)(i * 7 + j));
+                double d = 0.0;
+                JS_ToFloat64(ctx, &d, e);
+                f[j] = d;
+                JS_FreeValue(ctx, e);
+            }
+            /* Colors fit a double exactly, so (uint32_t)double is bit-accurate ARGB8888. */
+            paints[i].fill = (uint32_t)f[0];
+            paints[i].stroke = (uint32_t)f[1];
+            paints[i].stroke_w = (float)f[2];
+            paints[i].miter = (float)f[3];
+            paints[i].cap = (uint8_t)f[4];
+            paints[i].join = (uint8_t)f[5];
+            paints[i].fill_rule = (uint8_t)f[6];
+        }
+    }
+
+    er_node_set_vector_ops(node, ops, olen, paints, np);
+    return JS_UNDEFINED;
+}
+
 /**
  * @brief NativeUI.commit() — runs layout + paint for all pending mutations.
  *
@@ -3159,6 +3259,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
+    JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 3));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));

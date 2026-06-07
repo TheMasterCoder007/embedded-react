@@ -10,6 +10,7 @@
 #include "shadow.h"
 #include "text_renderer.h"
 #include "transform.h"
+#include "vector.h"
 #include <math.h>
 #include <string.h>
 
@@ -714,6 +715,16 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_IMAGE:
                 er_image_render(&n->props.image, px, py, w, h);
                 break;
+            case ER_NODE_VECTOR:
+                if (n->vector_slot >= 0)
+                {
+                    int no = 0, np = 0;
+                    const float* vops = er_vector_slot_ops(n->vector_slot, &no);
+                    const ERVectorPaint* vpa = er_vector_slot_paints(n->vector_slot, &np);
+                    if (vops && no > 0)
+                        er_vector_render(vops, no, vpa, np, px, py, w, h);
+                }
+                break;
             case ER_NODE_ACTIVITY_INDICATOR:
                 render_activity_indicator(n, px, py, w, h);
                 break;
@@ -977,6 +988,7 @@ ERNode* er_node_create(ERNodeType type)
     n->type = type;
     n->in_use = true;
     n->dirty = true;
+    n->vector_slot = -1; /* memset cleared it to 0, which is a valid slot; -1 = "no geometry". */
 
     init_layout_defaults(&n->layout);
 
@@ -1020,6 +1032,12 @@ void er_node_destroy(ERNode* node)
 
     node->in_use = false;
     node->dirty = false;
+    /* Release the vector storage slot so it can be reused (the binding lives on the node side). */
+    if (node->vector_slot >= 0)
+    {
+        er_vector_free(node->vector_slot);
+        node->vector_slot = -1;
+    }
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */
@@ -1425,6 +1443,26 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
     }
     /* Span text feeds the Text node's intrinsic-width measurement during layout. */
     mark_layout_dirty();
+    er_mark_dirty_upward(node);
+}
+
+void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
+{
+    if (!node || node->type != ER_NODE_VECTOR)
+        return;
+    if (!ops || n_ops <= 0)
+    {
+        /* Clearing geometry: release the slot and repaint the (now empty) box. */
+        if (node->vector_slot >= 0)
+        {
+            er_vector_free(node->vector_slot);
+            node->vector_slot = -1;
+        }
+        er_mark_dirty_upward(node);
+        return;
+    }
+    node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints);
+    /* Geometry is visual-only (the box comes from layout/style), so no layout pass is needed. */
     er_mark_dirty_upward(node);
 }
 

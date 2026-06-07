@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo, useCallback, memo } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'embedded-react';
+import { View, Text, Pressable, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
 
 // Thermostat arc dial — a climate control built around a draggable 270° arc (a physical-thermostat
 // metaphor). Dragging the handle around the arc sets the target temperature.
@@ -71,101 +71,93 @@ const compact = SW < 400;
 
 // Font sizes snap to the engine's baked Inter sizes (10/12/16/20/24/32/48), so pick from that set.
 const SZ = compact
-  ? { R: 52, dotR: 3, dots: 23, handle: 9, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
-  : { R: 104, dotR: 5, dots: 33, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
+  ? { R: 52, stroke: 8, handle: 9, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
+  : { R: 104, stroke: 14, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
 
 const PAD = compact ? 10 : 20;
 const GAP = compact ? 8 : 16;
-const BOX = 2 * (SZ.R + SZ.dotR + 4); // square that holds the dial; center at (BOX/2, BOX/2)
+const BOX = 2 * (SZ.R + SZ.handle + 4); // square that holds the dial; center at (BOX/2, BOX/2)
 const DIAL_C = BOX / 2;
-const DOT_SIZE = SZ.dotR * 2;
-
-// Precompute the dot ring once (positions never change — only their color does, per render).
-const DOTS = [];
-for (let i = 0; i < SZ.dots; i++) {
-  const frac = i / (SZ.dots - 1);
-  const p = pointOnArc(A_START + frac * SWEEP, DIAL_C, DIAL_C, SZ.R);
-  DOTS.push({ frac, left: p.x - SZ.dotR, top: p.y - SZ.dotR });
-}
-
-// ----------------------------------------------------------------------------------------------------
-// One arc dot — memoised on its primitive props. Position is constant for a given dot, so the only
-// prop that ever changes is `color`; React then re-commits ONLY the dots whose color actually flips.
-// ----------------------------------------------------------------------------------------------------
-const Dot = memo(function Dot({ left, top, color }) {
-  return (
-    <View
-      style={{
-        position: 'absolute',
-        left,
-        top,
-        width: DOT_SIZE,
-        height: DOT_SIZE,
-        borderRadius: SZ.dotR,
-        backgroundColor: color,
-      }}
-    />
-  );
-});
 
 // ----------------------------------------------------------------------------------------------------
 // The arc dial
 // ----------------------------------------------------------------------------------------------------
 function Dial({ value, current, mode, color, onValue }) {
-  // Dial center in absolute screen coords, captured from onLayout. A ref (not state) so updating it
-  // never triggers a re-render — the dial's box never moves once laid out.
+  // Dial center in absolute screen coords, captured from onLayout (a ref, so it never re-renders).
   const centerRef = useRef({ x: 0, y: 0 });
+  // Handles to the dial's vector node + the big number, for imperative (no-React) updates during drag.
+  const dialRef = useRef(null);
+  const numRef = useRef(null);
+  // The value currently on screen. Synced to the committed `value` every render, and advanced
+  // imperatively during a drag (without setState) so dragging never runs React's reconcile.
+  const shownRef = useRef(value);
+  shownRef.current = value;
 
   const onLayout = (e) => {
     centerRef.current = { x: e.layout.x + e.layout.width / 2, y: e.layout.y + e.layout.height / 2 };
   };
 
-  // pointer → value (spec §2). Compute the angle from the *rendered* center (screen px), clamp the
-  // bottom 90° gap to the nearest end, snap to step. onValue de-dupes (setState bails when the rounded
-  // value is unchanged), so most touchmove samples within a step are free — only step crossings render.
-  const onTouch = (e) => {
-    const c = centerRef.current;
-    const dx = e.x - c.x;
-    const dy = e.y - c.y;
-    let theta = (Math.atan2(dx, -dy) * 180) / Math.PI; // clockwise-from-top, (-180, 180]
-    theta = clamp(theta, A_START, -A_START); // bottom gap snaps to -135/+135
-    const v = Math.round(MIN + ((theta - A_START) / SWEEP) * (MAX - MIN));
-    onValue(clamp(v, MIN, MAX));
+  // Build the dial's shapes for value v and push them straight to the nodes — no React, no d-string
+  // parsing (the <Arc> primitive maps to a native arc op). Cheap enough to call on every pointer move.
+  const drawDial = (v) => {
+    const h = pointOnArc(angleForValue(v), DIAL_C, DIAL_C, SZ.R);
+    const shapes = [
+      { arc: [DIAL_C, DIAL_C, SZ.R, A_START, -A_START], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' },
+    ];
+    if (v > MIN) {
+      shapes.push({
+        arc: [DIAL_C, DIAL_C, SZ.R, A_START, angleForValue(v)],
+        stroke: color,
+        strokeWidth: SZ.stroke,
+        cap: 'round',
+      });
+    }
+    shapes.push({ circle: [h.x, h.y, SZ.handle], fill: theme.card, stroke: color, strokeWidth: 3 });
+    updateVector(dialRef.current, shapes);
+    updateText(numRef.current, v + '°');
   };
 
-  const activeFrac = (value - MIN) / (MAX - MIN);
+  // pointer → value (spec §2): angle from the rendered center, clamp the bottom 90° gap to the nearest
+  // end, snap to step. The drag updates the dial IMPERATIVELY (drawDial) and only commits to React state
+  // on release (onTouchEnd) — so a continuous drag never pays React's reconcile cost in PSRAM-QuickJS.
+  const onTouch = (e) => {
+    const c = centerRef.current;
+    let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
+    theta = clamp(theta, A_START, -A_START); // bottom gap snaps to -135/+135
+    const v = clamp(Math.round(MIN + ((theta - A_START) / SWEEP) * (MAX - MIN)), MIN, MAX);
+    if (v === shownRef.current) return; // same step — nothing to redraw
+    shownRef.current = v;
+    drawDial(v);
+  };
+
+  const onTouchEnd = () => {
+    if (shownRef.current !== value) onValue(shownRef.current); // commit the drag result to React
+  };
+
   const handle = pointOnArc(angleForValue(value), DIAL_C, DIAL_C, SZ.R);
-  const hr = SZ.handle;
 
   return (
     <View
       onLayout={onLayout}
       onTouchStart={onTouch}
       onTouchMove={onTouch}
+      onTouchEnd={onTouchEnd}
       style={{ width: BOX, height: BOX }}
     >
-      {/* Track + progress in one pass: a dot is "progress" (mode color) if it's at or before the
-          value's fraction, else "track" (muted). <Dot> is memoised, so only the flipped dots re-commit. */}
-      {DOTS.map((d, i) => (
-        <Dot key={i} left={d.left} top={d.top} color={d.frac <= activeFrac + 1e-6 ? color : theme.track} />
-      ))}
+      {/* The dial is ONE vector node: a muted track arc, the mode-colored progress arc, and the handle
+          knob. At REST React renders it declaratively; during a DRAG we update it imperatively through
+          dialRef (drawDial), bypassing React's reconcile — the expensive part on a PSRAM device. */}
+      <Svg ref={dialRef} style={{ position: 'absolute', left: 0, top: 0, width: BOX, height: BOX }}>
+        <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+        {value > MIN && (
+          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={angleForValue(value)} stroke={color} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+        )}
+        {/* Handle: a knob in the card color with a 3px stroke in the mode color (spec §5). */}
+        <Circle cx={handle.x} cy={handle.y} r={SZ.handle} fill={theme.card} stroke={color} strokeWidth={3} />
+      </Svg>
 
-      {/* Handle: a knob in the card color with a 3px stroke in the mode color (spec §5). */}
-      <View
-        style={{
-          position: 'absolute',
-          left: handle.x - hr,
-          top: handle.y - hr,
-          width: hr * 2,
-          height: hr * 2,
-          borderRadius: hr,
-          backgroundColor: theme.card,
-          borderWidth: 3,
-          borderColor: color,
-        }}
-      />
-
-      {/* Center readout, absolutely centered over the dial. */}
+      {/* Center readout, absolutely centered over the dial. The big number has a ref so the drag can
+          update it imperatively too (updateText keeps its style). */}
       <View
         style={{
           position: 'absolute',
@@ -178,7 +170,7 @@ function Dial({ value, current, mode, color, onValue }) {
         }}
       >
         <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>{statusFor(mode, value, current)}</Text>
-        <Text style={{ color: theme.text, fontSize: SZ.big, fontWeight: '500' }}>{value}°</Text>
+        <Text ref={numRef} style={{ color: theme.text, fontSize: SZ.big, fontWeight: '500' }}>{value}°</Text>
         <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>now {current}°</Text>
       </View>
     </View>

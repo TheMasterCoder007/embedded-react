@@ -5,6 +5,7 @@
 import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
 import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
+import { flattenSvg } from './embedded-react/svg-ops.js';
 
 /**
  * Applies inline-styled text spans for a <Text> node (no-op for other types). buildTextSpans returns
@@ -13,6 +14,17 @@ import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.
  */
 function applyTextSpans(type, handle, props) {
   if (type === 'Text') NativeUI.setTextSpans(handle, buildTextSpans(props));
+}
+
+/**
+ * Compiles an <Svg>'s declarative children (Path/Circle/G/...) into the node's vector op-tape. Like
+ * text spans, the Svg owns its subtree — React does not mount the shape children (see
+ * shouldSetTextContent), so we flatten props.children here on create and every update.
+ */
+function applyVectorOps(type, handle, props) {
+  if (type !== 'Svg') return;
+  const { ops, paints } = flattenSvg(props);
+  NativeUI.setVectorOps(handle, ops, paints);
 }
 
 /**
@@ -65,6 +77,7 @@ export const hostConfig = {
     const handle = NativeUI.createNode(type);
     NativeUI.setProps(handle, buildProps(type, props));
     applyTextSpans(type, handle, props);
+    applyVectorOps(type, handle, props);
     applyEvents(handle, null, props);
     return handle;
   },
@@ -85,7 +98,9 @@ export const hostConfig = {
     // Own the whole subtree for any flattenable <Text> (strings, interpolation, nested <Text>): React
     // skips mounting children and we render them via the node's text + spans. Non-flattenable content
     // (e.g. a <View> inside <Text>) returns false, falling back to mounted child instances.
-    return type === 'Text' && isTextContent(props.children);
+    // <Svg> also owns its subtree: the shape children are flattened into the vector op-tape
+    // (applyVectorOps), never mounted as host nodes.
+    return type === 'Svg' || (type === 'Text' && isTextContent(props.children));
   },
 
   // --- Mutation ---
@@ -119,6 +134,7 @@ export const hostConfig = {
   commitUpdate(instance, _payload, type, prevProps, nextProps) {
     NativeUI.setProps(instance, buildProps(type, nextProps));
     applyTextSpans(type, instance, nextProps);
+    applyVectorOps(type, instance, nextProps);
     applyEvents(instance, prevProps, nextProps);
   },
   commitTextUpdate(textInstance, _oldText, newText) {

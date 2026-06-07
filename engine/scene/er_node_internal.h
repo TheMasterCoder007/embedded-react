@@ -246,6 +246,8 @@ struct ERNode
     /* Modal: visibility and backdrop color (stored here to avoid growing ERViewProps). */
     uint8_t modal_visible;
     uint32_t modal_backdrop_color;
+    /* Vector (ER_NODE_VECTOR): index into the vector op-tape/paint storage pool, or -1 if none. */
+    int16_t vector_slot;
     union
     {
         ERViewProps view;

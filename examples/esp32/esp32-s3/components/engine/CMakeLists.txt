@@ -20,6 +20,7 @@ idf_component_register(
         "${E}/rendering/scratch_pool.c"
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
+        "${E}/rendering/vector.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
         "${E}/animation/layout_anim.c"
