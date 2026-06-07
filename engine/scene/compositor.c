@@ -493,6 +493,71 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
     return true;
 }
 
+/* Set per-commit: true when the cached subtree bounds are trustworthy this frame (no layout
+ * animation interpolating positions), so render_tree() may use them to skip untouched subtrees. */
+static bool s_prune_ok = false;
+
+/**
+ * @brief Recomputes cached subtree paint bounds for the whole tree (post-order).
+ *
+ * For each node, sub_{x,y,w,h} becomes the union of the node's own computed box and the paint
+ * bounds of every descendant that can draw outside it. A node that clips its children (overflow
+ * hidden/scroll, ScrollView, FlatList) bounds them to its own box, so its subtree bounds collapse
+ * to that box no matter where the children lay out. subtree_prunable is cleared whenever the
+ * subtree contains a transform — whose scratch-rendered output is not captured by the computed
+ * box — so render_tree() never prunes such a subtree.
+ *
+ * Bounds are in computed (pre-scroll) space; render_tree() subtracts the running scroll
+ * translation before testing them against the damage clip. Refreshed only on layout commits;
+ * during a static drag the previous layout's bounds remain valid because positions do not move.
+ *
+ * @param[in,out] n  Node whose subtree bounds to (re)compute.
+ */
+static void compute_subtree_bounds(ERNode* n)
+{
+    if (!n)
+        return;
+
+    int x0 = n->computed.x;
+    int y0 = n->computed.y;
+    int x1 = x0 + n->computed.w;
+    int y1 = y0 + n->computed.h;
+    bool prunable = !n->has_transform;
+
+    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
+                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+
+    uint16_t child_tag = n->first_child_tag;
+    while (child_tag != ER_INVALID_TAG)
+    {
+        ERNode* c = er_get_node(child_tag);
+        if (!c)
+            break;
+        compute_subtree_bounds(c);
+        if (!clips)
+        {
+            /* Non-clipping parent: a child may paint past this box, so grow to cover its subtree. */
+            if (c->sub_x < x0)
+                x0 = c->sub_x;
+            if (c->sub_y < y0)
+                y0 = c->sub_y;
+            if (c->sub_x + c->sub_w > x1)
+                x1 = c->sub_x + c->sub_w;
+            if (c->sub_y + c->sub_h > y1)
+                y1 = c->sub_y + c->sub_h;
+            if (!c->subtree_prunable)
+                prunable = false;
+        }
+        child_tag = c->next_sibling_tag;
+    }
+
+    n->sub_x = (int16_t)x0;
+    n->sub_y = (int16_t)y0;
+    n->sub_w = (int16_t)(x1 - x0);
+    n->sub_h = (int16_t)(y1 - y0);
+    n->subtree_prunable = prunable;
+}
+
 /**
  * @brief Recursively renders a node and its children depth-first.
  *
@@ -513,6 +578,26 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 {
     if (n->layout.display == ER_DISPLAY_NONE)
         return;
+
+    /* Subtree-bounds pruning: if this whole subtree's cached paint bounds fall entirely outside the
+     * active damage clip it cannot contribute to the changed region, so skip it (and every descendant)
+     * without touching their structs — the win that turns the per-commit walk from O(all nodes) into
+     * O(nodes near the change). Only applies when bounds are trustworthy (s_prune_ok), the subtree has
+     * no transform (subtree_prunable), and a clip is active (a full repaint pushes none, so this is a
+     * no-op then). Bounds are computed-space; subtract the scroll translation to compare in screen space. */
+    if (s_prune_ok && n->subtree_prunable)
+    {
+        int gx, gy, gw, gh;
+        if (er_get_clip_rect(&gx, &gy, &gw, &gh))
+        {
+            const int bx0 = (int)n->sub_x - translate_x;
+            const int by0 = (int)n->sub_y - translate_y;
+            const int bx1 = bx0 + (int)n->sub_w;
+            const int by1 = by0 + (int)n->sub_h;
+            if (bx1 <= gx || by1 <= gy || bx0 >= gx + gw || by0 >= gy + gh)
+                return;
+        }
+    }
 
     const bool should_render = n->dirty || parent_dirty;
 
@@ -624,6 +709,14 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         else
         {
             int ux = px, uy = py, uw = w, uh = h;
+            if (n->type == ER_NODE_VECTOR && n->vec_has_dirty)
+            {
+                /* Match the sub-region damage so the engine's dirty-rect tracker stays tight too. */
+                ux = px + (int)n->vec_dirty_x;
+                uy = py + (int)n->vec_dirty_y;
+                uw = (int)n->vec_dirty_w;
+                uh = (int)n->vec_dirty_h;
+            }
 #if ERUI_SHADOWS
             /* Expand conservatively for shadow bleed outside the node layout rect. */
             if ((n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
@@ -643,6 +736,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             union_dirty_rect(ux, uy, uw, uh);
         }
         n->source_dirty = false;
+        /* NB: vec_has_dirty is consumed + cleared by the vector render below (which runs later in this
+         * function), not here — clearing it now would hide the sub-region from the rasterize clip. */
     }
 
     /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
@@ -722,8 +817,30 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                     const float* vops = er_vector_slot_ops(n->vector_slot, &no);
                     const ERVectorPaint* vpa = er_vector_slot_paints(n->vector_slot, &np);
                     if (vops && no > 0)
-                        er_vector_render(vops, no, vpa, np, px, py, w, h);
+                    {
+                        /* Clip the rasterize to the CURRENT DAMAGE REGION (the active scissor), not just
+                         * this node's own sub-rect: the background under the vector is repainted across
+                         * the whole damage clip (which may be larger — e.g. unioned with the readout's
+                         * box), so the vector must recompute + repaint everywhere the background was
+                         * erased, or its content (e.g. the track ring) goes missing there. Intersect with
+                         * the node box. With no scissor (full repaint), this is just the node box. */
+                        int clx0 = px, cly0 = py, clx1 = px + w, cly1 = py + h;
+                        int gx, gy, gw, gh;
+                        if (er_get_clip_rect(&gx, &gy, &gw, &gh))
+                        {
+                            if (gx > clx0)
+                                clx0 = gx;
+                            if (gy > cly0)
+                                cly0 = gy;
+                            if (gx + gw < clx1)
+                                clx1 = gx + gw;
+                            if (gy + gh < cly1)
+                                cly1 = gy + gh;
+                        }
+                        er_vector_render(vops, no, vpa, np, px, py, clx0, cly0, clx1, cly1);
+                    }
                 }
+                n->vec_has_dirty = false; /* one-shot: consumed by this commit */
                 break;
             case ER_NODE_ACTIVITY_INDICATOR:
                 render_activity_indicator(n, px, py, w, h);
@@ -1450,6 +1567,8 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
+    /* Default to a full-box repaint; er_node_set_vector_dirty_rect (if called after) narrows it. */
+    node->vec_has_dirty = false;
     if (!ops || n_ops <= 0)
     {
         /* Clearing geometry: release the slot and repaint the (now empty) box. */
@@ -1463,6 +1582,18 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
     }
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints);
     /* Geometry is visual-only (the box comes from layout/style), so no layout pass is needed. */
+    er_mark_dirty_upward(node);
+}
+
+void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h)
+{
+    if (!node || node->type != ER_NODE_VECTOR)
+        return;
+    node->vec_dirty_x = (int16_t)x;
+    node->vec_dirty_y = (int16_t)y;
+    node->vec_dirty_w = (int16_t)w;
+    node->vec_dirty_h = (int16_t)h;
+    node->vec_has_dirty = true;
     er_mark_dirty_upward(node);
 }
 
@@ -1743,6 +1874,7 @@ void er_commit(void)
         refresh_scroll_content_sizes(root);
         er_layout_anim_post_layout(root);
         dispatch_layout_events(root);
+        compute_subtree_bounds(root); /* refresh cached prune bounds; stay valid through static frames */
 
         s_layout_dirty = false;
         s_layout_pass_count++;
@@ -1789,7 +1921,20 @@ void er_commit(void)
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
                                    || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
             if (!n->source_dirty && !moved)
-                continue;                               /* unchanged and in place: contributes nothing to the damage */
+                continue; /* unchanged and in place: contributes nothing to the damage */
+            if (n->type == ER_NODE_VECTOR && n->vec_has_dirty && !moved)
+            {
+                /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
+                 * screen), not the whole box. The caller's rect already covers old+new content, so the
+                 * full last_paint_rect is intentionally NOT unioned (it would balloon back to the box). */
+                damage_union(&clip,
+                             &have,
+                             rx + (int)n->vec_dirty_x,
+                             ry + (int)n->vec_dirty_y,
+                             (int)n->vec_dirty_w,
+                             (int)n->vec_dirty_h);
+                continue;
+            }
             damage_union(&clip, &have, rx, ry, rw, rh); /* new position */
             if (n->has_last_paint)
                 damage_union(&clip,
@@ -1828,6 +1973,11 @@ void er_commit(void)
         /* trackable && !have: nothing is dirty this commit, render_tree() repaints nothing anyway.
          * !trackable: leave unclipped for a full repaint. */
     }
+
+    /* Enable subtree pruning only when no layout animation is interpolating positions (which would
+     * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
+     * pruning self-disables there regardless. */
+    s_prune_ok = !er_layout_anim_has_pending() && !er_layout_anim_is_active();
 
     render_tree(root, false, 0, 0);
 

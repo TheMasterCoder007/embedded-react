@@ -2400,6 +2400,27 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     }
 
     er_node_set_vector_ops(node, ops, olen, paints, np);
+
+    /* Optional 4th arg: a [x, y, w, h] node-local sub-rect to restrict this commit's damage to. */
+    if (argc >= 4 && JS_IsArray(argv[3]))
+    {
+        JSValue dlv = JS_GetPropertyStr(ctx, argv[3], "length");
+        int32_t dlen = 0;
+        JS_ToInt32(ctx, &dlen, dlv);
+        JS_FreeValue(ctx, dlv);
+        if (dlen >= 4)
+        {
+            double d[4];
+            for (int k = 0; k < 4; k++)
+            {
+                JSValue e = JS_GetPropertyUint32(ctx, argv[3], (uint32_t)k);
+                d[k] = 0.0;
+                JS_ToFloat64(ctx, &d[k], e);
+                JS_FreeValue(ctx, e);
+            }
+            er_node_set_vector_dirty_rect(node, (int)d[0], (int)d[1], (int)d[2], (int)d[3]);
+        }
+    }
     return JS_UNDEFINED;
 }
 
@@ -3259,7 +3280,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
-    JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 3));
+    JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 4));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));

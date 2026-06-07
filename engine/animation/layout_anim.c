@@ -510,6 +510,23 @@ bool er_layout_anim_has_pending(void)
     return s_pending_active;
 }
 
+/**
+ * @brief Reports whether any layout animation is currently interpolating a node's position.
+ *
+ * While true, one or more nodes have node->animated drifting away from node->computed, so any
+ * cached computed-space geometry (e.g. the compositor's subtree paint bounds) is stale for the
+ * animating nodes. Callers use this to fall back to a conservative full traversal.
+ *
+ * @return true if at least one layout animation slot is active, false otherwise.
+ */
+bool er_layout_anim_is_active(void)
+{
+    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+        if (s_la[i].active)
+            return true;
+    return false;
+}
+
 void er_layout_anim_tick(uint32_t delta_ms)
 {
     for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)

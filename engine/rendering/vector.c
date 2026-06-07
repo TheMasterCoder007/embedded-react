@@ -56,7 +56,11 @@
 #endif
 
 #define VEC_SUBSAMPLES 5   /**< Vertical AA sub-scanlines per pixel row. */
-#define VEC_FLAT_TOL 0.20f /**< Bezier flatness tolerance (px², see test). */
+#define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
+#define VEC_ARC_TOL                                                                                                    \
+    0.10f /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:                              \
+             the rasterize cost is clip-area bound, not edge-count bound, and a coarse                                 \
+             value visibly facets small curves (the knob most of all). */
 #define VEC_PI 3.14159265358979323846f
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -86,6 +90,7 @@ static VecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_nedges;
 
 static float s_cover[ERUI_VECTOR_MAX_ROW]; /**< Per-pixel coverage accumulator for the current row. */
+static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo,hi)) in s_cover for the current row. */
 
 /* Crossing list reused per sub-scanline. */
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
@@ -247,8 +252,8 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
         while (da < 0.0f)
             da += 2.0f * VEC_PI;
     }
-    /* Step angle so r*(1-cos(step/2)) < ~0.2px. */
-    float step = (r > 0.5f) ? 2.0f * acosf(1.0f - 0.2f / r) : VEC_PI;
+    /* Step angle so the chord deviation r*(1-cos(step/2)) stays under VEC_ARC_TOL px. */
+    float step = (r > 0.5f) ? 2.0f * acosf(1.0f - VEC_ARC_TOL / r) : VEC_PI;
     if (step <= 0.0f || step != step) /* NaN/0 guard */
         step = 0.2f;
     int n = (int)ceilf(fabsf(da) / step);
@@ -302,16 +307,32 @@ static void cover_span(float xs, float xe, float weight, int clipx0, int width)
         return;
     int ix0 = (int)floorf(xs);
     int ix1 = (int)floorf(xe);
+    int high; /* highest cell index written, for the touched-range tracker */
     if (ix0 == ix1)
     {
         s_cover[ix0] += weight * (xe - xs);
-        return;
+        high = ix0;
     }
-    s_cover[ix0] += weight * ((float)(ix0 + 1) - xs);
-    for (int x = ix0 + 1; x < ix1; x++)
-        s_cover[x] += weight;
-    if (ix1 < width)
-        s_cover[ix1] += weight * (xe - (float)ix1);
+    else
+    {
+        s_cover[ix0] += weight * ((float)(ix0 + 1) - xs);
+        for (int x = ix0 + 1; x < ix1; x++)
+            s_cover[x] += weight;
+        if (ix1 < width)
+        {
+            s_cover[ix1] += weight * (xe - (float)ix1);
+            high = ix1;
+        }
+        else
+        {
+            high = ix1 - 1;
+        }
+    }
+    /* Record the span so the row's clear + emit touch only covered pixels, not the whole clip width. */
+    if (ix0 < s_row_lo)
+        s_row_lo = ix0;
+    if (high + 1 > s_row_hi)
+        s_row_hi = high + 1;
 }
 
 /** @brief Returns true when winding @p acc counts as "inside" under the given fill rule. */
@@ -320,13 +341,19 @@ static int rule_inside(int acc, int evenodd)
     return evenodd ? (acc & 1) : (acc != 0);
 }
 
-/** @brief Blends the accumulated coverage row into the target, coalescing equal-alpha runs. */
-static void emit_row(uint32_t color, int iy, int clipx0, int width)
+/**
+ * @brief Blends the accumulated coverage row into the target, coalescing equal-alpha runs.
+ *
+ * Scans only [lo,hi) — the x-range cover_span() actually touched this row — and zeroes each
+ * consumed cell so the next row starts clean without a full-width memset. For a thin stroke in a
+ * wide clip this turns the per-row floor from O(clip width) into O(covered width).
+ */
+static void emit_row(uint32_t color, int iy, int clipx0, int lo, int hi)
 {
     const uint32_t pa = (color >> 24) & 0xFFU;
     const uint32_t rgb = color & 0x00FFFFFFU;
-    int x = 0;
-    while (x < width)
+    int x = lo;
+    while (x < hi)
     {
         float c = s_cover[x];
         if (c <= 0.0f)
@@ -334,12 +361,13 @@ static void emit_row(uint32_t color, int iy, int clipx0, int width)
             x++;
             continue;
         }
+        s_cover[x] = 0.0f; /* consume so the cell is clean for the next row */
         if (c > 1.0f)
             c = 1.0f;
         const uint32_t a = (pa * (uint32_t)(c * 255.0f + 0.5f) + 127U) / 255U;
         /* Coalesce a run of pixels with the same quantized alpha. */
         int run = 1;
-        while (x + run < width)
+        while (x + run < hi)
         {
             float c2 = s_cover[x + run];
             if (c2 > 1.0f)
@@ -347,6 +375,7 @@ static void emit_row(uint32_t color, int iy, int clipx0, int width)
             const uint32_t a2 = c2 <= 0.0f ? 0U : (pa * (uint32_t)(c2 * 255.0f + 0.5f) + 127U) / 255U;
             if (a2 != a)
                 break;
+            s_cover[x + run] = 0.0f; /* consume */
             run++;
         }
         if (a != 0U)
@@ -409,7 +438,10 @@ static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int c
                 a++;
         }
 
-        memset(s_cover, 0, (size_t)width * sizeof(float));
+        /* s_cover is left zeroed by the previous row's emit_row (which clears every cell it consumes),
+         * so no full-width memset is needed; track the x-range this row actually touches instead. */
+        s_row_lo = width;
+        s_row_hi = 0;
         for (int s = 0; s < VEC_SUBSAMPLES; s++)
         {
             const float sy = (float)iy + ((float)s + 0.5f) * w;
@@ -451,7 +483,8 @@ static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int c
                     cover_span(s_cross_x[k], s_cross_x[k + 1], w, clipx0, width);
             }
         }
-        emit_row(color, iy, clipx0, width);
+        if (s_row_hi > s_row_lo)
+            emit_row(color, iy, clipx0, s_row_lo, s_row_hi);
     }
 }
 
@@ -485,7 +518,14 @@ static void add_quad(float ax, float ay, float bx, float by, float cx, float cy,
     edge_add(dx, dy, ax, ay);
 }
 
-/** @brief Adds a filled disc (used for round caps/joins) approximated by an n-gon. */
+/**
+ * @brief Adds a filled disc (used for round caps) approximated by an n-gon.
+ *
+ * The perimeter is traversed CLOCKWISE (t decreasing) so the disc's winding sign matches the segment
+ * quads from add_quad(). A round cap disc overlaps the stroke body it sits on; under the nonzero rule
+ * matching signs make the overlap add (stay filled) — the opposite winding would cancel it to zero and
+ * punch a half-circle hole at each arc end.
+ */
 static void add_disc(float cx, float cy, float r)
 {
     if (r <= 0.0f)
@@ -498,7 +538,7 @@ static void add_disc(float cx, float cy, float r)
     float px = cx + r, py = cy;
     for (int i = 1; i <= n; i++)
     {
-        const float t = 2.0f * VEC_PI * (float)i / (float)n;
+        const float t = -2.0f * VEC_PI * (float)i / (float)n;
         const float qx = cx + r * cosf(t);
         const float qy = cy + r * sinf(t);
         edge_add(px, py, qx, qy);
@@ -675,12 +715,22 @@ static void stroke_shape(uint32_t color, float sw, int cap, int join, float mite
  - Public entry
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_vector_render(
-    const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints, int px, int py, int w, int h)
+void er_vector_render(const float* ops,
+                      int n_ops,
+                      const ERVectorPaint* paints,
+                      int n_paints,
+                      int px,
+                      int py,
+                      int clipx0,
+                      int clipy0,
+                      int clipx1,
+                      int clipy1)
 {
     if (!ops || n_ops <= 0)
         return;
-    const int cx0 = px, cy0 = py, cx1 = px + w, cy1 = py + h;
+    /* px,py position the geometry; the clip box bounds the rasterize compute + painting (a sub-region
+     * for an interactive update, or the full node box otherwise). */
+    const int cx0 = clipx0, cy0 = clipy0, cx1 = clipx1, cy1 = clipy1;
 
     int i = 0;
     while (i < n_ops)

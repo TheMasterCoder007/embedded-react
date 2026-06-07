@@ -1230,6 +1230,23 @@ extern "C"
      */
     void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints);
 
+    /**
+     * @brief Restricts the next commit's damage for a vector node to a sub-region of its box.
+     *
+     * By default a changed vector node damages (repaints + flushes) its whole layout box. For an
+     * interactive update that only touches a small area (e.g. a dial handle moving), call this with the
+     * node-local bounding rect of the change; the engine then damages only that rect, so the repaint and
+     * panel flush stay tight. The hint applies to ONE commit and is cleared after; er_node_set_vector_ops
+     * resets it to a full-box repaint. The rect is intersected with the node box.
+     *
+     * @param[in] node  Vector node (no-op for other types).
+     * @param[in] x     Sub-rect left, in node-local pixels.
+     * @param[in] y     Sub-rect top, in node-local pixels.
+     * @param[in] w     Sub-rect width.
+     * @param[in] h     Sub-rect height.
+     */
+    void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h);
+
     /*----------------------------------------------------------------------------------------------------------------------
      - Layout animation
      ---------------------------------------------------------------------------------------------------------------------*/

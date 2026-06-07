@@ -3,6 +3,9 @@
 
 #include "native_renderer.h"
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* Forward declaration (full definition in er_node_internal.h) */
 struct ERNode;
 
@@ -36,6 +39,18 @@ void er_push_clip_rect(int x, int y, int w, int h);
  * After this call the previous clip (or no clip, if the stack is now empty) is restored.
  */
 void er_pop_clip_rect(void);
+
+/**
+ * @brief Reads the current (top-most) scissor clip rectangle.
+ *
+ * @param[out] x  Left edge (may be NULL).
+ * @param[out] y  Top edge (may be NULL).
+ * @param[out] w  Width (may be NULL).
+ * @param[out] h  Height (may be NULL).
+ *
+ * @return true and fills the outputs when a clip is active; false when the stack is empty (no clip).
+ */
+bool er_get_clip_rect(int* x, int* y, int* w, int* h);
 
 /**
  * @brief Forces the next er_commit() to repaint the whole screen (no damage clipping).

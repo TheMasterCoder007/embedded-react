@@ -248,6 +248,16 @@ struct ERNode
     uint32_t modal_backdrop_color;
     /* Vector (ER_NODE_VECTOR): index into the vector op-tape/paint storage pool, or -1 if none. */
     int16_t vector_slot;
+    /* Vector sub-region damage: when vec_has_dirty, only this node-local rect is damaged on the next
+     * commit (instead of the whole node box) — lets an interactive vector update just the changed area. */
+    bool vec_has_dirty;
+    int16_t vec_dirty_x, vec_dirty_y, vec_dirty_w, vec_dirty_h;
+    /* Subtree paint bounds (computed coords), refreshed at layout: the union of this node's box and all
+     * descendants that can paint outside it. render_tree skips a subtree whose bounds miss the damage,
+     * turning the per-commit walk from O(all nodes) into O(nodes near the change). subtree_prunable is
+     * false when the bounds may be unreliable (a transform in the subtree), disabling the skip there. */
+    int16_t sub_x, sub_y, sub_w, sub_h;
+    bool subtree_prunable;
     union
     {
         ERViewProps view;

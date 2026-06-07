@@ -27,13 +27,23 @@
  * @param[in] n_ops     Number of floats in @p ops.
  * @param[in] paints    Paint table (one ERVectorPaint per entry).
  * @param[in] n_paints  Number of paint entries.
- * @param[in] px        Node box left edge in framebuffer pixels.
- * @param[in] py        Node box top edge in framebuffer pixels.
- * @param[in] w         Node box width in pixels.
- * @param[in] h         Node box height in pixels.
+ * @param[in] px        Geometry origin X in framebuffer pixels (node box left).
+ * @param[in] py        Geometry origin Y in framebuffer pixels (node box top).
+ * @param[in] clipx0    Clip box left edge (rasterize + paint are limited to this rect).
+ * @param[in] clipy0    Clip box top edge.
+ * @param[in] clipx1    Clip box right edge (exclusive).
+ * @param[in] clipy1    Clip box bottom edge (exclusive).
  */
-void er_vector_render(
-    const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints, int px, int py, int w, int h);
+void er_vector_render(const float* ops,
+                      int n_ops,
+                      const ERVectorPaint* paints,
+                      int n_paints,
+                      int px,
+                      int py,
+                      int clipx0,
+                      int clipy0,
+                      int clipx1,
+                      int clipy1);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Per-node storage pool (a fixed set of slots; a vector node references one by index)

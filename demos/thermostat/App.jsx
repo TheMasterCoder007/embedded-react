@@ -8,13 +8,13 @@ import { View, Text, Pressable, StyleSheet, Svg, Circle, Arc, updateVector, upda
 // ----------------------------------------------------------------------------------------------------
 // Domain constants (from the spec's reference values)
 // ----------------------------------------------------------------------------------------------------
-const MIN = 16; // °C
-const MAX = 28;
+const MIN = 45; // °F
+const MAX = 90;
 const STEP = 1;
 const SWEEP = 270; // arc covers 270°, with a 90° gap at the bottom
 const A_START = -135; // bottom-left, degrees clockwise from 12 o'clock
-const DEADBAND = 0.3; // prevents Heating/Cooling flicker when target ≈ current
-const CURRENT = 20.4; // live room reading (static in this demo)
+const DEADBAND = 0.5; // prevents Heating/Cooling flicker when target ≈ current
+const CURRENT = 68.7; // live room reading °F (static in this demo)
 
 const MODES = [
   { key: 'heat', label: 'Heat', color: '#f4a261' }, // warning / amber
@@ -79,6 +79,28 @@ const GAP = compact ? 8 : 16;
 const BOX = 2 * (SZ.R + SZ.handle + 4); // square that holds the dial; center at (BOX/2, BOX/2)
 const DIAL_C = BOX / 2;
 
+// Node-local bbox of just the change when the value goes a -> b: the swept arc sector plus the handle,
+// padded for the stroke half-width and AA. Handed to the engine, so a drag step repaints only this area
+// of the dial, not the whole box.
+function dirtyRectFor(a, b) {
+  const a0 = angleForValue(Math.min(a, b));
+  const a1 = angleForValue(Math.max(a, b));
+  let minx = Infinity;
+  let miny = Infinity;
+  let maxx = -Infinity;
+  let maxy = -Infinity;
+  const steps = Math.max(1, Math.ceil((a1 - a0) / 12));
+  for (let i = 0; i <= steps; i++) {
+    const p = pointOnArc(a0 + ((a1 - a0) * i) / steps, DIAL_C, DIAL_C, SZ.R);
+    if (p.x < minx) minx = p.x;
+    if (p.y < miny) miny = p.y;
+    if (p.x > maxx) maxx = p.x;
+    if (p.y > maxy) maxy = p.y;
+  }
+  const m = SZ.stroke / 2 + SZ.handle + 4; // half stroke + handle radius + AA pad
+  return [Math.floor(minx - m), Math.floor(miny - m), Math.ceil(maxx - minx + 2 * m), Math.ceil(maxy - miny + 2 * m)];
+}
+
 // ----------------------------------------------------------------------------------------------------
 // The arc dial
 // ----------------------------------------------------------------------------------------------------
@@ -88,18 +110,21 @@ function Dial({ value, current, mode, color, onValue }) {
   // Handles to the dial's vector node + the big number, for imperative (no-React) updates during drag.
   const dialRef = useRef(null);
   const numRef = useRef(null);
-  // The value currently on screen. Synced to the committed `value` every render, and advanced
-  // imperatively during a drag (without setState) so dragging never runs React's reconcile.
+  // The CONTINUOUS value currently on screen (a float — the handle follows the finger sub-degree for a
+  // smooth drag). Synced to committed `value` every render, advanced imperatively during a drag (no
+  // setState). `shownRound` tracks the displayed whole degree so the number only re-renders when it ticks.
   const shownRef = useRef(value);
   shownRef.current = value;
+  const shownRoundRef = useRef(Math.round(value));
+  shownRoundRef.current = Math.round(value);
 
   const onLayout = (e) => {
     centerRef.current = { x: e.layout.x + e.layout.width / 2, y: e.layout.y + e.layout.height / 2 };
   };
 
-  // Build the dial's shapes for value v and push them straight to the nodes — no React, no d-string
-  // parsing (the <Arc> primitive maps to a native arc op). Cheap enough to call on every pointer move.
-  const drawDial = (v) => {
+  // Build the dial's shapes for (continuous) value v — no React, no d-string parsing (the <Arc> maps to
+  // a native arc op). Cheap enough to rebuild on every pointer move.
+  const dialShapes = (v) => {
     const h = pointOnArc(angleForValue(v), DIAL_C, DIAL_C, SZ.R);
     const shapes = [
       { arc: [DIAL_C, DIAL_C, SZ.R, A_START, -A_START], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' },
@@ -113,25 +138,31 @@ function Dial({ value, current, mode, color, onValue }) {
       });
     }
     shapes.push({ circle: [h.x, h.y, SZ.handle], fill: theme.card, stroke: color, strokeWidth: 3 });
-    updateVector(dialRef.current, shapes);
-    updateText(numRef.current, v + '°');
+    return shapes;
   };
 
-  // pointer → value (spec §2): angle from the rendered center, clamp the bottom 90° gap to the nearest
-  // end, snap to step. The drag updates the dial IMPERATIVELY (drawDial) and only commits to React state
-  // on release (onTouchEnd) — so a continuous drag never pays React's reconcile cost in PSRAM-QuickJS.
+  // pointer → continuous value (spec §2): angle from the rendered center, clamp the bottom 90° gap. The
+  // drag updates the dial IMPERATIVELY at the continuous value (smooth, no stepping) with a tight
+  // dirtyRect, and commits to React state only on release — so a drag never pays React's reconcile cost.
   const onTouch = (e) => {
     const c = centerRef.current;
     let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
     theta = clamp(theta, A_START, -A_START); // bottom gap snaps to -135/+135
-    const v = clamp(Math.round(MIN + ((theta - A_START) / SWEEP) * (MAX - MIN)), MIN, MAX);
-    if (v === shownRef.current) return; // same step — nothing to redraw
+    const v = clamp(MIN + ((theta - A_START) / SWEEP) * (MAX - MIN), MIN, MAX); // continuous, NOT rounded
+    const old = shownRef.current;
+    if (Math.abs(v - old) < 0.08) return; // < ~1px of handle motion: skip
     shownRef.current = v;
-    drawDial(v);
+    updateVector(dialRef.current, dialShapes(v), dirtyRectFor(old, v));
+    // The big number only changes on whole-degree ticks (and only then damages the center).
+    const r = Math.round(v);
+    if (r !== shownRoundRef.current) {
+      shownRoundRef.current = r;
+      updateText(numRef.current, r + '°');
+    }
   };
 
   const onTouchEnd = () => {
-    if (shownRef.current !== value) onValue(shownRef.current); // commit the drag result to React
+    if (shownRef.current !== value) onValue(shownRef.current); // commit the continuous value (no snap)
   };
 
   const handle = pointOnArc(angleForValue(value), DIAL_C, DIAL_C, SZ.R);
@@ -170,7 +201,7 @@ function Dial({ value, current, mode, color, onValue }) {
         }}
       >
         <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>{statusFor(mode, value, current)}</Text>
-        <Text ref={numRef} style={{ color: theme.text, fontSize: SZ.big, fontWeight: '500' }}>{value}°</Text>
+        <Text ref={numRef} style={{ color: theme.text, fontSize: SZ.big, fontWeight: '500' }}>{Math.round(value)}°</Text>
         <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>now {current}°</Text>
       </View>
     </View>
@@ -227,15 +258,16 @@ const Header = memo(function Header() {
 // App
 // ----------------------------------------------------------------------------------------------------
 export function App() {
-  const [value, setValue] = useState(21); // default target (spec §8)
+  const [value, setValue] = useState(70); // default target (°F); a float once dragged
   const [mode, setMode] = useState('heat'); // default mode
 
   const color = useMemo(() => MODES.find((m) => m.key === mode).color, [mode]);
 
-  // Stable callbacks so the memoised children below don't re-render on a value drag.
+  // Stable callbacks so the memoised children below don't re-render on a value drag. The stepper rounds
+  // first so a press after a fractional drag lands on a whole degree.
   const selectMode = useCallback((key) => setMode(key), []);
-  const dec = useCallback(() => setValue((v) => clamp(v - STEP, MIN, MAX)), []);
-  const inc = useCallback(() => setValue((v) => clamp(v + STEP, MIN, MAX)), []);
+  const dec = useCallback(() => setValue((v) => clamp(Math.round(v) - STEP, MIN, MAX)), []);
+  const inc = useCallback(() => setValue((v) => clamp(Math.round(v) + STEP, MIN, MAX)), []);
 
   return (
     <View style={styles.root}>
@@ -263,8 +295,8 @@ export function App() {
         {/* Metric row */}
         <View style={styles.metricRow}>
           <Metric label="Humidity" value="44%" />
-          <Metric label="Outdoor" value="12°" />
-          <Metric label="Next change" value="18° at 11pm" />
+          <Metric label="Outdoor" value="54°" />
+          <Metric label="Next change" value="64° at 11pm" />
         </View>
       </View>
     </View>

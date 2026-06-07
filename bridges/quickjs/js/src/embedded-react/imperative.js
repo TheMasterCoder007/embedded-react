@@ -9,13 +9,16 @@ import { shapesToVector } from './svg-ops.js';
 
 /**
  * Imperatively sets an <Svg> node's geometry from primitive shape descriptors (see shapesToVector).
- * @param {number} handle  The node handle from a ref on an <Svg/>.
- * @param {Array}  shapes  Flat array of shape descriptors ({arc}/{circle}/{line}/{rect}/{path} + paint).
+ * @param {number} handle      The node handle from a ref on an <Svg/>.
+ * @param {Array}  shapes      Flat array of shape descriptors ({arc}/{circle}/{line}/{rect}/{path} + paint).
+ * @param {Array}  [dirtyRect] Optional node-local [x, y, w, h] bounding the change; when given, only that
+ *                             region is repainted and flushed (a big win for small updates on a large
+ *                             vector node). Omit to repaint the whole node box.
  */
-export function updateVector(handle, shapes) {
+export function updateVector(handle, shapes, dirtyRect) {
   if (handle == null) return;
   const { ops, paints } = shapesToVector(shapes);
-  NativeUI.setVectorOps(handle, ops, paints);
+  NativeUI.setVectorOps(handle, ops, paints, dirtyRect);
 }
 
 /**

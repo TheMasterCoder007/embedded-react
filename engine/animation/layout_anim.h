@@ -34,4 +34,14 @@ void er_layout_anim_post_layout(ERNode* root);
  */
 bool er_layout_anim_has_pending(void);
 
+/**
+ * @brief Reports whether any layout animation is currently interpolating a node's position.
+ *
+ * While true the compositor disables subtree-bounds pruning, since an animating node's
+ * node->animated has drifted from its computed rect and the cached bounds are stale.
+ *
+ * @return true if at least one layout animation is in flight, false otherwise.
+ */
+bool er_layout_anim_is_active(void);
+
 #endif

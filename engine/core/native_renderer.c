@@ -283,6 +283,22 @@ void er_pop_clip_rect(void)
         s_clip_depth--;
 }
 
+bool er_get_clip_rect(int* x, int* y, int* w, int* h)
+{
+    if (s_clip_depth == 0)
+        return false;
+    const ClipEntry* c = &s_clip_stack[s_clip_depth - 1];
+    if (x)
+        *x = c->x;
+    if (y)
+        *y = c->y;
+    if (w)
+        *w = c->w;
+    if (h)
+        *h = c->h;
+    return true;
+}
+
 void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
 {
     if (!apply_clip(&x, &y, &w, &h))
