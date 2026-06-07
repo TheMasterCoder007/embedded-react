@@ -1,5 +1,12 @@
 import { useState, useRef, useMemo, useCallback, memo } from 'react';
 import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
+// Weather icons — the bundler's image plugin turns each import into its baked asset name (the PNG's
+// basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. The actual
+// pixels are baked separately into assets/image_data.c (tools/image-converter/gen_image.py).
+import wxSun from './assets/wx_sun.png';
+import wxCloud from './assets/wx_cloud.png';
+import wxPartly from './assets/wx_partly.png';
+import wxRain from './assets/wx_rain.png';
 
 // Thermostat arc dial — a climate control built around a draggable 270° arc (a physical-thermostat
 // metaphor). Dragging the handle around the arc sets the target temperature.
@@ -237,13 +244,12 @@ const ModeButton = memo(function ModeButton({ item, active, onSelect }) {
   );
 });
 
-// 4-day outlook — each day maps to one of the baked weather icons (registered by name at boot via the
-// generated image_data.c; see tools/image-converter/gen_image.py).
+// 4-day outlook — each day's icon is an imported asset (resolved to its baked name by the bundler).
 const FORECAST = [
-  { day: 'Thu', icon: 'wx_sun', hi: 58 },
-  { day: 'Fri', icon: 'wx_cloud', hi: 52 },
-  { day: 'Sat', icon: 'wx_rain', hi: 49 },
-  { day: 'Sun', icon: 'wx_partly', hi: 55 },
+  { day: 'Thu', icon: wxSun, hi: 58 },
+  { day: 'Fri', icon: wxCloud, hi: 52 },
+  { day: 'Sat', icon: wxRain, hi: 49 },
+  { day: 'Sun', icon: wxPartly, hi: 55 },
 ];
 
 // Weather panel — the demo's showcase for baked <Image> assets. Static content; memoised so the dial
@@ -255,7 +261,7 @@ const WeatherPanel = memo(function WeatherPanel() {
 
       {/* Current conditions: a big icon next to the reading. */}
       <View style={styles.wxNow}>
-        <Image imageName="wx_partly" resizeMode="contain" style={styles.wxNowIcon} />
+        <Image source={wxPartly} resizeMode="contain" style={styles.wxNowIcon} />
         <View style={styles.wxNowText}>
           <Text style={styles.wxNowTemp}>54°</Text>
           <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>Partly cloudy</Text>
@@ -268,7 +274,7 @@ const WeatherPanel = memo(function WeatherPanel() {
         {FORECAST.map((f) => (
           <View key={f.day} style={styles.wxDay}>
             <Text style={{ color: theme.subtext, fontSize: SZ.label }}>{f.day}</Text>
-            <Image imageName={f.icon} resizeMode="contain" style={styles.wxDayIcon} />
+            <Image source={f.icon} resizeMode="contain" style={styles.wxDayIcon} />
             <Text style={{ color: theme.text, fontSize: SZ.metric, fontWeight: '500' }}>{f.hi}°</Text>
           </View>
         ))}

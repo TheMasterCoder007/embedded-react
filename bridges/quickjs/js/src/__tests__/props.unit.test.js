@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProps, flattenStyle, isEventProp, PASSTHROUGH } from '../props.js';
+import { buildProps, flattenStyle, isEventProp, PASSTHROUGH, resolveImageSource } from '../props.js';
 
 describe('flattenStyle', () => {
   it('merges a plain style object', () => {
@@ -39,6 +39,22 @@ describe('buildProps', () => {
     expect(buildProps('View', { style: {}, foo: 'bar', onPress: () => {} })).toEqual({});
   });
 
+  it('resolves an <Image source> string to imageName', () => {
+    expect(buildProps('Image', { style: {}, source: 'wx_sun' })).toEqual({ imageName: 'wx_sun' });
+  });
+
+  it('resolves an <Image source={{uri}}> to imageName', () => {
+    expect(buildProps('Image', { style: {}, source: { uri: 'logo' } })).toEqual({ imageName: 'logo' });
+  });
+
+  it('an explicit imageName wins over source', () => {
+    expect(buildProps('Image', { style: {}, imageName: 'a', source: 'b' })).toEqual({ imageName: 'a' });
+  });
+
+  it('ignores an unresolvable source (e.g. a numeric require id)', () => {
+    expect(buildProps('Image', { style: {}, source: 7 })).toEqual({});
+  });
+
   it('uses a string child as Text content', () => {
     expect(buildProps('Text', { children: 'hi' })).toEqual({ text: 'hi' });
   });
@@ -58,6 +74,21 @@ describe('buildProps', () => {
   it('PASSTHROUGH is a non-empty list of strings', () => {
     expect(PASSTHROUGH.length).toBeGreaterThan(0);
     expect(PASSTHROUGH.every((k) => typeof k === 'string')).toBe(true);
+  });
+});
+
+describe('resolveImageSource', () => {
+  it('passes through a bare name string (also what the image import resolves to)', () => {
+    expect(resolveImageSource('wx_sun')).toBe('wx_sun');
+  });
+  it('reads { uri } objects', () => {
+    expect(resolveImageSource({ uri: 'logo' })).toBe('logo');
+  });
+  it('returns null for unresolvable values', () => {
+    expect(resolveImageSource(null)).toBe(null);
+    expect(resolveImageSource(undefined)).toBe(null);
+    expect(resolveImageSource(42)).toBe(null);
+    expect(resolveImageSource({})).toBe(null);
   });
 });
 

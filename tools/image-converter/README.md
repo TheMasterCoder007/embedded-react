@@ -20,7 +20,7 @@ python tools/image-converter/gen_image.py \
 Each positional arg is `name=path`; `name` is what `<Image imageName="name">` looks up (≤ 63 chars,
 `ER_IMAGE_NAME_MAX`). Writes `image_data.c` and a sibling `image_data.h` (declares
 `er_register_baked_images`). The generated files are committed artifacts — regenerate and re-commit
-when the source images change. The engine u,opdoes scaling at render time, so bake at whatever source
+when the source images change. The engine does scaling at render time, so bake at whatever source
 resolution you want to ship (bake at the largest on-screen size to avoid upscaling; enable
 `ERUI_BILINEAR_SCALE` for smooth up/down-scaling).
 
@@ -30,6 +30,22 @@ resolution you want to ship (bake at the largest on-screen size to avoid upscali
    (see `examples/esp32/esp32-s3/main/CMakeLists.txt` and `examples/linux/CMakeLists.txt`).
 2. Call `er_register_baked_images()` once at boot, **after** the render backend is set
    (`embedded_renderer_set_backend()` initializes the image registry).
+
+## Referencing assets from JSX
+
+An `<Image>` looks up a registered buffer by name. Two equivalent ways:
+
+```jsx
+import logo from './assets/logo.png';   // resolves to the baked NAME ("logo") via the bundler plugin
+<Image source={logo} resizeMode="contain" style={{ width: 64, height: 64 }} />
+
+<Image imageName="logo" ... />          // or reference the baked name directly
+```
+
+`build.mjs` has an esbuild plugin that turns an image `import`/`require` into its baked name (the file's
+basename), and `<Image source={...}>` (a string, or an RN-style `{ uri }`) resolves to `imageName` in
+`buildProps`. The plugin only resolves the *name* — you still bake the pixels with `gen_image.py` using
+the same `name=basename` convention, and basenames must be unique across a bundle.
 
 ## Notes / roadmap
 

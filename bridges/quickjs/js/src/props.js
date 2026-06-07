@@ -110,11 +110,28 @@ export function buildTextSpans(props) {
 /**
  * Builds the flat prop bag NativeUI.setProps expects: resolved style + passthrough props + text.
  */
+/**
+ * Resolves an <Image source> to the engine asset name (the string registered via er_image_load and
+ * stored on the node as imageName). Accepts a bare name string — which is also what the bundler's
+ * image plugin turns `import logo from './logo.png'` into (the file's basename) — or an RN-style
+ * { uri } object. Returns null for anything unresolvable (e.g., a numeric require() id).
+ */
+export function resolveImageSource(source) {
+  if (typeof source === 'string') return source;
+  if (source && typeof source === 'object' && typeof source.uri === 'string') return source.uri;
+  return null;
+}
+
 export function buildProps(type, props) {
   const flat = {};
   flattenStyle(props.style, flat);
   for (const k of PASSTHROUGH) {
     if (props[k] !== undefined) flat[k] = props[k];
+  }
+  // <Image source={...}> resolves to the engine asset name unless imageName was set explicitly.
+  if (flat.imageName === undefined && props.source != null) {
+    const name = resolveImageSource(props.source);
+    if (name != null) flat.imageName = name;
   }
   // <Text> content: flatten string/number/nested-<Text> children into the node's full-text string.
   // The engine renders this when no spans are set; with spans (buildTextSpans) it carries the same

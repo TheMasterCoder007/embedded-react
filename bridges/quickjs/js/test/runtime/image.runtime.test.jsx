@@ -43,4 +43,18 @@ root.render(
 );
 check(true, 'Image without a registered source renders without crash');
 
+// The RN-style `source` prop (string name, and { uri } object) resolves to imageName via buildProps.
+root.render(
+  <View style={{ width: 200, height: 200 }}>
+    <Image source="logo" style={{ width: 48, height: 48 }} />
+  </View>
+);
+check(true, 'Image source="name" mounts without crash');
+root.render(
+  <View style={{ width: 200, height: 200 }}>
+    <Image source={{ uri: 'logo' }} style={{ width: 48, height: 48 }} />
+  </View>
+);
+check(true, 'Image source={{uri}} mounts without crash');
+
 report('image');

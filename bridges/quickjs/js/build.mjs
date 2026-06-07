@@ -17,6 +17,22 @@ const demosDir = resolve(repoRoot, 'demos');
 const libEntry = resolve(here, 'src/embedded-react/index.js');
 const nodeModules = resolve(here, 'node_modules');
 
+// Image-asset resolver: `import logo from './logo.png'` (or require) resolves to the asset's baked
+// NAME (the file's basename without extension) — the string an <Image source={...}> looks up in the
+// engine image registry. Baking is still a separate build step (tools/image-converter/gen_image.py);
+// this just lets a demo reference assets RN style by import instead of hardcoding name strings. The
+// bake must use the same name=basename convention (gen_image.py's default), and base names must be
+// unique across a bundle.
+const imageAssetPlugin = {
+  name: 'image-asset-name',
+  setup(build) {
+    build.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
+      const base = args.path.replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '');
+      return { contents: `module.exports = ${JSON.stringify(base)};`, loader: 'js' };
+    });
+  },
+};
+
 const DEFAULT_DEMO = 'thermostat';
 const demo = process.argv[2] || process.env.DEMO || DEFAULT_DEMO;
 const entry = resolve(demosDir, demo, 'index.jsx');
@@ -46,6 +62,7 @@ await build({
   // imports still resolve relatively / from node_modules as before.)
   alias: { 'embedded-react': libEntry },
   nodePaths: [nodeModules],
+  plugins: [imageAssetPlugin],
   // Production React: smaller and avoids dev-only warning machinery that needs more shims.
   define: { 'process.env.NODE_ENV': '"production"' },
   legalComments: 'none',
