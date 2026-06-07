@@ -3,8 +3,10 @@
 // headless harness uses a no-op backend, so this still drives the full path: flattenSvg ->
 // NativeUI.setVectorOps -> er_node_set_vector_ops -> er_vector_render (the rasterizer runs).
 // Pixels aren't observable from JS, so we assert layout + no-crash across renders.
+import { useRef } from 'react';
 import { createRoot } from '../../src/renderer.js';
-import { View, Svg, Path, Circle } from 'embedded-react';
+import { View, Svg, Path, Circle, updateVector } from 'embedded-react';
+import { NativeUI } from '../../src/native-ui.js';
 import { check, report } from './harness.js';
 
 const layouts = {};
@@ -53,4 +55,48 @@ root.render(
 );
 check(true, 'empty Svg renders without crash');
 
-report();
+// Miter + bevel joins on sharp (90°) corners, and an even-odd fill with a hole — these exercise the
+// stroke_subpath join branches and the even-odd winding rule that the dial's round-only geometry never
+// reaches. Pixels aren't observable headless, so this is a no-crash guard over those rasterizer paths.
+root.render(
+  <View style={{ width: 200, height: 200 }}>
+    <Svg style={{ width: 200, height: 200 }}>
+      <Path d="M20 20 L100 20 L100 90" stroke="#4cc9f0" strokeWidth={12} strokeLinejoin="miter" fill="none" />
+      <Path d="M20 110 L100 110 L100 180" stroke="#2a9d8f" strokeWidth={12} strokeLinejoin="bevel" fill="none" />
+      <Path d="M120 20 L180 20 L180 80 L120 80 Z M140 40 L160 40 L160 60 L140 60 Z" fill="#f4a261" fillRule="evenodd" />
+    </Svg>
+  </View>
+);
+check(true, 'miter + bevel joins and even-odd fill rasterized without crash');
+
+// The imperative drag path: grab the Svg's node handle via a ref, then push geometry + a node-local
+// dirty rect through updateVector()/NativeUI.commit() (bypassing React, like the thermostat dial does).
+let imperativeRef = null;
+function ImperativeSvg() {
+  const ref = useRef(null);
+  imperativeRef = ref;
+  return (
+    <View style={{ width: 200, height: 200 }}>
+      <Svg ref={ref} style={{ position: 'absolute', left: 0, top: 0, width: 200, height: 200 }} />
+    </View>
+  );
+}
+root.render(<ImperativeSvg />);
+check(imperativeRef.current != null, 'Svg ref resolved to a node handle');
+
+// Sweep the progress arc imperatively with a tight dirty rect each step — slot reuse + sub-region damage.
+for (let a = -135; a <= 135; a += 30) {
+  updateVector(
+    imperativeRef.current,
+    [
+      { arc: [100, 100, 80, -135, 135], stroke: '#2c3a4f', strokeWidth: 10, cap: 'round' },
+      { arc: [100, 100, 80, -135, a], stroke: '#f4a261', strokeWidth: 10, cap: 'round' },
+      { circle: [100, 20, 8], fill: '#16202f', stroke: '#f4a261', strokeWidth: 3 },
+    ],
+    [0, 0, 200, 200]
+  );
+  NativeUI.commit();
+}
+check(true, 'imperative updateVector drag (geometry + dirtyRect + commit) did not crash');
+
+report('svg');

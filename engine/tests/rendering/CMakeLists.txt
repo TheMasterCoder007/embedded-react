@@ -28,3 +28,9 @@ add_test(NAME rendering_components COMMAND test_components)
 add_executable(test_gradient test_gradient.c)
 target_link_libraries(test_gradient PRIVATE embedded-react)
 add_test(NAME rendering_gradient COMMAND test_gradient)
+
+add_executable(test_vector test_vector.c)
+target_link_libraries(test_vector PRIVATE embedded-react)
+# test_vector needs engine/rendering for vector.h (a private engine header).
+target_include_directories(test_vector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering)
+add_test(NAME rendering_vector COMMAND test_vector)
