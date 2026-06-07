@@ -30,14 +30,26 @@ const NAMED = {
   grey: 0xff808080,
 };
 
+// Cache string->uint32 results: a theme reuses a handful of color strings, so on a continuous drag
+// (which recompiles the dial every move) this turns repeated hex parsing into a Map lookup.
+const _colorCache = new Map();
+
 /**
  * Parses a CSS color string to a uint32 ARGB8888. Returns 0 (fully transparent) for none/transparent/
  * null, so the engine treats it as "no fill"/"no stroke". Accepts #rgb, #rgba, #rrggbb, #rrggbbaa,
- * rgb()/rgba(), and the small named set above.
+ * rgb()/rgba(), and the small named set above. String results are memoised (see _colorCache).
  */
 export function parseColor(c) {
   if (c == null || c === false) return 0;
   if (typeof c === 'number') return c >>> 0;
+  const cached = _colorCache.get(c);
+  if (cached !== undefined) return cached;
+  const v = parseColorString(c);
+  _colorCache.set(c, v);
+  return v;
+}
+
+function parseColorString(c) {
   let s = String(c).trim().toLowerCase();
   if (s in NAMED) return NAMED[s] >>> 0;
   if (s[0] === '#') {
@@ -348,19 +360,6 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
 
 // --- Imperative shapes -> op-tape (the fast path; no JSX, no React) -------------------------------
 
-/** Builds a 7-field paint record from a shape descriptor's paint fields. */
-function shapePaint(s) {
-  return [
-    parseColor(s.fill),
-    parseColor(s.stroke),
-    num(s.strokeWidth, 1),
-    num(s.miter, 4),
-    CAP[s.cap] ?? 0,
-    JOIN[s.join] ?? 0,
-    s.fillRule === 'evenodd' ? 1 : 0,
-  ];
-}
-
 /**
  * Compiles a flat array of primitive shape descriptors into {ops, paints} for NativeUI.setVectorOps.
  * Each descriptor names one primitive plus paint fields, e.g.:
@@ -372,20 +371,59 @@ function shapePaint(s) {
  * Arc angles are degrees, clockwise from 12 o'clock. This avoids the d-string parser entirely, so it's
  * cheap enough to call on every pointer move (the imperative drag path).
  */
+// Reused output buffers — shapesToVector is on the drag hot path and its result is consumed
+// synchronously by NativeUI.setVectorOps, so growing fresh arrays (plus per-shape arrays + spreads)
+// every move is pure GC. Push directly into these instead.
+const _vecOps = [];
+const _vecPaints = [];
+
 export function shapesToVector(shapes) {
-  const ops = [];
-  const paints = [];
-  for (const s of shapes) {
-    let shapeOps = null;
-    if (s.arc) shapeOps = arcOpsCW(s.arc[0], s.arc[1], s.arc[2], s.arc[3], s.arc[4]);
-    else if (s.circle) shapeOps = circleOps({ cx: s.circle[0], cy: s.circle[1], r: s.circle[2] });
-    else if (s.line) shapeOps = lineOps({ x1: s.line[0], y1: s.line[1], x2: s.line[2], y2: s.line[3] });
-    else if (s.rect) shapeOps = rectOps({ x: s.rect[0], y: s.rect[1], width: s.rect[2], height: s.rect[3] });
-    else if (s.path) shapeOps = parsePath(s.path);
-    if (!shapeOps || shapeOps.length === 0) continue;
+  const ops = _vecOps;
+  const paints = _vecPaints;
+  ops.length = 0;
+  paints.length = 0;
+  for (let si = 0; si < shapes.length; si++) {
+    const s = shapes[si];
+    const opStart = ops.length;
     const paintIndex = paints.length / 7;
-    paints.push(...shapePaint(s));
-    ops.push(VOP_SHAPE, paintIndex, ...shapeOps);
+    ops.push(VOP_SHAPE, paintIndex);
+    if (s.arc) {
+      const cx = s.arc[0];
+      const cy = s.arc[1];
+      const r = s.arc[2];
+      const a0 = ((s.arc[3] - 90) * Math.PI) / 180;
+      const a1 = ((s.arc[4] - 90) * Math.PI) / 180;
+      ops.push(VOP_MOVE, cx + r * Math.cos(a0), cy + r * Math.sin(a0), VOP_ARC, cx, cy, r, a0, a1, 0);
+    } else if (s.circle) {
+      const cx = s.circle[0];
+      const cy = s.circle[1];
+      const r = s.circle[2];
+      ops.push(VOP_MOVE, cx + r, cy, VOP_ARC, cx, cy, r, 0, 2 * Math.PI, 0, VOP_CLOSE);
+    } else if (s.rect) {
+      const x = s.rect[0];
+      const y = s.rect[1];
+      const w = s.rect[2];
+      const h = s.rect[3];
+      ops.push(VOP_MOVE, x, y, VOP_LINE, x + w, y, VOP_LINE, x + w, y + h, VOP_LINE, x, y + h, VOP_CLOSE);
+    } else if (s.line) {
+      ops.push(VOP_MOVE, s.line[0], s.line[1], VOP_LINE, s.line[2], s.line[3]);
+    } else if (s.path) {
+      const so = parsePath(s.path);
+      for (let k = 0; k < so.length; k++) ops.push(so[k]);
+    }
+    if (ops.length <= opStart + 2) {
+      ops.length = opStart; // nothing emitted — roll back the SHAPE header
+      continue;
+    }
+    paints.push(
+      parseColor(s.fill),
+      parseColor(s.stroke),
+      num(s.strokeWidth, 1),
+      num(s.miter, 4),
+      CAP[s.cap] ?? 0,
+      JOIN[s.join] ?? 0,
+      s.fillRule === 'evenodd' ? 1 : 0
+    );
   }
   return { ops, paints };
 }

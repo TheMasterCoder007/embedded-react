@@ -55,7 +55,7 @@
 #define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries stored per vector node. */
 #endif
 
-#define VEC_SUBSAMPLES 5   /**< Vertical AA sub-scanlines per pixel row. */
+#define VEC_SUBSAMPLES 4   /**< Vertical AA sub-scanlines per pixel row. */
 #define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
 #define VEC_ARC_TOL                                                                                                    \
     0.10f /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:                              \

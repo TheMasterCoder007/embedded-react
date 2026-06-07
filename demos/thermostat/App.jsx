@@ -101,6 +101,32 @@ function dirtyRectFor(a, b) {
   return [Math.floor(minx - m), Math.floor(miny - m), Math.ceil(maxx - minx + 2 * m), Math.ceil(maxy - miny + 2 * m)];
 }
 
+// Reused shape buffers for the drag hot path. Rebuilding these objects/arrays on every pointer move was
+// a measurable slice of the JS dispatch cost, so they are mutated in place instead.
+const _track = { arc: [DIAL_C, DIAL_C, SZ.R, A_START, -A_START], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' };
+const _prog = { arc: [DIAL_C, DIAL_C, SZ.R, A_START, 0], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' };
+const _knob = { circle: [0, 0, SZ.handle], fill: theme.card, stroke: theme.track, strokeWidth: 3 };
+const _dialShapes = [];
+
+// Build the dial's shapes for (continuous) value v — track arc, mode-colored progress arc, and the
+// handle knob. Mutates the shared buffers above (no per-move allocation) and returns the shared array.
+function buildDialShapes(v, color) {
+  const ang = angleForValue(v);
+  const h = pointOnArc(ang, DIAL_C, DIAL_C, SZ.R);
+  _dialShapes.length = 0;
+  _dialShapes.push(_track);
+  if (v > MIN) {
+    _prog.arc[4] = ang;
+    _prog.stroke = color;
+    _dialShapes.push(_prog);
+  }
+  _knob.circle[0] = h.x;
+  _knob.circle[1] = h.y;
+  _knob.stroke = color;
+  _dialShapes.push(_knob);
+  return _dialShapes;
+}
+
 // ----------------------------------------------------------------------------------------------------
 // The arc dial
 // ----------------------------------------------------------------------------------------------------
@@ -122,25 +148,6 @@ function Dial({ value, current, mode, color, onValue }) {
     centerRef.current = { x: e.layout.x + e.layout.width / 2, y: e.layout.y + e.layout.height / 2 };
   };
 
-  // Build the dial's shapes for (continuous) value v — no React, no d-string parsing (the <Arc> maps to
-  // a native arc op). Cheap enough to rebuild on every pointer move.
-  const dialShapes = (v) => {
-    const h = pointOnArc(angleForValue(v), DIAL_C, DIAL_C, SZ.R);
-    const shapes = [
-      { arc: [DIAL_C, DIAL_C, SZ.R, A_START, -A_START], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' },
-    ];
-    if (v > MIN) {
-      shapes.push({
-        arc: [DIAL_C, DIAL_C, SZ.R, A_START, angleForValue(v)],
-        stroke: color,
-        strokeWidth: SZ.stroke,
-        cap: 'round',
-      });
-    }
-    shapes.push({ circle: [h.x, h.y, SZ.handle], fill: theme.card, stroke: color, strokeWidth: 3 });
-    return shapes;
-  };
-
   // pointer → continuous value (spec §2): angle from the rendered center, clamp the bottom 90° gap. The
   // drag updates the dial IMPERATIVELY at the continuous value (smooth, no stepping) with a tight
   // dirtyRect, and commits to React state only on release — so a drag never pays React's reconcile cost.
@@ -152,7 +159,7 @@ function Dial({ value, current, mode, color, onValue }) {
     const old = shownRef.current;
     if (Math.abs(v - old) < 0.08) return; // < ~1px of handle motion: skip
     shownRef.current = v;
-    updateVector(dialRef.current, dialShapes(v), dirtyRectFor(old, v));
+    updateVector(dialRef.current, buildDialShapes(v, color), dirtyRectFor(old, v));
     // The big number only changes on whole-degree ticks (and only then damages the center).
     const r = Math.round(v);
     if (r !== shownRoundRef.current) {
@@ -210,7 +217,7 @@ function Dial({ value, current, mode, color, onValue }) {
 
 // ----------------------------------------------------------------------------------------------------
 // Small building blocks — all memoised so a value drag (which re-renders App) never reconciles them.
-// Their callbacks are stabilised with useCallback in App so the memo comparison holds.
+// Their callbacks are stabilized with useCallback in App so the memo comparison holds.
 // ----------------------------------------------------------------------------------------------------
 const StepButton = memo(function StepButton({ label, onPress }) {
   return (
