@@ -295,7 +295,11 @@ Vitest with no aliases. Public surface lives in `src/embedded-react/`.
 - [x] `Animated.View` / `.Text` / `.Image` + `Animated.Value` / `timing` / `spring` / `decay` +
   composition (`sequence` / `parallel` / `stagger` / `delay` / `loop`) and `.start(callback)` (§1.4)
 - [x] `Easing` module — tokens mapping to `ERAnimEasing` (+ `Easing.bezier`)
-- [ ] `useAnimatedValue` hook over the native value handle
+- [x] `useAnimatedValue` hook over the native value handle — returns a render-stable
+  `Animated.Value` (like `useRef(new Animated.Value(initial)).current`) and frees the engine-side
+  value slot on unmount (the value pool is fixed-size, so a value owned by a mounting/unmounting
+  component would otherwise leak a slot). Exported from the `embedded-react` barrel; verified by
+  `use-animated-value.runtime.test.jsx` (stable across renders, animates, destroyed once on unmount)
 - [x] `StyleSheet.create` (identity pass-through) + `flatten`; also `Platform.OS`/`select`
 - [x] Hooks come from React core (`useState` verified running under QuickJS); apps import hooks
   from `react`, components/APIs from `embedded-react` (RN convention)

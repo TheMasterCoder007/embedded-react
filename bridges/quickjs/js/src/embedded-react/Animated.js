@@ -1,7 +1,7 @@
 // Animated — the React Native analog, backed by the engine's native-driver value system
 // (er_anim_value_*). An Animated.Value is a handle to an engine-side float; binding it to a node
 // prop (via Animated.View) lets the engine advance the animation each frame with NO per-frame JS.
-import { createElement } from 'react';
+import { createElement, useRef, useEffect } from 'react';
 import { NativeUI } from '../native-ui.js';
 import { splitAnimatedStyle } from './split-style.js';
 
@@ -11,11 +11,23 @@ export class AnimatedValue {
     this.__animated = true;
     this._handle = NativeUI.animValueCreate(initial);
     this._value = initial;
+    this._destroyed = false;
   }
 
   setValue(v) {
     this._value = v;
     NativeUI.animValueSet(this._handle, v);
+  }
+
+  /**
+   * Releases the engine-side value slot. The engine's value pool is fixed-size (unlike RN, where the
+   * JS value is simply garbage-collected), so a value tied to a mounting/unmounting component must be
+   * freed explicitly — see useAnimatedValue. Idempotent; the value must not be used after destroy().
+   */
+  destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    NativeUI.animValueDestroy(this._handle);
   }
 
   __getValue() {
@@ -269,6 +281,27 @@ export function loop(animation, config) {
       animation.stop();
     },
   };
+}
+
+/**
+ * Returns a stable Animated.Value that persists across renders (the analog of
+ * `useRef(new Animated.Value(initial)).current`), and frees the engine-side value slot when the
+ * component unmounts. The unmount cleanup matters here in a way it doesn't in React Native: the
+ * engine's value pool is fixed-size, so a value owned by a mounting/unmounting component (e.g., a list
+ * row or a tab screen) would otherwise leak a slot on every unmount.
+ */
+export function useAnimatedValue(initial = 0) {
+  const ref = useRef(null);
+  if (ref.current == null) {
+    ref.current = new AnimatedValue(initial);
+  }
+  // Empty deps → the cleanup runs only on unmount. `initial` is read once on the first render (matching
+  // useRef semantics); later changes don't recreate the value, as in React Native.
+  useEffect(() => {
+    const value = ref.current;
+    return () => value.destroy();
+  }, []);
+  return ref.current;
 }
 
 /**
