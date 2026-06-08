@@ -1,41 +1,32 @@
 // Bundles a demo (React app + reconciler + host config) into a single classic (IIFE) script that
-// QuickJS can run with a plain JS_Eval. Globals the bundle expects at runtime (NativeUI, screen,
-// console, and timer shims) are provided by the C host (e.g., examples/linux/main_js.c).
+// QuickJS can run with a plain JS_Eval, and bakes the images/fonts the demo imports into a generated
+// C translation unit (dist/assets.generated.c) exposing er_register_assets(). Globals the bundle
+// expects at runtime (NativeUI, screen, console, timer shims) are provided by the C host (e.g.,
+// examples/linux/main_js.c); the example firmware compiles the generated assets and calls
+// er_register_assets() at boot.
 //
 // Demos live in the top-level demos/ folder, one folder per demo. Pick one with:
 //   npm run build                 # default demo (thermostat)
 //   npm run build -- marine-dash  # a specific demo by folder name
-// The output is always dist/app.bundle.js — the single "active" bundle the example hosts pick up.
+// Outputs are always dist/app.bundle.js + dist/assets.generated.{c,h} — the single "active" app the
+// example hosts pick up.
 import { build } from 'esbuild';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { existsSync, readdirSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, resolve, basename } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { bakeAssets } from './assets/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
 const demosDir = resolve(repoRoot, 'demos');
 const libEntry = resolve(here, 'src/embedded-react/index.js');
 const nodeModules = resolve(here, 'node_modules');
-
-// Image-asset resolver: `import logo from './logo.png'` (or require) resolves to the asset's baked
-// NAME (the file's basename without extension) — the string an <Image source={...}> looks up in the
-// engine image registry. Baking is still a separate build step (tools/image-converter/gen_image.py);
-// this just lets a demo reference assets RN style by import instead of hardcoding name strings. The
-// bake must use the same name=basename convention (gen_image.py's default), and base names must be
-// unique across a bundle.
-const imageAssetPlugin = {
-  name: 'image-asset-name',
-  setup(build) {
-    build.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
-      const base = args.path.replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '');
-      return { contents: `module.exports = ${JSON.stringify(base)};`, loader: 'js' };
-    });
-  },
-};
+const distDir = resolve(here, 'dist');
 
 const DEFAULT_DEMO = 'thermostat';
 const demo = process.argv[2] || process.env.DEMO || DEFAULT_DEMO;
-const entry = resolve(demosDir, demo, 'index.jsx');
+const demoDir = resolve(demosDir, demo);
+const entry = resolve(demoDir, 'index.jsx');
 
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
@@ -48,11 +39,34 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 
+// Asset discovery is import-driven: an `import x from './x.png'` (image) or `import F from './F.ttf'`
+// (font) is intercepted here. The import resolves to the asset's NAME (its file basename) — the
+// string an <Image source>/imageName looks up, or the family a fontFamily uses — and the path is
+// recorded, so it gets baked below. Only what the app imports is baked.
+const images = new Map(); // name -> path
+const fonts = new Map(); // family -> path
+const assetPlugin = {
+  name: 'embedded-react-assets',
+  setup(build) {
+    build.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
+      const name = basename(args.path).replace(/\.[^.]+$/, '');
+      images.set(name, args.path);
+      return { contents: `module.exports = ${JSON.stringify(name)};`, loader: 'js' };
+    });
+    build.onLoad({ filter: /\.(ttf|otf)$/i }, (args) => {
+      const family = basename(args.path).replace(/\.[^.]+$/, '');
+      fonts.set(family, args.path);
+      return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
+    });
+  },
+};
+
+const bundlePath = resolve(distDir, 'app.bundle.js');
 await build({
   entryPoints: [entry],
   bundle: true,
   format: 'iife',
-  outfile: resolve(here, 'dist/app.bundle.js'),
+  outfile: bundlePath,
   platform: 'neutral',
   target: 'es2020',
   jsx: 'automatic',
@@ -62,7 +76,7 @@ await build({
   // imports still resolve relatively / from node_modules as before.)
   alias: { 'embedded-react': libEntry },
   nodePaths: [nodeModules],
-  plugins: [imageAssetPlugin],
+  plugins: [assetPlugin],
   // Production React: smaller and avoids dev-only warning machinery that needs more shims.
   define: { 'process.env.NODE_ENV': '"production"' },
   legalComments: 'none',
@@ -70,3 +84,37 @@ await build({
 });
 
 console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
+
+// --- Bake imported assets ---------------------------------------------------------------------
+// Fonts are pre-rasterized at fixed sizes (the engine has no runtime rasterizer), so bake exactly
+// the literal fontSize values the bundle uses. Computed/dynamic sizes can't be discovered statically
+// and will snap to the nearest baked size at runtime; pin them via assets.config.js if needed.
+const bundleSrc = readFileSync(bundlePath, 'utf8');
+const discoveredSizes = [
+  ...new Set([...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map((m) => Math.round(Number(m[1])))),
+].sort((a, b) => a - b);
+
+// Optional per-demo overrides: demos/<demo>/assets.config.js
+//   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps] } } }
+let config = {};
+const configPath = resolve(demoDir, 'assets.config.js');
+if (existsSync(configPath)) {
+  config = (await import(pathToFileURL(configPath).href)).default || {};
+}
+const fontConfig = config.fonts || {};
+
+const fontJobs = [...fonts.entries()].map(([family, path]) => {
+  const fc = fontConfig[family] || {};
+  const sizes = fc.sizes && fc.sizes.length ? fc.sizes : discoveredSizes.length ? discoveredSizes : [16];
+  return { path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii' };
+});
+const imageJobs = [...images.entries()].map(([name, path]) => ({ path, name }));
+
+const summary = bakeAssets({ images: imageJobs, fonts: fontJobs, outDir: distDir });
+const fontDesc = fontJobs.length
+  ? fontJobs.map((f) => `${f.family}@[${f.sizes.join(',')}]x${f.bpp}bpp`).join(', ')
+  : 'none';
+console.log(
+  `Baked ${summary.images} image(s), ${summary.fonts} font size(s) -> dist/assets.generated.c\n` +
+    `  fonts: ${fontDesc}`,
+);
