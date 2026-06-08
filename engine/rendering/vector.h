@@ -65,6 +65,9 @@ int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* 
 /** @brief Releases a storage slot back to the pool (no-op for an invalid slot). */
 void er_vector_free(int slot);
 
+/** @brief Releases every storage slot back to the pool (part of er_reset()). */
+void er_vector_reset(void);
+
 /** @brief Returns a slot's op-tape and writes its float count to @p n_ops (NULL/0 for an empty slot). */
 const float* er_vector_slot_ops(int slot, int* n_ops);
 

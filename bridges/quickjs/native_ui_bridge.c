@@ -3258,6 +3258,13 @@ void er_bridge_install(JSContext* ctx)
 {
     s_bridge_ctx = ctx;
 
+    /* Start with an empty node-handle table so a re-install on a fresh context (the simulator's live
+     * reload — see /SIMULATOR.md) doesn't alias stale handles onto newly created nodes. Pair this with
+     * er_reset() on the engine side, which empties the node pool the handles point into. */
+    memset(s_node_by_handle, 0, sizeof(s_node_by_handle));
+    s_free_top = 0;
+    s_high_water = 1;
+
     /* Start every context with an empty timer pool (statics persist across re-install in tests). */
     for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
     {

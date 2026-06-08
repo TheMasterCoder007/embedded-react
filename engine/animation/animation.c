@@ -163,6 +163,20 @@ static ERAnimValue s_anim_values[ERUI_MAX_ANIM_VALUES];
 static uint16_t s_next_handle = 1; /**< Monotonically increasing handle counter; wraps avoiding 0. */
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public — reset
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+void er_anim_reset(void)
+{
+    /* All three pools are plain value arrays whose "free" state is all-zero (active/in_use = false),
+     * with no heap to release — a zero-fill is a complete reset. */
+    memset(s_animations, 0, sizeof(s_animations));
+    memset(s_groups, 0, sizeof(s_groups));
+    memset(s_anim_values, 0, sizeof(s_anim_values));
+    s_next_handle = 1;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — handle allocation
  ---------------------------------------------------------------------------------------------------------------------*/
 

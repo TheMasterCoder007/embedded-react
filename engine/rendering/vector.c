@@ -148,6 +148,15 @@ void er_vector_free(int slot)
         s_slots[slot].used = false;
 }
 
+void er_vector_reset(void)
+{
+    /* Free every storage slot; the rasterization scratch is per-call, but zero it for tidiness. */
+    memset(s_slots, 0, sizeof(s_slots));
+    s_npts = 0;
+    s_nsub = 0;
+    s_nedges = 0;
+}
+
 const float* er_vector_slot_ops(int slot, int* n_ops)
 {
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)

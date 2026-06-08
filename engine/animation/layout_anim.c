@@ -1,5 +1,6 @@
 #include "er_node_internal.h"
 #include "er_scene.h"
+#include "renderer_internal.h"
 #include <math.h>
 #include <string.h>
 
@@ -65,6 +66,17 @@ typedef struct
 static ERLayoutAnim s_la[ERUI_MAX_LAYOUT_ANIMS];
 static ERLayoutAnimConfig s_pending_cfg;
 static bool s_pending_active;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public — reset
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+void er_layout_anim_reset(void)
+{
+    memset(s_la, 0, sizeof(s_la));
+    memset(&s_pending_cfg, 0, sizeof(s_pending_cfg));
+    s_pending_active = false;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants: Public (preset configs)

@@ -5,8 +5,31 @@ way you'd run a React Native app, that **hot-reloads your code as you edit it**.
 developer-experience counterpart to Flow A (see [PLAN.md](PLAN.md)) — the runtime exists; this is
 about the edit→see loop.
 
-> Status: **design only — not built yet.** This captures the architecture, decisions, and a phased
-> plan so the work is ready to pick up. Nothing here is implemented.
+> Status: **Phases 0–1 shipped — live reload works.** `npm run sim` runs the simulator with
+> file-watch + full-remount hot reload on the desktop. Phases 2–4 (runtime asset reload, Fast
+> Refresh, on-device) are still ahead. See **Running it** and the phase table below.
+
+## Running it
+
+```
+# one-time: build the simulator binary
+cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake]
+cmake --build tools/simulator/build
+
+# then, from your app folder (React Native style):
+cd demos/thermostat && npm run sim
+```
+
+Each demo has a thin `package.json` whose `sim` script delegates to the package's `sim.mjs`, so you
+run it from the app you're editing. (Equivalent: `cd bridges/quickjs/js && npm run sim <demo>`.)
+
+`npm run sim` bundles the demo (+ bakes its assets once), starts `esbuild --watch`, and launches the
+simulator window. Edit a file under `demos/<demo>/` (or the library `src/`), save, and the window
+live-reloads. A JS error doesn't close the window — fix the source and save to reload. The component state 
+is reset on each reload (Fast Refresh is Phase 3). Asset *changes* need a sim rebuild (Phase 2).
+
+> Output (`app.bundle.js`, baked assets) always lands in `bridges/quickjs/js/dist/` regardless of the
+> folder you run from — that's the single "active app" the simulator and example hosts read.
 
 ---
 
@@ -122,13 +145,18 @@ engine's static state safely.
 
 ## Phased plan
 
-| Phase | Scope |
-|-------|-------|
-| **0** | Factor the SDL host core into a shared unit; frame `examples/linux` as a pure demo (peer to esp32). Light, no behavior change. |
-| **1 — MVP** | `simulator` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Requires the engine/bridge reset above. |
-| **2** | Runtime asset loading (image/font hot reload); in-window **error overlay** for uncaught JS exceptions (RN redbox); manual reload key. |
-| **3** | React **Fast Refresh** (state-preserving) via `react-refresh` + module HMR in the bundler. |
-| **4** | **On-device hot reload** — dev-server/socket transport pushing bytecode to the ESP32 over serial / Wi-Fi (the "later luxury"). |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **0** | Factor the SDL host core into a shared unit (`examples/linux/host.{c,h}`); frame `examples/linux` as a pure demo (peer to esp32). | ✅ done |
+| **1 — MVP** | `tools/simulator/` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Backed by `er_reset()` (engine) + handle-table reset (bridge) + `er_host_reload()` (host). | ✅ done |
+| **2** | Runtime asset loading (image/font hot reload); in-window **error overlay** for uncaught JS exceptions (RN redbox); manual reload key. | ☐ |
+| **3** | React **Fast Refresh** (state-preserving) via `react-refresh` + module HMR in the bundler. | ☐ |
+| **4** | **On-device hot reload** — dev-server/socket transport pushing bytecode to the ESP32 over serial / Wi-Fi (the "later luxury"). | ☐ |
+
+The reload primitive is **`er_reset()`** (public, `er_scene.h`): it empties the node pool, root, and
+the animation / layout-animation / vector / input subsystems, while keeping the backend and registered
+images/fonts. The bridge resets its handle table on `er_bridge_install`, and `er_host_reload()` ties it
+together (free context → `er_reset()` → fresh context + bridge + globals → re-eval).
 
 ---
 
@@ -141,11 +169,24 @@ or the scaffold immediately after the simulator MVP.
 
 ---
 
-## Open questions (resolve at start)
+## Open questions
 
-1. Reload transport for the MVP — confirm file-watch (vs jumping straight to a dev-server).
-2. Simulator location — `tools/simulator/` vs top-level `simulator/`.
-3. Does the desktop demo pin to a specific committed demo, or keep running "whatever `npm run build`
-   last produced" (symmetric with esp32)? Leaning: keep symmetric.
-4. Asset hot-reload decoder for Phase 2 — stb_image/stb_truetype in the sim host, vs reusing the JS
-   bakers to emit a runtime-loadable pack the host reads.
+1. ✅ **Reload transport** — file-watch (the sim polls the bundle's mtime+size every 200 ms). A
+   dev-server/socket transport is deferred to Phase 4 (on-device).
+2. ✅ **Simulator location** — `tools/simulator/` (reuses the shared `examples/linux/host.c`).
+3. ✅ **Desktop demo** — kept symmetric with esp32: it runs whatever `npm run build` last produced; no
+   pinning.
+4. ⏳ **Asset hot-reload decoder for Phase 2** — stb_image/stb_truetype in the sim host, vs reusing the
+   JS bakers to emit a runtime-loadable pack the host reads. (Still open.)
+
+## Phase 1 — known limitations / rough edges (for Phase 2)
+
+- **Live reload resets component state** (by design until Fast Refresh, Phase 3).
+- **Assets are baked at sim-build time** — changing/adding an image or font needs a sim rebuild; the
+  sim binary's baked assets are fixed at CMake time, so running a *different* demo than the one it was
+  built against won't have matching assets. (Phase 2 = runtime asset loading.)
+- **One-time CMake build** of the sim binary is required before `npm run sim` (the script prints how if
+  it's missing). A future `create-embedded-react` scaffold + prebuilt/auto-built binary would remove
+  this step.
+- **Mid-write races** are handled by self-correction: a partial read fails to eval (window stays up)
+  and the next poll reloads the finished file.

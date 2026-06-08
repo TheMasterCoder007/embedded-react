@@ -134,6 +134,13 @@ void er_tick(uint32_t delta_ms);
 void er_anim_tick(uint32_t delta_ms);
 
 /**
+ * @brief Clears all native animations, animation groups, and Animated.Values back to empty.
+ *
+ * Part of er_reset(); drops every running animation and frees every value/binding slot.
+ */
+void er_anim_reset(void);
+
+/**
  * @brief Re-applies the current value of every ERAnimValue bound to this node.
  *
  * Call after er_node_set_props so a declarative prop update does not clobber a native-driver
@@ -153,6 +160,13 @@ void er_anim_reapply_bound(struct ERNode* node);
  * @param[in] delta_ms  Milliseconds elapsed since the last tick.
  */
 void er_layout_anim_tick(uint32_t delta_ms);
+
+/**
+ * @brief Clears all running layout animations and any pending LayoutAnimation config.
+ *
+ * Part of er_reset().
+ */
+void er_layout_anim_reset(void);
 
 /**
  * @brief Clears input gesture state.

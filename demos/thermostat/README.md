@@ -23,11 +23,14 @@ for the full asset workflow (including fonts and `assets.config.js`).
 
 ## Build & run
 
+From this folder:
+
 ```
-cd bridges/quickjs/js
-npm run build            # thermostat is the default; -> dist/app.bundle.js
+npm run sim      # live-reload simulator (hot reload on save) — see /SIMULATOR.md for one-time setup
+npm run build    # just bundle + bake assets -> bridges/quickjs/js/dist/app.bundle.js
 ```
 
-Then run the desktop host (`examples/linux`) or flash a device (`examples/esp32/esp32-s3`) — see
-their READMEs. The host injects the globals the bundle expects (`NativeUI`, `screen`, `console`,
-timers).
+The `sim`/`build` scripts delegate to the `embedded-react` package (`bridges/quickjs/js`); output always
+lands in that package's `dist/`. After `npm run build` you can also run the desktop host
+(`examples/linux`) or flash a device (`examples/esp32/esp32-s3`) — see their READMEs. The host injects
+the globals the bundle expects (`NativeUI`, `screen`, `console`, timers).

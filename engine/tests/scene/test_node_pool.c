@@ -358,6 +358,78 @@ static void test_dirty_rect_union_coverage(void)
     printf("test_dirty_rect_union_coverage PASSED\n");
 }
 
+/**
+ * @brief Drains the Animated.Value pool, returning how many values could be created before exhaustion.
+ *
+ * @return The pool capacity (number of successful er_anim_value_create calls).
+ */
+static int drain_anim_values(void)
+{
+    int n = 0;
+    while (er_anim_value_create(0.0f) != ER_ANIM_VALUE_INVALID)
+        n++;
+    return n;
+}
+
+/**
+ * @brief Verifies er_reset() empties the scene: the whole node pool and the Animated.Value pool
+ *        fully recover, and a fresh scene built afterwards lays out and paints.
+ *
+ * Leaves the engine reset (an empty scene) for the tests that follow.
+ */
+static void test_reset(void)
+{
+    /* Build a non-trivial scene: a committed tree plus a live Animated.Value. */
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    assert(root != NULL);
+    ERProps p = test_props_default();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+    for (int i = 0; i < 16; i++)
+    {
+        ERNode* c = er_node_create(ER_NODE_VIEW);
+        assert(c != NULL);
+        er_tree_append_child(root, c);
+    }
+    er_tree_set_root(root);
+    er_commit();
+    assert(er_anim_value_create(1.0f) != ER_ANIM_VALUE_INVALID);
+
+    /* Reset must free every node: the whole pool is allocatable again. */
+    er_reset();
+    int allocated = 0;
+    while (allocated < (int)ERUI_MAX_NODES && er_node_create(ER_NODE_VIEW) != NULL)
+        allocated++;
+    assert(allocated == (int)ERUI_MAX_NODES && "er_reset must free the entire node pool");
+    assert(er_node_create(ER_NODE_VIEW) == NULL && "pool must be full after allocating ERUI_MAX_NODES");
+
+    /* Reset must free every Animated.Value: draining twice (with a reset between) yields the same
+     * capacity, and that capacity is non-zero. */
+    er_reset();
+    const int cap1 = drain_anim_values();
+    er_reset();
+    const int cap2 = drain_anim_values();
+    assert(cap1 > 0 && "Animated.Value pool capacity must be non-zero");
+    assert(cap1 == cap2 && "er_reset must free every Animated.Value");
+
+    /* A fresh scene after reset lays out and paints (no stale root / dirty / force-full state). */
+    er_reset();
+    ERNode* root2 = er_node_create(ER_NODE_VIEW);
+    assert(root2 != NULL);
+    ERProps p2 = test_props_default();
+    p2.width = 100;
+    p2.height = 100;
+    er_node_set_props(root2, &p2);
+    er_tree_set_root(root2);
+    er_commit();
+    ERRect dr;
+    assert(er_get_dirty_rect(&dr) && dr.w > 0 && dr.h > 0 && "fresh scene after reset must paint");
+
+    er_reset(); /* leave an empty scene for the tests that follow */
+    printf("test_reset PASSED\n");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -376,6 +448,7 @@ int main(void)
     be.blend_rect = null_blend;
     embedded_renderer_set_backend(&be);
 
+    test_reset();
     test_freelist_lifo_reuse();
     test_freelist_multi_reuse();
     test_double_free_is_noop();

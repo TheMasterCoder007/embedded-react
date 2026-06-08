@@ -819,6 +819,20 @@ extern "C"
     void er_commit(void);
 
     /**
+     * @brief Resets the engine to an empty scene: frees every node, clears the root, and resets the
+     *        animation, layout-animation, vector, and input subsystems.
+     *
+     * Intended for mid-process teardown before re-running a fresh app (the simulator's live reload —
+     * see /SIMULATOR.md). Keeps the active render backend, registered images (er_image_load), and
+     * registered fonts (er_font_register / built-in) — only the scene graph and its derived state are
+     * cleared. The next er_commit() fully repaints. The monotonic clock (er_now_ms) is preserved.
+     *
+     * Callers that drive JS must also reset their side (e.g. recreate the QuickJS context so the
+     * NativeUI bridge's handle table / registries start clean) — this resets only the C engine.
+     */
+    void er_reset(void);
+
+    /**
      * @brief Returns how many times er_commit() has actually run the layout pass.
      *
      * Increments once per commit that recomputes layout, and stays unchanged on commits that take

@@ -74,6 +74,21 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host);
 bool er_host_load_app(ErHost* host, const char* explicit_path);
 
 /**
+ * @brief Live-reloads the app: frees the JS context, resets the engine to an empty scene, brings up a
+ *        fresh context (bridge + globals reinstalled), and re-runs the app. Component state is not
+ *        preserved. Registered images/fonts survive (baked assets keep resolving). The simulator
+ *        calls this when the watched bundle changes. See /SIMULATOR.md.
+ *
+ * @param[in] host           Started host.
+ * @param[in] explicit_path  App path to reload (typically the watched bundle); NULL uses the
+ *                           bundle-next-to-exe / fallback chain.
+ *
+ * @return true on clean evaluation; false if a JS exception propagated (the host stays usable —
+ *         the simulator keeps running and can reload again once the source is fixed).
+ */
+bool er_host_reload(ErHost* host, const char* explicit_path);
+
+/**
  * @brief Scales a logical SDL input coordinate to physical framebuffer pixels.
  *
  * @param[in] host     Started host.

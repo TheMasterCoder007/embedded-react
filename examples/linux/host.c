@@ -247,6 +247,20 @@ static bool host_run(JSContext* ctx, const char* src, size_t len, const char* na
     return host_report(ctx, result);
 }
 
+/**
+ * @brief Creates a fresh QuickJS context on the host's runtime and installs console, screen, and the
+ *        NativeUI bridge. Used at startup and on every live reload.
+ *
+ * @param[in,out] host  Host whose ctx field is (re)created.
+ */
+static void host_install_globals(ErHost* host)
+{
+    host->ctx = JS_NewContext(host->rt);
+    host_install_console(host->ctx);
+    host_install_screen(host->ctx, host->phys_w, host->phys_h, host->dpi_scale);
+    er_bridge_install(host->ctx);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -306,14 +320,28 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
 
     /* Boot QuickJS and publish the bridge + host globals. */
     host->rt = JS_NewRuntime();
-    host->ctx = JS_NewContext(host->rt);
-    host_install_console(host->ctx);
-    host_install_screen(host->ctx, host->phys_w, host->phys_h, host->dpi_scale);
-    er_bridge_install(host->ctx);
+    host_install_globals(host);
 
     host->running = true;
     host->prev_ticks = SDL_GetTicks();
     return true;
+}
+
+bool er_host_reload(ErHost* host, const char* explicit_path)
+{
+    /* Live reload (full remount): drop the JS context — freeing the whole React tree, the bridge's
+     * GC-rooted registries, event handlers, and timers — reset the engine to an empty scene, then
+     * bring up a fresh context and re-run the app. Component state is intentionally not preserved
+     * (that's Fast Refresh, a later phase — see /SIMULATOR.md). Registered images/fonts survive the
+     * reset, so baked assets keep resolving. */
+    if (host->ctx)
+    {
+        JS_FreeContext(host->ctx);
+        host->ctx = NULL;
+    }
+    er_reset();
+    host_install_globals(host);
+    return er_host_load_app(host, explicit_path);
 }
 
 bool er_host_load_app(ErHost* host, const char* explicit_path)

@@ -1819,6 +1819,32 @@ void er_tree_set_root(ERNode* root)
     er_force_full_repaint(); /* whole new scene: repaint everything */
 }
 
+void er_reset(void)
+{
+    /* Empty the node pool and clear the scene root. er_node_create pops the free list or bumps
+     * s_next_tag and memsets each slot on allocation, so resetting the counters is a complete reset —
+     * nothing scans s_nodes for stale in_use flags. */
+    s_next_tag = 0;
+    s_free_count = 0;
+    s_root_tag = ER_INVALID_TAG;
+    s_focused_input_tag = ER_INVALID_TAG;
+    s_last_cursor_phase = 2U;
+
+    /* Drop dirty/damage tracking and force the next commit to fully repaint and re-run layout. */
+    s_has_dirty = false;
+    s_have_removed_damage = false;
+    s_force_full_repaint = true;
+    s_layout_dirty = true;
+
+    /* Reset the per-scene subsystems. The render backend, registered images, and registered/built-in
+     * fonts are kept; the monotonic clock (s_now_ms) is preserved so time never runs backwards across
+     * a reload. */
+    er_anim_reset();
+    er_layout_anim_reset();
+    er_vector_reset();
+    er_input_reset();
+}
+
 void er_commit(void)
 {
     if (s_root_tag == ER_INVALID_TAG)
