@@ -69,13 +69,15 @@ add_subdirectory(
 # `npm run build` before configuring to pick the assets up.
 set(ER_GENERATED_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist/assets.generated.c")
 
+# main.c is a thin driver over the shared desktop host core (host.c) — the SDL + QuickJS + engine
+# runtime the simulator will also build on (see /SIMULATOR.md).
 if (EXISTS "${ER_GENERATED_ASSETS}")
-    add_executable(embedded-react-desktop main.c "${ER_GENERATED_ASSETS}")
+    add_executable(embedded-react-desktop main.c host.c "${ER_GENERATED_ASSETS}")
     target_include_directories(embedded-react-desktop PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist")
     target_compile_definitions(embedded-react-desktop PRIVATE ER_HAVE_BAKED_ASSETS=1)
 else ()
-    add_executable(embedded-react-desktop main.c)
+    add_executable(embedded-react-desktop main.c host.c)
     message(STATUS "embedded-react-desktop: no baked assets at ${ER_GENERATED_ASSETS} "
             "(run `npm run build` in bridges/quickjs/js, then reconfigure)")
 endif ()

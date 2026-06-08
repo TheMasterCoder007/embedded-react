@@ -8,13 +8,16 @@ backend swapped to SDL. Develop here (instant), then flash the *same* bundle to 
 JSX bundle (+ baked assets)  →  QuickJS + er_scene.h engine  →  backends/sdl  →  SDL2 window
 ```
 
-**Status:** Implemented. One target, `embedded-react-desktop` (`main.c`): it inits QuickJS, installs
-the `NativeUI` bridge + host globals (`screen`, `console`, timers), loads the app, and runs the SDL
-frame loop (pump → commit → present). Mouse is forwarded as touch. The default demo is the
+**Status:** Implemented. One target, `embedded-react-desktop` — a thin `main.c` over the shared
+desktop **host core** (`host.c` / `host.h`): the host inits QuickJS, installs the `NativeUI` bridge +
+host globals (`screen`, `console`, timers), loads the app, and runs the SDL frame loop (pump → commit
+→ present). Mouse is forwarded as touch. The default demo is the
 [thermostat](../../demos/thermostat/) (a draggable arc-dial climate UI). Press ESC to quit.
 
-> The old hand-written C-API showcase has been removed — this project is "JSX on embedded", so the
-> desktop demo is the JSX end-to-end path, not a separate C scene.
+> The old handwritten C-API showcase has been removed — this project is "JSX on embedded", so the
+> desktop demo is the JSX end-to-end path, not a separate C scene. The host core is factored out
+> (`host.c`) so the upcoming **simulator** (`/SIMULATOR.md`) can reuse it — the demo drives it
+> one-shot (`er_host_run`); the simulator will step it (`er_host_step`) around a watch + reload loop.
 
 ---
 
