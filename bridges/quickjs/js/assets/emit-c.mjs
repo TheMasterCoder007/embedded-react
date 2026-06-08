@@ -73,46 +73,10 @@ export function emitAssetsC({ headerName, images = [], fonts = [] }) {
   const fontRegistrations = [];
   for (const font of fonts) {
     const famId = cIdent(font.family);
+    lines.push(`/* font "${font.family}" — ${font.sizes.map((s) => `${s.pixelSize}px`).join(', ')} */`);
+    emitFontSizes(lines, font, famId, 'static const '); // file-local: only er_register_assets refers to these
     for (const sz of font.sizes) {
-      const prefix = `s_${famId}_${sz.pixelSize}`;
-      const fontSym = `g_font_${famId}_${sz.pixelSize}`;
-
-      const hex = sz.bitmap.map((b) => '0x' + b.toString(16).toUpperCase().padStart(2, '0'));
-      lines.push(`/* font "${font.family}" @ ${sz.pixelSize}px, ${sz.bpp}bpp */`);
-      lines.push(`static const uint8_t ${prefix}_bitmap[${sz.bitmap.length || 1}] = {`);
-      lines.push(sz.bitmap.length ? rows(hex, 16) : '    0x00,');
-      lines.push(`};`);
-      lines.push(``);
-
-      lines.push(`static const GlyphInfo ${prefix}_glyphs[${sz.dense.length}] = {`);
-      for (let i = 0; i < sz.dense.length; i++) lines.push(`    ${glyphInit(sz.dense[i])},`);
-      lines.push(`};`);
-      lines.push(``);
-
-      if (sz.extras.length) {
-        lines.push(`static const ExtraGlyph ${prefix}_extras[${sz.extras.length}] = {`);
-        for (const e of sz.extras) {
-          lines.push(`    { .codepoint = 0x${e.codepoint.toString(16).toUpperCase()}, .info = ${glyphInit(e.info)} },`);
-        }
-        lines.push(`};`);
-        lines.push(``);
-      }
-
-      lines.push(`static const BitmapFont ${fontSym} = {`);
-      lines.push(`    .bitmap       = ${prefix}_bitmap,`);
-      lines.push(`    .glyphs       = ${prefix}_glyphs,`);
-      lines.push(`    .extras       = ${sz.extras.length ? `${prefix}_extras` : 'NULL'},`);
-      lines.push(`    .extras_count = ${sz.extras.length},`);
-      lines.push(`    .first        = 0x${sz.first.toString(16).toUpperCase()},`);
-      lines.push(`    .last         = 0x${sz.last.toString(16).toUpperCase()},`);
-      lines.push(`    .pixel_size   = ${sz.pixelSize},`);
-      lines.push(`    .line_height  = ${sz.lineHeight},`);
-      lines.push(`    .baseline     = ${sz.baseline},`);
-      lines.push(`    .format       = ${sz.bpp},`);
-      lines.push(`};`);
-      lines.push(``);
-
-      fontRegistrations.push(`    er_font_register(${JSON.stringify(font.family)}, &${fontSym});`);
+      fontRegistrations.push(`    er_font_register(${JSON.stringify(font.family)}, &g_font_${famId}_${sz.pixelSize});`);
     }
   }
 
@@ -130,4 +94,78 @@ export function emitAssetsC({ headerName, images = [], fonts = [] }) {
   lines.push(``);
 
   return { c: lines.join('\n'), h };
+}
+
+/** Emits the per-size BitmapFont blocks (bitmap + glyphs + extras + struct) for one font. */
+function emitFontSizes(lines, font, symbol, fontStorage) {
+  for (const sz of font.sizes) {
+    const prefix = `s_${symbol}_${sz.pixelSize}`;
+    const hex = sz.bitmap.map((b) => '0x' + b.toString(16).toUpperCase().padStart(2, '0'));
+    lines.push(`static const uint8_t ${prefix}_bitmap[${sz.bitmap.length || 1}] = {`);
+    lines.push(sz.bitmap.length ? rows(hex, 16) : '    0x00,');
+    lines.push(`};`);
+    lines.push(``);
+
+    lines.push(`static const GlyphInfo ${prefix}_glyphs[${sz.dense.length}] = {`);
+    for (const g of sz.dense) lines.push(`    ${glyphInit(g)},`);
+    lines.push(`};`);
+    lines.push(``);
+
+    if (sz.extras.length) {
+      lines.push(`static const ExtraGlyph ${prefix}_extras[${sz.extras.length}] = {`);
+      for (const e of sz.extras) {
+        lines.push(`    { .codepoint = 0x${e.codepoint.toString(16).toUpperCase()}, .info = ${glyphInit(e.info)} },`);
+      }
+      lines.push(`};`);
+      lines.push(``);
+    }
+
+    lines.push(`${fontStorage}BitmapFont g_font_${symbol}_${sz.pixelSize} = {`);
+    lines.push(`    .bitmap       = ${prefix}_bitmap,`);
+    lines.push(`    .glyphs       = ${prefix}_glyphs,`);
+    lines.push(`    .extras       = ${sz.extras.length ? `${prefix}_extras` : 'NULL'},`);
+    lines.push(`    .extras_count = ${sz.extras.length},`);
+    lines.push(`    .first        = 0x${sz.first.toString(16).toUpperCase()},`);
+    lines.push(`    .last         = 0x${sz.last.toString(16).toUpperCase()},`);
+    lines.push(`    .pixel_size   = ${sz.pixelSize},`);
+    lines.push(`    .line_height  = ${sz.lineHeight},`);
+    lines.push(`    .baseline     = ${sz.baseline},`);
+    lines.push(`    .format       = ${sz.bpp},`);
+    lines.push(`};`);
+    lines.push(``);
+  }
+}
+
+/**
+ * Emits the engine's built-in font translation unit (font_data.c format): the per-size BitmapFont
+ * structs plus the `g_<symbol>_sizes[]` array + `_count` that font_registry.c falls back to. Depends
+ * only on font_bitmap.h. Symbol must be 'inter' to satisfy the extern decls in font_bitmap.h.
+ *
+ * @param {object} opts
+ * @param {object} opts.font        Result of bakeFont().
+ * @param {string} [opts.symbol]    C symbol prefix (default 'inter').
+ * @param {string} [opts.sourceName] Source font filename, for the header comment.
+ * @returns {string} The .c source text.
+ */
+export function emitBuiltinFont({ font, symbol = 'inter', sourceName = '' }) {
+  const sizesStr = font.sizes.map((s) => s.pixelSize).join(',');
+  const bpp = font.sizes[0] ? font.sizes[0].bpp : 4;
+  const lines = [];
+  lines.push(`/* AUTO-GENERATED by bridges/quickjs/js/assets/build-builtin-font.mjs — do not edit by hand.`);
+  lines.push(` * Source : ${sourceName}`);
+  lines.push(` * Sizes  : ${sizesStr}  (bpp ${bpp}, family "${font.family}")`);
+  lines.push(` * Regenerate: cd bridges/quickjs/js && npm run build:builtin-font`);
+  lines.push(` */`);
+  lines.push(`#include "font_bitmap.h"`);
+  lines.push(`#include <stddef.h>`);
+  lines.push(``);
+
+  emitFontSizes(lines, font, symbol, 'const '); // file-scope const: referenced by g_<symbol>_sizes
+
+  lines.push(`const BitmapFont *const g_${symbol}_sizes[] = {`);
+  for (const sz of font.sizes) lines.push(`    &g_font_${symbol}_${sz.pixelSize},`);
+  lines.push(`};`);
+  lines.push(`const size_t g_${symbol}_sizes_count = sizeof(g_${symbol}_sizes) / sizeof(g_${symbol}_sizes[0]);`);
+  lines.push(``);
+  return lines.join('\n');
 }

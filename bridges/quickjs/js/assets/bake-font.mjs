@@ -16,7 +16,7 @@ import { rasterize } from './rasterize.mjs';
 export const ASCII_FIRST = 0x20;
 export const ASCII_LAST = 0x7e;
 
-// Named extra-symbol sets, mirroring tools/font-converter/gen_font.py so configs stay portable.
+// Named extra-symbol sets selectable from assets.config.js (glyphs: 'common' | 'minimal' | ...).
 const SYMBOLS_MINIMAL = [
   0x00b0, 0x00b1, 0x00b5, 0x00d7, 0x00f7, 0x2013, 0x2014, 0x2022, 0x2026, 0x2190, 0x2191, 0x2192,
   0x2193, 0x2713, 0x2717,

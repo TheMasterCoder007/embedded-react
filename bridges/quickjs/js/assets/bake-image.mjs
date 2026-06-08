@@ -24,7 +24,7 @@ export function bakeImage({ path, name }) {
     const g = data[i * 4 + 1];
     const b = data[i * 4 + 2];
     const a = data[i * 4 + 3];
-    // Premultiply the colour channels by alpha (round-to-nearest), matching gen_image.py.
+    // Premultiply the color channels by alpha (round-to-nearest) — the engine's image format.
     const rp = Math.floor((r * a + 127) / 255);
     const gp = Math.floor((g * a + 127) / 255);
     const bp = Math.floor((b * a + 127) / 255);
