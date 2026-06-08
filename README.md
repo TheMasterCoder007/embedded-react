@@ -47,9 +47,9 @@ This is an in-progress project. Here's what is and isn't real today:
 | Layer                                   | Status      | Notes                                                                                                                                                                                                                                                            |
 |-----------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **C engine** (`engine/`)                | In progress | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), Pressable/touch interactions with zIndex-aware stacking, timing animations for existing color/opacity props, and host-side CTest (animation, input, layout, text, rendering/rrect) work today. Shadows, transforms, ScrollView gestures, TextInput focus/input, and image scaling remain scaffolded or incomplete. |
-| **Backends** (`backends/`)              | In progress | `backends/sdl/` fully implemented (fill, copy, blend with premultiplied blend mode). Other six backends remain stubs.                                                                                                                                            |
-| **QuickJS bridge** (`bridges/quickjs/`) | Stub        | Metro-compatible bundler + React reconciler integration is the next major milestone.                                                                                                                                                                             |
-| **Examples** (`examples/`)              | Partial     | `examples/linux/` is implemented as a pure-C SDL demo that drives `er_scene.h` directly. Bridge-backed examples are not built yet; the remaining examples are READMEs only.                                                                                      |
+| **Backends** (`backends/`)              | In progress | `backends/sdl/` (desktop) and `backends/esp32-lcd/` (Waveshare 7" RGB panel, runs on hardware) implemented. The other backends remain stubs.                                                                                                                     |
+| **QuickJS bridge** (`bridges/quickjs/`) | Working     | Flow A end-to-end: the `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, and build-time image/font bakers. A JSX app runs on the desktop host and on ESP32-S3 hardware.                                                                  |
+| **Examples** (`examples/`)              | Partial     | `examples/linux/` (desktop, SDL) and `examples/esp32/esp32-s3/` (ESP32-S3 + RGB panel) run the same JSX bundle end-to-end. The other example boards are READMEs only.                                                                                            |
 
 If you're looking for a finished embedded UI framework today, this isn't it yet. If you
 want to follow along — or contribute to the engine, the toolchain, or a backend — read
@@ -91,14 +91,17 @@ export default function App() {
 }
 ```
 
-This is the **target experience**, not the current one. Today you would have to drive
-the C engine directly via `er_scene.h` — see [`engine/include/er_scene.h`](engine/include/er_scene.h).
+Writing JSX and running it on the engine **works today** on the desktop host (`examples/linux`,
+SDL) and on ESP32-S3 hardware (`examples/esp32/esp32-s3`) — same bundle, swap the backend. What's
+still aspirational is the polished CLI wrapper above (`npx create-embedded-react`, `npm run flash`);
+today you build the bundle with `npm run build` in `bridges/quickjs/js` and run the example target.
+See [`bridges/quickjs/js/README.md`](bridges/quickjs/js/README.md).
 
 ---
 
 ## How it works
 
-The supported path is Flow A: React on QuickJS. Once shipped, it looks like this:
+The supported path is Flow A: React on QuickJS. It looks like this:
 
 ```
 JSX source  →  bundler  →  QuickJS bytecode + JS  →  flashed to MCU
@@ -149,13 +152,13 @@ possibilities the layering enables, not roadmap items.
 
 - Finish runtime: shadows, transforms, full animation engine, image scaling
 
-**Flow A — React on QuickJS** (next)
+**Flow A — React on QuickJS** (working)
 
-- Thin `NativeUI` bridge surface around `er_scene.h`
-- Metro-compatible bundler that emits a QuickJS bytecode payload + JS bundle
-- React reconciler hosted in QuickJS, calling `er_scene.h`
-- `examples/linux/` end-to-end — write JSX, run on desktop
-- `examples/esp32/esp32-s3/` — ESP32-S3 (+PSRAM) bring-up, working end-to-end
+- ✅ `NativeUI` bridge over `er_scene.h`; React reconciler hosted in QuickJS
+- ✅ esbuild bundler + QuickJS bytecode precompiler + build-time image/font bakers
+- ✅ `examples/linux/` end-to-end — write JSX, run on the desktop SDL host
+- ✅ `examples/esp32/esp32-s3/` — ESP32-S3 (+PSRAM) bring-up, running on the Waveshare 7" panel
+- Remaining: `create-embedded-react` scaffold; `examples/stm32h7/` (+ `backends/dma2d/`) bring-up
 
 **Flow B — React as a compile target** (later)
 

@@ -92,19 +92,19 @@ This separation pays for itself in three ways:
 | `engine/tests/`            | Host-side CTest suites                                    | Green (animation, input, layout, text, rrect)                       |
 | `backends/dma2d/`          | STM32 DMA2D hardware blitter                              | Stub                                                                |
 | `backends/sdl/`            | SDL2 desktop backend                                      | **Implemented** (`fill`, `copy`, `blend`; premultiplied blend mode) |
-| `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Stub                                                                |
+| `backends/esp32-lcd/`      | ESP32-S3 LCD peripheral + PSRAM                           | Implemented (Waveshare 7" RGB panel, runs on hardware)              |
 | `backends/software/`       | Pure CPU blit (RP2040, low-end MCUs)                      | Stub                                                                |
 | `backends/opengl/`         | OpenGL ES 2.0 (RPi, Android)                              | README only                                                         |
 | `backends/framebuffer/`    | Linux `/dev/fb0`                                          | README only                                                         |
 | `backends/web/`            | WebAssembly + Canvas/WebGL                                | README only                                                         |
-| `bridges/quickjs/`         | React reconciler hosted on QuickJS                        | Stub (Flow A milestone)                                             |
+| `bridges/quickjs/`         | React reconciler hosted on QuickJS                        | Working — Flow A end-to-end (desktop + ESP32-S3 hardware)           |
 | `examples/linux/`          | Desktop SDL demo                                          | Implemented as C-driver demo; Flow A JSX target planned             |
 | `examples/stm32h7/`        | First MCU bring-up                                        | Planned                                                             |
 | `examples/esp32/`          | ESP32-S3 bring-up                                         | Planned                                                             |
 | `examples/raspberry-pi/`   | RPi reference app                                         | Planned                                                             |
 | `examples/dashboard-demo/` | Cross-platform UI showcase                                | Planned                                                             |
 | `examples/marine-display/` | Real-world reference app                                  | Planned                                                             |
-| `tools/font-converter/`    | TTF → C font data generator                               | Working                                                             |
+| `bridges/quickjs/js/assets/` | Build-time image + font bakers (pure JS, no Python)     | Working — PNG→ARGB8888, TTF→BitmapFont; emits the C assets register |
 
 ---
 
@@ -146,8 +146,9 @@ Under the hood:
   be exercised without flashing hardware), then `examples/stm32h7/` with
   `backends/dma2d/`.
 
-Flow A is not built yet. The runtime ABI it targets (`er_scene.h`) is, and
-`examples/linux/` currently validates that ABI through a pure-C SDL demo.
+Flow A is built and runs end-to-end: `examples/linux/` (target `embedded-react-desktop`) boots the
+QuickJS bridge + engine and paints a JSX bundle in an SDL2 window, and the same bundle runs on the
+ESP32-S3 (`examples/esp32/esp32-s3/`, Waveshare 7" panel) with only the backend swapped.
 
 ### Flow B — React as a compile target (future, design only)
 
@@ -187,7 +188,7 @@ differently:
 | Artifact                               | Contents                                                                                                                          | Distribution                                                                          | RN analog                                |
 |----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|------------------------------------------|
 | **`embedded-react`** (npm)             | Component surface (`View`/`Text`/…), `StyleSheet`, `Animated`, `Easing`, `Platform`, `AppRegistry`, **and the Flow A reconciler** | npm package                                                                           | `react-native`                           |
-| **`@embedded-react/cli`** (npm)        | `create-embedded-react`, the bundler + `qjsc` bytecode step, build/flash commands                                                 | npm package                                                                           | `@react-native-community/cli` / Expo CLI |
+| **`@embedded-react/cli`** (npm)        | `create-embedded-react`, the bundler + bytecode precompiler + asset bakers, build/flash commands                                  | npm package                                                                           | `@react-native-community/cli` / Expo CLI |
 | **engine + QuickJS bridge + backends** | The pure-C runtime and host glue                                                                                                  | **Source**, via CMake `FetchContent` and `idf_component.yml` (Decision 1) — *not* npm | the native runtime baked into a RN app   |
 
 The reconciler is **not** a standalone package. Like RN's renderer, it lives *inside*
@@ -227,14 +228,14 @@ my-app/
 ```
 npx create-embedded-react my-app --target esp32-s3
 cd my-app
-npm run build     # JSX → bundle → qjsc bytecode → embedded as a C array in firmware/
+npm run build     # JSX → bundle → bytecode + baked image/font C → embedded in firmware/
 npm run flash     # cmake / idf.py builds the firmware image + flashes it
 ```
 
 ### The desktop host is the simulator
 
 The single biggest DX risk on embedded is a slow edit→flash→wait loop. The answer is the
-SDL desktop host (`examples/linux`, target `embedded-react-desktop-js`): it boots the same
+SDL desktop host (`examples/linux`, target `embedded-react-desktop`): it boots the same
 QuickJS bridge + engine and runs the same bundle in a window. It is the analog of the iOS
 Simulator / Android emulator / Expo Go.
 
@@ -512,17 +513,15 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - Rounded rectangle rasterizer — implemented (scanline fill, border ring, anti-aliased corners, `ERUI_BORDER_AA` flag)
 - Backend interface — wired; `backends/sdl/` fully implemented
 - Host-side CTest (animation + input + layout + text + rendering/rrect) — green
-- `examples/linux/` — pure-C SDL demo implemented; no React/QuickJS bridge yet
+- `examples/linux/` — JSX desktop host (`embedded-react-desktop`) running the bundle via QuickJS
 
-**Next (Flow A)**
+**Flow A — React on QuickJS (working)**
 
-- Finish engine: shadows, transforms, full animation engine, image scaling
-- Thin `NativeUI` bridge surface around `er_scene.h`
-- Metro-compatible bundler
-- React reconciler hosted in QuickJS (`bridges/quickjs/`)
-- End-to-end: `examples/linux/` — JSX → SDL2 desktop preview
-- First MCU: `examples/esp32/` with `backends/esp32-lcd/`
-- Second MCU bring-up: `examples/stm32h7/` with `backends/dma2d/`
+- `NativeUI` bridge over `er_scene.h` — done (nodes, props, events, Animated, timers, text spans, LayoutAnimation)
+- React reconciler hosted in QuickJS (`bridges/quickjs/js/`) — done
+- esbuild bundler + bytecode precompiler + build-time image/font bakers — done
+- End-to-end on desktop (`examples/linux/`, SDL) and on ESP32-S3 (`examples/esp32/esp32-s3/`, RGB panel) — done
+- Remaining: `create-embedded-react` project scaffold; second MCU bring-up (`examples/stm32h7/` + `backends/dma2d/`)
 
 **Later (Flow B)**
 

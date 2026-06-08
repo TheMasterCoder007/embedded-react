@@ -1,98 +1,71 @@
 # examples/linux
 
-Desktop sample app — engine + `backends/sdl/` inside an SDL2 window. No bridge yet;
-the scene is driven directly via `er_scene.h` to validate the full render stack
-(Yoga layout → rrect rasterizer → SDL2 blit) on a real display without flashing hardware.
+The **desktop host** for Flow A — the analog of the iOS Simulator / Android emulator. It boots the
+same QuickJS bridge + C engine the MCU runs and paints a JSX app into an SDL2 window, with only the
+backend swapped to SDL. Develop here (instant), then flash the *same* bundle to a device.
 
-**Status:** Implemented. C-driver path only (no React/QuickJS). Displays a dark-background
-window with a title and two rounded-corner cards at 480 × 320. The second card is
-clickable, draggable out/back in, and long-pressable through the engine touch-event path,
-with its background color animated by the native timing animation engine. Two overlapping
-zIndex badges in the top-right demonstrate matching render and hit-test stacking. Press
-ESC to quit.
+```
+JSX bundle (+ baked assets)  →  QuickJS + er_scene.h engine  →  backends/sdl  →  SDL2 window
+```
+
+**Status:** Implemented. One target, `embedded-react-desktop` (`main.c`): it inits QuickJS, installs
+the `NativeUI` bridge + host globals (`screen`, `console`, timers), loads the app, and runs the SDL
+frame loop (pump → commit → present). Mouse is forwarded as touch. The default demo is the
+[thermostat](../../demos/thermostat/) (a draggable arc-dial climate UI). Press ESC to quit.
+
+> The old hand-written C-API showcase has been removed — this project is "JSX on embedded", so the
+> desktop demo is the JSX end-to-end path, not a separate C scene.
 
 ---
 
-## Building on Windows
+## Build & run
 
-### Prerequisites
+The desktop target runs whatever bundle `npm run build` produced. Build the JS app first, then the
+example:
 
-- [CMake](https://cmake.org/download/) 3.16 or later (add to PATH during install)
-- A C compiler — Visual Studio 2019/2022 (MSVC) or [MinGW-w64](https://www.mingw-w64.org/)
-- [SDL2](https://github.com/libsdl-org/SDL/releases) 2.0.6 or later
+```sh
+# 1. Bundle a demo + bake its assets  (from the repo)
+cd bridges/quickjs/js && npm install && npm run build      # → dist/app.bundle.js + dist/assets.generated.c
+cd ../../..
 
-### Install SDL2 via vcpkg (recommended)
+# 2. Build + run the desktop host
+cmake -S examples/linux -B examples/linux/build
+cmake --build examples/linux/build --target embedded-react-desktop
+examples/linux/build/embedded-react-desktop                # boots the bundle by default
+```
+
+The build copies `app.bundle.js` next to the exe, precompiles it to `app.bundle.qbc` (bytecode —
+preferred at boot), and compiles `dist/assets.generated.c` so the demo's `<Image>`/`<Text>` assets
+resolve. App resolution: explicit CLI path → `app.bundle.qbc` → `app.bundle.js` → a small built-in JS
+demo. Run with no args for the active bundle, or pass a path to iterate on a different one.
+
+> Iterate: edit `demos/<name>/*` or the library `src/*` → `npm run build` → rebuild the target
+> (re-copies bundle + assets) → run. Configure once with `npm run build` already done so the baked
+> assets are present (otherwise the example builds text-only and prints a status note).
+
+---
+
+## Prerequisites (SDL2)
+
+CMake 3.16+, a C compiler, and SDL2 2.0.6+ (`SDL_ComposeCustomBlendMode`).
+
+**Windows (vcpkg):**
 
 ```bat
 git clone https://github.com/microsoft/vcpkg C:\vcpkg
 C:\vcpkg\bootstrap-vcpkg.bat
 C:\vcpkg\vcpkg install sdl2:x64-windows
+cmake -S examples\linux -B examples\linux\build -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 ```
 
-Then configure with the vcpkg toolchain file:
+On Windows the build copies `SDL2.dll` next to the exe automatically.
 
-```bat
-cd examples\linux
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
-cmake --build build --config Release
-build\Release\embedded-react-desktop.exe
-```
+**Linux / macOS:**
 
-### Install SDL2 manually
-
-Download the `SDL2-devel-x.y.z-VC.zip` (MSVC) or `SDL2-devel-x.y.z-mingw.tar.gz`
-(MinGW) development package from the SDL2 releases page. Extract it and pass the
-`cmake/` subfolder as `SDL2_DIR`:
-
-```bat
-cmake -S . -B build -DSDL2_DIR=C:\SDL2-2.30.0\cmake
-cmake --build build --config Release
-```
-
-Copy `SDL2.dll` next to the built executable before running:
-
-```bat
-copy C:\SDL2-2.30.0\lib\x64\SDL2.dll build\Release\
-build\Release\embedded-react-desktop.exe
+```sh
+sudo apt install libsdl2-dev      # Debian/Ubuntu
+brew install sdl2                 # macOS
+cmake -S examples/linux -B examples/linux/build
 ```
 
 ---
-
-## Building on Linux / macOS
-
-Install SDL2 from your package manager:
-
-```sh
-# Debian / Ubuntu
-sudo apt install libsdl2-dev
-
-# macOS (Homebrew)
-brew install sdl2
-```
-
-Then build:
-
-```sh
-cd examples/linux
-cmake -S . -B build
-cmake --build build
-./build/embedded-react-desktop
-```
-
----
-
-## What you should see
-
-A 480 × 320 window titled **embedded-react** with:
-
-- Dark navy background (`#1A1A2E`)
-- White title text at the top
-- A dark blue rounded card labelled *Scene graph · Yoga flexbox · Rounded rects*
-- A red rounded card labelled *Click me: hit-testing + press events*
-- Clicking the red card animates it to a green active state
-- Holding the card triggers the long-press path
-- Dragging out and back in exercises press-out / press-in transitions
-- Clicking the overlap between the top-right badges hits the higher zIndex target
-
-This is a pure C99 scene built with `er_scene.h`. React / QuickJS integration
-comes in the next milestone (Flow A).

@@ -45,7 +45,8 @@ which you generate from the JS source before building (next section).
 
 ## Build
 
-Prerequisites: **ESP-IDF v5.x** installed and exported (`. $IDF_PATH/export.sh`).
+Prerequisites: **ESP-IDF v6.x** installed and exported (`. $IDF_PATH/export.sh`). Validated on
+v6.0.1 (xtensa GCC).
 
 **1. Generate the app bytecode** (`main/app.bundle.qbc`) — it's not committed (it's a build artifact
 of the JS app). From the repo root:
@@ -84,18 +85,22 @@ Expected monitor output (roughly):
 
 ```
 I (xxx) embedded-react: embedded-react ESP32-S3 host — Phase 2 (RGB display)
-I (xxx) embedded-react: PSRAM free: 8……  internal free: …
+I (xxx) embedded-react: PSRAM free: 6……  internal free: …
 I (xxx) board: RGB panel up: 800x480
 I (xxx) embedded-react: display backend active
-I (xxx) embedded-react: loading 940975 bytes of bytecode
-I (xxx) embedded-react: first commit painted=1 dirty=0,0 800x480
+I (xxx) board: GT911 up: product id '911 '
+I (xxx) embedded-react: loading ~1 MB of bytecode
+I (xxx) js: React mounted at 800x480
 I (xxx) embedded-react: alive: 120 frames, …
 ```
 
-`first commit painted=1` plus a lit panel is the win: the React tree mounted, the engine laid it out
-at panel size, paint walked it into the ARGB8888 framebuffer, and the backend flushed it to the LCD
-as RGB565 — all from bytecode, with the heap in PSRAM. If the panel fails to init, the host logs a
-warning and falls back to the headless no-op backend so the JS stack still runs.
+`React mounted` plus a lit panel is the win: the React tree mounted, the engine laid it out at panel
+size, paint walked it into the ARGB8888 framebuffer, and the backend flushed it to the LCD as RGB565
+— all from bytecode, with the heap in PSRAM. (The `first commit painted=` count depends on the demo:
+the thermostat paints its content on the frames after the initial mount/effects settle, so the very
+first commit may report `painted=0` — the steady `alive:` frames confirm it's running.) If the panel
+fails to init, the host logs a warning and falls back to the headless no-op backend so the JS stack
+still runs.
 
 Re-run **step 1** (regenerate `app.bundle.qbc`) whenever you change the JS app. The bytecode **must**
 come from the same QuickJS version the top-level `CMakeLists.txt` fetches (`v0.15.0`) — the precompiler
@@ -151,6 +156,8 @@ as fast as the work allows. It always blocks at least one tick so the idle task 
 
 ## Possible next steps
 
-1. Multitouch / gestures (the engine has `er_responder_query_set`), 
-2. Asset/font loading (`loadImage`/`loadFont`, needs PNG decode), 
-3. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
+1. Multitouch / gestures (the engine has `er_responder_query_set`),
+2. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
+
+(Baked images and custom fonts are already handled at build time — see the
+[JS package README](../../../bridges/quickjs/js/README.md#assets-images--fonts).)

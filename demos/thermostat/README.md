@@ -6,7 +6,7 @@ mode selector round it out. On the wide layout a **weather panel** sits to the r
 conditions plus a 4-day forecast, each day a baked `<Image>` weather icon.
 
 It exercises three engine features: the **vector** dial (one `<Svg>` arc, updated imperatively during
-the drag), **baked images** (the weather icons; see `assets/` + `tools/image-converter`), and the
+the drag), **baked images** (the weather icons — imported PNGs, baked at build time), and the
 responsive layout.
 
 It's the default demo and is **responsive**: every dimension derives from the host-injected `screen`
@@ -15,9 +15,11 @@ global, so one source flexes between the 800×480 panel (ESP32-S3 / Flow A) and 
 
 ## Assets
 
-`assets/` holds the weather-icon PNGs and the generated `image_data.c`/`.h` (premultiplied ARGB8888,
-compiled into the host and registered at boot). Regenerate with `tools/image-converter` if you change
-the icons — see that tool's README.
+`assets/` holds the weather-icon PNGs. `App.jsx` imports them (`import wxSun from './assets/wx_sun.png'`)
+and `npm run build` bakes each into `dist/assets.generated.c` (premultiplied ARGB8888, flash-resident,
+registered at boot via `er_register_assets()`) — no separate step, no committed generated files. Drop
+a new PNG in `assets/`, import it, and rebuild. See [the JS package README](../../bridges/quickjs/js/README.md#assets-images--fonts)
+for the full asset workflow (including fonts and `assets.config.js`).
 
 ## Build & run
 
