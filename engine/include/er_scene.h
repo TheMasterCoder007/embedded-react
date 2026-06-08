@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* The baked bitmap-font format (BitmapFont / GlyphInfo). This is a public contract: the build-time
+ * font converter emits BitmapFont structs and er_font_register() hands them to the engine — the font
+ * analog of the premultiplied-ARGB8888 buffer er_image_load() takes. */
+#include "font_bitmap.h"
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -845,6 +850,24 @@ extern "C"
      * @param[in] len   Size of the blob in bytes.
      */
     void er_font_load(const char* name, const void* buf, size_t len);
+
+    /**
+     * @brief Registers a baked bitmap font (one pixel size) under a family name for Text nodes.
+     *
+     * Unlike er_font_load(), the BitmapFont is referenced by pointer and never copied — it must point
+     * at storage that stays live for the program's lifetime (typically a flash-resident `const` struct
+     * emitted by the font converter), so this needs no font pool (works with ERUI_FONT_POOL_BYTES = 0)
+     * and costs zero RAM. This is the primary, build-time path for adding custom fonts.
+     *
+     * Call once per (family, pixel_size). Registering the same family with a new pixel_size adds that
+     * size; registering an existing (family, pixel_size) replaces it in place. Text nodes select the
+     * registered size closest to their fontSize (see font_registry_get). A NULL family or font, or a
+     * full registry, is a no-op.
+     *
+     * @param[in] family  Null-terminated font family name (e.g. "Roboto").
+     * @param[in] font    Pointer to the baked BitmapFont (caller-owned, must outlive all uses).
+     */
+    void er_font_register(const char* family, const BitmapFont* font);
 
     /**
      * @brief Registers a premultiplied ARGB8888 image under a name for use by Image nodes.

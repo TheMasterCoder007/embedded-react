@@ -241,6 +241,51 @@ static int test_font_blob_reuse(void)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Tests: Public er_font_register
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Verifies the public er_font_register() registers a baked font by pointer (zero-copy) and is
+ *        resolvable by closest-size lookup, with NULL arguments treated as safe no-ops.
+ *
+ * This is the build-time font path the converter's generated C uses (no font pool, no copy).
+ *
+ * @return 0 on success, 1 on failure.
+ */
+static int test_font_register_public(void)
+{
+    font_registry_init();
+
+    BitmapFont brand16 = {0};
+    brand16.pixel_size = 16U;
+    brand16.line_height = 20U;
+    BitmapFont brand24 = {0};
+    brand24.pixel_size = 24U;
+    brand24.line_height = 30U;
+
+    er_font_register("Brand", &brand16);
+    er_font_register("Brand", &brand24);
+
+    /* The exact baked struct is returned by pointer (never copied). */
+    CHECK(font_registry_get_exact("Brand", 16U) == &brand16, "er_font_register: exact 16 by pointer");
+    CHECK(font_registry_get_exact("Brand", 24U) == &brand24, "er_font_register: exact 24 by pointer");
+
+    /* A fontSize between baked sizes resolves to the nearest registered one (no scaling). */
+    CHECK(font_registry_get("Brand", 17U) == &brand16, "er_font_register: 17 picks nearest (16)");
+    CHECK(font_registry_get("Brand", 22U) == &brand24, "er_font_register: 22 picks nearest (24)");
+
+    /* NULL family or font are safe no-ops and must not register anything or crash. */
+    er_font_register(NULL, &brand16);
+    er_font_register("Bogus", NULL);
+    CHECK(font_registry_get_exact("Bogus", 16U) == NULL, "er_font_register: NULL font did not register");
+
+    /* An unknown family falls back to the built-in font (never NULL). */
+    CHECK(font_registry_get("Unknown", 16U) != NULL, "er_font_register: unknown family falls back to built-in");
+
+    return s_fail;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -254,6 +299,7 @@ int main(void)
     (void)test_image_replace();
     (void)test_font_registry_replace();
     (void)test_font_blob_reuse();
+    (void)test_font_register_public();
 
     if (s_fail)
         return 1;

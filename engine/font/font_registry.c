@@ -171,3 +171,10 @@ void er_font_load(const char* name, const void* buf, size_t len)
         return;
     (void)font_blob_register(name, buf, (uint32_t)len);
 }
+
+void er_font_register(const char* family, const BitmapFont* font)
+{
+    /* Public, zero-copy companion to er_font_load: the BitmapFont is referenced by pointer (no font
+     * pool involved), so this is the build-time path the font converter's baked C uses. */
+    (void)font_registry_add(family, font);
+}
