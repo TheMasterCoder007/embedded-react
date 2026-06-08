@@ -73,6 +73,35 @@ static const char* k_default_app =
     "NativeUI.commit();\n"
     "console.log('App built UI at', W + 'x' + H, '- tap a card');\n";
 
+/**
+ * @brief Last uncaught JS error (message + stack), captured by host_report for the error overlay.
+ */
+static char s_last_error[512] = "";
+
+/**
+ * @brief Error-overlay app: builds a red "JS error" screen from the `__error` global. Evaluated by
+ *        er_host_show_error so a failed load/reload shows the error on screen (RN redbox style)
+ *        instead of leaving a blank or stale window. Reuses the NativeUI marshalling path.
+ */
+static const char* k_error_app =
+    "const W = screen.width, H = screen.height;\n"
+    "const msg = (typeof __error === 'string' && __error) ? __error : 'Unknown error';\n"
+    "const root = NativeUI.createNode('View');\n"
+    "NativeUI.setProps(root, { width: W, height: H, backgroundColor: '#7a0b0b',\n"
+    "                          flexDirection: 'column', padding: 24, gap: 12 });\n"
+    "const title = NativeUI.createNode('Text');\n"
+    "NativeUI.setProps(title, { text: 'JS error', color: '#ffffff', fontSize: 24, fontWeight: 'bold' });\n"
+    "NativeUI.appendChild(root, title);\n"
+    "const body = NativeUI.createNode('Text');\n"
+    "NativeUI.setProps(body, { text: msg, color: '#ffd9d9', fontSize: 14, width: W - 48, numberOfLines: 20 });\n"
+    "NativeUI.appendChild(root, body);\n"
+    "const hint = NativeUI.createNode('Text');\n"
+    "NativeUI.setProps(hint, { text: 'fix the source and save to reload (or press R)', color: '#ff9b9b', fontSize: 12 "
+    "});\n"
+    "NativeUI.appendChild(root, hint);\n"
+    "NativeUI.setRoot(root);\n"
+    "NativeUI.commit();\n";
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — file + JS helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -207,19 +236,24 @@ static bool host_report(JSContext* ctx, JSValue result)
         JSValue exc = JS_GetException(ctx);
         const char* msg = JS_ToCString(ctx, exc);
         fprintf(stderr, "JS exception: %s\n", msg ? msg : "(unknown)");
+
+        JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+        const char* st = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
+        if (st)
+        {
+            fprintf(stderr, "%s\n", st);
+        }
+
+        /* Capture message + stack for the error overlay (er_host_show_error). */
+        snprintf(s_last_error, sizeof(s_last_error), "%s%s%s", msg ? msg : "(unknown)", st ? "\n\n" : "", st ? st : "");
+
         if (msg)
         {
             JS_FreeCString(ctx, msg);
         }
-        JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
-        if (!JS_IsUndefined(stack))
+        if (st)
         {
-            const char* st = JS_ToCString(ctx, stack);
-            if (st)
-            {
-                fprintf(stderr, "%s\n", st);
-                JS_FreeCString(ctx, st);
-            }
+            JS_FreeCString(ctx, st);
         }
         JS_FreeValue(ctx, stack);
         JS_FreeValue(ctx, exc);
@@ -344,6 +378,19 @@ bool er_host_reload(ErHost* host, const char* explicit_path)
     return er_host_load_app(host, explicit_path);
 }
 
+void er_host_show_error(ErHost* host)
+{
+    /* RN-redbox style: clear the (possibly half-built) scene, publish the last captured error text as
+     * a global, and run the built-in error app in the current context so the failure is on screen
+     * instead of leaving a blank/stale window. The next successful reload replaces it. */
+    er_reset();
+    JSValue global = JS_GetGlobalObject(host->ctx);
+    JS_SetPropertyStr(host->ctx, global, "__error", JS_NewString(host->ctx, s_last_error));
+    JS_FreeValue(host->ctx, global);
+    host_run(host->ctx, k_error_app, strlen(k_error_app), "<error-overlay>", false);
+    er_bridge_pump(host->ctx);
+}
+
 bool er_host_load_app(ErHost* host, const char* explicit_path)
 {
     /* Choose the app to run, in priority order:
@@ -438,6 +485,10 @@ bool er_host_step(ErHost* host)
         else if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)
         {
             host->running = false;
+        }
+        else if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_r)
+        {
+            host->reload_requested = true; /* the simulator acts on this; the demo ignores it */
         }
         else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
         {

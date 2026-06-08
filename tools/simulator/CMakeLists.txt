@@ -40,23 +40,12 @@ set(ER_BRIDGE_QUICKJS_SMOKE OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/quickjs)
 
 # The shared desktop host core lives with the demo; the simulator reuses it (sim_main.c is just the
-# watch + reload loop over it).
+# watch + reload loop over it). Unlike the demo/device, the simulator does NOT compile assets in: it
+# loads them at runtime from a binary pack (asset_pack.c) so images/fonts hot-reload (Phase 2b).
 set(ER_HOST_DIR "${ER_ROOT}/examples/linux")
-set(ER_GENERATED_ASSETS "${ER_ROOT}/bridges/quickjs/js/dist/assets.generated.c")
 
-# Baked assets (images + fonts) are compiled in like the demo, so they resolve while JS hot-reloads.
-# (Asset *changes* need a sim rebuild — runtime asset reload is Phase 2 in /SIMULATOR.md.)
-if (EXISTS "${ER_GENERATED_ASSETS}")
-    add_executable(embedded-react-simulator sim_main.c "${ER_HOST_DIR}/host.c" "${ER_GENERATED_ASSETS}")
-    target_include_directories(embedded-react-simulator PRIVATE
-            "${ER_HOST_DIR}" "${ER_ROOT}/bridges/quickjs/js/dist")
-    target_compile_definitions(embedded-react-simulator PRIVATE ER_HAVE_BAKED_ASSETS=1)
-else ()
-    add_executable(embedded-react-simulator sim_main.c "${ER_HOST_DIR}/host.c")
-    target_include_directories(embedded-react-simulator PRIVATE "${ER_HOST_DIR}")
-    message(STATUS "embedded-react-simulator: no baked assets at ${ER_GENERATED_ASSETS} "
-            "(run `npm run build` in bridges/quickjs/js, then reconfigure)")
-endif ()
+add_executable(embedded-react-simulator sim_main.c asset_pack.c "${ER_HOST_DIR}/host.c")
+target_include_directories(embedded-react-simulator PRIVATE "${ER_HOST_DIR}")
 
 target_link_libraries(embedded-react-simulator
         PRIVATE

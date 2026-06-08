@@ -5,9 +5,10 @@ way you'd run a React Native app, that **hot-reloads your code as you edit it**.
 developer-experience counterpart to Flow A (see [PLAN.md](PLAN.md)) — the runtime exists; this is
 about the edit→see loop.
 
-> Status: **Phases 0–1 shipped — live reload works.** `npm run sim` runs the simulator with
-> file-watch + full-remount hot reload on the desktop. Phases 2–4 (runtime asset reload, Fast
-> Refresh, on-device) are still ahead. See **Running it** and the phase table below.
+> Status: **Phases 0, 1, 2 shipped.** `npm run sim` runs the simulator with file-watch + full-remount
+> hot reload (JS **and** images/fonts), an RN-redbox error overlay, and an R reload key. Still ahead:
+> Fast Refresh (3, state-preserving) and on-device hot reload (4). See **Running it** and the phase
+> table.
 
 ## Running it
 
@@ -111,11 +112,11 @@ Today assets are baked into the binary (`dist/assets.generated.c` → `er_regist
 defeats hot-reloading an image or font. The simulator is the use case for the **runtime**
 `loadImage`/`loadFont` path deferred in BRIDGE.md §1.5:
 
-- **MVP** — JS-only hot reload. Assets are baked at sim start; changing/adding an image or font needs a
-  sim restart.
-- **Phase 2** — the simulator host decodes PNG/TTF from disk on (re)load (e.g., stb_image /
-  stb_truetype, or by reading a manifest the bundler emits) and calls `er_image_load` /
-  `er_font_register` at runtime. **Simulator only** — on a device, assets stay baked.
+- **Shipped (Phase 2b)** — the JS bakers emit a binary **ERPK pack** (`assets/emit-pack.mjs` →
+  `dist/assets.pack`); the sim host loads it at runtime (`tools/simulator/asset_pack.c` →
+  `er_image_load` / `er_font_register`) and re-registers when it changes. Reusing the same bakers
+  means sim fonts/images are pixel-identical to the device's baked assets, with no C rasterizer.
+  **Simulator only** — on a device, assets stay baked into the firmware.
 
 ### 4. Where it lives
 
@@ -149,7 +150,8 @@ engine's static state safely.
 |-------|-------|--------|
 | **0** | Factor the SDL host core into a shared unit (`examples/linux/host.{c,h}`); frame `examples/linux` as a pure demo (peer to esp32). | ✅ done |
 | **1 — MVP** | `tools/simulator/` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Backed by `er_reset()` (engine) + handle-table reset (bridge) + `er_host_reload()` (host). | ✅ done |
-| **2** | Runtime asset loading (image/font hot reload); in-window **error overlay** for uncaught JS exceptions (RN redbox); manual reload key. | ☐ |
+| **2a** | In-window **error overlay** (RN redbox) for uncaught JS exceptions; **manual reload key** (R). | ✅ done |
+| **2b** | Runtime asset loading (image/font hot reload) via a binary **ERPK pack**: the JS bakers emit `dist/assets.pack`, the sim host loads it (`asset_pack.c`) and re-registers on change. Fonts identical to device. | ✅ done |
 | **3** | React **Fast Refresh** (state-preserving) via `react-refresh` + module HMR in the bundler. | ☐ |
 | **4** | **On-device hot reload** — dev-server/socket transport pushing bytecode to the ESP32 over serial / Wi-Fi (the "later luxury"). | ☐ |
 
@@ -176,17 +178,18 @@ or the scaffold immediately after the simulator MVP.
 2. ✅ **Simulator location** — `tools/simulator/` (reuses the shared `examples/linux/host.c`).
 3. ✅ **Desktop demo** — kept symmetric with esp32: it runs whatever `npm run build` last produced; no
    pinning.
-4. ⏳ **Asset hot-reload decoder for Phase 2** — stb_image/stb_truetype in the sim host, vs reusing the
-   JS bakers to emit a runtime-loadable pack the host reads. (Still open.)
+4. ✅ **Asset hot-reload decoder** — reuse the JS bakers (fonts identical to device) via a binary
+   **ERPK pack** (`assets/emit-pack.mjs`) the sim host loads (`tools/simulator/asset_pack.c`). No C
+   rasterizer; the sim loads assets at runtime instead of compiling them in.
 
-## Phase 1 — known limitations / rough edges (for Phase 2)
+## Known limitations / rough edges (for later phases)
 
 - **Live reload resets component state** (by design until Fast Refresh, Phase 3).
-- **Assets are baked at sim-build time** — changing/adding an image or font needs a sim rebuild; the
-  sim binary's baked assets are fixed at CMake time, so running a *different* demo than the one it was
-  built against won't have matching assets. (Phase 2 = runtime asset loading.)
 - **One-time CMake build** of the sim binary is required before `npm run sim` (the script prints how if
   it's missing). A future `create-embedded-react` scaffold + prebuilt/auto-built binary would remove
   this step.
-- **Mid-write races** are handled by self-correction: a partial read fails to eval (window stays up)
-  and the next poll reloads the finished file.
+- **Asset-pack reload leaks** the previous pack's buffers (a few KB per asset change) — the engine has
+  no "unregister", so the sim keeps old buffers alive rather than risk a dangling reference. Fine for a
+  short-lived dev session.
+- **Mid-write races** are handled by self-correction: a partial read fails (eval throws / pack parse
+  returns false, window stays up) and the next poll reloads the finished file.

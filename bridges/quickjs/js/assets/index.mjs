@@ -6,6 +6,7 @@ import path from 'node:path';
 import { bakeImage } from './bake-image.mjs';
 import { bakeFont } from './bake-font.mjs';
 import { emitAssetsC } from './emit-c.mjs';
+import { emitAssetPack } from './emit-pack.mjs';
 
 /**
  * Bakes the given assets and writes assets.generated.{c,h} into outDir.
@@ -32,4 +33,24 @@ export function bakeAssets({ images = [], fonts = [], outDir }) {
 
   const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
   return { cPath, hPath, images: bakedImages.length, fonts: fontSizes };
+}
+
+/**
+ * Bakes the given assets into a binary ERPK pack the simulator loads at runtime (hot-reloadable),
+ * using the same bakers as bakeAssets so the result is pixel-identical.
+ *
+ * @param {object} opts
+ * @param {Array<{path:string,name:string}>} [opts.images]
+ * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any}>} [opts.fonts]
+ * @param {string} opts.outPath  Path to write the .pack file.
+ * @returns {{path:string, bytes:number, images:number, fonts:number}}
+ */
+export function bakeAssetPack({ images = [], fonts = [], outPath }) {
+  const bakedImages = images.map((i) => bakeImage(i));
+  const bakedFonts = fonts.map((f) => bakeFont(f));
+  const pack = emitAssetPack({ images: bakedImages, fonts: bakedFonts });
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, pack);
+  const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
+  return { path: outPath, bytes: pack.length, images: bakedImages.length, fonts: fontSizes };
 }

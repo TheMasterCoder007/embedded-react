@@ -42,6 +42,7 @@ typedef struct
     int phys_h;                    /**< Framebuffer height in physical pixels. */
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
+    bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
     uint32_t prev_ticks;           /**< SDL_GetTicks() at the previous frame, for the tick delta. */
 } ErHost;
 
@@ -87,6 +88,16 @@ bool er_host_load_app(ErHost* host, const char* explicit_path);
  *         the simulator keeps running and can reload again once the source is fixed).
  */
 bool er_host_reload(ErHost* host, const char* explicit_path);
+
+/**
+ * @brief Renders an on-screen error overlay (RN-redbox style) from the last uncaught JS error.
+ *
+ * Call after er_host_load_app / er_host_reload returns false so the failure shows in the window
+ * instead of leaving a blank or stale screen. The next successful reload replaces it.
+ *
+ * @param[in] host  Started host with a live context.
+ */
+void er_host_show_error(ErHost* host);
 
 /**
  * @brief Scales a logical SDL input coordinate to physical framebuffer pixels.

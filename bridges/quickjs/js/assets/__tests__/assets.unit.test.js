@@ -11,6 +11,7 @@ import { rasterize } from '../rasterize.mjs';
 import { bakeImage } from '../bake-image.mjs';
 import { bakeFont, resolveExtras, ASCII_FIRST, ASCII_LAST } from '../bake-font.mjs';
 import { emitAssetsC } from '../emit-c.mjs';
+import { emitAssetPack } from '../emit-pack.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INTER = resolve(here, '../../../../../assets/fonts/Inter-Regular.ttf');
@@ -116,6 +117,98 @@ describe('bakeFont', () => {
 
   it('rejects an unsupported bpp', () => {
     expect(() => bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 3 })).toThrow();
+  });
+});
+
+/** Parses an ERPK pack back into a structured form (mirrors tools/simulator/asset_pack.c). */
+function readPack(buf) {
+  let o = 0;
+  const u8 = () => buf.readUInt8(o++);
+  const i8 = () => buf.readInt8(o++);
+  const u16 = () => {
+    const v = buf.readUInt16LE(o);
+    o += 2;
+    return v;
+  };
+  const u32 = () => {
+    const v = buf.readUInt32LE(o);
+    o += 4;
+    return v;
+  };
+  const str = () => {
+    const len = u16();
+    const s = buf.toString('utf8', o, o + len);
+    o += len;
+    return s;
+  };
+  const magic = buf.toString('ascii', 0, 4);
+  o = 4;
+  const version = u32();
+  const nImages = u32();
+  const nFonts = u32();
+  const images = [];
+  for (let i = 0; i < nImages; i++) {
+    const name = str();
+    const w = u32();
+    const h = u32();
+    const pixels = [];
+    for (let p = 0; p < w * h; p++) pixels.push(u32());
+    images.push({ name, w, h, pixels });
+  }
+  const fonts = [];
+  for (let i = 0; i < nFonts; i++) {
+    const family = str();
+    const f = { family, pixel_size: u8(), line_height: u8(), baseline: u8(), format: u8() };
+    f.first = u16();
+    f.last = u16();
+    f.gc = u16();
+    f.ec = u16();
+    f.blen = u32();
+    for (let g = 0; g < f.gc; g++) {
+      u32();
+      u8();
+      u8();
+      i8();
+      i8();
+      u8();
+    } // glyph
+    for (let e = 0; e < f.ec; e++) {
+      u32();
+      u32();
+      u8();
+      u8();
+      i8();
+      i8();
+      u8();
+    } // extra
+    o += f.blen; // bitmap
+    fonts.push(f);
+  }
+  return { magic, version, nImages, nFonts, images, fonts, consumed: o, total: buf.length };
+}
+
+describe('emitAssetPack', () => {
+  it('serializes images + fonts into a self-consistent ERPK pack', () => {
+    const image = { name: 'logo', width: 2, height: 1, pixels: new Uint32Array([0xffff0000, 0x80000080]) };
+    const font = bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 4 });
+    const p = readPack(emitAssetPack({ images: [image], fonts: [font] }));
+
+    expect(p.magic).toBe('ERPK');
+    expect(p.version).toBe(1);
+    expect(p.nImages).toBe(1);
+    expect(p.nFonts).toBe(1); // one font *size*
+
+    expect(p.images[0]).toMatchObject({ name: 'logo', w: 2, h: 1 });
+    expect(p.images[0].pixels[0] >>> 0).toBe(0xffff0000);
+    expect(p.images[0].pixels[1] >>> 0).toBe(0x80000080);
+
+    expect(p.fonts[0].family).toBe('Inter');
+    expect(p.fonts[0].pixel_size).toBe(16);
+    expect(p.fonts[0].format).toBe(4);
+    expect(p.fonts[0].gc).toBe(ASCII_COUNT);
+
+    // Every byte is accounted for — the reader consumes exactly what the writer produced.
+    expect(p.consumed).toBe(p.total);
   });
 });
 

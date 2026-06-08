@@ -1,16 +1,18 @@
 // `npm run sim [demo]` — the embedded-react simulator launcher (see /SIMULATOR.md).
 //
-// Runs esbuild in watch mode (rebundling demos/<demo> → dist/app.bundle.js on every save) and
-// launches the simulator binary, which watches that bundle and live-reloads the window on change —
-// the React Native inner loop on the desktop. Edit your JSX, save, see it.
+// Runs esbuild in watch mode (rebundling demos/<demo> → dist/app.bundle.js on every save), bakes the
+// demo's imported assets into a binary pack (dist/assets.pack) the simulator loads at runtime, and
+// launches the simulator window. Edit your JSX (or an image/font), save, and the window live-reloads
+// — JS via the bundle, images/fonts via the pack. The React Native inner loop on the desktop.
 //
 // One-time setup: build the simulator binary with CMake (tools/simulator). This script tells you how
 // if it's missing.
 import { context } from 'esbuild';
-import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { bakeAssetPack } from './assets/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
@@ -19,9 +21,11 @@ const libEntry = resolve(here, 'src/embedded-react/index.js');
 const nodeModules = resolve(here, 'node_modules');
 const distDir = resolve(here, 'dist');
 const bundlePath = resolve(distDir, 'app.bundle.js');
+const packPath = resolve(distDir, 'assets.pack');
 
 const demo = process.argv[2] || process.env.DEMO || 'thermostat';
-const entry = resolve(demosDir, demo, 'index.jsx');
+const demoDir = resolve(demosDir, demo);
+const entry = resolve(demoDir, 'index.jsx');
 if (!existsSync(entry)) {
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   process.exit(1);
@@ -40,16 +44,56 @@ if (!existsSync(simBin)) {
   process.exit(1);
 }
 
-// 1. Initial full build: bundle + bake the demo's assets. The simulator binary compiled those baked
-//    assets, so they resolve while the JS hot-reloads. (Changing an asset needs a sim rebuild.)
-console.log(`Building demo "${demo}" (+ assets)...`);
-const built = spawnSync(process.execPath, [resolve(here, 'build.mjs'), demo], { stdio: 'inherit' });
-if (built.status !== 0) {
-  process.exit(built.status || 1);
+const assetName = (p) => basename(p).replace(/\.[^.]+$/, '');
+const mtime = (p) => {
+  try {
+    return statSync(p).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+// Asset discovery: imports are recorded per build (cleared on onStart), then baked into the pack in
+// onEnd. The bundle still references the baked names (the import resolves to the file basename).
+const images = new Map(); // name -> path
+const fonts = new Map(); // family -> path
+let lastAssetSig = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
+
+async function bakePack() {
+  // Font sizes: bake exactly the literal fontSizes the bundle uses (engine has no runtime rasterizer).
+  const bundleSrc = readFileSync(bundlePath, 'utf8');
+  const discoveredSizes = [
+    ...new Set([...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map((m) => Math.round(Number(m[1])))),
+  ].sort((a, b) => a - b);
+
+  let cfg = {};
+  const cp = resolve(demoDir, 'assets.config.js');
+  if (existsSync(cp)) cfg = (await import(`${pathToFileURL(cp).href}?t=${mtime(cp)}`)).default || {};
+  const fontConfig = cfg.fonts || {};
+
+  const fontJobs = [...fonts.entries()].map(([family, path]) => {
+    const fc = fontConfig[family] || {};
+    const sizes = fc.sizes && fc.sizes.length ? fc.sizes : discoveredSizes.length ? discoveredSizes : [16];
+    return { path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii' };
+  });
+  const imageJobs = [...images.entries()].map(([name, path]) => ({ path, name }));
+
+  // Only re-bake when the asset inputs actually changed (avoids re-rasterizing fonts on every save).
+  const sig = JSON.stringify({
+    i: imageJobs.map((j) => [j.name, j.path, mtime(j.path)]).sort(),
+    f: fontJobs.map((j) => [j.family, j.path, mtime(j.path), j.sizes, j.bpp, j.glyphs]).sort(),
+  });
+  if (sig === lastAssetSig) return;
+  lastAssetSig = sig;
+
+  try {
+    const s = bakeAssetPack({ images: imageJobs, fonts: fontJobs, outPath: packPath });
+    console.log(`  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B → dist/assets.pack`);
+  } catch (e) {
+    console.error(`  asset bake failed: ${e.message}`);
+  }
 }
 
-// 2. esbuild watch — rebundle to dist/app.bundle.js on save (bundle only; assets baked in step 1).
-const assetName = (p) => basename(p).replace(/\.[^.]+$/, '');
 const ctx = await context({
   entryPoints: [entry],
   bundle: true,
@@ -62,20 +106,29 @@ const ctx = await context({
   nodePaths: [nodeModules],
   plugins: [
     {
-      name: 'embedded-react-asset-name',
+      name: 'embedded-react-sim',
       setup(b) {
-        b.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp|ttf|otf)$/i }, (args) => ({
-          contents: `module.exports = ${JSON.stringify(assetName(args.path))};`,
-          loader: 'js',
-        }));
-      },
-    },
-    {
-      name: 'sim-rebuild-log',
-      setup(b) {
-        b.onEnd((r) => {
-          if (r.errors.length) console.error(`✗ build failed (${r.errors.length} error(s)) — fix and save to retry`);
-          else console.log(`↻ rebuilt → dist/app.bundle.js`);
+        b.onStart(() => {
+          images.clear();
+          fonts.clear();
+        });
+        b.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
+          const name = assetName(args.path);
+          images.set(name, args.path);
+          return { contents: `module.exports = ${JSON.stringify(name)};`, loader: 'js' };
+        });
+        b.onLoad({ filter: /\.(ttf|otf)$/i }, (args) => {
+          const family = assetName(args.path);
+          fonts.set(family, args.path);
+          return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
+        });
+        b.onEnd(async (r) => {
+          if (r.errors.length) {
+            console.error(`✗ build failed (${r.errors.length} error(s)) — fix and save to retry`);
+            return;
+          }
+          console.log('↻ rebuilt → dist/app.bundle.js');
+          await bakePack();
         });
       },
     },
@@ -84,11 +137,13 @@ const ctx = await context({
   legalComments: 'none',
   logLevel: 'silent',
 });
-await ctx.watch();
-console.log(`Watching demos/${demo} — edit & save to hot-reload. Close the window or Ctrl-C to quit.`);
 
-// 3. Launch the simulator pointed at the watched bundle.
-const sim = spawn(simBin, [bundlePath], { stdio: 'inherit' });
+await ctx.rebuild(); // initial build → bundle + pack
+await ctx.watch();
+console.log(`Building demo "${demo}" — watching for changes. Close the window or Ctrl-C to quit.`);
+
+// Launch the simulator pointed at the watched bundle + asset pack.
+const sim = spawn(simBin, [bundlePath, packPath], { stdio: 'inherit' });
 const shutdown = async () => {
   try {
     await ctx.dispose();
