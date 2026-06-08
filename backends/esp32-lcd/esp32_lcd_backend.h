@@ -22,13 +22,21 @@ extern "C"
      * buffer and converts at present. The caller owns the panel (init it first — pins, timings, reset,
      * backlight) and must keep it alive for the backend's lifetime.
      *
-     * @param[in] panel   An initialised esp_lcd panel handle (e.g. an RGB panel).
-     * @param[in] width   Panel width in pixels (must match the engine's root width).
-     * @param[in] height  Panel height in pixels.
+     * Whole-screen rotation: pass the LOGICAL width/height the engine renders into (the size the app
+     * lays out at and `screen` reports) plus a rotation of 0/90/180/270 degrees clockwise. The canonical
+     * framebuffer is the logical size; present maps it onto the physical panel with the rotation (a plain
+     * row copy at 0°, a transpose at 90/270°, a row-reverse at 180°). For 90/270° the logical size is the
+     * panel's height×width (e.g. 480×800 logical on an 800×480 panel = a portrait UI). The host must also
+     * report the logical size to the app and remap touch coordinates by the inverse rotation.
      *
-     * @return true on success; false if a framebuffer could not be allocated.
+     * @param[in] panel     An initialised esp_lcd panel handle (e.g. an RGB panel).
+     * @param[in] width     Logical (engine) width in pixels.
+     * @param[in] height    Logical (engine) height in pixels.
+     * @param[in] rotation  Clockwise display rotation in degrees: 0, 90, 180, or 270.
+     *
+     * @return true on success; false on a bad rotation or a framebuffer allocation failure.
      */
-    bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height);
+    bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height, int rotation);
 
     /**
      * @brief Flushes the painted (dirty) region of the framebuffer to the panel.

@@ -79,6 +79,12 @@ static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
     memcpy(dst, src, (size_t)n * sizeof(uint16_t));
 }
 
+/** @brief Converts one canonical pixel to RGB565 (already 565 — identity). Used by rotated present. */
+static inline uint16_t fb_to_565_px(fbpx_t p)
+{
+    return (uint16_t)p;
+}
+
 #define FB_CLEAR_PX ((fbpx_t)0x0000) /* opaque black */
 
 #else /* ARGB8888 canonical */
@@ -95,16 +101,21 @@ static inline uint32_t fb_load(fbpx_t p)
     return p;
 }
 
+/** @brief Converts one ARGB8888 canonical pixel to RGB565. Used by rotated present. */
+static inline uint16_t fb_to_565_px(fbpx_t p)
+{
+    const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
+    const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
+    const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
+    return (uint16_t)(r | g | b);
+}
+
 /** @brief Converts n ARGB8888 canonical pixels to an RGB565 output row. */
 static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
 {
     for (int i = 0; i < n; i++)
     {
-        const uint32_t p = src[i];
-        const uint16_t r = (uint16_t)(((p >> 16) & 0xF8U) << 8);
-        const uint16_t g = (uint16_t)(((p >> 8) & 0xFCU) << 3);
-        const uint16_t b = (uint16_t)((p & 0xF8U) >> 3);
-        dst[i] = (uint16_t)(r | g | b);
+        dst[i] = fb_to_565_px(src[i]);
     }
 }
 
@@ -121,8 +132,11 @@ static const char* TAG = "er-lcd";
 typedef struct
 {
     esp_lcd_panel_handle_t panel;
-    int w;
-    int h;
+    int w;            /**< Logical (canonical fb) width — what the engine composites into. */
+    int h;            /**< Logical (canonical fb) height. */
+    int pw;           /**< Physical panel width (= w/h swapped for 90/270). */
+    int ph;           /**< Physical panel height. */
+    int rot;          /**< Clockwise display rotation: 0, 90, 180, or 270. */
     fbpx_t* fb;       /**< Canonical framebuffer (PSRAM), w*h. Authoritative full frame. */
     uint16_t* fbp[2]; /**< The panel's two RGB565 framebuffers (double-buffer mode); NULL = copy mode. */
     int back;         /**< Index of the off-screen framebuffer to draw next (double-buffer mode). */
@@ -188,6 +202,73 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dy1 = y + h - 1;
 }
 
+/** @brief Maps a logical (canonical-fb) pixel to its physical (panel) position under the rotation. */
+static inline void rot_point(int lx, int ly, int* px, int* py)
+{
+    switch (s_be.rot)
+    {
+        case 90:
+            *px = s_be.pw - 1 - ly;
+            *py = lx;
+            break;
+        case 180:
+            *px = s_be.pw - 1 - lx;
+            *py = s_be.ph - 1 - ly;
+            break;
+        case 270:
+            *px = ly;
+            *py = s_be.ph - 1 - lx;
+            break;
+        default:
+            *px = lx;
+            *py = ly;
+            break;
+    }
+}
+
+/** @brief Maps a logical box (inclusive) to its physical bounding box (still axis-aligned). */
+static void rot_box(int x0, int y0, int x1, int y1, int* px0, int* py0, int* px1, int* py1)
+{
+    int ax, ay, bx, by;
+    rot_point(x0, y0, &ax, &ay);
+    rot_point(x1, y1, &bx, &by);
+    *px0 = ax < bx ? ax : bx;
+    *py0 = ay < by ? ay : by;
+    *px1 = ax > bx ? ax : bx;
+    *py1 = ay > by ? ay : by;
+}
+
+/**
+ * @brief Writes the logical region [x0..x1]x[y0..y1] of the canonical fb into a physical 565 buffer.
+ *
+ * dst has row stride dst_stride pixels, and its element (0,0) is physical (dst_ox, dst_oy). At 0° this
+ * is the fast per-row 565 copy; otherwise each pixel is placed at its rotated physical position.
+ */
+static void present_region(uint16_t* dst, int dst_stride, int dst_ox, int dst_oy, int x0, int y0, int x1, int y1)
+{
+    if (s_be.rot == 0)
+    {
+        const int rw = x1 - x0 + 1;
+        for (int ly = y0; ly <= y1; ly++)
+        {
+            const fbpx_t* s = s_be.fb + (size_t)ly * s_be.w + x0;
+            uint16_t* o = dst + (size_t)(ly - dst_oy) * dst_stride + (x0 - dst_ox);
+            fb_to_565_row(o, s, rw);
+        }
+        return;
+    }
+    for (int ly = y0; ly <= y1; ly++)
+    {
+        const fbpx_t* s = s_be.fb + (size_t)ly * s_be.w;
+        for (int lx = x0; lx <= x1; lx++)
+        {
+            int px, py;
+            rot_point(lx, ly, &px, &py);
+            dst[(size_t)(py - dst_oy) * dst_stride + (px - dst_ox)] = fb_to_565_px(s[lx]);
+        }
+    }
+}
+
 /**
  * @brief Composites one premultiplied ARGB8888 source pixel over an opaque dst pixel (8-bit precision).
  *
@@ -222,14 +303,29 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sp)
     return 0xFF000000U | (r << 16) | (g << 8) | b;
 }
 
-/** @brief Copies the cached RGB565 overlay on top of a full-frame RGB565 destination buffer. */
+/** @brief Composites the cached RGB565 overlay (logical coords) onto the physical panel buffer. */
 static void blit_overlay(uint16_t* dst)
 {
+    if (s_be.rot == 0)
+    {
+        for (int row = 0; row < s_be.ovh; row++)
+        {
+            const uint16_t* s = s_be.ov_cache + (size_t)row * s_be.ovw;
+            uint16_t* o = dst + (size_t)(s_be.ovy + row) * s_be.pw + s_be.ovx;
+            memcpy(o, s, (size_t)s_be.ovw * sizeof(uint16_t));
+        }
+        return;
+    }
     for (int row = 0; row < s_be.ovh; row++)
     {
+        const int ly = s_be.ovy + row;
         const uint16_t* s = s_be.ov_cache + (size_t)row * s_be.ovw;
-        uint16_t* o = dst + (size_t)(s_be.ovy + row) * s_be.w + s_be.ovx;
-        memcpy(o, s, (size_t)s_be.ovw * sizeof(uint16_t));
+        for (int col = 0; col < s_be.ovw; col++)
+        {
+            int px, py;
+            rot_point(s_be.ovx + col, ly, &px, &py);
+            dst[(size_t)py * s_be.pw + px] = s[col];
+        }
     }
 }
 
@@ -407,18 +503,11 @@ void er_esp32_lcd_present(void)
     if (dbl)
     {
         uint16_t* dst_fb = s_be.fbp[s_be.back];
-        /* App region: emit straight into the off-screen framebuffer (full-width rows). In RGB565 mode
-         * this is a plain 565→565 copy; in ARGB mode it converts. */
+        /* App region: map the logical dirty region into the off-screen panel framebuffer with the
+         * configured rotation (a plain 565→565 row copy at 0°). */
         if (have)
         {
-            const int rw = x1 - x0 + 1;
-            const int rh = y1 - y0 + 1;
-            for (int row = 0; row < rh; row++)
-            {
-                const fbpx_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
-                uint16_t* o = dst_fb + (size_t)(y0 + row) * s_be.w + x0;
-                fb_to_565_row(o, s, rw);
-            }
+            present_region(dst_fb, s_be.pw, 0, 0, x0, y0, x1, y1);
         }
         /* Overlay: re-composite the cached RGB565 panel on top (its own tight region — not unioned
          * into the app's dirty box, so a small corner overlay never enlarges the app flush). */
@@ -426,54 +515,65 @@ void er_esp32_lcd_present(void)
         {
             blit_overlay(dst_fb);
         }
-        /* draw_bitmap flips the whole framebuffer at vsync; the bounds are an informational hint, so
-         * pass the union of the app + overlay regions (the per-region conversions above stay tight). */
-        int bx0 = x0, by0 = y0, bx1 = x1, by1 = y1;
+        /* draw_bitmap bounds are PHYSICAL panel coords: rotate the app + overlay logical boxes and
+         * union them (the per-region writes above stay tight). */
+        int bx0 = s_be.pw, by0 = s_be.ph, bx1 = -1, by1 = -1;
+        if (have)
+        {
+            rot_box(x0, y0, x1, y1, &bx0, &by0, &bx1, &by1);
+        }
         if (s_be.ov_active)
         {
-            const int ox1 = s_be.ovx + s_be.ovw - 1;
-            const int oy1 = s_be.ovy + s_be.ovh - 1;
-            if (!have)
-            {
-                bx0 = s_be.ovx;
-                by0 = s_be.ovy;
-                bx1 = ox1;
-                by1 = oy1;
-            }
-            else
-            {
-                if (s_be.ovx < bx0)
-                    bx0 = s_be.ovx;
-                if (s_be.ovy < by0)
-                    by0 = s_be.ovy;
-                if (ox1 > bx1)
-                    bx1 = ox1;
-                if (oy1 > by1)
-                    by1 = oy1;
-            }
+            int ax, ay, axe, aye;
+            rot_box(s_be.ovx, s_be.ovy, s_be.ovx + s_be.ovw - 1, s_be.ovy + s_be.ovh - 1, &ax, &ay, &axe, &aye);
+            if (ax < bx0)
+                bx0 = ax;
+            if (ay < by0)
+                by0 = ay;
+            if (axe > bx1)
+                bx1 = axe;
+            if (aye > by1)
+                by1 = aye;
         }
         esp_lcd_panel_draw_bitmap(s_be.panel, bx0, by0, bx1 + 1, by1 + 1, dst_fb);
         s_be.back ^= 1;
     }
     else
     {
-        /* Copy mode: pack row-tight into the staging buffer; draw_bitmap copies it into the live fb. */
+        /* Copy mode: pack the (rotated) region row-tight into the staging buffer; draw_bitmap copies it
+         * into the live framebuffer at the physical bounding box. */
         if (have)
         {
-            const int rw = x1 - x0 + 1;
-            const int rh = y1 - y0 + 1;
-            for (int row = 0; row < rh; row++)
-            {
-                const fbpx_t* s = s_be.fb + (size_t)(y0 + row) * s_be.w + x0;
-                uint16_t* o = s_be.line + (size_t)row * rw;
-                fb_to_565_row(o, s, rw);
-            }
-            esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, s_be.line);
+            int px0, py0, px1, py1;
+            rot_box(x0, y0, x1, y1, &px0, &py0, &px1, &py1);
+            present_region(s_be.line, px1 - px0 + 1, px0, py0, x0, y0, x1, y1);
+            esp_lcd_panel_draw_bitmap(s_be.panel, px0, py0, px1 + 1, py1 + 1, s_be.line);
         }
         if (s_be.ov_active)
         {
-            esp_lcd_panel_draw_bitmap(
-                s_be.panel, s_be.ovx, s_be.ovy, s_be.ovx + s_be.ovw, s_be.ovy + s_be.ovh, s_be.ov_cache);
+            if (s_be.rot == 0)
+            {
+                esp_lcd_panel_draw_bitmap(
+                    s_be.panel, s_be.ovx, s_be.ovy, s_be.ovx + s_be.ovw, s_be.ovy + s_be.ovh, s_be.ov_cache);
+            }
+            else
+            {
+                int px0, py0, px1, py1;
+                rot_box(s_be.ovx, s_be.ovy, s_be.ovx + s_be.ovw - 1, s_be.ovy + s_be.ovh - 1, &px0, &py0, &px1, &py1);
+                const int pbw = px1 - px0 + 1;
+                for (int row = 0; row < s_be.ovh; row++)
+                {
+                    const int ly = s_be.ovy + row;
+                    const uint16_t* s = s_be.ov_cache + (size_t)row * s_be.ovw;
+                    for (int col = 0; col < s_be.ovw; col++)
+                    {
+                        int px, py;
+                        rot_point(s_be.ovx + col, ly, &px, &py);
+                        s_be.line[(size_t)(py - py0) * pbw + (px - px0)] = s[col];
+                    }
+                }
+                esp_lcd_panel_draw_bitmap(s_be.panel, px0, py0, px1 + 1, py1 + 1, s_be.line);
+            }
         }
     }
 }
@@ -541,11 +641,20 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
  - Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height)
+bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height, int rotation)
 {
+    if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270)
+    {
+        ESP_LOGE(TAG, "invalid rotation %d (must be 0/90/180/270)", rotation);
+        return false;
+    }
     s_be.panel = panel;
-    s_be.w = width;
+    s_be.w = width; /* logical (canonical fb) */
     s_be.h = height;
+    s_be.rot = rotation;
+    /* Physical panel size = logical with width/height swapped for 90/270. */
+    s_be.pw = (rotation == 90 || rotation == 270) ? height : width;
+    s_be.ph = (rotation == 90 || rotation == 270) ? width : height;
     s_be.dx0 = width;
     s_be.dy0 = height;
     s_be.dx1 = -1;
@@ -604,9 +713,12 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     embedded_renderer_set_backend(&backend);
 
     ESP_LOGI(TAG,
-             "LCD backend ready: %dx%d, canonical fb %s (%d KB PSRAM)",
+             "LCD backend ready: logical %dx%d, panel %dx%d, rotation %d°, canonical fb %s (%d KB PSRAM)",
              width,
              height,
+             s_be.pw,
+             s_be.ph,
+             rotation,
              ER_LCD_FB_RGB565 ? "RGB565" : "ARGB8888",
              (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
     return true;

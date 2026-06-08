@@ -36,9 +36,44 @@
 
 static const char* TAG = "embedded-react";
 
-/* Waveshare ESP32-S3-Touch-LCD-7 panel resolution. The app sizes its root from `screen`. */
-#define SCREEN_W 800
-#define SCREEN_H 480
+/* Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. The panel is physically BOARD_LCD_WIDTH ×
+   BOARD_LCD_HEIGHT (800×480); for 90/270 the LOGICAL screen the app renders into is the swap (480×800,
+   a portrait UI). The backend maps logical→physical at present; touch is remapped by the inverse. */
+#ifndef ER_DISPLAY_ROTATION
+#define ER_DISPLAY_ROTATION 0
+#endif
+
+/* Logical screen the app sizes its root from (`screen` global) — panel size, swapped for 90/270. */
+#if (ER_DISPLAY_ROTATION == 90) || (ER_DISPLAY_ROTATION == 270)
+#define SCREEN_W BOARD_LCD_HEIGHT
+#define SCREEN_H BOARD_LCD_WIDTH
+#else
+#define SCREEN_W BOARD_LCD_WIDTH
+#define SCREEN_H BOARD_LCD_HEIGHT
+#endif
+
+/** @brief Remaps a physical (panel) touch point to logical (app) coords by the inverse rotation. */
+static void remap_touch(int* x, int* y)
+{
+    const int px = *x, py = *y;
+    switch (ER_DISPLAY_ROTATION)
+    {
+        case 90:
+            *x = py;
+            *y = BOARD_LCD_WIDTH - 1 - px;
+            break;
+        case 180:
+            *x = BOARD_LCD_WIDTH - 1 - px;
+            *y = BOARD_LCD_HEIGHT - 1 - py;
+            break;
+        case 270:
+            *x = BOARD_LCD_HEIGHT - 1 - py;
+            *y = px;
+            break;
+        default:
+            break;
+    }
+}
 
 /* QuickJS stack-overflow guard. Kept below the main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE,
    set large in sdkconfig.defaults) so deep React/QuickJS recursion is caught before it corrupts the
@@ -294,7 +329,7 @@ static void run_app(void)
        stack still runs (and logs why) over UART. */
     esp_lcd_panel_handle_t panel = NULL;
     const bool display =
-        board_display_init(&panel) && er_esp32_lcd_backend_init(panel, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+        board_display_init(&panel) && er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION);
     if (display)
     {
         ESP_LOGI(TAG, "display backend active");
@@ -372,6 +407,7 @@ static void run_app(void)
             bool pressed = false;
             if (board_touch_read(&tx, &ty, &pressed))
             {
+                remap_touch(&tx, &ty); /* physical panel coords -> logical (rotated) app coords */
                 if (pressed)
                 {
                     embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);

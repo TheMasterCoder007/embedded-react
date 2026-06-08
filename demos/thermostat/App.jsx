@@ -75,6 +75,8 @@ function statusFor(mode, value, current) {
 // ----------------------------------------------------------------------------------------------------
 const SW = (typeof screen !== 'undefined' && screen.width) || 800;
 const compact = SW < 400;
+// Wide enough to place the thermostat + weather panel side by side (else stack them, e.g., in portrait).
+const wide = !compact && SW >= 760;
 
 // Font sizes snap to the engine's baked Inter sizes (10/12/16/20/24/32/48), so pick from that set.
 const SZ = compact
@@ -337,14 +339,26 @@ export function App() {
     </View>
   );
 
-  // Wide screens (e.g. the 800×480 panel) place the thermostat on the left and the weather panel on the
-  // right; the narrow layout drops the weather panel and just shows the thermostat.
+  // Three layouts from the logical screen size:
+  //   compact (<400, e.g., a small portrait panel): thermostat only.
+  //   wide   (>=760, the 800×480 landscape panel): thermostat + weather side by side.
+  //   else   (e.g., 480×800 portrait via 90° rotation): the two stacked vertically.
   if (compact) {
     return <View style={styles.root}>{thermostat}</View>;
   }
+  if (wide) {
+    return (
+      <View style={styles.root}>
+        <View style={styles.row}>
+          {thermostat}
+          <WeatherPanel />
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.root}>
-      <View style={styles.row}>
+      <View style={styles.stack}>
         {thermostat}
         <WeatherPanel />
       </View>
@@ -363,6 +377,8 @@ const styles = StyleSheet.create({
   },
   // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
   row: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start' },
+  // Portrait/stacked layout: the thermostat over the weather panel, centered.
+  stack: { gap: GAP, alignItems: 'center' },
   thermo: { width: compact ? '100%' : 400, gap: GAP },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   pill: {
@@ -402,9 +418,9 @@ const styles = StyleSheet.create({
   modeIdle: { borderWidth: 1, borderColor: theme.modeBorder },
   modeActive: { backgroundColor: theme.modeActiveBg },
 
-  // --- Weather panel (right column) ---
+  // --- Weather panel (right column when wide; below the thermostat when stacked) ---
   weatherCard: {
-    width: 344,
+    width: wide ? 344 : 400,
     backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.cardBorder,

@@ -35,3 +35,8 @@ idf_component_register(
 # metric gathering on ER_PERF_OVERLAY; the engine component sets the same flag so the renderer draws
 # the panel. Set here too so the host wiring is enabled regardless of requirement propagation order.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=1)
+
+# Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. Change this for a differently-mounted panel;
+# 0 (the default) is the fast path (a plain framebuffer copy at present). 90/270 give a portrait UI on
+# the landscape panel; the thermostat demo stacks its layout for the narrower width.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_DISPLAY_ROTATION=0)
