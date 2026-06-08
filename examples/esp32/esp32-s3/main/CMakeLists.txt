@@ -18,18 +18,32 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/app.bundle.qbc")
         "    3) er-bridge-quickjs-compile bridges/quickjs/js/dist/app.bundle.js examples/esp32/esp32-s3/main/app.bundle.qbc")
 endif()
 
-# The thermostat demo's baked weather icons (premultiplied ARGB8888 in flash). image_data.c is a
-# generated artifact (tools/image-converter/gen_image.py); main.c calls er_register_baked_images() at
-# boot to hand its buffers to the engine image registry.
-set(ER_DEMO_ASSETS "${CMAKE_CURRENT_LIST_DIR}/../../../../demos/thermostat/assets")
+# Baked assets (images + fonts) the active demo imports, as premultiplied ARGB8888 / BitmapFont data
+# in flash. assets.generated.c is produced by `npm run build` (step 1 above) into
+# bridges/quickjs/js/dist and exposes er_register_assets(), which main.c calls at boot. Like the
+# bytecode it's a generated artifact, not committed; compile it when present and define
+# ER_HAVE_BAKED_ASSETS so main.c makes the call.
+set(ER_GENERATED_ASSETS "${CMAKE_CURRENT_LIST_DIR}/../../../../bridges/quickjs/js/dist/assets.generated.c")
+set(ER_GENERATED_ASSETS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../bridges/quickjs/js/dist")
+
+set(ER_MAIN_SRCS "main.c" "board.c")
+set(ER_MAIN_INCS ".")
+if(EXISTS "${ER_GENERATED_ASSETS}")
+    list(APPEND ER_MAIN_SRCS "${ER_GENERATED_ASSETS}")
+    list(APPEND ER_MAIN_INCS "${ER_GENERATED_ASSETS_DIR}")
+endif()
 
 idf_component_register(
-    SRCS "main.c" "board.c" "${ER_DEMO_ASSETS}/image_data.c"
-    INCLUDE_DIRS "." "${ER_DEMO_ASSETS}"
+    SRCS ${ER_MAIN_SRCS}
+    INCLUDE_DIRS ${ER_MAIN_INCS}
     REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
     EMBED_FILES "app.bundle.qbc"
 )
+
+if(EXISTS "${ER_GENERATED_ASSETS}")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HAVE_BAKED_ASSETS=1)
+endif()
 
 # Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side
 # metric gathering on ER_PERF_OVERLAY; the engine component sets the same flag so the renderer draws

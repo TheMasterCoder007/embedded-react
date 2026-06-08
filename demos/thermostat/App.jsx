@@ -1,8 +1,8 @@
 import { useState, useRef, useMemo, useCallback, memo } from 'react';
 import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
-// Weather icons — the bundler's image plugin turns each import into its baked asset name (the PNG's
-// basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. The actual
-// pixels are baked separately into assets/image_data.c (tools/image-converter/gen_image.py).
+// Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
+// basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
+// build` decodes the PNGs and emits them into dist/assets.generated.c (er_register_assets()).
 import wxSun from './assets/wx_sun.png';
 import wxCloud from './assets/wx_cloud.png';
 import wxPartly from './assets/wx_partly.png';
