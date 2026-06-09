@@ -26,6 +26,7 @@ typedef struct
     const char* title; /**< Window title (NULL → a default). */
     int width;         /**< Logical window width in pixels. */
     int height;        /**< Logical window height in pixels. */
+    bool persist;      /**< Install __erPersist so usePersistentState survives reload (simulator only). */
 } ErHostConfig;
 
 /**
@@ -43,6 +44,7 @@ typedef struct
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
     bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
+    bool persist_enabled;          /**< Mirror of ErHostConfig.persist; installs the __erPersist global. */
     uint32_t prev_ticks;           /**< SDL_GetTicks() at the previous frame, for the tick delta. */
 } ErHost;
 
@@ -98,6 +100,14 @@ bool er_host_reload(ErHost* host, const char* explicit_path);
  * @param[in] host  Started host with a live context.
  */
 void er_host_show_error(ErHost* host);
+
+/**
+ * @brief Clears the persisted-state store backing usePersistentState (simulator only).
+ *
+ * Call before a reload to drop preserved state and remount the app fresh (the simulator's manual
+ * reload, R). A no-op when persistence was never enabled.
+ */
+void er_host_clear_persist(void);
 
 /**
  * @brief Scales a logical SDL input coordinate to physical framebuffer pixels.

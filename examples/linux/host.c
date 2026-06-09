@@ -281,6 +281,110 @@ static bool host_run(JSContext* ctx, const char* src, size_t len, const char* na
     return host_report(ctx, result);
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — persisted state (usePersistentState across simulator reloads)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Maximum number of distinct usePersistentState keys retained across reloads. */
+#define ER_PERSIST_MAX 64
+
+/**
+ * @brief key → JSON-value store that outlives the QuickJS context, so usePersistentState restores its
+ *        value after a live reload (the context, and thus all JS state, is recreated on reload).
+ */
+static struct
+{
+    char* key;
+    char* val;
+} s_persist[ER_PERSIST_MAX];
+static int s_persist_count = 0;
+
+/** @brief Heap-duplicates a C string; returns NULL on allocation failure. */
+static char* persist_dup(const char* s)
+{
+    const size_t n = strlen(s) + 1;
+    char* d = (char*)malloc(n);
+    if (d)
+    {
+        memcpy(d, s, n);
+    }
+    return d;
+}
+
+/** @brief __erPersist.get(key) → the stored JSON string, or undefined if the key is unset. */
+static JSValue js_persist_get(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    const char* key = JS_ToCString(ctx, argv[0]);
+    if (!key)
+    {
+        return JS_UNDEFINED;
+    }
+    JSValue r = JS_UNDEFINED;
+    for (int i = 0; i < s_persist_count; i++)
+    {
+        if (s_persist[i].val && strcmp(s_persist[i].key, key) == 0)
+        {
+            r = JS_NewString(ctx, s_persist[i].val);
+            break;
+        }
+    }
+    JS_FreeCString(ctx, key);
+    return r;
+}
+
+/** @brief __erPersist.set(key, jsonString) → stores it, replacing any prior value for the key. */
+static JSValue js_persist_set(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    const char* key = JS_ToCString(ctx, argv[0]);
+    const char* val = JS_ToCString(ctx, argv[1]);
+    if (key && val)
+    {
+        int idx = -1;
+        for (int i = 0; i < s_persist_count; i++)
+        {
+            if (strcmp(s_persist[i].key, key) == 0)
+            {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0 && s_persist_count < ER_PERSIST_MAX)
+        {
+            idx = s_persist_count++;
+            s_persist[idx].key = persist_dup(key);
+            s_persist[idx].val = NULL;
+        }
+        if (idx >= 0 && s_persist[idx].key)
+        {
+            free(s_persist[idx].val);
+            s_persist[idx].val = persist_dup(val);
+        }
+    }
+    if (key)
+    {
+        JS_FreeCString(ctx, key);
+    }
+    if (val)
+    {
+        JS_FreeCString(ctx, val);
+    }
+    return JS_UNDEFINED;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — globals install
+ ---------------------------------------------------------------------------------------------------------------------*/
+
 /**
  * @brief Creates a fresh QuickJS context on the host's runtime and installs console, screen, and the
  *        NativeUI bridge. Used at startup and on every live reload.
@@ -293,6 +397,19 @@ static void host_install_globals(ErHost* host)
     host_install_console(host->ctx);
     host_install_screen(host->ctx, host->phys_w, host->phys_h, host->dpi_scale);
     er_bridge_install(host->ctx);
+
+    /* Simulator only: expose __erPersist so usePersistentState can survive a reload. The store is
+     * host-side C state (s_persist) that outlives the recreated context. On a device this global is
+     * absent and usePersistentState falls back to plain useState. */
+    if (host->persist_enabled)
+    {
+        JSValue global = JS_GetGlobalObject(host->ctx);
+        JSValue persist = JS_NewObject(host->ctx);
+        JS_SetPropertyStr(host->ctx, persist, "get", JS_NewCFunction(host->ctx, js_persist_get, "get", 1));
+        JS_SetPropertyStr(host->ctx, persist, "set", JS_NewCFunction(host->ctx, js_persist_set, "set", 2));
+        JS_SetPropertyStr(host->ctx, global, "__erPersist", persist);
+        JS_FreeValue(host->ctx, global);
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -302,6 +419,7 @@ static void host_install_globals(ErHost* host)
 bool er_host_start(const ErHostConfig* cfg, ErHost* host)
 {
     memset(host, 0, sizeof(*host));
+    host->persist_enabled = cfg->persist;
 
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -376,6 +494,18 @@ bool er_host_reload(ErHost* host, const char* explicit_path)
     er_reset();
     host_install_globals(host);
     return er_host_load_app(host, explicit_path);
+}
+
+void er_host_clear_persist(void)
+{
+    for (int i = 0; i < s_persist_count; i++)
+    {
+        free(s_persist[i].key);
+        free(s_persist[i].val);
+        s_persist[i].key = NULL;
+        s_persist[i].val = NULL;
+    }
+    s_persist_count = 0;
 }
 
 void er_host_show_error(ErHost* host)

@@ -185,4 +185,7 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
 - ✅ **Bytecode + assets + `useAnimatedValue`.** The build compiles the bundle to a `.qbc` bytecode
   blob (the MCU load path) and bakes imported images/fonts to flash-resident C; `useAnimatedValue` is
   exported. Runs end-to-end on the desktop host and on ESP32-S3 hardware.
+- ✅ **`usePersistentState`** — a `useState` whose value survives the simulator's hot reload (kept via
+  a host-side store), so you don't lose your screen/form on every save. On a device it's exactly
+  `useState`, so the same app code runs everywhere. Press R in the sim to reset. See `/SIMULATOR.md`.
 - ⏳ **`create-embedded-react` scaffold** — the project-init CLI is still to come (§4).

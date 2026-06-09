@@ -5,10 +5,10 @@ way you'd run a React Native app, that **hot-reloads your code as you edit it**.
 developer-experience counterpart to Flow A (see [PLAN.md](PLAN.md)) — the runtime exists; this is
 about the edit→see loop.
 
-> Status: **Phases 0, 1, 2 shipped.** `npm run sim` runs the simulator with file-watch + full-remount
-> hot reload (JS **and** images/fonts), an RN-redbox error overlay, and an R reload key. Still ahead:
-> Fast Refresh (3, state-preserving) and on-device hot reload (4). See **Running it** and the phase
-> table.
+> Status: **Phases 0, 1, 2, 3 shipped.** `npm run sim` runs the simulator with file-watch +
+> full-remount hot reload (JS **and** images/fonts), an RN-redbox error overlay, an R reload key, and
+> opt-in **`usePersistentState`** that survives reloads. Still ahead: on-device hot reload (4). See
+> **Running it** and the phase table.
 
 ## Running it
 
@@ -104,7 +104,10 @@ a socket transport can be layered on later (Phase 4) without reworking the host.
 - **Fast Refresh (state-preserving HMR)** — needs the `react-refresh` runtime + Metro-style
   module-boundary HMR. Much larger; matches BRIDGE.md's "Hot reload / Fast Refresh — post-slice."
 
-**Plan:** live reload first; Fast Refresh is Phase 3.
+**Resolved:** live reload (full remount) is the model. Rather than full Fast Refresh (module HMR +
+react-refresh — large, with real embedded-QuickJS risk), Phase 3 shipped **opt-in state
+preservation**: a `usePersistentState` hook whose value survives the remount via a host-side store.
+Full Fast Refresh remains a possible future upgrade.
 
 ### 3. Asset hot reload — baked vs runtime-loaded
 
@@ -152,7 +155,7 @@ engine's static state safely.
 | **1 — MVP** | `tools/simulator/` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Backed by `er_reset()` (engine) + handle-table reset (bridge) + `er_host_reload()` (host). | ✅ done |
 | **2a** | In-window **error overlay** (RN redbox) for uncaught JS exceptions; **manual reload key** (R). | ✅ done |
 | **2b** | Runtime asset loading (image/font hot reload) via a binary **ERPK pack**: the JS bakers emit `dist/assets.pack`, the sim host loads it (`asset_pack.c`) and re-registers on change. Fonts identical to device. | ✅ done |
-| **3** | React **Fast Refresh** (state-preserving) via `react-refresh` + module HMR in the bundler. | ☐ |
+| **3** | **State preservation across reload** — opt-in `usePersistentState` hook (kept across saves via a host-side `__erPersist` store; plain `useState` on a device). Chosen over full Fast Refresh (module HMR + react-refresh) for a far better value/effort ratio + no embedded-QuickJS HMR risk. | ✅ done |
 | **4** | **On-device hot reload** — dev-server/socket transport pushing bytecode to the ESP32 over serial / Wi-Fi (the "later luxury"). | ☐ |
 
 The reload primitive is **`er_reset()`** (public, `er_scene.h`): it empties the node pool, root, and

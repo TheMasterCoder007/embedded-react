@@ -60,7 +60,7 @@ int main(int argc, char** argv)
     const char* app_path = argv[1];
     const char* pack_path = argc > 2 ? argv[2] : NULL;
 
-    const ErHostConfig cfg = {"embedded-react — simulator", 800, 600};
+    const ErHostConfig cfg = {"embedded-react — simulator", 800, 600, /*persist=*/true};
     ErHost host;
     if (!er_host_start(&cfg, &host))
     {
@@ -89,12 +89,14 @@ int main(int argc, char** argv)
     {
         bool do_reload = false;
 
-        /* Manual reload (R key, handled by the host). */
+        /* Manual reload (R key): a "hard" reload that also drops persisted state, so the app remounts
+         * fresh. (A save-triggered reload below keeps usePersistentState across the edit.) */
         if (host.reload_requested)
         {
             host.reload_requested = false;
+            er_host_clear_persist();
             do_reload = true;
-            SDL_Log("manual reload");
+            SDL_Log("manual reload (state reset)");
         }
 
         /* File-watch: poll the bundle and the asset pack periodically. */
