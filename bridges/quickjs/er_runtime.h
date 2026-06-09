@@ -68,6 +68,35 @@ bool er_runtime_init(const ErRuntimeConfig* cfg);
  */
 JSContext* er_runtime_context(void);
 
+/** @brief Result of er_runtime_load_container (see er_runtime_container_status_str). */
+typedef enum
+{
+    ER_CONTAINER_OK = 0,      /**< Loaded and the app ran. */
+    ER_CONTAINER_BAD_MAGIC,   /**< Not an ERCF container. */
+    ER_CONTAINER_BAD_VERSION, /**< Unsupported container format version (or malformed structure). */
+    ER_CONTAINER_BAD_CRC,     /**< Integrity check failed — corrupt or partially written. */
+    ER_CONTAINER_BAD_QJS,     /**< Built for a different QuickJS version than this firmware. */
+    ER_CONTAINER_LOAD_FAILED, /**< No bytecode section, or the app threw on evaluation. */
+} ErContainerStatus;
+
+/**
+ * @brief Loads an ERCF config container: verifies its CRC + QuickJS version, registers its asset pack,
+ *        then evaluates its bytecode (and pumps).
+ *
+ * The universal "load a config" path — desktop, embedded bin, or a flash/config region on a device.
+ * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. On any
+ * failure the engine is left as it was (call er_runtime_reset first if replacing a running app).
+ *
+ * @param[in] buf  Container bytes (ERCF; caller-owned, must stay live).
+ * @param[in] len  Byte length.
+ *
+ * @return ER_CONTAINER_OK, or a specific failure the caller can log/show.
+ */
+ErContainerStatus er_runtime_load_container(const void* buf, size_t len);
+
+/** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
+const char* er_runtime_container_status_str(ErContainerStatus status);
+
 /**
  * @brief Evaluates an app from a compiled QuickJS bytecode blob (JS_ReadObject), then pumps once.
  *

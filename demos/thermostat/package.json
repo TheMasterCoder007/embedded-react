@@ -4,6 +4,7 @@
   "description": "embedded-react thermostat demo — run the simulator (hot reload) or build the bundle from here.",
   "scripts": {
     "sim": "node ../../bridges/quickjs/js/sim.mjs thermostat",
-    "build": "node ../../bridges/quickjs/js/build.mjs thermostat"
+    "build": "node ../../bridges/quickjs/js/build.mjs thermostat",
+    "pack": "node ../../bridges/quickjs/js/pack-container.mjs thermostat"
   }
 }

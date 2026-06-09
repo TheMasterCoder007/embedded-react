@@ -9,12 +9,21 @@
 
 #include "er_runtime.h"
 
+#include "er_assets.h"        /* er_assets_load_pack (ERPK asset section of the container) */
 #include "er_scene.h"         /* er_reset */
 #include "native_ui_bridge.h" /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/**
+ * @brief QuickJS release this build is bytecode-compatible with — MUST match the FetchContent pin in
+ *        bridges/quickjs/CMakeLists.txt and the tag the packager stamps into the container. A config
+ *        built for a different QuickJS is rejected (ER_CONTAINER_BAD_QJS) rather than run as garbage.
+ */
+#define ER_QUICKJS_TAG "v0.15.0"
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private (single-instance, like the engine + bridge)
@@ -333,6 +342,132 @@ bool er_runtime_load_bytecode(const void* buf, size_t len)
         er_bridge_pump(s_ctx);
     }
     return ok;
+}
+
+/* --- ERCF config container ------------------------------------------------------------------------
+ * Layout (little-endian): "ERCF" | format_version u32 | crc32 u32 (over everything after it) |
+ *   qjs_tag (u16 len + bytes) | section_count u32 | sections[ type u32 | len u32 | bytes ]
+ * Section types: 1 = QuickJS bytecode, 2 = ERPK asset pack. */
+
+static uint16_t rd_le16(const uint8_t* p)
+{
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static uint32_t rd_le32(const uint8_t* p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/** @brief Standard CRC-32 (IEEE / zlib polynomial 0xEDB88320), branchless inner loop. */
+static uint32_t crc32_bytes(const uint8_t* p, size_t n)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++)
+    {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++)
+        {
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1u)));
+        }
+    }
+    return ~crc;
+}
+
+const char* er_runtime_container_status_str(ErContainerStatus status)
+{
+    switch (status)
+    {
+        case ER_CONTAINER_OK:
+            return "ok";
+        case ER_CONTAINER_BAD_MAGIC:
+            return "not an ERCF container";
+        case ER_CONTAINER_BAD_VERSION:
+            return "unsupported or malformed container";
+        case ER_CONTAINER_BAD_CRC:
+            return "CRC mismatch (corrupt or partially written)";
+        case ER_CONTAINER_BAD_QJS:
+            return "built for a different QuickJS version";
+        case ER_CONTAINER_LOAD_FAILED:
+            return "app load failed";
+        default:
+            return "unknown";
+    }
+}
+
+ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
+{
+    const uint8_t* buf = (const uint8_t*)vbuf;
+    if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
+    {
+        return ER_CONTAINER_BAD_MAGIC;
+    }
+    if (rd_le32(buf + 4) != 1u)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    if (rd_le32(buf + 8) != crc32_bytes(buf + 12, len - 12u))
+    {
+        return ER_CONTAINER_BAD_CRC;
+    }
+
+    size_t off = 12u;
+    if (off + 2u > len)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    const uint16_t tlen = rd_le16(buf + off);
+    off += 2u;
+    if (off + tlen > len)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    if (tlen != strlen(ER_QUICKJS_TAG) || memcmp(buf + off, ER_QUICKJS_TAG, tlen) != 0)
+    {
+        return ER_CONTAINER_BAD_QJS;
+    }
+    off += tlen;
+    if (off + 4u > len)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    const uint32_t nsec = rd_le32(buf + off);
+    off += 4u;
+
+    /* Register asset sections as we encounter them (so <Image>/<Text> resolve when the app mounts);
+     * defer the bytecode so it runs last regardless of section order. */
+    const uint8_t* bytecode = NULL;
+    uint32_t bytecode_len = 0;
+    for (uint32_t i = 0; i < nsec; i++)
+    {
+        if (off + 8u > len)
+        {
+            return ER_CONTAINER_BAD_VERSION;
+        }
+        const uint32_t type = rd_le32(buf + off);
+        const uint32_t slen = rd_le32(buf + off + 4u);
+        off += 8u;
+        if (off + slen > len)
+        {
+            return ER_CONTAINER_BAD_VERSION;
+        }
+        const uint8_t* sdata = buf + off;
+        off += slen;
+        if (type == 2u)
+        {
+            er_assets_load_pack(sdata, slen);
+        }
+        else if (type == 1u)
+        {
+            bytecode = sdata;
+            bytecode_len = slen;
+        }
+    }
+    if (!bytecode)
+    {
+        return ER_CONTAINER_LOAD_FAILED;
+    }
+    return er_runtime_load_bytecode(bytecode, bytecode_len) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
 }
 
 bool er_runtime_load_source(const char* src, size_t len, const char* name)

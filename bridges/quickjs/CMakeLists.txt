@@ -66,7 +66,7 @@ endforeach ()
 # core (er_runtime.c: context lifecycle, console/screen/persist globals, load/pump/reset/error). Hosts
 # (desktop, MCU firmware) build on er_runtime with a few lines of glue — see er_runtime.h.
 # ---------------------------------------------------------------------------
-add_library(er-bridge-quickjs STATIC native_ui_bridge.c er_runtime.c)
+add_library(er-bridge-quickjs STATIC native_ui_bridge.c er_runtime.c er_assets.c)
 
 target_link_libraries(er-bridge-quickjs
         PUBLIC

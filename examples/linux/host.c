@@ -123,6 +123,19 @@ static bool is_bytecode_path(const char* path)
     return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
 }
 
+/**
+ * @brief Returns true when a path ends in ".erpkg" (an ERCF config container).
+ *
+ * @param[in] path  File path.
+ *
+ * @return true for a container path.
+ */
+static bool is_container_path(const char* path)
+{
+    const size_t n = strlen(path);
+    return n >= 6 && strcmp(path + n - 6, ".erpkg") == 0;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -207,16 +220,18 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
 {
     (void)host;
     /* Choose the app to run, in priority order:
-     *   1. an explicit path (.qbc = bytecode, else source),
-     *   2. the compiled bytecode bundle (app.bundle.qbc) next to the executable — the MCU load path,
-     *   3. the source bundle (app.bundle.js) next to the executable,
-     *   4. the built-in fallback JS app.
+     *   1. an explicit path (.erpkg = config container, .qbc = bytecode, else source),
+     *   2. a config container (app.erpkg) next to the executable — the universal "a config" path,
+     *   3. the compiled bytecode bundle (app.bundle.qbc) next to the executable,
+     *   4. the source bundle (app.bundle.js) next to the executable,
+     *   5. the built-in fallback JS app.
      */
     char* loaded = NULL;
     const char* app_src = k_default_app;
     size_t app_len = strlen(k_default_app);
     const char* app_name = "<builtin-app>";
     bool app_bytecode = false;
+    bool app_container = false;
 
     if (explicit_path)
     {
@@ -227,6 +242,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
             app_src = loaded;
             app_len = len;
             app_name = explicit_path;
+            app_container = is_container_path(explicit_path);
             app_bytecode = is_bytecode_path(explicit_path);
         }
         else
@@ -241,37 +257,63 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
         {
             char path[1024];
             size_t len = 0;
-            /* Prefer the compiled bytecode blob (no parser, faster boot) over the source bundle. */
-            snprintf(path, sizeof(path), "%sapp.bundle.qbc", base);
+            /* Prefer a config container (bytecode + its assets in one verified blob), then the bare
+               bytecode blob (no parser, faster boot than source), then the source bundle. */
+            snprintf(path, sizeof(path), "%sapp.erpkg", base);
             loaded = read_file(path, &len);
             if (loaded)
             {
                 app_src = loaded;
                 app_len = len;
-                app_name = "app.bundle.qbc";
-                app_bytecode = true;
+                app_name = "app.erpkg";
+                app_container = true;
             }
             else
             {
-                snprintf(path, sizeof(path), "%sapp.bundle.js", base);
+                snprintf(path, sizeof(path), "%sapp.bundle.qbc", base);
                 loaded = read_file(path, &len);
                 if (loaded)
                 {
                     app_src = loaded;
                     app_len = len;
-                    app_name = "app.bundle.js";
+                    app_name = "app.bundle.qbc";
+                    app_bytecode = true;
+                }
+                else
+                {
+                    snprintf(path, sizeof(path), "%sapp.bundle.js", base);
+                    loaded = read_file(path, &len);
+                    if (loaded)
+                    {
+                        app_src = loaded;
+                        app_len = len;
+                        app_name = "app.bundle.js";
+                    }
                 }
             }
             SDL_free(base);
         }
     }
 
-    /* Make the chosen path explicit — otherwise a silent fall-back from bytecode to source (e.g.
-       the precompiler wasn't built, so app.bundle.qbc is missing) looks identical at runtime. */
-    SDL_Log("running %s (%s)", app_name, app_bytecode ? "bytecode" : "source");
+    /* Make the chosen path explicit — otherwise a silent fall-back (e.g. the precompiler wasn't built,
+       so app.bundle.qbc is missing) looks identical at runtime. */
+    SDL_Log("running %s (%s)", app_name, app_container ? "container" : app_bytecode ? "bytecode" : "source");
 
-    const bool ok =
-        app_bytecode ? er_runtime_load_bytecode(app_src, app_len) : er_runtime_load_source(app_src, app_len, app_name);
+    bool ok;
+    if (app_container)
+    {
+        /* The container buffer is referenced (asset pixels/font bitmaps point into it), so it must
+           outlive the app — keep `loaded` alive deliberately (this host runs one app per process; a
+           reload re-reads the file). */
+        const ErContainerStatus st = er_runtime_load_container(app_src, app_len);
+        if (st != ER_CONTAINER_OK)
+        {
+            SDL_Log("config rejected: %s", er_runtime_container_status_str(st));
+        }
+        ok = (st == ER_CONTAINER_OK);
+        return ok; /* intentionally not freeing `loaded` */
+    }
+    ok = app_bytecode ? er_runtime_load_bytecode(app_src, app_len) : er_runtime_load_source(app_src, app_len, app_name);
     free(loaded);
     return ok;
 }
