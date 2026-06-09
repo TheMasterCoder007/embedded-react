@@ -10,9 +10,10 @@
 import { context } from 'esbuild';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, resolve, basename } from 'node:path';
+import { dirname, resolve, basename, relative } from 'node:path';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { bakeAssetPack } from './assets/index.mjs';
+import { transformPersist } from './persist-transform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
@@ -111,6 +112,18 @@ const ctx = await context({
         b.onStart(() => {
           images.clear();
           fonts.clear();
+        });
+        // App files only (not the library/React): rewrite useState → a persisting helper so state
+        // survives reload transparently. Library/node_modules files fall through to esbuild untouched.
+        b.onLoad({ filter: /\.(jsx?|tsx?)$/ }, (args) => {
+          const norm = args.path.replace(/\\/g, '/');
+          if (!norm.startsWith(demoDir.replace(/\\/g, '/'))) return undefined; // not app code
+          try {
+            const code = transformPersist(readFileSync(args.path, 'utf8'), relative(demoDir, args.path).replace(/\\/g, '/'));
+            return { contents: code, loader: 'jsx' };
+          } catch (e) {
+            return { errors: [{ text: `persist transform: ${e.message}` }] };
+          }
         });
         b.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
           const name = assetName(args.path);

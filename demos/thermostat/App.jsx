@@ -1,17 +1,5 @@
 import { useState, useRef, useMemo, useCallback, memo } from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  Image,
-  StyleSheet,
-  Svg,
-  Circle,
-  Arc,
-  updateVector,
-  updateText,
-  usePersistentState,
-} from 'embedded-react';
+import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
 // Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
 // basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
 // build` decodes the PNGs and emits them into dist/assets.generated.c (er_register_assets()).
@@ -316,10 +304,8 @@ const Header = memo(function Header() {
 // App
 // ----------------------------------------------------------------------------------------------------
 export function App() {
-  // usePersistentState keeps the dragged target + mode across simulator hot reloads (it's plain
-  // useState on a device). Press R in the sim to reset to the defaults.
-  const [value, setValue] = usePersistentState('value', 70); // default target (°F); a float once dragged
-  const [mode, setMode] = usePersistentState('mode', 'heat'); // default mode
+  const [value, setValue] = useState(70); // default target (°F); a float once dragged
+  const [mode, setMode] = useState('heat'); // default mode
 
   const color = useMemo(() => MODES.find((m) => m.key === mode).color, [mode]);
 

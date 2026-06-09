@@ -7,8 +7,8 @@ about the edit→see loop.
 
 > Status: **Phases 0, 1, 2, 3 shipped.** `npm run sim` runs the simulator with file-watch +
 > full-remount hot reload (JS **and** images/fonts), an RN-redbox error overlay, an R reload key, and
-> opt-in **`usePersistentState`** that survives reloads. Still ahead: on-device hot reload (4). See
-> **Running it** and the phase table.
+> **transparent state preservation** — plain `useState` survives a reload (a sim-only build
+> transform). Still ahead: on-device hot reload (4). See **Running it** and the phase table.
 
 ## Running it
 
@@ -105,9 +105,11 @@ a socket transport can be layered on later (Phase 4) without reworking the host.
   module-boundary HMR. Much larger; matches BRIDGE.md's "Hot reload / Fast Refresh — post-slice."
 
 **Resolved:** live reload (full remount) is the model. Rather than full Fast Refresh (module HMR +
-react-refresh — large, with real embedded-QuickJS risk), Phase 3 shipped **opt-in state
-preservation**: a `usePersistentState` hook whose value survives the remount via a host-side store.
-Full Fast Refresh remains a possible future upgrade.
+react-refresh — large, with real embedded-QuickJS risk), Phase 3 shipped **transparent state
+preservation**: a sim-only Babel transform rewrites the app's `useState` into a persisting helper
+(`usePersistentState`, backed by a host-side store), so plain `useState` survives the remount with no
+opt-in. On a device there's no transform, so it's plain `useState`. Full Fast Refresh (per-component,
+no keying fragility) remains a possible future upgrade.
 
 ### 3. Asset hot reload — baked vs runtime-loaded
 
@@ -155,7 +157,7 @@ engine's static state safely.
 | **1 — MVP** | `tools/simulator/` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Backed by `er_reset()` (engine) + handle-table reset (bridge) + `er_host_reload()` (host). | ✅ done |
 | **2a** | In-window **error overlay** (RN redbox) for uncaught JS exceptions; **manual reload key** (R). | ✅ done |
 | **2b** | Runtime asset loading (image/font hot reload) via a binary **ERPK pack**: the JS bakers emit `dist/assets.pack`, the sim host loads it (`asset_pack.c`) and re-registers on change. Fonts identical to device. | ✅ done |
-| **3** | **State preservation across reload** — opt-in `usePersistentState` hook (kept across saves via a host-side `__erPersist` store; plain `useState` on a device). Chosen over full Fast Refresh (module HMR + react-refresh) for a far better value/effort ratio + no embedded-QuickJS HMR risk. | ✅ done |
+| **3** | **State preservation across reload** — plain `useState` transparently persists across saves via a **sim-only Babel transform** (`persist-transform.mjs` rewrites app `useState` → a persisting helper keyed by `module::component#index`, backed by the host-side `__erPersist` store). Nothing to opt into; on a device it's plain `useState`. Press R to reset. Chosen over full Fast Refresh (module HMR + react-refresh) — same transparency for a fraction of the effort/risk. | ✅ done |
 | **4** | **On-device hot reload** — dev-server/socket transport pushing bytecode to the ESP32 over serial / Wi-Fi (the "later luxury"). | ☐ |
 
 The reload primitive is **`er_reset()`** (public, `er_scene.h`): it empties the node pool, root, and

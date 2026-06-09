@@ -1,10 +1,11 @@
 // usePersistentState — a useState that survives the simulator's hot reload (see /SIMULATOR.md, Phase
-// 3). State you mark with this hook is kept across saves so you don't lose your screen/form on every
-// edit. Outside the simulator (e.g. on a device, where the host doesn't install `__erPersist`) it is
-// exactly useState — so the same app code runs everywhere; persistence is a dev-only convenience.
+// 3). The simulator's build transform (persist-transform.mjs) rewrites the app's plain `useState`
+// into this helper, so persistence is transparent — you normally never call this directly; it's also
+// exported for explicit use. Outside the simulator (e.g., on a device, where the host doesn't install
+// `__erPersist`) it is exactly useState, so the same app code runs everywhere.
 //
 // Values must be JSON-serializable (numbers, strings, booleans, plain objects/arrays). The simulator
-// resets persisted state when you press R (manual reload) or restart it.
+// resets the persisted state when you press R (manual reload) or restart it.
 import { useState, useCallback } from 'react';
 
 /**
