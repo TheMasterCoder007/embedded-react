@@ -11,6 +11,7 @@
     "build": "node build.mjs",
     "build:builtin-font": "node assets/build-builtin-font.mjs",
     "sim": "node sim.mjs",
+    "create": "node create-embedded-react.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:runtime": "node test/runtime/run.mjs",

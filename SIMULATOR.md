@@ -169,10 +169,11 @@ together (free context → `er_reset()` → fresh context + bridge + globals →
 
 ## Relationship to `create-embedded-react`
 
-The simulator is the natural partner of the remaining Flow A item, the `create-embedded-react`
-scaffold (PLAN.md). The scaffold would generate a `package.json` with `"sim": "embedded-react sim"`,
-so `npm run sim` works from a fresh app with zero setup — the React Native feel. Build them together,
-or the scaffold immediately after the simulator MVP.
+The simulator's natural partner — the **scaffold** — now ships (in-repo precursor):
+`npm run create -- <name>` (from `bridges/quickjs/js`) generates `demos/<name>/` with a per-app
+`package.json` whose `sim` script points at `sim.mjs`, so `npm run sim` works from a fresh app with
+zero setup — the React Native feel. The standalone `npx create-embedded-react` (its own `firmware/`,
+published deps) is the future form once packages are published. See PLAN.md.
 
 ---
 

@@ -210,6 +210,12 @@ AppRegistry.registerComponent('my-app', () => App);
 
 ### Project scaffold (`create-embedded-react`)
 
+> Today: an **in-repo precursor** ships — `npm run create -- <name>` (from `bridges/quickjs/js`)
+> scaffolds a `demos/<name>/` app (App.jsx, index.jsx, per-app `package.json` with `sim`/`build`
+> scripts, README, assets/) wired to the monorepo's build/sim tooling, so `cd demos/<name> && npm run
+> sim` works immediately. The standalone `npx create-embedded-react` below — which emits its own
+> `firmware/` and pulls published npm packages — is the future form once the packages are published.
+
 Because the JSX is cross-compiled into firmware, a project is a **hybrid: a JS app plus a
 firmware C project**, glued by the CLI. The scaffold generates both halves for the chosen
 board:
@@ -521,7 +527,10 @@ Cortex-M, or anything else. Same shape; the inner loops just walk pixels.
 - React reconciler hosted in QuickJS (`bridges/quickjs/js/`) — done
 - esbuild bundler + bytecode precompiler + build-time image/font bakers — done
 - End-to-end on desktop (`examples/linux/`, SDL) and on ESP32-S3 (`examples/esp32/esp32-s3/`, RGB panel) — done
-- Remaining: `create-embedded-react` project scaffold; second MCU bring-up (`examples/stm32h7/` + `backends/dma2d/`)
+- Project scaffold — in-repo precursor done (`npm run create -- <name>` generates a `demos/<name>/`
+  app wired to the build/sim tooling); a published standalone `npx create-embedded-react` awaits npm publishing
+- Remaining: published packages + standalone scaffold; on-device hot reload (SIMULATOR.md Phase 4);
+  second MCU bring-up (`examples/stm32h7/` + `backends/dma2d/`)
 
 **Later (Flow B)**
 

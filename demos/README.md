@@ -31,9 +31,18 @@ which one gets flashed/run; see each example's README for the run/flash step.
 
 ## Adding a demo
 
-1. Create `demos/<name>/index.jsx` and `demos/<name>/App.jsx` (copy `thermostat/` as a starting point).
-2. `npm run build -- <name>` from `bridges/quickjs/js`.
-3. Run/flash via the relevant `examples/*` host.
+Scaffold one with the generator (the in-repo precursor to `npx create-embedded-react`):
+
+```
+cd bridges/quickjs/js
+npm run create -- my-app        # creates demos/my-app/ (App.jsx, index.jsx, package.json, README, assets/)
+cd ../../../demos/my-app
+npm run sim                      # hot-reload simulator   (or `npm run build`)
+```
+
+Each scaffolded app gets its own `package.json` so `npm run sim` / `npm run build` work from the app
+folder (React Native style). Or do it by hand: create `demos/<name>/index.jsx` + `App.jsx` (copy
+`thermostat/`), then `npm run build -- <name>`. Run/flash via the relevant `examples/*` host.
 
 > Note: demos resolve `'embedded-react'` through an esbuild alias in `build.mjs` (they live outside
 > the package directory). Once `embedded-react` is published / set up as an npm workspace, demos will

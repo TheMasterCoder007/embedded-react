@@ -158,7 +158,9 @@ possibilities the layering enables, not roadmap items.
 - ✅ esbuild bundler + QuickJS bytecode precompiler + build-time image/font bakers
 - ✅ `examples/linux/` end-to-end — write JSX, run on the desktop SDL host
 - ✅ `examples/esp32/esp32-s3/` — ESP32-S3 (+PSRAM) bring-up, running on the Waveshare 7" panel
-- Remaining: `create-embedded-react` scaffold; `examples/stm32h7/` (+ `backends/dma2d/`) bring-up
+- ✅ Hot-reload **simulator** (`npm run sim`) — file-watch live reload, error overlay, transparent state preservation (`/SIMULATOR.md`)
+- ✅ App **scaffold** (in-repo: `npm run create -- <name>`); standalone `npx create-embedded-react` awaits npm publishing
+- Remaining: published packages; on-device hot reload; `examples/stm32h7/` (+ `backends/dma2d/`) bring-up
 
 **Flow B — React as a compile target** (later)
 

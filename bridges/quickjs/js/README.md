@@ -73,6 +73,7 @@ interpolation like `Hi {name}`, or nested `<Text>` runs) becomes the node's `tex
 npm install
 npm run build               # bundles the default demo (demos/thermostat) → dist/app.bundle.js
 npm run build -- marine-dash  # bundle a specific demo (demos/<name>) instead
+npm run create -- my-app    # scaffold a new app at demos/my-app (App.jsx + scripts); then `cd` + npm run sim
 ```
 
 `npm run build` also bakes the images and fonts the demo imports (see **Assets** below).
