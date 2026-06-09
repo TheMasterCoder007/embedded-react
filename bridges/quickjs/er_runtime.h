@@ -1,0 +1,136 @@
+#ifndef ER_RUNTIME_H
+#define ER_RUNTIME_H
+
+/*
+ * er_runtime — the portable QuickJS host core for Flow A.
+ *
+ * Wraps the lifecycle every embedded-react host shares: create a QuickJS runtime + context, install
+ * the NativeUI bridge and host globals (console, screen, optional persist), evaluate an app bundle
+ * (bytecode or source), pump the job queue/timers, reset for a reload, and report errors. It is
+ * backend-agnostic and platform-neutral (no SDL, no ESP-IDF, no filesystem) — the caller owns the
+ * window/display backend, where the app bytes come from, and the frame loop.
+ *
+ * This is what lets embedded-react drop into any firmware with a few lines of glue:
+ *
+ *     ErRuntimeConfig cfg = { .screen_width = W, .screen_height = H, .log = my_log };
+ *     er_runtime_init(&cfg);
+ *     // (optional) install custom device-API globals on er_runtime_context()
+ *     er_register_assets();                 // baked images/fonts (or load a pack)
+ *     er_runtime_load_bytecode(qbc, len);   // your app — a pointer into flash/RAM
+ *     for (;;) { er_runtime_pump(); er_commit(); my_present(); embedded_renderer_tick(dt); }
+ *
+ * The engine + bridge are single-instance (static state), so this runtime is a singleton too.
+ */
+
+#include "quickjs.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Types
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Configuration for er_runtime_init (and re-applied on er_runtime_reset). */
+typedef struct
+{
+    int screen_width;              /**< `screen.width` exposed to JS (framebuffer pixels). */
+    int screen_height;             /**< `screen.height`. */
+    float screen_scale;            /**< `screen.scale` (DPI); <= 0 is treated as 1.0. */
+    bool install_persist;          /**< Expose `__erPersist` so usePersistentState survives a reload
+                                        (dev/simulator). Off on devices, where it falls back to useState. */
+    void (*log)(const char* line); /**< console.log/warn/error + error sink (one line, no newline).
+                                        NULL → stdout. On a device, point this at your UART logger. */
+} ErRuntimeConfig;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Creates the QuickJS runtime + context and installs the NativeUI bridge and host globals.
+ *
+ * Call once after the render backend is set. Does not load an app — call er_runtime_load_* next.
+ *
+ * @param[in] cfg  Runtime configuration (copied; re-applied on reset).
+ *
+ * @return true on success; false if the runtime/context could not be created.
+ */
+bool er_runtime_init(const ErRuntimeConfig* cfg);
+
+/**
+ * @brief Returns the live QuickJS context, for installing custom globals (e.g. device-API bindings).
+ *
+ * Valid after er_runtime_init; the pointer changes across er_runtime_reset, so re-install any custom
+ * globals after a reset.
+ *
+ * @return The current JSContext, or NULL before init / after shutdown.
+ */
+JSContext* er_runtime_context(void);
+
+/**
+ * @brief Evaluates an app from a compiled QuickJS bytecode blob (JS_ReadObject), then pumps once.
+ *
+ * @param[in] buf  Bytecode bytes (caller-owned; may point into flash).
+ * @param[in] len  Byte length.
+ *
+ * @return true on clean evaluation; false if a JS exception propagated (see er_runtime_last_error).
+ */
+bool er_runtime_load_bytecode(const void* buf, size_t len);
+
+/**
+ * @brief Evaluates an app from JS source text, then pumps once.
+ *
+ * @param[in] src   Source text.
+ * @param[in] len   Byte length.
+ * @param[in] name  Display name for stack traces (NULL → "<app>").
+ *
+ * @return true on clean evaluation; false if a JS exception propagated.
+ */
+bool er_runtime_load_source(const char* src, size_t len, const char* name);
+
+/**
+ * @brief Drains the QuickJS job queue (Promises/microtasks) and fires due timers.
+ *
+ * Call once per frame before committing so async/timer-driven state lands in the frame.
+ */
+void er_runtime_pump(void);
+
+/**
+ * @brief Tears the runtime back to a clean slate for a reload: frees the JS context, resets the engine
+ *        scene (er_reset), and brings up a fresh context with the bridge + globals reinstalled.
+ *
+ * Keeps the render backend and registered images/fonts. After this, re-install any custom globals and
+ * call er_runtime_load_* to run the new app. Component state is not preserved (use usePersistentState
+ * + install_persist for that).
+ *
+ * @return true on success.
+ */
+bool er_runtime_reset(void);
+
+/**
+ * @brief Returns the last uncaught JS error (message + stack), or "" if none.
+ *
+ * @return A read-only string owned by the runtime.
+ */
+const char* er_runtime_last_error(void);
+
+/**
+ * @brief Renders an on-screen error overlay (RN-redbox) from the last error into the current scene.
+ *
+ * Resets the engine scene and builds a red "JS error" screen via the bridge; the caller's next commit
+ * paints it. Requires a live context + a render backend. Useful after a failed load/reload.
+ */
+void er_runtime_show_error(void);
+
+/**
+ * @brief Clears the persisted-state store backing usePersistentState (no-op if persistence is off).
+ */
+void er_runtime_clear_persist(void);
+
+/**
+ * @brief Frees the QuickJS context and runtime. The engine/backend are left untouched.
+ */
+void er_runtime_shutdown(void);
+
+#endif

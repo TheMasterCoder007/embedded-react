@@ -196,6 +196,24 @@ The reconciler is **not** a standalone package. Like RN's renderer, it lives *in
 moves to build time as part of the AOT compiler — the component API stays the same either
 way, which is why it, not the reconciler, is the stable public surface.)
 
+**Integrating the C runtime into custom firmware.** The "host glue" above is a portable,
+backend-agnostic unit — **`er_runtime`** (`bridges/quickjs/er_runtime.h`). A firmware pulls the
+engine and bridge via `FetchContent`, provides a display backend (the 5 callbacks) and the app bytes
+(e.g., a bytecode + asset blob loaded from a flash/config region), and wires it up in ~10 lines:
+
+```c
+ErRuntimeConfig cfg = { .screen_width = W, .screen_height = H, .log = my_uart_log };
+er_runtime_init(&cfg);
+/* optional: install custom device-API globals on er_runtime_context() */
+er_register_assets();                  /* or load a runtime asset pack */
+er_runtime_load_bytecode(qbc, len);    /* the app — a pointer into flash/RAM */
+for (;;) { er_runtime_pump(); er_commit(); my_present(); embedded_renderer_tick(dt); }
+```
+
+`er_runtime_reset()` + `er_runtime_load_bytecode()` is also the on-device "load a new config" path
+(no reflash). The desktop demo and simulator's `examples/linux/host.c` is just an SDL wrapper over the
+same runtime — proving the abstraction.
+
 ### What an app author writes
 
 Same idiom as React Native — hooks from `react`, everything else from `embedded-react`:

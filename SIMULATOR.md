@@ -153,7 +153,7 @@ engine's static state safely.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| **0** | Factor the SDL host core into a shared unit (`examples/linux/host.{c,h}`); frame `examples/linux` as a pure demo (peer to esp32). | ✅ done |
+| **0** | Factor the host core into a shared unit; frame `examples/linux` as a pure demo (peer to esp32). The portable QuickJS host core later moved into the bridge as **`er_runtime`** (`bridges/quickjs/er_runtime.{c,h}` — context lifecycle, console/screen/persist, load/pump/reset/error); `examples/linux/host.c` is now just an SDL wrapper over it, shared with the simulator and reusable by MCU firmware. | ✅ done |
 | **1 — MVP** | `tools/simulator/` target + `npm run sim` (esbuild `--watch` + launch). File-watch → **live reload** (full remount) on save. JS-only. Backed by `er_reset()` (engine) + handle-table reset (bridge) + `er_host_reload()` (host). | ✅ done |
 | **2a** | In-window **error overlay** (RN redbox) for uncaught JS exceptions; **manual reload key** (R). | ✅ done |
 | **2b** | Runtime asset loading (image/font hot reload) via a binary **ERPK pack**: the JS bakers emit `dist/assets.pack`, the sim host loads it (`asset_pack.c`) and re-registers on change. Fonts identical to device. | ✅ done |

@@ -8,7 +8,6 @@
  * er_host_step so it can interleave file-watching + reload.
  */
 
-#include "quickjs.h" /* JSRuntime / JSContext */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -30,21 +29,18 @@ typedef struct
 } ErHostConfig;
 
 /**
- * @brief A running desktop host: the SDL window/renderer, the QuickJS runtime/context with the
- *        NativeUI bridge installed, and the frame-loop bookkeeping.
+ * @brief A running desktop host: the SDL window/renderer + the frame-loop bookkeeping. The QuickJS
+ *        runtime/context lives in er_runtime (the portable host core this wraps).
  */
 typedef struct
 {
     struct SDL_Window* window;     /**< SDL window. */
     struct SDL_Renderer* renderer; /**< SDL renderer backing the engine's SDL backend. */
-    JSRuntime* rt;                 /**< QuickJS runtime. */
-    JSContext* ctx;                /**< QuickJS context (bridge + host globals installed). */
     int phys_w;                    /**< Framebuffer width in physical pixels. */
     int phys_h;                    /**< Framebuffer height in physical pixels. */
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
     bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
-    bool persist_enabled;          /**< Mirror of ErHostConfig.persist; installs the __erPersist global. */
     uint32_t prev_ticks;           /**< SDL_GetTicks() at the previous frame, for the tick delta. */
 } ErHost;
 

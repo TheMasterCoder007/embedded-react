@@ -1,10 +1,9 @@
 /*
- * Desktop host core — the reusable SDL + QuickJS + engine runtime shared by the desktop demo
- * (main.c) and, later, the simulator (see /SIMULATOR.md). It brings up an SDL window and the SDL
- * backend, boots a QuickJS context with the NativeUI bridge + host globals (console, screen),
- * resolves and evaluates a JS app, and drives the frame loop (input → touch, pump, commit, present,
- * tick). main() is just a thin driver over this; the simulator will add a watch + reload layer on
- * top of the same steppable API (er_host_step).
+ * Desktop host — the SDL layer over the portable QuickJS host core (er_runtime). It opens an SDL
+ * window + the SDL backend, resolves the app to run (a bundle file or a built-in fallback), and drives
+ * the frame loop (input → touch, pump, commit, present, tick). Everything JS-side — context lifecycle,
+ * console/screen/persist globals, eval/reset/error overlay — lives in er_runtime (bridges/quickjs),
+ * shared with MCU firmware. main() is a thin driver; the simulator adds watch + reload on er_host_step.
  */
 
 /* Must be defined before any SDL header to disable SDL's main() macro on Windows. */
@@ -12,10 +11,9 @@
 
 #include "host.h"
 
+#include "er_runtime.h"
 #include "er_scene.h"
 #include "native_renderer.h"
-#include "native_ui_bridge.h"
-#include "quickjs.h"
 #include "sdl_backend.h"
 
 #if defined(ER_HAVE_BAKED_ASSETS)
@@ -35,8 +33,7 @@
  * @brief Built-in fallback app, evaluated when no bundle is available next to the executable.
  *
  * Exercises the marshalling layer (flex layout, colors, border radius, text, press events) entirely
- * from JS through the NativeUI bridge — a self-contained "the host works" screen. `screen` is
- * injected by the host before eval.
+ * from JS through the NativeUI bridge — a self-contained "the host works" screen.
  */
 static const char* k_default_app =
     "const W = screen.width, H = screen.height;\n"
@@ -73,37 +70,8 @@ static const char* k_default_app =
     "NativeUI.commit();\n"
     "console.log('App built UI at', W + 'x' + H, '- tap a card');\n";
 
-/**
- * @brief Last uncaught JS error (message + stack), captured by host_report for the error overlay.
- */
-static char s_last_error[512] = "";
-
-/**
- * @brief Error-overlay app: builds a red "JS error" screen from the `__error` global. Evaluated by
- *        er_host_show_error so a failed load/reload shows the error on screen (RN redbox style)
- *        instead of leaving a blank or stale window. Reuses the NativeUI marshalling path.
- */
-static const char* k_error_app =
-    "const W = screen.width, H = screen.height;\n"
-    "const msg = (typeof __error === 'string' && __error) ? __error : 'Unknown error';\n"
-    "const root = NativeUI.createNode('View');\n"
-    "NativeUI.setProps(root, { width: W, height: H, backgroundColor: '#7a0b0b',\n"
-    "                          flexDirection: 'column', padding: 24, gap: 12 });\n"
-    "const title = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(title, { text: 'JS error', color: '#ffffff', fontSize: 24, fontWeight: 'bold' });\n"
-    "NativeUI.appendChild(root, title);\n"
-    "const body = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(body, { text: msg, color: '#ffd9d9', fontSize: 14, width: W - 48, numberOfLines: 20 });\n"
-    "NativeUI.appendChild(root, body);\n"
-    "const hint = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(hint, { text: 'fix the source and save to reload (or press R)', color: '#ff9b9b', fontSize: 12 "
-    "});\n"
-    "NativeUI.appendChild(root, hint);\n"
-    "NativeUI.setRoot(root);\n"
-    "NativeUI.commit();\n";
-
 /*----------------------------------------------------------------------------------------------------------------------
- - Functions: Private — file + JS helpers
+ - Functions: Private — file helpers
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
@@ -155,263 +123,6 @@ static bool is_bytecode_path(const char* path)
     return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
 }
 
-/**
- * @brief Minimal console.log implementation printing space-separated arguments to stdout.
- *
- * @param[in] ctx       QuickJS context.
- * @param[in] this_val  JS `this` (unused).
- * @param[in] argc      Argument count.
- * @param[in] argv      Argument values.
- *
- * @return JS_UNDEFINED, or JS_EXCEPTION if an argument cannot be stringified.
- */
-static JSValue host_console_log(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
-{
-    (void)this_val;
-    for (int i = 0; i < argc; i++)
-    {
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (!str)
-        {
-            return JS_EXCEPTION;
-        }
-        printf("%s%s", i ? " " : "", str);
-        JS_FreeCString(ctx, str);
-    }
-    printf("\n");
-    return JS_UNDEFINED;
-}
-
-/**
- * @brief Installs a minimal `console` (log/warn/error all map to stdout) onto the global scope.
- *
- * @param[in] ctx  QuickJS context.
- */
-static void host_install_console(JSContext* ctx)
-{
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue console = JS_NewObject(ctx);
-    JSValue log = JS_NewCFunction(ctx, host_console_log, "log", 1);
-
-    JS_SetPropertyStr(ctx, console, "log", JS_DupValue(ctx, log));
-    JS_SetPropertyStr(ctx, console, "warn", JS_DupValue(ctx, log));
-    JS_SetPropertyStr(ctx, console, "error", log);
-    JS_SetPropertyStr(ctx, global, "console", console);
-    JS_FreeValue(ctx, global);
-}
-
-/**
- * @brief Injects a `screen` global ({ width, height, scale }) so the app can size its root.
- *
- * @param[in] ctx     QuickJS context.
- * @param[in] width   Framebuffer width in physical pixels.
- * @param[in] height  Framebuffer height in physical pixels.
- * @param[in] scale   DPI scale factor.
- */
-static void host_install_screen(JSContext* ctx, int width, int height, float scale)
-{
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue screen = JS_NewObject(ctx);
-
-    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, width));
-    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, height));
-    JS_SetPropertyStr(ctx, screen, "scale", JS_NewFloat64(ctx, (double)scale));
-    JS_SetPropertyStr(ctx, global, "screen", screen);
-    JS_FreeValue(ctx, global);
-}
-
-/**
- * @brief Reports an uncaught JS exception (message + stack) to stderr and frees the result.
- *
- * @param[in] ctx     QuickJS context.
- * @param[in] result  The value returned by JS_Eval / er_bridge_run_bytecode (consumed).
- *
- * @return true on clean evaluation; false if an exception propagated.
- */
-static bool host_report(JSContext* ctx, JSValue result)
-{
-    bool ok = true;
-    if (JS_IsException(result))
-    {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        fprintf(stderr, "JS exception: %s\n", msg ? msg : "(unknown)");
-
-        JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
-        const char* st = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
-        if (st)
-        {
-            fprintf(stderr, "%s\n", st);
-        }
-
-        /* Capture message + stack for the error overlay (er_host_show_error). */
-        snprintf(s_last_error, sizeof(s_last_error), "%s%s%s", msg ? msg : "(unknown)", st ? "\n\n" : "", st ? st : "");
-
-        if (msg)
-        {
-            JS_FreeCString(ctx, msg);
-        }
-        if (st)
-        {
-            JS_FreeCString(ctx, st);
-        }
-        JS_FreeValue(ctx, stack);
-        JS_FreeValue(ctx, exc);
-        ok = false;
-    }
-    JS_FreeValue(ctx, result);
-    return ok;
-}
-
-/**
- * @brief Runs an app from either JS source or a compiled bytecode blob, reporting exceptions.
- *
- * @param[in] ctx       QuickJS context.
- * @param[in] src       Source text, or bytecode bytes when is_bytecode is true.
- * @param[in] len       Byte length of src.
- * @param[in] name      Display name used in stack traces (source path).
- * @param[in] bytecode  true to load src as a QuickJS bytecode blob (JS_ReadObject).
- *
- * @return true on clean evaluation; false if an exception propagated.
- */
-static bool host_run(JSContext* ctx, const char* src, size_t len, const char* name, bool bytecode)
-{
-    JSValue result = bytecode ? er_bridge_run_bytecode(ctx, (const uint8_t*)src, len)
-                              : JS_Eval(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
-    return host_report(ctx, result);
-}
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Functions: Private — persisted state (usePersistentState across simulator reloads)
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/** @brief Maximum number of distinct usePersistentState keys retained across reloads. */
-#define ER_PERSIST_MAX 64
-
-/**
- * @brief key → JSON-value store that outlives the QuickJS context, so usePersistentState restores its
- *        value after a live reload (the context, and thus all JS state, is recreated on reload).
- */
-static struct
-{
-    char* key;
-    char* val;
-} s_persist[ER_PERSIST_MAX];
-static int s_persist_count = 0;
-
-/** @brief Heap-duplicates a C string; returns NULL on allocation failure. */
-static char* persist_dup(const char* s)
-{
-    const size_t n = strlen(s) + 1;
-    char* d = (char*)malloc(n);
-    if (d)
-    {
-        memcpy(d, s, n);
-    }
-    return d;
-}
-
-/** @brief __erPersist.get(key) → the stored JSON string, or undefined if the key is unset. */
-static JSValue js_persist_get(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
-{
-    (void)this_val;
-    if (argc < 1)
-    {
-        return JS_UNDEFINED;
-    }
-    const char* key = JS_ToCString(ctx, argv[0]);
-    if (!key)
-    {
-        return JS_UNDEFINED;
-    }
-    JSValue r = JS_UNDEFINED;
-    for (int i = 0; i < s_persist_count; i++)
-    {
-        if (s_persist[i].val && strcmp(s_persist[i].key, key) == 0)
-        {
-            r = JS_NewString(ctx, s_persist[i].val);
-            break;
-        }
-    }
-    JS_FreeCString(ctx, key);
-    return r;
-}
-
-/** @brief __erPersist.set(key, jsonString) → stores it, replacing any prior value for the key. */
-static JSValue js_persist_set(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
-{
-    (void)this_val;
-    if (argc < 2)
-    {
-        return JS_UNDEFINED;
-    }
-    const char* key = JS_ToCString(ctx, argv[0]);
-    const char* val = JS_ToCString(ctx, argv[1]);
-    if (key && val)
-    {
-        int idx = -1;
-        for (int i = 0; i < s_persist_count; i++)
-        {
-            if (strcmp(s_persist[i].key, key) == 0)
-            {
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0 && s_persist_count < ER_PERSIST_MAX)
-        {
-            idx = s_persist_count++;
-            s_persist[idx].key = persist_dup(key);
-            s_persist[idx].val = NULL;
-        }
-        if (idx >= 0 && s_persist[idx].key)
-        {
-            free(s_persist[idx].val);
-            s_persist[idx].val = persist_dup(val);
-        }
-    }
-    if (key)
-    {
-        JS_FreeCString(ctx, key);
-    }
-    if (val)
-    {
-        JS_FreeCString(ctx, val);
-    }
-    return JS_UNDEFINED;
-}
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Functions: Private — globals install
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/**
- * @brief Creates a fresh QuickJS context on the host's runtime and installs console, screen, and the
- *        NativeUI bridge. Used at startup and on every live reload.
- *
- * @param[in,out] host  Host whose ctx field is (re)created.
- */
-static void host_install_globals(ErHost* host)
-{
-    host->ctx = JS_NewContext(host->rt);
-    host_install_console(host->ctx);
-    host_install_screen(host->ctx, host->phys_w, host->phys_h, host->dpi_scale);
-    er_bridge_install(host->ctx);
-
-    /* Simulator only: expose __erPersist so usePersistentState can survive a reload. The store is
-     * host-side C state (s_persist) that outlives the recreated context. On a device this global is
-     * absent and usePersistentState falls back to plain useState. */
-    if (host->persist_enabled)
-    {
-        JSValue global = JS_GetGlobalObject(host->ctx);
-        JSValue persist = JS_NewObject(host->ctx);
-        JS_SetPropertyStr(host->ctx, persist, "get", JS_NewCFunction(host->ctx, js_persist_get, "get", 1));
-        JS_SetPropertyStr(host->ctx, persist, "set", JS_NewCFunction(host->ctx, js_persist_set, "set", 2));
-        JS_SetPropertyStr(host->ctx, global, "__erPersist", persist);
-        JS_FreeValue(host->ctx, global);
-    }
-}
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -419,7 +130,6 @@ static void host_install_globals(ErHost* host)
 bool er_host_start(const ErHostConfig* cfg, ErHost* host)
 {
     memset(host, 0, sizeof(*host));
-    host->persist_enabled = cfg->persist;
 
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -470,59 +180,32 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
     er_register_assets();
 #endif
 
-    /* Boot QuickJS and publish the bridge + host globals. */
-    host->rt = JS_NewRuntime();
-    host_install_globals(host);
+    /* Boot the portable QuickJS host core: bridge + console (→ stdout) + screen [+ __erPersist]. */
+    const ErRuntimeConfig rt = {
+        .screen_width = host->phys_w,
+        .screen_height = host->phys_h,
+        .screen_scale = host->dpi_scale,
+        .install_persist = cfg->persist,
+        .log = NULL, /* stdout */
+    };
+    if (!er_runtime_init(&rt))
+    {
+        SDL_Log("er_runtime_init failed");
+        er_sdl_backend_destroy();
+        SDL_DestroyRenderer(host->renderer);
+        SDL_DestroyWindow(host->window);
+        SDL_Quit();
+        return false;
+    }
 
     host->running = true;
     host->prev_ticks = SDL_GetTicks();
     return true;
 }
 
-bool er_host_reload(ErHost* host, const char* explicit_path)
-{
-    /* Live reload (full remount): drop the JS context — freeing the whole React tree, the bridge's
-     * GC-rooted registries, event handlers, and timers — reset the engine to an empty scene, then
-     * bring up a fresh context and re-run the app. Component state is intentionally not preserved
-     * (that's Fast Refresh, a later phase — see /SIMULATOR.md). Registered images/fonts survive the
-     * reset, so baked assets keep resolving. */
-    if (host->ctx)
-    {
-        JS_FreeContext(host->ctx);
-        host->ctx = NULL;
-    }
-    er_reset();
-    host_install_globals(host);
-    return er_host_load_app(host, explicit_path);
-}
-
-void er_host_clear_persist(void)
-{
-    for (int i = 0; i < s_persist_count; i++)
-    {
-        free(s_persist[i].key);
-        free(s_persist[i].val);
-        s_persist[i].key = NULL;
-        s_persist[i].val = NULL;
-    }
-    s_persist_count = 0;
-}
-
-void er_host_show_error(ErHost* host)
-{
-    /* RN-redbox style: clear the (possibly half-built) scene, publish the last captured error text as
-     * a global, and run the built-in error app in the current context so the failure is on screen
-     * instead of leaving a blank/stale window. The next successful reload replaces it. */
-    er_reset();
-    JSValue global = JS_GetGlobalObject(host->ctx);
-    JS_SetPropertyStr(host->ctx, global, "__error", JS_NewString(host->ctx, s_last_error));
-    JS_FreeValue(host->ctx, global);
-    host_run(host->ctx, k_error_app, strlen(k_error_app), "<error-overlay>", false);
-    er_bridge_pump(host->ctx);
-}
-
 bool er_host_load_app(ErHost* host, const char* explicit_path)
 {
+    (void)host;
     /* Choose the app to run, in priority order:
      *   1. an explicit path (.qbc = bytecode, else source),
      *   2. the compiled bytecode bundle (app.bundle.qbc) next to the executable — the MCU load path,
@@ -587,15 +270,30 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
        the precompiler wasn't built, so app.bundle.qbc is missing) looks identical at runtime. */
     SDL_Log("running %s (%s)", app_name, app_bytecode ? "bytecode" : "source");
 
-    const bool app_ok = host_run(host->ctx, app_src, app_len, app_name, app_bytecode);
+    const bool ok =
+        app_bytecode ? er_runtime_load_bytecode(app_src, app_len) : er_runtime_load_source(app_src, app_len, app_name);
     free(loaded);
+    return ok;
+}
 
-    /* Settle any Promises / mount-time microtasks the app queued before the first paint. */
-    if (app_ok)
-    {
-        er_bridge_pump(host->ctx);
-    }
-    return app_ok;
+bool er_host_reload(ErHost* host, const char* explicit_path)
+{
+    /* Live reload (full remount): er_runtime drops the JS context + resets the engine, then we re-run
+     * the app. Component state is not preserved (use usePersistentState). Registered images/fonts
+     * survive the reset, so baked assets keep resolving. */
+    er_runtime_reset();
+    return er_host_load_app(host, explicit_path);
+}
+
+void er_host_clear_persist(void)
+{
+    er_runtime_clear_persist();
+}
+
+void er_host_show_error(ErHost* host)
+{
+    (void)host;
+    er_runtime_show_error(); /* the next er_host_step commit paints it */
 }
 
 int er_host_event_px(const ErHost* host, int logical)
@@ -640,7 +338,7 @@ bool er_host_step(ErHost* host)
     /* Service Promises and setTimeout/setInterval before painting, so timer/async-driven state
        updates land in this frame's commit. The engine clock used by timers was advanced by last
        frame's embedded_renderer_tick. */
-    er_bridge_pump(host->ctx);
+    er_runtime_pump();
 
     er_commit();
     er_sdl_present();
@@ -663,16 +361,7 @@ void er_host_run(ErHost* host)
 
 void er_host_shutdown(ErHost* host)
 {
-    if (host->ctx)
-    {
-        JS_FreeContext(host->ctx);
-        host->ctx = NULL;
-    }
-    if (host->rt)
-    {
-        JS_FreeRuntime(host->rt);
-        host->rt = NULL;
-    }
+    er_runtime_shutdown();
     er_sdl_backend_destroy();
     if (host->renderer)
     {
