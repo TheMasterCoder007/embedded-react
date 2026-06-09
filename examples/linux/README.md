@@ -1,17 +1,21 @@
 # examples/linux
 
-The **desktop host** for Flow A — the analog of the iOS Simulator / Android emulator. It boots the
-same QuickJS bridge + C engine the MCU runs and paints a JSX app into an SDL2 window, with only the
-backend swapped to SDL. Develop here (instant), then flash the *same* bundle to a device.
+The **desktop host** for Flow A — the analog of the iOS Simulator / Android emulator, and the on-desktop
+peer of the ESP32 board. It mirrors the device's **uploaded-config model**: the exe is the "firmware"
+(ships no app, no baked assets) and at boot loads a **config container** (`app.erpkg`) from a fixed
+"config slot" next to the executable, exactly as the MCU loads its config from a flash partition. Same
+QuickJS bridge + C engine the MCU runs, only the backend swapped to SDL. Build a config (`npm run pack`)
+and run the *same* `.erpkg` here or on a device.
 
 ```
-JSX bundle (+ baked assets)  →  QuickJS + er_scene.h engine  →  backends/sdl  →  SDL2 window
+app.erpkg (bytecode + assets + CRC)  →  QuickJS + er_scene.h engine  →  backends/sdl  →  SDL2 window
 ```
 
 **Status:** Implemented. One target, `embedded-react-desktop` — a thin `main.c` over the shared
 desktop **host core** (`host.c` / `host.h`): the host inits QuickJS, installs the `NativeUI` bridge +
-host globals (`screen`, `console`, timers), loads the app, and runs the SDL frame loop (pump → commit
-→ present). Mouse is forwarded as touch. The default demo is the
+host globals (`screen`, `console`, timers), loads the config container, and runs the SDL frame loop
+(pump → commit → present). Mouse is forwarded as touch. No config / a corrupt one shows an on-screen
+panel (no built-in fallback), and the window stays up — just like firmware. The default demo is the
 [thermostat](../../demos/thermostat/) (a draggable arc-dial climate UI). Press ESC to quit.
 
 > The old handwritten C-API showcase has been removed — this project is "JSX on embedded", so the
@@ -23,28 +27,28 @@ host globals (`screen`, `console`, timers), loads the app, and runs the SDL fram
 
 ## Build & run
 
-The desktop target runs whatever bundle `npm run build` produced. Build the JS app first, then the
-example:
+The desktop "firmware" builds standalone; you pack a config, and it gets copied into the slot:
 
 ```sh
-# 1. Bundle a demo + bake its assets  (from the repo)
-cd bridges/quickjs/js && npm install && npm run build      # → dist/app.bundle.js + dist/assets.generated.c
+# 1. Pack a demo into a config container  (from the repo root)
+cd bridges/quickjs/js && npm install && npm run pack       # → dist/app.erpkg (bytecode + assets + CRC)
 cd ../../..
 
 # 2. Build + run the desktop host
 cmake -S examples/linux -B examples/linux/build
 cmake --build examples/linux/build --target embedded-react-desktop
-examples/linux/build/embedded-react-desktop                # boots the bundle by default
+examples/linux/build/embedded-react-desktop                # boots the config in the slot
 ```
 
-The build copies `app.bundle.js` next to the exe, precompiles it to `app.bundle.qbc` (bytecode —
-preferred at boot), and compiles `dist/assets.generated.c` so the demo's `<Image>`/`<Text>` assets
-resolve. App resolution: explicit CLI path → `app.bundle.qbc` → `app.bundle.js` → a small built-in JS
-demo. Run with no args for the active bundle, or pass a path to iterate on a different one.
+The build copies `dist/app.erpkg` into the slot next to the exe (best-effort — the firmware builds
+even with no config; it just shows a "No config loaded" panel until one is present). App resolution:
+explicit CLI path (`.erpkg` container / `.qbc` bytecode / `.js` source) → otherwise the `app.erpkg`
+slot. Run with no args for the slot config, or pass a path to test a specific one.
 
-> Iterate: edit `demos/<name>/*` or the library `src/*` → `npm run build` → rebuild the target
-> (re-copies bundle + assets) → run. Configure once with `npm run build` already done so the baked
-> assets are present (otherwise the example builds text-only and prints a status note).
+> Iterate: edit `demos/<name>/*` or the library `src/*` → `npm run pack` → rebuild the target
+> (re-copies the container into the slot) → run. To "upload" a new config without rebuilding, drop a
+> fresh `app.erpkg` next to the exe and restart — the same model as flashing a device's config
+> partition. (For an instant edit-save-see loop instead, use the **simulator**: `npm run sim`.)
 
 ---
 

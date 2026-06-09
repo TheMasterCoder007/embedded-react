@@ -1,15 +1,20 @@
 /*
  * embedded-react-desktop — the desktop demo.
  *
- * A board-like example (peer to examples/esp32/esp32-s3): it runs the active JSX bundle on the
- * desktop via SDL2, with the same QuickJS bridge + engine the MCU uses and only the backend swapped.
- * It is a *demo*, not the dev tool — hot-reload-driven development lives in the simulator (see
- * /SIMULATOR.md). All the runtime lives in the shared host core (host.c); main() just drives it.
+ * A board-like example (peer to examples/esp32/esp32-s3): it runs an uploaded config the same way the
+ * MCU does — the firmware (this exe) ships no app and no baked assets, and at boot loads a config
+ * container (app.erpkg) from the "config slot" next to the executable. No config / a corrupt one shows
+ * an on-screen panel and the window stays up (no built-in fallback), just like firmware. It is a
+ * *demo*, not the dev tool — hot-reload-driven development lives in the simulator (see /SIMULATOR.md).
+ * All the runtime lives in the shared host core (host.c); main() just drives it.
+ *
+ * Build a config with `npm run pack` (in bridges/quickjs/js); the build copies it into the slot. To
+ * "upload" a new one, drop a fresh app.erpkg next to the exe and restart.
  *
  * Usage:
- *   embedded-react-desktop [app.js|app.qbc]
- * With no argument it loads the bundle next to the executable (app.bundle.qbc / .js), falling back
- * to a small built-in app.
+ *   embedded-react-desktop [app.erpkg|app.js|app.qbc]
+ * With no argument it loads app.erpkg from the slot. An explicit path overrides the slot (handy for
+ * testing a specific config/bundle).
  */
 
 #define SDL_MAIN_HANDLED
@@ -46,10 +51,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!er_host_load_app(&host, argc > 1 ? argv[1] : NULL))
+    /* No app arg → load the config slot (device parity). An explicit path overrides it. Both render an
+       on-screen panel on failure (and keep the window up — firmware doesn't exit when a config is
+       missing/bad), so we ignore the result and just run the loop. */
+    if (argc > 1)
     {
-        er_host_shutdown(&host);
-        return 1;
+        er_host_load_app(&host, argv[1]);
+    }
+    else
+    {
+        er_host_load_config(&host);
     }
 
     er_host_run(&host);

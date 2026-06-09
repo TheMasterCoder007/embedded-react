@@ -3,9 +3,10 @@
 
 /*
  * Desktop host core (SDL + QuickJS + engine bridge) — shared by the desktop demo (main.c) and the
- * simulator (see /SIMULATOR.md). The demo is a thin driver: er_host_start → er_host_load_app →
+ * simulator (see /SIMULATOR.md). The demo is a thin driver: er_host_start → er_host_load_config →
  * er_host_run → er_host_shutdown. The simulator drives the same core one frame at a time with
- * er_host_step so it can interleave file-watching + reload.
+ * er_host_step (loading an explicit bundle via er_host_load_app) so it can interleave file-watching
+ * + reload.
  */
 
 #include <stdbool.h>
@@ -50,7 +51,8 @@ typedef struct
 
 /**
  * @brief Brings up SDL + the SDL backend and a QuickJS context with console/screen/NativeUI
- *        installed, and registers the app's baked assets. Fills @p host on success.
+ *        installed. No assets are registered here — they ride inside the config container (demo) or a
+ *        runtime pack (simulator). Fills @p host on success.
  *
  * @param[in]  cfg   Window configuration.
  * @param[out] host  Host state to initialize.
@@ -60,15 +62,32 @@ typedef struct
 bool er_host_start(const ErHostConfig* cfg, ErHost* host);
 
 /**
- * @brief Resolves, evaluates, and pumps the app once.
+ * @brief Loads the config container from the fixed "config slot" (app.erpkg next to the executable)
+ *        and runs it — the desktop demo's device-parity boot path.
  *
- * Resolution order: @p explicit_path (`.qbc` = bytecode, else source) → app.bundle.qbc next to the
- * executable → app.bundle.js → a built-in fallback app.
+ * On no config / a corrupt / version-incompatible one, paints an on-screen panel (via er_runtime) and
+ * returns false; there is NO built-in fallback. Callers keep the window up so the panel stays visible,
+ * exactly as firmware would. Mirrors how an MCU loads its config from a flash region.
+ *
+ * @param[in] host  Started host.
+ *
+ * @return true if a valid config loaded and ran; false otherwise (a panel was rendered).
+ */
+bool er_host_load_config(ErHost* host);
+
+/**
+ * @brief Loads, evaluates, and pumps an explicit app file: `.erpkg` = config container, `.qbc` =
+ *        bytecode, else JS source. No fallback. Used by the simulator (watched source bundle) and for
+ *        ad-hoc CLI overrides.
+ *
+ * On failure it renders the matching on-screen panel itself (a "Couldn't load config" panel for a bad
+ * container, the JS-error redbox for a source/bytecode error), so the caller need not — the file
+ * couldn't be read is the only silent failure.
  *
  * @param[in] host           Started host.
- * @param[in] explicit_path  Optional app path; NULL to use the bundle-next-to-exe / fallback chain.
+ * @param[in] explicit_path  App path (required; NULL returns false).
  *
- * @return true on clean evaluation; false if a JS exception propagated.
+ * @return true on clean evaluation; false if the file was unreadable or a JS/container load failed.
  */
 bool er_host_load_app(ErHost* host, const char* explicit_path);
 
@@ -79,8 +98,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path);
  *        calls this when the watched bundle changes. See /SIMULATOR.md.
  *
  * @param[in] host           Started host.
- * @param[in] explicit_path  App path to reload (typically the watched bundle); NULL uses the
- *                           bundle-next-to-exe / fallback chain.
+ * @param[in] explicit_path  App path to reload (typically the watched bundle).
  *
  * @return true on clean evaluation; false if a JS exception propagated (the host stays usable —
  *         the simulator keeps running and can reload again once the source is fixed).

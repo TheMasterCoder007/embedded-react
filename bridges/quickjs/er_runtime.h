@@ -41,6 +41,11 @@ typedef struct
                                         (dev/simulator). Off on devices, where it falls back to useState. */
     void (*log)(const char* line); /**< console.log/warn/error + error sink (one line, no newline).
                                         NULL → stdout. On a device, point this at your UART logger. */
+    const JSMallocFunctions* malloc_functions; /**< Custom JS-heap allocator, or NULL for the QuickJS
+                                        default. On an MCU with external RAM, point the JS heap at PSRAM
+                                        (JS_NewRuntime2). Must outlive the runtime. */
+    size_t max_stack_size;             /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
+                                        QuickJS default. Set below the host/task stack on an MCU. */
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -87,8 +92,13 @@ typedef enum
  * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. On any
  * failure the engine is left as it was (call er_runtime_reset first if replacing a running app).
  *
- * @param[in] buf  Container bytes (ERCF; caller-owned, must stay live).
- * @param[in] len  Byte length.
+ * @p len may be an UPPER BOUND, not the exact byte count: the loader walks the container's
+ * self-describing sections (bounds-checked against @p len) to find its true end, then verifies the CRC
+ * over exactly that payload. So you can pass the full size of a memory-mapped flash/config partition
+ * without knowing the stored container's length.
+ *
+ * @param[in] buf  Container bytes (ERCF; caller-owned, must stay live — e.g. a partition mmap).
+ * @param[in] len  Buffer length, or an upper bound (e.g. the config partition size).
  *
  * @return ER_CONTAINER_OK, or a specific failure the caller can log/show.
  */
@@ -145,10 +155,23 @@ bool er_runtime_reset(void);
 const char* er_runtime_last_error(void);
 
 /**
- * @brief Renders an on-screen error overlay (RN-redbox) from the last error into the current scene.
+ * @brief Renders a full-screen red message panel (RN-redbox) into the current scene.
  *
- * Resets the engine scene and builds a red "JS error" screen via the bridge; the caller's next commit
- * paints it. Requires a live context + a render backend. Useful after a failed load/reload.
+ * Resets the engine scene and builds a `title` / `body` / optional `hint` screen via the bridge; the
+ * caller's next commit paints it. Requires a live context + a render backend. The portable building
+ * block for both JS-error and config-load-failure screens — a device shows the same panel as desktop.
+ *
+ * @param[in] title  Heading (NULL → "Error").
+ * @param[in] body   Detail text (NULL → empty).
+ * @param[in] hint   Optional smaller hint line below the body (NULL/empty → omitted).
+ */
+void er_runtime_show_message(const char* title, const char* body, const char* hint);
+
+/**
+ * @brief Renders an on-screen error overlay (RN-redbox) from the last JS error into the current scene.
+ *
+ * Convenience wrapper over er_runtime_show_message for the "JS error" case. Useful after a failed
+ * load/reload.
  */
 void er_runtime_show_error(void);
 

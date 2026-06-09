@@ -1,7 +1,12 @@
 # examples/esp32/esp32-s3 — ESP32-S3 host (Flow A – QuickJS)
 
-Runs the embedded-react Flow A stack on an **ESP32-S3**: QuickJS interprets the precompiled
-bytecode bundle, the C engine lays out and paints, and an LCD backend pushes pixels.
+Runs the embedded-react Flow A stack on an **ESP32-S3** using the **uploaded-config model**: the
+firmware brings up the panel + QuickJS, then loads its UI + logic as a **config container** (`app.erpkg`)
+from a dedicated flash partition — memory-mapped and verified (CRC + QuickJS version), **not embedded
+in the firmware image**. QuickJS interprets the container's bytecode, the C engine lays out and paints,
+and an LCD backend pushes pixels. The config carries its own images and fonts. This is the on-device peer
+of the desktop demo (`examples/linux`): firmware and config ship and update independently — reflash a
+new UI by writing one partition, no firmware rebuild.
 
 **Target board:** Waveshare **ESP32-S3-Touch-LCD-7** — 7" **800×480 RGB-parallel** IPS panel,
 8 MB octal PSRAM, 16 MB flash, **GT911** capacitive touch (I²C), and a **CH422G** I²C IO-expander
@@ -17,63 +22,42 @@ It's the seed a `create-embedded-react` scaffold would emit.
 ```
 CMakeLists.txt            top-level IDF project — FetchContent of QuickJS + embedded-react
 sdkconfig.defaults        ESP32-S3, octal PSRAM, 16MB flash, big task stack
-partitions.csv            roomy factory partition (~1MB bytecode in the image)
+partitions.csv            factory (firmware) + a 'config' data partition for app.erpkg
 main/
-  main.c                  host: PSRAM JS heap, bytecode load, frame loop + present + touch
+  main.c                  host: PSRAM JS heap, mmap + load config from flash, frame loop + touch
   board.c                 Waveshare 7" bring-up: CH422G expander + RGB panel + GT911 touch
   board.h                 board resolution + board_display_init() + board_touch_*()
-  app.bundle.qbc          precompiled bytecode of THE APP — GENERATED, not committed (see Build)
 components/
   quickjs/                CMakeLists only — compiles the fetched QuickJS sources
   engine/                 CMakeLists only — compiles the fetched/local engine sources
-  er-bridge-quickjs/      CMakeLists only — compiles the fetched/local native_ui_bridge.c
+  er-bridge-quickjs/      CMakeLists only — compiles the fetched/local bridge + er_runtime + er_assets
   esp32-lcd-backend/      CMakeLists only — compiles the fetched/local esp32-lcd renderer backend
 ```
 
 What the top-level `CMakeLists.txt` fetches:
 
-- **QuickJS-ng** — *always* fetched, **pinned to `v0.15.0`**. The pin matters: `JS_ReadObject` is
-  bytecode-version-specific, so this must match the version that produced `main/app.bundle.qbc`.
+- **QuickJS-ng** — *always* fetched, **pinned to `v0.15.0`**. The pin matters: `.qbc` bytecode is
+  QuickJS-version-specific. The container stamps the tag it was built with, and the loader rejects a
+  config built for a different version (`config rejected: built for a different QuickJS version`) —
+  so a mismatch shows a panel instead of running garbage.
 - **embedded-react (engine + bridge)** — uses the **local monorepo checkout when building in-tree**
   (so development picks up your live edits with no sync step), otherwise **fetched from GitHub**
   (`github.com/TheMasterCoder007/react-embedded`, branch `master`). The components reference whichever
   source the top CMakeLists resolved.
 
-The fetched sources land in the gitignored `build/` dir — they're build inputs, never committed.
-**Nothing generated is committed** — including `main/app.bundle.qbc` (the precompiled app bytecode),
-which you generate from the JS source before building (next section).
+The fetched sources land in the gitignored `build/` dir — they're build inputs, never committed. The
+firmware builds standalone (no app required at build time); the config (`app.erpkg`) is a separate
+artifact you flash into the `config` partition (next section).
 
 ## Build
 
 Prerequisites: **ESP-IDF v6.x** installed and exported (`. $IDF_PATH/export.sh`). Validated on
 v6.0.1 (xtensa GCC).
 
-**1. Generate the app bytecode** (`main/app.bundle.qbc`) — it's not committed (it's a build artifact
-of the JS app). From the repo root:
+Firmware and config are **two independent artifacts**: build/flash the firmware once, then flash a
+config into the `config` partition (and re-flash just the config whenever the JS app changes).
 
-```bash
-# 1. Build the JS bundle from a demo in demos/. (This cd leaves you in js/ — cd back afterwards.)
-#    `npm run build` bundles the default demo (demos/thermostat); `npm run build -- <name>` picks another.
-cd bridges/quickjs/js && npm run build                  # → dist/app.bundle.js
-cd ../../..                                              # back to repo root
-
-# 2. Configure + build the precompiler ONCE. (It FetchContents QuickJS-ng; needs a host compiler.
-#    On Windows use the MinGW Makefiles generator; on Linux/macOS drop the -G line.)
-cmake -S bridges/quickjs -B bridges/quickjs/build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile
-
-# 3. Compile the bundle to bytecode. (The tool is er-bridge-quickjs-compile.exe on Windows.)
-bridges/quickjs/build/er-bridge-quickjs-compile \
-    bridges/quickjs/js/dist/app.bundle.js \
-    examples/esp32/esp32-s3/main/app.bundle.qbc
-```
-
-Steps 1 and 3 paths are relative to the **repo root**; the precompiler only needs configuring once
-(step 2) — after that, regenerating bytecode is just steps 1 + 3.
-
-(If you skip this, the build stops with a message telling you to do it.)
-
-**2. Build + flash:**
+**1. Build + flash the firmware:**
 
 ```bash
 cd examples/esp32/esp32-s3
@@ -81,30 +65,50 @@ idf.py set-target esp32s3
 idf.py build flash monitor      # picks the right port automatically, or pass -p <PORT>
 ```
 
+The firmware builds with no app — until a config is flashed, it shows a **"No config loaded"** panel.
+
+**2. Pack a config and flash it into the `config` partition.** From the repo root:
+
+```bash
+# Build the config container from a demo in demos/ (bytecode + assets + version + CRC → one .erpkg).
+# `npm run pack` packs the default demo (demos/thermostat); `npm run pack -- <name>` picks another.
+cd bridges/quickjs/js && npm run pack            # → dist/app.erpkg
+cd ../../..                                       # back to repo root
+
+# Write it into the 'config' partition (parttool.py ships with ESP-IDF; auto-detects the port).
+parttool.py write_partition --partition-name=config \
+    --input bridges/quickjs/js/dist/app.erpkg
+```
+
+Reboot (or it's already running if you flashed before boot). To deploy a new UI later, re-run **step
+2** only — no firmware rebuild.
+
 Expected monitor output (roughly):
 
 ```
-I (xxx) embedded-react: embedded-react ESP32-S3 host — Phase 2 (RGB display)
+I (xxx) embedded-react: embedded-react ESP32-S3 host
 I (xxx) embedded-react: PSRAM free: 6……  internal free: …
 I (xxx) board: RGB panel up: 800x480
 I (xxx) embedded-react: display backend active
 I (xxx) board: GT911 up: product id '911 '
-I (xxx) embedded-react: loading ~1 MB of bytecode
+I (xxx) embedded-react: config partition mapped (2097152 bytes) — loading container
+I (xxx) embedded-react: config loaded
 I (xxx) js: React mounted at 800x480
 I (xxx) embedded-react: alive: 120 frames, …
 ```
 
-`React mounted` plus a lit panel is the win: the React tree mounted, the engine laid it out at panel
-size, paint walked it into the ARGB8888 framebuffer, and the backend flushed it to the LCD as RGB565
-— all from bytecode, with the heap in PSRAM. (The `first commit painted=` count depends on the demo:
-the thermostat paints its content on the frames after the initial mount/effects settle, so the very
-first commit may report `painted=0` — the steady `alive:` frames confirm it's running.) If the panel
-fails to init, the host logs a warning and falls back to the headless no-op backend so the JS stack
-still runs.
+`React mounted` plus a lit panel is the win: the container verified (CRC + QuickJS version), its assets
+registered, the React tree mounted, the engine laid it out at panel size, paint walked it into the
+ARGB8888 framebuffer, and the backend flushed it to the LCD as RGB565 — all from a memory-mapped config
+in flash, with the JS heap in PSRAM. (The `first commit painted=` count depends on the demo: the
+thermostat paints its content on the frames after the initial mount/effects settle, so the very first
+commit may report `painted=0` — the steady `alive:` frames confirm it's running.) If the panel fails to
+init, the host falls back to the headless no-op backend so the JS stack still runs. If the config is
+missing or rejected, the panel shows why (`No config loaded` / `Couldn't load config: <reason>`).
 
-Re-run **step 1** (regenerate `app.bundle.qbc`) whenever you change the JS app. The bytecode **must**
-come from the same QuickJS version the top-level `CMakeLists.txt` fetches (`v0.15.0`) — the precompiler
-links exactly that version, so it's automatic as long as both come from this repo.
+The container stamps the QuickJS version `npm run pack` built it against; it **must** match the tag the
+top-level `CMakeLists.txt` fetches (`v0.15.0`). Both come from this repo, so it's automatic — and if it
+ever mismatches, the loader rejects it with a panel rather than running garbage.
 
 ## Known tuning points / gotchas
 
@@ -130,12 +134,17 @@ links exactly that version, so it's automatic as long as both come from this rep
   `CONFIG_SPIRAM_MODE_QUAD`.
 - **Boot bytecode parse.** `JS_ReadObject` of ~940 KB takes a moment on first boot; that's the
   bytecode loader, not a hang.
+- **Config partition.** `partitions.csv` defines a `config` data partition (label `config`); main.c
+  finds it by label and `esp_partition_mmap`s it, passing the whole partition size as an upper bound
+  (the loader walks the container to find its true length, so trailing partition bytes are ignored).
+  Size it ≥ your `.erpkg` (default 2 MB). If you rename/resize it, keep the label `config`.
 - **First configure downloads deps.** `idf.py set-target` / first `build` runs FetchContent, which
   `git clone`s QuickJS-ng (and, when copied out, embedded-react) — so it needs network + `git` once.
   They cache in `build/`; later builds are offline. `idf.py fullclean` forces a re-fetch.
-- **QuickJS pin vs bytecode.** The fetched QuickJS tag (`v0.15.0`, in the top `CMakeLists.txt`) must
-  match `bridges/quickjs/CMakeLists.txt` and the version that compiled `app.bundle.qbc`. Bump all
-  three together if you ever change it, or the bytecode won't load.
+- **QuickJS pin vs config.** The fetched QuickJS tag (`v0.15.0`, in the top `CMakeLists.txt`) must
+  match `bridges/quickjs/CMakeLists.txt` and the version `npm run pack` stamped into the `.erpkg`. The
+  loader enforces it: a mismatch is rejected (panel) rather than crashing. Bump all together if you
+  ever change it.
 
 ## Performance overlay
 
@@ -159,5 +168,9 @@ as fast as the work allows. It always blocks at least one tick so the idle task 
 1. Multitouch / gestures (the engine has `er_responder_query_set`),
 2. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
 
-(Baked images and custom fonts are already handled at build time — see the
+3. On-device config upload over USB/network (write the `config` partition from the app itself) +
+   reload — the desktop already does live reload; the device reload core (`er_runtime_reset`) exists.
+
+(Images and custom fonts ride inside the config container — `npm run pack` bakes the demo's imported
+assets into the `.erpkg`. See the
 [JS package README](../../../bridges/quickjs/js/README.md#assets-images--fonts).)

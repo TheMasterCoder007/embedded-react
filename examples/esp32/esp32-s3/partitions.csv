@@ -1,6 +1,10 @@
-# Custom partition table — the app image embeds ~1 MB of QuickJS bytecode, so it needs a roomy
-# factory partition. 16 MB flash leaves plenty of headroom for OTA/assets later.
+# Custom partition table (16 MB flash). The firmware no longer embeds the app bytecode — the UI +
+# logic ship as a config container (app.erpkg) flashed into the dedicated 'config' data partition and
+# loaded at boot (memory-mapped) by main.c. Flash a config separately from the firmware:
+#   parttool.py write_partition --partition-name=config --input <path>/app.erpkg
+#
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 phy_init,   data, phy,     0xf000,   0x1000
-factory,    app,  factory, 0x10000,  0x400000
+factory,    app,  factory, 0x10000,  0x300000
+config,     data, 0x40,    ,         0x200000

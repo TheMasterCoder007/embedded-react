@@ -36,22 +36,30 @@ static ErRuntimeConfig s_cfg;
 /** @brief Last uncaught JS error (message + stack), for er_runtime_show_error / _last_error. */
 static char s_last_error[512] = "";
 
-/** @brief Error-overlay app: builds a red "JS error" screen from the `__error` global (RN redbox). */
-static const char* k_error_app =
+/**
+ * @brief Message-overlay app: builds a full-screen red panel from the `__title` / `__error` / `__hint`
+ *        globals (RN redbox). Used for both JS errors and config-load failures, so a device shows the
+ *        same screen the desktop does. `__hint` is optional (empty → no hint line).
+ */
+static const char* k_message_app =
     "const W = screen.width, H = screen.height;\n"
+    "const title = (typeof __title === 'string' && __title) ? __title : 'Error';\n"
     "const msg = (typeof __error === 'string' && __error) ? __error : 'Unknown error';\n"
+    "const hint = (typeof __hint === 'string') ? __hint : '';\n"
     "const root = NativeUI.createNode('View');\n"
     "NativeUI.setProps(root, { width: W, height: H, backgroundColor: '#7a0b0b',\n"
     "                          flexDirection: 'column', padding: 24, gap: 12 });\n"
-    "const title = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(title, { text: 'JS error', color: '#ffffff', fontSize: 24, fontWeight: 'bold' });\n"
-    "NativeUI.appendChild(root, title);\n"
+    "const t = NativeUI.createNode('Text');\n"
+    "NativeUI.setProps(t, { text: title, color: '#ffffff', fontSize: 24, fontWeight: 'bold' });\n"
+    "NativeUI.appendChild(root, t);\n"
     "const body = NativeUI.createNode('Text');\n"
     "NativeUI.setProps(body, { text: msg, color: '#ffd9d9', fontSize: 14, width: W - 48, numberOfLines: 20 });\n"
     "NativeUI.appendChild(root, body);\n"
-    "const hint = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(hint, { text: 'fix the source and reload', color: '#ff9b9b', fontSize: 12 });\n"
-    "NativeUI.appendChild(root, hint);\n"
+    "if (hint) {\n"
+    "  const h = NativeUI.createNode('Text');\n"
+    "  NativeUI.setProps(h, { text: hint, color: '#ff9b9b', fontSize: 12 });\n"
+    "  NativeUI.appendChild(root, h);\n"
+    "}\n"
     "NativeUI.setRoot(root);\n"
     "NativeUI.commit();\n";
 
@@ -264,6 +272,9 @@ static void install_globals(void)
     {
         return;
     }
+    /* Record the calling task's stack base for the max-stack-size overflow guard. Must run on the task
+     * that will execute JS (the host's frame-loop task) — er_runtime_init/reset are called from it. */
+    JS_UpdateStackTop(s_rt);
     install_console(s_ctx);
     install_screen(s_ctx);
     er_bridge_install(s_ctx);
@@ -320,10 +331,14 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     {
         s_cfg.screen_scale = 1.0f;
     }
-    s_rt = JS_NewRuntime();
+    s_rt = s_cfg.malloc_functions ? JS_NewRuntime2(s_cfg.malloc_functions, NULL) : JS_NewRuntime();
     if (!s_rt)
     {
         return false;
+    }
+    if (s_cfg.max_stack_size)
+    {
+        JS_SetMaxStackSize(s_rt, s_cfg.max_stack_size);
     }
     install_globals();
     return s_ctx != NULL;
@@ -395,6 +410,9 @@ const char* er_runtime_container_status_str(ErContainerStatus status)
     }
 }
 
+/** @brief Most sections a single container may hold (we use 2: bytecode + asset pack). */
+#define ER_CONTAINER_MAX_SECTIONS 8u
+
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
 {
     const uint8_t* buf = (const uint8_t*)vbuf;
@@ -406,11 +424,13 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
-    if (rd_le32(buf + 8) != crc32_bytes(buf + 12, len - 12u))
-    {
-        return ER_CONTAINER_BAD_CRC;
-    }
+    const uint32_t stored_crc = rd_le32(buf + 8);
 
+    /* Walk the structure FIRST, bounds-checking every field against `len`, to learn the exact payload
+     * end. This lets `len` be an upper bound — e.g. the full size of a flash/config partition the
+     * container was written into — rather than the exact byte count. The CRC is then taken over only
+     * the true payload, so trailing partition bytes don't corrupt the check. The walk reads unverified
+     * length fields, but each is bounds-checked, so a malformed blob is rejected, never over-read. */
     size_t off = 12u;
     if (off + 2u > len)
     {
@@ -418,26 +438,25 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
     }
     const uint16_t tlen = rd_le16(buf + off);
     off += 2u;
-    if (off + tlen > len)
+    if (off + (size_t)tlen + 4u > len)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
-    if (tlen != strlen(ER_QUICKJS_TAG) || memcmp(buf + off, ER_QUICKJS_TAG, tlen) != 0)
-    {
-        return ER_CONTAINER_BAD_QJS;
-    }
+    const uint8_t* tag = buf + off;
     off += tlen;
-    if (off + 4u > len)
-    {
-        return ER_CONTAINER_BAD_VERSION;
-    }
     const uint32_t nsec = rd_le32(buf + off);
     off += 4u;
+    if (nsec > ER_CONTAINER_MAX_SECTIONS)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
 
-    /* Register asset sections as we encounter them (so <Image>/<Text> resolve when the app mounts);
-     * defer the bytecode so it runs last regardless of section order. */
-    const uint8_t* bytecode = NULL;
-    uint32_t bytecode_len = 0;
+    struct
+    {
+        uint32_t type;
+        const uint8_t* data;
+        uint32_t len;
+    } secs[ER_CONTAINER_MAX_SECTIONS];
     for (uint32_t i = 0; i < nsec; i++)
     {
         if (off + 8u > len)
@@ -451,16 +470,37 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
         {
             return ER_CONTAINER_BAD_VERSION;
         }
-        const uint8_t* sdata = buf + off;
+        secs[i].type = type;
+        secs[i].data = buf + off;
+        secs[i].len = slen;
         off += slen;
-        if (type == 2u)
+    }
+    const size_t payload_end = off; /* exact end of the container within the (possibly larger) buffer */
+
+    /* Integrity, then version compatibility — both before touching the engine. */
+    if (stored_crc != crc32_bytes(buf + 12, payload_end - 12u))
+    {
+        return ER_CONTAINER_BAD_CRC;
+    }
+    if (tlen != strlen(ER_QUICKJS_TAG) || memcmp(tag, ER_QUICKJS_TAG, tlen) != 0)
+    {
+        return ER_CONTAINER_BAD_QJS;
+    }
+
+    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts), then run
+     * the bytecode last regardless of section order. */
+    const uint8_t* bytecode = NULL;
+    uint32_t bytecode_len = 0;
+    for (uint32_t i = 0; i < nsec; i++)
+    {
+        if (secs[i].type == 2u)
         {
-            er_assets_load_pack(sdata, slen);
+            er_assets_load_pack(secs[i].data, secs[i].len);
         }
-        else if (type == 1u)
+        else if (secs[i].type == 1u)
         {
-            bytecode = sdata;
-            bytecode_len = slen;
+            bytecode = secs[i].data;
+            bytecode_len = secs[i].len;
         }
     }
     if (!bytecode)
@@ -505,20 +545,27 @@ const char* er_runtime_last_error(void)
     return s_last_error;
 }
 
-void er_runtime_show_error(void)
+void er_runtime_show_message(const char* title, const char* body, const char* hint)
 {
     if (!s_ctx)
     {
         return;
     }
-    /* Clear the (possibly half-built) scene, publish the error text, and run the redbox app in the
+    /* Clear the (possibly half-built) scene, publish the strings, and run the overlay app in the
      * current context. The caller's next commit paints it. */
     er_reset();
     JSValue global = JS_GetGlobalObject(s_ctx);
-    JS_SetPropertyStr(s_ctx, global, "__error", JS_NewString(s_ctx, s_last_error));
+    JS_SetPropertyStr(s_ctx, global, "__title", JS_NewString(s_ctx, title ? title : "Error"));
+    JS_SetPropertyStr(s_ctx, global, "__error", JS_NewString(s_ctx, body ? body : ""));
+    JS_SetPropertyStr(s_ctx, global, "__hint", JS_NewString(s_ctx, hint ? hint : ""));
     JS_FreeValue(s_ctx, global);
-    JS_FreeValue(s_ctx, JS_Eval(s_ctx, k_error_app, strlen(k_error_app), "<error-overlay>", JS_EVAL_TYPE_GLOBAL));
+    JS_FreeValue(s_ctx, JS_Eval(s_ctx, k_message_app, strlen(k_message_app), "<message-overlay>", JS_EVAL_TYPE_GLOBAL));
     er_bridge_pump(s_ctx);
+}
+
+void er_runtime_show_error(void)
+{
+    er_runtime_show_message("JS error", s_last_error, "fix the source and reload");
 }
 
 void er_runtime_clear_persist(void)
