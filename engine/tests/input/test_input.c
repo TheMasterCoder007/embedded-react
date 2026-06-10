@@ -681,6 +681,40 @@ static int test_long_press_cancelled_by_exit(void)
 }
 
 /**
+ * @brief A held press (past the long-press threshold) must still fire onPress on release when the node
+ *        has NO onLongPress handler — the common case (e.g. a plain button).
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_long_press_without_handler(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* node = er_node_create(ER_NODE_PRESSABLE);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    er_node_set_props(node, &p);
+    er_event_set(node, ER_EVENT_PRESS, on_press, &counts);
+    er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, &counts);
+    er_event_set(node, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+    /* Deliberately NO ER_EVENT_LONG_PRESS handler — matches a plain <Pressable onPress>. */
+    er_tree_append_child(root, node);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 12, 14);
+    embedded_renderer_tick(600U); /* exceed the 500 ms long-press threshold while held inside */
+    embedded_renderer_touch(0, ER_TOUCH_UP, 12, 14);
+
+    if (counts.press_count != 1)
+        return fail("onPress must fire on release after a long hold when there is no onLongPress handler");
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks raw touch events bubble through ancestors.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
@@ -1536,6 +1570,8 @@ int main(void)
     if (test_long_press() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_long_press_cancelled_by_exit() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_long_press_without_handler() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_raw_touch_bubbling() != EXIT_SUCCESS)
         return EXIT_FAILURE;
