@@ -1,0 +1,24 @@
+# Defaults for the DIYmall ESP32-2432S028R "Cheap Yellow Display" (ESP32-WROOM-32, NO PSRAM, 4MB flash).
+# Seed sdkconfig on first build; tweak via `idf.py menuconfig` after.
+
+CONFIG_IDF_TARGET="esp32"
+
+# No PSRAM on this board — the framebuffer + engine pools all live in internal DRAM (the whole point of
+# Flow B: no QuickJS heap). If the framebuffer alloc fails at boot, free RAM by lowering ERUI_MAX_NODES
+# (components/engine/CMakeLists.txt) and/or rebuilding the AOT app with a smaller ER_AOT_LIST_CAP.
+
+# 4 MB flash. Default partition table (single factory app) — the compiled app is IN the firmware image
+# (Flow B), so there's no separate config partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# Main-task stack: the engine's layout/render recurses with tree depth. Plenty for the demo.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
+
+# Performance: full clock + a 1 kHz scheduler tick so the frame pacer can yield ~1 ms (not a 10 ms tick).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,0 +1,117 @@
+/*
+ * embedded-react — ESP32-2432S028R "Cheap Yellow Display" host (Flow B / AOT).
+ *
+ * The no-PSRAM peer of the ESP32-S3 example: this runs the AOT-compiled C app (dist/app.gen.c, from
+ * `npm run aot`) with NO QuickJS and no JS at runtime — exactly what fits a plain ESP32-WROOM-32's
+ * internal RAM. It brings up the CYD's ST7789 SPI panel + XPT2046 touch (board.c), registers the lean
+ * SPI render backend, calls er_app_build() once, and runs the frame loop: poll touch, pump animations,
+ * commit, present, tick. The compiled app IS the firmware — there is no uploaded config (that model
+ * was for the QuickJS path).
+ *
+ * See ../README.md.
+ */
+
+#include "app.gen.h"
+#include "board.h"
+#include "er_scene.h"
+#include "esp32_spi_lcd_backend.h"
+#include "native_renderer.h"
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char* TAG = "embedded-react";
+
+/** @brief Target frame period for the adaptive pacer (~33 fps); heavy frames just run as fast as work allows. */
+#define ER_TARGET_FRAME_MS 30U
+
+/** @brief Returns milliseconds since boot (engine-clock delta source). */
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+/** @brief Boots the panel + engine, builds the AOT app, then drives the frame loop. */
+static void run_app(void)
+{
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_lcd_panel_io_handle_t io = NULL;
+    if (!board_display_init(&panel, &io))
+    {
+        ESP_LOGE(TAG, "display init failed — halting");
+        return;
+    }
+    if (!er_esp32_spi_lcd_backend_init(panel, io, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
+    {
+        ESP_LOGE(TAG, "render backend init failed (out of internal RAM?) — halting");
+        return;
+    }
+    const bool touch = board_touch_init();
+    if (!touch)
+    {
+        ESP_LOGW(TAG, "touch init failed — UI renders but input is disabled");
+    }
+
+    /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
+    er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    ESP_LOGI(TAG, "AOT app built at %dx%d (no QuickJS)", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    ESP_LOGI(TAG, "free internal RAM after boot: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    /* Frame loop. The press state machine turns XPT2046 polls into down/move/up for the engine. */
+    uint32_t prev = now_ms();
+    bool touch_down = false;
+    int last_x = 0, last_y = 0;
+    while (true)
+    {
+        const int64_t frame_start_us = esp_timer_get_time();
+
+        if (touch)
+        {
+            int tx = 0, ty = 0;
+            bool pressed = false;
+            if (board_touch_read(&tx, &ty, &pressed))
+            {
+                if (pressed)
+                {
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    touch_down = true;
+                    last_x = tx;
+                    last_y = ty;
+                }
+                else if (touch_down)
+                {
+                    embedded_renderer_touch(0, ER_TOUCH_UP, last_x, last_y);
+                    touch_down = false;
+                }
+            }
+        }
+
+        er_commit();
+        er_esp32_spi_lcd_present();
+
+        const uint32_t now = now_ms();
+        embedded_renderer_tick(now - prev);
+        prev = now;
+
+        /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick for the idle task. */
+        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);
+        const uint32_t sleep_ms = (used_ms >= ER_TARGET_FRAME_MS) ? 0U : (ER_TARGET_FRAME_MS - used_ms);
+        TickType_t ticks = pdMS_TO_TICKS(sleep_ms);
+        if (ticks == 0U)
+        {
+            ticks = 1U;
+        }
+        vTaskDelay(ticks);
+    }
+}
+
+/** @brief IDF entry point. */
+void app_main(void)
+{
+    ESP_LOGI(TAG, "embedded-react ESP32-2432S028R (CYD) host — Flow B (AOT, no QuickJS)");
+    ESP_LOGI(TAG, "free internal RAM: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    run_app();
+}
