@@ -21,7 +21,7 @@ import { parse } from '@babel/parser';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lowerStyle, NODE_TYPES } from './style-map.mjs';
+import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const repoRoot = resolve(here, '../../../..');
@@ -258,14 +258,63 @@ function attrExpr(attr) {
   return v;
 }
 
-function collectStyle(openingElement, scope) {
-  let merged = {};
+/** Lowers a dynamic (state-referencing) color expression to a C ARGB expression. */
+function emitColorExpr(node, env) {
+  if (node.type === 'StringLiteral') return colorLiteral(node.value);
+  if (node.type === 'ConditionalExpression') {
+    const t = emitExpr(node.test, env).code;
+    return `((${t}) ? ${emitColorExpr(node.consequent, env)} : ${emitColorExpr(node.alternate, env)})`;
+  }
+  if (node.type === 'Identifier' && node.name in env.consts && typeof env.consts[node.name] === 'string') {
+    return colorLiteral(env.consts[node.name]);
+  }
+  throw new Error('AOT: a dynamic color must be a color string literal or a ternary of them');
+}
+
+/** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
+function lowerDynamicStyleValue(key, valueNode, env) {
+  const meta = DYN_FIELDS[key];
+  if (!meta) throw new Error(`AOT: a state-driven value for style "${key}" is not supported (static only)`);
+  if (meta.kind === 'color') return [{ field: meta.field, code: emitColorExpr(valueNode, env) }];
+  if (meta.kind === 'opacity') return [{ field: meta.field, code: `(uint8_t)((${emitExpr(valueNode, env).code}) * 255.0f)` }];
+  return [{ field: meta.field, code: `(int16_t)(${emitExpr(valueNode, env).code})` }]; /* num */
+}
+
+/**
+ * Collects an element's merged style into static field assigns and dynamic (state-driven) field assigns.
+ * Inline object values are tried statically first; a value that references state becomes a dynAssign.
+ * Later style sources override earlier ones per field (RN merge), kept in `fields` by ERProps field.
+ */
+function collectStyleAssigns(openingElement, scope, env) {
+  const fields = new Map(); // ERProps field -> { dynamic: bool, code: string }
+  const apply = (expr) => {
+    if (expr.type === 'ArrayExpression') {
+      for (const e of expr.elements) if (e) apply(e);
+      return;
+    }
+    if (expr.type === 'ObjectExpression') {
+      for (const prop of expr.properties) {
+        if (prop.type !== 'ObjectProperty') throw new Error('AOT: spread/method in an inline style object not supported');
+        const key = prop.computed ? evalStatic(prop.key, scope) : prop.key.name ?? prop.key.value;
+        try {
+          for (const a of lowerStyle({ [key]: evalStatic(prop.value, scope) })) fields.set(a.field, { dynamic: false, code: a.expr });
+        } catch {
+          for (const a of lowerDynamicStyleValue(key, prop.value, env)) fields.set(a.field, { dynamic: true, code: a.code });
+        }
+      }
+      return;
+    }
+    // A StyleSheet reference / identifier resolving to a static style object.
+    for (const a of lowerStyle(evalStatic(expr, scope))) fields.set(a.field, { dynamic: false, code: a.expr });
+  };
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
-    const val = evalStatic(attrExpr(attr), scope);
-    for (const p of Array.isArray(val) ? val : [val]) if (p) merged = { ...merged, ...p };
+    apply(attrExpr(attr));
   }
-  return merged;
+  const staticAssigns = [];
+  const dynAssigns = [];
+  for (const [field, v] of fields) (v.dynamic ? dynAssigns : staticAssigns).push(v.dynamic ? { field, code: v.code } : { field, expr: v.code });
+  return { staticAssigns, dynAssigns };
 }
 
 const EVENT_TYPES = { onPress: 'ER_EVENT_PRESS', onLongPress: 'ER_EVENT_LONG_PRESS', onPressIn: 'ER_EVENT_PRESS_IN', onPressOut: 'ER_EVENT_PRESS_OUT' };
@@ -470,12 +519,11 @@ function emitNode(el, scope, out, env, state, opts = {}) {
   }
 
   const v = `n${out.n++}`;
-  const styleAssigns = lowerStyle(collectStyle(el.openingElement, scope));
+  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
   const text = tag === 'Text' ? buildText(el.children, scope, env) : null;
 
-  // Dynamic field assignments recomputed every app_update(). `displayCode` toggles show/hide for a
-  // state-driven conditional: the node is always built, its `display` flips between flex and none.
-  const dynAssigns = [];
+  // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
+  // `display` flips between flex and none in app_update (joining any state-driven style assigns).
   if (opts.displayCode) dynAssigns.push({ field: 'display', code: `((${opts.displayCode}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)` });
 
   const isDynamic = !!text?.dynamic || dynAssigns.length > 0;
@@ -485,10 +533,10 @@ function emitNode(el, scope, out, env, state, opts = {}) {
     // Props are (re)applied in app_update(); here just create the node and remember its handle.
     out.build.push(`    s_${v} = ${v};`);
     out.handles.push(v);
-    out.updates.push({ v, styleAssigns, text, dynAssigns });
+    out.updates.push({ v, styleAssigns: staticAssigns, text, dynAssigns });
   } else {
     out.build.push(`    er_props_default(&p);`);
-    for (const a of styleAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
     if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
     out.build.push(`    er_node_set_props(${v}, &p);`);
   }

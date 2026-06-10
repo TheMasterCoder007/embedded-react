@@ -28,10 +28,10 @@ export function App() {
   return (
     <View style={styles.screen}>
       <Text style={styles.kicker}>NOW PLAYING</Text>
-      <View style={styles.art} />
+      <View style={[styles.art, { opacity: playing ? 1 : 0.45 }]} />
       <Text style={styles.title}>Midnight City</Text>
       <Text style={styles.artist}>M83</Text>
-      <Pressable style={styles.play} onPress={() => setPlaying((p) => !p)}>
+      <Pressable style={[styles.play, { backgroundColor: playing ? '#22c55e' : '#5b6cff' }]} onPress={() => setPlaying((p) => !p)}>
         <Text style={styles.playLabel}>{playing ? 'Pause' : 'Play'}</Text>
       </Pressable>
       {playing && <Text style={styles.badge}>Playing now</Text>}

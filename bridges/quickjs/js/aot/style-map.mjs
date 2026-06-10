@@ -170,3 +170,26 @@ export const NODE_TYPES = {
   Image: 'ER_NODE_IMAGE',
   ScrollView: 'ER_NODE_SCROLL_VIEW',
 };
+
+// Style keys whose value can be DYNAMIC (driven by state). Each maps to its ERProps field + a kind the
+// AOT compiler uses to lower a runtime expression: 'num' → assign a C numeric expression directly;
+// 'opacity' → scale a 0–1 expression to 0–255; 'color' → a (ternary of) color literal(s). Keys absent
+// here (enums like flexDirection, the `flex` shorthand) can only be static for now.
+const NUM_FIELDS = {
+  width: 'width', height: 'height', minWidth: 'min_width', maxWidth: 'max_width', minHeight: 'min_height', maxHeight: 'max_height',
+  padding: 'padding', paddingHorizontal: 'padding_horizontal', paddingVertical: 'padding_vertical',
+  paddingLeft: 'padding_left', paddingTop: 'padding_top', paddingRight: 'padding_right', paddingBottom: 'padding_bottom',
+  margin: 'margin', marginHorizontal: 'margin_horizontal', marginVertical: 'margin_vertical',
+  marginLeft: 'margin_left', marginTop: 'margin_top', marginRight: 'margin_right', marginBottom: 'margin_bottom',
+  gap: 'gap', rowGap: 'row_gap', columnGap: 'column_gap', flexGrow: 'flex_grow', flexShrink: 'flex_shrink',
+  borderRadius: 'border_radius', borderWidth: 'border_width', zIndex: 'z_index',
+  fontSize: 'font_size', lineHeight: 'line_height', letterSpacing: 'letter_spacing',
+};
+
+export const DYN_FIELDS = {
+  ...Object.fromEntries(Object.entries(NUM_FIELDS).map(([k, f]) => [k, { field: f, kind: 'num' }])),
+  backgroundColor: { field: 'background_color', kind: 'color' },
+  color: { field: 'color', kind: 'color' },
+  borderColor: { field: 'border_color', kind: 'color' },
+  opacity: { field: 'opacity', kind: 'opacity' },
+};
