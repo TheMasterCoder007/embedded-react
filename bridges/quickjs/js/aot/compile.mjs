@@ -106,6 +106,7 @@ function emitExpr(node, env) {
       if (env.locals.has(node.name)) return env.locals.get(node.name);
       if (env.state.has(node.name)) {
         const s = env.state.get(node.name);
+        if (s.kind === 'list') throw new Error(`AOT: a list state ("${node.name}") can only be used via .length or .map`);
         return { code: s.cMember, cType: s.cType };
       }
       if (node.name in env.consts) {
@@ -147,6 +148,21 @@ function emitExpr(node, env) {
       const cType = c.cType === 'float' || a.cType === 'float' ? 'float' : c.cType === a.cType ? c.cType : 'int';
       return { code: `(${t.code} ? ${c.code} : ${a.code})`, cType };
     }
+    case 'MemberExpression': {
+      const obj = node.object;
+      const prop = node.computed ? null : node.property.name;
+      // `<list>.length` → the runtime count.
+      if (obj.type === 'Identifier' && env.state.get(obj.name)?.kind === 'list' && prop === 'length') {
+        return { code: env.state.get(obj.name).countMember, cType: 'int' };
+      }
+      // `<item>.field` where item is a struct local (a list row's bound element).
+      if (obj.type === 'Identifier' && env.locals.get(obj.name)?.struct && prop) {
+        const f = env.locals.get(obj.name).struct.fields.find((x) => x.key === prop);
+        if (!f) throw new Error(`AOT: unknown field "${prop}" on a list item`);
+        return { code: `${env.locals.get(obj.name).code}.${f.key}`, cType: f.kind === 'string' ? 'string' : f.kind };
+      }
+      throw new Error('AOT: unsupported member expression in a dynamic context');
+    }
   }
   throw new Error(`AOT: unsupported expression "${node.type}" in a dynamic context`);
 }
@@ -187,6 +203,25 @@ function moduleScope(program) {
 }
 
 /** Collects useState declarations → state descriptors keyed by both state name and setter name. */
+/** Max characters stored per string field of a list-state item (fixed buffer — embedded-friendly). */
+const LIST_STR_CAP = 48;
+/** Max rows a list-state can hold (pre-allocated pool; rows beyond the count are display:none). */
+const LIST_CAP = 16;
+
+/** Infers a C struct shape from a list-state's initial elements (objects of strings/numbers). */
+function inferItemStruct(items, name) {
+  if (!Array.isArray(items) || !items.length) throw new Error(`AOT: list state "${name}" needs ≥1 initial element to infer its item shape`);
+  const first = items[0];
+  if (typeof first !== 'object' || first === null || Array.isArray(first)) throw new Error(`AOT: list state "${name}" elements must be objects`);
+  const fields = Object.keys(first).map((key) => {
+    const v = first[key];
+    if (typeof v === 'string') return { key, kind: 'string' };
+    if (typeof v === 'number') return { key, kind: Number.isInteger(v) ? 'int' : 'float' };
+    throw new Error(`AOT: list state "${name}" field "${key}" must be a string or number`);
+  });
+  return { fields };
+}
+
 function collectState(fnBody, scope) {
   const byName = new Map();
   const bySetter = new Map();
@@ -198,10 +233,19 @@ function collectState(fnBody, scope) {
       const name = decl.id.elements[0]?.name;
       const setter = decl.id.elements[1]?.name;
       if (!name) continue;
-      const initVal = init.arguments[0] ? evalStatic(init.arguments[0], scope) : 0;
-      const cType = cTypeOfValue(initVal);
-      if (cType === 'string') throw new Error(`AOT: string useState ("${name}") not yet supported`);
-      const rec = { name, setter, cType, cMember: `s_state.${name}`, initCode: cType === 'float' ? `${initVal}f` : String(Number(initVal)) };
+      const initArg = init.arguments[0];
+
+      let rec;
+      if (initArg?.type === 'ArrayExpression') {
+        // List state → a fixed-capacity C struct array + a count (s_<name>[CAP], s_<name>_count).
+        const items = evalStatic(initArg, scope);
+        rec = { name, setter, kind: 'list', struct: inferItemStruct(items, name), items, cap: LIST_CAP, cTypeName: `ErItem_${name}`, arrayName: `s_${name}`, countMember: `s_${name}_count` };
+      } else {
+        const initVal = initArg ? evalStatic(initArg, scope) : 0;
+        const cType = cTypeOfValue(initVal);
+        if (cType === 'string') throw new Error(`AOT: string useState ("${name}") not yet supported`);
+        rec = { name, setter, kind: 'scalar', cType, cMember: `s_state.${name}`, initCode: cType === 'float' ? `${initVal}f` : String(Number(initVal)) };
+      }
       byName.set(name, rec);
       if (setter) bySetter.set(setter, rec);
     }
@@ -354,6 +398,40 @@ function buildText(children, scope, env) {
 // ---------------------------------------------------------------------------------------------------
 // Handler compilation — an on* arrow/function → C statements that mutate state and re-render.
 // ---------------------------------------------------------------------------------------------------
+/** Compiles a list-state setter call (`setItems(...)`) to bounded C array mutations. */
+function compileListOp(rec, arg, env) {
+  const { arrayName: arr, countMember: cnt, cap, struct } = rec;
+  // setItems([...items, a, b]) — append; setItems([]) — clear.
+  if (arg.type === 'ArrayExpression') {
+    if (arg.elements.length === 0) return [`    ${cnt} = 0;`];
+    const [head, ...rest] = arg.elements;
+    if (head?.type !== 'SpreadElement' || head.argument.name !== rec.name) throw new Error(`AOT: a list literal must spread the current list first: [...${rec.name}, item]`);
+    const lines = [];
+    for (const el of rest) {
+      if (el.type !== 'ObjectExpression') throw new Error('AOT: appended list items must be object literals');
+      const props = new Map(el.properties.map((p) => [p.key.name ?? p.key.value, p.value]));
+      lines.push(`    if (${cnt} < ${cap})`, '    {');
+      for (const f of struct.fields) {
+        const valNode = props.get(f.key);
+        if (!valNode) continue;
+        const e = emitExpr(valNode, env);
+        if (f.kind === 'string') lines.push(`        snprintf(${arr}[${cnt}].${f.key}, sizeof(${arr}[${cnt}].${f.key}), "${printfSpec(e.cType)}", ${e.code});`);
+        else lines.push(`        ${arr}[${cnt}].${f.key} = ${e.code};`);
+      }
+      lines.push(`        ${cnt}++;`, '    }');
+    }
+    return lines;
+  }
+  // setItems(items.slice(0, X)) — slice(0,-1) pops the last; slice(0,n) truncates to n.
+  if (arg.type === 'CallExpression' && arg.callee.type === 'MemberExpression' && arg.callee.object.name === rec.name && arg.callee.property.name === 'slice') {
+    const end = arg.arguments[1];
+    if (end?.type === 'UnaryExpression' && end.operator === '-' && end.argument.value === 1) return [`    if (${cnt} > 0) ${cnt}--;`];
+    const e = emitExpr(end, env);
+    return [`    ${cnt} = (${cnt} < (${e.code})) ? ${cnt} : (${e.code});`];
+  }
+  throw new Error(`AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`);
+}
+
 function compileHandler(fnNode, env, state) {
   const stmts = [];
   const body = fnNode.body;
@@ -365,7 +443,9 @@ function compileHandler(fnNode, env, state) {
     const rec = state.bySetter.get(expr.callee.name);
     if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
     const arg = expr.arguments[0];
-    if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')) {
+    if (rec.kind === 'list') {
+      stmts.push(...compileListOp(rec, arg, env));
+    } else if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')) {
       // setState(prev => expr): bind the param to the current value, assign the result.
       const param = arg.params[0]?.name;
       const locals = new Map(env.locals);
@@ -389,34 +469,43 @@ function compileHandler(fnNode, env, state) {
 // ---------------------------------------------------------------------------------------------------
 
 /** Reads a component instance's props (attributes) as static values; dynamic props throw (for now). */
-function extractProps(openingElement, scope) {
+/** Reads a component's props as descriptors: `{static:true,value}` (folded) or `{static:false,code,cType,struct}`
+ *  (a runtime C expression — e.g. a list row's `item.field`). */
+function extractProps(openingElement, scope, env) {
   const props = {};
   for (const attr of openingElement.attributes) {
     if (attr.type === 'JSXSpreadAttribute') throw new Error('AOT: spread props {...x} to a component not yet supported');
     if (attr.type !== 'JSXAttribute' || attr.name.name === 'key') continue;
+    const node = attrExpr(attr);
     try {
-      props[attr.name.name] = evalStatic(attrExpr(attr), scope);
+      props[attr.name.name] = { static: true, value: evalStatic(node, scope) };
     } catch {
-      throw new Error(`AOT: dynamic prop "${attr.name.name}" to a component not yet supported (static props only for now)`);
+      props[attr.name.name] = { static: false, ...emitExpr(node, env) };
     }
   }
   return props;
 }
 
-/** Binds a component's parameter (destructured `{a,b}` or whole `props`) to the passed prop values. */
+/** Maps a component's parameter to its prop descriptors (handles destructure rename + defaults). */
 function bindParams(fn, props) {
-  const out = {};
+  const out = new Map();
   const param = fn.params[0];
   if (!param) return out;
   if (param.type === 'Identifier') {
-    out[param.name] = props;
+    const obj = {};
+    for (const [k, d] of Object.entries(props)) {
+      if (!d.static) throw new Error('AOT: dynamic props require a destructured component parameter (e.g. `function C({ x })`)');
+      obj[k] = d.value;
+    }
+    out.set(param.name, { static: true, value: obj });
   } else if (param.type === 'ObjectPattern') {
     for (const p of param.properties) {
       if (p.type === 'RestElement') throw new Error('AOT: rest props (...rest) in a component param not supported');
-      const key = p.key.name ?? p.key.value;
-      let val = props[key];
-      if (val === undefined && p.value?.type === 'AssignmentPattern') val = evalStatic(p.value.right, {});
-      out[key] = val;
+      const propName = p.key.name ?? p.key.value;
+      const bindName = p.value?.type === 'Identifier' ? p.value.name : p.value?.type === 'AssignmentPattern' ? p.value.left.name : propName;
+      let d = props[propName];
+      if (!d && p.value?.type === 'AssignmentPattern') d = { static: true, value: evalStatic(p.value.right, {}) };
+      out.set(bindName, d ?? { static: true, value: undefined });
     }
   } else {
     throw new Error('AOT: unsupported component parameter pattern');
@@ -424,15 +513,19 @@ function bindParams(fn, props) {
   return out;
 }
 
-/** Inlines a function component instance: bind props into scope, emit its returned JSX in place. */
+/** Inlines a function component instance: bind props (static → scope, dynamic → locals), emit its JSX. */
 function emitComponent(el, scope, out, env, state, opts) {
   const tag = el.openingElement.name.name;
   const fn = out.components.get(tag);
   if (usesState(fn)) throw new Error(`AOT: component <${tag}> uses useState — per-instance child state not yet supported`);
   if (el.children.some((c) => c.type === 'JSXElement')) throw new Error(`AOT: passing children to <${tag}> (props.children) not yet supported`);
-  const bindings = bindParams(fn, extractProps(el.openingElement, scope));
-  const childScope = { ...scope, ...bindings };
-  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope }, state, opts);
+  const childScope = { ...scope };
+  const childLocals = new Map(env.locals);
+  for (const [name, d] of bindParams(fn, extractProps(el.openingElement, scope, env))) {
+    if (d.static) childScope[name] = d.value;
+    else childLocals.set(name, { code: d.code, cType: d.cType, struct: d.struct });
+  }
+  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope, locals: childLocals }, state, opts);
 }
 
 /** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
@@ -462,6 +555,26 @@ function emitMap(call, parentVar, scope, out, env, state) {
     if (idxName) iterScope[idxName] = i;
     emitElementInto(retJSX, parentVar, iterScope, out, { ...env, consts: iterScope }, state);
   });
+}
+
+/**
+ * `{listState.map((item, i) => <Row/>)}` over a STATE array of variable length. Pre-allocates a fixed
+ * pool of `cap` rows (no runtime malloc); each row k binds `item` to `s_<name>[k]` (a struct local) and
+ * is shown only while `k < count` (display toggle). app_update then drives every row's content and show.
+ */
+function emitDynamicMap(call, rec, parentVar, scope, out, env, state) {
+  const cb = call.arguments[0];
+  if (!isFn(cb)) throw new Error('AOT: .map argument must be an inline function');
+  const itemName = cb.params[0]?.name;
+  const idxName = cb.params[1]?.name;
+  const retJSX = componentReturnJSX(cb);
+  for (let k = 0; k < rec.cap; k++) {
+    const iterScope = { ...scope };
+    if (idxName) iterScope[idxName] = k; // the index is a compile-time literal per pooled row
+    const locals = new Map(env.locals);
+    if (itemName) locals.set(itemName, { code: `${rec.arrayName}[${k}]`, struct: rec.struct });
+    emitElementInto(retJSX, parentVar, iterScope, out, { ...env, consts: iterScope, locals }, state, { displayCode: `(${k} < ${rec.countMember})` });
+  }
 }
 
 /** Emits the children of a container node, handling element + {expression} children. */
@@ -495,7 +608,10 @@ function emitChildren(children, parentVar, scope, out, env, state) {
           if (expr.alternate.type === 'JSXElement') emitElementInto(expr.alternate, parentVar, scope, out, env, state, { displayCode: `!(${code})` });
         }
       } else if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'map') {
-        emitMap(expr, parentVar, scope, out, env, state);
+        const obj = expr.callee.object;
+        const rec = obj.type === 'Identifier' ? env.state.get(obj.name) : null;
+        if (rec?.kind === 'list') emitDynamicMap(expr, rec, parentVar, scope, out, env, state);
+        else emitMap(expr, parentVar, scope, out, env, state);
       } else {
         // A constant that renders nothing (false/null/'') is fine; anything else is unsupported.
         let v;
@@ -573,10 +689,24 @@ const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
 const stateRecords = [...state.byName.values()];
+const scalarRecords = stateRecords.filter((s) => s.kind === 'scalar');
+const listRecords = stateRecords.filter((s) => s.kind === 'list');
 
-const stateBlock = stateRecords.length
-  ? `typedef struct\n{\n${stateRecords.map((s) => `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${stateRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
+// Scalar state → one ErAppState struct. List state → a fixed-capacity struct array + a count each.
+const fieldCDecl = (f) => (f.kind === 'string' ? `    char ${f.key}[${LIST_STR_CAP}];` : `    ${f.kind} ${f.key};`);
+const itemInit = (item, struct) => `{ ${struct.fields.map((f) => (f.kind === 'string' ? cstr(String(item[f.key] ?? '')) : f.kind === 'float' ? `${Number(item[f.key]) || 0}f` : String(Math.round(Number(item[f.key]) || 0)))).join(', ')} }`;
+const listBlocks = listRecords
+  .map(
+    (s) =>
+      `typedef struct\n{\n${s.struct.fields.map(fieldCDecl).join('\n')}\n} ${s.cTypeName};\n\n` +
+      `static ${s.cTypeName} ${s.arrayName}[${s.cap}] = {${s.items.map((it) => '\n    ' + itemInit(it, s.struct)).join(',')}\n};\n` +
+      `static int ${s.countMember} = ${s.items.length};\n`,
+  )
+  .join('\n');
+const scalarBlock = scalarRecords.length
+  ? `typedef struct\n{\n${scalarRecords.map((s) => `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
   : '';
+const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 
 const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
 
