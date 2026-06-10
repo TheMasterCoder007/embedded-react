@@ -838,58 +838,9 @@ static ERNodeType map_node_type(const char* s)
  */
 static void props_init_defaults(ERProps* p)
 {
-    memset(p, 0, sizeof(*p));
-
-    /* NOTE: flex_grow and flex_shrink are deliberately NOT in this list — their default is 0
-     * ("no grow / no shrink", the RN default), and the layout engine reads any non-zero value
-     * (including the ER_LAYOUT_AUTO sentinel) as a real flex factor. flex_basis stays AUTO. */
-    int16_t* const auto_fields[] = {
-        &p->left,
-        &p->top,
-        &p->right,
-        &p->bottom,
-        &p->width,
-        &p->height,
-        &p->min_width,
-        &p->max_width,
-        &p->min_height,
-        &p->max_height,
-        &p->padding,
-        &p->padding_left,
-        &p->padding_top,
-        &p->padding_right,
-        &p->padding_bottom,
-        &p->margin,
-        &p->margin_left,
-        &p->margin_top,
-        &p->margin_right,
-        &p->margin_bottom,
-        &p->gap,
-        &p->row_gap,
-        &p->column_gap,
-        &p->flex_basis,
-        &p->margin_horizontal,
-        &p->margin_vertical,
-        &p->padding_horizontal,
-        &p->padding_vertical,
-    };
-    for (size_t i = 0; i < sizeof(auto_fields) / sizeof(auto_fields[0]); i++)
-    {
-        *auto_fields[i] = ER_LAYOUT_AUTO;
-    }
-
-    p->opacity = 255;
-
-    /* RN defaults the transform pivot to the node centre; the engine treats 0.0 as a literal
-       top-left pivot, so seed the fractional origin to 0.5/0.5 (overridden by transformOrigin). */
-    p->transform_origin_x = 0.5f;
-    p->transform_origin_y = 0.5f;
-
-    /* Type-specific fields whose engine default is non-zero. Harmless for other node types,
-       since er_node_set_props() only applies fields relevant to the node's type. */
-    p->editable = 1;               /* TextInput editable by default. */
-    p->animating = 1;              /* ActivityIndicator spins by default. */
-    p->shadow_color = 0xFF000000U; /* Opaque black shadow unless overridden. */
+    /* The default seeding lives in the engine (er_props_default) so the Flow B AOT codegen produces
+       byte-identical prop bags. This wrapper stays for the call sites + the doc comment above. */
+    er_props_default(p);
 }
 
 /* Marshalling convenience macros — each reads one key from `obj` into the ERProps `p`.

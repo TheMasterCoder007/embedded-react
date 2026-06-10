@@ -762,6 +762,20 @@ extern "C"
     void er_node_destroy(ERNode* node);
 
     /**
+     * @brief Initialises an ERProps to its defaults, ready for the caller to set specific fields.
+     *
+     * ERProps is mostly zero-defaulted, but several fields have non-zero defaults that must be seeded
+     * before er_node_set_props (layout fields → ER_LAYOUT_AUTO, opacity → 255, transform origin → 0.5,
+     * editable/animating → 1, shadow_color → opaque black). Always start from this, then assign only
+     * the props you set — both so unset fields behave correctly and so byte-identical prop bags hash
+     * equal (er_node_set_props skips no-op updates). Used by the QuickJS bridge and the Flow B AOT
+     * codegen alike, so they produce identical bags.
+     *
+     * @param[out] props  Property bag to initialise.
+     */
+    void er_props_default(ERProps* props);
+
+    /**
      * @brief Applies a property bag to a node, marking it dirty for re-render.
      *
      * Only the fields relevant to the node's type are copied; others are ignored.

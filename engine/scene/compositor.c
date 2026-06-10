@@ -1175,6 +1175,44 @@ static uint64_t props_hash(const ERProps* p)
     return h;
 }
 
+void er_props_default(ERProps* props)
+{
+    if (!props)
+        return;
+    memset(props, 0, sizeof(*props));
+
+    /* Layout fields default to the AUTO sentinel ("not set", size from flex). flex_grow/flex_shrink
+     * are deliberately NOT in this list — their default is 0 (RN's "no grow / no shrink"), and any
+     * non-zero value (including ER_LAYOUT_AUTO) is read as a real flex factor. flex_basis stays AUTO. */
+    int16_t* const auto_fields[] = {
+        &props->left,           &props->top,          &props->right,
+        &props->bottom,         &props->width,        &props->height,
+        &props->min_width,      &props->max_width,    &props->min_height,
+        &props->max_height,     &props->padding,      &props->padding_left,
+        &props->padding_top,    &props->padding_right, &props->padding_bottom,
+        &props->margin,         &props->margin_left,  &props->margin_top,
+        &props->margin_right,   &props->margin_bottom, &props->gap,
+        &props->row_gap,        &props->column_gap,   &props->flex_basis,
+        &props->margin_horizontal, &props->margin_vertical,
+        &props->padding_horizontal, &props->padding_vertical,
+    };
+    for (size_t i = 0; i < sizeof(auto_fields) / sizeof(auto_fields[0]); i++)
+        *auto_fields[i] = ER_LAYOUT_AUTO;
+
+    props->opacity = 255;
+
+    /* RN defaults the transform pivot to the node centre; the engine treats 0.0 as a literal top-left
+       pivot, so seed the fractional origin to 0.5/0.5 (overridden by transformOrigin). */
+    props->transform_origin_x = 0.5f;
+    props->transform_origin_y = 0.5f;
+
+    /* Type-specific fields whose engine default is non-zero. Harmless for other node types, since
+       er_node_set_props applies only the fields relevant to the node's type. */
+    props->editable = 1;                 /* TextInput editable by default. */
+    props->animating = 1;                /* ActivityIndicator spins by default. */
+    props->shadow_color = 0xFF000000U;   /* Opaque black shadow unless overridden. */
+}
+
 void er_node_set_props(ERNode* node, const ERProps* props)
 {
     if (!node || !props)
