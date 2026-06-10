@@ -135,6 +135,28 @@ int main(void)
             SDL_Log("injected %d tap(s) at %d,%d", clicks, px, py);
         }
 
+        /* ER_AOT_HOLD=<ms>: press at the click point and HOLD it, ticking the engine so a press-driven
+           animation can settle, then screenshot while still held (no release). Lets a headless run
+           capture an in-progress animation — e.g. a button scaled down by an onPressIn spring. */
+        int hold_ms = 0;
+        {
+            const char* s = SDL_getenv("ER_AOT_HOLD");
+            if (s)
+            {
+                hold_ms = SDL_atoi(s);
+            }
+        }
+        if (hold_ms > 0)
+        {
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, px, py);
+            for (int elapsed = 0; elapsed < hold_ms; elapsed += 16)
+            {
+                er_commit();
+                embedded_renderer_tick(16);
+            }
+            SDL_Log("held press at %d,%d for %d ms", px, py, hold_ms);
+        }
+
         er_commit();
         er_sdl_present();
         SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, phys_w, phys_h, 32, SDL_PIXELFORMAT_ARGB8888);

@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'embedded-react';
+import { View, Text, Pressable, StyleSheet, Animated, useAnimatedValue } from 'embedded-react';
 
 // Music-player demo — exercises the full Flow B AOT subset: child components (TrackRow), a play/pause
-// toggle (useState + dynamic text/styles), a state-driven conditional (the "Playing now" badge), and a
+// toggle (useState + dynamic text/styles), a state-driven conditional (the "Playing now" badge), a
 // RUNTIME-DYNAMIC queue (useState array) you can Add to / Remove from — rows appear and disappear and
-// the count updates, all compiled to C with no JS engine.
+// the count updates — and an ANIMATION: the Play button springs down on press and back on release
+// (useAnimatedValue + Animated.spring → the engine's native value driver). All compiled to C, no JS engine.
 function TrackRow({ title, artist }) {
   return (
     <View style={styles.row}>
@@ -23,13 +24,19 @@ export function App() {
     { title: 'Midnight City', artist: 'M83' },
     { title: 'Resonance', artist: 'Home' },
   ]);
+  const pressScale = useAnimatedValue(1);
 
   return (
     <View style={styles.screen}>
       <Text style={styles.kicker}>NOW PLAYING</Text>
       <Text style={styles.title}>Midnight City</Text>
       <Text style={styles.artist}>M83</Text>
-      <Pressable style={[styles.play, { backgroundColor: playing ? '#22c55e' : '#5b6cff' }]} onPress={() => setPlaying((p) => !p)}>
+      <Pressable
+        style={[styles.play, { backgroundColor: playing ? '#22c55e' : '#5b6cff', transform: [{ scale: pressScale }] }]}
+        onPressIn={() => Animated.spring(pressScale, { toValue: 0.85 }).start()}
+        onPressOut={() => Animated.spring(pressScale, { toValue: 1 }).start()}
+        onPress={() => setPlaying((p) => !p)}
+      >
         <Text style={styles.playLabel}>{playing ? 'Pause' : 'Play'}</Text>
       </Pressable>
       {playing && <Text style={styles.badge}>Playing now</Text>}
@@ -54,7 +61,7 @@ export function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0b1020', alignItems: 'center', paddingVertical: 28, paddingHorizontal: 24, gap: 8 },
+  screen: { flex: 1, backgroundColor: '#333333', alignItems: 'center', paddingVertical: 28, paddingHorizontal: 24, gap: 8 },
   kicker: { color: '#7c89a8', fontSize: 12, fontWeight: 'bold', letterSpacing: 2 },
   title: { color: '#f4f7ff', fontSize: 24, fontWeight: 'bold', marginTop: 4 },
   artist: { color: '#9aa6c4', fontSize: 15 },

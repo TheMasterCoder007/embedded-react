@@ -204,9 +204,10 @@ function moduleScope(program) {
 
 /** Collects useState declarations → state descriptors keyed by both state name and setter name. */
 /** Max characters stored per string field of a list-state item (fixed buffer — embedded-friendly). */
-const LIST_STR_CAP = 48;
-/** Max rows a list-state can hold (pre-allocated pool; rows beyond the count are display:none). */
-const LIST_CAP = 16;
+const LIST_STR_CAP = Number(process.env.ER_AOT_LIST_STR_CAP) || 48;
+/** Max rows a list-state can hold (pre-allocated pool; rows beyond the count are display:none).
+ *  Override with ER_AOT_LIST_CAP — lower it on a tight-RAM MCU (each pooled row costs engine nodes). */
+const LIST_CAP = Number(process.env.ER_AOT_LIST_CAP) || 16;
 
 /** Infers a C struct shape from a list-state's initial elements (objects of strings/numbers). */
 function inferItemStruct(items, name) {
@@ -292,6 +293,65 @@ function usesState(fn) {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Animations — useAnimatedValue → an engine-side ERAnimValueHandle (native driver). The value binds to
+// a node property (opacity / transform / color) via er_anim_value_bind, and Animated.timing/spring(...)
+// .start() → er_anim_value_animate. The host's per-frame embedded_renderer_tick advances it in C — no
+// per-frame JS, no app_update needed for the motion itself.
+// ---------------------------------------------------------------------------------------------------
+
+/** Collects `const x = useAnimatedValue(initial)` → Map(name → {cVar, initCode}). */
+function collectAnims(fnBody, scope) {
+  const anims = new Map();
+  if (fnBody.type !== 'BlockStatement') return anims;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const decl of stmt.declarations) {
+      const init = decl.init;
+      if (init?.type === 'CallExpression' && init.callee.name === 'useAnimatedValue' && decl.id.type === 'Identifier') {
+        const initVal = init.arguments[0] ? evalStatic(init.arguments[0], scope) : 0;
+        anims.set(decl.id.name, { cVar: `s_av_${decl.id.name}`, initCode: floatLit(initVal) });
+      }
+    }
+  }
+  return anims;
+}
+
+/** Resolves a JSX tag to a name, mapping `Animated.View/Text/Image` to their host element. */
+function resolveTag(openingElement) {
+  const n = openingElement.name;
+  if (n.type === 'JSXIdentifier') return n.name;
+  if (n.type === 'JSXMemberExpression' && n.object.name === 'Animated') return n.property.name; // Animated.View → View
+  throw new Error('AOT: unsupported JSX tag expression');
+}
+
+/** Style key → the ERAnimProp(s) an animated value binds to. */
+const ANIM_STYLE_PROPS = { opacity: ['ER_PROP_OPACITY'], backgroundColor: ['ER_PROP_BACKGROUND_COLOR'], color: ['ER_PROP_COLOR'] };
+const ANIM_TRANSFORM_PROPS = {
+  scale: ['ER_PROP_SCALE_X', 'ER_PROP_SCALE_Y'],
+  scaleX: ['ER_PROP_SCALE_X'],
+  scaleY: ['ER_PROP_SCALE_Y'],
+  translateX: ['ER_PROP_TRANSLATE_X'],
+  translateY: ['ER_PROP_TRANSLATE_Y'],
+  rotate: ['ER_PROP_ROTATE_Z'],
+  rotateZ: ['ER_PROP_ROTATE_Z'],
+};
+
+/** Formats a number as a valid C float literal (`1` → `1.0f`, not `1f` which doesn't compile). */
+function floatLit(n) {
+  const v = Number(n);
+  return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
+}
+
+/** Maps `Easing.<x>` to an ER_EASE_* constant (a flat subset; defaults to ease-in-out). */
+function mapEasing(node) {
+  if (node?.type === 'MemberExpression' && node.object.name === 'Easing') {
+    const m = { linear: 'ER_EASE_LINEAR', ease: 'ER_EASE_EASE', quad: 'ER_EASE_QUAD_IN_OUT', cubic: 'ER_EASE_CUBIC_IN_OUT', bounce: 'ER_EASE_BOUNCE_OUT', elastic: 'ER_EASE_ELASTIC_OUT' };
+    return m[node.property.name] || 'ER_EASE_EASE_IN_OUT';
+  }
+  return 'ER_EASE_EASE_IN_OUT';
+}
+
+// ---------------------------------------------------------------------------------------------------
 // JSX → style / text / events
 // ---------------------------------------------------------------------------------------------------
 function attrExpr(attr) {
@@ -331,6 +391,8 @@ function lowerDynamicStyleValue(key, valueNode, env) {
  */
 function collectStyleAssigns(openingElement, scope, env) {
   const fields = new Map(); // ERProps field -> { dynamic: bool, code: string }
+  const binds = []; // [{ cVar, prop }] — animated values bound to node properties (native driver)
+  const animRef = (node) => (node?.type === 'Identifier' && env.anims?.has(node.name) ? env.anims.get(node.name).cVar : null);
   const apply = (expr) => {
     if (expr.type === 'ArrayExpression') {
       for (const e of expr.elements) if (e) apply(e);
@@ -340,6 +402,30 @@ function collectStyleAssigns(openingElement, scope, env) {
       for (const prop of expr.properties) {
         if (prop.type !== 'ObjectProperty') throw new Error('AOT: spread/method in an inline style object not supported');
         const key = prop.computed ? evalStatic(prop.key, scope) : prop.key.name ?? prop.key.value;
+
+        // Animated value bound directly to a prop (opacity / backgroundColor / color).
+        const av = animRef(prop.value);
+        if (av && ANIM_STYLE_PROPS[key]) {
+          for (const p of ANIM_STYLE_PROPS[key]) binds.push({ cVar: av, prop: p });
+          continue;
+        }
+        // transform: [{ scale: <anim> }, { translateX: <anim> }, ...] — bind each animated entry.
+        if (key === 'transform' && prop.value.type === 'ArrayExpression') {
+          let handled = false;
+          for (const entry of prop.value.elements) {
+            if (entry?.type !== 'ObjectExpression') continue;
+            for (const tp of entry.properties) {
+              const tk = tp.key.name ?? tp.key.value;
+              const tav = animRef(tp.value);
+              if (tav && ANIM_TRANSFORM_PROPS[tk]) {
+                for (const p of ANIM_TRANSFORM_PROPS[tk]) binds.push({ cVar: tav, prop: p });
+                handled = true;
+              }
+            }
+          }
+          if (handled) continue;
+        }
+
         try {
           for (const a of lowerStyle({ [key]: evalStatic(prop.value, scope) })) fields.set(a.field, { dynamic: false, code: a.expr });
         } catch {
@@ -358,7 +444,7 @@ function collectStyleAssigns(openingElement, scope, env) {
   const staticAssigns = [];
   const dynAssigns = [];
   for (const [field, v] of fields) (v.dynamic ? dynAssigns : staticAssigns).push(v.dynamic ? { field, code: v.code } : { field, expr: v.code });
-  return { staticAssigns, dynAssigns };
+  return { staticAssigns, dynAssigns, binds };
 }
 
 const EVENT_TYPES = { onPress: 'ER_EVENT_PRESS', onLongPress: 'ER_EVENT_LONG_PRESS', onPressIn: 'ER_EVENT_PRESS_IN', onPressOut: 'ER_EVENT_PRESS_OUT' };
@@ -432,16 +518,62 @@ function compileListOp(rec, arg, env) {
   throw new Error(`AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`);
 }
 
+/** Compiles `Animated.timing|spring(value, cfg).start()` to a scoped ERAnimConfig + er_anim_value_animate. */
+function compileAnimateStart(expr, env, idx) {
+  const animCall = expr.callee.object; // Animated.timing(value, cfg)
+  if (animCall?.type !== 'CallExpression' || animCall.callee.type !== 'MemberExpression' || animCall.callee.object.name !== 'Animated') throw new Error('AOT: .start() must be called on Animated.timing/spring(value, config)');
+  const kind = animCall.callee.property.name; // 'timing' | 'spring' | 'decay'
+  const valRef = animCall.arguments[0];
+  if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name)) throw new Error(`AOT: Animated.${kind}() first argument must be a useAnimatedValue`);
+  const cVar = env.anims.get(valRef.name).cVar;
+  const cfgObj = animCall.arguments[1];
+  const get = (k) => cfgObj?.properties?.find((p) => (p.key.name ?? p.key.value) === k)?.value;
+  const toNode = get('toValue');
+  if (!toNode) throw new Error(`AOT: Animated.${kind}() config needs a toValue`);
+  const toCode = emitExpr(toNode, env).code;
+  const c = `cfg${idx}`;
+  const lines = ['    {', `        ERAnimConfig ${c};`, `        memset(&${c}, 0, sizeof(${c}));`];
+  if (kind === 'spring') {
+    lines.push(`        ${c}.type = ER_ANIM_SPRING;`);
+    lines.push(`        ${c}.stiffness = ${floatLit(evalStaticOr(get('stiffness'), env, 200))};`);
+    lines.push(`        ${c}.damping = ${floatLit(evalStaticOr(get('damping'), env, 18))};`);
+    lines.push(`        ${c}.mass = ${floatLit(evalStaticOr(get('mass'), env, 1))};`);
+  } else {
+    lines.push(`        ${c}.type = ER_ANIM_TIMING;`);
+    lines.push(`        ${c}.duration_ms = ${Math.round(Number(evalStaticOr(get('duration'), env, 250)))};`);
+    lines.push(`        ${c}.easing = ${mapEasing(get('easing'))};`);
+  }
+  lines.push(`        er_anim_value_animate(${cVar}, (float)(${toCode}), &${c});`, '    }');
+  return lines;
+}
+
+/** evalStatic with a fallback default when the node is absent or not foldable. */
+function evalStaticOr(node, env, dflt) {
+  if (!node) return dflt;
+  try {
+    return evalStatic(node, env.consts ?? {});
+  } catch {
+    return dflt;
+  }
+}
+
 function compileHandler(fnNode, env, state) {
   const stmts = [];
   const body = fnNode.body;
   const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
-  for (const st of list) {
+  let stateChanged = false;
+  list.forEach((st, idx) => {
     if (st.type !== 'ExpressionStatement') throw new Error(`AOT: unsupported statement "${st.type}" in event handler`);
     const expr = st.expression;
-    if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: event handler may only call a state setter (for now)');
+    // Animated.timing/spring(value, cfg).start() — a native-driven animation; no app_update needed.
+    if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
+      stmts.push(...compileAnimateStart(expr, env, idx));
+      return;
+    }
+    if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: event handler may only call a state setter or Animated.timing/spring(...).start() (for now)');
     const rec = state.bySetter.get(expr.callee.name);
     if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
+    stateChanged = true;
     const arg = expr.arguments[0];
     if (rec.kind === 'list') {
       stmts.push(...compileListOp(rec, arg, env));
@@ -457,8 +589,10 @@ function compileHandler(fnNode, env, state) {
       const e = emitExpr(arg, env);
       stmts.push(`    ${rec.cMember} = ${e.code};`);
     }
-  }
-  stmts.push('    app_update();');
+  });
+  // app_update re-applies state-dependent props. A pure animation handler needs none (the native driver
+  // moves the bound value); only re-render when a state setter actually changed something.
+  if (stateChanged) stmts.push('    app_update();');
   return stmts;
 }
 
@@ -627,7 +761,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
 }
 
 function emitNode(el, scope, out, env, state, opts = {}) {
-  const tag = el.openingElement.name.name;
+  const tag = resolveTag(el.openingElement);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
@@ -635,7 +769,7 @@ function emitNode(el, scope, out, env, state, opts = {}) {
   }
 
   const v = `n${out.n++}`;
-  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+  const { staticAssigns, dynAssigns, binds } = collectStyleAssigns(el.openingElement, scope, env);
   const text = tag === 'Text' ? buildText(el.children, scope, env) : null;
 
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
@@ -656,6 +790,10 @@ function emitNode(el, scope, out, env, state, opts = {}) {
     if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
     out.build.push(`    er_node_set_props(${v}, &p);`);
   }
+
+  // Animated style props (opacity / transform / color) → bind the node to its animated value. The
+  // engine's native driver advances it each tick (no per-frame JS, no app_update for the motion).
+  for (const b of binds) out.build.push(`    er_anim_value_bind(${b.cVar}, ${v}, ${b.prop});`);
 
   for (const attr of el.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') continue;
@@ -683,7 +821,8 @@ const component = findComponent(ast.program);
 const state = collectState(component.body, scope);
 const rootJSX = findReturnJSX(component.body);
 
-const env = { state: state.byName, locals: new Map(), consts: scope };
+const anims = collectAnims(component.body, scope);
+const env = { state: state.byName, locals: new Map(), consts: scope, anims };
 const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program) };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
@@ -709,6 +848,11 @@ const scalarBlock = scalarRecords.length
 const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 
 const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
+
+// Animated values — one engine-side handle each, created at the top of er_app_build (binds reference them).
+const animList = [...anims.values()];
+const animDecls = animList.map((a) => `static ERAnimValueHandle ${a.cVar};`).join('\n');
+const animCreate = animList.map((a) => `    ${a.cVar} = er_anim_value_create(${a.initCode});`).join('\n');
 
 const updateBlock = (() => {
   if (!out.updates.length) return '';
@@ -741,7 +885,8 @@ const body = `/*
 #include "er_scene.h"
 
 #include <stdio.h>
-${stateBlock ? '\n' + stateBlock : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+#include <string.h>
+${stateBlock ? '\n' + stateBlock : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;
@@ -753,7 +898,7 @@ void er_app_build(int screen_w, int screen_h)
     p.width = (int16_t)screen_w;
     p.height = (int16_t)screen_h;
     er_node_set_props(root, &p);
-
+${animCreate ? '\n' + animCreate + '\n' : ''}
 ${out.build.join('\n')}
     er_tree_append_child(root, ${appTop});
     er_tree_set_root(root);
