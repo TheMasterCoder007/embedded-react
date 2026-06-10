@@ -38,6 +38,15 @@ static const EmbeddedRenderBackend* g_backend = NULL;
 static ClipEntry s_clip_stack[ER_CLIP_STACK_DEPTH];
 static int s_clip_depth = 0;
 
+/* Banded rendering. The strip currently being rendered occupies screen rows [s_band_oy, s_band_oy +
+ * s_band_h). This is applied at the BACKEND-EMIT boundary only — NOT via the clip stack — so it bounds
+ * what lands in the band buffer without truncating offscreen-scratch (transform / opacity) source
+ * rendering, which must always be complete or a transformed node split across a strip seam shows an
+ * anti-aliasing gap. Each backend blit is clamped to these rows and its Y translated to the 0-origin
+ * band buffer. s_band_h == 0 disables both (the classic full-framebuffer path). */
+static int s_band_oy = 0;
+static int s_band_h = 0;
+
 /* Scratch redirect: when s_scratch_buf is non-NULL all blit calls write into it. */
 static uint32_t* s_scratch_buf = NULL;
 static int s_scratch_w = 0;
@@ -283,6 +292,21 @@ void er_pop_clip_rect(void)
         s_clip_depth--;
 }
 
+void er_set_band(int oy, int h)
+{
+    s_band_oy = oy;
+    s_band_h = h;
+}
+
+bool er_band_active(int* oy, int* h)
+{
+    if (oy)
+        *oy = s_band_oy;
+    if (h)
+        *h = s_band_h;
+    return s_band_h > 0;
+}
+
 bool er_get_clip_rect(int* x, int* y, int* w, int* h)
 {
     if (s_clip_depth == 0)
@@ -309,7 +333,22 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
         return;
     }
     if (g_backend && g_backend->fill_rect)
-        g_backend->fill_rect(argb, x, y, w, h, g_backend->ctx);
+    {
+        if (s_band_h > 0)
+        {
+            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            if (y < top)
+            {
+                h -= top - y;
+                y = top;
+            }
+            if (y + h > bot)
+                h = bot - y;
+            if (h <= 0)
+                return;
+        }
+        g_backend->fill_rect(argb, x, y - s_band_oy, w, h, g_backend->ctx);
+    }
 }
 
 void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
@@ -328,7 +367,24 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
         return;
     }
     if (g_backend && g_backend->copy_rect)
-        g_backend->copy_rect(src, stride, x, y, w, h, g_backend->ctx);
+    {
+        if (s_band_h > 0)
+        {
+            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            if (y < top)
+            {
+                const int d = top - y;
+                src = (const uint8_t*)src + (size_t)d * (size_t)stride;
+                h -= d;
+                y = top;
+            }
+            if (y + h > bot)
+                h = bot - y;
+            if (h <= 0)
+                return;
+        }
+        g_backend->copy_rect(src, stride, x, y - s_band_oy, w, h, g_backend->ctx);
+    }
 }
 
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h)
@@ -346,7 +402,24 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
         return;
     }
     if (g_backend && g_backend->blend_rect)
-        g_backend->blend_rect(src, stride, alpha, x, y, w, h, g_backend->ctx);
+    {
+        if (s_band_h > 0)
+        {
+            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            if (y < top)
+            {
+                const int d = top - y;
+                src = (const uint8_t*)src + (size_t)d * (size_t)stride;
+                h -= d;
+                y = top;
+            }
+            if (y + h > bot)
+                h = bot - y;
+            if (h <= 0)
+                return;
+        }
+        g_backend->blend_rect(src, stride, alpha, x, y - s_band_oy, w, h, g_backend->ctx);
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

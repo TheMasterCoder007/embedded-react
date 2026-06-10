@@ -4,6 +4,28 @@
 #include <SDL2/SDL.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Configuration
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Banded rendering (desktop mirror of the no-full-framebuffer path).
+ *
+ * When ER_LCD_BANDED is set the backend advertises a band height to the engine, which then renders each
+ * commit's damage region in horizontal strips through a small band texture — exactly as a RAM-constrained
+ * LCD backend does — instead of compositing into a full persistent framebuffer. The persistent `fb`
+ * texture stands in for the panel's own GRAM: it retains the pixels outside the strips. This lets the
+ * engine's banded driver be validated on desktop with screenshots. 0 = classic full-framebuffer path.
+ */
+#ifndef ER_LCD_BANDED
+#define ER_LCD_BANDED 0
+#endif
+
+/** @brief Rows per band buffer when ER_LCD_BANDED is enabled. */
+#ifndef ER_LCD_BANDED_ROWS
+#define ER_LCD_BANDED_ROWS 40
+#endif
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -18,6 +40,10 @@ typedef struct
     int scratch_w;               /**< Width of the scratch texture in pixels. */
     int scratch_h;               /**< Height of the scratch texture in pixels. */
     SDL_BlendMode premult_blend; /**< Custom blend mode for premultiplied ARGB sources. */
+#if ER_LCD_BANDED
+    SDL_Texture* band; /**< Small render-target strip buffer (fb_w × ER_LCD_BANDED_ROWS). */
+    SDL_Rect strip;    /**< Screen-space rect of the strip currently being rendered. */
+#endif
 } SDLCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -115,6 +141,52 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
     SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
 }
 
+#if ER_LCD_BANDED
+/**
+ * @brief Begins a strip: targets the band texture and clears its used region to opaque black.
+ *
+ * The engine emits the strip's fill/copy/blend ops with band-local Y (the strip top is subtracted
+ * upstream), so they land in the band texture; band_flush_cb then copies the strip into `fb`.
+ *
+ * @param[in] x    Strip left edge in screen space.
+ * @param[in] y    Strip top edge in screen space.
+ * @param[in] w    Strip width in pixels.
+ * @param[in] h    Strip height in pixels.
+ * @param[in] ctx  Pointer to the SDLCtx.
+ */
+static void band_begin_cb(int x, int y, int w, int h, void* ctx)
+{
+    SDLCtx* c = ctx;
+    c->strip.x = x;
+    c->strip.y = y;
+    c->strip.w = w;
+    c->strip.h = h;
+    /* X stays absolute (band texture is full screen width); only Y is band-local, so clear [x,0,w,h]. */
+    const SDL_Rect local = {x, 0, w, h};
+    SDL_SetRenderTarget(c->renderer, c->band);
+    SDL_SetRenderDrawBlendMode(c->renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(c->renderer, 0, 0, 0, 255); /* matches a RAM backend's zeroed (opaque black) fb */
+    SDL_RenderFillRect(c->renderer, &local);
+}
+
+/**
+ * @brief Flushes the current strip from the band texture into the persistent framebuffer.
+ *
+ * Mirrors a hardware backend's per-band DMA: the band buffer is pushed to the panel (here, the `fb`
+ * texture that stands in for panel GRAM) at the strip's screen position.
+ *
+ * @param[in] ctx  Pointer to the SDLCtx.
+ */
+static void band_flush_cb(void* ctx)
+{
+    SDLCtx* c = ctx;
+    const SDL_Rect src = {c->strip.x, 0, c->strip.w, c->strip.h};
+    SDL_SetRenderTarget(c->renderer, c->fb);
+    SDL_SetTextureBlendMode(c->band, SDL_BLENDMODE_NONE);
+    SDL_RenderCopy(c->renderer, c->band, &src, &c->strip);
+}
+#endif /* ER_LCD_BANDED */
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -168,6 +240,25 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
     s_backend.wait = NULL;
     s_backend.frame_ready = NULL;
     s_backend.ctx = &s_ctx;
+
+#if ER_LCD_BANDED
+    /* Band buffer: a strip of the screen the engine recomposites and flushes one row-range at a time. */
+    s_ctx.band =
+        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, fb_w, ER_LCD_BANDED_ROWS);
+    if (!s_ctx.band)
+    {
+        SDL_DestroyTexture(s_ctx.fb);
+        s_ctx.fb = NULL;
+        SDL_DestroyTexture(s_ctx.scratch);
+        s_ctx.scratch = NULL;
+        return false;
+    }
+    SDL_SetTextureBlendMode(s_ctx.band, SDL_BLENDMODE_NONE);
+    s_backend.band_height = ER_LCD_BANDED_ROWS;
+    s_backend.band_begin = band_begin_cb;
+    s_backend.band_flush = band_flush_cb;
+#endif
+
     embedded_renderer_set_backend(&s_backend);
 
     return true;
@@ -216,6 +307,13 @@ void er_sdl_present(void)
 
 void er_sdl_backend_destroy(void)
 {
+#if ER_LCD_BANDED
+    if (s_ctx.band)
+    {
+        SDL_DestroyTexture(s_ctx.band);
+        s_ctx.band = NULL;
+    }
+#endif
     if (s_ctx.fb)
     {
         SDL_DestroyTexture(s_ctx.fb);

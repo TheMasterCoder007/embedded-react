@@ -16,3 +16,13 @@ target_include_directories(er-backend-sdl
         PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# Banded rendering (LCD-agnostic): render in horizontal strips through a small band buffer instead of a
+# full persistent framebuffer. Mirrors the no-PSRAM device path on desktop so it can be verified here.
+# Enable with -DER_LCD_BANDED=ON (optionally -DER_LCD_BANDED_ROWS=<n>).
+if (ER_LCD_BANDED)
+    target_compile_definitions(er-backend-sdl PRIVATE ER_LCD_BANDED=1)
+    if (DEFINED ER_LCD_BANDED_ROWS)
+        target_compile_definitions(er-backend-sdl PRIVATE ER_LCD_BANDED_ROWS=${ER_LCD_BANDED_ROWS})
+    endif()
+endif()

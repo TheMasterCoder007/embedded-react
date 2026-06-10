@@ -41,6 +41,29 @@ void er_push_clip_rect(int x, int y, int w, int h);
 void er_pop_clip_rect(void);
 
 /**
+ * @brief Sets the current band strip (banded rendering): screen rows [oy, oy + h).
+ *
+ * Applied only at the backend-emit boundary — each backend blit is clamped to these rows and its Y
+ * translated to the 0-origin band buffer. Deliberately NOT a clip-stack entry, so offscreen-scratch
+ * (transform / opacity) source rendering stays complete across strip seams. Set before rendering a
+ * strip; call er_set_band(0, 0) afterwards to disable (the full-framebuffer path).
+ *
+ * @param[in] oy  Screen-space top row of the strip (subtracted from blit destinations).
+ * @param[in] h   Strip height in rows; 0 disables banding.
+ */
+void er_set_band(int oy, int h);
+
+/**
+ * @brief Reports the active band strip, if any (used by render_tree to cull subtrees off-strip).
+ *
+ * @param[out] oy  Strip top (may be NULL).
+ * @param[out] h   Strip height (may be NULL).
+ *
+ * @return true if a band strip is active (h > 0); false in full-framebuffer mode.
+ */
+bool er_band_active(int* oy, int* h);
+
+/**
  * @brief Reads the current (top-most) scissor clip rectangle.
  *
  * @param[out] x  Left edge (may be NULL).

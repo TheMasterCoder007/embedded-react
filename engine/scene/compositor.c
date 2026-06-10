@@ -587,16 +587,22 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
      * no-op then). Bounds are computed-space; subtract the scroll translation to compare in screen space. */
     if (s_prune_ok && n->subtree_prunable)
     {
+        const int bx0 = (int)n->sub_x - translate_x;
+        const int by0 = (int)n->sub_y - translate_y;
+        const int bx1 = bx0 + (int)n->sub_w;
+        const int by1 = by0 + (int)n->sub_h;
         int gx, gy, gw, gh;
         if (er_get_clip_rect(&gx, &gy, &gw, &gh))
         {
-            const int bx0 = (int)n->sub_x - translate_x;
-            const int by0 = (int)n->sub_y - translate_y;
-            const int bx1 = bx0 + (int)n->sub_w;
-            const int by1 = by0 + (int)n->sub_h;
             if (bx1 <= gx || by1 <= gy || bx0 >= gx + gw || by0 >= gy + gh)
                 return;
         }
+        /* Banded render: skip subtrees entirely outside the strip currently being emitted. Transformed
+         * subtrees are never prunable, so they still render in full each strip — keeping their offscreen
+         * scratch source complete across strip seams. */
+        int band_oy, band_h;
+        if (er_band_active(&band_oy, &band_h) && (by1 <= band_oy || by0 >= band_oy + band_h))
+            return;
     }
 
     const bool should_render = n->dirty || parent_dirty;
@@ -1185,16 +1191,34 @@ void er_props_default(ERProps* props)
      * are deliberately NOT in this list — their default is 0 (RN's "no grow / no shrink"), and any
      * non-zero value (including ER_LAYOUT_AUTO) is read as a real flex factor. flex_basis stays AUTO. */
     int16_t* const auto_fields[] = {
-        &props->left,           &props->top,          &props->right,
-        &props->bottom,         &props->width,        &props->height,
-        &props->min_width,      &props->max_width,    &props->min_height,
-        &props->max_height,     &props->padding,      &props->padding_left,
-        &props->padding_top,    &props->padding_right, &props->padding_bottom,
-        &props->margin,         &props->margin_left,  &props->margin_top,
-        &props->margin_right,   &props->margin_bottom, &props->gap,
-        &props->row_gap,        &props->column_gap,   &props->flex_basis,
-        &props->margin_horizontal, &props->margin_vertical,
-        &props->padding_horizontal, &props->padding_vertical,
+        &props->left,
+        &props->top,
+        &props->right,
+        &props->bottom,
+        &props->width,
+        &props->height,
+        &props->min_width,
+        &props->max_width,
+        &props->min_height,
+        &props->max_height,
+        &props->padding,
+        &props->padding_left,
+        &props->padding_top,
+        &props->padding_right,
+        &props->padding_bottom,
+        &props->margin,
+        &props->margin_left,
+        &props->margin_top,
+        &props->margin_right,
+        &props->margin_bottom,
+        &props->gap,
+        &props->row_gap,
+        &props->column_gap,
+        &props->flex_basis,
+        &props->margin_horizontal,
+        &props->margin_vertical,
+        &props->padding_horizontal,
+        &props->padding_vertical,
     };
     for (size_t i = 0; i < sizeof(auto_fields) / sizeof(auto_fields[0]); i++)
         *auto_fields[i] = ER_LAYOUT_AUTO;
@@ -1208,9 +1232,9 @@ void er_props_default(ERProps* props)
 
     /* Type-specific fields whose engine default is non-zero. Harmless for other node types, since
        er_node_set_props applies only the fields relevant to the node's type. */
-    props->editable = 1;                 /* TextInput editable by default. */
-    props->animating = 1;                /* ActivityIndicator spins by default. */
-    props->shadow_color = 0xFF000000U;   /* Opaque black shadow unless overridden. */
+    props->editable = 1;               /* TextInput editable by default. */
+    props->animating = 1;              /* ActivityIndicator spins by default. */
+    props->shadow_color = 0xFF000000U; /* Opaque black shadow unless overridden. */
 }
 
 void er_node_set_props(ERNode* node, const ERProps* props)
@@ -1952,7 +1976,16 @@ void er_commit(void)
      * or a translate animation) — propagated-dirty ancestors are excluded so the damage stays tight.
      * The persistent framebuffer keeps the untouched pixels, so the compositor and the backend's flush
      * both shrink from full-screen to just the changed region. */
-    bool clipped = false;
+    /* Compute this commit's repaint region in screen space. Default is the whole root rect (a full
+     * repaint); the damage pre-pass below narrows it to the union of changed/moved node rects whenever
+     * change tracking is possible. The region then drives EITHER a single damage-clipped render_tree
+     * (full-framebuffer backend) OR a per-strip banded render (backend->band_height > 0). */
+    int rb_x0 = root->computed.x;
+    int rb_y0 = root->computed.y;
+    int rb_x1 = rb_x0 + root->computed.w;
+    int rb_y1 = rb_y0 + root->computed.h;
+    bool render_full = true;    /* repaint the whole root rect */
+    bool nothing_dirty = false; /* tracked, but nothing changed (or changes clamped off-screen) */
     if (s_force_full_repaint)
     {
         root->dirty = true; /* force the whole tree to repaint into the fresh/invalidated framebuffer */
@@ -2016,26 +2049,32 @@ void er_commit(void)
             int cy0 = clip.y - margin;
             int cx1 = clip.x + clip.w + margin;
             int cy1 = clip.y + clip.h + margin;
-            const int rx0 = root->computed.x;
-            const int ry0 = root->computed.y;
-            const int rx1 = root->computed.x + root->computed.w;
-            const int ry1 = root->computed.y + root->computed.h;
-            if (cx0 < rx0)
-                cx0 = rx0;
-            if (cy0 < ry0)
-                cy0 = ry0;
-            if (cx1 > rx1)
-                cx1 = rx1;
-            if (cy1 > ry1)
-                cy1 = ry1;
+            if (cx0 < rb_x0)
+                cx0 = rb_x0;
+            if (cy0 < rb_y0)
+                cy0 = rb_y0;
+            if (cx1 > rb_x1)
+                cx1 = rb_x1;
+            if (cy1 > rb_y1)
+                cy1 = rb_y1;
             if (cx1 > cx0 && cy1 > cy0)
             {
-                er_push_clip_rect(cx0, cy0, cx1 - cx0, cy1 - cy0);
-                clipped = true;
+                rb_x0 = cx0;
+                rb_y0 = cy0;
+                rb_x1 = cx1;
+                rb_y1 = cy1;
+                render_full = false; /* narrowed to the damage region */
+            }
+            else
+            {
+                nothing_dirty = true; /* damage collapsed to empty after clamping (off-screen change) */
             }
         }
-        /* trackable && !have: nothing is dirty this commit, render_tree() repaints nothing anyway.
-         * !trackable: leave unclipped for a full repaint. */
+        else if (trackable)
+        {
+            nothing_dirty = true; /* nothing changed this commit */
+        }
+        /* !trackable: render_full stays true (repaint the whole root rect). */
     }
 
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
@@ -2043,10 +2082,57 @@ void er_commit(void)
      * pruning self-disables there regardless. */
     s_prune_ok = !er_layout_anim_has_pending() && !er_layout_anim_is_active();
 
-    render_tree(root, false, 0, 0);
-
-    if (clipped)
-        er_pop_clip_rect();
+    const EmbeddedRenderBackend* backend = er_backend();
+    if (backend && backend->band_height > 0)
+    {
+        /* Banded render: split the repaint region into horizontal strips no taller than the band
+         * buffer. Each strip is fully recomposited (parent_dirty = true) into the backend's band buffer
+         * — which starts blank, so every overlapping layer must repaint, unlike the retained-framebuffer
+         * path — then flushed to the panel. Pixels outside the region are retained by the panel's GRAM.
+         *
+         * The whole repaint region is pushed as a SINGLE clip for the duration (enabling subtree pruning
+         * and, crucially, keeping transform/opacity scratch sources complete — the region contains every
+         * changed node in full). The per-strip row range is set via er_set_band(), which clamps only the
+         * backend emit; render_tree additionally culls subtrees that fall entirely outside the strip. */
+        if (!nothing_dirty)
+        {
+            /* Strips span the FULL screen width (only the dirty ROWS are narrowed). A band backend
+             * flushes each strip as one tightly-packed full-width block straight from the band buffer,
+             * so partial-width strips are intentionally not used; on the narrow panels this targets the
+             * extra horizontal fill is negligible. The damage box still bounds the dirty rows. */
+            const int bh = backend->band_height;
+            const int fx = root->computed.x;
+            const int fw = root->computed.w;
+            er_push_clip_rect(fx, rb_y0, fw, rb_y1 - rb_y0);
+            for (int sy = rb_y0; sy < rb_y1; sy += bh)
+            {
+                const int sh = (rb_y1 - sy < bh) ? (rb_y1 - sy) : bh;
+                if (backend->band_begin)
+                    backend->band_begin(fx, sy, fw, sh, backend->ctx);
+                er_set_band(sy, sh);
+                render_tree(root, true, 0, 0);
+                if (backend->band_flush)
+                    backend->band_flush(backend->ctx);
+            }
+            er_set_band(0, 0);
+            er_pop_clip_rect();
+        }
+    }
+    else
+    {
+        /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
+         * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
+         * clip, the whole tree repaints; otherwise scissor to the damage region.) */
+        bool clipped = false;
+        if (!render_full && !nothing_dirty)
+        {
+            er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+            clipped = true;
+        }
+        render_tree(root, false, 0, 0);
+        if (clipped)
+            er_pop_clip_rect();
+    }
 
     s_force_full_repaint = false;
     s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */

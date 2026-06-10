@@ -39,13 +39,48 @@
 #define ER_SPI_LCD_BOUNCE_ROWS 24
 #endif
 
+/**
+ * @brief Banded rendering: render in horizontal strips through a small RGB565 band buffer instead of a
+ * full-screen canonical framebuffer. The panel's own GRAM retains everything outside the dirty rows, so
+ * only ER_LCD_BANDED_ROWS rows live in RAM at once — the way a no-PSRAM panel affords full 16-bit color.
+ * The engine drives the strips (band_begin/band_flush below); each strip is full screen width so the
+ * band buffer flushes straight to the panel via one draw_bitmap (no bounce). Implies RGB565 — the whole
+ * point is 16-bit color — so ER_SPI_LCD_FB8 is ignored when banded.
+ */
+#ifndef ER_LCD_BANDED
+#define ER_LCD_BANDED 0
+#endif
+
+/** @brief Rows per band buffer when ER_LCD_BANDED is enabled (RAM = screen_w * rows * 2 bytes). */
+#ifndef ER_LCD_BANDED_ROWS
+#define ER_LCD_BANDED_ROWS 40
+#endif
+
+/** @brief RGB332 canonical pixel only applies to the full-fb FB8 path; banded is always RGB565. */
+#if ER_SPI_LCD_FB8 && !ER_LCD_BANDED
+#define ER_SPI_LCD_FB332 1
+#else
+#define ER_SPI_LCD_FB332 0
+#endif
+
+/**
+ * @brief Panel color order for the RGB565 path: 1 = byte-swap + BGR, 0 = standard RGB565.
+ *
+ * Some SPI panels display a stored RGB565 word as BGR(byteswap(word)) rather than the standard layout —
+ * notably the DIYmall "Cheap Yellow Display" ST7789, which wants the two color bytes swapped AND red/blue
+ * in BGR order. Set this per board (the CYD example does). Has no effect on the RGB332 path.
+ */
+#ifndef ER_SPI_LCD_SWAP_BGR
+#define ER_SPI_LCD_SWAP_BGR 0
+#endif
+
 static const char* TAG = "er-spi-lcd";
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Canonical-pixel helpers (full-precision compositing; pack to the canonical format; convert to RGB565)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#if ER_SPI_LCD_FB8
+#if ER_SPI_LCD_FB332
 
 typedef uint8_t fbpx_t; /**< RGB332: RRRGGGBB. */
 
@@ -80,6 +115,29 @@ static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
 
 typedef uint16_t fbpx_t;
 
+/*
+ * fb_store / fb_load pack to (and unpack from) the panel's pixel order. With ER_SPI_LCD_SWAP_BGR the
+ * stored word is pre-compensated for a panel that displays it as BGR(byteswap(word)) — pack BGR
+ * (B5 [15:11], G6 [10:5], R5 [4:0]) then byte-swap — so the panel's transform lands on the intended
+ * color. Otherwise standard RGB565. fb_load is the exact inverse of fb_store so compositing read-back
+ * (alpha blends that sample the destination) stays correct.
+ */
+#if ER_SPI_LCD_SWAP_BGR
+static inline fbpx_t fb_store(uint32_t argb)
+{
+    const uint16_t bgr = (uint16_t)(((argb & 0xF8U) << 8)             /* B5 -> [15:11] */
+                                    | (((argb >> 8) & 0xFCU) << 3)    /* G6 -> [10:5]  */
+                                    | (((argb >> 16) & 0xF8U) >> 3)); /* R5 -> [4:0]   */
+    return (fbpx_t)__builtin_bswap16(bgr);
+}
+static inline uint32_t fb_load(fbpx_t p)
+{
+    const uint16_t bgr = __builtin_bswap16((uint16_t)p);
+    const uint32_t b5 = (bgr >> 11) & 0x1FU, g6 = (bgr >> 5) & 0x3FU, r5 = bgr & 0x1FU;
+    const uint32_t r = (r5 << 3) | (r5 >> 2), g = (g6 << 2) | (g6 >> 4), b = (b5 << 3) | (b5 >> 2);
+    return 0xFF000000U | (r << 16) | (g << 8) | b;
+}
+#else
 static inline fbpx_t fb_store(uint32_t argb)
 {
     return (uint16_t)((((argb >> 16) & 0xF8U) << 8) | (((argb >> 8) & 0xFCU) << 3) | ((argb & 0xF8U) >> 3));
@@ -90,9 +148,10 @@ static inline uint32_t fb_load(fbpx_t p)
     const uint32_t r = (r5 << 3) | (r5 >> 2), g = (g6 << 2) | (g6 >> 4), b = (b5 << 3) | (b5 >> 2);
     return 0xFF000000U | (r << 16) | (g << 8) | b;
 }
+#endif
 static inline void fb_to_565_row(uint16_t* dst, const fbpx_t* src, int n)
 {
-    memcpy(dst, src, (size_t)n * sizeof(uint16_t)); /* already 565 */
+    memcpy(dst, src, (size_t)n * sizeof(uint16_t)); /* already in the panel's pixel order */
 }
 
 #endif
@@ -130,11 +189,13 @@ typedef struct
     esp_lcd_panel_handle_t panel;
     int w;
     int h;
-    fbpx_t* fb;              /**< Canonical framebuffer, w*h, plain internal RAM (need not be DMA). */
-    uint16_t* bounce;        /**< Small DMA-capable RGB565 staging buffer: w * ER_SPI_LCD_BOUNCE_ROWS px. */
-    SemaphoreHandle_t done;  /**< Given by the panel's color-trans-done ISR; waited on before bounce reuse. */
-    int dx0, dy0, dx1, dy1;  /**< Dirty bounding box (inclusive); x1 < x0 means empty. */
-    bool first;              /**< First present pushes the whole frame. */
+    int fb_rows;            /**< Rows in the canonical fb: h (full-screen) or ER_LCD_BANDED_ROWS (banded). */
+    fbpx_t* fb;             /**< Canonical framebuffer/band buffer, w*fb_rows. */
+    uint16_t* bounce;       /**< Small DMA-capable RGB565 staging buffer (full-fb path only; NULL banded). */
+    SemaphoreHandle_t done; /**< Given by the panel's color-trans-done ISR; waited on before buffer reuse. */
+    int dx0, dy0, dx1, dy1; /**< Dirty bounding box (inclusive); x1 < x0 means empty. */
+    bool first;             /**< First present pushes the whole frame. */
+    int sx, sy, sw, sh;     /**< Banded: screen-space rect of the strip currently being composited. */
 } ERSpiLcdBackend;
 
 static ERSpiLcdBackend s_be;
@@ -167,9 +228,9 @@ static bool clip_rect(int* x, int* y, int* w, int* h)
     {
         *w = s_be.w - *x;
     }
-    if (*y + *h > s_be.h)
+    if (*y + *h > s_be.fb_rows)
     {
-        *h = s_be.h - *y;
+        *h = s_be.fb_rows - *y;
     }
     return (*w > 0 && *h > 0);
 }
@@ -283,12 +344,63 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     mark_dirty(x, y, w, h);
 }
 
+#if ER_LCD_BANDED
+/**
+ * @brief Begins a strip: records its screen rect and clears the band buffer rows it will fill.
+ *
+ * The engine emits the strip's fill/copy/blend ops with band-local Y, so they composite into the band
+ * buffer; band_flush_cb() then DMAs it to the panel. Strips are full screen width (sx = 0, sw = w), so
+ * the band buffer's first sh rows are tightly packed and flush directly without a bounce buffer.
+ *
+ * @param[in] x    Strip left edge in screen space (0).
+ * @param[in] y    Strip top edge in screen space.
+ * @param[in] w    Strip width in pixels (screen width).
+ * @param[in] h    Strip height in pixels (<= ER_LCD_BANDED_ROWS).
+ * @param[in] ctx  Unused.
+ */
+static void band_begin_cb(int x, int y, int w, int h, void* ctx)
+{
+    (void)ctx;
+    s_be.sx = x;
+    s_be.sy = y;
+    s_be.sw = w;
+    s_be.sh = h;
+    for (int r = 0; r < h; r++)
+    {
+        memset(s_be.fb + (size_t)r * s_be.w + x, 0, (size_t)w * sizeof(fbpx_t)); /* opaque black */
+    }
+}
+
+/**
+ * @brief Flushes the current strip from the band buffer to the panel, then waits for the DMA to finish.
+ *
+ * The band buffer is already RGB565 and DMA-capable, so it is handed straight to draw_bitmap. The wait
+ * keeps the next band_begin from clearing the buffer while the controller is still reading it.
+ *
+ * @param[in] ctx  Unused.
+ */
+static void band_flush_cb(void* ctx)
+{
+    (void)ctx;
+    if (s_be.sw <= 0 || s_be.sh <= 0)
+    {
+        return;
+    }
+    esp_lcd_panel_draw_bitmap(s_be.panel, s_be.sx, s_be.sy, s_be.sx + s_be.sw, s_be.sy + s_be.sh, s_be.fb);
+    xSemaphoreTake(s_be.done, portMAX_DELAY);
+}
+#endif /* ER_LCD_BANDED */
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Present + init
  ---------------------------------------------------------------------------------------------------------------------*/
 
 void er_esp32_spi_lcd_present(void)
 {
+#if ER_LCD_BANDED
+    /* Banded mode flushes each strip inside band_flush() during er_commit(); nothing to do per frame. */
+    return;
+#else
     int y0, y1;
     if (s_be.first)
     {
@@ -321,6 +433,7 @@ void er_esp32_spi_lcd_present(void)
     s_be.dy0 = s_be.h;
     s_be.dx1 = -1;
     s_be.dy1 = -1;
+#endif /* !ER_LCD_BANDED */
 }
 
 bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_io_handle_t io, int width, int height)
@@ -344,10 +457,25 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
     const esp_lcd_panel_io_callbacks_t cbs = {.on_color_trans_done = on_trans_done};
     esp_lcd_panel_io_register_event_callbacks(io, &cbs, NULL);
 
+#if ER_LCD_BANDED
+    /* Banded: only a small RGB565 band buffer lives in RAM; the panel's own GRAM retains the rest of the
+     * frame. It is DMA-capable so each full-width strip flushes straight to the panel (no bounce). */
+    s_be.fb_rows = ER_LCD_BANDED_ROWS;
+    const size_t bytes = (size_t)width * (size_t)ER_LCD_BANDED_ROWS * sizeof(fbpx_t);
+    s_be.fb = (fbpx_t*)heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_be.fb)
+    {
+        ESP_LOGE(TAG, "band buffer alloc failed (need %d KB internal DMA RAM)", (int)(bytes / 1024));
+        return false;
+    }
+    memset(s_be.fb, 0, bytes); /* opaque black */
+    s_be.bounce = NULL;
+#else
     /* Canonical framebuffer: MALLOC_CAP_8BIT = byte-addressable internal RAM. MUST NOT be plain
      * MALLOC_CAP_INTERNAL — that can return instruction-RAM (IRAM, 0x4008xxxx) which only allows
      * 32-bit word access, and the byte/16-bit fb accesses would fault (LoadStoreError). 8BIT also
      * picks the data-bus "D/IRAM" block, which is the largest byte-addressable region here. */
+    s_be.fb_rows = height;
     const size_t bytes = (size_t)width * height * sizeof(fbpx_t);
     s_be.fb = (fbpx_t*)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
     if (!s_be.fb)
@@ -367,22 +495,39 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
         s_be.fb = NULL;
         return false;
     }
+#endif
 
     static EmbeddedRenderBackend backend;
+    memset(&backend, 0, sizeof(backend));
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL;
     backend.ctx = NULL;
+#if ER_LCD_BANDED
+    backend.band_height = ER_LCD_BANDED_ROWS;
+    backend.band_begin = band_begin_cb;
+    backend.band_flush = band_flush_cb;
+#endif
     embedded_renderer_set_backend(&backend);
 
+#if ER_LCD_BANDED
+    ESP_LOGI(TAG,
+             "SPI LCD backend ready: %dx%d, RGB565 BANDED (%d-row band buffer, %d KB DMA RAM) — panel GRAM retains the "
+             "frame",
+             width,
+             height,
+             ER_LCD_BANDED_ROWS,
+             (int)(bytes / 1024));
+#else
     ESP_LOGI(TAG,
              "SPI LCD backend ready: %dx%d, %s fb in internal RAM (%d KB) + %d KB DMA bounce",
              width,
              height,
-             ER_SPI_LCD_FB8 ? "RGB332" : "RGB565",
+             ER_SPI_LCD_FB332 ? "RGB332" : "RGB565",
              (int)(bytes / 1024),
              (int)(bounce_bytes / 1024));
+#endif
     return true;
 }

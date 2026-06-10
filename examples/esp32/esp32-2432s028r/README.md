@@ -16,13 +16,18 @@ App.jsx → AOT → app.gen.c → C engine (er_scene.h) → SPI backend → ST77
 
 ## How it fits in internal RAM
 
-Flow B's whole point is fitting a no-PSRAM MCU. The only large allocation is the **150 KB RGB565
-framebuffer** (`backends/esp32-spi-lcd`, internal RAM, full-width-band flush — no staging buffer). The
-engine's static pools are tuned down in `components/engine/CMakeLists.txt` (`ERUI_MAX_NODES=96`, tiny
-opacity scratch, shadows/gradients off). `app_main` logs free internal RAM at boot — watch it.
+Flow B's whole point is fitting a no-PSRAM MCU. A full 240×320 **RGB565** framebuffer is 150 KB, which
+does **not** fit the ESP32's fragmented internal DRAM (largest contiguous block ~110 KB). So the backend
+renders in **horizontal strips through a small RGB565 band buffer** (`ER_LCD_BANDED`): the engine repaints
+only the dirty rows, one ~40-row strip at a time, into a **~19 KB DMA-capable band buffer**, and the
+ST7789's own GRAM retains the rest of the frame. The result is **full 16-bit color at less RAM than the
+old RGB332 framebuffer** (75 KB) — crisp anti-aliased text, no 256-color banding. The engine's static
+pools are also tuned down in `components/engine/CMakeLists.txt` (`ERUI_MAX_NODES`, tiny opacity scratch,
+shadows/gradients off). `app_main` logs free internal RAM at boot — watch it.
 
-> If the framebuffer alloc fails at boot ("out of internal RAM"), free RAM by lowering `ERUI_MAX_NODES`
-> and/or rebuilding the app with a smaller `ER_AOT_LIST_CAP` (fewer pooled list rows = fewer nodes).
+> Tune the strip height with `ER_LCD_BANDED_ROWS` (default 40) in the backend component's CMakeLists: a
+> taller strip costs more RAM (`240 × rows × 2` bytes) but flushes the screen in fewer DMA transfers.
+> If RAM is still tight, lower `ERUI_MAX_NODES` and/or rebuild the app with a smaller `ER_AOT_LIST_CAP`.
 
 ## Build
 
@@ -56,7 +61,7 @@ Expected monitor output:
 I (xxx) embedded-react: embedded-react ESP32-2432S028R (CYD) host — Flow B (AOT, no QuickJS)
 I (xxx) embedded-react: free internal RAM: 2xxxxx bytes
 I (xxx) board: ST7789 panel up: 240x320 (invert=0, bgr=0)
-I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB332 fb in internal RAM (75 KB) + 11 KB DMA bounce
+I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB565 BANDED (40-row band buffer, 18 KB DMA RAM) — panel GRAM retains the frame
 I (xxx) board: XPT2046 touch ready
 I (xxx) embedded-react: AOT app built at 240x320 (no QuickJS)
 I (xxx) embedded-react: free internal RAM after boot: 1xxxxx bytes
@@ -70,10 +75,18 @@ compiled C. Re-run **step 1** whenever you change the JSX, then `idf.py flash`.
 The defaults below are dialed in for the **v3 (dual-USB) CYD this was developed on**. A different unit
 may need a tweak — they're all `#define`s at the top of `board.c`:
 
-- **RGB332 framebuffer.** The ESP32's internal RAM is fragmented (largest byte-addressable block ~110 KB),
-  so a full 240×320 **RGB565** fb (150 KB) does NOT fit — the backend uses **RGB332** (75 KB,
-  `ER_SPI_LCD_FB8=1`). Trade-off: 256 colors, so anti-aliased small text looks a bit coarse. Big text and
-  flat fills look fine. (A PSRAM board could use RGB565.)
+- **Banded RGB565 framebuffer.** A full 240×320 RGB565 fb (150 KB) does NOT fit the fragmented internal
+  DRAM (largest block ~110 KB), so the backend renders in **horizontal strips through a ~19 KB RGB565
+  band buffer** (`ER_LCD_BANDED=1`, `ER_LCD_BANDED_ROWS=40`) and lets the ST7789's GRAM retain the rest of
+  the frame. Full 16-bit color (crisp text) at less RAM than the old RGB332 path. The engine repaints only
+  the dirty rows, so a small change flushes one or two strips. (An earlier revision used a full RGB332 fb,
+  `ER_SPI_LCD_FB8=1` — 256 colors, coarse anti-aliased text; banded RGB565 supersedes it.)
+- **Pixel order — byte-swap + BGR (`ER_SPI_LCD_SWAP_BGR=1`).** This CYD's ST7789 displays a stored RGB565
+  word as `BGR(byteswap(word))`: it wants the two color bytes swapped **and** red/blue in BGR order. The
+  backend pre-compensates in `fb_store` when this flag is set (in the backend component's CMakeLists).
+  Symptoms if it's wrong: gray renders pastel-green, blue renders pink, navy renders brown. Pure red/white
+  still look right, which is why it hid in the old RGB332 build (mostly gray/white). A standard RGB565
+  panel should leave this unset.
 - **Display:** `BOARD_LCD_INVERT` (this unit = `false`; set `true` if the screen looks like a photo
   negative), `BOARD_LCD_BGR` (red/blue swapped), `BOARD_LCD_MIRROR_X` (this unit = `true`; flip if text
   is mirrored), `LCD_PCLK_HZ` (20 MHz — raising it can cause lines/glitches on CYD wiring). A **v1/v2

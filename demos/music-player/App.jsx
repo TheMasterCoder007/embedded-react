@@ -61,7 +61,7 @@ export function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#333333', alignItems: 'center', paddingVertical: 28, paddingHorizontal: 24, gap: 8 },
+  screen: { flex: 1, backgroundColor: '#000000', alignItems: 'center', paddingVertical: 28, paddingHorizontal: 24, gap: 8 },
   kicker: { color: '#7c89a8', fontSize: 12, fontWeight: 'bold', letterSpacing: 2 },
   title: { color: '#f4f7ff', fontSize: 24, fontWeight: 'bold', marginTop: 4 },
   artist: { color: '#9aa6c4', fontSize: 15 },

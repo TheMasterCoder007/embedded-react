@@ -38,6 +38,26 @@ extern "C"
 
         /** @brief Opaque context pointer forwarded to every callback. */
         void* ctx;
+
+        /*------------------------------------------------------------------------------------------------
+         - Banded rendering (optional). A backend with no RAM for a full framebuffer keeps only a small
+           band buffer of `band_height` rows and relies on the panel's own GRAM to retain the rest of the
+           frame. When band_height > 0 the engine renders each commit's damage region as horizontal
+           strips: for every strip it calls band_begin(), emits the (Y-translated) fill/copy/blend ops for
+           that strip into the band buffer, then calls band_flush() to push it to the panel. The fill/copy/
+           blend callbacks receive BAND-LOCAL Y (already offset by the strip's top), so the band buffer is
+           a plain `screen_w x band_height` surface. Leave band_height = 0 (and these NULL) for the
+           classic full-framebuffer path — the engine behaviour is then unchanged.
+         ------------------------------------------------------------------------------------------------*/
+
+        /** @brief Rows per band buffer; > 0 enables banded rendering. 0 = full-framebuffer mode. */
+        int band_height;
+
+        /** @brief Begin a strip [x,y,w,h] (screen space): clear the band buffer, remember the rect. */
+        void (*band_begin)(int x, int y, int w, int h, void* ctx);
+
+        /** @brief Flush the strip begun by band_begin() to the panel (convert + DMA). */
+        void (*band_flush)(void* ctx);
     } EmbeddedRenderBackend;
 
     /**
