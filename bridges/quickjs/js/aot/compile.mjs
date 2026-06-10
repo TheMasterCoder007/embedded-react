@@ -1,16 +1,22 @@
 // `npm run aot [demo]` — the Flow B ahead-of-time compiler (vertical slice).
 //
 // Compiles a demo's JSX straight to C against er_scene.h: no QuickJS, no JS at runtime. The generated
-// app.gen.c builds the engine node tree directly, so it fits an MCU with only internal RAM. This is
-// the static-tree slice — it lowers the component's returned JSX (View/Text/Pressable, StyleSheet +
-// inline styles, literal/interpolated text) to er_node_create / er_node_set_props / er_tree_* calls.
-// State + events come next; today useState initial values render as constants.
+// app.gen.c builds the engine node tree directly and wires state + events, so it fits an MCU with only
+// internal RAM.
+//
+// Supported subset (grows demo by demo; unsupported syntax throws "AOT: ..."):
+//   - View / Text / Pressable / Image / ScrollView elements
+//   - StyleSheet + inline styles → ERProps (static values)
+//   - text with literal + {interpolation} segments (interpolations may reference state)
+//   - useState(initial) → C state; on* handlers (onPress/onPressIn/onPressOut/onLongPress) → C functions
+//   - setState(value) and setState(prev => expr); a small C expression subset (literals, identifiers,
+//     +-*/% , comparisons, ?:)
+//
+// The compiler tracks which nodes depend on which state, so a state change re-sets ONLY the dependent
+// nodes (er_node_set_props) — no diffing, no reconciler. See /PLAN.md Flow B.
 //
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
 //   npm run aot -- music-player      # a specific demo by folder name
-//
-// Unsupported syntax throws with a clear "AOT: ..." message rather than emitting wrong code — the
-// supported subset grows demo by demo (see /PLAN.md Flow B).
 import { parse } from '@babel/parser';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -31,8 +37,8 @@ if (!existsSync(appPath)) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Static expression evaluation — resolves the constant subset (literals, objects/arrays, identifiers
-// in scope, member access, StyleSheet.create). Anything dynamic throws; the slice only needs constants.
+// Static expression evaluation — folds the constant subset (used for styles + state initials). Throws
+// on anything dynamic (e.g., a state reference), which the caller catches to fall back to C emission.
 // ---------------------------------------------------------------------------------------------------
 function evalStatic(node, scope) {
   switch (node.type) {
@@ -70,7 +76,6 @@ function evalStatic(node, scope) {
     case 'ArrayExpression':
       return node.elements.map((e) => (e ? evalStatic(e, scope) : null));
     case 'CallExpression': {
-      // The only call we statically fold is StyleSheet.create(obj) — an identity pass-through.
       const c = node.callee;
       if (c.type === 'MemberExpression' && c.object.name === 'StyleSheet' && c.property.name === 'create') {
         return evalStatic(node.arguments[0], scope);
@@ -82,24 +87,88 @@ function evalStatic(node, scope) {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// C expression emission — lowers a JS expression to C, given the current state + local bindings. Each
+// result carries a C type so callers pick the right printf specifier / assignment.
+//   env = { state: Map(name→record), locals: Map(name→{code,cType}), consts: scope object }
+// ---------------------------------------------------------------------------------------------------
+const ARITH = new Set(['+', '-', '*', '/', '%']);
+const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
+
+function emitExpr(node, env) {
+  switch (node.type) {
+    case 'NumericLiteral':
+      return Number.isInteger(node.value) ? { code: String(node.value), cType: 'int' } : { code: `${node.value}f`, cType: 'float' };
+    case 'StringLiteral':
+      return { code: cstr(node.value), cType: 'string' };
+    case 'BooleanLiteral':
+      return { code: node.value ? '1' : '0', cType: 'int' };
+    case 'Identifier': {
+      if (env.locals.has(node.name)) return env.locals.get(node.name);
+      if (env.state.has(node.name)) {
+        const s = env.state.get(node.name);
+        return { code: s.cMember, cType: s.cType };
+      }
+      if (node.name in env.consts) {
+        const v = env.consts[node.name];
+        if (typeof v === 'number') return Number.isInteger(v) ? { code: String(v), cType: 'int' } : { code: `${v}f`, cType: 'float' };
+        if (typeof v === 'string') return { code: cstr(v), cType: 'string' };
+      }
+      throw new Error(`AOT: cannot resolve identifier "${node.name}" in a dynamic expression`);
+    }
+    case 'UnaryExpression': {
+      const a = emitExpr(node.argument, env);
+      if (node.operator === '-' || node.operator === '+' || node.operator === '!') return { code: `(${node.operator}${a.code})`, cType: node.operator === '!' ? 'int' : a.cType };
+      throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
+    }
+    case 'BinaryExpression': {
+      const l = emitExpr(node.left, env);
+      const r = emitExpr(node.right, env);
+      if (ARITH.has(node.operator)) {
+        const cType = l.cType === 'float' || r.cType === 'float' ? 'float' : 'int';
+        return { code: `(${l.code} ${node.operator} ${r.code})`, cType };
+      }
+      if (COMPARE.has(node.operator)) {
+        const op = node.operator === '===' ? '==' : node.operator === '!==' ? '!=' : node.operator;
+        return { code: `(${l.code} ${op} ${r.code})`, cType: 'int' };
+      }
+      throw new Error(`AOT: unsupported binary operator "${node.operator}"`);
+    }
+    case 'LogicalExpression': {
+      const op = node.operator === '&&' || node.operator === '||' ? node.operator : null;
+      if (!op) throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
+      const l = emitExpr(node.left, env);
+      const r = emitExpr(node.right, env);
+      return { code: `(${l.code} ${op} ${r.code})`, cType: 'int' };
+    }
+    case 'ConditionalExpression': {
+      const t = emitExpr(node.test, env);
+      const c = emitExpr(node.consequent, env);
+      const a = emitExpr(node.alternate, env);
+      const cType = c.cType === 'float' || a.cType === 'float' ? 'float' : c.cType === a.cType ? c.cType : 'int';
+      return { code: `(${t.code} ? ${c.code} : ${a.code})`, cType };
+    }
+  }
+  throw new Error(`AOT: unsupported expression "${node.type}" in a dynamic context`);
+}
+
+const printfSpec = (cType) => (cType === 'string' ? '%s' : cType === 'float' ? '%g' : '%d');
+const cTypeOfValue = (v) => (typeof v === 'string' ? 'string' : typeof v === 'number' && !Number.isInteger(v) ? 'float' : 'int');
+
+// ---------------------------------------------------------------------------------------------------
 // AST helpers
 // ---------------------------------------------------------------------------------------------------
 const isFn = (n) => n && (n.type === 'FunctionDeclaration' || n.type === 'FunctionExpression' || n.type === 'ArrowFunctionExpression');
 
-/** Finds the app component: a function named `App` (declaration or const = arrow/function). */
 function findComponent(program) {
   for (const stmt of program.body) {
     const d = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
     if (!d) continue;
     if (d.type === 'FunctionDeclaration' && d.id?.name === 'App') return d;
-    if (d.type === 'VariableDeclaration') {
-      for (const decl of d.declarations) if (decl.id?.name === 'App' && isFn(decl.init)) return decl.init;
-    }
+    if (d.type === 'VariableDeclaration') for (const decl of d.declarations) if (decl.id?.name === 'App' && isFn(decl.init)) return decl.init;
   }
   throw new Error('AOT: no `App` component found (expected `export function App() { ... }`)');
 }
 
-/** Builds the module-level scope: StyleSheet objects and simple const values. */
 function moduleScope(program) {
   const scope = {};
   for (const stmt of program.body) {
@@ -110,109 +179,174 @@ function moduleScope(program) {
       try {
         scope[decl.id.name] = evalStatic(decl.init, scope);
       } catch {
-        /* not a static const (e.g. a component) — skip; resolved on demand if ever referenced */
+        /* not a static const — skip */
       }
     }
   }
   return scope;
 }
 
-/** Collects useState initial values from the component body into scope (state renders as its initial). */
-function collectHooks(fnBody, scope) {
+/** Collects useState declarations → state descriptors keyed by both state name and setter name. */
+function collectState(fnBody, scope) {
+  const byName = new Map();
+  const bySetter = new Map();
   for (const stmt of fnBody.body) {
     if (stmt.type !== 'VariableDeclaration') continue;
     for (const decl of stmt.declarations) {
       const init = decl.init;
-      if (init?.type === 'CallExpression' && init.callee.name === 'useState' && decl.id.type === 'ArrayPattern') {
-        const stateName = decl.id.elements[0]?.name;
-        if (stateName) scope[stateName] = init.arguments[0] ? evalStatic(init.arguments[0], scope) : undefined;
-      }
+      if (init?.type !== 'CallExpression' || init.callee.name !== 'useState' || decl.id.type !== 'ArrayPattern') continue;
+      const name = decl.id.elements[0]?.name;
+      const setter = decl.id.elements[1]?.name;
+      if (!name) continue;
+      const initVal = init.arguments[0] ? evalStatic(init.arguments[0], scope) : 0;
+      const cType = cTypeOfValue(initVal);
+      if (cType === 'string') throw new Error(`AOT: string useState ("${name}") not yet supported`);
+      const rec = { name, setter, cType, cMember: `s_state.${name}`, initCode: cType === 'float' ? `${initVal}f` : String(Number(initVal)) };
+      byName.set(name, rec);
+      if (setter) bySetter.set(setter, rec);
     }
   }
+  return { byName, bySetter };
 }
 
-/** Returns the JSX element a component function returns (unwrapping a parenthesized/single return). */
 function findReturnJSX(fnBody) {
   for (const stmt of fnBody.body) {
     if (stmt.type === 'ReturnStatement' && stmt.argument) {
-      let a = stmt.argument;
-      if (a.type === 'JSXElement') return a;
-      throw new Error(`AOT: the component must return a single JSX element (got ${a.type})`);
+      if (stmt.argument.type === 'JSXElement') return stmt.argument;
+      throw new Error(`AOT: the component must return a single JSX element (got ${stmt.argument.type})`);
     }
   }
   throw new Error('AOT: component has no return statement');
 }
 
 // ---------------------------------------------------------------------------------------------------
-// JSX → flattened style + text
+// JSX → style / text / events
 // ---------------------------------------------------------------------------------------------------
-function attrValue(attr) {
+function attrExpr(attr) {
   const v = attr.value;
-  if (!v) return true; // bare boolean attribute
+  if (!v) return { type: 'BooleanLiteral', value: true };
   if (v.type === 'StringLiteral') return v;
   if (v.type === 'JSXExpressionContainer') return v.expression;
   return v;
 }
 
-/** Merges an element's `style` attribute (styles.x ref / inline object / array of those) → flat object. */
 function collectStyle(openingElement, scope) {
   let merged = {};
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
-    const expr = attrValue(attr);
-    const val = evalStatic(expr, scope);
-    const parts = Array.isArray(val) ? val : [val];
-    for (const p of parts) if (p) merged = { ...merged, ...p };
+    const val = evalStatic(attrExpr(attr), scope);
+    for (const p of Array.isArray(val) ? val : [val]) if (p) merged = { ...merged, ...p };
   }
   return merged;
 }
 
-/** Builds a Text node's string from its JSX children (literal segments + {expression} interpolations). */
-function collectText(children, scope) {
-  let out = '';
+const EVENT_TYPES = { onPress: 'ER_EVENT_PRESS', onLongPress: 'ER_EVENT_LONG_PRESS', onPressIn: 'ER_EVENT_PRESS_IN', onPressOut: 'ER_EVENT_PRESS_OUT' };
+
+const cstr = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t')}"`;
+
+/**
+ * Builds a Text node's content. Static interpolations fold into the literal; any that reference state
+ * make it dynamic (a printf format + C arg expressions recomputed on update).
+ */
+function buildText(children, scope, env) {
+  let format = '';
+  const args = [];
+  let dynamic = false;
   for (const child of children) {
     if (child.type === 'JSXText') {
-      // JSX whitespace: collapse runs containing a newline to nothing/space; keep simple inline text.
-      out += /\n/.test(child.value) ? child.value.replace(/\s+/g, ' ').trim() : child.value;
+      const t = /\n/.test(child.value) ? child.value.replace(/\s+/g, ' ').trim() : child.value;
+      format += t.replace(/%/g, '%%');
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
-      const v = evalStatic(child.expression, scope);
-      out += v === undefined || v === null ? '' : String(v);
+      try {
+        const v = evalStatic(child.expression, scope); // constant → fold in
+        format += (v === undefined || v === null ? '' : String(v)).replace(/%/g, '%%');
+      } catch {
+        const e = emitExpr(child.expression, env); // references state → dynamic
+        format += printfSpec(e.cType);
+        args.push(e.code);
+        dynamic = true;
+      }
     } else if (child.type === 'JSXElement') {
       throw new Error('AOT: nested <Text> / element children inside <Text> not yet supported (spans)');
     }
   }
-  return out;
+  return { dynamic, format, args };
 }
 
-const cstr = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t')}"`;
+// ---------------------------------------------------------------------------------------------------
+// Handler compilation — an on* arrow/function → C statements that mutate state and re-render.
+// ---------------------------------------------------------------------------------------------------
+function compileHandler(fnNode, env, state) {
+  const stmts = [];
+  const body = fnNode.body;
+  const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+  for (const st of list) {
+    if (st.type !== 'ExpressionStatement') throw new Error(`AOT: unsupported statement "${st.type}" in event handler`);
+    const expr = st.expression;
+    if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: event handler may only call a state setter (for now)');
+    const rec = state.bySetter.get(expr.callee.name);
+    if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
+    const arg = expr.arguments[0];
+    if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')) {
+      // setState(prev => expr): bind the param to the current value, assign the result.
+      const param = arg.params[0]?.name;
+      const locals = new Map(env.locals);
+      if (param) locals.set(param, { code: rec.cMember, cType: rec.cType });
+      if (arg.body.type === 'BlockStatement') throw new Error('AOT: updater function must be a single expression (for now)');
+      const e = emitExpr(arg.body, { ...env, locals });
+      stmts.push(`    ${rec.cMember} = ${e.code};`);
+    } else {
+      const e = emitExpr(arg, env);
+      stmts.push(`    ${rec.cMember} = ${e.code};`);
+    }
+  }
+  stmts.push('    app_update();');
+  return stmts;
+}
 
 // ---------------------------------------------------------------------------------------------------
-// Emit C
+// Emit
 // ---------------------------------------------------------------------------------------------------
-function emitNode(el, scope, lines, ctx) {
+function emitNode(el, scope, out, env, state) {
   const tag = el.openingElement.name.name;
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) throw new Error(`AOT: unsupported element <${tag}> (custom components not yet supported)`);
 
-  const v = `n${ctx.n++}`;
-  const style = collectStyle(el.openingElement, scope);
-  const assigns = lowerStyle(style);
+  const v = `n${out.n++}`;
+  const styleAssigns = lowerStyle(collectStyle(el.openingElement, scope));
+  const text = tag === 'Text' ? buildText(el.children, scope, env) : null;
+  const isDynamic = !!text?.dynamic;
 
-  lines.push(`    ERNode* ${v} = er_node_create(${nodeType});`);
-  lines.push(`    er_props_default(&p);`);
-  for (const a of assigns) lines.push(`    p.${a.field} = ${a.expr};`);
-  if (tag === 'Text') {
-    const text = collectText(el.children, scope);
-    lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text)});`);
+  out.build.push(`    ${v} = er_node_create(${nodeType});`);
+  if (isDynamic) {
+    // Props are (re)applied in app_update(); here just create the node and remember its handle.
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({ v, styleAssigns, text });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of styleAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
+    out.build.push(`    er_node_set_props(${v}, &p);`);
   }
-  lines.push(`    er_node_set_props(${v}, &p);`);
+
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') continue;
+    const evt = EVENT_TYPES[attr.name.name];
+    if (!evt) continue;
+    const fn = attrExpr(attr);
+    if (!isFn(fn)) throw new Error(`AOT: ${attr.name.name} must be an inline function`);
+    const hid = out.handlers.length;
+    out.handlers.push({ name: `er_handler_${hid}`, body: compileHandler(fn, env, state) });
+    out.build.push(`    er_event_set(${v}, ${evt}, er_handler_${hid}, NULL);`);
+  }
 
   if (tag !== 'Text') {
     for (const child of el.children) {
       if (child.type !== 'JSXElement') continue;
-      const cv = emitNode(child, scope, lines, ctx);
-      lines.push(`    er_tree_append_child(${v}, ${cv});`);
+      const cv = emitNode(child, scope, out, env, state);
+      out.build.push(`    er_tree_append_child(${v}, ${cv});`);
     }
   }
   return v;
@@ -226,26 +360,55 @@ const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
 const scope = moduleScope(ast.program);
 const component = findComponent(ast.program);
-collectHooks(component.body, scope);
+const state = collectState(component.body, scope);
 const rootJSX = findReturnJSX(component.body);
 
-const lines = [];
-const ctx = { n: 0 };
-const appTop = emitNode(rootJSX, scope, lines, ctx);
+const env = { state: state.byName, locals: new Map(), consts: scope };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [] };
+const appTop = emitNode(rootJSX, scope, out, env, state);
 
+const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
+const stateRecords = [...state.byName.values()];
+
+const stateBlock = stateRecords.length
+  ? `typedef struct\n{\n${stateRecords.map((s) => `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${stateRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
+  : '';
+
+const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
+
+const updateBlock = (() => {
+  if (!out.updates.length) return '';
+  const lines = ['static void app_update(void)', '{', '    ERProps p;'];
+  for (const u of out.updates) {
+    lines.push(`    er_props_default(&p);`);
+    for (const a of u.styleAssigns) lines.push(`    p.${a.field} = ${a.expr};`);
+    if (u.text.args.length) lines.push(`    snprintf(p.text, sizeof(p.text), ${cstr(u.text.format)}, ${u.text.args.join(', ')});`);
+    else lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(u.text.format.replace(/%%/g, '%'))});`);
+    lines.push(`    er_node_set_props(s_${u.v}, &p);`);
+  }
+  lines.push('}');
+  return lines.join('\n');
+})();
+
+const handlerDefs = out.handlers
+  .map((h) => `static void ${h.name}(ERNode* node, const EREventData* data, void* user_data)\n{\n    (void)node;\n    (void)data;\n    (void)user_data;\n${h.body.join('\n')}\n}`)
+  .join('\n\n');
+
+const hasUpdate = out.updates.length > 0;
 const body = `/*
  * Generated by the embedded-react Flow B AOT compiler (npm run aot -- ${demo}). DO NOT EDIT.
- * Builds the app's scene graph directly against er_scene.h — no QuickJS, no JS at runtime.
+ * Builds the app's scene graph + state machine directly against er_scene.h — no QuickJS, no JS runtime.
  */
 #include "app.gen.h"
 
 #include "er_scene.h"
 
 #include <stdio.h>
-
+${stateBlock ? '\n' + stateBlock : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;
+    ERNode* ${nodeDecls.join(';\n    ERNode* ')};
 
     /* A screen-sized root the app tree fills (mirrors AppRegistry mounting into a screen-sized host). */
     ERNode* root = er_node_create(ER_NODE_VIEW);
@@ -254,17 +417,17 @@ void er_app_build(int screen_w, int screen_h)
     p.height = (int16_t)screen_h;
     er_node_set_props(root, &p);
 
-${lines.join('\n')}
+${out.build.join('\n')}
     er_tree_append_child(root, ${appTop});
     er_tree_set_root(root);
-}
+${hasUpdate ? '\n    app_update(); /* apply initial state-dependent props */\n' : ''}}
 `;
 
 const header = `/* Generated by the embedded-react Flow B AOT compiler. DO NOT EDIT. */
 #ifndef ER_APP_GEN_H
 #define ER_APP_GEN_H
 
-/** @brief Builds the AOT-compiled app's scene graph into the engine (call once after backend init). */
+/** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
 
 #endif
@@ -273,4 +436,4 @@ void er_app_build(int screen_w, int screen_h);
 mkdirSync(distDir, { recursive: true });
 writeFileSync(resolve(distDir, 'app.gen.c'), body);
 writeFileSync(resolve(distDir, 'app.gen.h'), header);
-console.log(`AOT: compiled demo "${demo}" -> dist/app.gen.c (${ctx.n} nodes)`);
+console.log(`AOT: compiled demo "${demo}" -> dist/app.gen.c (${out.n} nodes, ${stateRecords.length} state, ${out.handlers.length} handler(s), ${out.updates.length} dynamic)`);

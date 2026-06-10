@@ -84,9 +84,57 @@ int main(void)
 
     /* Optional one-shot screenshot for verification: ER_AOT_SHOT=<path.bmp> renders one frame, saves
        it, and exits. Lets a headless run confirm the pixels without a visible window. */
-    const char* shot = SDL_getenv("ER_AOT_SHOT");
-    if (shot)
+    /* SDL_getenv returns a pointer into a SHARED static buffer on Windows — a later SDL_getenv clobbers
+       an earlier result. So copy/convert each value immediately before the next call. */
+    char shot[512] = {0};
     {
+        const char* s = SDL_getenv("ER_AOT_SHOT");
+        if (s)
+        {
+            SDL_strlcpy(shot, s, sizeof(shot));
+        }
+    }
+    if (shot[0])
+    {
+        int clicks = 0;
+        int px = phys_w / 2;
+        int py = (int)(phys_h * 0.57f);
+        {
+            const char* s = SDL_getenv("ER_AOT_CLICKS");
+            if (s)
+            {
+                clicks = SDL_atoi(s);
+            }
+        }
+        {
+            const char* s = SDL_getenv("ER_AOT_CLICK_X");
+            if (s)
+            {
+                px = SDL_atoi(s);
+            }
+        }
+        {
+            const char* s = SDL_getenv("ER_AOT_CLICK_Y");
+            if (s)
+            {
+                py = SDL_atoi(s);
+            }
+        }
+        er_commit(); /* compute layout + hit areas before injecting taps so the first one lands */
+        for (int i = 0; i < clicks; i++)
+        {
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, px, py);
+            er_commit();
+            embedded_renderer_tick(16);
+            embedded_renderer_touch(0, ER_TOUCH_UP, px, py);
+            er_commit();
+            embedded_renderer_tick(16);
+        }
+        if (clicks > 0)
+        {
+            SDL_Log("injected %d tap(s) at %d,%d", clicks, px, py);
+        }
+
         er_commit();
         er_sdl_present();
         SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, phys_w, phys_h, 32, SDL_PIXELFORMAT_ARGB8888);
