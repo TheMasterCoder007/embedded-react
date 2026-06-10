@@ -34,6 +34,7 @@ export function App() {
       <Pressable style={styles.play} onPress={() => setPlaying((p) => !p)}>
         <Text style={styles.playLabel}>{playing ? 'Pause' : 'Play'}</Text>
       </Pressable>
+      {playing && <Text style={styles.badge}>Playing now</Text>}
       <Text style={styles.upNext}>UP NEXT</Text>
       {TRACKS.map((t, i) => (
         <TrackRow key={i} title={t.title} artist={t.artist} />
@@ -50,6 +51,7 @@ const styles = StyleSheet.create({
   artist: { color: '#9aa6c4', fontSize: 16 },
   play: { backgroundColor: '#5b6cff', paddingHorizontal: 40, paddingVertical: 12, borderRadius: 24, marginTop: 8, marginBottom: 8 },
   playLabel: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  badge: { color: '#7ee0a0', fontSize: 13, fontWeight: 'bold', letterSpacing: 1 },
   upNext: { color: '#7c89a8', fontSize: 12, fontWeight: 'bold', letterSpacing: 2, marginTop: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, width: 280, paddingVertical: 8 },
   rowDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#5b6cff' },

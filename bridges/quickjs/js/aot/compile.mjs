@@ -376,20 +376,20 @@ function bindParams(fn, props) {
 }
 
 /** Inlines a function component instance: bind props into scope, emit its returned JSX in place. */
-function emitComponent(el, scope, out, env, state) {
+function emitComponent(el, scope, out, env, state, opts) {
   const tag = el.openingElement.name.name;
   const fn = out.components.get(tag);
   if (usesState(fn)) throw new Error(`AOT: component <${tag}> uses useState — per-instance child state not yet supported`);
   if (el.children.some((c) => c.type === 'JSXElement')) throw new Error(`AOT: passing children to <${tag}> (props.children) not yet supported`);
   const bindings = bindParams(fn, extractProps(el.openingElement, scope));
   const childScope = { ...scope, ...bindings };
-  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope }, state);
+  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope }, state, opts);
 }
 
-/** Emits an element / component child and appends it to the parent. */
-function emitElementInto(node, parentVar, scope, out, env, state) {
+/** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
+function emitElementInto(node, parentVar, scope, out, env, state, opts) {
   if (node.type !== 'JSXElement') throw new Error(`AOT: expected a JSX element here, got ${node.type}`);
-  const cv = emitNode(node, scope, out, env, state);
+  const cv = emitNode(node, scope, out, env, state, opts);
   out.build.push(`    er_tree_append_child(${parentVar}, ${cv});`);
 }
 
@@ -424,23 +424,27 @@ function emitChildren(children, parentVar, scope, out, env, state) {
       const expr = child.expression;
       if (expr.type === 'JSXEmptyExpression') continue;
       if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
-        // `{cond && <X/>}` — condition resolved at compile time (static only for now).
+        // `{cond && <X/>}`. Static cond → include/omit at compile time. Dynamic (state) cond → always
+        // build X but toggle its display (none/flex) in app_update — show/hide without node churn.
         let cond;
         try {
           cond = evalStatic(expr.left, scope);
+          if (cond) emitElementInto(expr.right, parentVar, scope, out, env, state);
         } catch {
-          throw new Error('AOT: dynamic `{cond && ...}` (state-driven add/remove) not yet supported');
+          const code = emitExpr(expr.left, env).code;
+          emitElementInto(expr.right, parentVar, scope, out, env, state, { displayCode: code });
         }
-        if (cond) emitElementInto(expr.right, parentVar, scope, out, env, state);
-      } else if (expr.type === 'ConditionalExpression') {
-        // `{cond ? <A/> : <B/>}` — static condition picks a branch at compile time.
+      } else if (expr.type === 'ConditionalExpression' && (expr.consequent.type === 'JSXElement' || expr.alternate.type === 'JSXElement')) {
+        // `{cond ? <A/> : <B/>}`. Static cond picks a branch; dynamic cond builds both and toggles each.
         let test;
         try {
           test = evalStatic(expr.test, scope);
+          emitElementInto(test ? expr.consequent : expr.alternate, parentVar, scope, out, env, state);
         } catch {
-          throw new Error('AOT: dynamic `{cond ? <A/> : <B/>}` (state-driven swap) not yet supported');
+          const code = emitExpr(expr.test, env).code;
+          if (expr.consequent.type === 'JSXElement') emitElementInto(expr.consequent, parentVar, scope, out, env, state, { displayCode: code });
+          if (expr.alternate.type === 'JSXElement') emitElementInto(expr.alternate, parentVar, scope, out, env, state, { displayCode: `!(${code})` });
         }
-        emitElementInto(test ? expr.consequent : expr.alternate, parentVar, scope, out, env, state);
       } else if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'map') {
         emitMap(expr, parentVar, scope, out, env, state);
       } else {
@@ -457,25 +461,31 @@ function emitChildren(children, parentVar, scope, out, env, state) {
   }
 }
 
-function emitNode(el, scope, out, env, state) {
+function emitNode(el, scope, out, env, state, opts = {}) {
   const tag = el.openingElement.name.name;
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
-    if (out.components.has(tag)) return emitComponent(el, scope, out, env, state);
+    if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
     throw new Error(`AOT: unknown element <${tag}> (not a built-in or a component in this file)`);
   }
 
   const v = `n${out.n++}`;
   const styleAssigns = lowerStyle(collectStyle(el.openingElement, scope));
   const text = tag === 'Text' ? buildText(el.children, scope, env) : null;
-  const isDynamic = !!text?.dynamic;
+
+  // Dynamic field assignments recomputed every app_update(). `displayCode` toggles show/hide for a
+  // state-driven conditional: the node is always built, its `display` flips between flex and none.
+  const dynAssigns = [];
+  if (opts.displayCode) dynAssigns.push({ field: 'display', code: `((${opts.displayCode}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)` });
+
+  const isDynamic = !!text?.dynamic || dynAssigns.length > 0;
 
   out.build.push(`    ${v} = er_node_create(${nodeType});`);
   if (isDynamic) {
     // Props are (re)applied in app_update(); here just create the node and remember its handle.
     out.build.push(`    s_${v} = ${v};`);
     out.handles.push(v);
-    out.updates.push({ v, styleAssigns, text });
+    out.updates.push({ v, styleAssigns, text, dynAssigns });
   } else {
     out.build.push(`    er_props_default(&p);`);
     for (const a of styleAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
@@ -528,8 +538,11 @@ const updateBlock = (() => {
   for (const u of out.updates) {
     lines.push(`    er_props_default(&p);`);
     for (const a of u.styleAssigns) lines.push(`    p.${a.field} = ${a.expr};`);
-    if (u.text.args.length) lines.push(`    snprintf(p.text, sizeof(p.text), ${cstr(u.text.format)}, ${u.text.args.join(', ')});`);
-    else lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(u.text.format.replace(/%%/g, '%'))});`);
+    for (const a of u.dynAssigns) lines.push(`    p.${a.field} = ${a.code};`);
+    if (u.text) {
+      if (u.text.args.length) lines.push(`    snprintf(p.text, sizeof(p.text), ${cstr(u.text.format)}, ${u.text.args.join(', ')});`);
+      else lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(u.text.format.replace(/%%/g, '%'))});`);
+    }
     lines.push(`    er_node_set_props(s_${u.v}, &p);`);
   }
   lines.push('}');
