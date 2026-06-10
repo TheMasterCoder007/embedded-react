@@ -1,34 +1,59 @@
 import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 
-// Music-player demo. For now it's the minimal counter app that brings up the Flow B AOT compiler
-// (useState, static styles, one event handler, interpolated text). As the AOT compiler grows
-// (state+events, lists, images, animation) this evolves into a real music-player UI.
+// Music-player demo — exercises the Flow B AOT compiler's Phase 3 features: a reusable child component
+// (TrackRow), a `.map` over a constant list (unrolled at compile time), and a play/pause toggle
+// (useState + dynamic text). Still a static UI; playback/now-playing wiring comes as AOT grows.
+const TRACKS = [
+  { title: 'Midnight City', artist: 'M83' },
+  { title: 'Resonance', artist: 'Home' },
+  { title: 'Nightcall', artist: 'Kavinsky' },
+];
+
+function TrackRow({ title, artist }) {
+  return (
+    <View style={styles.row}>
+      <View style={styles.rowDot} />
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        <Text style={styles.rowArtist}>{artist}</Text>
+      </View>
+    </View>
+  );
+}
+
 export function App() {
-  const [count, setCount] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
   return (
     <View style={styles.screen}>
-      <Text style={styles.title}>Hello, embedded-react</Text>
-      <Text style={styles.subtitle}>Flow B — compiled to C, no JS engine</Text>
-      <Pressable style={styles.button} onPress={() => setCount((c) => c + 1)}>
-        <Text style={styles.buttonText}>Tapped {count} times</Text>
+      <Text style={styles.kicker}>NOW PLAYING</Text>
+      <View style={styles.art} />
+      <Text style={styles.title}>Midnight City</Text>
+      <Text style={styles.artist}>M83</Text>
+      <Pressable style={styles.play} onPress={() => setPlaying((p) => !p)}>
+        <Text style={styles.playLabel}>{playing ? 'Pause' : 'Play'}</Text>
       </Pressable>
+      <Text style={styles.upNext}>UP NEXT</Text>
+      {TRACKS.map((t, i) => (
+        <TrackRow key={i} title={t.title} artist={t.artist} />
+      ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#0f172a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    padding: 24,
-  },
-  title: { color: '#f8fafc', fontSize: 24, fontWeight: 'bold' },
-  subtitle: { color: '#94a3b8', fontSize: 14 },
-  button: { backgroundColor: '#2563eb', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 10 },
-  buttonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  screen: { flex: 1, backgroundColor: '#0b1020', alignItems: 'center', paddingVertical: 36, paddingHorizontal: 24, gap: 10 },
+  kicker: { color: '#7c89a8', fontSize: 12, fontWeight: 'bold', letterSpacing: 2 },
+  art: { width: 168, height: 168, borderRadius: 20, backgroundColor: '#5b6cff', marginTop: 6, marginBottom: 8 },
+  title: { color: '#f4f7ff', fontSize: 26, fontWeight: 'bold' },
+  artist: { color: '#9aa6c4', fontSize: 16 },
+  play: { backgroundColor: '#5b6cff', paddingHorizontal: 40, paddingVertical: 12, borderRadius: 24, marginTop: 8, marginBottom: 8 },
+  playLabel: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  upNext: { color: '#7c89a8', fontSize: 12, fontWeight: 'bold', letterSpacing: 2, marginTop: 8 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, width: 280, paddingVertical: 8 },
+  rowDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#5b6cff' },
+  rowText: { flexDirection: 'column' },
+  rowTitle: { color: '#e6ecff', fontSize: 16, fontWeight: 'bold' },
+  rowArtist: { color: '#8190b0', fontSize: 13 },
 });

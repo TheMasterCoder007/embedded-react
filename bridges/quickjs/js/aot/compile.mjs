@@ -219,6 +219,34 @@ function findReturnJSX(fnBody) {
   throw new Error('AOT: component has no return statement');
 }
 
+/** Returns the JSX a function component returns (arrow expression body or a block's return). */
+function componentReturnJSX(fn) {
+  if (fn.body.type === 'JSXElement') return fn.body;
+  if (fn.body.type === 'BlockStatement') return findReturnJSX(fn.body);
+  throw new Error('AOT: component body must return a JSX element');
+}
+
+const fnReturnsJSX = (fn) => fn.body.type === 'JSXElement' || (fn.body.type === 'BlockStatement' && fn.body.body.some((s) => s.type === 'ReturnStatement' && s.argument?.type === 'JSXElement'));
+
+/** Collects top-level function components (name → fn node), excluding the `App` entry component. */
+function collectComponents(program) {
+  const comps = new Map();
+  for (const stmt of program.body) {
+    const d = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+    if (!d) continue;
+    if (d.type === 'FunctionDeclaration' && d.id && d.id.name !== 'App' && fnReturnsJSX(d)) comps.set(d.id.name, d);
+    if (d.type === 'VariableDeclaration')
+      for (const decl of d.declarations) if (decl.id?.type === 'Identifier' && decl.id.name !== 'App' && isFn(decl.init) && fnReturnsJSX(decl.init)) comps.set(decl.id.name, decl.init);
+  }
+  return comps;
+}
+
+/** True if a function component declares any useState (per-instance child state — not yet supported). */
+function usesState(fn) {
+  if (fn.body.type !== 'BlockStatement') return false;
+  return fn.body.body.some((s) => s.type === 'VariableDeclaration' && s.declarations.some((d) => d.init?.type === 'CallExpression' && d.init.callee.name === 'useState'));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // JSX → style / text / events
 // ---------------------------------------------------------------------------------------------------
@@ -306,12 +334,136 @@ function compileHandler(fnNode, env, state) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Emit
+// Emit — control flow (components / conditionals / lists) all unroll at COMPILE TIME into fixed nodes.
+// Runtime-dynamic conditionals/lists (where the node COUNT changes with state) are not yet supported
+// and throw a clear "AOT: ..." — see /PLAN.md Flow B.
 // ---------------------------------------------------------------------------------------------------
+
+/** Reads a component instance's props (attributes) as static values; dynamic props throw (for now). */
+function extractProps(openingElement, scope) {
+  const props = {};
+  for (const attr of openingElement.attributes) {
+    if (attr.type === 'JSXSpreadAttribute') throw new Error('AOT: spread props {...x} to a component not yet supported');
+    if (attr.type !== 'JSXAttribute' || attr.name.name === 'key') continue;
+    try {
+      props[attr.name.name] = evalStatic(attrExpr(attr), scope);
+    } catch {
+      throw new Error(`AOT: dynamic prop "${attr.name.name}" to a component not yet supported (static props only for now)`);
+    }
+  }
+  return props;
+}
+
+/** Binds a component's parameter (destructured `{a,b}` or whole `props`) to the passed prop values. */
+function bindParams(fn, props) {
+  const out = {};
+  const param = fn.params[0];
+  if (!param) return out;
+  if (param.type === 'Identifier') {
+    out[param.name] = props;
+  } else if (param.type === 'ObjectPattern') {
+    for (const p of param.properties) {
+      if (p.type === 'RestElement') throw new Error('AOT: rest props (...rest) in a component param not supported');
+      const key = p.key.name ?? p.key.value;
+      let val = props[key];
+      if (val === undefined && p.value?.type === 'AssignmentPattern') val = evalStatic(p.value.right, {});
+      out[key] = val;
+    }
+  } else {
+    throw new Error('AOT: unsupported component parameter pattern');
+  }
+  return out;
+}
+
+/** Inlines a function component instance: bind props into scope, emit its returned JSX in place. */
+function emitComponent(el, scope, out, env, state) {
+  const tag = el.openingElement.name.name;
+  const fn = out.components.get(tag);
+  if (usesState(fn)) throw new Error(`AOT: component <${tag}> uses useState — per-instance child state not yet supported`);
+  if (el.children.some((c) => c.type === 'JSXElement')) throw new Error(`AOT: passing children to <${tag}> (props.children) not yet supported`);
+  const bindings = bindParams(fn, extractProps(el.openingElement, scope));
+  const childScope = { ...scope, ...bindings };
+  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope }, state);
+}
+
+/** Emits an element / component child and appends it to the parent. */
+function emitElementInto(node, parentVar, scope, out, env, state) {
+  if (node.type !== 'JSXElement') throw new Error(`AOT: expected a JSX element here, got ${node.type}`);
+  const cv = emitNode(node, scope, out, env, state);
+  out.build.push(`    er_tree_append_child(${parentVar}, ${cv});`);
+}
+
+/** Unrolls `arr.map((item, i) => <JSX/>)` over a COMPILE-TIME-CONSTANT array. */
+function emitMap(call, parentVar, scope, out, env, state) {
+  let arr;
+  try {
+    arr = evalStatic(call.callee.object, scope);
+  } catch {
+    throw new Error('AOT: .map target must be a compile-time-constant array (dynamic lists not yet supported)');
+  }
+  if (!Array.isArray(arr)) throw new Error('AOT: .map target did not resolve to an array');
+  const cb = call.arguments[0];
+  if (!isFn(cb)) throw new Error('AOT: .map argument must be an inline function');
+  const itemName = cb.params[0]?.name;
+  const idxName = cb.params[1]?.name;
+  const retJSX = componentReturnJSX(cb);
+  arr.forEach((item, i) => {
+    const iterScope = { ...scope };
+    if (itemName) iterScope[itemName] = item;
+    if (idxName) iterScope[idxName] = i;
+    emitElementInto(retJSX, parentVar, iterScope, out, { ...env, consts: iterScope }, state);
+  });
+}
+
+/** Emits the children of a container node, handling element + {expression} children. */
+function emitChildren(children, parentVar, scope, out, env, state) {
+  for (const child of children) {
+    if (child.type === 'JSXElement') {
+      emitElementInto(child, parentVar, scope, out, env, state);
+    } else if (child.type === 'JSXExpressionContainer') {
+      const expr = child.expression;
+      if (expr.type === 'JSXEmptyExpression') continue;
+      if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
+        // `{cond && <X/>}` — condition resolved at compile time (static only for now).
+        let cond;
+        try {
+          cond = evalStatic(expr.left, scope);
+        } catch {
+          throw new Error('AOT: dynamic `{cond && ...}` (state-driven add/remove) not yet supported');
+        }
+        if (cond) emitElementInto(expr.right, parentVar, scope, out, env, state);
+      } else if (expr.type === 'ConditionalExpression') {
+        // `{cond ? <A/> : <B/>}` — static condition picks a branch at compile time.
+        let test;
+        try {
+          test = evalStatic(expr.test, scope);
+        } catch {
+          throw new Error('AOT: dynamic `{cond ? <A/> : <B/>}` (state-driven swap) not yet supported');
+        }
+        emitElementInto(test ? expr.consequent : expr.alternate, parentVar, scope, out, env, state);
+      } else if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'map') {
+        emitMap(expr, parentVar, scope, out, env, state);
+      } else {
+        // A constant that renders nothing (false/null/'') is fine; anything else is unsupported.
+        let v;
+        try {
+          v = evalStatic(expr, scope);
+        } catch {
+          throw new Error(`AOT: unsupported expression child "${expr.type}" in a container`);
+        }
+        if (v !== false && v != null && v !== '') throw new Error(`AOT: a non-element expression child (${JSON.stringify(v)}) cannot render here`);
+      }
+    }
+  }
+}
+
 function emitNode(el, scope, out, env, state) {
   const tag = el.openingElement.name.name;
   const nodeType = NODE_TYPES[tag];
-  if (!nodeType) throw new Error(`AOT: unsupported element <${tag}> (custom components not yet supported)`);
+  if (!nodeType) {
+    if (out.components.has(tag)) return emitComponent(el, scope, out, env, state);
+    throw new Error(`AOT: unknown element <${tag}> (not a built-in or a component in this file)`);
+  }
 
   const v = `n${out.n++}`;
   const styleAssigns = lowerStyle(collectStyle(el.openingElement, scope));
@@ -342,13 +494,7 @@ function emitNode(el, scope, out, env, state) {
     out.build.push(`    er_event_set(${v}, ${evt}, er_handler_${hid}, NULL);`);
   }
 
-  if (tag !== 'Text') {
-    for (const child of el.children) {
-      if (child.type !== 'JSXElement') continue;
-      const cv = emitNode(child, scope, out, env, state);
-      out.build.push(`    er_tree_append_child(${v}, ${cv});`);
-    }
-  }
+  if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
   return v;
 }
 
@@ -364,7 +510,7 @@ const state = collectState(component.body, scope);
 const rootJSX = findReturnJSX(component.body);
 
 const env = { state: state.byName, locals: new Map(), consts: scope };
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [] };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program) };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
