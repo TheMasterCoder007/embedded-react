@@ -308,6 +308,13 @@ function componentReturnJSX(fn) {
 const fnReturnsJSX = (fn) => fn.body.type === 'JSXElement' || (fn.body.type === 'BlockStatement' && fn.body.body.some((s) => s.type === 'ReturnStatement' && s.argument?.type === 'JSXElement'));
 
 /** Collects top-level function components (name → fn node), excluding the `App` entry component. */
+/** Resolves a component definition expression to its function node, unwrapping memo(fn) / React.memo(fn). */
+function asComponentFn(node) {
+  if (isFn(node)) return node;
+  if (node?.type === 'CallExpression' && isFn(node.arguments[0]) && (node.callee.name === 'memo' || (node.callee.type === 'MemberExpression' && node.callee.property?.name === 'memo'))) return node.arguments[0];
+  return null;
+}
+
 function collectComponents(program) {
   const comps = new Map();
   for (const stmt of program.body) {
@@ -315,7 +322,11 @@ function collectComponents(program) {
     if (!d) continue;
     if (d.type === 'FunctionDeclaration' && d.id && d.id.name !== 'App' && fnReturnsJSX(d)) comps.set(d.id.name, d);
     if (d.type === 'VariableDeclaration')
-      for (const decl of d.declarations) if (decl.id?.type === 'Identifier' && decl.id.name !== 'App' && isFn(decl.init) && fnReturnsJSX(decl.init)) comps.set(decl.id.name, decl.init);
+      for (const decl of d.declarations) {
+        if (decl.id?.type !== 'Identifier' || decl.id.name === 'App') continue;
+        const fn = asComponentFn(decl.init); // unwrap memo(...)
+        if (fn && fnReturnsJSX(fn)) comps.set(decl.id.name, fn);
+      }
   }
   return comps;
 }
@@ -838,7 +849,18 @@ function compileHandler(fnNode, env, state, out) {
 function extractProps(openingElement, scope, env) {
   const props = {};
   for (const attr of openingElement.attributes) {
-    if (attr.type === 'JSXSpreadAttribute') throw new Error('AOT: spread props {...x} to a component not yet supported');
+    if (attr.type === 'JSXSpreadAttribute') {
+      // Static spread: {...obj} where obj folds to a compile-time object → merge its keys as props.
+      let obj;
+      try {
+        obj = evalStatic(attr.argument, scope);
+      } catch {
+        throw new Error('AOT: only a compile-time-constant object can be spread to a component ({...obj})');
+      }
+      if (obj == null || typeof obj !== 'object') throw new Error('AOT: a component spread {...x} must resolve to an object');
+      for (const [k, v] of Object.entries(obj)) props[k] = { static: true, value: v };
+      continue;
+    }
     if (attr.type !== 'JSXAttribute' || attr.name.name === 'key') continue;
     const node = attrExpr(attr);
     try {
@@ -877,19 +899,40 @@ function bindParams(fn, props) {
   return out;
 }
 
-/** Inlines a function component instance: bind props (static → scope, dynamic → locals), emit its JSX. */
+/** True if `expr` is how a component body refers to its children (destructured {children} or props.children). */
+function isChildrenRef(expr, env) {
+  const cr = env.children?.ref;
+  if (!cr) return false;
+  if (cr.kind === 'local') return expr.type === 'Identifier' && expr.name === cr.name;
+  return expr.type === 'MemberExpression' && !expr.computed && expr.object.type === 'Identifier' && expr.object.name === cr.name && expr.property.name === 'children';
+}
+
+/** Inlines a function component instance: bind props (static → scope, dynamic → locals), emit its JSX.
+ *  Children passed at the call site are captured and emitted (in the CALLER's scope) where the body uses them. */
 function emitComponent(el, scope, out, env, state, opts) {
   const tag = el.openingElement.name.name;
   const fn = out.components.get(tag);
   if (usesState(fn)) throw new Error(`AOT: component <${tag}> uses useState — per-instance child state not yet supported`);
-  if (el.children.some((c) => c.type === 'JSXElement')) throw new Error(`AOT: passing children to <${tag}> (props.children) not yet supported`);
+  const childNodes = el.children.filter((c) => c.type === 'JSXElement' || (c.type === 'JSXExpressionContainer' && c.expression.type !== 'JSXEmptyExpression'));
+
+  // How the body refers to children: destructured `{ children }` (a local) or whole `props` → props.children.
+  const param = fn.params[0];
+  let childrenRef = null;
+  if (param?.type === 'ObjectPattern') {
+    for (const p of param.properties) if ((p.key?.name ?? p.key?.value) === 'children') childrenRef = { kind: 'local', name: p.value?.name ?? 'children' };
+  } else if (param?.type === 'Identifier') {
+    childrenRef = { kind: 'props', name: param.name };
+  }
+
   const childScope = { ...scope };
   const childLocals = new Map(env.locals);
   for (const [name, d] of bindParams(fn, extractProps(el.openingElement, scope, env))) {
+    if (childrenRef?.kind === 'local' && name === childrenRef.name) continue; // children come from the slot, not a value prop
     if (d.static) childScope[name] = d.value;
     else childLocals.set(name, { code: d.code, cType: d.cType, struct: d.struct });
   }
-  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope, locals: childLocals }, state, opts);
+  const children = childNodes.length ? { nodes: childNodes, scope, env, ref: childrenRef } : null;
+  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope, locals: childLocals, children }, state, opts);
 }
 
 /** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
@@ -949,6 +992,11 @@ function emitChildren(children, parentVar, scope, out, env, state) {
     } else if (child.type === 'JSXExpressionContainer') {
       const expr = child.expression;
       if (expr.type === 'JSXEmptyExpression') continue;
+      if (isChildrenRef(expr, env)) {
+        // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
+        emitChildren(env.children.nodes, parentVar, env.children.scope, out, env.children.env, state);
+        continue;
+      }
       if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
         // `{cond && <X/>}`. Static cond → include/omit at compile time. Dynamic (state) cond → always
         // build X but toggle its display (none/flex) in app_update — show/hide without node churn.

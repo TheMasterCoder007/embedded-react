@@ -239,6 +239,38 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('er_node_set_vector_dirty_rect(s_ref_dial, 0, 0, 200, 200);');
   });
 
+  it('recognizes a memo()-wrapped component', () => {
+    const c = gen(`${PRE}
+      import { memo } from 'react';
+      const Badge = memo(function Badge({ label }) { return (<Text>{label}</Text>); });
+      export function App() { return (<View><Badge label="hi" /></View>); }`);
+    expect(c).toContain('"hi"');                    // inlined, prop substituted
+    expect(c).toContain('er_node_create(ER_NODE_TEXT)');
+  });
+
+  it('emits props.children (destructured) passed to a component', () => {
+    const c = gen(`${PRE}
+      function Card({ children }) { return (<View style={{ padding: 8 }}>{children}</View>); }
+      export function App() { return (<Card><Text>inside</Text></Card>); }`);
+    expect(c).toContain('"inside"');                // the child Text is emitted
+    expect(c).toContain('er_node_create(ER_NODE_VIEW)');
+  });
+
+  it('emits props.children via the whole-props parameter', () => {
+    const c = gen(`${PRE}
+      function Card(props) { return (<View>{props.children}</View>); }
+      export function App() { return (<Card><Text>P</Text></Card>); }`);
+    expect(c).toContain('"P"');
+  });
+
+  it('merges a static spread {...obj} into a component\'s props', () => {
+    const c = gen(`${PRE}
+      const cfg = { label: 'spread!' };
+      function Badge({ label }) { return (<Text>{label}</Text>); }
+      export function App() { return (<View><Badge {...cfg} /></View>); }`);
+    expect(c).toContain('"spread!"');
+  });
+
   it('binds an animated transform and starts a spring from a handler', () => {
     const c = gen(`${PRE}
       export function App() {
