@@ -315,6 +315,19 @@ export function App() {
   const [value, setValue] = useState(70); // default target (°F); a float once dragged (wide/Flow A)
   const [mode, setMode] = useState('heat'); // default mode
 
+  // Compact-dial drag (also valid in Flow A): capture the dial's on-screen centre via onLayout, then map a
+  // touch point to a target temperature — the angle of (touch − centre) around the dial → value. Stays in
+  // the Flow B (AOT) subset: value refs for the centre + a state setter, no per-instance component hooks.
+  // (The wide/Flow A layout uses the richer <Dial> with imperative redraw; these refs go unused there.)
+  const cx = useRef(0);
+  const cy = useRef(0);
+  const onDrag = useCallback((e) => {
+    const ang = (Math.atan2(e.x - cx.current, cy.current - e.y) * 180) / Math.PI; // clockwise from 12 o'clock
+    const clamped = ang < A_START ? A_START : ang > -A_START ? -A_START : ang;     // snap the bottom 90° gap
+    const v = Math.round(MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN));
+    setValue(v < MIN ? MIN : v > MAX ? MAX : v);
+  }, []);
+
   // ---- Compact layout (small panels, e.g., the 240×320 CYD) -------------------------------------------
   // Self-contained and within the Flow B (AOT) subset: a STATE-DRIVEN dial (arc sweep + handle follow
   // `value` via Math.sin/cos — no drag, no per-instance component hooks), integer ± steppers, and the
@@ -328,18 +341,31 @@ export function App() {
       <View style={styles.root}>
         <Text style={styles.cTitle}>Thermostat</Text>
 
-        <Svg width={BOX} height={BOX}>
-          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-          <Circle
-            cx={DIAL_C + SZ.R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
-            cy={DIAL_C - SZ.R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
-            r={SZ.handle}
-            fill={theme.card}
-            stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT}
-            strokeWidth={3}
-          />
-        </Svg>
+        {/* The dial box doubles as the drag surface: onLayout records its screen centre, and a touch
+            anywhere in it sets the target to that angle (touch-down captures it, so the finger can then
+            roam the whole dial). The handle/arc are inside, so grabbing them just works. */}
+        <View
+          style={{ width: BOX, height: BOX }}
+          onLayout={(e) => {
+            cx.current = e.layout.x + e.layout.width / 2;
+            cy.current = e.layout.y + e.layout.height / 2;
+          }}
+          onTouchStart={onDrag}
+          onTouchMove={onDrag}
+        >
+          <Svg width={BOX} height={BOX}>
+            <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+            <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+            <Circle
+              cx={DIAL_C + SZ.R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
+              cy={DIAL_C - SZ.R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
+              r={SZ.handle}
+              fill={theme.card}
+              stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT}
+              strokeWidth={3}
+            />
+          </Svg>
+        </View>
 
         <View style={styles.cReadout}>
           <Text style={styles.cStatus}>{mode === 'off' ? 'Off' : mode !== 'cool' && value > CURRENT ? 'Heating' : mode !== 'heat' && value < CURRENT ? 'Cooling' : 'Holding'}</Text>

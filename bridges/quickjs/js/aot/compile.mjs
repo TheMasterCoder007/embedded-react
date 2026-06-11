@@ -142,7 +142,8 @@ function emitExpr(node, env) {
     }
     case 'UnaryExpression': {
       const a = emitExpr(node.argument, env);
-      if (node.operator === '-' || node.operator === '+' || node.operator === '!') return { code: `(${node.operator}${a.code})`, cType: node.operator === '!' ? 'int' : a.cType };
+      // Parenthesize the operand so `-` on a negative literal emits `(-(-135))`, not `(--135)` (a decrement).
+      if (node.operator === '-' || node.operator === '+' || node.operator === '!') return { code: `(${node.operator}(${a.code}))`, cType: node.operator === '!' ? 'int' : a.cType };
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
@@ -205,6 +206,13 @@ function emitExpr(node, env) {
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
       if (obj.type === 'Identifier' && env.event === obj.name && (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')) {
         return { code: `data->${prop}`, cType: 'int' };
+      }
+      // `<event>.layout.x / .y / .width / .height` — the onLayout rect (EREventData.layout_rect; ERRect uses w/h).
+      if (obj.type === 'MemberExpression' && !obj.computed && obj.object.type === 'Identifier' && env.event === obj.object.name && obj.property.name === 'layout') {
+        const RECT = { x: 'x', y: 'y', width: 'w', height: 'h' };
+        const f = RECT[prop];
+        if (!f) throw new Error(`AOT: unknown onLayout rect field "${prop}" (use x / y / width / height)`);
+        return { code: `data->layout_rect.${f}`, cType: 'int' };
       }
       if (obj.type === 'Identifier' && obj.name === 'Math' && prop === 'PI') return { code: '(float)M_PI', cType: 'float' };
       throw new Error('AOT: unsupported member expression in a dynamic context');
@@ -619,7 +627,16 @@ function collectStyleAssigns(openingElement, scope, env) {
   return { staticAssigns, dynAssigns, binds };
 }
 
-const EVENT_TYPES = { onPress: 'ER_EVENT_PRESS', onLongPress: 'ER_EVENT_LONG_PRESS', onPressIn: 'ER_EVENT_PRESS_IN', onPressOut: 'ER_EVENT_PRESS_OUT' };
+const EVENT_TYPES = {
+  onPress: 'ER_EVENT_PRESS',
+  onLongPress: 'ER_EVENT_LONG_PRESS',
+  onPressIn: 'ER_EVENT_PRESS_IN',
+  onPressOut: 'ER_EVENT_PRESS_OUT',
+  onTouchStart: 'ER_EVENT_TOUCH_START',
+  onTouchMove: 'ER_EVENT_TOUCH_MOVE',
+  onTouchEnd: 'ER_EVENT_TOUCH_END',
+  onLayout: 'ER_EVENT_LAYOUT',
+};
 
 const cstr = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t')}"`;
 

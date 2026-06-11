@@ -40,7 +40,7 @@ describe('AOT baseline (regression)', () => {
         const [on, setOn] = useState(false);
         return (<Pressable onPress={() => setOn((p) => !p)}><Text>x</Text></Pressable>);
       }`);
-    expect(c).toContain('s_state.on = (!s_state.on);');
+    expect(c).toContain('s_state.on = (!(s_state.on));');
   });
 
   it('makes interpolated text dynamic with a printf format', () => {
@@ -417,5 +417,45 @@ describe('AOT responsive layout', () => {
         return (<View><Text>b</Text></View>);
       }`;
     expect(() => compileSource(src, 'test')).toThrow(/compile-time-constant test/);
+  });
+});
+
+describe('AOT touch drag', () => {
+  it('wires onLayout / onTouchStart / onTouchMove and lowers e.layout.* + e.x to EREventData fields', () => {
+    const c = gen(`${PRE}
+      import { useRef, useCallback } from 'react';
+      export function App() {
+        const [v, setV] = useState(70);
+        const cx = useRef(0);
+        const onDrag = useCallback((e) => setV(e.x - cx.current), []);
+        return (
+          <View
+            onLayout={(e) => { cx.current = e.layout.x + e.layout.width / 2; }}
+            onTouchStart={onDrag}
+            onTouchMove={onDrag}
+          ><Text>{v}</Text></View>
+        );
+      }`);
+    expect(c).toContain('ER_EVENT_LAYOUT');
+    expect(c).toContain('ER_EVENT_TOUCH_START');
+    expect(c).toContain('ER_EVENT_TOUCH_MOVE');
+    // onLayout rect: x/y stay, width/height map to ERRect w/h
+    expect(c).toContain('s_ref_cx = (data->layout_rect.x + (data->layout_rect.w / 2));');
+    // touch coord + ref read in the shared drag handler
+    expect(c).toContain('static void er_cb_onDrag(');
+    expect(c).toContain('s_state.v = (data->x - s_ref_cx);');
+    // onTouchStart + onTouchMove reuse the one useCallback handler
+    expect(c.match(/er_event_set\([^,]+, ER_EVENT_TOUCH_(START|MOVE), er_cb_onDrag, NULL\);/g)).toHaveLength(2);
+  });
+
+  it('negates a negative constant as (-(-135)), never the decrement token --135', () => {
+    const c = gen(`${PRE}
+      const A = -135;
+      export function App() {
+        const [v, setV] = useState(0);
+        return (<Pressable onPress={(e) => setV(e.x > -A ? -A : e.x)}><Text>{v}</Text></Pressable>);
+      }`);
+    expect(c).toContain('(-(-135))');
+    expect(c).not.toContain('--135');
   });
 });
