@@ -249,8 +249,14 @@ function findComponent(program) {
   throw new Error('AOT: no `App` component found (expected `export function App() { ... }`)');
 }
 
-function moduleScope(program) {
-  const scope = {};
+// Target screen size, baked at compile time so the demo's responsive `screen.width`/`screen.height`
+// branching folds to the layout for THIS build (each board compiles its own binary). Override per target,
+// e.g. ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 for the CYD; defaults to a wide 800×480.
+const SCREEN_W = Number(process.env.ER_AOT_SCREEN_W) || 800;
+const SCREEN_H = Number(process.env.ER_AOT_SCREEN_H) || 480;
+
+function moduleScope(program, screen) {
+  const scope = { screen };
   for (const stmt of program.body) {
     const d = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
     if (d?.type !== 'VariableDeclaration') continue;
@@ -319,20 +325,40 @@ function collectState(fnBody, scope) {
   return { byName, bySetter };
 }
 
-function findReturnJSX(fnBody) {
-  for (const stmt of fnBody.body) {
-    if (stmt.type === 'ReturnStatement' && stmt.argument) {
-      if (stmt.argument.type === 'JSXElement') return stmt.argument;
-      throw new Error(`AOT: the component must return a single JSX element (got ${stmt.argument.type})`);
+function findReturnJSX(fnBody, scope = {}) {
+  // Fold top-level `if (staticCond) return …` at compile time — responsive layouts switch on `screen`.
+  const scan = (stmts) => {
+    for (const stmt of stmts) {
+      if (stmt.type === 'IfStatement') {
+        let test;
+        try {
+          test = evalStatic(stmt.test, scope);
+        } catch {
+          throw new Error('AOT: a top-level `if` in the component must have a compile-time-constant test (e.g. on the `screen` global) — runtime layout branching is not supported');
+        }
+        const branch = test ? stmt.consequent : stmt.alternate;
+        if (branch) {
+          const r = scan(branch.type === 'BlockStatement' ? branch.body : [branch]);
+          if (r) return r;
+        }
+        continue;
+      }
+      if (stmt.type === 'ReturnStatement' && stmt.argument) {
+        if (stmt.argument.type === 'JSXElement') return stmt.argument;
+        throw new Error(`AOT: the component must return a single JSX element (got ${stmt.argument.type})`);
+      }
     }
-  }
-  throw new Error('AOT: component has no return statement');
+    return null;
+  };
+  const r = scan(fnBody.body);
+  if (!r) throw new Error('AOT: component has no return statement');
+  return r;
 }
 
 /** Returns the JSX a function component returns (arrow expression body or a block's return). */
-function componentReturnJSX(fn) {
+function componentReturnJSX(fn, scope = {}) {
   if (fn.body.type === 'JSXElement') return fn.body;
-  if (fn.body.type === 'BlockStatement') return findReturnJSX(fn.body);
+  if (fn.body.type === 'BlockStatement') return findReturnJSX(fn.body, scope);
   throw new Error('AOT: component body must return a JSX element');
 }
 
@@ -511,8 +537,12 @@ function emitColorExpr(node, env) {
     const t = emitExpr(node.test, env).code;
     return `((${t}) ? ${emitColorExpr(node.consequent, env)} : ${emitColorExpr(node.alternate, env)})`;
   }
-  if (node.type === 'Identifier' && node.name in env.consts && typeof env.consts[node.name] === 'string') {
-    return colorLiteral(env.consts[node.name]);
+  // A statically-resolvable color (a const string, or a theme token like `theme.card`) folds to a literal.
+  try {
+    const s = evalStatic(node, env.consts ?? {});
+    if (typeof s === 'string') return colorLiteral(s);
+  } catch {
+    /* not static — fall through to the error below */
   }
   throw new Error('AOT: a dynamic color must be a color string literal or a ternary of them');
 }
@@ -963,7 +993,7 @@ function emitComponent(el, scope, out, env, state, opts) {
     else childLocals.set(name, { code: d.code, cType: d.cType, struct: d.struct });
   }
   const children = childNodes.length ? { nodes: childNodes, scope, env, ref: childrenRef } : null;
-  return emitNode(componentReturnJSX(fn), childScope, out, { ...env, consts: childScope, locals: childLocals, children }, state, opts);
+  return emitNode(componentReturnJSX(fn, childScope), childScope, out, { ...env, consts: childScope, locals: childLocals, children }, state, opts);
 }
 
 /** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
@@ -1340,13 +1370,28 @@ function emitNode(el, scope, out, env, state, opts = {}) {
  * @param {string} demo  Demo name (only used in the generated-by header comment).
  * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
  */
-export function compileSource(src, demo = 'app') {
+export function compileSource(src, demo = 'app', opts = {}) {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
-const scope = moduleScope(ast.program);
+const screen = opts.screen ?? { width: SCREEN_W, height: SCREEN_H };
+const scope = moduleScope(ast.program, screen);
 const component = findComponent(ast.program);
+// Fold statically-derived component-local consts (e.g. `const compact = screen.width < 400`) into the
+// const scope, so responsive `if` branches and styles can switch on them at compile time. Dynamic consts
+// (state-derived, useMemo, etc.) throw here and are skipped — they're handled later by memos/emitExpr.
+for (const stmt of component.body.body) {
+  if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const') continue;
+  for (const decl of stmt.declarations) {
+    if (decl.id.type !== 'Identifier' || !decl.init || decl.id.name in scope) continue;
+    try {
+      scope[decl.id.name] = evalStatic(decl.init, scope);
+    } catch {
+      /* dynamic const — resolved later */
+    }
+  }
+}
 const state = collectState(component.body, scope);
-const rootJSX = findReturnJSX(component.body);
+const rootJSX = findReturnJSX(component.body, scope);
 
 const anims = collectAnims(component.body, scope);
 const refs = collectRefs(component.body, scope);

@@ -5,6 +5,7 @@
   "scripts": {
     "sim": "node ../../bridges/quickjs/js/sim.mjs thermostat",
     "build": "node ../../bridges/quickjs/js/build.mjs thermostat",
-    "pack": "node ../../bridges/quickjs/js/pack-container.mjs thermostat"
+    "pack": "node ../../bridges/quickjs/js/pack-container.mjs thermostat",
+    "aot": "node ../../bridges/quickjs/js/aot/compile.mjs thermostat"
   }
 }

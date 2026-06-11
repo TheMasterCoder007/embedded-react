@@ -323,3 +323,60 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('er_anim_value_animate(s_av_s,');
   });
 });
+
+describe('AOT responsive layout', () => {
+  // A percentage dimension lowers to the engine's *_pct field (% of parent), not the absolute pixel field.
+  it('lowers percentage width/height to the *_pct fields', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View style={{ width: '50%', height: '100%' }}><Text>x</Text></View>);
+      }`);
+    expect(c).toContain('p.width_pct = 50.0f;');
+    expect(c).toContain('p.height_pct = 100.0f;');
+    expect(c).not.toMatch(/p\.width = \(int16_t\)50;/);
+  });
+
+  it('keeps absolute pixel widths on the pixel field', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View style={{ width: 120 }}><Text>x</Text></View>);
+      }`);
+    expect(c).toContain('p.width = 120;');
+    expect(c).not.toContain('width_pct');
+  });
+
+  // The `screen` global is a compile-time constant; a top-level `if` on it folds to one branch per build.
+  it('folds a compile-time screen branch to the WIDE layout (default 800x480)', () => {
+    const src = `${PRE}
+      export function App() {
+        const compact = screen.width < 400;
+        if (compact) return (<View><Text>small</Text></View>);
+        return (<View><Text>wide</Text></View>);
+      }`;
+    const c = compileSource(src, 'test').c;
+    expect(c).toContain('"wide"');
+    expect(c).not.toContain('"small"');
+  });
+
+  it('folds the same source to the COMPACT layout for a 240x320 screen', () => {
+    const src = `${PRE}
+      export function App() {
+        const compact = screen.width < 400;
+        if (compact) return (<View><Text>small</Text></View>);
+        return (<View><Text>wide</Text></View>);
+      }`;
+    const c = compileSource(src, 'test', { screen: { width: 240, height: 320 } }).c;
+    expect(c).toContain('"small"');
+    expect(c).not.toContain('"wide"');
+  });
+
+  it('throws on a top-level if whose test is not compile-time constant', () => {
+    const src = `${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        if (n > 5) return (<View><Text>a</Text></View>);
+        return (<View><Text>b</Text></View>);
+      }`;
+    expect(() => compileSource(src, 'test')).toThrow(/compile-time-constant test/);
+  });
+});

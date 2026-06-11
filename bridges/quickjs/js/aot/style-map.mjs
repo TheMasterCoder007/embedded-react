@@ -87,13 +87,32 @@ const dim = (v) => {
 };
 
 /**
+ * A dimension that may be a percentage. `'50%'` → the engine's float `*_pct` field (% of the parent);
+ * a number → the pixel field. Used for width / height / flexBasis, which the engine resolves at layout.
+ *
+ * @param {string} pxField   ERProps pixel field (e.g. 'width').
+ * @param {string} pctField  ERProps percentage field (e.g. 'width_pct').
+ */
+const pctOrPx = (pxField, pctField) => (v) => {
+  if (typeof v === 'string' && v.trim().endsWith('%')) {
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) throw new Error(`expected a percentage like '50%', got ${JSON.stringify(v)}`);
+    // A valid C float literal needs a decimal point — `50f` is a syntax error, `50.0f` is not.
+    const lit = Number.isInteger(n) ? `${n}.0f` : `${n}f`;
+    return [{ field: pctField, expr: lit }];
+  }
+  return [{ field: pxField, expr: dim(v) }];
+};
+
+/**
  * Per-style-key lowering. Each entry maps a style value to one or more { field, expr } ERProps writes
  * (field = ERProps C member, expr = C source for the value). `flex` expands to several fields.
  */
 const KEYS = {
   // Layout
-  width: (v) => [{ field: 'width', expr: dim(v) }],
-  height: (v) => [{ field: 'height', expr: dim(v) }],
+  width: pctOrPx('width', 'width_pct'),
+  height: pctOrPx('height', 'height_pct'),
+  flexBasis: pctOrPx('flex_basis', 'flex_basis_pct'),
   minWidth: (v) => [{ field: 'min_width', expr: dim(v) }],
   maxWidth: (v) => [{ field: 'max_width', expr: dim(v) }],
   minHeight: (v) => [{ field: 'min_height', expr: dim(v) }],

@@ -33,12 +33,13 @@ shadows/gradients off). `app_main` logs free internal RAM at boot — watch it.
 
 Prerequisites: **ESP-IDF v5.3+** installed and exported (`. $IDF_PATH/export.sh`).
 
-**1. Generate the AOT app** (sized for this board's RAM — a small list-pool cap keeps the node count
-down). From the repo root:
+**1. Generate the AOT app.** The `ER_AOT_SCREEN_W/H` you pass selects the demo's responsive layout at
+compile time — `240×320` folds the thermostat's **compact** branch (dial + steppers + modes, no weather),
+which is exactly what fits this board. From the repo root:
 
 ```bash
 cd bridges/quickjs/js
-ER_AOT_LIST_CAP=8 npm run aot -- music-player    # → dist/app.gen.{c,h}
+ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat    # → dist/app.gen.{c,h}
 cd ../../..
 ```
 

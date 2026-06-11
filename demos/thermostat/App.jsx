@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback, memo } from 'react';
+import { useState, useRef, useCallback, memo } from 'react';
 import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
 // Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
 // basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
@@ -20,8 +20,11 @@ const MAX = 90;
 const STEP = 1;
 const SWEEP = 270; // arc covers 270°, with a 90° gap at the bottom
 const A_START = -135; // bottom-left, degrees clockwise from 12 o'clock
+const DEG = SWEEP / (MAX - MIN); // degrees per °F (folds to 6) — used by the compact inline dial
 const DEADBAND = 0.5; // prevents Heating/Cooling flicker when target ≈ current
 const CURRENT = 68.7; // live room reading °F (static in this demo)
+const ACCENT = '#f4a261'; // dial accent (amber). The compact (AOT) dial uses a STATIC arc/handle color —
+//                           dynamic vector paint isn't in the compile-time subset — so it stays amber there.
 
 const MODES = [
   { key: 'heat', label: 'Heat', color: '#f4a261' }, // warning / amber
@@ -71,21 +74,26 @@ function statusFor(mode, value, current) {
 }
 
 // ----------------------------------------------------------------------------------------------------
-// Responsive sizing — read once from the host-injected `screen` global.
+// Responsive sizing — driven by the `screen` global (the Flow A host injects it at runtime; the Flow B
+// AOT compiler seeds it from ER_AOT_SCREEN_W/H at build time). Because every term below folds to a
+// constant for a given screen, the AOT picks ONE layout per board: the compact branch on a 240×320 panel
+// (the only branch it compiles — the weather/drag code in the wide branch is never reached), the wide
+// branch on an 800×480+ board. `screen.width` must stay foldable here (no `typeof` guard) so the compiler
+// can resolve it; the Flow A host always provides `screen`.
 // ----------------------------------------------------------------------------------------------------
-const SW = (typeof screen !== 'undefined' && screen.width) || 800;
+const SW = screen.width;
 const compact = SW < 400;
 // Wide enough to place the thermostat + weather panel side by side (else stack them, e.g., in portrait).
 const wide = !compact && SW >= 760;
 
 // Font sizes snap to the engine's baked Inter sizes (10/12/16/20/24/32/48), so pick from that set.
 const SZ = compact
-  ? { R: 52, stroke: 8, handle: 9, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
+  ? { R: 72, stroke: 12, handle: 10, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
   : { R: 104, stroke: 14, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
 
 const PAD = compact ? 10 : 20;
 const GAP = compact ? 8 : 16;
-const BOX = 2 * (SZ.R + SZ.handle + 4); // square that holds the dial; center at (BOX/2, BOX/2)
+const BOX = 2 * (SZ.R + SZ.handle + 6); // square that holds the dial; center at (BOX/2, BOX/2)
 const DIAL_C = BOX / 2;
 
 // Node-local bbox of just the change when the value goes a -> b: the swept arc sector plus the handle,
@@ -304,10 +312,64 @@ const Header = memo(function Header() {
 // App
 // ----------------------------------------------------------------------------------------------------
 export function App() {
-  const [value, setValue] = useState(70); // default target (°F); a float once dragged
+  const [value, setValue] = useState(70); // default target (°F); a float once dragged (wide/Flow A)
   const [mode, setMode] = useState('heat'); // default mode
 
-  const color = useMemo(() => MODES.find((m) => m.key === mode).color, [mode]);
+  // ---- Compact layout (small panels, e.g., the 240×320 CYD) -------------------------------------------
+  // Self-contained and within the Flow B (AOT) subset: a STATE-DRIVEN dial (arc sweep + handle follow
+  // `value` via Math.sin/cos — no drag, no per-instance component hooks), integer ± steppers, and the
+  // mode row as an inlined MODES.map. The dial's arc/handle paint is static (ACCENT) — dynamic vector
+  // paint isn't compile-time-foldable yet — while the View backgrounds/text recolor with `mode`. This is
+  // the ONLY branch the AOT compiles on a 240×320 board, so nothing below it (weather/drag) is reached.
+  if (compact) {
+    return (
+      <View style={styles.root}>
+        <Text style={styles.cTitle}>Thermostat</Text>
+
+        <Svg width={BOX} height={BOX}>
+          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+          <Circle
+            cx={DIAL_C + SZ.R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
+            cy={DIAL_C - SZ.R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
+            r={SZ.handle}
+            fill={theme.card}
+            stroke={ACCENT}
+            strokeWidth={3}
+          />
+        </Svg>
+
+        <View style={styles.cReadout}>
+          <Text style={styles.cStatus}>{mode === 'off' ? 'Off' : mode !== 'cool' && value > CURRENT ? 'Heating' : mode !== 'heat' && value < CURRENT ? 'Cooling' : 'Holding'}</Text>
+          <Text style={styles.cBig}>{value}°</Text>
+          <Text style={styles.cSub}>now {CURRENT}°</Text>
+        </View>
+
+        <View style={styles.stepRow}>
+          <Pressable style={styles.step} onPressIn={() => setValue(value > MIN ? value - 1 : value)}>
+            <Text style={styles.stepText}>−</Text>
+          </Pressable>
+          <Pressable style={styles.step} onPressIn={() => setValue(value < MAX ? value + 1 : value)}>
+            <Text style={styles.stepText}>+</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.modeRow}>
+          {MODES.map((m) => (
+            <Pressable key={m.key} style={[styles.mode, { backgroundColor: mode === m.key ? theme.modeActiveBg : theme.card }]} onPress={() => setMode(m.key)}>
+              <Text style={{ color: mode === m.key ? theme.text : theme.subtext, fontSize: SZ.mode }}>{m.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  // ---- Wide / stacked layouts (Flow A only: PSRAM/SDRAM boards, the simulator, a laptop) -------------
+  // Below here is the rich runtime experience — the draggable Dial and the <Image>-backed weather panel.
+  // The AOT never reaches it (it folds the compact branch on the small boards it targets), so it is free
+  // to use the full Flow A feature set: per-instance hooks, callback props, helper calls, baked assets.
+  const color = MODES.find((m) => m.key === mode).color;
 
   // Stable callbacks so the memoised children below don't re-render on a value drag. The stepper rounds
   // first so a press after a fractional drag lands on a whole degree.
@@ -339,13 +401,9 @@ export function App() {
     </View>
   );
 
-  // Three layouts from the logical screen size:
-  //   compact (<400, e.g., a small portrait panel): thermostat only.
+  // Two wide-side layouts from the logical screen size (compact already returned above):
   //   wide   (>=760, the 800×480 landscape panel): thermostat + weather side by side.
   //   else   (e.g., 480×800 portrait via 90° rotation): the two stacked vertically.
-  if (compact) {
-    return <View style={styles.root}>{thermostat}</View>;
-  }
   if (wide) {
     return (
       <View style={styles.root}>
@@ -375,6 +433,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: compact ? 'flex-start' : 'center',
   },
+  // --- Compact (AOT) inline thermostat ---
+  cTitle: { color: theme.text, fontSize: SZ.title, fontWeight: 'bold', marginBottom: 10 },
+  // The readout overlaps the dial: pulled up over the dial center, then padded back down past it.
+  cReadout: { alignItems: 'center', marginTop: -120, marginBottom: 58, gap: 1 },
+  cStatus: { color: theme.subtext, fontSize: SZ.sub },
+  cBig: { color: theme.text, fontSize: SZ.big, fontWeight: 'bold' },
+  cSub: { color: theme.subtext, fontSize: SZ.sub },
+
   // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
   row: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start' },
   // Portrait/stacked layout: the thermostat over the weather panel, centered.

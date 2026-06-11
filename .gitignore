@@ -23,6 +23,10 @@ tools/font-converter/build/
 tests/*/build/
 Testing/
 
+# Node deps / tool caches (real deps live in bridges/quickjs/js; this catches stray caches at any level)
+node_modules/
+.vite/
+
 # OS
 .DS_Store
 Thumbs.db
