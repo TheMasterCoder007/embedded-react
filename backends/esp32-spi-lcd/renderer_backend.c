@@ -190,12 +190,17 @@ typedef struct
     int w;
     int h;
     int fb_rows;            /**< Rows in the canonical fb: h (full-screen) or ER_LCD_BANDED_ROWS (banded). */
-    fbpx_t* fb;             /**< Canonical framebuffer/band buffer, w*fb_rows. */
+    fbpx_t* fb;             /**< Canonical framebuffer (full-fb path) or the band buffer CURRENTLY being
+                                 composited (banded path = bank[cur]). All draw callbacks target this. */
     uint16_t* bounce;       /**< Small DMA-capable RGB565 staging buffer (full-fb path only; NULL banded). */
     SemaphoreHandle_t done; /**< Given by the panel's color-trans-done ISR; waited on before buffer reuse. */
     int dx0, dy0, dx1, dy1; /**< Dirty bounding box (inclusive); x1 < x0 means empty. */
     bool first;             /**< First present pushes the whole frame. */
     int sx, sy, sw, sh;     /**< Banded: screen-space rect of the strip currently being composited. */
+    fbpx_t* bank[2];        /**< Banded: two ping-pong band buffers — compose the next strip into one while
+                                 the panel DMAs the previous from the other (overlaps CPU + SPI). */
+    int cur;                /**< Banded: index of the bank currently being composited (0/1). */
+    bool inflight;          /**< Banded: a strip's draw_bitmap DMA is outstanding (must be waited on). */
 } ERSpiLcdBackend;
 
 static ERSpiLcdBackend s_be;
@@ -361,6 +366,7 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
 static void band_begin_cb(int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    s_be.fb = s_be.bank[s_be.cur];
     s_be.sx = x;
     s_be.sy = y;
     s_be.sw = w;
@@ -372,10 +378,14 @@ static void band_begin_cb(int x, int y, int w, int h, void* ctx)
 }
 
 /**
- * @brief Flushes the current strip from the band buffer to the panel, then waits for the DMA to finish.
+ * @brief Flushes the current strip to the panel WITHOUT blocking, overlapping its DMA with the next strip.
  *
- * The band buffer is already RGB565 and DMA-capable, so it is handed straight to draw_bitmap. The wait
- * keeps the next band_begin from clearing the buffer while the controller is still reading it.
+ * Ping-pong: we first wait for the PREVIOUS strip's DMA (on the other bank) to finish — by now the engine
+ * has spent the whole compositing of THIS strip overlapping it, so the wait is usually instant — which
+ * frees that bank for the next strip. We then kick off this strip's draw_bitmap (async; the band buffer is
+ * RGB565 + DMA-capable so it goes straight to the panel) and flip `cur` so the next band_begin composites
+ * into the now-free bank while this one transfers. Net: repaint time ≈ max(compose, transfer) per strip,
+ * not their sum — the visible top-to-bottom "wave" becomes a single smooth sweep instead of a stepped one.
  *
  * @param[in] ctx  Unused.
  */
@@ -386,8 +396,13 @@ static void band_flush_cb(void* ctx)
     {
         return;
     }
+    if (s_be.inflight)
+    {
+        xSemaphoreTake(s_be.done, portMAX_DELAY); /* previous strip's DMA done → its bank is free to reuse */
+    }
     esp_lcd_panel_draw_bitmap(s_be.panel, s_be.sx, s_be.sy, s_be.sx + s_be.sw, s_be.sy + s_be.sh, s_be.fb);
-    xSemaphoreTake(s_be.done, portMAX_DELAY);
+    s_be.inflight = true;
+    s_be.cur ^= 1; /* next strip composites into the other bank while this one DMAs */
 }
 #endif /* ER_LCD_BANDED */
 
@@ -458,17 +473,24 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
     esp_lcd_panel_io_register_event_callbacks(io, &cbs, NULL);
 
 #if ER_LCD_BANDED
-    /* Banded: only a small RGB565 band buffer lives in RAM; the panel's own GRAM retains the rest of the
-     * frame. It is DMA-capable so each full-width strip flushes straight to the panel (no bounce). */
+    /* Banded: only small RGB565 band buffers live in RAM; the panel's own GRAM retains the rest of the
+     * frame. TWO ping-pong buffers (both DMA-capable, flushed straight to the panel — no bounce): the
+     * engine composites the next strip into one while the panel DMAs the previous from the other. */
     s_be.fb_rows = ER_LCD_BANDED_ROWS;
     const size_t bytes = (size_t)width * (size_t)ER_LCD_BANDED_ROWS * sizeof(fbpx_t);
-    s_be.fb = (fbpx_t*)heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!s_be.fb)
+    for (int b = 0; b < 2; b++)
     {
-        ESP_LOGE(TAG, "band buffer alloc failed (need %d KB internal DMA RAM)", (int)(bytes / 1024));
-        return false;
+        s_be.bank[b] = (fbpx_t*)heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_be.bank[b])
+        {
+            ESP_LOGE(TAG, "band buffer %d alloc failed (need 2 x %d KB internal DMA RAM)", b, (int)(bytes / 1024));
+            return false;
+        }
+        memset(s_be.bank[b], 0, bytes); /* opaque black */
     }
-    memset(s_be.fb, 0, bytes); /* opaque black */
+    s_be.cur = 0;
+    s_be.inflight = false;
+    s_be.fb = s_be.bank[0];
     s_be.bounce = NULL;
 #else
     /* Canonical framebuffer: MALLOC_CAP_8BIT = byte-addressable internal RAM. MUST NOT be plain
@@ -514,12 +536,12 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
 
 #if ER_LCD_BANDED
     ESP_LOGI(TAG,
-             "SPI LCD backend ready: %dx%d, RGB565 BANDED (%d-row band buffer, %d KB DMA RAM) — panel GRAM retains the "
-             "frame",
+             "SPI LCD backend ready: %dx%d, RGB565 BANDED (2 x %d-row ping-pong buffers, %d KB DMA RAM) — panel GRAM "
+             "retains the frame",
              width,
              height,
              ER_LCD_BANDED_ROWS,
-             (int)(bytes / 1024));
+             (int)(2 * bytes / 1024));
 #else
     ESP_LOGI(TAG,
              "SPI LCD backend ready: %dx%d, %s fb in internal RAM (%d KB) + %d KB DMA bounce",

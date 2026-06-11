@@ -35,7 +35,7 @@ static const char* TAG = "board";
 #define PIN_LCD_DC 2
 #define PIN_LCD_RST -1 /* ST7789 reset is software (no dedicated GPIO) */
 #define PIN_LCD_BL 21
-#define LCD_PCLK_HZ (20 * 1000 * 1000) /* CYD SPI can glitch at 40 MHz; 20 is safe */
+#define LCD_PCLK_HZ (40 * 1000 * 1000) /* 40 MHz for snappy flushes; if this unit glitches, step down (26/30) */
 
 #define BOARD_LCD_INVERT false /* this unit shows correct brightness without inversion */
 #define BOARD_LCD_BGR false    /* set true if red/blue are swapped */

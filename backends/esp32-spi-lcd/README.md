@@ -18,12 +18,20 @@ internal DRAM, and offers two compile-time modes:
 
 A full 240×320 RGB565 framebuffer is 150 KB and does **not** fit the ESP32's fragmented internal DRAM
 (largest contiguous block ~110 KB). In banded mode the **engine repaints only the dirty rows, one
-horizontal strip at a time**, into a small **DMA-capable RGB565 band buffer** (`240 × ER_LCD_BANDED_ROWS
-× 2` ≈ **19 KB** at the default 40 rows). Each full-width strip is handed straight to
+horizontal strip at a time**, into small **DMA-capable RGB565 band buffers** (`240 × ER_LCD_BANDED_ROWS
+× 2` ≈ **19 KB** each at the default 40 rows). Each full-width strip is handed straight to
 `esp_lcd_panel_draw_bitmap` (no bounce); the panel's **own GRAM retains everything outside the dirty
 rows**. Net: **full 16-bit color at a fraction of the RAM**, and crisp anti-aliased text. The engine
 drives the strips via the `band_height` / `band_begin` / `band_flush` fields of `EmbeddedRenderBackend`,
 so banding is an LCD-agnostic engine capability — any band backend opts in the same way.
+
+The backend keeps **two ping-pong band buffers** (~38 KB total): it composites the next strip into one
+while the panel DMAs the previous strip from the other, so a repaint's wall-clock is ≈ `max(compose,
+transfer)` per strip rather than their sum. Without this the per-strip `draw_bitmap` blocks until its DMA
+completes before the next strip composites, which shows up on-screen as a *stepped* top-to-bottom "wave"
+when a large region repaints (e.g., recoloring a whole dial); overlapping the two turns it into a single
+smooth sweep. Only one DMA is ever outstanding (each bank is waited on before reuse), so a plain binary
+done-semaphore stays correct.
 
 ### Full framebuffer (`ER_LCD_BANDED` unset)
 
