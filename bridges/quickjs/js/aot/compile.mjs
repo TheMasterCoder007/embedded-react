@@ -18,6 +18,7 @@
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
 //   npm run aot -- music-player      # a specific demo by folder name
 import { parse } from '@babel/parser';
+import { codeFrameColumns } from '@babel/code-frame';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,51 @@ const distDir = resolve(here, '..', 'dist');
 
 // The core compiler is exported as compileSource(src) so it can be unit-tested on inline JSX. The CLI
 // (read a demo's App.jsx, write dist/app.gen.{c,h}) lives in the entry guard at the bottom of this file.
+
+// ---------------------------------------------------------------------------------------------------
+// Diagnostics — turn "AOT: <reason>" into "<reason> at file:line:col" + a source code-frame (+ a rewrite
+// hint when one is attached). emitExpr / emitNode / compileHandlerExpr are wrapped (withLoc) so the
+// DEEPEST node that failed pins the location; compileSource formats it at the top.
+// ---------------------------------------------------------------------------------------------------
+
+/** Throws an AOT error carrying an optional `hint` (a "rewrite it like this" suggestion shown to the user). */
+function aotError(message, hint) {
+  const e = new Error(message.startsWith('AOT:') ? message : `AOT: ${message}`);
+  if (hint) e.aotHint = hint;
+  return e;
+}
+
+/** Wraps an emit fn so a thrown AOT error (without a location yet) is tagged with the current node's loc. */
+function withLoc(fn) {
+  return function (node, ...rest) {
+    try {
+      return fn(node, ...rest);
+    } catch (e) {
+      if (e && typeof e.message === 'string' && e.message.startsWith('AOT:') && !e.aotLoc && node && node.loc) {
+        e.aotLoc = node.loc.start; // babel loc: { line (1-based), column (0-based) }
+      }
+      throw e;
+    }
+  };
+}
+
+/** Re-throws an AOT error with `file:line:col`, a code-frame, and any hint folded into the message. */
+function formatAotError(e, src, filename) {
+  if (!e || !e.aotLoc) return e; // nothing to locate — leave the bare message
+  const { line, column } = e.aotLoc;
+  const loc = { start: { line, column: column + 1 } }; // code-frame columns are 1-based
+  let frame = '';
+  try {
+    frame = codeFrameColumns(src, loc, { highlightCode: false });
+  } catch {
+    /* code-frame is best-effort */
+  }
+  const hint = e.aotHint ? `\n\nhint: ${e.aotHint}` : '';
+  const out = new Error(`${e.message}\n  at ${filename}:${line}:${column + 1}\n\n${frame}${hint}`);
+  out.aotLoc = e.aotLoc;
+  if (e.aotHint) out.aotHint = e.aotHint;
+  return out;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Static expression evaluation — folds the constant subset (used for styles + state initials). Throws
@@ -118,7 +164,7 @@ function evalStatic(node, scope) {
 const ARITH = new Set(['+', '-', '*', '/', '%']);
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
-function emitExpr(node, env) {
+function emitExprImpl(node, env) {
   switch (node.type) {
     case 'NumericLiteral':
       return Number.isInteger(node.value) ? { code: String(node.value), cType: 'int' } : { code: `${node.value}f`, cType: 'float' };
@@ -215,7 +261,7 @@ function emitExpr(node, env) {
         return { code: `data->layout_rect.${f}`, cType: 'int' };
       }
       if (obj.type === 'Identifier' && obj.name === 'Math' && prop === 'PI') return { code: '(float)M_PI', cType: 'float' };
-      throw new Error('AOT: unsupported member expression in a dynamic context');
+      throw aotError('AOT: unsupported member expression in a dynamic context', 'in a handler or dynamic expression you can read state, `ref.current`, a `.map` item field, event fields (e.x / e.y / e.dx / e.dy / e.layout.*), and Math.PI — other member access must be a compile-time constant.');
     }
     case 'CallExpression': {
       // Math.* helpers → libm (the generated C includes <math.h> when these appear).
@@ -238,6 +284,7 @@ function emitExpr(node, env) {
   }
   throw new Error(`AOT: unsupported expression "${node.type}" in a dynamic context`);
 }
+const emitExpr = withLoc(emitExprImpl);
 
 const printfSpec = (cType) => (cType === 'string' ? '%s' : cType === 'float' ? '%g' : '%d');
 const cTypeOfValue = (v) => (typeof v === 'string' ? 'string' : typeof v === 'number' && !Number.isInteger(v) ? 'float' : 'int');
@@ -564,7 +611,7 @@ function emitColorExpr(node, env) {
 /** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
 function lowerDynamicStyleValue(key, valueNode, env) {
   const meta = DYN_FIELDS[key];
-  if (!meta) throw new Error(`AOT: a state-driven value for style "${key}" is not supported (static only)`);
+  if (!meta) throw aotError(`AOT: a state-driven value for style "${key}" is not supported (static only)`, `only color/opacity/size style props can be state-driven today (e.g. backgroundColor, opacity, width). Make "${key}" a static value, or drive the change another way.`);
   if (meta.kind === 'color') return [{ field: meta.field, code: emitColorExpr(valueNode, env) }];
   if (meta.kind === 'opacity') return [{ field: meta.field, code: `(uint8_t)((${emitExpr(valueNode, env).code}) * 255.0f)` }];
   return [{ field: meta.field, code: `(int16_t)(${emitExpr(valueNode, env).code})` }]; /* num */
@@ -835,7 +882,7 @@ function compileUpdateVector(expr, env, ctx, indent) {
 }
 
 /** Compiles one handler ExpressionStatement: a state setter, ref mutation, or Animated.*(...).start(). */
-function compileHandlerExpr(expr, env, state, ctx, indent) {
+function compileHandlerExprImpl(expr, env, state, ctx, indent) {
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
   if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && expr.callee.name === 'updateVector') {
     return compileUpdateVector(expr, env, ctx, indent);
@@ -856,7 +903,7 @@ function compileHandlerExpr(expr, env, state, ctx, indent) {
   if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
     return compileAnimateStart(expr, env, ctx.animIdx++);
   }
-  if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()');
+  if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw aotError('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()', 'each statement in a handler must be one of: setX(value) / setX(prev => …), a `ref.current = …` write, an `updateVector(…)` call, or `Animated.timing|spring(v, …).start()`. Wrap conditional logic in `if (…) { … }`.');
   const rec = state.bySetter.get(expr.callee.name);
   if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
   ctx.stateChanged = true;
@@ -872,6 +919,7 @@ function compileHandlerExpr(expr, env, state, ctx, indent) {
   }
   return [scalarAssign(rec, emitExpr(arg, env), indent)];
 }
+const compileHandlerExpr = withLoc(compileHandlerExprImpl);
 
 /**
  * Compiles a list of handler statements to C lines. Supports: `const x = expr` (a C local, visible to
@@ -1354,13 +1402,13 @@ function emitRefBind(v, openingElement, out, env) {
   }
 }
 
-function emitNode(el, scope, out, env, state, opts = {}) {
+function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
-    throw new Error(`AOT: unknown element <${tag}> (not a built-in or a component in this file)`);
+    throw aotError(`AOT: unknown element <${tag}> (not a built-in or a component in this file)`, `<${tag}> must be a built-in (View / Text / Pressable / Image / ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS file. Check the import/spelling, or define the component here.`);
   }
 
   const v = `n${out.n++}`;
@@ -1410,7 +1458,7 @@ function emitNode(el, scope, out, env, state, opts = {}) {
       handlerName = `er_handler_${out.handlers.length}`;
       out.handlers.push({ name: handlerName, body: compileHandler(fn, env, state, out) });
     } else {
-      throw new Error(`AOT: ${attr.name.name} must be an inline function or a useCallback`);
+      throw aotError(`AOT: ${attr.name.name} must be an inline function or a useCallback`, `pass an inline arrow (onPress={() => setX(…)}) or a useCallback identifier — a plain function reference or a non-function value isn't supported here.`);
     }
     out.build.push(`    er_event_set(${v}, ${evt}, ${handlerName}, NULL);`);
   }
@@ -1418,6 +1466,7 @@ function emitNode(el, scope, out, env, state, opts = {}) {
   if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
   return v;
 }
+const emitNode = withLoc(emitNodeImpl);
 
 // ---------------------------------------------------------------------------------------------------
 // Compile — JSX source string → generated C. Pure (no I/O) so it can be unit-tested directly.
@@ -1428,7 +1477,7 @@ function emitNode(el, scope, out, env, state, opts = {}) {
  * @param {string} demo  Demo name (only used in the generated-by header comment).
  * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
  */
-export function compileSource(src, demo = 'app', opts = {}) {
+function compileSourceImpl(src, demo = 'app', opts = {}) {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
 const screen = opts.screen ?? { width: SCREEN_W, height: SCREEN_H };
@@ -1578,6 +1627,19 @@ void er_app_build(int screen_w, int screen_h);
   return { c: body, h: header, nodes: out.n, state: stateRecords.length, handlers: out.handlers.length, updates: out.updates.length };
 }
 
+/** Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
+ *  source code-frame (+ hint) so the failure points at the exact unsupported construct. */
+export function compileSource(src, demo = 'app', opts = {}) {
+  try {
+    return compileSourceImpl(src, demo, opts);
+  } catch (e) {
+    if (e && typeof e.message === 'string' && e.message.startsWith('AOT:')) {
+      throw formatAotError(e, src, opts.filename || `demos/${demo}/App.jsx`);
+    }
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // CLI entry — `node aot/compile.mjs [demo]`: read a demo's App.jsx, write dist/app.gen.{c,h}. Runs only
 // when this file is invoked directly (not when imported by the test harness).
@@ -1590,7 +1652,15 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`);
     process.exit(1);
   }
-  const result = compileSource(readFileSync(appPath, 'utf8'), demo);
+  let result;
+  try {
+    result = compileSource(readFileSync(appPath, 'utf8'), demo, { filename: resolve(demosDir, demo, 'App.jsx') });
+  } catch (e) {
+    // A located AOT error already reads as "<reason>\n  at file:line:col\n\n<frame>\n\nhint: ..."; print it
+    // cleanly (no JS stack) so the developer sees exactly the unsupported construct.
+    console.error(e && e.aotLoc ? e.message : e?.message || String(e));
+    process.exit(1);
+  }
   mkdirSync(distDir, { recursive: true });
   writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
   writeFileSync(resolve(distDir, 'app.gen.h'), result.h);

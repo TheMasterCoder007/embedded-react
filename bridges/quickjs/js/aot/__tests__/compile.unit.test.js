@@ -482,3 +482,44 @@ describe('AOT touch drag', () => {
     expect(c).not.toContain('--135');
   });
 });
+
+describe('AOT diagnostics', () => {
+  it('locates an unsupported construct with file:line:col + a code-frame caret', () => {
+    const src = `${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<Pressable onPress={() => setN(window.x)}><Text>{n}</Text></Pressable>);
+      }`;
+    let err;
+    try {
+      compileSource(src, 'demo', { filename: 'demos/demo/App.jsx' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(err.message).toContain('demos/demo/App.jsx:'); // file:line:col
+    expect(err.aotLoc).toBeTruthy(); // structured location preserved
+    expect(err.message).toContain('^'); // code-frame caret
+  });
+
+  it('attaches a rewrite hint to a known error', () => {
+    let err;
+    try {
+      compileSource(`${PRE}\nexport function App() { return (<View><Gauge /></View>); }`, 'demo');
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toContain('hint:');
+    expect(err.message).toContain('built-in');
+  });
+
+  it('points at the default demo path when no filename is given', () => {
+    let err;
+    try {
+      compileSource(`${PRE}\nexport function App() { return (<Nope />); }`, 'mydemo');
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toContain('demos/mydemo/App.jsx:');
+  });
+});

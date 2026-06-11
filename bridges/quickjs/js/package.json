@@ -11,6 +11,7 @@
     "build": "node build.mjs",
     "pack": "node pack-container.mjs",
     "aot": "node aot/compile.mjs",
+    "aot:smoke": "node aot/screenshot-smoke.mjs",
     "build:builtin-font": "node assets/build-builtin-font.mjs",
     "sim": "node sim.mjs",
     "create": "node create-embedded-react.mjs",
