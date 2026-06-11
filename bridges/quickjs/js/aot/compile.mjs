@@ -190,6 +190,10 @@ function emitExpr(node, env) {
         const r = env.refs.get(obj.name);
         return { code: r.cVar, cType: r.cType };
       }
+      // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
+      if (obj.type === 'Identifier' && env.event === obj.name && (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')) {
+        return { code: `data->${prop}`, cType: 'int' };
+      }
       throw new Error('AOT: unsupported member expression in a dynamic context');
     }
   }
@@ -382,10 +386,11 @@ function collectAnims(fnBody, scope) {
 }
 
 /**
- * Collects `const r = useRef(initial)` VALUE refs → Map(name → {cVar, cType, initCode}). A value ref is
- * a mutable C slot (like state but it does NOT trigger a re-render — `.current` reads/writes only). Node
- * refs (`useRef()` with no initial, used as `ref={r}` for imperative calls) are deferred to the Vector
- * phase and throw a clear error here.
+ * Collects `const r = useRef(initial)` refs → Map(name → {cVar, cType, initCode, kind}). Two kinds:
+ *  - VALUE ref (numeric initial): a mutable C slot (escape-hatch state that does NOT re-render;
+ *    `.current` reads/writes).
+ *  - NODE ref (`useRef()` / `useRef(null)`): holds an `ERNode*`, captured by `ref={r}` on an element and
+ *    used as the target of imperative calls like updateVector(r, …). kind === 'node'.
  */
 function collectRefs(fnBody, scope) {
   const refs = new Map();
@@ -395,11 +400,16 @@ function collectRefs(fnBody, scope) {
     for (const decl of stmt.declarations) {
       const init = decl.init;
       if (init?.type === 'CallExpression' && init.callee.name === 'useRef' && decl.id.type === 'Identifier') {
-        if (!init.arguments[0]) throw new Error(`AOT: useRef() with no initial value (node/imperative refs) not yet supported — give "${decl.id.name}" a numeric initial`);
-        const v = evalStatic(init.arguments[0], scope);
-        if (typeof v !== 'number') throw new Error(`AOT: useRef initial for "${decl.id.name}" must be a number (value refs only, for now)`);
+        const cVar = `s_ref_${decl.id.name}`;
+        const arg = init.arguments[0];
+        if (!arg || (arg.type === 'NullLiteral')) {
+          refs.set(decl.id.name, { cVar, cType: 'ERNode*', initCode: 'NULL', kind: 'node' });
+          continue;
+        }
+        const v = evalStatic(arg, scope);
+        if (typeof v !== 'number') throw new Error(`AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`);
         const cType = Number.isInteger(v) ? 'int' : 'float';
-        refs.set(decl.id.name, { cVar: `s_ref_${decl.id.name}`, cType, initCode: cType === 'float' ? `${v}f` : String(v) });
+        refs.set(decl.id.name, { cVar, cType, initCode: cType === 'float' ? `${v}f` : String(v), kind: 'value' });
       }
     }
   }
@@ -666,8 +676,75 @@ function refTarget(node, env) {
   return null;
 }
 
+/** An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[…]|line:[…]|path:'…', fill, stroke, … }`
+ *  → { entries (op-tape C exprs), paint (static 7-num record) }. Geometry coords may reference state/refs/
+ *  event fields (emitExpr); paint must be static. Shares the ...EntriesC geometry with the JSX path. */
+function imperativeShape(shapeNode, env) {
+  if (shapeNode?.type !== 'ObjectExpression') throw new Error('AOT: each updateVector shape must be an object literal');
+  const props = {};
+  for (const p of shapeNode.properties) {
+    if (p.type !== 'ObjectProperty') throw new Error('AOT: spread/method in an updateVector shape not supported');
+    props[p.key.name ?? p.key.value] = p.value;
+  }
+  const arr = (key, n) => {
+    if (props[key].type !== 'ArrayExpression') throw new Error(`AOT: updateVector "${key}" must be an array literal`);
+    return props[key].elements.slice(0, n).map((el) => `(float)(${emitExpr(el, env).code})`);
+  };
+  let entries;
+  if (props.arc) entries = arcEntriesC(...arr('arc', 5));
+  else if (props.circle) entries = circleEntriesC(...arr('circle', 3));
+  else if (props.rect) entries = rectEntriesC(...arr('rect', 4));
+  else if (props.line) entries = lineEntriesC(...arr('line', 4));
+  else if (props.path) entries = parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(floatLit);
+  else throw new Error('AOT: an updateVector shape needs one of arc / circle / rect / line / path');
+  const stat = (key, dflt) => {
+    if (props[key] == null) return dflt;
+    try {
+      return evalStatic(props[key], env.consts ?? {});
+    } catch {
+      throw new Error(`AOT: updateVector paint "${key}" must be static`);
+    }
+  };
+  const paint = [parseColor(stat('fill', 'none')), parseColor(stat('stroke', 'none')), svgNum(stat('strokeWidth', 1), 1), svgNum(stat('miter', 4), 4), CAP_MAP[stat('cap', 'butt')] ?? 0, JOIN_MAP[stat('join', 'miter')] ?? 0, stat('fillRule', 'nonzero') === 'evenodd' ? 1 : 0];
+  return { entries, paint };
+}
+
+/** Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)` to: fill a mutable op-tape, push it to the node, and
+ *  (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update. */
+function compileUpdateVector(expr, env, ctx, indent) {
+  const out = ctx.out;
+  const [refArg, shapesArg, dirtyArg] = expr.arguments;
+  const ref = refArg?.type === 'Identifier' ? env.refs?.get(refArg.name) : null;
+  if (ref?.kind !== 'node') throw new Error('AOT: updateVector(ref, …) first arg must be a node ref (const r = useRef())');
+  if (shapesArg?.type !== 'ArrayExpression') throw new Error('AOT: updateVector(ref, shapes, …) shapes must be an array literal');
+  const entries = [];
+  const paints = [];
+  for (const s of shapesArg.elements) {
+    const { entries: e, paint } = imperativeShape(s, env);
+    entries.push('ER_VOP_SHAPE', floatLit(paints.length), ...e);
+    paints.push(paint);
+  }
+  const id = out.svgN++;
+  const len = entries.length;
+  out.needsMath = true;
+  out.vectorData.push(`static float s_uv${id}_ops[${len}];`);
+  out.vectorData.push(`static const ERVectorPaint s_uv${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
+  const lines = entries.map((e, i) => `${indent}s_uv${id}_ops[${i}] = ${e};`);
+  lines.push(`${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length});`);
+  if (dirtyArg) {
+    if (dirtyArg.type !== 'ArrayExpression' || dirtyArg.elements.length < 4) throw new Error('AOT: updateVector dirtyRect must be a [x, y, w, h] array literal');
+    const [x, y, w, h] = dirtyArg.elements.map((el) => emitExpr(el, env).code);
+    lines.push(`${indent}er_node_set_vector_dirty_rect(${ref.cVar}, ${x}, ${y}, ${w}, ${h});`);
+  }
+  return lines;
+}
+
 /** Compiles one handler ExpressionStatement: a state setter, ref mutation, or Animated.*(...).start(). */
 function compileHandlerExpr(expr, env, state, ctx, indent) {
+  // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
+  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && expr.callee.name === 'updateVector') {
+    return compileUpdateVector(expr, env, ctx, indent);
+  }
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
   if (expr.type === 'AssignmentExpression') {
     const r = refTarget(expr.left, env);
@@ -737,11 +814,14 @@ function compileStmts(list, env, state, ctx, indent) {
   return lines;
 }
 
-function compileHandler(fnNode, env, state) {
+function compileHandler(fnNode, env, state, out) {
   const body = fnNode.body;
   const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
-  const ctx = { stateChanged: false, animIdx: 0 };
-  const stmts = compileStmts(list, env, state, ctx, '    ');
+  // The handler's first parameter is the event; `<event>.x/.y/.dx/.dy` map to EREventData fields.
+  const eventParam = fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
+  const henv = eventParam ? { ...env, event: eventParam } : env;
+  const ctx = { stateChanged: false, animIdx: 0, out };
+  const stmts = compileStmts(list, henv, state, ctx, '    ');
   if (ctx.stateChanged) stmts.push('    app_update();'); // re-apply state-dependent props once
   return stmts;
 }
@@ -924,6 +1004,7 @@ function jsxToSvgElement(node, scope) {
   for (const attr of node.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') throw new Error('AOT: spread attributes on an <Svg> element not supported');
     const name = attr.name.name;
+    if (name === 'ref' || name === 'key') continue; // not geometry/paint
     if (attr.value == null) props[name] = true;
     else if (attr.value.type === 'StringLiteral') props[name] = attr.value.value;
     else if (attr.value.type === 'JSXExpressionContainer') props[name] = evalStatic(attr.value.expression, scope);
@@ -959,6 +1040,7 @@ function svgAttrs(openingElement, scope, env) {
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') throw new Error('AOT: spread attributes on an <Svg> element not supported');
     const name = attr.name.name;
+    if (name === 'ref' || name === 'key') continue; // not geometry/paint
     const vn = attr.value;
     if (vn == null) out[name] = true;
     else if (vn.type === 'StringLiteral') out[name] = vn.value;
@@ -983,29 +1065,23 @@ function svgPaintRecord(a) {
   return [parseColor(a.fill ?? 'black'), parseColor(a.stroke ?? 'none'), svgNum(a.strokeWidth, 1), svgNum(a.strokeMiterlimit, 4), CAP_MAP[a.strokeLinecap] ?? 0, JOIN_MAP[a.strokeLinejoin] ?? 0, a.fillRule === 'evenodd' ? 1 : 0];
 }
 
-// Per-shape op-tape entries (C-expr strings; opcodes as ER_VOP_* macros). Mirror svg-ops circleOps/etc.
-const arcEntries = (a) => {
-  const cx = cf(a.cx),
-    cy = cf(a.cy),
-    r = cf(a.r);
-  const a0 = `((${cf(a.startAngle)} - 90.0f) * (float)M_PI / 180.0f)`;
-  const a1 = `((${cf(a.endAngle)} - 90.0f) * (float)M_PI / 180.0f)`;
+// Per-shape op-tape entries (C-expr strings; opcodes as ER_VOP_* macros). The ...C base fns take resolved
+// C-float expressions, so both the JSX path (6b, via cf) and the imperative updateVector path (6c, via
+// arrays) share the geometry. Mirror svg-ops circleOps / arcOpsCW / etc.
+const arcEntriesC = (cx, cy, r, a0deg, a1deg) => {
+  const a0 = `((${a0deg} - 90.0f) * (float)M_PI / 180.0f)`;
+  const a1 = `((${a1deg} - 90.0f) * (float)M_PI / 180.0f)`;
   return ['ER_VOP_MOVE', `(${cx} + ${r} * cosf(${a0}))`, `(${cy} + ${r} * sinf(${a0}))`, 'ER_VOP_ARC', cx, cy, r, a0, a1, '0.0f'];
 };
-const circleEntries = (a) => {
-  const cx = cf(a.cx),
-    cy = cf(a.cy),
-    r = cf(a.r);
-  return ['ER_VOP_MOVE', `(${cx} + ${r})`, cy, 'ER_VOP_ARC', cx, cy, r, '0.0f', '(2.0f * (float)M_PI)', '0.0f', 'ER_VOP_CLOSE'];
-};
-const rectEntries = (a) => {
-  const x = cf(a.x),
-    y = cf(a.y),
-    w = cf(a.width),
-    h = cf(a.height);
-  return ['ER_VOP_MOVE', x, y, 'ER_VOP_LINE', `(${x} + ${w})`, y, 'ER_VOP_LINE', `(${x} + ${w})`, `(${y} + ${h})`, 'ER_VOP_LINE', x, `(${y} + ${h})`, 'ER_VOP_CLOSE'];
-};
-const lineEntries = (a) => ['ER_VOP_MOVE', cf(a.x1), cf(a.y1), 'ER_VOP_LINE', cf(a.x2), cf(a.y2)];
+const circleEntriesC = (cx, cy, r) => ['ER_VOP_MOVE', `(${cx} + ${r})`, cy, 'ER_VOP_ARC', cx, cy, r, '0.0f', '(2.0f * (float)M_PI)', '0.0f', 'ER_VOP_CLOSE'];
+const rectEntriesC = (x, y, w, h) => ['ER_VOP_MOVE', x, y, 'ER_VOP_LINE', `(${x} + ${w})`, y, 'ER_VOP_LINE', `(${x} + ${w})`, `(${y} + ${h})`, 'ER_VOP_LINE', x, `(${y} + ${h})`, 'ER_VOP_CLOSE'];
+const lineEntriesC = (x1, y1, x2, y2) => ['ER_VOP_MOVE', x1, y1, 'ER_VOP_LINE', x2, y2];
+
+// JSX-attribute wrappers (6b): resolve each attr to a C float via cf().
+const arcEntries = (a) => arcEntriesC(cf(a.cx), cf(a.cy), cf(a.r), cf(a.startAngle), cf(a.endAngle));
+const circleEntries = (a) => circleEntriesC(cf(a.cx), cf(a.cy), cf(a.r));
+const rectEntries = (a) => rectEntriesC(cf(a.x), cf(a.y), cf(a.width), cf(a.height));
+const lineEntries = (a) => lineEntriesC(cf(a.x1), cf(a.y1), cf(a.x2), cf(a.y2));
 const pathEntries = (a) => {
   if (a.d == null) return [];
   if (isDyn(a.d)) throw new Error('AOT: a state-driven <Path d=…> is not yet supported (use Arc/Circle/Rect/Line for dynamic shapes)');
@@ -1019,7 +1095,7 @@ function svgHasDynamic(el, scope) {
   const walk = (node) => {
     if (node.type !== 'JSXElement') return;
     for (const attr of node.openingElement.attributes) {
-      if (attr.type === 'JSXAttribute' && attr.value?.type === 'JSXExpressionContainer') {
+      if (attr.type === 'JSXAttribute' && attr.name.name !== 'ref' && attr.name.name !== 'key' && attr.value?.type === 'JSXExpressionContainer') {
         try {
           evalStatic(attr.value.expression, scope);
         } catch {
@@ -1041,6 +1117,7 @@ function emitSvgBox(v, width, height, openingElement, scope, out, env) {
   if (typeof height === 'number') out.build.push(`    p.height = (int16_t)${Math.round(height)};`);
   for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
   out.build.push(`    er_node_set_props(${v}, &p);`);
+  emitRefBind(v, openingElement, out, env);
 }
 
 /** <Svg> → ER_NODE_VECTOR. Static subtree → a baked const op-tape; any state-driven attr → a symbolic
@@ -1088,6 +1165,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   const id = out.svgN++;
   const len = entries.length;
   const nPaints = paints.length;
+  out.needsMath = true; // build_svg uses cosf/sinf/M_PI for arcs
   out.vectorData.push(`static float s_svg${id}_ops[${len}];`);
   out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
   out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${entries.map((e, i) => `    s_svg${id}_ops[${i}] = ${e};`).join('\n')}\n}`);
@@ -1097,6 +1175,16 @@ function emitSvgDynamic(el, scope, out, env, state) {
   out.handles.push(v);
   out.svgUpdates.push({ id, len, nPaints, nodeVar: `s_${v}` });
   return v;
+}
+
+/** Captures `ref={r}` (r a node ref) by storing the freshly-created node handle into the ref's slot. */
+function emitRefBind(v, openingElement, out, env) {
+  for (const attr of openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute' || attr.name.name !== 'ref') continue;
+    const e = attr.value?.type === 'JSXExpressionContainer' ? attr.value.expression : null;
+    if (e?.type === 'Identifier' && env.refs?.get(e.name)?.kind === 'node') out.build.push(`    ${env.refs.get(e.name).cVar} = ${v};`);
+    else throw new Error('AOT: ref={…} must reference a node ref declared with useRef()');
+  }
 }
 
 function emitNode(el, scope, out, env, state, opts = {}) {
@@ -1135,6 +1223,8 @@ function emitNode(el, scope, out, env, state, opts = {}) {
   // engine's native driver advances it each tick (no per-frame JS, no app_update for the motion).
   for (const b of binds) out.build.push(`    er_anim_value_bind(${b.cVar}, ${v}, ${b.prop});`);
 
+  emitRefBind(v, el.openingElement, out, env);
+
   for (const attr of el.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') continue;
     const evt = EVENT_TYPES[attr.name.name];
@@ -1147,11 +1237,11 @@ function emitNode(el, scope, out, env, state, opts = {}) {
       if (!handlerName) {
         handlerName = `er_cb_${fn.name}`;
         out.cbEmitted.set(fn.name, handlerName);
-        out.handlers.push({ name: handlerName, body: compileHandler(env.callbacks.get(fn.name), env, state) });
+        out.handlers.push({ name: handlerName, body: compileHandler(env.callbacks.get(fn.name), env, state, out) });
       }
     } else if (isFn(fn)) {
       handlerName = `er_handler_${out.handlers.length}`;
-      out.handlers.push({ name: handlerName, body: compileHandler(fn, env, state) });
+      out.handlers.push({ name: handlerName, body: compileHandler(fn, env, state, out) });
     } else {
       throw new Error(`AOT: ${attr.name.name} must be an inline function or a useCallback`);
     }
@@ -1195,7 +1285,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0 };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
@@ -1272,7 +1362,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${out.vectorBuilders.length ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+${out.needsMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;

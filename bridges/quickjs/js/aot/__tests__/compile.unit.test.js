@@ -215,6 +215,30 @@ describe('AOT baseline (regression)', () => {
     expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/); // re-upload in app_update
   });
 
+  it('captures a node ref and lowers updateVector(ref, shapes, dirtyRect) imperatively', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      import { Svg, Circle } from 'embedded-react';
+      export function App() {
+        const dial = useRef();
+        return (
+          <Pressable onPress={(e) => updateVector(dial, [{ arc: [100, 100, 80, -130, e.x], stroke: '#f4a261', strokeWidth: 14, cap: 'round' }], [0, 0, 200, 200])}>
+            <Svg ref={dial} width={200} height={200}>
+              <Circle cx={100} cy={100} r={80} fill="#16202f" />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toContain('static ERNode* s_ref_dial = NULL;');     // node ref slot
+    expect(c).toMatch(/s_ref_dial = n\d+;/);                       // captured at build
+    expect(c).toContain('#include <math.h>');                     // arc trig
+    expect(c).toMatch(/static float s_uv0_ops\[\d+\];/);          // imperative op buffer
+    expect(c).toContain('s_uv0_ops[0] = ER_VOP_SHAPE;');
+    expect(c).toContain('data->x');                                // event coord in arc endAngle
+    expect(c).toMatch(/er_node_set_vector_ops\(s_ref_dial, s_uv0_ops, \d+, s_uv0_paints, 1\);/);
+    expect(c).toContain('er_node_set_vector_dirty_rect(s_ref_dial, 0, 0, 200, 200);');
+  });
+
   it('binds an animated transform and starts a spring from a handler', () => {
     const c = gen(`${PRE}
       export function App() {
