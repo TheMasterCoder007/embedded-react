@@ -271,6 +271,40 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('"spread!"');
   });
 
+  it('lowers Math.*, string-state equality (strcmp), and static member folds', () => {
+    const c = gen(`${PRE}
+      const ITEMS = [{ key: 'a' }, { key: 'b' }];
+      export function App() {
+        const [sel, setSel] = useState('a');
+        const [v, setV] = useState(10);
+        return (
+          <View>
+            <Text>{Math.round(v * 1.5)}</Text>
+            {ITEMS.map((it) => (
+              <Pressable key={it.key} style={{ backgroundColor: sel === it.key ? '#ffffff' : '#000000' }} onPress={() => setSel(it.key)}>
+                <Text>{it.key}</Text>
+              </Pressable>
+            ))}
+          </View>
+        );
+      }`);
+    expect(c).toContain('#include <math.h>');
+    expect(c).toContain('(int)roundf(');                         // Math.round → int cast
+    expect(c).toContain('strcmp(s_state.sel, "a")');             // string equality + it.key folded to "a"
+    expect(c).toContain('strcmp(s_state.sel, "b")');             // second unrolled .map iteration
+  });
+
+  it('lowers Math.sin/cos/PI to libm for dynamic Svg coordinates', () => {
+    const c = gen(`${PRE}
+      import { Svg, Circle } from 'embedded-react';
+      export function App() {
+        const [a, setA] = useState(0);
+        return (<Svg width={100} height={100}><Circle cx={50 + 40 * Math.sin((a * Math.PI) / 180)} cy={50} r={5} fill="#fff" /></Svg>);
+      }`);
+    expect(c).toContain('sinf(');
+    expect(c).toContain('M_PI');
+  });
+
   it('binds an animated transform and starts a spring from a handler', () => {
     const c = gen(`${PRE}
       export function App() {

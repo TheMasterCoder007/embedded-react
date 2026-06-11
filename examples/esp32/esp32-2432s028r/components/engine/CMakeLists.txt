@@ -65,16 +65,18 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_MAX_IMG_ROW_PIXELS=240
 )
 
-# The SVG/vector rasterizer's static pools are ~100 KB by default (s_edges, the per-node op-tape, point
-# buffers) — but this demo uses no <Svg>. Shrink them to near-zero. (Internal to vector.c, so PRIVATE.)
+# The SVG/vector rasterizer's static pools are ~100 KB by default — far too big for internal RAM. Sized
+# for the thermostat-aot dial (ONE <Svg>: a 270° track arc + value arc + handle circle). The op-tape is
+# ~37 floats / 3 paints; MAX_ROW MUST cover the dial node width (240 px) or the coverage row clips. Banded
+# RGB565 freed ~56 KB vs the old RGB332 fb, leaving headroom. (Internal to vector.c, so PRIVATE.)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    ERUI_VECTOR_MAX_PTS=16
-    ERUI_VECTOR_MAX_SUBPATHS=4
-    ERUI_VECTOR_MAX_EDGES=16
-    ERUI_VECTOR_MAX_ROW=16
-    ERUI_MAX_VECTOR_NODES=1
-    ERUI_VECTOR_TAPE_MAX=16
-    ERUI_VECTOR_PAINTS_MAX=2
+    ERUI_VECTOR_MAX_PTS=512      # flattened vertices per shape (a 270° arc + round caps)
+    ERUI_VECTOR_MAX_SUBPATHS=8
+    ERUI_VECTOR_MAX_EDGES=600   # stroke outline edges per pass — both round caps need full tessellation
+    ERUI_VECTOR_MAX_ROW=200      # coverage row buffer in px — must be >= the dial node width (176)
+    ERUI_MAX_VECTOR_NODES=1      # the dial is the only vector node
+    ERUI_VECTOR_TAPE_MAX=64      # op-tape floats (dial ~37)
+    ERUI_VECTOR_PAINTS_MAX=8     # paints (dial = 3)
 )
 
 # Perf overlay off (saves code/RAM); the host doesn't gather metrics either.
