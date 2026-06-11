@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
-import { flattenSvg } from '../src/embedded-react/svg-ops.js';
+import { flattenSvg, parseColor, parsePath } from '../src/embedded-react/svg-ops.js';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const repoRoot = resolve(here, '../../../..');
@@ -943,34 +943,165 @@ function emitVectorPaint(p) {
   return `{ .fill = ${p[0] >>> 0}u, .stroke = ${p[1] >>> 0}u, .stroke_w = ${floatLit(p[2])}, .miter = ${floatLit(p[3])}, .cap = ${p[4] | 0}, .join = ${p[5] | 0}, .fill_rule = ${p[6] | 0} }`;
 }
 
-/** Emits a static <Svg> as an ER_NODE_VECTOR with a baked op-tape + paint table. */
-function emitSvg(el, scope, out, env, opts) {
+/** Static numeric coercion for an SVG attribute value (mirrors svg-ops `num`). */
+const svgNum = (v, d = 0) => {
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isNaN(n) ? d : n;
+};
+/** True if an attribute value is a state-driven C expression (vs a static number/string). */
+const isDyn = (v) => v != null && typeof v === 'object' && 'dyn' in v;
+/** Lowers an SVG coordinate attr to a C float expression (literal when static, cast expr when dynamic). */
+const cf = (v, d = 0) => (isDyn(v) ? `(float)(${v.dyn})` : floatLit(svgNum(v, d)));
+
+/** Reads an SVG element's attributes → { name: number|string|true | {dyn: cExpr} } (state attrs → {dyn}). */
+function svgAttrs(openingElement, scope, env) {
+  const out = {};
+  for (const attr of openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw new Error('AOT: spread attributes on an <Svg> element not supported');
+    const name = attr.name.name;
+    const vn = attr.value;
+    if (vn == null) out[name] = true;
+    else if (vn.type === 'StringLiteral') out[name] = vn.value;
+    else if (vn.type === 'JSXExpressionContainer') {
+      try {
+        out[name] = evalStatic(vn.expression, scope);
+      } catch {
+        out[name] = { dyn: emitExpr(vn.expression, env).code };
+      }
+    } else throw new Error(`AOT: unsupported SVG attribute value for "${name}"`);
+  }
+  return out;
+}
+
+const CAP_MAP = { butt: 0, round: 1, square: 2 };
+const JOIN_MAP = { miter: 0, round: 1, bevel: 2 };
+
+/** A shape's static 7-number paint record [fill,stroke,w,miter,cap,join,rule]; dynamic paint attrs throw. */
+function svgPaintRecord(a) {
+  for (const k of ['fill', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin', 'strokeMiterlimit', 'fillRule'])
+    if (isDyn(a[k])) throw new Error('AOT: a state-driven <Svg> paint attribute is not yet supported (geometry can be dynamic, paint must be static)');
+  return [parseColor(a.fill ?? 'black'), parseColor(a.stroke ?? 'none'), svgNum(a.strokeWidth, 1), svgNum(a.strokeMiterlimit, 4), CAP_MAP[a.strokeLinecap] ?? 0, JOIN_MAP[a.strokeLinejoin] ?? 0, a.fillRule === 'evenodd' ? 1 : 0];
+}
+
+// Per-shape op-tape entries (C-expr strings; opcodes as ER_VOP_* macros). Mirror svg-ops circleOps/etc.
+const arcEntries = (a) => {
+  const cx = cf(a.cx),
+    cy = cf(a.cy),
+    r = cf(a.r);
+  const a0 = `((${cf(a.startAngle)} - 90.0f) * (float)M_PI / 180.0f)`;
+  const a1 = `((${cf(a.endAngle)} - 90.0f) * (float)M_PI / 180.0f)`;
+  return ['ER_VOP_MOVE', `(${cx} + ${r} * cosf(${a0}))`, `(${cy} + ${r} * sinf(${a0}))`, 'ER_VOP_ARC', cx, cy, r, a0, a1, '0.0f'];
+};
+const circleEntries = (a) => {
+  const cx = cf(a.cx),
+    cy = cf(a.cy),
+    r = cf(a.r);
+  return ['ER_VOP_MOVE', `(${cx} + ${r})`, cy, 'ER_VOP_ARC', cx, cy, r, '0.0f', '(2.0f * (float)M_PI)', '0.0f', 'ER_VOP_CLOSE'];
+};
+const rectEntries = (a) => {
+  const x = cf(a.x),
+    y = cf(a.y),
+    w = cf(a.width),
+    h = cf(a.height);
+  return ['ER_VOP_MOVE', x, y, 'ER_VOP_LINE', `(${x} + ${w})`, y, 'ER_VOP_LINE', `(${x} + ${w})`, `(${y} + ${h})`, 'ER_VOP_LINE', x, `(${y} + ${h})`, 'ER_VOP_CLOSE'];
+};
+const lineEntries = (a) => ['ER_VOP_MOVE', cf(a.x1), cf(a.y1), 'ER_VOP_LINE', cf(a.x2), cf(a.y2)];
+const pathEntries = (a) => {
+  if (a.d == null) return [];
+  if (isDyn(a.d)) throw new Error('AOT: a state-driven <Path d=…> is not yet supported (use Arc/Circle/Rect/Line for dynamic shapes)');
+  return parsePath(String(a.d)).map(floatLit); // opcodes are encoded as float values 0..6, like coords
+};
+const SHAPE_ENTRIES = { Arc: arcEntries, Circle: circleEntries, Rect: rectEntries, Line: lineEntries, Path: pathEntries };
+
+/** True if any attribute anywhere in the <Svg> subtree references state (→ the state-driven path). */
+function svgHasDynamic(el, scope) {
+  let dyn = false;
+  const walk = (node) => {
+    if (node.type !== 'JSXElement') return;
+    for (const attr of node.openingElement.attributes) {
+      if (attr.type === 'JSXAttribute' && attr.value?.type === 'JSXExpressionContainer') {
+        try {
+          evalStatic(attr.value.expression, scope);
+        } catch {
+          dyn = true;
+        }
+      }
+    }
+    for (const c of node.children) walk(c);
+  };
+  walk(el);
+  return dyn;
+}
+
+/** Emits the vector node's box: create + props + width/height + optional style={}. */
+function emitSvgBox(v, width, height, openingElement, scope, out, env) {
+  const { staticAssigns } = collectStyleAssigns(openingElement, scope, env);
+  out.build.push(`    ${v} = er_node_create(ER_NODE_VECTOR);`, `    er_props_default(&p);`);
+  if (typeof width === 'number') out.build.push(`    p.width = (int16_t)${Math.round(width)};`);
+  if (typeof height === 'number') out.build.push(`    p.height = (int16_t)${Math.round(height)};`);
+  for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+  out.build.push(`    er_node_set_props(${v}, &p);`);
+}
+
+/** <Svg> → ER_NODE_VECTOR. Static subtree → a baked const op-tape; any state-driven attr → a symbolic
+ *  op-tape rebuilt by a generated build_svgN() at build time and on every app_update. */
+function emitSvg(el, scope, out, env, state, opts) {
   if (opts.displayCode) throw new Error('AOT: an <Svg> inside a dynamic conditional is not yet supported');
+  return svgHasDynamic(el, scope) ? emitSvgDynamic(el, scope, out, env, state) : emitSvgStatic(el, scope, out, env);
+}
+
+/** Static <Svg>: reuse flattenSvg (full feature set: viewBox, <G>, Path) and bake const arrays. */
+function emitSvgStatic(el, scope, out, env) {
   const svgEl = jsxToSvgElement(el, scope);
   const { ops, paints } = flattenSvg(svgEl.props);
   const v = `n${out.n++}`;
-  const id = out.vectorData.length / 2;
-  const opsName = `s_svg${id}_ops`;
-  const paintsName = `s_svg${id}_paints`;
+  const id = out.svgN++;
   const nPaints = paints.length / 7;
   if (ops.length) {
-    out.vectorData.push(`static const float ${opsName}[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
-    out.vectorData.push(`static const ERVectorPaint ${paintsName}[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * 7, i * 7 + 7))).join(',\n')}\n};`);
+    out.vectorData.push(`static const float s_svg${id}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
+    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * 7, i * 7 + 7))).join(',\n')}\n};`);
   }
-  const { staticAssigns } = collectStyleAssigns(el.openingElement, scope, env); // optional style={} (margins, etc.)
-  out.build.push(`    ${v} = er_node_create(ER_NODE_VECTOR);`);
-  out.build.push(`    er_props_default(&p);`);
-  if (typeof svgEl.props.width === 'number') out.build.push(`    p.width = (int16_t)${Math.round(svgEl.props.width)};`);
-  if (typeof svgEl.props.height === 'number') out.build.push(`    p.height = (int16_t)${Math.round(svgEl.props.height)};`);
-  for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
-  out.build.push(`    er_node_set_props(${v}, &p);`);
-  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, ${opsName}, ${ops.length}, ${paintsName}, ${nPaints});`);
+  emitSvgBox(v, svgEl.props.width, svgEl.props.height, el.openingElement, scope, out, env);
+  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints});`);
+  return v;
+}
+
+/** State-driven <Svg> (flat Arc/Circle/Rect/Line/static-Path; no viewBox/<G>): emit a mutable op-tape
+ *  + build_svgN() that recomputes it from state, called at build and re-called on each app_update. */
+function emitSvgDynamic(el, scope, out, env, state) {
+  const svgA = svgAttrs(el.openingElement, scope, env);
+  if (svgA.viewBox != null) throw new Error('AOT: a viewBox on a state-driven <Svg> is not yet supported — size shapes in the width/height space');
+  const entries = [];
+  const paints = [];
+  for (const c of el.children) {
+    if (c.type !== 'JSXElement') continue;
+    const type = c.openingElement.name.name;
+    const fn = SHAPE_ENTRIES[type];
+    if (!fn) throw new Error(`AOT: <${type}> is not a supported shape in a state-driven <Svg> (no <G>/viewBox yet)`);
+    const a = svgAttrs(c.openingElement, scope, env);
+    const shape = fn(a);
+    if (!shape.length) continue;
+    entries.push('ER_VOP_SHAPE', floatLit(paints.length), ...shape);
+    paints.push(svgPaintRecord(a));
+  }
+  const v = `n${out.n++}`;
+  const id = out.svgN++;
+  const len = entries.length;
+  const nPaints = paints.length;
+  out.vectorData.push(`static float s_svg${id}_ops[${len}];`);
+  out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
+  out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${entries.map((e, i) => `    s_svg${id}_ops[${i}] = ${e};`).join('\n')}\n}`);
+
+  emitSvgBox(v, svgA.width, svgA.height, el.openingElement, scope, out, env);
+  out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints});`, `    s_${v} = ${v};`);
+  out.handles.push(v);
+  out.svgUpdates.push({ id, len, nPaints, nodeVar: `s_${v}` });
   return v;
 }
 
 function emitNode(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
-  if (tag === 'Svg') return emitSvg(el, scope, out, env, opts);
+  if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
@@ -1064,7 +1195,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [] };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0 };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
@@ -1096,15 +1227,19 @@ const refDecls = [...refs.values()].map((r) => `static ${r.cType} ${r.cVar} = ${
 
 // Baked vector op-tapes + paint tables (static <Svg> geometry), emitted at file scope.
 const vectorBlock = out.vectorData.join('\n\n');
+// build_svgN() recompute functions (state-driven Svgs) — declared before app_update, which calls them.
+const vectorBuilderBlock = out.vectorBuilders.join('\n\n');
 
 // Animated values — one engine-side handle each, created at the top of er_app_build (binds reference them).
 const animList = [...anims.values()];
 const animDecls = animList.map((a) => `static ERAnimValueHandle ${a.cVar};`).join('\n');
 const animCreate = animList.map((a) => `    ${a.cVar} = er_anim_value_create(${a.initCode});`).join('\n');
 
+const hasUpdate = out.updates.length > 0 || out.svgUpdates.length > 0;
 const updateBlock = (() => {
-  if (!out.updates.length) return '';
-  const lines = ['static void app_update(void)', '{', '    ERProps p;'];
+  if (!hasUpdate) return '';
+  const lines = ['static void app_update(void)', '{'];
+  if (out.updates.length) lines.push('    ERProps p;');
   for (const u of out.updates) {
     lines.push(`    er_props_default(&p);`);
     for (const a of u.styleAssigns) lines.push(`    p.${a.field} = ${a.expr};`);
@@ -1115,6 +1250,11 @@ const updateBlock = (() => {
     }
     lines.push(`    er_node_set_props(s_${u.v}, &p);`);
   }
+  // State-driven Svgs: recompute the op-tape from state and re-upload.
+  for (const s of out.svgUpdates) {
+    lines.push(`    build_svg${s.id}();`);
+    lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints});`);
+  }
   lines.push('}');
   return lines.join('\n');
 })();
@@ -1122,8 +1262,6 @@ const updateBlock = (() => {
 const handlerDefs = out.handlers
   .map((h) => `static void ${h.name}(ERNode* node, const EREventData* data, void* user_data)\n{\n    (void)node;\n    (void)data;\n    (void)user_data;\n${h.body.join('\n')}\n}`)
   .join('\n\n');
-
-const hasUpdate = out.updates.length > 0;
 const body = `/*
  * Generated by the embedded-react Flow B AOT compiler (npm run aot -- ${demo}). DO NOT EDIT.
  * Builds the app's scene graph + state machine directly against er_scene.h — no QuickJS, no JS runtime.
@@ -1134,7 +1272,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+${out.vectorBuilders.length ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;

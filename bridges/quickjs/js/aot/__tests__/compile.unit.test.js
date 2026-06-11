@@ -192,6 +192,29 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('p.width = (int16_t)100;');     // node box from Svg width
   });
 
+  it('compiles a state-driven <Svg> (arc sweep) to a build_svg fn recomputed on update', () => {
+    const c = gen(`${PRE}
+      import { Svg, Circle, Arc } from 'embedded-react';
+      export function App() {
+        const [temp, setTemp] = useState(50);
+        return (
+          <Pressable onPress={() => setTemp(temp + 1)}>
+            <Svg width={200} height={200}>
+              <Circle cx={100} cy={100} r={80} fill="#16202f" />
+              <Arc cx={100} cy={100} r={80} startAngle={-130} endAngle={temp * 2} stroke="#f4a261" strokeWidth={12} strokeLinecap="round" />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toContain('#include <math.h>');
+    expect(c).toMatch(/static float s_svg0_ops\[\d+\];/);   // mutable, not const
+    expect(c).toContain('static void build_svg0(void)');
+    expect(c).toContain('cosf(');                            // arc trig in C
+    expect(c).toContain('(s_state.temp * 2)');               // dynamic endAngle expression
+    expect(c).toContain('build_svg0();');
+    expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/); // re-upload in app_update
+  });
+
   it('binds an animated transform and starts a spring from a handler', () => {
     const c = gen(`${PRE}
       export function App() {
