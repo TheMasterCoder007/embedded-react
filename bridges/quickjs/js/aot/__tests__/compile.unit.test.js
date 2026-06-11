@@ -173,6 +173,25 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('"12"');
   });
 
+  it('bakes a static <Svg> subtree into an op-tape + paint table on a vector node', () => {
+    const c = gen(`${PRE}
+      import { Svg, Circle, Arc } from 'embedded-react';
+      export function App() {
+        return (
+          <Svg width={100} height={100} viewBox="0 0 100 100">
+            <Circle cx={50} cy={50} r={40} fill="#16202f" stroke="#f4a261" strokeWidth={3} />
+            <Arc cx={50} cy={50} r={40} startAngle={0} endAngle={180} stroke="#e76f51" strokeWidth={8} />
+          </Svg>
+        );
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_VECTOR)');
+    expect(c).toContain('static const float s_svg0_ops[]');
+    expect(c).toContain('static const ERVectorPaint s_svg0_paints[]');
+    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/);
+    expect(c).toContain('.stroke_w = 3.0f');           // circle stroke width baked
+    expect(c).toContain('p.width = (int16_t)100;');     // node box from Svg width
+  });
+
   it('binds an animated transform and starts a spring from a handler', () => {
     const c = gen(`${PRE}
       export function App() {

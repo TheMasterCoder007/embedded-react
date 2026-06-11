@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
+import { flattenSvg } from '../src/embedded-react/svg-ops.js';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const repoRoot = resolve(here, '../../../..');
@@ -909,8 +910,67 @@ function emitChildren(children, parentVar, scope, out, env, state) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Vector / Svg — a static <Svg> subtree is converted to flattenSvg()'s element shape (the same converter
+// Flow A uses), giving a flat {ops, paints}. We bake those into C const arrays + er_node_set_vector_ops.
+// ---------------------------------------------------------------------------------------------------
+
+/** Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
+ *  statically evaluating every attribute. Dynamic attrs/children throw (state-driven Svg is Phase 6b). */
+function jsxToSvgElement(node, scope) {
+  if (node.type !== 'JSXElement') return null;
+  const type = node.openingElement.name.name;
+  const props = {};
+  for (const attr of node.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw new Error('AOT: spread attributes on an <Svg> element not supported');
+    const name = attr.name.name;
+    if (attr.value == null) props[name] = true;
+    else if (attr.value.type === 'StringLiteral') props[name] = attr.value.value;
+    else if (attr.value.type === 'JSXExpressionContainer') props[name] = evalStatic(attr.value.expression, scope);
+    else throw new Error(`AOT: unsupported <${type}> attribute value for "${name}"`);
+  }
+  const children = [];
+  for (const c of node.children) {
+    if (c.type === 'JSXElement') children.push(jsxToSvgElement(c, scope));
+    else if (c.type === 'JSXExpressionContainer' && c.expression.type !== 'JSXEmptyExpression') throw new Error('AOT: dynamic <Svg> children ({…}) not yet supported — use literal shape elements');
+  }
+  if (children.length) props.children = children;
+  return { type, props };
+}
+
+/** Emits one ERVectorPaint initializer from a 7-number flattenSvg paint record [fill,stroke,w,miter,cap,join,rule]. */
+function emitVectorPaint(p) {
+  return `{ .fill = ${p[0] >>> 0}u, .stroke = ${p[1] >>> 0}u, .stroke_w = ${floatLit(p[2])}, .miter = ${floatLit(p[3])}, .cap = ${p[4] | 0}, .join = ${p[5] | 0}, .fill_rule = ${p[6] | 0} }`;
+}
+
+/** Emits a static <Svg> as an ER_NODE_VECTOR with a baked op-tape + paint table. */
+function emitSvg(el, scope, out, env, opts) {
+  if (opts.displayCode) throw new Error('AOT: an <Svg> inside a dynamic conditional is not yet supported');
+  const svgEl = jsxToSvgElement(el, scope);
+  const { ops, paints } = flattenSvg(svgEl.props);
+  const v = `n${out.n++}`;
+  const id = out.vectorData.length / 2;
+  const opsName = `s_svg${id}_ops`;
+  const paintsName = `s_svg${id}_paints`;
+  const nPaints = paints.length / 7;
+  if (ops.length) {
+    out.vectorData.push(`static const float ${opsName}[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
+    out.vectorData.push(`static const ERVectorPaint ${paintsName}[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * 7, i * 7 + 7))).join(',\n')}\n};`);
+  }
+  const { staticAssigns } = collectStyleAssigns(el.openingElement, scope, env); // optional style={} (margins, etc.)
+  out.build.push(`    ${v} = er_node_create(ER_NODE_VECTOR);`);
+  out.build.push(`    er_props_default(&p);`);
+  if (typeof svgEl.props.width === 'number') out.build.push(`    p.width = (int16_t)${Math.round(svgEl.props.width)};`);
+  if (typeof svgEl.props.height === 'number') out.build.push(`    p.height = (int16_t)${Math.round(svgEl.props.height)};`);
+  for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+  out.build.push(`    er_node_set_props(${v}, &p);`);
+  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, ${opsName}, ${ops.length}, ${paintsName}, ${nPaints});`);
+  return v;
+}
+
 function emitNode(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
+  if (tag === 'Svg') return emitSvg(el, scope, out, env, opts);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
@@ -1004,7 +1064,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map() };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [] };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
@@ -1033,6 +1093,9 @@ const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
 
 // Value refs — a plain mutable static each (escape-hatch state that does not trigger a re-render).
 const refDecls = [...refs.values()].map((r) => `static ${r.cType} ${r.cVar} = ${r.initCode};`).join('\n');
+
+// Baked vector op-tapes + paint tables (static <Svg> geometry), emitted at file scope.
+const vectorBlock = out.vectorData.join('\n\n');
 
 // Animated values — one engine-side handle each, created at the top of er_app_build (binds reference them).
 const animList = [...anims.values()];
@@ -1071,7 +1134,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;
