@@ -23,6 +23,11 @@ const A_START = -135; // bottom-left, degrees clockwise from 12 o'clock
 const DEG = SWEEP / (MAX - MIN); // degrees per °F (folds to 6) — used by the compact inline dial
 const DEADBAND = 0.5; // prevents Heating/Cooling flicker when target ≈ current
 const CURRENT = 68.7; // live room reading °F (static in this demo)
+// Drag jitter deadband (°F): a resistive touch panel reports a few px of noise even when held still, which
+// — now that the value is continuous — would wiggle the handle. Ignore sub-threshold moves so a held finger
+// stays put; a real drag moves more than this and still tracks. Raise if the handle still dances; lower if
+// a slow drag feels steppy.
+const DRAG_JITTER = 0.5;
 const ACCENT = '#f4a261'; // dial accent (amber). The compact (AOT) dial uses a STATIC arc/handle color —
 //                           dynamic vector paint isn't in the compile-time subset — so it stays amber there.
 
@@ -325,8 +330,9 @@ export function App() {
     const ang = (Math.atan2(e.x - cx.current, cy.current - e.y) * 180) / Math.PI; // clockwise from 12 o'clock
     const clamped = ang < A_START ? A_START : ang > -A_START ? -A_START : ang;     // snap the bottom 90° gap
     const v = MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN);                   // CONTINUOUS (sub-degree) target
-    setValue(v < MIN ? MIN : v > MAX ? MAX : v);
-  }, []);
+    const target = v < MIN ? MIN : v > MAX ? MAX : v;
+    if (Math.abs(target - value) > DRAG_JITTER) setValue(target); // deadband: ignore held-finger panel jitter
+  }, [value]);
 
   // ---- Compact layout (small panels, e.g., the 240×320 CYD) -------------------------------------------
   // Self-contained and within the Flow B (AOT) subset: a STATE-DRIVEN dial (arc sweep + handle follow
@@ -490,7 +496,7 @@ const styles = StyleSheet.create({
     gap: GAP,
     alignItems: 'center',
   },
-  stepRow: { flexDirection: 'row', gap: GAP, marginBottom: GAP },
+  stepRow: { flexDirection: 'row', gap: GAP, marginBottom: 15 },
   step: {
     width: compact ? 56 : 72,
     height: compact ? 32 : 40,

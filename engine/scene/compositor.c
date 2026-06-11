@@ -1845,6 +1845,13 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
         int old_n = 0, old_np = 0;
         const float* old_ops = er_vector_slot_ops(node->vector_slot, &old_n);
         const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
+        /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
+         * state) → nothing changed, so skip the repaint entirely. */
+        if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0 &&
+            (n_paints <= 0 || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0)))
+        {
+            return;
+        }
         tight = vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
     }
 
