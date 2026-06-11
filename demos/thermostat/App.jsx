@@ -318,23 +318,25 @@ export function App() {
   // ---- Compact layout (small panels, e.g., the 240×320 CYD) -------------------------------------------
   // Self-contained and within the Flow B (AOT) subset: a STATE-DRIVEN dial (arc sweep + handle follow
   // `value` via Math.sin/cos — no drag, no per-instance component hooks), integer ± steppers, and the
-  // mode row as an inlined MODES.map. The dial's arc/handle paint is static (ACCENT) — dynamic vector
-  // paint isn't compile-time-foldable yet — while the View backgrounds/text recolor with `mode`. This is
-  // the ONLY branch the AOT compiles on a 240×320 board, so nothing below it (weather/drag) is reached.
+  // mode row as an inlined MODES.map. The value arc + handle paint recolor with `mode` (dynamic vector
+  // paint — a state-driven stroke lowered to an ARGB ternary). This is the ONLY branch the AOT compiles
+  // on a 240×320 board, so nothing below it (weather/drag) is reached.
   if (compact) {
+    // The value arc + handle use a per-mode accent (matches the MODES colors), inlined into both strokes —
+    // a local const here wouldn't be visible to the AOT's expression compiler (state/consts, not block locals).
     return (
       <View style={styles.root}>
         <Text style={styles.cTitle}>Thermostat</Text>
 
         <Svg width={BOX} height={BOX}>
           <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
+          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
           <Circle
             cx={DIAL_C + SZ.R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
             cy={DIAL_C - SZ.R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
             r={SZ.handle}
             fill={theme.card}
-            stroke={ACCENT}
+            stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT}
             strokeWidth={3}
           />
         </Svg>
@@ -462,7 +464,7 @@ const styles = StyleSheet.create({
     gap: GAP,
     alignItems: 'center',
   },
-  stepRow: { flexDirection: 'row', gap: GAP },
+  stepRow: { flexDirection: 'row', gap: GAP, marginBottom: GAP },
   step: {
     width: compact ? 56 : 72,
     height: compact ? 32 : 40,

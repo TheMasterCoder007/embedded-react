@@ -1157,7 +1157,9 @@ function svgAttrs(openingElement, scope, env) {
       try {
         out[name] = evalStatic(vn.expression, scope);
       } catch {
-        out[name] = { dyn: emitExpr(vn.expression, env).code };
+        // Keep the raw expression node too: color paint attrs (fill/stroke) lower via emitColorExpr (→ ARGB),
+        // not the generic numeric `dyn` code, so a dynamic color resolves to a uint, not a char*.
+        out[name] = { dyn: emitExpr(vn.expression, env).code, node: vn.expression };
       }
     } else throw new Error(`AOT: unsupported SVG attribute value for "${name}"`);
   }
@@ -1167,11 +1169,39 @@ function svgAttrs(openingElement, scope, env) {
 const CAP_MAP = { butt: 0, round: 1, square: 2 };
 const JOIN_MAP = { miter: 0, round: 1, bevel: 2 };
 
-/** A shape's static 7-number paint record [fill,stroke,w,miter,cap,join,rule]; dynamic paint attrs throw. */
-function svgPaintRecord(a) {
-  for (const k of ['fill', 'stroke', 'strokeWidth', 'strokeLinecap', 'strokeLinejoin', 'strokeMiterlimit', 'fillRule'])
-    if (isDyn(a[k])) throw new Error('AOT: a state-driven <Svg> paint attribute is not yet supported (geometry can be dynamic, paint must be static)');
-  return [parseColor(a.fill ?? 'black'), parseColor(a.stroke ?? 'none'), svgNum(a.strokeWidth, 1), svgNum(a.strokeMiterlimit, 4), CAP_MAP[a.strokeLinecap] ?? 0, JOIN_MAP[a.strokeLinejoin] ?? 0, a.fillRule === 'evenodd' ? 1 : 0];
+/** The ERVectorPaint members, in op-tape paint order [fill,stroke,stroke_w,miter,cap,join,fill_rule]. */
+const PAINT_FIELDS = ['fill', 'stroke', 'stroke_w', 'miter', 'cap', 'join', 'fill_rule'];
+
+/**
+ * A shape's paint as 7 C-expr fields (matching PAINT_FIELDS) + whether any is state-driven.
+ *   - fill / stroke may be DYNAMIC → lowered via emitColorExpr to an ARGB uint expr (a color string, a
+ *     ternary of them, or a folded theme token); static → a baked `0xAARRGGBBu` literal.
+ *   - strokeWidth may be DYNAMIC (numeric C expr); static → a float literal.
+ *   - cap / join / miterlimit / fillRule must be STATIC (a dynamic one throws clear).
+ */
+function paintSpec(a, env) {
+  let anyDynamic = false;
+  const color = (v, dflt) => {
+    if (isDyn(v)) {
+      anyDynamic = true;
+      return emitColorExpr(v.node, env);
+    }
+    return `${parseColor(v ?? dflt) >>> 0}u`;
+  };
+  let strokeW;
+  if (isDyn(a.strokeWidth)) {
+    anyDynamic = true;
+    strokeW = `(float)(${a.strokeWidth.dyn})`;
+  } else strokeW = floatLit(svgNum(a.strokeWidth, 1));
+  for (const k of ['strokeLinecap', 'strokeLinejoin', 'strokeMiterlimit', 'fillRule'])
+    if (isDyn(a[k])) throw new Error(`AOT: a state-driven <Svg> "${k}" is not supported (only fill / stroke / strokeWidth can be state-driven)`);
+  const fields = [color(a.fill, 'black'), color(a.stroke, 'none'), strokeW, floatLit(svgNum(a.strokeMiterlimit, 4)), String(CAP_MAP[a.strokeLinecap] ?? 0), String(JOIN_MAP[a.strokeLinejoin] ?? 0), String(a.fillRule === 'evenodd' ? 1 : 0)];
+  return { fields, anyDynamic };
+}
+
+/** A `{ .fill = …, … }` ERVectorPaint initializer from a paintSpec's C-expr fields (used for static paints). */
+function paintInitFromSpec(ps) {
+  return `{ ${PAINT_FIELDS.map((f, i) => `.${f} = ${ps.fields[i]}`).join(', ')} }`;
 }
 
 // Per-shape op-tape entries (C-expr strings; opcodes as ER_VOP_* macros). The ...C base fns take resolved
@@ -1258,7 +1288,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   const svgA = svgAttrs(el.openingElement, scope, env);
   if (svgA.viewBox != null) throw new Error('AOT: a viewBox on a state-driven <Svg> is not yet supported — size shapes in the width/height space');
   const entries = [];
-  const paints = [];
+  const specs = [];
   for (const c of el.children) {
     if (c.type !== 'JSXElement') continue;
     const type = c.openingElement.name.name;
@@ -1267,17 +1297,22 @@ function emitSvgDynamic(el, scope, out, env, state) {
     const a = svgAttrs(c.openingElement, scope, env);
     const shape = fn(a);
     if (!shape.length) continue;
-    entries.push('ER_VOP_SHAPE', floatLit(paints.length), ...shape);
-    paints.push(svgPaintRecord(a));
+    entries.push('ER_VOP_SHAPE', floatLit(specs.length), ...shape);
+    specs.push(paintSpec(a, env));
   }
   const v = `n${out.n++}`;
   const id = out.svgN++;
   const len = entries.length;
-  const nPaints = paints.length;
+  const nPaints = specs.length;
+  const dynPaint = specs.some((p) => p.anyDynamic);
   out.needsMath = true; // build_svg uses cosf/sinf/M_PI for arcs
   out.vectorData.push(`static float s_svg${id}_ops[${len}];`);
-  out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
-  out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${entries.map((e, i) => `    s_svg${id}_ops[${i}] = ${e};`).join('\n')}\n}`);
+  // Dynamic paint → a MUTABLE paint table (re)filled by build_svg from state each update; else a const table.
+  if (dynPaint) out.vectorData.push(`static ERVectorPaint s_svg${id}_paints[${nPaints}];`);
+  else out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${specs.map((p) => '    ' + paintInitFromSpec(p)).join(',\n')}\n};`);
+  const builderLines = entries.map((e, i) => `    s_svg${id}_ops[${i}] = ${e};`);
+  if (dynPaint) specs.forEach((ps, pi) => ps.fields.forEach((f, fi) => builderLines.push(`    s_svg${id}_paints[${pi}].${PAINT_FIELDS[fi]} = ${f};`)));
+  out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${builderLines.join('\n')}\n}`);
 
   emitSvgBox(v, svgA.width, svgA.height, el.openingElement, scope, out, env);
   out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints});`, `    s_${v} = ${v};`);

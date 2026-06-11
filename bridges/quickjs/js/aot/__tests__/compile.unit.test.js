@@ -215,6 +215,45 @@ describe('AOT baseline (regression)', () => {
     expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/); // re-upload in app_update
   });
 
+  it('lowers a state-driven <Svg> paint (stroke color/width) to a mutable paint table rebuilt from state', () => {
+    const c = gen(`${PRE}
+      import { Svg, Arc } from 'embedded-react';
+      export function App() {
+        const [mode, setMode] = useState('heat');
+        return (
+          <Pressable onPress={() => setMode('cool')}>
+            <Svg width={100} height={100}>
+              <Arc cx={50} cy={50} r={40} startAngle={-135} endAngle={135}
+                   stroke={mode === 'cool' ? '#4cc9f0' : '#f4a261'} strokeWidth={mode === 'off' ? 2 : 8} />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toMatch(/static ERVectorPaint s_svg0_paints\[1\];/);      // MUTABLE table (not const)
+    expect(c).not.toMatch(/static const ERVectorPaint s_svg0_paints/);  // ...specifically not const
+    // dynamic stroke color → an ARGB ternary, assigned in build_svg0
+    expect(c).toContain('s_svg0_paints[0].stroke = (((strcmp(s_state.mode, "cool") == 0)) ? 0xFF4CC9F0u : 0xFFF4A261u);');
+    // dynamic stroke width → a numeric ternary cast to float
+    expect(c).toContain('s_svg0_paints[0].stroke_w = (float)(((strcmp(s_state.mode, "off") == 0) ? 2 : 8));');
+  });
+
+  it('keeps a state-driven <Svg> with STATIC paint on a const paint table (no per-update paint work)', () => {
+    const c = gen(`${PRE}
+      import { Svg, Arc } from 'embedded-react';
+      export function App() {
+        const [t, setT] = useState(0);
+        return (
+          <Pressable onPress={() => setT(t + 1)}>
+            <Svg width={100} height={100}>
+              <Arc cx={50} cy={50} r={40} startAngle={-135} endAngle={t * 2} stroke="#f4a261" strokeWidth={8} />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toMatch(/static const ERVectorPaint s_svg0_paints\[\] = \{/); // const fast path retained
+    expect(c).not.toContain('s_svg0_paints[0].stroke =');                   // paint NOT reassigned per update
+  });
+
   it('captures a node ref and lowers updateVector(ref, shapes, dirtyRect) imperatively', () => {
     const c = gen(`${PRE}
       import { useRef } from 'react';
