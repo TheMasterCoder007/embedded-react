@@ -1625,11 +1625,204 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
     er_mark_dirty_upward(node);
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Vector damage diffing
+ *
+ * When a state-driven <Svg> re-uploads its op-tape (e.g. a thermostat dial each value change), most of
+ * it is unchanged — the static track arc, and a moving value arc that only shifts its END ANGLE. The
+ * vector rasterizer's cost is CLIP-AREA bound, so damaging just the changed sub-region instead of the
+ * whole node box is the difference between a cheap and an expensive redraw. We diff the new tape against
+ * the stored one and emit a tight node-local damage rect. CONSERVATIVE: any structural change (first
+ * upload, different length/opcodes/paint-index, or a paint-table change) falls back to a full-box repaint,
+ * so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change (same geometry, e.g.
+ * a mode recolor) also falls back to full, which is correct (every pixel of the shape changes colour).
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
+static void vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
+{
+    float span = a1 - a0;
+    if (span < 0.0f)
+        span = -span;
+    int n = (int)(span / 0.196f) + 1; /* ~ one sample per 11.25 deg */
+    if (n > 64)
+        n = 64;
+    for (int k = 0; k <= n; k++)
+    {
+        const float a = a0 + (a1 - a0) * (float)k / (float)n;
+        const float x = cx + r * cosf(a);
+        const float y = cy + r * sinf(a);
+        if (x < *minx)
+            *minx = x;
+        if (y < *miny)
+            *miny = y;
+        if (x > *maxx)
+            *maxx = x;
+        if (y > *maxy)
+            *maxy = y;
+    }
+}
+
+/**
+ * @brief Diffs old vs new op-tape (+ paints) and writes a node-local damage rect of the changed geometry.
+ * @return true if a tight rect was computed; false → caller must repaint the full node box.
+ */
+static bool vec_diff_dirty_rect(const float* o, int on, const ERVectorPaint* op, int onp, const float* nw, int nn, const ERVectorPaint* np, int nnp, int* rx, int* ry, int* rw, int* rh)
+{
+    if (!o || on <= 0 || on != nn || onp != nnp)
+        return false;
+    if (onp > 0 && (!op || !np || memcmp(op, np, (size_t)onp * sizeof(ERVectorPaint)) != 0))
+        return false; /* paint table changed → every pixel of affected shapes recolours; full repaint */
+
+    float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+    bool any = false;
+#define VADD(X, Y)                                                                                                      \
+    do                                                                                                                  \
+    {                                                                                                                   \
+        const float _x = (X), _y = (Y);                                                                                 \
+        if (_x < minx)                                                                                                  \
+            minx = _x;                                                                                                  \
+        if (_y < miny)                                                                                                  \
+            miny = _y;                                                                                                  \
+        if (_x > maxx)                                                                                                  \
+            maxx = _x;                                                                                                  \
+        if (_y > maxy)                                                                                                  \
+            maxy = _y;                                                                                                  \
+        any = true;                                                                                                     \
+    } while (0)
+
+    int i = 0;
+    while (i < on)
+    {
+        if (o[i] != nw[i])
+            return false; /* opcode / shape structure differs */
+        const int code = (int)o[i];
+        if (code == (int)ER_VOP_SHAPE)
+        {
+            i++;
+            if (i < on)
+            {
+                if (o[i] != nw[i])
+                    return false; /* paint-index swap on a shape */
+                i++;
+            }
+            continue;
+        }
+        i++; /* consume opcode (identical in both tapes) */
+        if (code == (int)ER_VOP_MOVE || code == (int)ER_VOP_LINE)
+        {
+            if (i + 2 > on)
+                return false;
+            if (o[i] != nw[i] || o[i + 1] != nw[i + 1])
+            {
+                VADD(o[i], o[i + 1]);
+                VADD(nw[i], nw[i + 1]);
+            }
+            i += 2;
+        }
+        else if (code == (int)ER_VOP_QUAD)
+        {
+            if (i + 4 > on)
+                return false;
+            bool ch = false;
+            for (int k = 0; k < 4; k++)
+                if (o[i + k] != nw[i + k])
+                    ch = true;
+            if (ch)
+            {
+                VADD(o[i], o[i + 1]);
+                VADD(o[i + 2], o[i + 3]);
+                VADD(nw[i], nw[i + 1]);
+                VADD(nw[i + 2], nw[i + 3]);
+            }
+            i += 4;
+        }
+        else if (code == (int)ER_VOP_CUBIC)
+        {
+            if (i + 6 > on)
+                return false;
+            bool ch = false;
+            for (int k = 0; k < 6; k++)
+                if (o[i + k] != nw[i + k])
+                    ch = true;
+            if (ch)
+                for (int k = 0; k < 6; k += 2)
+                {
+                    VADD(o[i + k], o[i + k + 1]);
+                    VADD(nw[i + k], nw[i + k + 1]);
+                }
+            i += 6;
+        }
+        else if (code == (int)ER_VOP_ARC)
+        {
+            if (i + 6 > on)
+                return false;
+            const float ocx = o[i], ocy = o[i + 1], orr = o[i + 2], oa0 = o[i + 3], oa1 = o[i + 4], occw = o[i + 5];
+            const float ncx = nw[i], ncy = nw[i + 1], nrr = nw[i + 2], na0 = nw[i + 3], na1 = nw[i + 4], nccw = nw[i + 5];
+            if (ocx != ncx || ocy != ncy || orr != nrr || oa0 != na0 || oa1 != na1 || occw != nccw)
+            {
+                if (ocx == ncx && ocy == ncy && orr == nrr && occw == nccw)
+                {
+                    /* Same circle, only swept angles moved (the value arc) → damage just the changed sub-arcs. */
+                    if (oa0 != na0)
+                        vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
+                    if (oa1 != na1)
+                        vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy);
+                    any = true;
+                }
+                else
+                {
+                    /* Centre/radius moved (e.g. the handle knob) → full-circle bbox of old + new. */
+                    VADD(ocx - orr, ocy - orr);
+                    VADD(ocx + orr, ocy + orr);
+                    VADD(ncx - nrr, ncy - nrr);
+                    VADD(ncx + nrr, ncy + nrr);
+                }
+            }
+            i += 6;
+        }
+        else if (code == (int)ER_VOP_CLOSE)
+        {
+            /* no coordinates */
+        }
+        else
+        {
+            return false; /* unknown opcode — bail to a full repaint */
+        }
+    }
+#undef VADD
+
+    if (!any)
+        return false; /* geometry identical (paint-only or no-op change) → full box is simplest & correct */
+
+    /* Pad by the widest stroke half-width + AA so round caps and coverage fringes are covered. */
+    float pad = 1.5f;
+    for (int p = 0; p < nnp; p++)
+    {
+        const float sw = np[p].stroke_w;
+        if (sw > 0.0f)
+        {
+            const float hp = sw * 0.5f + 1.5f;
+            if (hp > pad)
+                pad = hp;
+        }
+    }
+    minx -= pad;
+    miny -= pad;
+    maxx += pad;
+    maxy += pad;
+    *rx = (int)floorf(minx);
+    *ry = (int)floorf(miny);
+    *rw = (int)ceilf(maxx) - *rx;
+    *rh = (int)ceilf(maxy) - *ry;
+    return (*rw > 0 && *rh > 0);
+}
+
 void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
-    /* Default to a full-box repaint; er_node_set_vector_dirty_rect (if called after) narrows it. */
+    /* Default to a full-box repaint; the diff below (or er_node_set_vector_dirty_rect, if called after) narrows it. */
     node->vec_has_dirty = false;
     if (!ops || n_ops <= 0)
     {
@@ -1642,7 +1835,28 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
         er_mark_dirty_upward(node);
         return;
     }
+
+    /* Diff the incoming tape against the stored one to damage only the changed sub-region (a cheap redraw
+     * for a moving dial). Read the old tape BEFORE er_vector_store overwrites the slot. */
+    int dx = 0, dy = 0, dw = 0, dh = 0;
+    bool tight = false;
+    if (node->vector_slot >= 0)
+    {
+        int old_n = 0, old_np = 0;
+        const float* old_ops = er_vector_slot_ops(node->vector_slot, &old_n);
+        const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
+        tight = vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
+    }
+
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints);
+    if (tight)
+    {
+        node->vec_dirty_x = (int16_t)dx;
+        node->vec_dirty_y = (int16_t)dy;
+        node->vec_dirty_w = (int16_t)dw;
+        node->vec_dirty_h = (int16_t)dh;
+        node->vec_has_dirty = true;
+    }
     /* Geometry is visual-only (the box comes from layout/style), so no layout pass is needed. */
     er_mark_dirty_upward(node);
 }

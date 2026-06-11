@@ -448,6 +448,29 @@ describe('AOT touch drag', () => {
     expect(c.match(/er_event_set\([^,]+, ER_EVENT_TOUCH_(START|MOVE), er_cb_onDrag, NULL\);/g)).toHaveLength(2);
   });
 
+  it('treats useState(70.0) as a FLOAT slot (decimal literal forces float, value stays sub-integer)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [v, setV] = useState(70.0);
+        return (<Pressable onPress={() => setV(v + 0.5)}><Text>{Math.round(v)}</Text></Pressable>);
+      }`);
+    expect(c).toContain('float v;');             // float struct field, not int
+    expect(c).toContain('.v = 70.0f');           // valid C float literal (not 70f)
+    expect(c).toContain('s_state.v = (s_state.v + 0.5f);');
+    expect(c).toContain('(int)roundf((float)(s_state.v))'); // displayed rounded
+  });
+
+  it('keeps useState(70) an int slot (no decimal → no float widening)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [v, setV] = useState(70);
+        return (<Pressable onPress={() => setV(v + 1)}><Text>{v}</Text></Pressable>);
+      }`);
+    expect(c).toContain('int v;');
+    expect(c).toContain('.v = 70');
+    expect(c).not.toContain('float v;');
+  });
+
   it('negates a negative constant as (-(-135)), never the decrement token --135', () => {
     const c = gen(`${PRE}
       const A = -135;

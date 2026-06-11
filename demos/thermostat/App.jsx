@@ -312,7 +312,7 @@ const Header = memo(function Header() {
 // App
 // ----------------------------------------------------------------------------------------------------
 export function App() {
-  const [value, setValue] = useState(70); // default target (°F); a float once dragged (wide/Flow A)
+  const [value, setValue] = useState(70.0); // target (°F) as a FLOAT — drag glides sub-degree, UI shows Math.round
   const [mode, setMode] = useState('heat'); // default mode
 
   // Compact-dial drag (also valid in Flow A): capture the dial's on-screen centre via onLayout, then map a
@@ -324,7 +324,7 @@ export function App() {
   const onDrag = useCallback((e) => {
     const ang = (Math.atan2(e.x - cx.current, cy.current - e.y) * 180) / Math.PI; // clockwise from 12 o'clock
     const clamped = ang < A_START ? A_START : ang > -A_START ? -A_START : ang;     // snap the bottom 90° gap
-    const v = Math.round(MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN));
+    const v = MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN);                   // CONTINUOUS (sub-degree) target
     setValue(v < MIN ? MIN : v > MAX ? MAX : v);
   }, []);
 
@@ -369,15 +369,15 @@ export function App() {
 
         <View style={styles.cReadout}>
           <Text style={styles.cStatus}>{mode === 'off' ? 'Off' : mode !== 'cool' && value > CURRENT ? 'Heating' : mode !== 'heat' && value < CURRENT ? 'Cooling' : 'Holding'}</Text>
-          <Text style={styles.cBig}>{value}°</Text>
+          <Text style={styles.cBig}>{Math.round(value)}°</Text>
           <Text style={styles.cSub}>now {CURRENT}°</Text>
         </View>
 
         <View style={styles.stepRow}>
-          <Pressable style={styles.step} onPressIn={() => setValue(value > MIN ? value - 1 : value)}>
+          <Pressable style={styles.step} onPressIn={() => setValue(Math.max(MIN, Math.round(value) - 1))}>
             <Text style={styles.stepText}>−</Text>
           </Pressable>
-          <Pressable style={styles.step} onPressIn={() => setValue(value < MAX ? value + 1 : value)}>
+          <Pressable style={styles.step} onPressIn={() => setValue(Math.min(MAX, Math.round(value) + 1))}>
             <Text style={styles.stepText}>+</Text>
           </Pressable>
         </View>

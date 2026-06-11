@@ -25,8 +25,9 @@
 
 static const char* TAG = "embedded-react";
 
-/** @brief Target frame period for the adaptive pacer (~33 fps); heavy frames just run as fast as work allows. */
-#define ER_TARGET_FRAME_MS 30U
+/** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
+ *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
+#define ER_TARGET_FRAME_MS 16U
 
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)

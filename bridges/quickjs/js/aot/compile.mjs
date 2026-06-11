@@ -321,9 +321,15 @@ function collectState(fnBody, scope) {
         rec = { name, setter, kind: 'list', struct: inferItemStruct(items, name), items, cap: LIST_CAP, cTypeName: `ErItem_${name}`, arrayName: `s_${name}`, countMember: `s_${name}_count` };
       } else {
         const initVal = initArg ? evalStatic(initArg, scope) : 0;
-        const cType = cTypeOfValue(initVal);
+        let cType = cTypeOfValue(initVal);
+        // A numeric literal written with a decimal point or exponent (e.g. useState(70.0)) forces a FLOAT
+        // slot even though the value is integral — lets the state hold sub-integer values (a smooth drag)
+        // while the UI shows Math.round(value). (70.0 === 70 in JS, so we read the raw source to tell them apart.)
+        if (cType === 'int' && initArg?.type === 'NumericLiteral' && typeof initArg.extra?.raw === 'string' && /[.eE]/.test(initArg.extra.raw)) {
+          cType = 'float';
+        }
         // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
-        const initCode = cType === 'string' ? cstr(String(initVal)) : cType === 'float' ? `${initVal}f` : String(Number(initVal));
+        const initCode = cType === 'string' ? cstr(String(initVal)) : cType === 'float' ? floatLit(initVal) : String(Number(initVal));
         rec = { name, setter, kind: 'scalar', cType, cMember: `s_state.${name}`, initCode };
       }
       byName.set(name, rec);
