@@ -28,13 +28,8 @@ const repoRoot = resolve(here, '../../../..');
 const demosDir = resolve(repoRoot, 'demos');
 const distDir = resolve(here, '..', 'dist');
 
-const demo = process.argv[2] || process.env.DEMO || 'thermostat';
-const appPath = resolve(demosDir, demo, 'App.jsx');
-if (!existsSync(appPath)) {
-  const avail = existsSync(demosDir) ? readdirSync(demosDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
-  console.error(`AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`);
-  process.exit(1);
-}
+// The core compiler is exported as compileSource(src) so it can be unit-tested on inline JSX. The CLI
+// (read a demo's App.jsx, write dist/app.gen.{c,h}) lives in the entry guard at the bottom of this file.
 
 // ---------------------------------------------------------------------------------------------------
 // Static expression evaluation — folds the constant subset (used for styles + state initials). Throws
@@ -55,6 +50,34 @@ function evalStatic(node, scope) {
       if (node.operator === '!') return !a;
       break;
     }
+    case 'BinaryExpression': {
+      const l = evalStatic(node.left, scope);
+      const r = evalStatic(node.right, scope);
+      switch (node.operator) {
+        case '+': return l + r;
+        case '-': return l - r;
+        case '*': return l * r;
+        case '/': return l / r;
+        case '%': return l % r;
+        case '<': return l < r;
+        case '>': return l > r;
+        case '<=': return l <= r;
+        case '>=': return l >= r;
+        case '==':
+        case '===': return l === r;
+        case '!=':
+        case '!==': return l !== r;
+      }
+      break;
+    }
+    case 'LogicalExpression': {
+      const l = evalStatic(node.left, scope);
+      if (node.operator === '&&') return l ? evalStatic(node.right, scope) : l;
+      if (node.operator === '||') return l ? l : evalStatic(node.right, scope);
+      break;
+    }
+    case 'ConditionalExpression':
+      return evalStatic(node.test, scope) ? evalStatic(node.consequent, scope) : evalStatic(node.alternate, scope);
     case 'Identifier':
       if (node.name in scope) return scope[node.name];
       throw new Error(`AOT: cannot statically resolve identifier "${node.name}"`);
@@ -161,6 +184,11 @@ function emitExpr(node, env) {
         if (!f) throw new Error(`AOT: unknown field "${prop}" on a list item`);
         return { code: `${env.locals.get(obj.name).code}.${f.key}`, cType: f.kind === 'string' ? 'string' : f.kind };
       }
+      // `<ref>.current` — a value ref's mutable C slot.
+      if (obj.type === 'Identifier' && env.refs?.has(obj.name) && prop === 'current') {
+        const r = env.refs.get(obj.name);
+        return { code: r.cVar, cType: r.cType };
+      }
       throw new Error('AOT: unsupported member expression in a dynamic context');
     }
   }
@@ -244,8 +272,9 @@ function collectState(fnBody, scope) {
       } else {
         const initVal = initArg ? evalStatic(initArg, scope) : 0;
         const cType = cTypeOfValue(initVal);
-        if (cType === 'string') throw new Error(`AOT: string useState ("${name}") not yet supported`);
-        rec = { name, setter, kind: 'scalar', cType, cMember: `s_state.${name}`, initCode: cType === 'float' ? `${initVal}f` : String(Number(initVal)) };
+        // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
+        const initCode = cType === 'string' ? cstr(String(initVal)) : cType === 'float' ? `${initVal}f` : String(Number(initVal));
+        rec = { name, setter, kind: 'scalar', cType, cMember: `s_state.${name}`, initCode };
       }
       byName.set(name, rec);
       if (setter) bySetter.set(setter, rec);
@@ -286,6 +315,41 @@ function collectComponents(program) {
   return comps;
 }
 
+/** Collects `const fn = useCallback((...) => {...}, deps)` → Map(name → arrow fn node). Deps are ignored:
+ *  the AOT re-renders via its own dependency tracking, so useCallback only names a shared C handler. */
+function collectCallbacks(fnBody) {
+  const cbs = new Map();
+  if (fnBody.type !== 'BlockStatement') return cbs;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const decl of stmt.declarations) {
+      const init = decl.init;
+      if (init?.type === 'CallExpression' && init.callee.name === 'useCallback' && decl.id.type === 'Identifier' && isFn(init.arguments[0])) {
+        cbs.set(decl.id.name, init.arguments[0]);
+      }
+    }
+  }
+  return cbs;
+}
+
+/** Collects `const m = useMemo(() => expr, deps)` → Map(name → the memo's expression node). */
+function collectMemos(fnBody) {
+  const memos = new Map();
+  if (fnBody.type !== 'BlockStatement') return memos;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const decl of stmt.declarations) {
+      const init = decl.init;
+      if (init?.type === 'CallExpression' && init.callee.name === 'useMemo' && decl.id.type === 'Identifier' && isFn(init.arguments[0])) {
+        const body = init.arguments[0].body;
+        if (body.type === 'BlockStatement') throw new Error(`AOT: useMemo for "${decl.id.name}" must be a single expression (for now)`);
+        memos.set(decl.id.name, body);
+      }
+    }
+  }
+  return memos;
+}
+
 /** True if a function component declares any useState (per-instance child state — not yet supported). */
 function usesState(fn) {
   if (fn.body.type !== 'BlockStatement') return false;
@@ -314,6 +378,31 @@ function collectAnims(fnBody, scope) {
     }
   }
   return anims;
+}
+
+/**
+ * Collects `const r = useRef(initial)` VALUE refs → Map(name → {cVar, cType, initCode}). A value ref is
+ * a mutable C slot (like state but it does NOT trigger a re-render — `.current` reads/writes only). Node
+ * refs (`useRef()` with no initial, used as `ref={r}` for imperative calls) are deferred to the Vector
+ * phase and throw a clear error here.
+ */
+function collectRefs(fnBody, scope) {
+  const refs = new Map();
+  if (fnBody.type !== 'BlockStatement') return refs;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const decl of stmt.declarations) {
+      const init = decl.init;
+      if (init?.type === 'CallExpression' && init.callee.name === 'useRef' && decl.id.type === 'Identifier') {
+        if (!init.arguments[0]) throw new Error(`AOT: useRef() with no initial value (node/imperative refs) not yet supported — give "${decl.id.name}" a numeric initial`);
+        const v = evalStatic(init.arguments[0], scope);
+        if (typeof v !== 'number') throw new Error(`AOT: useRef initial for "${decl.id.name}" must be a number (value refs only, for now)`);
+        const cType = Number.isInteger(v) ? 'int' : 'float';
+        refs.set(decl.id.name, { cVar: `s_ref_${decl.id.name}`, cType, initCode: cType === 'float' ? `${v}f` : String(v) });
+      }
+    }
+  }
+  return refs;
 }
 
 /** Resolves a JSX tag to a name, mapping `Animated.View/Text/Image` to their host element. */
@@ -557,42 +646,102 @@ function evalStaticOr(node, env, dflt) {
   }
 }
 
+/** Returns a statement node's body list: a BlockStatement's contents, or the lone statement wrapped. */
+function blockList(node) {
+  return node.type === 'BlockStatement' ? node.body : [node];
+}
+
+/** Emits C to write a value into a scalar state slot: snprintf for a string buffer, plain assign else. */
+function scalarAssign(rec, e, indent) {
+  if (rec.cType === 'string') return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), "${printfSpec(e.cType)}", ${e.code});`;
+  return `${indent}${rec.cMember} = ${e.code};`;
+}
+
+/** True if `node` is a `<ref>.current` member access on a known value ref. */
+function refTarget(node, env) {
+  if (node?.type === 'MemberExpression' && !node.computed && node.object.type === 'Identifier' && node.property.name === 'current' && env.refs?.has(node.object.name)) {
+    return env.refs.get(node.object.name);
+  }
+  return null;
+}
+
+/** Compiles one handler ExpressionStatement: a state setter, ref mutation, or Animated.*(...).start(). */
+function compileHandlerExpr(expr, env, state, ctx, indent) {
+  // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
+  if (expr.type === 'AssignmentExpression') {
+    const r = refTarget(expr.left, env);
+    if (!r) throw new Error('AOT: the only assignment allowed in a handler is `ref.current = ...`');
+    return [`${indent}${r.cVar} ${expr.operator} ${emitExpr(expr.right, env).code};`];
+  }
+  // `ref.current++` / `ref.current--`.
+  if (expr.type === 'UpdateExpression') {
+    const r = refTarget(expr.argument, env);
+    if (!r) throw new Error('AOT: the only ++/-- allowed in a handler is on `ref.current`');
+    return [`${indent}${r.cVar}${expr.operator};`];
+  }
+  // Animated.timing/spring(value, cfg).start() — native-driven; sets no React state, needs no app_update.
+  if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
+    return compileAnimateStart(expr, env, ctx.animIdx++);
+  }
+  if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()');
+  const rec = state.bySetter.get(expr.callee.name);
+  if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
+  ctx.stateChanged = true;
+  const arg = expr.arguments[0];
+  if (rec.kind === 'list') return compileListOp(rec, arg, env);
+  if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')) {
+    // setState(prev => expr): bind the param to the current value, assign the result.
+    const param = arg.params[0]?.name;
+    const locals = new Map(env.locals);
+    if (param) locals.set(param, { code: rec.cMember, cType: rec.cType });
+    if (arg.body.type === 'BlockStatement') throw new Error('AOT: updater function must be a single expression (for now)');
+    return [scalarAssign(rec, emitExpr(arg.body, { ...env, locals }), indent)];
+  }
+  return [scalarAssign(rec, emitExpr(arg, env), indent)];
+}
+
+/**
+ * Compiles a list of handler statements to C lines. Supports: `const x = expr` (a C local, visible to
+ * later statements), `if (cond) {...} else {...}`, state setters, and Animated.*(...).start(). `ctx`
+ * accumulates `stateChanged` (→ trailing app_update) and `animIdx` (unique ERAnimConfig locals).
+ */
+function compileStmts(list, env, state, ctx, indent) {
+  const lines = [];
+  for (const st of list) {
+    if (st.type === 'VariableDeclaration') {
+      for (const decl of st.declarations) {
+        if (decl.id.type !== 'Identifier') throw new Error('AOT: destructuring a handler local is not supported');
+        if (!decl.init) throw new Error('AOT: a handler local must have an initializer');
+        const e = emitExpr(decl.init, env);
+        const cName = `l_${decl.id.name}`;
+        lines.push(`${indent}${e.cType === 'float' ? 'float' : 'int'} ${cName} = ${e.code};`);
+        env = { ...env, locals: new Map(env.locals).set(decl.id.name, { code: cName, cType: e.cType }) };
+      }
+      continue;
+    }
+    if (st.type === 'IfStatement') {
+      lines.push(`${indent}if (${emitExpr(st.test, env).code})`, `${indent}{`);
+      lines.push(...compileStmts(blockList(st.consequent), env, state, ctx, indent + '    '));
+      lines.push(`${indent}}`);
+      if (st.alternate) {
+        lines.push(`${indent}else`, `${indent}{`);
+        lines.push(...compileStmts(blockList(st.alternate), env, state, ctx, indent + '    '));
+        lines.push(`${indent}}`);
+      }
+      continue;
+    }
+    if (st.type !== 'ExpressionStatement') throw new Error(`AOT: unsupported statement "${st.type}" in event handler`);
+    lines.push(...compileHandlerExpr(st.expression, env, state, ctx, indent));
+  }
+  return lines;
+}
+
 function compileHandler(fnNode, env, state) {
-  const stmts = [];
   const body = fnNode.body;
   const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
-  let stateChanged = false;
-  list.forEach((st, idx) => {
-    if (st.type !== 'ExpressionStatement') throw new Error(`AOT: unsupported statement "${st.type}" in event handler`);
-    const expr = st.expression;
-    // Animated.timing/spring(value, cfg).start() — a native-driven animation; no app_update needed.
-    if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
-      stmts.push(...compileAnimateStart(expr, env, idx));
-      return;
-    }
-    if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw new Error('AOT: event handler may only call a state setter or Animated.timing/spring(...).start() (for now)');
-    const rec = state.bySetter.get(expr.callee.name);
-    if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
-    stateChanged = true;
-    const arg = expr.arguments[0];
-    if (rec.kind === 'list') {
-      stmts.push(...compileListOp(rec, arg, env));
-    } else if (arg && (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression')) {
-      // setState(prev => expr): bind the param to the current value, assign the result.
-      const param = arg.params[0]?.name;
-      const locals = new Map(env.locals);
-      if (param) locals.set(param, { code: rec.cMember, cType: rec.cType });
-      if (arg.body.type === 'BlockStatement') throw new Error('AOT: updater function must be a single expression (for now)');
-      const e = emitExpr(arg.body, { ...env, locals });
-      stmts.push(`    ${rec.cMember} = ${e.code};`);
-    } else {
-      const e = emitExpr(arg, env);
-      stmts.push(`    ${rec.cMember} = ${e.code};`);
-    }
-  });
-  // app_update re-applies state-dependent props. A pure animation handler needs none (the native driver
-  // moves the bound value); only re-render when a state setter actually changed something.
-  if (stateChanged) stmts.push('    app_update();');
+  const ctx = { stateChanged: false, animIdx: 0 };
+  const stmts = compileStmts(list, env, state, ctx, '    ');
+  if (ctx.stateChanged) stmts.push('    app_update();'); // re-apply state-dependent props once
   return stmts;
 }
 
@@ -800,10 +949,22 @@ function emitNode(el, scope, out, env, state, opts = {}) {
     const evt = EVENT_TYPES[attr.name.name];
     if (!evt) continue;
     const fn = attrExpr(attr);
-    if (!isFn(fn)) throw new Error(`AOT: ${attr.name.name} must be an inline function`);
-    const hid = out.handlers.length;
-    out.handlers.push({ name: `er_handler_${hid}`, body: compileHandler(fn, env, state) });
-    out.build.push(`    er_event_set(${v}, ${evt}, er_handler_${hid}, NULL);`);
+    let handlerName;
+    if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
+      // onPress={fn} where fn is a useCallback → emit one shared handler, reused across elements.
+      handlerName = out.cbEmitted.get(fn.name);
+      if (!handlerName) {
+        handlerName = `er_cb_${fn.name}`;
+        out.cbEmitted.set(fn.name, handlerName);
+        out.handlers.push({ name: handlerName, body: compileHandler(env.callbacks.get(fn.name), env, state) });
+      }
+    } else if (isFn(fn)) {
+      handlerName = `er_handler_${out.handlers.length}`;
+      out.handlers.push({ name: handlerName, body: compileHandler(fn, env, state) });
+    } else {
+      throw new Error(`AOT: ${attr.name.name} must be an inline function or a useCallback`);
+    }
+    out.build.push(`    er_event_set(${v}, ${evt}, ${handlerName}, NULL);`);
   }
 
   if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
@@ -811,9 +972,15 @@ function emitNode(el, scope, out, env, state, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Compile
+// Compile — JSX source string → generated C. Pure (no I/O) so it can be unit-tested directly.
 // ---------------------------------------------------------------------------------------------------
-const src = readFileSync(appPath, 'utf8');
+/**
+ * Compiles a Flow B app's JSX source to C.
+ * @param {string} src   The App.jsx source text.
+ * @param {string} demo  Demo name (only used in the generated-by header comment).
+ * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
+ */
+export function compileSource(src, demo = 'app') {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
 const scope = moduleScope(ast.program);
@@ -822,8 +989,22 @@ const state = collectState(component.body, scope);
 const rootJSX = findReturnJSX(component.body);
 
 const anims = collectAnims(component.body, scope);
-const env = { state: state.byName, locals: new Map(), consts: scope, anims };
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program) };
+const refs = collectRefs(component.body, scope);
+const callbacks = collectCallbacks(component.body);
+const memos = collectMemos(component.body);
+const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks };
+// Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
+// derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
+// tracking re-applies dependent nodes anyway). Done before emit so references resolve.
+for (const [name, expr] of memos) {
+  try {
+    scope[name] = evalStatic(expr, scope);
+  } catch {
+    const e = emitExpr(expr, env);
+    env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
+  }
+}
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map() };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
@@ -842,12 +1023,16 @@ const listBlocks = listRecords
       `static int ${s.countMember} = ${s.items.length};\n`,
   )
   .join('\n');
+const scalarFieldDecl = (s) => (s.cType === 'string' ? `    char ${s.name}[${LIST_STR_CAP}];` : `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`);
 const scalarBlock = scalarRecords.length
-  ? `typedef struct\n{\n${scalarRecords.map((s) => `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
+  ? `typedef struct\n{\n${scalarRecords.map(scalarFieldDecl).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
   : '';
 const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 
 const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
+
+// Value refs — a plain mutable static each (escape-hatch state that does not trigger a re-render).
+const refDecls = [...refs.values()].map((r) => `static ${r.cType} ${r.cVar} = ${r.initCode};`).join('\n');
 
 // Animated values — one engine-side handle each, created at the top of er_app_build (binds reference them).
 const animList = [...anims.values()];
@@ -886,7 +1071,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${stateBlock ? '\n' + stateBlock : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;
@@ -915,7 +1100,24 @@ void er_app_build(int screen_w, int screen_h);
 #endif
 `;
 
-mkdirSync(distDir, { recursive: true });
-writeFileSync(resolve(distDir, 'app.gen.c'), body);
-writeFileSync(resolve(distDir, 'app.gen.h'), header);
-console.log(`AOT: compiled demo "${demo}" -> dist/app.gen.c (${out.n} nodes, ${stateRecords.length} state, ${out.handlers.length} handler(s), ${out.updates.length} dynamic)`);
+  return { c: body, h: header, nodes: out.n, state: stateRecords.length, handlers: out.handlers.length, updates: out.updates.length };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// CLI entry — `node aot/compile.mjs [demo]`: read a demo's App.jsx, write dist/app.gen.{c,h}. Runs only
+// when this file is invoked directly (not when imported by the test harness).
+// ---------------------------------------------------------------------------------------------------
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  const demo = process.argv[2] || process.env.DEMO || 'thermostat';
+  const appPath = resolve(demosDir, demo, 'App.jsx');
+  if (!existsSync(appPath)) {
+    const avail = existsSync(demosDir) ? readdirSync(demosDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
+    console.error(`AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`);
+    process.exit(1);
+  }
+  const result = compileSource(readFileSync(appPath, 'utf8'), demo);
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
+  writeFileSync(resolve(distDir, 'app.gen.h'), result.h);
+  console.log(`AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ${result.handlers} handler(s), ${result.updates} dynamic)`);
+}
