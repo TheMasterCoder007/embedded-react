@@ -31,3 +31,22 @@ export function updateText(handle, text) {
   if (handle == null) return;
   NativeUI.setTextSpans(handle, [{ text: String(text) }]);
 }
+
+/**
+ * Customises the on-screen software keyboard's appearance and/or layout. Only effective when the engine was
+ * built with the keyboard enabled (ERUI_ONSCREEN_KEYBOARD=1); a no-op otherwise. The config is a plain
+ * object of colours/sizes plus an optional `layers` array; omit `layers` to keep the built-in QWERTY:
+ *
+ *   setKeyboardConfig({ keyColor: '#fff', labelColor: '#111', fontSize: 20,
+ *     layers: [ [ [ { char: 'a' }, ... ],                                    // a row
+ *                 [ { label: 'shift', layer: 1, highlight: true }, ... ] ],  // a row with a layer-switch key
+ *               ... ] });                                                    // more layers
+ *
+ * Key shapes: { char } types it; { char: ' ', span } a space bar; { label, layer } switches layer;
+ * { label, backspace } / { label, done }; optional `span` (grid columns) and `highlight` (lit on its layer).
+ * Pass nothing/null to restore the default.
+ * @param {object} [config]  Keyboard config, or null for the built-in default.
+ */
+export function setKeyboardConfig(config) {
+  NativeUI.setKeyboardConfig(config || null);
+}

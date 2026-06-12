@@ -1631,7 +1631,10 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
     JSValue cb = JS_GetPropertyUint32(ctx, s_event_handlers, key);
     if (JS_IsFunction(ctx, cb))
     {
-        JSValue ev = build_event_object(ctx, type, data);
+        /* onChangeText receives the new TEXT directly (RN convention, matching Flow B's AOT lowering);
+         * every other event gets the event object. */
+        JSValue ev = (type == ER_EVENT_CHANGE_TEXT) ? JS_NewString(ctx, data->changed_text ? data->changed_text : "")
+                                                    : build_event_object(ctx, type, data);
         JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
         if (JS_IsException(ret))
         {
@@ -2255,6 +2258,211 @@ static JSValue js_set_text_spans(JSContext* ctx, JSValueConst this_val, int argc
     }
 
     er_node_set_text_spans(node, spans, (uint8_t)len);
+    return JS_UNDEFINED;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - On-screen keyboard config (Flow A): setKeyboardConfig({ ...colours/sizes, layers? }) → ERKeyboardConfig.
+ - er_keyboard_set_config keeps the POINTER, so the parsed structs live in persistent static pools (the JS
+ - objects/strings are transient). Re-config overwrites the pools. No-op unless ERUI_ONSCREEN_KEYBOARD=1.
+ ---------------------------------------------------------------------------------------------------------------------*/
+#define KBD_MAX_KEYS 160
+#define KBD_MAX_ROWS 28
+#define KBD_MAX_LAYERS 6
+#define KBD_STR_POOL 1536
+static ERKeyboardKey s_kbd_keys[KBD_MAX_KEYS];
+static ERKeyboardRow s_kbd_rows[KBD_MAX_ROWS];
+static ERKeyboardLayer s_kbd_layers[KBD_MAX_LAYERS];
+static ERKeyboardConfig s_kbd_cfg;
+static char s_kbd_strs[KBD_STR_POOL];
+static int s_kbd_str_used;
+
+/** Length of a JS array (0 when not an array). */
+static int arr_len(JSContext* ctx, JSValueConst arr)
+{
+    if (!JS_IsArray(arr))
+        return 0;
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t n = 0;
+    JS_ToInt32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    return n < 0 ? 0 : n;
+}
+
+/** Bump-copies a JS string into the persistent pool; returns a stable pointer or NULL (empty / pool full). */
+static const char* kbd_intern(JSContext* ctx, JSValueConst v)
+{
+    const char* s = JS_ToCString(ctx, v);
+    if (!s)
+        return NULL;
+    const size_t n = strlen(s);
+    if (n == 0 || (size_t)s_kbd_str_used + n + 1U > KBD_STR_POOL)
+    {
+        JS_FreeCString(ctx, s);
+        return NULL;
+    }
+    char* dst = &s_kbd_strs[s_kbd_str_used];
+    memcpy(dst, s, n + 1);
+    s_kbd_str_used += (int)(n + 1);
+    JS_FreeCString(ctx, s);
+    return dst;
+}
+
+/** Interns object[name] (a string) into the pool, or NULL when absent. */
+static const char* kbd_intern_prop(JSContext* ctx, JSValueConst obj, const char* name)
+{
+    JSValue v;
+    const char* r = NULL;
+    if (prop_get(ctx, obj, name, &v))
+    {
+        r = kbd_intern(ctx, v);
+        JS_FreeValue(ctx, v);
+    }
+    return r;
+}
+
+/** Reads object[name] as an int, returning whether it was present. */
+static bool kbd_int(JSContext* ctx, JSValueConst obj, const char* name, int* out)
+{
+    JSValue v;
+    if (prop_get(ctx, obj, name, &v))
+    {
+        int32_t n = 0;
+        const bool ok = JS_ToInt32(ctx, &n, v) == 0;
+        JS_FreeValue(ctx, v);
+        if (ok)
+        {
+            *out = n;
+            return true;
+        }
+    }
+    return false;
+}
+
+/** True when object[name] is a present, truthy boolean. */
+static bool kbd_bool(JSContext* ctx, JSValueConst obj, const char* name)
+{
+    JSValue v;
+    bool r = false;
+    if (prop_get(ctx, obj, name, &v))
+    {
+        r = JS_ToBool(ctx, v) > 0;
+        JS_FreeValue(ctx, v);
+    }
+    return r;
+}
+
+/** Reads object[name] as a color into *out, returning whether present + valid. */
+static bool kbd_color(JSContext* ctx, JSValueConst obj, const char* name, uint32_t* out)
+{
+    JSValue v;
+    bool r = false;
+    if (prop_get(ctx, obj, name, &v))
+    {
+        r = to_color(ctx, v, out);
+        JS_FreeValue(ctx, v);
+    }
+    return r;
+}
+
+/** @brief JS `setKeyboardConfig(config)` — applies a custom on-screen-keyboard layout/appearance. */
+static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1 || !JS_IsObject(argv[0]))
+    {
+        er_keyboard_set_config(NULL); /* restore the built-in default */
+        return JS_UNDEFINED;
+    }
+    JSValueConst cfgv = argv[0];
+    ERKeyboardConfig* cfg = &s_kbd_cfg;
+    memset(cfg, 0, sizeof(*cfg));
+    s_kbd_str_used = 0;
+    int nkeys = 0, nrows = 0, nlayers = 0, tmp = 0;
+
+    kbd_color(ctx, cfgv, "panelColor", &cfg->panel_color);
+    kbd_color(ctx, cfgv, "keyColor", &cfg->key_color);
+    kbd_color(ctx, cfgv, "keyActiveColor", &cfg->key_active_color);
+    kbd_color(ctx, cfgv, "labelColor", &cfg->label_color);
+    if (kbd_int(ctx, cfgv, "fontSize", &tmp))
+        cfg->font_size_px = (uint8_t)tmp;
+    if (kbd_int(ctx, cfgv, "rowHeight", &tmp))
+        cfg->row_height_px = (uint16_t)tmp;
+    if (kbd_int(ctx, cfgv, "keyGap", &tmp))
+        cfg->key_gap_px = (uint8_t)tmp;
+    if (kbd_int(ctx, cfgv, "keyRadius", &tmp))
+        cfg->key_radius_px = (uint8_t)tmp;
+    if (kbd_int(ctx, cfgv, "gridCols", &tmp))
+        cfg->grid_cols = (uint8_t)tmp;
+
+    JSValue layers = JS_GetPropertyStr(ctx, cfgv, "layers");
+    if (JS_IsArray(layers))
+    {
+        const int nl = arr_len(ctx, layers);
+        for (int li = 0; li < nl && nlayers < KBD_MAX_LAYERS; li++)
+        {
+            JSValue layer = JS_GetPropertyUint32(ctx, layers, (uint32_t)li);
+            const int row_start = nrows;
+            const int nr = arr_len(ctx, layer);
+            for (int ri = 0; ri < nr && nrows < KBD_MAX_ROWS; ri++)
+            {
+                JSValue row = JS_GetPropertyUint32(ctx, layer, (uint32_t)ri);
+                const int key_start = nkeys;
+                const int nk = arr_len(ctx, row);
+                for (int ki = 0; ki < nk && nkeys < KBD_MAX_KEYS; ki++)
+                {
+                    JSValue key = JS_GetPropertyUint32(ctx, row, (uint32_t)ki);
+                    ERKeyboardKey* k = &s_kbd_keys[nkeys++];
+                    memset(k, 0, sizeof(*k));
+                    k->span = 1;
+                    k->highlight_layer = 0xFFU;
+                    const char* jlabel = kbd_intern_prop(ctx, key, "label");
+                    int layer_target = 0;
+                    if (kbd_bool(ctx, key, "backspace"))
+                    {
+                        k->type = ER_KBD_KEY_BACKSPACE;
+                        k->label = jlabel ? jlabel : "<";
+                    }
+                    else if (kbd_bool(ctx, key, "done"))
+                    {
+                        k->type = ER_KBD_KEY_DONE;
+                        k->label = jlabel ? jlabel : "OK";
+                    }
+                    else if (kbd_int(ctx, key, "layer", &layer_target))
+                    {
+                        k->type = ER_KBD_KEY_LAYER;
+                        k->layer = (uint8_t)layer_target;
+                        k->label = jlabel;
+                    }
+                    else
+                    {
+                        const char* ch = kbd_intern_prop(ctx, key, "char");
+                        k->type = ER_KBD_KEY_CHAR;
+                        k->text = ch;
+                        k->label = jlabel ? jlabel : ((ch && ch[0] == ' ') ? NULL : ch); /* blank space bar */
+                    }
+                    if (kbd_int(ctx, key, "span", &tmp))
+                        k->span = (uint8_t)(tmp > 0 ? tmp : 1);
+                    if (kbd_bool(ctx, key, "highlight"))
+                        k->highlight_layer = (uint8_t)li;
+                    JS_FreeValue(ctx, key);
+                }
+                ERKeyboardRow* r = &s_kbd_rows[nrows++];
+                r->keys = &s_kbd_keys[key_start];
+                r->count = (uint8_t)(nkeys - key_start);
+                JS_FreeValue(ctx, row);
+            }
+            ERKeyboardLayer* L = &s_kbd_layers[nlayers++];
+            L->rows = &s_kbd_rows[row_start];
+            L->count = (uint8_t)(nrows - row_start);
+            JS_FreeValue(ctx, layer);
+        }
+        cfg->layers = s_kbd_layers;
+        cfg->layer_count = (uint8_t)nlayers;
+    }
+    JS_FreeValue(ctx, layers);
+
+    er_keyboard_set_config(cfg);
     return JS_UNDEFINED;
 }
 
@@ -3238,6 +3446,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
+    JS_SetPropertyStr(ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 4));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));

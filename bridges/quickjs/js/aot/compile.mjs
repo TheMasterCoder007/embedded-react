@@ -2194,6 +2194,94 @@ const emitNode = withLoc(emitNodeImpl);
  * @param {string} demo  Demo name (only used in the generated-by header comment).
  * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
  */
+/** Formats a color value (string like "#303030" or a number) as a C ARGB literal; null/undefined → "0". */
+function kbdColor(v) {
+  if (v == null) return '0';
+  const argb = parseColor(String(v)) >>> 0;
+  return '0x' + argb.toString(16).padStart(8, '0').toUpperCase() + 'u';
+}
+
+/** One JS keyboard key object → a C ERKeyboardKey initializer. `li` is its layer index (for shift highlight).
+ *  Shapes: { char } (types it), { char:' ', span } (space), { label, layer } (switch), { label, backspace },
+ *  { label, done }; optional span / highlight. */
+function kbdKeyToC(k, li) {
+  if (k == null || typeof k !== 'object') throw aotError('AOT: each setKeyboardConfig key must be an object', 'e.g. { char: "q" } or { label: "shift", layer: 1, highlight: true }');
+  let type;
+  let label;
+  let text = 'NULL';
+  let layer = 0;
+  if (k.backspace) {
+    type = 'ER_KBD_KEY_BACKSPACE';
+    label = k.label ?? '<';
+  } else if (k.done) {
+    type = 'ER_KBD_KEY_DONE';
+    label = k.label ?? 'OK';
+  } else if (k.layer != null) {
+    type = 'ER_KBD_KEY_LAYER';
+    label = k.label ?? '';
+    layer = Math.round(Number(k.layer));
+  } else if (k.char != null) {
+    type = 'ER_KBD_KEY_CHAR';
+    text = cstr(String(k.char));
+    label = k.label ?? (String(k.char) === ' ' ? '' : String(k.char)); // a space bar shows no label
+  } else {
+    throw aotError('AOT: a setKeyboardConfig key needs one of char / layer / backspace / done');
+  }
+  const span = k.span != null ? Math.round(Number(k.span)) : 1;
+  const hl = k.highlight ? li : 255;
+  return `{ ${label === '' ? 'NULL' : cstr(String(label))}, ${text}, ${type}, ${layer}, ${span}, ${hl} }`;
+}
+
+/** Lowers a module-level `setKeyboardConfig({...})` to a static ERKeyboardConfig + an er_keyboard_set_config()
+ *  call in er_app_build — customising the on-screen keyboard (colours/sizes, and optionally a full layout) from
+ *  the app, no engine edit. The config must be statically foldable; omit `layers` to keep the built-in QWERTY. */
+function compileKeyboardConfig(program, out) {
+  let arg = null;
+  for (const stmt of program.body) {
+    if (stmt.type === 'ExpressionStatement' && stmt.expression.type === 'CallExpression' && stmt.expression.callee.type === 'Identifier' && stmt.expression.callee.name === 'setKeyboardConfig') {
+      arg = stmt.expression.arguments[0];
+      break;
+    }
+  }
+  if (!arg) return;
+  let cfg;
+  try {
+    cfg = evalStatic(arg, {});
+  } catch {
+    throw aotError('AOT: setKeyboardConfig(...) needs a statically-foldable config object', 'pass an object literal of colours/sizes (+ an optional `layers` array) — no state or runtime values.');
+  }
+  if (cfg == null || typeof cfg !== 'object') throw aotError('AOT: setKeyboardConfig(...) needs a config object');
+
+  const data = [];
+  let layersExpr = 'NULL';
+  let layerCount = 0;
+  if (Array.isArray(cfg.layers)) {
+    const layerVars = [];
+    cfg.layers.forEach((layer, li) => {
+      if (!Array.isArray(layer)) throw aotError('AOT: setKeyboardConfig `layers[i]` must be an array of rows');
+      const rowVars = [];
+      layer.forEach((row, ri) => {
+        if (!Array.isArray(row) || !row.length) throw aotError('AOT: each keyboard row must be a non-empty array of keys');
+        data.push(`static const ERKeyboardKey kbd_l${li}r${ri}[] = { ${row.map((k) => kbdKeyToC(k, li)).join(', ')} };`);
+        rowVars.push(`{ kbd_l${li}r${ri}, ${row.length} }`);
+      });
+      data.push(`static const ERKeyboardRow kbd_l${li}rows[] = { ${rowVars.join(', ')} };`);
+      layerVars.push(`{ kbd_l${li}rows, ${layer.length} }`);
+    });
+    data.push(`static const ERKeyboardLayer kbd_layers[] = { ${layerVars.join(', ')} };`);
+    layersExpr = 'kbd_layers';
+    layerCount = cfg.layers.length;
+  }
+  const num = (v) => (v == null ? 0 : Math.round(Number(v)));
+  data.push(
+    `static const ERKeyboardConfig kbd_cfg = { ${layersExpr}, ${layerCount}, ${num(cfg.gridCols)}, ${num(cfg.rowHeight)}, ` +
+      `${num(cfg.keyGap)}, ${num(cfg.keyRadius)}, ${num(cfg.fontSize)}, ${kbdColor(cfg.panelColor)}, ${kbdColor(cfg.keyColor)}, ` +
+      `${kbdColor(cfg.keyActiveColor)}, ${kbdColor(cfg.labelColor)} };`,
+  );
+  out.kbdData = data.join('\n');
+  out.kbdSetup = '    er_keyboard_set_config(&kbd_cfg);';
+}
+
 function compileSourceImpl(src, demo = 'app', opts = {}) {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
@@ -2233,7 +2321,8 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0 };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '' };
+compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 // Mount effects: each `useEffect(fn, [])` body runs ONCE after the initial app_update (typically to start a
@@ -2419,7 +2508,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}
+${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 
 void er_app_build(int screen_w, int screen_h)
@@ -2437,7 +2526,7 @@ ${animCreate ? '\n' + animCreate + '\n' : ''}
 ${out.build.join('\n')}
     er_tree_append_child(root, ${appTop});
     er_tree_set_root(root);
-${hasUpdate ? '\n    app_update(); /* apply initial state-dependent props */\n' : ''}${mountEffectsBlock}}
+${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appearance */\n' : ''}${hasUpdate ? '\n    app_update(); /* apply initial state-dependent props */\n' : ''}${mountEffectsBlock}}
 `;
 
 const header = `/* Generated by the embedded-react Flow B AOT compiler. DO NOT EDIT. */
