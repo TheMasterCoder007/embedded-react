@@ -753,9 +753,14 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
         return;
 
     /* On-screen keyboard (if active) gets first refusal: taps inside its strip type into the focused input
-     * and are consumed so they never reach the scene below it. */
+     * and are consumed so they never reach the scene below it. The keyboard is drawn in fixed screen space,
+     * so it sees the raw point. */
     if (er_keyboard_dispatch_touch(phase, x, y))
         return;
+
+    /* Map the screen point back into the scene when it has been shifted up for keyboard avoidance, so taps
+     * land on the nodes where they're actually drawn. */
+    y += er_keyboard_avoid_offset();
 
     ERTouchState* touch = &s_touches[finger_id];
 

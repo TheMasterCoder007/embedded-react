@@ -32,6 +32,9 @@ static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused Tex
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
 static bool s_kbd_dirty = false; /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
 static uint8_t s_kbd_layer = 0;  /**< Active key layer index into the (default or app-supplied) layout. */
+static int s_kbd_avoid_y = 0;    /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
+                                      (0 when no keyboard / input already visible). Applied in render_tree +
+                                      node_screen_rect so render and damage stay in sync. */
 
 /* Dirty-rect tracking: union of all screen rects repainted during the current er_commit(). */
 static ERRect s_dirty_rect;
@@ -489,7 +492,7 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
         a = er_get_node(a->parent_tag);
     }
     *rx = (int)n->animated.x - sx + (int)n->tp_translate_x;
-    *ry = (int)n->animated.y - sy + (int)n->tp_translate_y;
+    *ry = (int)n->animated.y - sy + (int)n->tp_translate_y - s_kbd_avoid_y;
     *rw = (int)n->animated.w;
     *rh = (int)n->animated.h;
     return true;
@@ -2288,6 +2291,14 @@ void er_keyboard_set_config(const ERKeyboardConfig* cfg)
 
 #endif /* ERUI_ONSCREEN_KEYBOARD */
 
+/** @brief Pixels the scene is currently shifted up for keyboard avoidance (0 when none). Hit-testing adds
+ *         this to a touch's Y to map a screen point back to the shifted scene. Always defined (0 when the
+ *         keyboard is compiled out), so hit_test.c can call it unconditionally. */
+int er_keyboard_avoid_offset(void)
+{
+    return s_kbd_avoid_y;
+}
+
 /**
  * @brief Unlinks a child from its current parent's sibling list, if it has one.
  *
@@ -2506,6 +2517,34 @@ void er_commit(void)
         s_last_cursor_phase = 2U;
     }
 
+#if ERUI_ONSCREEN_KEYBOARD
+    /* Keyboard avoidance: shift the whole scene UP just enough that the focused input clears the on-screen
+     * keyboard (0 when no input is focused or it is already above the strip). A change moves the whole scene,
+     * so force a full repaint that frame; while stable, node_screen_rect applies the same offset so damage
+     * tracking stays exact. */
+    {
+        int want = 0;
+        if (er_keyboard_active())
+        {
+            ERNode* inp = er_get_node(s_focused_input_tag);
+            if (inp)
+            {
+                ERRect kr;
+                er_keyboard_rect((int)root->computed.w, (int)root->computed.h, &kr);
+                const int input_bottom = (int)inp->animated.y + (int)inp->animated.h; /* unshifted layout pos */
+                const int needed = input_bottom + 8 - kr.y;                            /* 8px above the strip */
+                if (needed > 0)
+                    want = needed;
+            }
+        }
+        if (want != s_kbd_avoid_y)
+        {
+            s_kbd_avoid_y = want;
+            er_force_full_repaint(); /* the whole scene shifts → repaint everything once */
+        }
+    }
+#endif
+
     /* Layout fast path: the flex solver and per-Text-node measurement only run when something
      * that affects a computed rect changed since the last commit (mark_layout_dirty), or when a
      * LayoutAnimation config is pending and must be evaluated against fresh rects. Animations
@@ -2686,7 +2725,7 @@ void er_commit(void)
                 if (backend->band_begin)
                     backend->band_begin(fx, sy, fw, sh, backend->ctx);
                 er_set_band(sy, sh);
-                render_tree(root, true, 0, 0);
+                render_tree(root, true, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
                 er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
                 if (backend->band_flush)
                     backend->band_flush(backend->ctx);
@@ -2706,7 +2745,7 @@ void er_commit(void)
             er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
             clipped = true;
         }
-        render_tree(root, false, 0, 0);
+        render_tree(root, false, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
         er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
         if (clipped)
             er_pop_clip_rect();

@@ -235,4 +235,7 @@ void er_keyboard_draw(int screen_w, int screen_h);
  *         the point is inside its strip — a key DOWN types into the focused input; otherwise false. */
 bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y);
 
+/** @brief Pixels the scene is shifted up for keyboard avoidance (0 when none); add to a touch Y for hit-testing. */
+int er_keyboard_avoid_offset(void);
+
 #endif
