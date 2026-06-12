@@ -701,3 +701,32 @@ describe('AOT dynamic enum styles', () => {
     ).toThrow(/unsupported enum value "sideways"/);
   });
 });
+
+describe('AOT nested Text spans', () => {
+  it('lowers a <Text> with nested <Text> to inline ERTextSpans (styled + inherit segments)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<Text style={{ color: '#ffffff', fontSize: 18 }}>Hi <Text style={{ fontWeight: 'bold', color: '#f4a261' }}>there</Text></Text>);
+      }`);
+    expect(c).toContain('static const ERTextSpan spans_n');
+    expect(c).toContain('{ "Hi ", 0u, 0, 0xFF, 0xFF, 0xFF, ER_LAYOUT_AUTO }'); // inherit segment
+    expect(c).toContain('{ "there", 0xFFF4A261u, 0, 1, 0xFF, 0xFF, ER_LAYOUT_AUTO }'); // bold + amber span
+    expect(c).toMatch(/er_node_set_text_spans\(n\d+, spans_n\d+, 2\);/);
+  });
+
+  it('throws when a <Text> exceeds the engine span limit (4)', () => {
+    expect(() =>
+      gen(`${PRE}
+        export function App() {
+          return (<Text>a <Text style={{ fontWeight: 'bold' }}>b</Text> c <Text style={{ fontWeight: 'bold' }}>d</Text> e</Text>);
+        }`),
+    ).toThrow(/renders at most 4/);
+  });
+
+  it('keeps a plain <Text> (no nested Text) on the single-string path', () => {
+    const c = gen(`${PRE}
+      export function App() { const [n, setN] = useState(3); return (<Text>Count {n}</Text>); }`);
+    expect(c).not.toContain('er_node_set_text_spans');
+    expect(c).toContain('snprintf(p.text');
+  });
+});

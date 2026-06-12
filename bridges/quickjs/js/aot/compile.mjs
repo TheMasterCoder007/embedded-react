@@ -333,6 +333,9 @@ const LIST_STR_CAP = Number(process.env.ER_AOT_LIST_STR_CAP) || 48;
 /** Max rows a list-state can hold (pre-allocated pool; rows beyond the count are display:none).
  *  Override with ER_AOT_LIST_CAP — lower it on a tight-RAM MCU (each pooled row costs engine nodes). */
 const LIST_CAP = Number(process.env.ER_AOT_LIST_CAP) || 16;
+/** Max inline segments in a nested-<Text>. Must match the engine's ER_TEXT_MAX_SPANS (default 4); if a
+ *  project raises that #define, set ER_AOT_MAX_TEXT_SPANS to the same value when generating. */
+const AOT_MAX_TEXT_SPANS = Number(process.env.ER_AOT_MAX_TEXT_SPANS) || 4;
 
 /** Infers a C struct shape from a list-state's initial elements (objects of strings/numbers). */
 function inferItemStruct(items, name) {
@@ -759,6 +762,81 @@ function buildText(children, scope, env) {
     }
   }
   return { dynamic, format, args };
+}
+
+/** Normalises JSX text the way Babel does: trim per-line, drop blank lines, join with single spaces; a
+ *  same-line leading/trailing space is preserved (so `Hello <b>x</b>` keeps the space before the span). */
+function cleanJsxText(value) {
+  const lines = value.split(/\r\n|\n|\r/);
+  let last = 0;
+  for (let i = 0; i < lines.length; i++) if (/[^ \t]/.test(lines[i])) last = i;
+  let out = '';
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].replace(/\t/g, ' ');
+    if (i !== 0) line = line.replace(/^ +/, '');
+    if (i !== lines.length - 1) line = line.replace(/ +$/, '');
+    if (line) out += i !== last ? line + ' ' : line;
+  }
+  return out;
+}
+
+/** Concatenates a (span) <Text>'s static text content (literal + folded {expr}); a nested element throws. */
+function staticTextContent(children, scope) {
+  let s = '';
+  for (const c of children) {
+    if (c.type === 'JSXText') s += cleanJsxText(c.value);
+    else if (c.type === 'JSXExpressionContainer' && c.expression.type !== 'JSXEmptyExpression') {
+      const v = evalStatic(c.expression, scope); // throws if it references state
+      if (v !== undefined && v !== null) s += String(v);
+    } else if (c.type === 'JSXElement') throw aotError('AOT: a nested <Text> span may not itself contain another <Text> (one level of spans only)');
+  }
+  return s;
+}
+
+/**
+ * If a <Text>'s children include a nested <Text>, returns inline SPANS [{text, color, font_size,
+ * font_weight, font_style, text_decoration, letter_spacing}] (C-expr fields; inherit sentinels for unset).
+ * Returns null when there's no nested <Text> (caller uses the single-string buildText path). Static only —
+ * a dynamic {…} segment or a state-driven span style throws.
+ */
+function collectTextSpans(children, scope, env) {
+  if (!children.some((c) => c.type === 'JSXElement' && c.openingElement.name.name === 'Text')) return null;
+  // Inherit sentinels (see ERTextSpan doc): color 0, font_size 0, weight/style/decoration 0xFF, spacing AUTO.
+  const inheritSpan = (text) => ({ text, color: '0u', font_size: '0', font_weight: '0xFF', font_style: '0xFF', text_decoration: '0xFF', letter_spacing: 'ER_LAYOUT_AUTO' });
+  const spans = [];
+  for (const c of children) {
+    if (c.type === 'JSXText') {
+      const t = cleanJsxText(c.value);
+      if (t) spans.push(inheritSpan(cstr(t)));
+    } else if (c.type === 'JSXExpressionContainer') {
+      if (c.expression.type === 'JSXEmptyExpression') continue;
+      let v;
+      try {
+        v = evalStatic(c.expression, scope);
+      } catch {
+        throw aotError('AOT: a dynamic {…} segment inside a multi-span <Text> is not supported', 'spans must be static; keep dynamic text in its own single <Text> (no nested <Text> siblings).');
+      }
+      if (v !== undefined && v !== null) spans.push(inheritSpan(cstr(String(v))));
+    } else if (c.type === 'JSXElement' && c.openingElement.name.name === 'Text') {
+      const { staticAssigns, dynAssigns } = collectStyleAssigns(c.openingElement, scope, env);
+      if (dynAssigns.length) throw aotError('AOT: a state-driven style on a nested <Text> span is not supported', 'give the span <Text> a static style.');
+      const field = (f, dflt) => staticAssigns.find((a) => a.field === f)?.expr ?? dflt;
+      spans.push({
+        text: cstr(staticTextContent(c.children, scope)),
+        color: field('color', '0u'),
+        font_size: field('font_size', '0'),
+        font_weight: field('font_weight', '0xFF'),
+        font_style: field('font_style', '0xFF'),
+        text_decoration: field('text_decoration', '0xFF'),
+        letter_spacing: field('letter_spacing', 'ER_LAYOUT_AUTO'),
+      });
+    } else throw aotError('AOT: unsupported child inside a multi-span <Text>', 'a <Text> with a nested <Text> may contain text, {static expressions}, and nested <Text> only.');
+  }
+  // The engine renders at most ER_TEXT_MAX_SPANS segments; refuse to silently drop the rest.
+  if (spans.length > AOT_MAX_TEXT_SPANS) {
+    throw aotError(`AOT: a <Text> has ${spans.length} inline segments but the engine renders at most ${AOT_MAX_TEXT_SPANS}`, `combine adjacent plain-text segments, or end the sentence right after a styled <Text> (e.g. "A <b>B</b> C <b>D</b>" is 4). If your engine build raised ER_TEXT_MAX_SPANS, set ER_AOT_MAX_TEXT_SPANS to match when running the AOT.`);
+  }
+  return spans;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1675,7 +1753,9 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
 
   const v = `n${out.n++}`;
   const { staticAssigns, dynAssigns, binds } = collectStyleAssigns(el.openingElement, scope, env);
-  const text = tag === 'Text' ? buildText(el.children, scope, env) : null;
+  // A <Text> with a nested <Text> becomes inline SPANS; otherwise a single (possibly dynamic) string.
+  const spans = tag === 'Text' ? collectTextSpans(el.children, scope, env) : null;
+  const text = tag === 'Text' && !spans ? buildText(el.children, scope, env) : null;
 
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
   // `display` flips between flex and none in app_update (joining any state-driven style assigns).
@@ -1694,6 +1774,14 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
     if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
     out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+
+  // Inline text spans (a <Text> with nested <Text>): set once; each span inherits the node's base style
+  // unless it overrides (the local array is copied by er_node_set_text_spans).
+  if (spans) {
+    out.build.push(`    {`, `        static const ERTextSpan spans_${v}[] = {`);
+    for (const s of spans) out.build.push(`            { ${s.text}, ${s.color}, ${s.font_size}, ${s.font_weight}, ${s.font_style}, ${s.text_decoration}, ${s.letter_spacing} },`);
+    out.build.push(`        };`, `        er_node_set_text_spans(${v}, spans_${v}, ${spans.length});`, `    }`);
   }
 
   // Animated style props (opacity / transform / color) → bind the node to its animated value. The
