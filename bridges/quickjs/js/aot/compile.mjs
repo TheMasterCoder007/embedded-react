@@ -1739,12 +1739,61 @@ function emitModal(el, scope, out, env, state) {
   return v;
 }
 
+/**
+ * <FlatList data={items} renderItem={({ item, index }) => <Row …/>} keyExtractor=… style=… /> → the SAME as
+ * <ScrollView style=…>{items.map((item, index) => <Row …/>)}</ScrollView>. The engine's FlatList IS a
+ * ScrollView (no virtualization), and the AOT already unrolls a .map (static or state-list), so this is a thin
+ * API-compat rewrite: synthesize that ScrollView+map AST and emit it. keyExtractor is ignored (no reconciler).
+ */
+function emitFlatList(el, scope, out, env, state, opts) {
+  let dataNode = null;
+  let renderItem = null;
+  let styleAttr = null;
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw aotError('AOT: spread props on <FlatList> are not supported');
+    const name = attr.name.name;
+    if (name === 'data') dataNode = attrExpr(attr);
+    else if (name === 'renderItem') renderItem = attrExpr(attr);
+    else if (name === 'style') styleAttr = attr;
+    else if (name === 'keyExtractor' || name === 'ref' || name === 'key') {
+      /* ignored — the AOT unrolls at compile time, so React keys are irrelevant */
+    } else throw aotError(`AOT: <FlatList> prop "${name}" is not supported`, 'supported: data, renderItem, keyExtractor, style. For headers/footers/horizontal/onEndReached etc., use <ScrollView> + .map directly.');
+  }
+  if (!dataNode) throw aotError('AOT: <FlatList> needs a data prop', '<FlatList data={items} renderItem={({ item }) => <Row item={item} />} />');
+  if (!renderItem || !isFn(renderItem)) throw aotError('AOT: <FlatList> needs a renderItem function', 'renderItem={({ item, index }) => <Row item={item} />}');
+  const param = renderItem.params[0];
+  if (!param || param.type !== 'ObjectPattern') throw aotError('AOT: FlatList renderItem must destructure ({ item, index })', 'renderItem={({ item }) => <Row item={item} />}');
+  let itemName = null;
+  let indexName = null;
+  for (const prop of param.properties) {
+    if (prop.type !== 'ObjectProperty' || prop.value.type !== 'Identifier') throw aotError('AOT: FlatList renderItem may destructure only item / index (to plain names)');
+    if (prop.key.name === 'item') itemName = prop.value.name;
+    else if (prop.key.name === 'index') indexName = prop.value.name;
+    else throw aotError(`AOT: FlatList renderItem cannot destructure "${prop.key.name}" (only item / index)`);
+  }
+  if (!itemName) throw aotError('AOT: FlatList renderItem must destructure item', 'renderItem={({ item }) => …}');
+
+  // Rewrite renderItem `({ item, index }) => BODY` → a positional `.map` callback `(item, index) => BODY`.
+  const cbParams = [{ type: 'Identifier', name: itemName }];
+  if (indexName) cbParams.push({ type: 'Identifier', name: indexName });
+  const cb = { type: 'ArrowFunctionExpression', params: cbParams, body: renderItem.body, async: false, expression: renderItem.body.type !== 'BlockStatement' };
+  const mapCall = { type: 'CallExpression', callee: { type: 'MemberExpression', object: dataNode, property: { type: 'Identifier', name: 'map' }, computed: false }, arguments: [cb] };
+  const scrollView = {
+    type: 'JSXElement',
+    openingElement: { type: 'JSXOpeningElement', name: { type: 'JSXIdentifier', name: 'ScrollView' }, attributes: styleAttr ? [styleAttr] : [], selfClosing: false },
+    closingElement: { type: 'JSXClosingElement', name: { type: 'JSXIdentifier', name: 'ScrollView' } },
+    children: [{ type: 'JSXExpressionContainer', expression: mapCall }],
+  };
+  return emitNode(scrollView, scope, out, env, state, opts);
+}
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
   if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
   if (tag === 'Modal') return emitModal(el, scope, out, env, state);
+  if (tag === 'FlatList') return emitFlatList(el, scope, out, env, state, opts);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);

@@ -493,6 +493,43 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
     return true;
 }
 
+/**
+ * @brief Intersects a node's screen rect with every clipping ancestor's box (ScrollView / overflow:hidden).
+ *
+ * A scrolled child's screen rect (node_screen_rect) is the UN-clipped position, so a row scrolled near a
+ * ScrollView's edge reaches outside the list (e.g. over a title above it). Clipping its DAMAGE contribution
+ * to the clippers keeps a scroll's dirty region inside the list, so siblings outside it aren't dragged into
+ * the repaint and momentarily cleared. (node_screen_rect itself stays un-clipped so move-detection holds.)
+ * Sets w/h to 0 when fully outside a clipper.
+ */
+static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
+{
+    int x0 = *rx, y0 = *ry, x1 = *rx + *rw, y1 = *ry + *rh;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        const bool clips = (a->layout.overflow == ER_OVERFLOW_HIDDEN || a->layout.overflow == ER_OVERFLOW_SCROLL
+                            || a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST);
+        int ax, ay, aw, ah;
+        if (clips && node_screen_rect(a, &ax, &ay, &aw, &ah))
+        {
+            if (ax > x0)
+                x0 = ax;
+            if (ay > y0)
+                y0 = ay;
+            if (ax + aw < x1)
+                x1 = ax + aw;
+            if (ay + ah < y1)
+                y1 = ay + ah;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+    *rx = x0;
+    *ry = y0;
+    *rw = (x1 > x0) ? (x1 - x0) : 0;
+    *rh = (y1 > y0) ? (y1 - y0) : 0;
+}
+
 /* Set per-commit: true when the cached subtree bounds are trustworthy this frame (no layout
  * animation interpolating positions), so render_tree() may use them to skip untouched subtrees. */
 static bool s_prune_ok = false;
@@ -929,8 +966,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     n->dirty = false;
 
-    /* Overflow clipping: push a scissor rect so children cannot draw outside this node. */
-    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL);
+    /* Overflow clipping: push a scissor rect so children cannot draw outside this node. A scroller
+     * (ScrollView / FlatList) ALWAYS clips to its viewport — that is its defining behaviour — regardless
+     * of an explicit overflow style, so scrolled children can't escape past the top or bottom edge. */
+    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
+                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
     if (clips)
         er_push_clip_rect(px, py, w, h);
 
@@ -2253,14 +2293,20 @@ void er_commit(void)
                              (int)n->vec_dirty_h);
                 continue;
             }
-            damage_union(&clip, &have, rx, ry, rw, rh); /* new position */
+            /* Clip both contributions to any clipping ancestor (ScrollView / overflow:hidden) so a scrolled
+             * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
+             * repaint, where it would be cleared but not restored for a frame. */
+            int nx = rx, ny = ry, nw = rw, nh = rh;
+            clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
+            if (nw > 0 && nh > 0)
+                damage_union(&clip, &have, nx, ny, nw, nh); /* new position */
             if (n->has_last_paint)
-                damage_union(&clip,
-                             &have,
-                             (int)n->last_paint_rect.x,
-                             (int)n->last_paint_rect.y,
-                             (int)n->last_paint_rect.w,
-                             (int)n->last_paint_rect.h); /* old position (erase trail) */
+            {
+                int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+                clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+                if (ow > 0 && oh > 0)
+                    damage_union(&clip, &have, ox, oy, ow, oh); /* old position (erase trail) */
+            }
         }
         if (trackable && have)
         {

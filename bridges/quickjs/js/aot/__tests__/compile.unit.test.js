@@ -730,3 +730,37 @@ describe('AOT nested Text spans', () => {
     expect(c).toContain('snprintf(p.text');
   });
 });
+
+describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
+  it('rewrites a static FlatList to a ScrollView with rows unrolled + renderItem style applied', () => {
+    const c = gen(`${PRE}
+      import { FlatList } from 'embedded-react';
+      const ITEMS = [{ id: 1, name: 'A' }, { id: 2, name: 'B' }];
+      export function App() {
+        return (<FlatList style={{ flex: 1 }} data={ITEMS} keyExtractor={(it) => it.id} renderItem={({ item }) => (<View style={{ padding: 8 }}><Text>{item.name}</Text></View>)} />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_SCROLL_VIEW)'); // FlatList IS a ScrollView in the engine
+    expect(c).toContain('"A"');
+    expect(c).toContain('"B"');
+    expect(c).toContain('p.padding = 8;'); // renderItem's per-row style
+  });
+
+  it('rewrites a state-list FlatList to a dynamic list inside a ScrollView (index param ok)', () => {
+    const c = gen(`${PRE}
+      import { FlatList } from 'embedded-react';
+      export function App() {
+        const [items, setItems] = useState([{ id: 1, label: 'Row' }]);
+        return (<FlatList data={items} renderItem={({ item, index }) => (<View><Text>{item.label}</Text></View>)} />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_SCROLL_VIEW)');
+    expect(c).toContain('s_items'); // the list-state pool array
+  });
+
+  it('throws when renderItem is not a ({ item }) destructuring function', () => {
+    expect(() =>
+      gen(`${PRE}
+        import { FlatList } from 'embedded-react';
+        export function App() { const d = []; return (<FlatList data={d} renderItem={(x) => <Text>x</Text>} />); }`),
+    ).toThrow(/must destructure/);
+  });
+});
