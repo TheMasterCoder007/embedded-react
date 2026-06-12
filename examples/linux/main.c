@@ -44,7 +44,25 @@
  */
 int main(int argc, char** argv)
 {
-    const ErHostConfig cfg = {"embedded-react — desktop demo", SCREEN_W, SCREEN_H};
+    /* Window/framebuffer size. Defaults to 800×600, but the Flow A↔B parity harness overrides it via
+       ER_W/ER_H so the demo's responsive layout (driven by the injected `screen` size) matches the size
+       the AOT host was built for — letting both render paths be compared at the same board dimensions.
+       NOTE: SDL_getenv returns a pointer into a SHARED static buffer on Windows, so each value must be
+       fully consumed (SDL_atoi) before the next SDL_getenv call clobbers it. */
+    int screen_w = SCREEN_W;
+    int screen_h = SCREEN_H;
+    const char* env = SDL_getenv("ER_W");
+    if (env && env[0] && SDL_atoi(env) > 0)
+    {
+        screen_w = SDL_atoi(env);
+    }
+    env = SDL_getenv("ER_H");
+    if (env && env[0] && SDL_atoi(env) > 0)
+    {
+        screen_h = SDL_atoi(env);
+    }
+
+    const ErHostConfig cfg = {"embedded-react — desktop demo", screen_w, screen_h};
     ErHost host;
     if (!er_host_start(&cfg, &host))
     {
@@ -63,7 +81,23 @@ int main(int argc, char** argv)
         er_host_load_config(&host);
     }
 
-    er_host_run(&host);
+    /* ER_SHOT=<path.bmp>: headless one-frame render for the Flow A↔B parity harness (vs. the interactive
+       loop). Copy the value out of SDL_getenv's SHARED static buffer first — er_host_screenshot reads
+       ER_TAPS internally, which would otherwise clobber this pointer (Windows). */
+    char shot[512] = {0};
+    const char* shot_env = SDL_getenv("ER_SHOT");
+    if (shot_env)
+    {
+        SDL_strlcpy(shot, shot_env, sizeof shot);
+    }
+    if (shot[0])
+    {
+        er_host_screenshot(&host, shot);
+    }
+    else
+    {
+        er_host_run(&host);
+    }
     er_host_shutdown(&host);
     return 0;
 }

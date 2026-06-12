@@ -128,6 +128,13 @@ export function buildProps(type, props) {
   for (const k of PASSTHROUGH) {
     if (props[k] !== undefined) flat[k] = props[k];
   }
+  // <Svg> takes width/height as DIRECT props (the react-native-svg convention) — the engine sizes the
+  // vector node from them. Fold them into the resolved style (an explicit style width/height still wins)
+  // so Flow A matches the Flow B AOT, which reads svg.props.width/height directly (compile.mjs emitSvgBox).
+  if (type === 'Svg') {
+    if (flat.width === undefined && props.width !== undefined) flat.width = props.width;
+    if (flat.height === undefined && props.height !== undefined) flat.height = props.height;
+  }
   // <Image source={...}> resolves to the engine asset name unless imageName was set explicitly.
   if (flat.imageName === undefined && props.source != null) {
     const name = resolveImageSource(props.source);

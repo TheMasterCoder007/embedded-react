@@ -39,6 +39,21 @@ describe('buildProps', () => {
     expect(buildProps('View', { style: {}, foo: 'bar', onPress: () => {} })).toEqual({});
   });
 
+  it('honors <Svg width/height> as direct props (react-native-svg convention, Flow A↔B parity)', () => {
+    expect(buildProps('Svg', { width: 180, height: 180 })).toEqual({ width: 180, height: 180 });
+  });
+
+  it('does not treat width/height as direct props on a non-Svg element', () => {
+    expect(buildProps('View', { width: 180, height: 180 })).toEqual({});
+  });
+
+  it('an explicit style width/height wins over the <Svg> direct prop', () => {
+    expect(buildProps('Svg', { width: 180, height: 180, style: { width: 200 } })).toEqual({
+      width: 200,
+      height: 180,
+    });
+  });
+
   it('resolves an <Image source> string to imageName', () => {
     expect(buildProps('Image', { style: {}, source: 'wx_sun' })).toEqual({ imageName: 'wx_sun' });
   });

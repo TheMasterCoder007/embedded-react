@@ -338,6 +338,57 @@ void er_host_run(ErHost* host)
         /* step until quit */
     }
 }
+/** Renders a fixed number of frames (pump → commit → present → tick), the headless settle used below. */
+static void er_host_settle(int frames)
+{
+    for (int i = 0; i < frames; i++)
+    {
+        er_runtime_pump();
+        er_commit();
+        er_sdl_present();
+        embedded_renderer_tick(16);
+    }
+}
+
+void er_host_screenshot(ErHost* host, const char* path)
+{
+    er_host_settle(16); /* let React mount + the scene render + any intro animation settle */
+
+    /* Optional taps (physical pixels, parity with linux-aot's ER_AOT_TAPS): tap each + re-settle. */
+    const char* p = SDL_getenv("ER_TAPS");
+    while (p && *p)
+    {
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+        const int tx = SDL_atoi(p);
+        const char* c = SDL_strchr(p, ',');
+        const int ty = c ? SDL_atoi(c + 1) : 0;
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
+        embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+        er_host_settle(8);
+        while (*p && *p != ' ')
+            p++;
+    }
+
+    er_commit();
+    er_sdl_present();
+    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, host->phys_w, host->phys_h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (surf && SDL_RenderReadPixels(host->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch) == 0)
+    {
+        SDL_SaveBMP(surf, path);
+        SDL_Log("wrote screenshot %s", path);
+    }
+    else
+    {
+        SDL_Log("screenshot failed: %s", SDL_GetError());
+    }
+    if (surf)
+    {
+        SDL_FreeSurface(surf);
+    }
+}
 
 void er_host_shutdown(ErHost* host)
 {

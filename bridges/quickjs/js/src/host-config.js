@@ -6,6 +6,20 @@ import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
 import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
 import { flattenSvg } from './embedded-react/svg-ops.js';
+import { splitAnimatedStyle } from './embedded-react/split-style.js';
+
+/**
+ * Applies a node's resolved props, binding any Animated.Value found in its `style` to the matching
+ * node prop (native driver). This makes animated styles work on ANY host element — `<Pressable
+ * style={{ transform: [{ scale: v }] }}>` binds without an Animated.* wrapper — which is what the
+ * Flow B AOT compiler does too, so the two render paths stay in parity. An Animated.* wrapper has
+ * already stripped its bindings into a ref, so splitAnimatedStyle finds none here (no double bind).
+ */
+function applyProps(type, handle, props) {
+  const { staticStyle, bindings } = splitAnimatedStyle(props.style);
+  NativeUI.setProps(handle, buildProps(type, bindings.length ? { ...props, style: staticStyle } : props));
+  for (const b of bindings) b.value.__bind(handle, b.prop);
+}
 
 /**
  * Applies inline-styled text spans for a <Text> node (no-op for other types). buildTextSpans returns
@@ -75,7 +89,7 @@ export const hostConfig = {
   // --- Creation ---
   createInstance(type, props) {
     const handle = NativeUI.createNode(type);
-    NativeUI.setProps(handle, buildProps(type, props));
+    applyProps(type, handle, props);
     applyTextSpans(type, handle, props);
     applyVectorOps(type, handle, props);
     applyEvents(handle, null, props);
@@ -132,7 +146,7 @@ export const hostConfig = {
     return true;
   },
   commitUpdate(instance, _payload, type, prevProps, nextProps) {
-    NativeUI.setProps(instance, buildProps(type, nextProps));
+    applyProps(type, instance, nextProps);
     applyTextSpans(type, instance, nextProps);
     applyVectorOps(type, instance, nextProps);
     applyEvents(instance, prevProps, nextProps);

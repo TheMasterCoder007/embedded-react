@@ -151,6 +151,15 @@ bool er_host_step(ErHost* host);
 void er_host_run(ErHost* host);
 
 /**
+ * @brief Headless render: settles a few frames, optionally injects taps (ER_TAPS="x,y x,y …"), then saves
+ *        the framebuffer to a BMP. Used by the Flow A↔B parity harness to compare the two render paths.
+ *
+ * @param[in] host  Started host with an app loaded.
+ * @param[in] path  Output BMP path.
+ */
+void er_host_screenshot(ErHost* host, const char* path);
+
+/**
  * @brief Tears down the QuickJS context/runtime, the SDL backend, the renderer, and the window.
  *
  * @param[in] host  Host to shut down (safe to call after a partial start).

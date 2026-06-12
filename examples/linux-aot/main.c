@@ -19,8 +19,20 @@
 
 #include <SDL2/SDL.h>
 
-#define SCREEN_W 800
-#define SCREEN_H 600
+#define SCREEN_W_DEFAULT 800
+#define SCREEN_H_DEFAULT 600
+
+/** @brief Reads an integer env var, returning @p fallback when unset/empty/non-positive. */
+static int env_int(const char* name, int fallback)
+{
+    const char* v = SDL_getenv(name);
+    if (!v || !v[0])
+    {
+        return fallback;
+    }
+    const int n = SDL_atoi(v);
+    return n > 0 ? n : fallback;
+}
 
 /** @brief Scales a logical SDL coordinate to physical framebuffer pixels. */
 static int to_px(int logical, float scale)
@@ -41,6 +53,12 @@ int main(void)
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
+
+    /* Framebuffer size. Defaults to 800×600, but the parity harness (and board-size tests) override it via
+       ER_AOT_SCREEN_W/H so the window matches the size the demo's responsive layout was COMPILED for (the
+       same vars seed screen.width/height in aot/compile.mjs). */
+    const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
+    const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
 
     SDL_Window* window = SDL_CreateWindow("embedded-react — desktop (Flow B / AOT)",
                                           SDL_WINDOWPOS_CENTERED,
