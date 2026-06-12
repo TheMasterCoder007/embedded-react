@@ -1780,10 +1780,10 @@ function emitRefBind(v, openingElement, out, env) {
 }
 
 /** Compiles a value-callback (e.g. Switch onValueChange) — binds its first param to `valueCode`, not an event. */
-function compileValueHandler(fnNode, valueCode, env, state, out) {
+function compileValueHandler(fnNode, valueCode, env, state, out, cType = 'int') {
   const param = fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
   const locals = new Map(env.locals);
-  if (param) locals.set(param, { code: valueCode, cType: 'int' });
+  if (param) locals.set(param, { code: valueCode, cType });
   const ctx = { stateChanged: false, animIdx: 0, out };
   const body = fnNode.body;
   const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
@@ -1852,6 +1852,78 @@ function emitSwitch(el, scope, out, env, state) {
     const toggled = `(!(${emitExpr(valueNode, env).code}))`; // the engine toggles on press → param is !value
     out.handlers.push({ name: handlerName, body: compileValueHandler(onChangeFn, toggled, env, state, out) });
     out.build.push(`    er_event_set(${v}, ER_EVENT_PRESS, ${handlerName}, NULL);`);
+  }
+  emitRefBind(v, el.openingElement, out, env);
+  return v;
+}
+
+/**
+ * <TextInput value={text} onChangeText={(t) => setText(t)} placeholder="…" placeholderTextColor=… style=… />
+ * → ER_NODE_TEXT_INPUT. The engine auto-focuses on tap (hit_test) and edits its own buffer, firing
+ * ER_EVENT_CHANGE_TEXT with the new text — bound to the handler's param via `data->changed_text` (a string).
+ * `value` drives the text buffer (er_node_set_props → er_text_input_set_text; state → dynamic, re-synced in
+ * app_update; set_text is a no-op when unchanged, so a controlled input is safe). Desktop types via the
+ * keyboard; the touch-only CYD needs an on-screen keyboard to enter text (deferred follow-on).
+ */
+function emitTextInput(el, scope, out, env, state) {
+  const v = `n${out.n++}`;
+  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+  let valueNode = null;
+  let onChangeFn = null;
+  let placeholder = null;
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw aotError('AOT: spread props on <TextInput> are not supported');
+    const name = attr.name.name;
+    if (name === 'style' || name === 'ref' || name === 'key') continue;
+    const node = attrExpr(attr);
+    if (name === 'value' || name === 'defaultValue') valueNode = node;
+    else if (name === 'onChangeText') onChangeFn = node;
+    else if (name === 'placeholder') placeholder = String(evalStatic(node, scope));
+    else if (name === 'placeholderTextColor') staticAssigns.push({ field: 'placeholder_color', expr: colorLiteral(String(evalStatic(node, scope))) });
+    else if (name === 'cursorColor') staticAssigns.push({ field: 'cursor_color', expr: colorLiteral(String(evalStatic(node, scope))) });
+    else if (name === 'editable') {
+      try {
+        staticAssigns.push({ field: 'editable', expr: evalStatic(node, scope) ? '1' : '0' });
+      } catch {
+        dynAssigns.push({ field: 'editable', code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)` });
+      }
+    } else if (['autoFocus', 'keyboardType', 'secureTextEntry', 'maxLength', 'multiline', 'autoCapitalize', 'autoCorrect', 'returnKeyType', 'onSubmitEditing', 'onFocus', 'onBlur'].includes(name)) {
+      /* accepted but not yet lowered (no on-screen keyboard / submit wiring in the AOT path) */
+    } else throw aotError(`AOT: <TextInput> prop "${name}" is not supported`, 'supported props: value, onChangeText, placeholder, placeholderTextColor, cursorColor, editable, style.');
+  }
+
+  // value → the input's text buffer (er_node_set_props → er_text_input_set_text): static literal, or a
+  // state-driven value re-synced each app_update.
+  let text = null;
+  if (valueNode) {
+    try {
+      const cv = evalStatic(valueNode, scope);
+      text = { dynamic: false, format: (cv == null ? '' : String(cv)).replace(/%/g, '%%'), args: [] };
+    } catch {
+      const e = emitExpr(valueNode, env);
+      text = { dynamic: true, format: printfSpec(e.cType), args: [e.code] };
+    }
+  }
+
+  const isDynamic = dynAssigns.length > 0 || (text && text.dynamic);
+  out.build.push(`    ${v} = er_node_create(ER_NODE_TEXT_INPUT);`);
+  if (isDynamic) {
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({ v, styleAssigns: staticAssigns, text, dynAssigns, placeholder });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    if (placeholder != null) out.build.push(`    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(placeholder)});`);
+    if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
+    out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+
+  if (onChangeFn) {
+    if (!isFn(onChangeFn)) throw aotError('AOT: onChangeText must be an inline function', 'onChangeText={(t) => setText(t)}');
+    const handlerName = `er_handler_${out.handlers.length}`;
+    out.handlers.push({ name: handlerName, body: compileValueHandler(onChangeFn, 'data->changed_text', env, state, out, 'string') });
+    out.build.push(`    er_event_set(${v}, ER_EVENT_CHANGE_TEXT, ${handlerName}, NULL);`);
   }
   emitRefBind(v, el.openingElement, out, env);
   return v;
@@ -2017,6 +2089,7 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
+  if (tag === 'TextInput') return emitTextInput(el, scope, out, env, state);
   if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
   if (tag === 'Modal') return emitModal(el, scope, out, env, state);
   if (tag === 'FlatList') return emitFlatList(el, scope, out, env, state, opts);
@@ -2223,6 +2296,7 @@ const updateBlock = (() => {
     lines.push(`    er_props_default(&p);`);
     for (const a of u.styleAssigns) lines.push(`    p.${a.field} = ${a.expr};`);
     for (const a of u.dynAssigns) lines.push(`    p.${a.field} = ${a.code};`);
+    if (u.placeholder != null) lines.push(`    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(u.placeholder)});`);
     if (u.text) {
       if (u.text.args.length) lines.push(`    snprintf(p.text, sizeof(p.text), ${cstr(u.text.format)}, ${u.text.args.join(', ')});`);
       else lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(u.text.format.replace(/%%/g, '%'))});`);

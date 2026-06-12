@@ -142,6 +142,24 @@ int main(void)
             }
         }
 
+        /* ER_AOT_TYPE=<text>: type each character into the focused TextInput (the click above focuses it),
+           committing between keys so onChangeText → state → app_update runs. ASCII only (one byte/char). */
+        {
+            const char* type_str = SDL_getenv("ER_AOT_TYPE");
+            if (type_str && type_str[0])
+            {
+                for (const char* tp = type_str; *tp; tp++)
+                {
+                    char ch[2] = {*tp, '\0'};
+                    embedded_renderer_key(0, ch);
+                    er_commit();
+                    embedded_renderer_tick(16);
+                    er_app_tick(16);
+                }
+                SDL_Log("typed \"%s\"", type_str);
+            }
+        }
+
         /* ER_AOT_HOLD=<ms>: press at the click point and HOLD it, ticking the engine so a press-driven
            animation can settle, then screenshot while still held (no release). Lets a headless run
            capture an in-progress animation — e.g. a button scaled down by an onPressIn spring. */

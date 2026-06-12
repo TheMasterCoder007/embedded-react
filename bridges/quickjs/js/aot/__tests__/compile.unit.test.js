@@ -946,3 +946,49 @@ import { View, Text, Pressable } from 'embedded-react';
     expect(c).toContain('er_event_set(');
   });
 });
+
+describe('AOT TextInput', () => {
+  const T = `import { useState } from 'react';
+import { View, Text, TextInput } from 'embedded-react';
+`;
+
+  it('compiles a controlled TextInput (value + onChangeText) to ER_NODE_TEXT_INPUT + CHANGE_TEXT', () => {
+    const c = gen(`${T}
+      export function App() {
+        const [name, setName] = useState('');
+        return (<TextInput value={name} onChangeText={(t) => setName(t)} placeholder="Name" placeholderTextColor="#888" />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_TEXT_INPUT)');
+    expect(c).toContain('ER_EVENT_CHANGE_TEXT');
+    // onChangeText param binds to the new text; setName(t) → snprintf from data->changed_text
+    expect(c).toContain('snprintf(s_state.name, sizeof(s_state.name), "%s", data->changed_text);');
+    // value drives the buffer (synced in app_update), placeholder + color applied
+    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", s_state.name);');
+    expect(c).toContain('snprintf(p.placeholder, sizeof(p.placeholder), "%s", "Name");');
+    expect(c).toContain('p.placeholder_color = 0xFF888888u;');
+  });
+
+  it('compiles a static-value TextInput inline (no app_update)', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TextInput value="hi" placeholder="type" editable={false} />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_TEXT_INPUT)');
+    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", "hi");');
+    expect(c).toContain('p.editable = 0;');
+  });
+
+  it('rejects a non-function onChangeText', () => {
+    expect(() =>
+      gen(`${T}
+        export function App() { const [n, setN] = useState(''); return (<TextInput value={n} onChangeText={n} />); }`),
+    ).toThrow(/onChangeText must be an inline function/);
+  });
+
+  it('rejects an unsupported TextInput prop', () => {
+    expect(() =>
+      gen(`${T}
+        export function App() { return (<TextInput selectionColor="#fff" />); }`),
+    ).toThrow(/not supported/);
+  });
+});
