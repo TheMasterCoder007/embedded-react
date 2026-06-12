@@ -670,3 +670,34 @@ describe('AOT Modal', () => {
     expect(c).toContain('p.top = 20;');
   });
 });
+
+describe('AOT dynamic enum styles', () => {
+  it('lowers a state-driven flexDirection to an ER_FLEX_* ternary (re-layouts on change)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [row, setRow] = useState(false);
+        return (<View style={{ flexDirection: row ? 'row' : 'column' }}><Pressable onPress={() => setRow(!row)}><Text>x</Text></Pressable></View>);
+      }`);
+    expect(c).toContain('p.flex_direction = ((s_state.row) ? ER_FLEX_ROW : ER_FLEX_COL);');
+  });
+
+  it('lowers state-driven alignItems and justifyContent', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [c2, setC2] = useState(true);
+        return (<View style={{ alignItems: c2 ? 'center' : 'flex-start', justifyContent: c2 ? 'center' : 'flex-end' }}><Text>x</Text></View>);
+      }`);
+    expect(c).toContain('p.align_items = ((s_state.c2) ? ER_ALIGN_CENTER : ER_ALIGN_FLEX_START);');
+    expect(c).toContain('p.justify_content = ((s_state.c2) ? ER_JUSTIFY_CENTER : ER_JUSTIFY_FLEX_END);');
+  });
+
+  it('throws on an unknown enum value in a dynamic enum style', () => {
+    expect(() =>
+      gen(`${PRE}
+        export function App() {
+          const [r, setR] = useState(false);
+          return (<View style={{ flexDirection: r ? 'sideways' : 'row' }}><Text>x</Text></View>);
+        }`),
+    ).toThrow(/unsupported enum value "sideways"/);
+  });
+});

@@ -623,12 +623,35 @@ function emitColorExpr(node, env) {
   throw new Error('AOT: a dynamic color must be a color string literal or a ternary of them');
 }
 
+/** Lowers a dynamic enum-style expression (e.g. `flexDirection: row ? 'row' : 'column'`) to its ER_* constant
+ *  (or a C ternary of them), looking values up in the style key's enum `table`. */
+function emitEnumExpr(node, table, env) {
+  if (node.type === 'StringLiteral') {
+    const c = table[node.value];
+    if (!c) throw aotError(`AOT: unsupported enum value "${node.value}"`, `one of: ${Object.keys(table).join(', ')}`);
+    return c;
+  }
+  if (node.type === 'ConditionalExpression') {
+    const t = emitExpr(node.test, env).code;
+    return `((${t}) ? ${emitEnumExpr(node.consequent, table, env)} : ${emitEnumExpr(node.alternate, table, env)})`;
+  }
+  // A statically resolvable enum (a const string) folds to its constant.
+  try {
+    const s = evalStatic(node, env.consts ?? {});
+    if (typeof s === 'string' && table[s]) return table[s];
+  } catch {
+    /* not static — fall through */
+  }
+  throw aotError('AOT: a state-driven enum style must be a string literal or a ternary of them', "e.g. flexDirection: wide ? 'row' : 'column'");
+}
+
 /** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
 function lowerDynamicStyleValue(key, valueNode, env) {
   const meta = DYN_FIELDS[key];
-  if (!meta) throw aotError(`AOT: a state-driven value for style "${key}" is not supported (static only)`, `only color/opacity/size style props can be state-driven today (e.g. backgroundColor, opacity, width). Make "${key}" a static value, or drive the change another way.`);
+  if (!meta) throw aotError(`AOT: a state-driven value for style "${key}" is not supported (static only)`, `state-driven styles supported: colors, opacity, sizes/margins/padding, and the layout enums (flexDirection, alignItems, alignSelf, justifyContent, position). Make "${key}" static, or drive the change another way.`);
   if (meta.kind === 'color') return [{ field: meta.field, code: emitColorExpr(valueNode, env) }];
   if (meta.kind === 'opacity') return [{ field: meta.field, code: `(uint8_t)((${emitExpr(valueNode, env).code}) * 255.0f)` }];
+  if (meta.kind === 'enum') return [{ field: meta.field, code: emitEnumExpr(valueNode, meta.table, env) }];
   return [{ field: meta.field, code: `(int16_t)(${emitExpr(valueNode, env).code})` }]; /* num */
 }
 

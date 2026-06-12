@@ -212,8 +212,19 @@ const NUM_FIELDS = {
   fontSize: 'font_size', lineHeight: 'line_height', letterSpacing: 'letter_spacing',
 };
 
+// Enum style keys that can be state-driven: the value (a string literal or a ternary of them) lowers to the
+// matching ER_* enum constant via its table. Changing one in app_update re-runs layout (props_hash covers it).
+const ENUM_FIELDS = {
+  flexDirection: { field: 'flex_direction', table: FLEX_DIRECTION },
+  alignItems: { field: 'align_items', table: ALIGN },
+  alignSelf: { field: 'align_self', table: ALIGN },
+  justifyContent: { field: 'justify_content', table: JUSTIFY },
+  position: { field: 'position', table: POSITION },
+};
+
 export const DYN_FIELDS = {
   ...Object.fromEntries(Object.entries(NUM_FIELDS).map(([k, f]) => [k, { field: f, kind: 'num' }])),
+  ...Object.fromEntries(Object.entries(ENUM_FIELDS).map(([k, m]) => [k, { field: m.field, kind: 'enum', table: m.table }])),
   backgroundColor: { field: 'background_color', kind: 'color' },
   color: { field: 'color', kind: 'color' },
   borderColor: { field: 'border_color', kind: 'color' },
