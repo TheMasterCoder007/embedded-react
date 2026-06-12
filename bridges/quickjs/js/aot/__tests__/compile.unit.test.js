@@ -363,6 +363,138 @@ describe('AOT baseline (regression)', () => {
   });
 });
 
+describe('AOT animation completeness (Phase 11)', () => {
+  const A = `import { View, Animated, Easing, useAnimatedValue } from 'embedded-react';`;
+  // Wraps a handler body in an App with two animated values a and b, on an onPress View.
+  const app = (body, style = '') =>
+    gen(`${A}
+      export function App() {
+        const a = useAnimatedValue(0);
+        const b = useAnimatedValue(0);
+        return (<View onPress={() => { ${body} }} ${style ? `style={${style}}` : ''}><Text>x</Text></View>);
+      }`);
+
+  it('chains Animated.sequence steps via on_complete', () => {
+    const c = app(`Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 300 }),
+      Animated.timing(b, { toValue: 1, duration: 200 }),
+    ]).start();`);
+    expect(c).toContain('er_anim_value_animate(s_av_a,');
+    expect(c).toContain('er_anim_value_animate(s_av_b,');
+    expect(c).toMatch(/\.on_complete = er_seqcb_/); // step 0 chains to step 1
+    expect(c).toMatch(/static void er_seqcb_\w+\(bool finished/); // step 1 emitted as a completion callback
+  });
+
+  it('sequences the SAME value (out-and-back) without the steps cancelling each other', () => {
+    const c = app(`Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 300 }),
+      Animated.timing(a, { toValue: 0, duration: 300 }),
+    ]).start();`);
+    // Both steps drive s_av_a; the second runs in an on_complete callback, NOT synchronously (which would
+    // cancel the first via cancel_value_anim). Two animate calls on the same value must survive.
+    const calls = (c.match(/er_anim_value_animate\(s_av_a,/g) || []).length;
+    expect(calls).toBe(2);
+    expect(c).toMatch(/\.on_complete = er_seqcb_/);
+  });
+
+  it('Animated.delay inside a sequence folds into the next step delay_ms', () => {
+    const c = app(`Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 300 }),
+      Animated.delay(100),
+      Animated.timing(b, { toValue: 1, duration: 200 }),
+    ]).start();`);
+    expect(c).toContain('.delay_ms = 100;'); // b starts 100ms after a completes
+  });
+
+  it('Animated.parallel starts every entry together (no offset)', () => {
+    const c = app(`Animated.parallel([
+      Animated.timing(a, { toValue: 1, duration: 300 }),
+      Animated.timing(b, { toValue: 1, duration: 200 }),
+    ]).start();`);
+    expect(c).not.toContain('delay_ms'); // both start at 0
+    expect(c).toContain('er_anim_value_animate(s_av_a,');
+    expect(c).toContain('er_anim_value_animate(s_av_b,');
+  });
+
+  it('Animated.stagger spaces entries by i * stagger_ms', () => {
+    const c = app(`Animated.stagger(80, [
+      Animated.timing(a, { toValue: 1, duration: 200 }),
+      Animated.timing(b, { toValue: 1, duration: 200 }),
+    ]).start();`);
+    expect(c).toContain('cfg1.delay_ms = 80;');
+  });
+
+  it('Animated.loop around a single timing sets cfg.loop', () => {
+    const c = app(`Animated.loop(Animated.timing(a, { toValue: 360, duration: 1000, easing: Easing.linear })).start();`);
+    expect(c).toContain('cfg0.loop = true;');
+    expect(c).toContain('ER_EASE_LINEAR');
+  });
+
+  it('Animated.decay lowers to ER_ANIM_DECAY with velocity + deceleration', () => {
+    const c = app(`Animated.decay(b, { velocity: 0.5, deceleration: 0.997 }).start();`);
+    expect(c).toContain('ER_ANIM_DECAY');
+    expect(c).toContain('cfg0.velocity = 0.5f;');
+    expect(c).toContain('cfg0.deceleration = 0.997f;');
+  });
+
+  it('maps Easing.inOut(Easing.quad) and Easing.bezier(...)', () => {
+    const c = app(`Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 100, easing: Easing.inOut(Easing.quad) }),
+      Animated.timing(b, { toValue: 1, duration: 100, easing: Easing.bezier(0.2, 0, 0.4, 1) }),
+    ]).start();`);
+    expect(c).toContain('ER_EASE_QUAD_IN_OUT');
+    expect(c).toContain('ER_EASE_BEZIER');
+    expect(c).toContain('.bezier_x1 = 0.2f;');
+    expect(c).toContain('.bezier_y2 = 1.0f;');
+  });
+
+  it('binds interpolate() on a style prop and a transform via er_anim_value_bind_interpolated', () => {
+    const c = app(
+      `Animated.timing(a, { toValue: 1, duration: 200 }).start();`,
+      `{ opacity: a.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1], extrapolate: 'clamp' }), transform: [{ translateX: b.interpolate({ inputRange: [0, 1], outputRange: [0, 100] }) }] }`,
+    );
+    expect(c).toContain('ERInterpolation');
+    expect(c).toContain('er_anim_value_bind_interpolated(s_av_a,');
+    expect(c).toContain('ER_PROP_OPACITY');
+    expect(c).toContain('ER_EXTRAPOLATE_CLAMP');
+    expect(c).toContain('er_anim_value_bind_interpolated(s_av_b,');
+    expect(c).toContain('ER_PROP_TRANSLATE_X');
+  });
+
+  it('supports a spring inside a sequence (chained, no fixed duration needed)', () => {
+    const c = app(`Animated.sequence([
+      Animated.spring(a, { toValue: 1 }),
+      Animated.timing(b, { toValue: 1, duration: 200 }),
+    ]).start();`);
+    expect(c).toContain('ER_ANIM_SPRING');
+    expect(c).toContain('er_anim_value_animate(s_av_b,');
+    expect(c).toMatch(/\.on_complete = er_seqcb_/);
+  });
+
+  it('rejects the same value driven twice in a parallel (they would cancel)', () => {
+    expect(() => app(`Animated.parallel([
+      Animated.timing(a, { toValue: 1, duration: 100 }),
+      Animated.timing(a, { toValue: 0, duration: 100 }),
+    ]).start();`)).toThrow(/same animated value/);
+  });
+
+  it('rejects Animated.loop around a multi-step sequence', () => {
+    expect(() => app(`Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 100 }),
+      Animated.timing(b, { toValue: 1, duration: 100 }),
+    ])).start();`)).toThrow(/loop currently wraps a single/);
+  });
+
+  it('rejects mismatched interpolate ranges', () => {
+    expect(() =>
+      app(
+        `Animated.timing(a, { toValue: 1, duration: 200 }).start();`,
+        `{ opacity: a.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.5, 1] }) }`,
+      ),
+    ).toThrow(/same length/);
+  });
+});
+
 describe('AOT responsive layout', () => {
   // A percentage dimension lowers to the engine's *_pct field (% of parent), not the absolute pixel field.
   it('lowers percentage width/height to the *_pct fields', () => {

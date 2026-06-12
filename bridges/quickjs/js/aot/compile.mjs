@@ -589,13 +589,72 @@ function floatLit(n) {
   return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
 }
 
-/** Maps `Easing.<x>` to an ER_EASE_* constant (a flat subset; defaults to ease-in-out). */
-function mapEasing(node) {
-  if (node?.type === 'MemberExpression' && node.object.name === 'Easing') {
-    const m = { linear: 'ER_EASE_LINEAR', ease: 'ER_EASE_EASE', quad: 'ER_EASE_QUAD_IN_OUT', cubic: 'ER_EASE_CUBIC_IN_OUT', bounce: 'ER_EASE_BOUNCE_OUT', elastic: 'ER_EASE_ELASTIC_OUT' };
-    return m[node.property.name] || 'ER_EASE_EASE_IN_OUT';
+/** The polynomial family of an `Easing.quad` / `Easing.cubic` node, for in/out/inOut composition. */
+function easingFamily(node) {
+  if (node?.type === 'MemberExpression' && node.object?.name === 'Easing') {
+    if (node.property.name === 'quad') return 'QUAD';
+    if (node.property.name === 'cubic') return 'CUBIC';
   }
-  return 'ER_EASE_EASE_IN_OUT';
+  return null;
+}
+
+/** Maps an `Easing.*` node → { ease: 'ER_EASE_*', bezier: [x1,y1,x2,y2] | null }. Handles the bare curves
+ *  (linear/ease/quad/cubic/bounce/elastic), the in/out/inOut wrappers around quad/cubic, and
+ *  Easing.bezier(x1,y1,x2,y2). No easing → ER_EASE_EASE_IN_OUT (RN's timing default); unknown → same. */
+function easingInfo(node, env) {
+  const FALLBACK = { ease: 'ER_EASE_EASE_IN_OUT', bezier: null };
+  if (!node) return FALLBACK;
+  // Bare member: Easing.linear / Easing.ease / Easing.quad (== quad-in) / ...
+  if (node.type === 'MemberExpression' && node.object?.name === 'Easing') {
+    const m = { linear: 'ER_EASE_LINEAR', ease: 'ER_EASE_EASE', quad: 'ER_EASE_QUAD_IN', cubic: 'ER_EASE_CUBIC_IN', bounce: 'ER_EASE_BOUNCE_OUT', elastic: 'ER_EASE_ELASTIC_OUT' };
+    return { ease: m[node.property.name] || 'ER_EASE_EASE_IN_OUT', bezier: null };
+  }
+  // Call: Easing.bezier(...), Easing.elastic(n), Easing.in/out/inOut(inner)
+  if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.object?.name === 'Easing') {
+    const fn = node.callee.property.name;
+    if (fn === 'bezier') {
+      const cps = node.arguments.slice(0, 4).map((a) => Number(evalStaticOr(a, env, 0)));
+      return cps.length === 4 ? { ease: 'ER_EASE_BEZIER', bezier: cps } : FALLBACK;
+    }
+    if (fn === 'elastic') return { ease: 'ER_EASE_ELASTIC_OUT', bezier: null };
+    if (fn === 'in' || fn === 'out' || fn === 'inOut') {
+      const fam = easingFamily(node.arguments[0]);
+      const dir = fn === 'in' ? 'IN' : fn === 'out' ? 'OUT' : 'IN_OUT';
+      return fam ? { ease: `ER_EASE_${fam}_${dir}`, bezier: null } : FALLBACK;
+    }
+  }
+  return FALLBACK;
+}
+
+/** Pushes `cfg.easing = …;` (and bezier control points for Easing.bezier) onto a timing config's C lines. */
+function pushEasing(lines, c, easingNode, env) {
+  const { ease, bezier } = easingInfo(easingNode, env);
+  lines.push(`        ${c}.easing = ${ease};`);
+  if (bezier) {
+    lines.push(`        ${c}.bezier_x1 = ${floatLit(bezier[0])}; ${c}.bezier_y1 = ${floatLit(bezier[1])};`);
+    lines.push(`        ${c}.bezier_x2 = ${floatLit(bezier[2])}; ${c}.bezier_y2 = ${floatLit(bezier[3])};`);
+  }
+}
+
+/** Parses a `.interpolate({ inputRange, outputRange, extrapolate })` config object → a static
+ *  { input, output, exLeft, exRight } descriptor (ranges must be static, equal-length, 2..8 points). */
+function parseInterp(cfgNode, env) {
+  if (cfgNode?.type !== 'ObjectExpression') throw aotError('AOT: .interpolate() needs a config object literal { inputRange, outputRange }');
+  const get = (k) => cfgNode.properties.find((p) => (p.key.name ?? p.key.value) === k)?.value;
+  const arr = (node, name) => {
+    if (node?.type !== 'ArrayExpression') throw aotError(`AOT: .interpolate() ${name} must be an array literal`);
+    return node.elements.map((e) => Number(evalStatic(e, env.consts ?? {})));
+  };
+  const input = arr(get('inputRange'), 'inputRange');
+  const output = arr(get('outputRange'), 'outputRange');
+  if (input.length < 2 || input.length !== output.length) throw aotError('AOT: .interpolate() inputRange and outputRange must be the same length (>= 2)');
+  if (input.length > 8) throw aotError('AOT: .interpolate() supports up to 8 breakpoints (ER_INTERPOLATE_MAX_POINTS)');
+  const ex = (node) => {
+    const v = node ? String(evalStaticOr(node, env, 'extend')) : 'extend';
+    return v === 'clamp' ? 'ER_EXTRAPOLATE_CLAMP' : v === 'identity' ? 'ER_EXTRAPOLATE_IDENTITY' : 'ER_EXTRAPOLATE_EXTEND';
+  };
+  const both = get('extrapolate'); // RN: `extrapolate` sets both ends; extrapolateLeft/Right override.
+  return { input, output, exLeft: ex(get('extrapolateLeft') ?? both), exRight: ex(get('extrapolateRight') ?? both) };
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -665,8 +724,15 @@ function lowerDynamicStyleValue(key, valueNode, env) {
  */
 function collectStyleAssigns(openingElement, scope, env) {
   const fields = new Map(); // ERProps field -> { dynamic: bool, code: string }
-  const binds = []; // [{ cVar, prop }] — animated values bound to node properties (native driver)
+  const binds = []; // [{ cVar, prop, interp? }] — animated values bound to node properties (native driver)
   const animRef = (node) => (node?.type === 'Identifier' && env.anims?.has(node.name) ? env.anims.get(node.name).cVar : null);
+  // `<animValue>.interpolate({ inputRange, outputRange, extrapolate })` → { cVar, interp } for a mapped bind.
+  const animInterpRef = (node) => {
+    if (node?.type === 'CallExpression' && node.callee.type === 'MemberExpression' && !node.callee.computed && node.callee.property.name === 'interpolate' && node.callee.object.type === 'Identifier' && env.anims?.has(node.callee.object.name)) {
+      return { cVar: env.anims.get(node.callee.object.name).cVar, interp: parseInterp(node.arguments[0], env) };
+    }
+    return null;
+  };
   const apply = (expr) => {
     if (expr.type === 'ArrayExpression') {
       for (const e of expr.elements) if (e) apply(e);
@@ -677,13 +743,19 @@ function collectStyleAssigns(openingElement, scope, env) {
         if (prop.type !== 'ObjectProperty') throw new Error('AOT: spread/method in an inline style object not supported');
         const key = prop.computed ? evalStatic(prop.key, scope) : prop.key.name ?? prop.key.value;
 
-        // Animated value bound directly to a prop (opacity / backgroundColor / color).
+        // Animated value bound directly to a prop (opacity / backgroundColor / color), optionally through
+        // an .interpolate({ inputRange, outputRange }) mapping.
         const av = animRef(prop.value);
         if (av && ANIM_STYLE_PROPS[key]) {
           for (const p of ANIM_STYLE_PROPS[key]) binds.push({ cVar: av, prop: p });
           continue;
         }
-        // transform: [{ scale: <anim> }, { translateX: <anim> }, ...] — bind each animated entry.
+        const ai = animInterpRef(prop.value);
+        if (ai && ANIM_STYLE_PROPS[key]) {
+          for (const p of ANIM_STYLE_PROPS[key]) binds.push({ cVar: ai.cVar, prop: p, interp: ai.interp });
+          continue;
+        }
+        // transform: [{ scale: <anim> }, { translateX: <anim>.interpolate(...) }, ...] — bind each entry.
         if (key === 'transform' && prop.value.type === 'ArrayExpression') {
           let handled = false;
           for (const entry of prop.value.elements) {
@@ -693,6 +765,12 @@ function collectStyleAssigns(openingElement, scope, env) {
               const tav = animRef(tp.value);
               if (tav && ANIM_TRANSFORM_PROPS[tk]) {
                 for (const p of ANIM_TRANSFORM_PROPS[tk]) binds.push({ cVar: tav, prop: p });
+                handled = true;
+                continue;
+              }
+              const tai = animInterpRef(tp.value);
+              if (tai && ANIM_TRANSFORM_PROPS[tk]) {
+                for (const p of ANIM_TRANSFORM_PROPS[tk]) binds.push({ cVar: tai.cVar, prop: p, interp: tai.interp });
                 handled = true;
               }
             }
@@ -876,19 +954,16 @@ function compileListOp(rec, arg, env) {
   throw new Error(`AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`);
 }
 
-/** Compiles `Animated.timing|spring(value, cfg).start()` to a scoped ERAnimConfig + er_anim_value_animate. */
-function compileAnimateStart(expr, env, idx) {
-  const animCall = expr.callee.object; // Animated.timing(value, cfg)
-  if (animCall?.type !== 'CallExpression' || animCall.callee.type !== 'MemberExpression' || animCall.callee.object.name !== 'Animated') throw new Error('AOT: .start() must be called on Animated.timing/spring(value, config)');
-  const kind = animCall.callee.property.name; // 'timing' | 'spring' | 'decay'
-  const valRef = animCall.arguments[0];
-  if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name)) throw new Error(`AOT: Animated.${kind}() first argument must be a useAnimatedValue`);
-  const cVar = env.anims.get(valRef.name).cVar;
-  const cfgObj = animCall.arguments[1];
-  const get = (k) => cfgObj?.properties?.find((p) => (p.key.name ?? p.key.value) === k)?.value;
-  const toNode = get('toValue');
-  if (!toNode) throw new Error(`AOT: Animated.${kind}() config needs a toValue`);
-  const toCode = emitExpr(toNode, env).code;
+/** Builds a `get(key)` accessor over an `Animated.*(value, config)` call's config object literal. */
+function animConfigGetter(cfgObj) {
+  return (k) => cfgObj?.properties?.find((p) => (p.key.name ?? p.key.value) === k)?.value;
+}
+
+/** Emits one atomic animation (timing/spring/decay) → a scoped ERAnimConfig + er_anim_value_animate.
+ *  `delayMs` is the absolute start delay (how composition offsets are realised); `loop` repeats a timing;
+ *  `onCompleteCb` (optional) is a C function name set as cfg.on_complete — used to chain sequence steps. */
+function emitAnimEntry(entry, env, idx, onCompleteCb) {
+  const { cVar, kind, get, delayMs, loop } = entry;
   const c = `cfg${idx}`;
   const lines = ['    {', `        ERAnimConfig ${c};`, `        memset(&${c}, 0, sizeof(${c}));`];
   if (kind === 'spring') {
@@ -896,12 +971,144 @@ function compileAnimateStart(expr, env, idx) {
     lines.push(`        ${c}.stiffness = ${floatLit(evalStaticOr(get('stiffness'), env, 200))};`);
     lines.push(`        ${c}.damping = ${floatLit(evalStaticOr(get('damping'), env, 18))};`);
     lines.push(`        ${c}.mass = ${floatLit(evalStaticOr(get('mass'), env, 1))};`);
+  } else if (kind === 'decay') {
+    lines.push(`        ${c}.type = ER_ANIM_DECAY;`);
+    lines.push(`        ${c}.deceleration = ${floatLit(evalStaticOr(get('deceleration'), env, 0.998))};`);
+    lines.push(`        ${c}.velocity = ${floatLit(evalStaticOr(get('velocity'), env, 0))};`);
   } else {
     lines.push(`        ${c}.type = ER_ANIM_TIMING;`);
     lines.push(`        ${c}.duration_ms = ${Math.round(Number(evalStaticOr(get('duration'), env, 250)))};`);
-    lines.push(`        ${c}.easing = ${mapEasing(get('easing'))};`);
+    pushEasing(lines, c, get('easing'), env);
   }
+  if (delayMs > 0) lines.push(`        ${c}.delay_ms = ${delayMs};`);
+  if (loop) lines.push(`        ${c}.loop = true;`);
+  if (onCompleteCb) lines.push(`        ${c}.on_complete = ${onCompleteCb};`);
+  // decay is velocity-driven and has no toValue target; every other type needs one.
+  const toNode = get('toValue');
+  if (!toNode && kind !== 'decay') throw aotError(`AOT: Animated.${kind}() config needs a toValue`);
+  const toCode = toNode ? emitExpr(toNode, env).code : `er_anim_value_get(${cVar})`;
   lines.push(`        er_anim_value_animate(${cVar}, (float)(${toCode}), &${c});`, '    }');
+  return lines;
+}
+
+/** Flattens an Animated composition (timing/spring/decay/sequence/parallel/stagger/delay/loop) into a flat
+ *  list of atomic entries, each with an ABSOLUTE start delay (ms) — composition is realised purely through
+ *  per-entry delay_ms (no engine grouping needed for standalone values). Returns { entries, duration } where
+ *  `duration` is this node's own run length in ms, used to offset later siblings in a sequence/stagger;
+ *  null = unknown (spring/decay/loop), which is illegal to sequence anything after. */
+function flattenAnim(node, env, baseDelay, loop) {
+  if (node?.type !== 'CallExpression' || node.callee.type !== 'MemberExpression' || node.callee.object?.name !== 'Animated')
+    throw aotError('AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)');
+  const kind = node.callee.property.name;
+  const args = node.arguments;
+
+  if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
+    const valRef = args[0];
+    if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name)) throw aotError(`AOT: Animated.${kind}() first argument must be a useAnimatedValue`);
+    const cVar = env.anims.get(valRef.name).cVar;
+    const get = animConfigGetter(args[1]);
+    const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
+    const duration = kind === 'timing' ? ownDelay + Math.round(Number(evalStaticOr(get('duration'), env, 250))) : null;
+    return { entries: [{ cVar, kind, get, delayMs: baseDelay + ownDelay, loop }], duration };
+  }
+  if (kind === 'delay') {
+    return { entries: [], duration: Math.round(Number(evalStaticOr(args[0], env, 0))) };
+  }
+  if (kind === 'sequence' || kind === 'parallel' || kind === 'stagger') {
+    const list = kind === 'stagger' ? args[1] : args[0];
+    const staggerMs = kind === 'stagger' ? Math.round(Number(evalStaticOr(args[0], env, 0))) : 0;
+    if (list?.type !== 'ArrayExpression') throw aotError(`AOT: Animated.${kind}(...) needs an array of animations`);
+    const entries = [];
+    let off = baseDelay; // running offset (sequence)
+    let groupDur = 0;    // max end-time relative to baseDelay (parallel/stagger)
+    let i = 0;
+    for (const child of list.elements) {
+      if (!child) continue;
+      const start = kind === 'sequence' ? off : baseDelay + i * staggerMs;
+      const r = flattenAnim(child, env, start, loop);
+      entries.push(...r.entries);
+      if (kind === 'sequence') {
+        if (r.duration == null) throw aotError('AOT: an Animated.sequence entry needs a known duration — use Animated.timing / Animated.delay (a spring/decay/loop inside a sequence is not supported; it has no fixed length to offset the next entry by)');
+        off += r.duration;
+      } else {
+        const end = (start - baseDelay) + (r.duration ?? 0);
+        if (end > groupDur) groupDur = end;
+      }
+      i++;
+    }
+    // Same value can't appear twice in a flat (delay_ms) composition: er_anim_value_animate cancels the
+    // running anim on a value, so concurrent/flat-sequenced same-value steps cancel each other. (A
+    // top-level Animated.sequence is handled separately via on_complete chaining, which does support this.)
+    const seen = new Set();
+    for (const e of entries) {
+      if (seen.has(e.cVar))
+        throw aotError('AOT: the same animated value is driven more than once in this composition — concurrent/flat same-value steps cancel each other. Use a top-level Animated.sequence(...) for multi-step animation of one value.');
+      seen.add(e.cVar);
+    }
+    return { entries, duration: kind === 'sequence' ? off - baseDelay : groupDur };
+  }
+  if (kind === 'loop') {
+    const r = flattenAnim(args[0], env, baseDelay, true);
+    if (r.entries.length !== 1) throw aotError('AOT: Animated.loop currently wraps a single Animated.timing/spring/decay (looping a sequence/parallel is not yet supported)');
+    return { entries: r.entries, duration: null };
+  }
+  throw aotError(`AOT: Animated.${kind}(...) is not a supported animation`);
+}
+
+/** Lowers `Animated.sequence([...]).start()` to an on_complete CHAIN: step 0 starts inline (in the handler),
+ *  and each step's completion callback starts the next. Unlike the flat delay_ms path this is correct when
+ *  steps share a value (out-and-back) — er_anim_value_animate cancels the running anim on a value, so
+ *  synchronous same-value animates would cancel each other — and needs no fixed duration (spring/decay OK).
+ *  delay() entries fold into the next step's delay_ms. Nested parallel/stagger/loop in a sequence throws. */
+function compileSequenceChain(seqNode, env, ctx) {
+  const list = seqNode.arguments[0];
+  if (list?.type !== 'ArrayExpression') throw aotError('AOT: Animated.sequence(...) needs an array of animations');
+  const steps = [];
+  let pendingDelay = 0;
+  for (const child of list.elements) {
+    if (!child) continue;
+    if (child.type !== 'CallExpression' || child.callee.type !== 'MemberExpression' || child.callee.object?.name !== 'Animated')
+      throw aotError('AOT: Animated.sequence entries must be Animated.timing/spring/decay/delay(...)');
+    const kind = child.callee.property.name;
+    if (kind === 'delay') {
+      pendingDelay += Math.round(Number(evalStaticOr(child.arguments[0], env, 0)));
+      continue;
+    }
+    if (kind !== 'timing' && kind !== 'spring' && kind !== 'decay')
+      throw aotError('AOT: Animated.sequence entries must be Animated.timing/spring/decay/delay (a nested parallel/stagger/loop inside a sequence is not yet supported — keep the sequence flat)');
+    const valRef = child.arguments[0];
+    if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name)) throw aotError(`AOT: Animated.${kind}() first argument must be a useAnimatedValue`);
+    const get = animConfigGetter(child.arguments[1]);
+    const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
+    steps.push({ cVar: env.anims.get(valRef.name).cVar, kind, get, delayMs: pendingDelay + ownDelay, loop: false });
+    pendingDelay = 0;
+  }
+  if (!steps.length) return [];
+  const seqId = ctx.out.seqN++; // GLOBAL: callback names are file-scope, so must be unique across handlers
+  let firstLines = [];
+  // Build from the tail so each step knows its successor's callback name. Step 0 runs inline; the rest
+  // become on_complete callbacks pushed to out.animCbs (emitted at file scope).
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const nextCb = i < steps.length - 1 ? `er_seqcb_${seqId}_${i + 1}` : null;
+    const lines = emitAnimEntry(steps[i], env, `${seqId}_${i}`, nextCb);
+    if (i === 0) firstLines = lines;
+    else ctx.out.animCbs.push({ name: `er_seqcb_${seqId}_${i}`, body: lines });
+  }
+  return firstLines;
+}
+
+/** Compiles `<animation>.start()` — a single Animated.timing/spring/decay or a composition
+ *  (sequence/parallel/stagger/delay/loop). A top-level sequence chains via on_complete (compileSequenceChain);
+ *  everything else flattens to one ERAnimConfig + er_anim_value_animate per atomic entry, composition
+ *  expressed through per-entry delay_ms. Native-driven; sets no React state. */
+function compileAnimateStart(expr, env, ctx) {
+  const receiver = expr.callee.object;
+  if (receiver?.type === 'CallExpression' && receiver.callee.type === 'MemberExpression' && receiver.callee.object?.name === 'Animated' && receiver.callee.property.name === 'sequence') {
+    return compileSequenceChain(receiver, env, ctx);
+  }
+  const { entries } = flattenAnim(receiver, env, 0, false);
+  const lines = [];
+  for (const e of entries) lines.push(...emitAnimEntry(e, env, ctx.animIdx++));
   return lines;
 }
 
@@ -1037,9 +1244,10 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
     if (!r) throw new Error('AOT: the only ++/-- allowed in a handler is on `ref.current`');
     return [`${indent}${r.cVar}${expr.operator};`];
   }
-  // Animated.timing/spring(value, cfg).start() — native-driven; sets no React state, needs no app_update.
+  // Animated.*(…).start() — single timing/spring/decay OR a sequence/parallel/stagger/delay/loop
+  // composition; native-driven, sets no React state, needs no app_update.
   if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
-    return compileAnimateStart(expr, env, ctx.animIdx++);
+    return compileAnimateStart(expr, env, ctx);
   }
   if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw aotError('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()', 'each statement in a handler must be one of: setX(value) / setX(prev => …), a `ref.current = …` write, an `updateVector(…)` call, or `Animated.timing|spring(v, …).start()`. Wrap conditional logic in `if (…) { … }`.');
   const rec = state.bySetter.get(expr.callee.name);
@@ -1834,8 +2042,21 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   }
 
   // Animated style props (opacity / transform / color) → bind the node to its animated value. The
-  // engine's native driver advances it each tick (no per-frame JS, no app_update for the motion).
-  for (const b of binds) out.build.push(`    er_anim_value_bind(${b.cVar}, ${v}, ${b.prop});`);
+  // engine's native driver advances it each tick (no per-frame JS, no app_update for the motion). A bind
+  // carrying an `interp` maps the raw value through a piecewise-linear range first (value.interpolate(...)).
+  binds.forEach((b, i) => {
+    if (b.interp) {
+      const it = b.interp;
+      out.build.push(
+        `    {`,
+        `        static const ERInterpolation interp_${v}_${i} = { { ${it.input.map(floatLit).join(', ')} }, { ${it.output.map(floatLit).join(', ')} }, ${it.input.length}, ${it.exLeft}, ${it.exRight} };`,
+        `        er_anim_value_bind_interpolated(${b.cVar}, ${v}, ${b.prop}, &interp_${v}_${i});`,
+        `    }`,
+      );
+    } else {
+      out.build.push(`    er_anim_value_bind(${b.cVar}, ${v}, ${b.prop});`);
+    }
+  });
 
   emitRefBind(v, el.openingElement, out, env);
 
@@ -1915,7 +2136,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [] };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0 };
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
 // Mount effects: each `useEffect(fn, [])` body runs ONCE after the initial app_update (typically to start a
@@ -2045,6 +2266,13 @@ static void er_timer_clear(int id)
 
 const timerFnDefs = out.timerFns.map((t) => `static void ${t.name}(void)\n{\n${t.body.join('\n')}\n}`).join('\n\n');
 
+// Animated.sequence on_complete callbacks: each starts the next step when the previous finishes. Forward-
+// declared (the handler that starts step 0 references the first callback, and each callback the next).
+const animCbDecls = out.animCbs.map((cb) => `static void ${cb.name}(bool finished, void* user_data);`).join('\n');
+const animCbDefs = out.animCbs
+  .map((cb) => `static void ${cb.name}(bool finished, void* user_data)\n{\n    (void)finished;\n    (void)user_data;\n${cb.body.join('\n')}\n}`)
+  .join('\n\n');
+
 const appTickFn = out.usesTimers
   ? `void er_app_tick(int dt_ms)
 {
@@ -2082,7 +2310,7 @@ const appTickFn = out.usesTimers
 const mountEffectsBlock = out.mountEffects.length ? '\n    /* useEffect(fn, []) — run once on mount. */\n' + out.mountEffects.join('\n') + '\n' : '';
 
 // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
-const usesMath = out.needsMath || /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test([stateBlock, refDecls, vectorBuilderBlock, updateBlock, handlerDefs, timerFnDefs, out.mountEffects.join('\n'), out.build.join('\n')].join('\n'));
+const usesMath = out.needsMath || /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test([stateBlock, refDecls, vectorBuilderBlock, updateBlock, handlerDefs, animCbDefs, timerFnDefs, out.mountEffects.join('\n'), out.build.join('\n')].join('\n'));
 const body = `/*
  * Generated by the embedded-react Flow B AOT compiler (npm run aot -- ${demo}). DO NOT EDIT.
  * Builds the app's scene graph + state machine directly against er_scene.h — no QuickJS, no JS runtime.
@@ -2093,7 +2321,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}
+${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}
 ${appTickFn}
 
 void er_app_build(int screen_w, int screen_h)
