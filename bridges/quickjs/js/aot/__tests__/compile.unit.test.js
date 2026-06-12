@@ -896,3 +896,53 @@ describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
     ).toThrow(/must destructure/);
   });
 });
+
+describe('AOT callback props', () => {
+  const C = `import { useState } from 'react';
+import { View, Text, Pressable } from 'embedded-react';
+`;
+
+  it('inlines each instance’s callback prop as the child handler, against the caller state', () => {
+    const c = gen(`${C}
+      function StepButton({ label, onTap }) {
+        return (<Pressable onPress={onTap}><Text>{label}</Text></Pressable>);
+      }
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View>
+          <StepButton label="-" onTap={() => setN(n - 1)} />
+          <StepButton label="+" onTap={() => setN(n + 1)} />
+        </View>);
+      }`);
+    expect(c).toContain('s_state.n = (s_state.n - 1);');
+    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    // two distinct handlers, one per instance, each wired via er_event_set
+    expect((c.match(/static void er_handler_\d+\(/g) || []).length).toBe(2);
+    expect((c.match(/er_event_set\(\w+, ER_EVENT_PRESS,/g) || []).length).toBe(2);
+  });
+
+  it('accepts a useCallback identifier passed as a callback prop', () => {
+    const c = gen(`${C}
+      import { useCallback } from 'react';
+      function Btn({ onTap }) { return (<Pressable onPress={onTap}><Text>x</Text></Pressable>); }
+      export function App() {
+        const [n, setN] = useState(0);
+        const inc = useCallback(() => setN(n + 1), [n]);
+        return (<Btn onTap={inc} />);
+      }`);
+    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('er_event_set(');
+  });
+
+  it('forwards a callback prop through an intermediate component', () => {
+    const c = gen(`${C}
+      function Inner({ onTap }) { return (<Pressable onPress={onTap}><Text>x</Text></Pressable>); }
+      function Outer({ onTap }) { return (<Inner onTap={onTap} />); }
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<Outer onTap={() => setN(n + 1)} />);
+      }`);
+    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('er_event_set(');
+  });
+});

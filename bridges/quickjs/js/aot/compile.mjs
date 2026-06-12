@@ -1354,6 +1354,20 @@ function extractProps(openingElement, scope, env) {
     }
     if (attr.type !== 'JSXAttribute' || attr.name.name === 'key') continue;
     const node = attrExpr(attr);
+    // Callback prop: a function passed to a child (inline arrow, or an identifier bound to a useCallback in
+    // the caller). Captured as a `fn` descriptor and resolved where the child uses it as an event handler.
+    if (isFn(node)) {
+      props[attr.name.name] = { fn: true, node };
+      continue;
+    }
+    if (node.type === 'Identifier' && env.callbacks?.has(node.name)) {
+      props[attr.name.name] = { fn: true, node: env.callbacks.get(node.name) };
+      continue;
+    }
+    if (node.type === 'Identifier' && env.fnProps?.has(node.name)) {
+      props[attr.name.name] = { fn: true, ...env.fnProps.get(node.name) }; // forward original {node, env, state}
+      continue;
+    }
     try {
       props[attr.name.name] = { static: true, value: evalStatic(node, scope) };
     } catch {
@@ -1417,13 +1431,17 @@ function emitComponent(el, scope, out, env, state, opts) {
 
   const childScope = { ...scope };
   const childLocals = new Map(env.locals);
+  // Callback props bound here resolve to the CALLER's function (node + caller env/state) so the child can
+  // use them as event handlers (onPress={onTap}); inherit any the caller itself received (forwarding).
+  const fnProps = new Map(env.fnProps);
   for (const [name, d] of bindParams(fn, extractProps(el.openingElement, scope, env))) {
     if (childrenRef?.kind === 'local' && name === childrenRef.name) continue; // children come from the slot, not a value prop
-    if (d.static) childScope[name] = d.value;
+    if (d.fn) fnProps.set(name, { node: d.node, env: d.env ?? env, state: d.state ?? state });
+    else if (d.static) childScope[name] = d.value;
     else childLocals.set(name, { code: d.code, cType: d.cType, struct: d.struct });
   }
   const children = childNodes.length ? { nodes: childNodes, scope, env, ref: childrenRef } : null;
-  return emitNode(componentReturnJSX(fn, childScope), childScope, out, { ...env, consts: childScope, locals: childLocals, children }, state, opts);
+  return emitNode(componentReturnJSX(fn, childScope), childScope, out, { ...env, consts: childScope, locals: childLocals, children, fnProps }, state, opts);
 }
 
 /** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
@@ -2074,11 +2092,17 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
         out.cbEmitted.set(fn.name, handlerName);
         out.handlers.push({ name: handlerName, body: compileHandler(env.callbacks.get(fn.name), env, state, out) });
       }
+    } else if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
+      // Callback prop: <Child onTap={() => …}/> where Child does onPress={onTap}. Inline the CALLER's
+      // function as this handler, compiled in the caller's env/state so its setters/locals resolve there.
+      const fp = env.fnProps.get(fn.name);
+      handlerName = `er_handler_${out.handlers.length}`;
+      out.handlers.push({ name: handlerName, body: compileHandler(fp.node, fp.env, fp.state, out) });
     } else if (isFn(fn)) {
       handlerName = `er_handler_${out.handlers.length}`;
       out.handlers.push({ name: handlerName, body: compileHandler(fn, env, state, out) });
     } else {
-      throw aotError(`AOT: ${attr.name.name} must be an inline function or a useCallback`, `pass an inline arrow (onPress={() => setX(…)}) or a useCallback identifier — a plain function reference or a non-function value isn't supported here.`);
+      throw aotError(`AOT: ${attr.name.name} must be an inline function, a useCallback, or a callback prop`, `pass an inline arrow (onPress={() => setX(…)}), a useCallback identifier, or a function prop received by this component.`);
     }
     out.build.push(`    er_event_set(${v}, ${evt}, ${handlerName}, NULL);`);
   }
