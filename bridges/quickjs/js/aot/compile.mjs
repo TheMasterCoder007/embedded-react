@@ -1530,10 +1530,62 @@ function emitSwitch(el, scope, out, env, state) {
   return v;
 }
 
+/**
+ * <ActivityIndicator color={…} size="small"|"large"|N animating={…} style={…} /> → ER_NODE_ACTIVITY_INDICATOR.
+ * The engine spins it on its own (a looping rotate; render is a ring of 8 fading dots). No intrinsic size, so
+ * a default box is set from `size` (small=20, large=36) unless style sets width/height.
+ */
+function emitActivityIndicator(el, scope, out, env) {
+  const v = `n${out.n++}`;
+  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+  const hasField = (f) => staticAssigns.some((a) => a.field === f) || dynAssigns.some((a) => a.field === f);
+  let size = 36;
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw aotError('AOT: spread props on <ActivityIndicator> are not supported');
+    const name = attr.name.name;
+    if (name === 'style' || name === 'ref' || name === 'key') continue;
+    const node = attrExpr(attr);
+    if (name === 'color') {
+      try {
+        staticAssigns.push({ field: 'indicator_color', expr: colorLiteral(String(evalStatic(node, scope))) });
+      } catch {
+        dynAssigns.push({ field: 'indicator_color', code: emitColorExpr(node, env) });
+      }
+    } else if (name === 'size') {
+      const sv = evalStatic(node, scope);
+      size = sv === 'small' ? 20 : sv === 'large' ? 36 : Number(sv) || 36;
+    } else if (name === 'animating') {
+      try {
+        staticAssigns.push({ field: 'animating', expr: evalStatic(node, scope) ? '1' : '0' });
+      } catch {
+        dynAssigns.push({ field: 'animating', code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)` });
+      }
+    } else throw aotError(`AOT: <ActivityIndicator> prop "${name}" is not supported`, 'supported props: color, size, animating, style.');
+  }
+  if (!hasField('width')) staticAssigns.push({ field: 'width', expr: String(size) });
+  if (!hasField('height')) staticAssigns.push({ field: 'height', expr: String(size) });
+
+  const isDynamic = dynAssigns.length > 0;
+  out.build.push(`    ${v} = er_node_create(ER_NODE_ACTIVITY_INDICATOR);`);
+  if (isDynamic) {
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({ v, styleAssigns: staticAssigns, text: null, dynAssigns });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+  emitRefBind(v, el.openingElement, out, env);
+  return v;
+}
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
+  if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
+  if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);

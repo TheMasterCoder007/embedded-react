@@ -658,7 +658,11 @@ extern "C"
         float bezier_y1;              /**< First control point Y for ER_EASE_BEZIER. */
         float bezier_x2;              /**< Second control point X for ER_EASE_BEZIER [0,1]. */
         float bezier_y2;              /**< Second control point Y for ER_EASE_BEZIER. */
-        bool loop;                    /**< Ping-pong repeat for ER_ANIM_TIMING; ignored otherwise. */
+        bool loop;                    /**< Repeat for ER_ANIM_TIMING when it completes; ignored otherwise. By
+                                           default each cycle RESTARTS from the start (a continuous one-way loop,
+                                           e.g. a spinner's 0→360° rotation), matching RN's Animated.loop. */
+        bool loop_reverse;            /**< When loop is set: reverse direction each cycle (ping-pong, e.g. an
+                                           opacity 0.3↔1.0 "breathing" pulse) instead of restarting. Default false. */
         ERAnimCompleteFn on_complete; /**< Called when the animation finishes; NULL = none. */
         void* on_complete_user_data;  /**< Forwarded to on_complete as user_data. */
     } ERAnimConfig;

@@ -374,6 +374,46 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * LOOP DIRECTION: a looping timing animation RESTARTS by default (a continuous
+     * one-way loop, e.g. a spinner's 0→360° rotation) and only ping-pongs when
+     * loop_reverse is set.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* spin = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = 10;
+        rp.height = 10;
+        er_node_set_props(spin, &rp);
+
+        ERAnimConfig rc = {0};
+        rc.type = ER_ANIM_TIMING;
+        rc.duration_ms = 100U;
+        rc.loop = true; /* loop_reverse defaults false → continuous restart */
+        er_anim_start(spin, ER_PROP_ROTATE_Z, 360.0f, &rc);
+
+        embedded_renderer_tick(100U); /* end of cycle 1 (reaches 360, then restarts at 0) */
+        embedded_renderer_tick(25U);  /* into cycle 2: continuous → ~90, reversed would be ~270 */
+        if (spin->tp_rotate_z > 180.0f)
+            return fail("loop: default loop ping-ponged instead of restarting continuously");
+        er_node_destroy(spin);
+
+        ERNode* yo = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(yo, &rp);
+        ERAnimConfig yc = {0};
+        yc.type = ER_ANIM_TIMING;
+        yc.duration_ms = 100U;
+        yc.loop = true;
+        yc.loop_reverse = true; /* ping-pong */
+        er_anim_start(yo, ER_PROP_ROTATE_Z, 360.0f, &yc);
+
+        embedded_renderer_tick(100U); /* peak ~360 */
+        embedded_renderer_tick(25U);  /* reversing → ~270 (heading back down), not ~90 */
+        if (yo->tp_rotate_z < 180.0f)
+            return fail("loop_reverse: did not ping-pong back down");
+        er_node_destroy(yo);
+    }
+
+    /* -----------------------------------------------------------------------
      * COMPLETION CALLBACK: fires with finished=true at end of timing animation
      * ---------------------------------------------------------------------- */
     {

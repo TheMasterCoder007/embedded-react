@@ -606,3 +606,33 @@ describe('AOT Switch', () => {
     ).toThrow(/needs a value prop/);
   });
 });
+
+describe('AOT ActivityIndicator', () => {
+  it('lowers <ActivityIndicator> to ER_NODE_ACTIVITY_INDICATOR with color + a size-derived box', () => {
+    const c = gen(`${PRE}
+      import { ActivityIndicator } from 'embedded-react';
+      export function App() { return (<ActivityIndicator size="large" color="#2a9d8f" />); }`);
+    expect(c).toContain('er_node_create(ER_NODE_ACTIVITY_INDICATOR)');
+    expect(c).toContain('p.indicator_color = 0xFF2A9D8Fu;');
+    expect(c).toContain('p.width = 36;'); // large
+    expect(c).toContain('p.height = 36;');
+  });
+
+  it('drives animating from state (start/stop)', () => {
+    const c = gen(`${PRE}
+      import { ActivityIndicator } from 'embedded-react';
+      export function App() {
+        const [busy, setBusy] = useState(true);
+        return (<ActivityIndicator animating={busy} />);
+      }`);
+    expect(c).toContain('p.animating = (uint8_t)((s_state.busy) ? 1 : 0);');
+  });
+
+  it('maps size="small" → 20px and a numeric size verbatim', () => {
+    const c = gen(`${PRE}
+      import { ActivityIndicator } from 'embedded-react';
+      export function App() { return (<View><ActivityIndicator size="small" /><ActivityIndicator size={48} /></View>); }`);
+    expect(c).toContain('p.width = 20;');
+    expect(c).toContain('p.width = 48;');
+  });
+});

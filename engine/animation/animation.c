@@ -72,6 +72,7 @@ typedef struct
     uint32_t elapsed_ms;
     uint32_t duration_ms;
     bool loop;
+    bool loop_reverse; /**< ping-pong (swap endpoints) each loop; else restart (continuous). */
     bool color_value;
     float from_value;
     float to_value;
@@ -1038,6 +1039,7 @@ static ERAnimHandle start_anim_internal(
     anim->in_delay = dly > 0U;
     anim->duration_ms = dur;
     anim->loop = cfg ? cfg->loop : false;
+    anim->loop_reverse = cfg ? cfg->loop_reverse : false;
     anim->color_value = color;
     anim->on_complete = cfg ? cfg->on_complete : NULL;
     anim->on_complete_user_data = cfg ? cfg->on_complete_user_data : NULL;
@@ -1466,6 +1468,7 @@ ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, con
     anim->in_delay = dly > 0U;
     anim->duration_ms = dur;
     anim->loop = cfg ? cfg->loop : false;
+    anim->loop_reverse = cfg ? cfg->loop_reverse : false;
     anim->color_value = false;
     anim->from_value = val->current;
     anim->to_value = to_value;
@@ -1559,9 +1562,12 @@ void er_anim_tick(uint32_t delta_ms)
                     if (anim->loop)
                     {
                         anim->elapsed_ms = 0U;
-                        const float tmp = anim->from_value;
-                        anim->from_value = anim->to_value;
-                        anim->to_value = tmp;
+                        if (anim->loop_reverse) /* ping-pong; else restart from the start (continuous) */
+                        {
+                            const float tmp = anim->from_value;
+                            anim->from_value = anim->to_value;
+                            anim->to_value = tmp;
+                        }
                     }
                     else
                     {
@@ -1665,17 +1671,20 @@ void er_anim_tick(uint32_t delta_ms)
                 if (anim->loop)
                 {
                     anim->elapsed_ms = 0U;
-                    if (anim->color_value)
+                    if (anim->loop_reverse) /* ping-pong; else restart from the start (continuous one-way) */
                     {
-                        const uint32_t tmp = anim->from_color;
-                        anim->from_color = anim->to_color;
-                        anim->to_color = tmp;
-                    }
-                    else
-                    {
-                        const float tmp = anim->from_value;
-                        anim->from_value = anim->to_value;
-                        anim->to_value = tmp;
+                        if (anim->color_value)
+                        {
+                            const uint32_t tmp = anim->from_color;
+                            anim->from_color = anim->to_color;
+                            anim->to_color = tmp;
+                        }
+                        else
+                        {
+                            const float tmp = anim->from_value;
+                            anim->from_value = anim->to_value;
+                            anim->to_value = tmp;
+                        }
                     }
                 }
                 else
