@@ -568,3 +568,41 @@ describe('AOT effects & timers', () => {
     ).toThrow(/only useEffect\(fn, \[\]\)/);
   });
 });
+
+describe('AOT Switch', () => {
+  it('lowers a controlled <Switch> to ER_NODE_SWITCH; toggle fires PRESS and sets state to !value', () => {
+    const c = gen(`${PRE}
+      import { Switch } from 'embedded-react';
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Switch value={on} onValueChange={(v) => setOn(v)} />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_SWITCH)');
+    expect(c).toContain('p.switch_value = (uint8_t)((s_state.on) ? 1 : 0);'); // state-driven value
+    expect(c).toMatch(/er_event_set\(n\d+, ER_EVENT_PRESS,/); // engine toggles + fires PRESS
+    expect(c).toContain('s_state.on = (!(s_state.on));'); // onValueChange's v param = the toggled value
+    expect(c).toContain('p.width = 51;'); // default RN box (renderer scales track/thumb to it)
+  });
+
+  it('bakes static trackColor/thumbColor and lets a style size override the default box', () => {
+    const c = gen(`${PRE}
+      import { Switch } from 'embedded-react';
+      export function App() {
+        const [on, setOn] = useState(true);
+        return (<Switch value={on} onValueChange={(v) => setOn(v)} trackColor={{ false: '#3a3f4a', true: '#2a9d8f' }} thumbColor="#ffffff" style={{ width: 64, height: 36 }} />);
+      }`);
+    expect(c).toContain('track_color_false');
+    expect(c).toContain('track_color_true');
+    expect(c).toContain('thumb_color');
+    expect(c).toContain('p.width = 64;'); // style overrides the 51 default
+    expect(c).not.toContain('p.width = 51;');
+  });
+
+  it('throws when a Switch has onValueChange but no value prop', () => {
+    expect(() =>
+      gen(`${PRE}
+        import { Switch } from 'embedded-react';
+        export function App() { const [on, setOn] = useState(false); return (<Switch onValueChange={(v) => setOn(v)} />); }`),
+    ).toThrow(/needs a value prop/);
+  });
+});

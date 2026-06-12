@@ -133,6 +133,13 @@ int main(void)
         if (clicks > 0)
         {
             SDL_Log("injected %d tap(s) at %d,%d", clicks, px, py);
+            /* Let any tap-triggered animation settle (e.g. a Switch thumb's 200 ms slide) before the shot. */
+            for (int elapsed = 0; elapsed < 300; elapsed += 16)
+            {
+                er_commit();
+                embedded_renderer_tick(16);
+                er_app_tick(16);
+            }
         }
 
         /* ER_AOT_HOLD=<ms>: press at the click point and HOLD it, ticking the engine so a press-driven

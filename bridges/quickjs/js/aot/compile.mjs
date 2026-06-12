@@ -1452,9 +1452,88 @@ function emitRefBind(v, openingElement, out, env) {
   }
 }
 
+/** Compiles a value-callback (e.g. Switch onValueChange) — binds its first param to `valueCode`, not an event. */
+function compileValueHandler(fnNode, valueCode, env, state, out) {
+  const param = fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
+  const locals = new Map(env.locals);
+  if (param) locals.set(param, { code: valueCode, cType: 'int' });
+  const ctx = { stateChanged: false, animIdx: 0, out };
+  const body = fnNode.body;
+  const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+  const stmts = compileStmts(list, { ...env, locals }, state, ctx, '    ');
+  if (ctx.stateChanged) stmts.push('    app_update();');
+  return stmts;
+}
+
+/**
+ * <Switch value={on} onValueChange={(v) => setOn(v)} trackColor={{false,true}} thumbColor=… style=… />
+ * → ER_NODE_SWITCH. The engine flips its own value on press (+ animates the thumb) then fires ER_EVENT_PRESS,
+ * so onValueChange maps to PRESS and its `v` param is the TOGGLED value (!value). `value` drives switch_value
+ * (state → dynamic). Default RN 51×31 box (the renderer scales the track/thumb to it); style can override.
+ */
+function emitSwitch(el, scope, out, env, state) {
+  const v = `n${out.n++}`;
+  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+  const hasField = (f) => staticAssigns.some((a) => a.field === f) || dynAssigns.some((a) => a.field === f);
+  if (!hasField('width')) staticAssigns.push({ field: 'width', expr: '51' });
+  if (!hasField('height')) staticAssigns.push({ field: 'height', expr: '31' });
+
+  let valueNode = null;
+  let onChangeFn = null;
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw aotError('AOT: spread props on <Switch> are not supported');
+    const name = attr.name.name;
+    if (name === 'style' || name === 'ref' || name === 'key') continue;
+    const node = attrExpr(attr);
+    if (name === 'value') valueNode = node;
+    else if (name === 'onValueChange') onChangeFn = node;
+    else if (name === 'thumbColor') staticAssigns.push({ field: 'thumb_color', expr: colorLiteral(String(evalStatic(node, scope))) });
+    else if (name === 'trackColor') {
+      const tc = evalStatic(node, scope);
+      if (tc?.false != null) staticAssigns.push({ field: 'track_color_false', expr: colorLiteral(String(tc.false)) });
+      if (tc?.true != null) staticAssigns.push({ field: 'track_color_true', expr: colorLiteral(String(tc.true)) });
+    } else if (name === 'disabled') {
+      /* accepted; the AOT has no disabled-visual yet, so it is a no-op */
+    } else throw aotError(`AOT: <Switch> prop "${name}" is not supported`, 'supported props: value, onValueChange, trackColor, thumbColor, style.');
+  }
+
+  // value → switch_value (static or, when state-driven, recomputed in app_update).
+  if (valueNode) {
+    try {
+      staticAssigns.push({ field: 'switch_value', expr: evalStatic(valueNode, scope) ? '1' : '0' });
+    } catch {
+      dynAssigns.push({ field: 'switch_value', code: `(uint8_t)((${emitExpr(valueNode, env).code}) ? 1 : 0)` });
+    }
+  }
+
+  const isDynamic = dynAssigns.length > 0;
+  out.build.push(`    ${v} = er_node_create(ER_NODE_SWITCH);`);
+  if (isDynamic) {
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({ v, styleAssigns: staticAssigns, text: null, dynAssigns });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+
+  if (onChangeFn) {
+    if (!isFn(onChangeFn)) throw aotError('AOT: onValueChange must be an inline function', 'onValueChange={(v) => setX(v)}');
+    if (!valueNode) throw aotError('AOT: a <Switch> with onValueChange needs a value prop', 'controlled switch: <Switch value={on} onValueChange={(v) => setOn(v)} />');
+    const handlerName = `er_handler_${out.handlers.length}`;
+    const toggled = `(!(${emitExpr(valueNode, env).code}))`; // the engine toggles on press → param is !value
+    out.handlers.push({ name: handlerName, body: compileValueHandler(onChangeFn, toggled, env, state, out) });
+    out.build.push(`    er_event_set(${v}, ER_EVENT_PRESS, ${handlerName}, NULL);`);
+  }
+  emitRefBind(v, el.openingElement, out, env);
+  return v;
+}
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
+  if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
