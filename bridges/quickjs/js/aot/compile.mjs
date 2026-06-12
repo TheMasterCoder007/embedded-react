@@ -32,6 +32,25 @@ const distDir = resolve(here, '..', 'dist');
 
 // The core compiler is exported as compileSource(src) so it can be unit-tested on inline JSX. The CLI
 // (read a demo's App.jsx, write dist/app.gen.{c,h}) lives in the entry guard at the bottom of this file.
+//
+// ---------------------------------------------------------------------------------------------------
+// SECTION MAP (top → bottom). The pipeline: parse the App.jsx → collect the module's component, state,
+// hooks & refs → emit each piece to C (expressions, styles/text, handlers, nodes) → assemble app.gen.c.
+//
+//   1.  Diagnostics              aotError / withLoc / formatAotError — locate + hint unsupported syntax
+//   2.  Static evaluation        evalStatic — fold the compile-time-constant subset (styles, initials)
+//   3.  C expression emission    emitExpr — lower a JS expression (state/props/refs) to a C expression
+//   4.  Collection passes        moduleScope + collect{State,Components,Callbacks,Memos,Effects}
+//   5.  Animations & refs        collect{Anims,Refs}, useAnimatedValue, Easing, interpolate (native driver)
+//   6.  JSX → style/text/events  attrExpr, collectStyleAssigns, buildText / text spans
+//   7.  Handler compilation      on* arrow → C statements (setters, refs, updateVector, Animated.start)
+//   8.  Emit: control flow        components / conditionals / .map — all UNROLL at compile time
+//   9.  Vector / Svg             <Svg> subtree → flattenSvg ops/paints → er_node_set_vector_ops
+//   10. Node emitters            typed components (Switch/TextInput/Modal/…) + the generic host node
+//   11. Keyboard config          setKeyboardConfig({...}) → static ERKeyboardConfig tables
+//   12. Compile orchestration    compileSourceImpl — stitch the above into app.gen.{c,h}
+//   13. CLI entry                node aot/compile.mjs [demo] → read App.jsx, write dist/app.gen.*
+// ---------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------
 // Diagnostics — turn "AOT: <reason>" into "<reason> at file:line:col" + a source code-frame (+ a rewrite
@@ -305,7 +324,9 @@ const printfSpec = (cType) => (cType === 'string' ? '%s' : cType === 'float' ? '
 const cTypeOfValue = (v) => (typeof v === 'string' ? 'string' : typeof v === 'number' && !Number.isInteger(v) ? 'float' : 'int');
 
 // ---------------------------------------------------------------------------------------------------
-// AST helpers
+// AST helpers + collection passes — small predicates (isFn, fnReturnsJSX, …) and the up-front scans
+// that walk the component body ONCE to gather what later emission needs: the module scope, useState,
+// child components, and the useCallback / useMemo / useEffect / useRef hooks.
 // ---------------------------------------------------------------------------------------------------
 const isFn = (n) => n && (n.type === 'FunctionDeclaration' || n.type === 'FunctionExpression' || n.type === 'ArrowFunctionExpression');
 
@@ -1829,6 +1850,13 @@ function emitSvgDynamic(el, scope, out, env, state) {
   return v;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Node emitters — typed components. Each maps one JSX element to its engine node + props: the shared
+// helpers (emitRefBind, compileValueHandler) then Switch / TextInput / ActivityIndicator / Modal /
+// FlatList. The generic host node (View/Text/Pressable/Image/ScrollView) + the element dispatcher live
+// in the next section (emitNodeImpl).
+// ---------------------------------------------------------------------------------------------------
+
 /** Captures `ref={r}` (r a node ref) by storing the freshly-created node handle into the ref's slot. */
 function emitRefBind(v, openingElement, out, env) {
   for (const attr of openingElement.attributes) {
@@ -2145,6 +2173,13 @@ function emitFlatList(el, scope, out, env, state, opts) {
   return emitNode(scrollView, scope, out, env, state, opts);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Node emitter — the element dispatcher + the generic host node. emitNodeImpl is the entry point for
+// every JSX element: it routes Svg / typed components / FlatList / components to their emitters above,
+// and handles the generic host nodes (View / Text / Pressable / Image / ScrollView) itself — style,
+// text, events, refs, children. emitNode wraps it with withLoc so a thrown AOT error gets a location.
+// ---------------------------------------------------------------------------------------------------
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
@@ -2260,14 +2295,10 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
 const emitNode = withLoc(emitNodeImpl);
 
 // ---------------------------------------------------------------------------------------------------
-// Compile — JSX source string → generated C. Pure (no I/O) so it can be unit-tested directly.
+// On-screen keyboard config — lower a module-level setKeyboardConfig({...}) call to static C tables
+// (ERKeyboardKey/Row/Layer + ERKeyboardConfig) that er_app_build hands to er_keyboard_set_config.
 // ---------------------------------------------------------------------------------------------------
-/**
- * Compiles a Flow B app's JSX source to C.
- * @param {string} src   The App.jsx source text.
- * @param {string} demo  Demo name (only used in the generated-by header comment).
- * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
- */
+
 /** Formats a color value (string like "#303030" or a number) as a C ARGB literal; null/undefined → "0". */
 function kbdColor(v) {
   if (v == null) return '0';
@@ -2356,6 +2387,17 @@ function compileKeyboardConfig(program, out) {
   out.kbdSetup = '    er_keyboard_set_config(&kbd_cfg);';
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Compile orchestration — JSX source string → generated C. Pure (no I/O) so it can be unit-tested
+// directly; the CLI entry at the bottom of the file wraps it with the file read/write.
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * Compiles a Flow B app's JSX source to C.
+ * @param {string} src   The App.jsx source text.
+ * @param {string} demo  Demo name (only used in the generated-by header comment).
+ * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
+ */
 function compileSourceImpl(src, demo = 'app', opts = {}) {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
