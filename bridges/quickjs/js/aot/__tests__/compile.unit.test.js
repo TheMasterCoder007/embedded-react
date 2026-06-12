@@ -654,6 +654,42 @@ describe('AOT diagnostics', () => {
     }
     expect(err.message).toContain('demos/mydemo/App.jsx:');
   });
+
+  // A spread on a HOST element used to be silently dropped (the style/event loops only read named
+  // attributes) — it must now error clearly, like the typed components already do.
+  it('rejects a spread on a host element instead of silently dropping it', () => {
+    expect(() => gen(`${PRE}\nexport function App() { const o = window.x; return (<View {...o} />); }`)).toThrow(
+      /spread \{\.\.\.\} on <View> is not supported/,
+    );
+  });
+
+  it('locates + hints a non-constant useState initial (was a bare evalStatic leak)', () => {
+    let err;
+    try {
+      compileSource(`${PRE}\nexport function App() { const [s] = useState(window.y); return (<Text>{s}</Text>); }`, 'demo', {
+        filename: 'demos/demo/App.jsx',
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toContain('must be a compile-time constant');
+    expect(err.message).toContain('demos/demo/App.jsx:'); // located, not a bare leak
+    expect(err.message).toContain('hint:');
+  });
+
+  it('locates a malformed list-state item shape at the initial', () => {
+    let err;
+    try {
+      compileSource(`${PRE}\nexport function App() { const [a] = useState([1, 2]); return (<View>{a.map((x) => (<Text key={x}>{x}</Text>))}</View>); }`, 'demo', {
+        filename: 'demos/demo/App.jsx',
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(/elements must be objects/);
+    expect(err.message).toContain('demos/demo/App.jsx:');
+    expect(err.message).toContain('hint:');
+  });
 });
 
 describe('AOT effects & timers', () => {

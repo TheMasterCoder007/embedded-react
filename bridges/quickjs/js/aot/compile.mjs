@@ -78,6 +78,21 @@ function formatAotError(e, src, filename) {
   return out;
 }
 
+/**
+ * evalStatic at a boundary that REQUIRES a compile-time constant. On a fold failure it rethrows as a
+ * LOCATED aotError with a clear message (+ optional hint), instead of letting evalStatic's bare
+ * control-flow error ("cannot statically resolve identifier …") leak to the user without a location.
+ */
+function evalStaticOrThrow(node, scope, message, hint) {
+  try {
+    return evalStatic(node, scope);
+  } catch {
+    const e = aotError(message, hint);
+    if (node && node.loc) e.aotLoc = node.loc.start;
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Static expression evaluation — folds the constant subset (used for styles + state initials). Throws
 // on anything dynamic (e.g., a state reference), which the caller catches to fall back to C emission.
@@ -339,14 +354,19 @@ const AOT_MAX_TEXT_SPANS = Number(process.env.ER_AOT_MAX_TEXT_SPANS) || 4;
 
 /** Infers a C struct shape from a list-state's initial elements (objects of strings/numbers). */
 function inferItemStruct(items, name) {
-  if (!Array.isArray(items) || !items.length) throw new Error(`AOT: list state "${name}" needs ≥1 initial element to infer its item shape`);
+  const shapeHint =
+    'a list state is a fixed-shape struct array: each element must be an OBJECT with the same string/number fields, ' +
+    'e.g. useState([{ title: "A", n: 1 }, { title: "B", n: 2 }]). The first element defines the columns.';
+  if (!Array.isArray(items) || !items.length)
+    throw aotError(`AOT: list state "${name}" needs ≥1 initial element to infer its item shape`, shapeHint);
   const first = items[0];
-  if (typeof first !== 'object' || first === null || Array.isArray(first)) throw new Error(`AOT: list state "${name}" elements must be objects`);
+  if (typeof first !== 'object' || first === null || Array.isArray(first))
+    throw aotError(`AOT: list state "${name}" elements must be objects`, shapeHint);
   const fields = Object.keys(first).map((key) => {
     const v = first[key];
     if (typeof v === 'string') return { key, kind: 'string' };
     if (typeof v === 'number') return { key, kind: Number.isInteger(v) ? 'int' : 'float' };
-    throw new Error(`AOT: list state "${name}" field "${key}" must be a string or number`);
+    throw aotError(`AOT: list state "${name}" field "${key}" must be a string or number`, shapeHint);
   });
   return { fields };
 }
@@ -367,10 +387,29 @@ function collectState(fnBody, scope) {
       let rec;
       if (initArg?.type === 'ArrayExpression') {
         // List state → a fixed-capacity C struct array + a count (s_<name>[CAP], s_<name>_count).
-        const items = evalStatic(initArg, scope);
-        rec = { name, setter, kind: 'list', struct: inferItemStruct(items, name), items, cap: LIST_CAP, cTypeName: `ErItem_${name}`, arrayName: `s_${name}`, countMember: `s_${name}_count` };
+        const items = evalStaticOrThrow(
+          initArg,
+          scope,
+          `AOT: the initial value of list state "${name}" must be a compile-time constant array`,
+          'useState([...]) initial must be a literal array of objects/numbers/strings — no runtime values or function calls in the initial.',
+        );
+        let struct;
+        try {
+          struct = inferItemStruct(items, name);
+        } catch (e) {
+          if (initArg.loc && !e.aotLoc) e.aotLoc = initArg.loc.start; // collectState isn't withLoc-wrapped
+          throw e;
+        }
+        rec = { name, setter, kind: 'list', struct, items, cap: LIST_CAP, cTypeName: `ErItem_${name}`, arrayName: `s_${name}`, countMember: `s_${name}_count` };
       } else {
-        const initVal = initArg ? evalStatic(initArg, scope) : 0;
+        const initVal = initArg
+          ? evalStaticOrThrow(
+              initArg,
+              scope,
+              `AOT: the initial value of state "${name}" must be a compile-time constant`,
+              'useState(x) initial must be a literal or a constant expression (number, string, bool, or arithmetic over consts) — not a runtime value or function call.',
+            )
+          : 0;
         let cType = cTypeOfValue(initVal);
         // A numeric literal written with a decimal point or exponent (e.g. useState(70.0)) forces a FLOAT
         // slot even though the value is integral — lets the state hold sub-integer values (a smooth drag)
@@ -1251,7 +1290,11 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
   }
   if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw aotError('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()', 'each statement in a handler must be one of: setX(value) / setX(prev => …), a `ref.current = …` write, an `updateVector(…)` call, or `Animated.timing|spring(v, …).start()`. Wrap conditional logic in `if (…) { … }`.');
   const rec = state.bySetter.get(expr.callee.name);
-  if (!rec) throw new Error(`AOT: "${expr.callee.name}" is not a known state setter`);
+  if (!rec)
+    throw aotError(
+      `AOT: "${expr.callee.name}" is not a known state setter`,
+      `a handler can only call a setter from this component's own useState (e.g. setCount), a ref write, updateVector(…), or Animated…start(). "${expr.callee.name}" isn't one of those — arbitrary functions (fetch, console.*, helpers) can't be lowered to C.`,
+    );
   ctx.stateChanged = true;
   const arg = expr.arguments[0];
   if (rec.kind === 'list') return compileListOp(rec, arg, env);
@@ -1310,7 +1353,11 @@ function compileStmts(list, env, state, ctx, indent) {
       }
       continue;
     }
-    if (st.type !== 'ExpressionStatement') throw new Error(`AOT: unsupported statement "${st.type}" in event handler`);
+    if (st.type !== 'ExpressionStatement')
+      throw aotError(
+        `AOT: unsupported statement "${st.type}" in event handler`,
+        'a handler supports only `const x = …` locals, `if (…) { … } else { … }`, and expression statements (setters / ref writes / updateVector / Animated…start). Loops (for/while), switch, try/catch, and early return are not lowered — precompute values or flatten the logic into if/else.',
+      );
     lines.push(...compileHandlerExpr(st.expression, env, state, ctx, indent));
   }
   return lines;
@@ -1417,7 +1464,11 @@ function isChildrenRef(expr, env) {
 function emitComponent(el, scope, out, env, state, opts) {
   const tag = el.openingElement.name.name;
   const fn = out.components.get(tag);
-  if (usesState(fn)) throw new Error(`AOT: component <${tag}> uses useState — per-instance child state not yet supported`);
+  if (usesState(fn))
+    throw aotError(
+      `AOT: component <${tag}> uses useState — per-instance child state not yet supported`,
+      `child components are inlined at compile time and can't yet own state. Lift the state into the parent (<${tag}>'s caller) and pass value + a setter callback down as props, or keep <${tag}> presentational (props only).`,
+    );
   const childNodes = el.children.filter((c) => c.type === 'JSXElement' || (c.type === 'JSXExpressionContainer' && c.expression.type !== 'JSXEmptyExpression'));
 
   // How the body refers to children: destructured `{ children }` (a local) or whole `props` → props.children.
@@ -1539,9 +1590,18 @@ function emitChildren(children, parentVar, scope, out, env, state) {
         try {
           v = evalStatic(expr, scope);
         } catch {
-          throw new Error(`AOT: unsupported expression child "${expr.type}" in a container`);
+          const e = aotError(
+            `AOT: unsupported expression child "${expr.type}" in a container`,
+            'a child expression must be a JSX element, `cond && <El/>` / a ternary of elements, or `list.map(item => <El/>)`. A bare variable holding JSX isn\'t inlined — write the element directly. (If this is a responsive Flow-A-only branch, compile at the target board size via ER_AOT_SCREEN_W/H so the AOT folds the supported branch.)',
+          );
+          if (expr.loc) e.aotLoc = expr.loc.start;
+          throw e;
         }
-        if (v !== false && v != null && v !== '') throw new Error(`AOT: a non-element expression child (${JSON.stringify(v)}) cannot render here`);
+        if (v !== false && v != null && v !== '') {
+          const e = aotError(`AOT: a non-element expression child (${JSON.stringify(v)}) cannot render here`, 'only JSX elements render as children; wrap text in a <Text>{…}</Text>.');
+          if (expr.loc) e.aotLoc = expr.loc.start;
+          throw e;
+        }
       }
     }
   }
@@ -2097,6 +2157,20 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
     throw aotError(`AOT: unknown element <${tag}> (not a built-in or a component in this file)`, `<${tag}> must be a built-in (View / Text / Pressable / Image / ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS file. Check the import/spelling, or define the component here.`);
+  }
+
+  // Spread attributes on a host element (`<View {...props} />`) aren't lowered — the style/event loops
+  // below only read named JSXAttributes, so a spread would be SILENTLY dropped. Reject it explicitly
+  // (the typed components — Switch/TextInput/Modal/… — already throw on spreads). Pin the location to the
+  // spread itself, not the whole element, for a precise code-frame.
+  const spread = el.openingElement.attributes.find((a) => a.type === 'JSXSpreadAttribute');
+  if (spread) {
+    const e = aotError(
+      `AOT: a spread {...} on <${tag}> is not supported`,
+      `list each prop explicitly (e.g. style={…} onPress={…}). Spread props are only supported on a function component instance whose spread object folds to a compile-time constant.`,
+    );
+    if (spread.loc) e.aotLoc = spread.loc.start;
+    throw e;
   }
 
   const v = `n${out.n++}`;
