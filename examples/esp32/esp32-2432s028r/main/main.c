@@ -94,7 +94,9 @@ static void run_app(void)
         er_esp32_spi_lcd_present();
 
         const uint32_t now = now_ms();
-        embedded_renderer_tick(now - prev);
+        const uint32_t dt = now - prev;
+        embedded_renderer_tick(dt);
+        er_app_tick((int)dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
         prev = now;
 
         /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick for the idle task. */

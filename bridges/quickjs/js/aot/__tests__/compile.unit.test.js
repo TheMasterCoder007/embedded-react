@@ -523,3 +523,48 @@ describe('AOT diagnostics', () => {
     expect(err.message).toContain('demos/mydemo/App.jsx:');
   });
 });
+
+describe('AOT effects & timers', () => {
+  it('runs useEffect(fn, []) once on mount and registers a setInterval timer + er_app_tick', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [t, setT] = useState(0);
+        useEffect(() => { const id = setInterval(() => setT((p) => p + 1), 250); return () => clearInterval(id); }, []);
+        return (<Text>{t}</Text>);
+      }`);
+    expect(c).toContain('void er_app_tick(int dt_ms)'); // host-tick timer driver
+    expect(c).toContain('er_timer_add((int)(250), true, er_timer_fn_0)'); // repeating timer
+    expect(c).toContain('static void er_timer_fn_0(void)'); // callback → parameterless C fn
+    expect(c).toContain('s_state.t = (s_state.t + 1);'); // setT(p => p+1) in the callback
+    expect(c).toContain('/* useEffect(fn, []) — run once on mount. */'); // body runs in er_app_build
+    expect(c).not.toContain('clearInterval'); // the cleanup return is dropped (never unmounts)
+  });
+
+  it('lowers setTimeout to a one-shot timer and clearTimeout(id) to er_timer_clear', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [show, setShow] = useState(true);
+        return (<Pressable onPress={() => { const id = setTimeout(() => setShow(false), 3000); clearTimeout(id); }}><Text>x</Text></Pressable>);
+      }`);
+    expect(c).toContain('er_timer_add((int)(3000), false, er_timer_fn_0)'); // one-shot (repeat=false)
+    expect(c).toContain('er_timer_clear(l_id);');
+  });
+
+  it('emits a no-op er_app_tick when the app uses no timers', () => {
+    const c = gen(`${PRE}\nexport function App() { return (<Text>hi</Text>); }`);
+    expect(c).toContain('void er_app_tick(int dt_ms)');
+    expect(c).toContain('(void)dt_ms;');
+    expect(c).not.toContain('er_timer_add');
+  });
+
+  it('throws (clearly) on a dependency-driven useEffect — only [] is supported', () => {
+    expect(() =>
+      gen(`${PRE}
+        export function App() {
+          const [n, setN] = useState(0);
+          useEffect(() => { setN(1); }, [n]);
+          return (<Text>{n}</Text>);
+        }`),
+    ).toThrow(/only useEffect\(fn, \[\]\)/);
+  });
+});

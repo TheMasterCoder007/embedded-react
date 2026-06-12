@@ -153,6 +153,7 @@ int main(void)
             {
                 er_commit();
                 embedded_renderer_tick(16);
+                er_app_tick(16); /* let app timers (setInterval/setTimeout) fire during the hold */
             }
             SDL_Log("held press at %d,%d for %d ms", px, py, hold_ms);
         }
@@ -209,7 +210,9 @@ int main(void)
         er_sdl_present();
 
         const uint32_t now = SDL_GetTicks();
-        embedded_renderer_tick(now - prev);
+        const uint32_t dt = now - prev;
+        embedded_renderer_tick(dt);
+        er_app_tick((int)dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
         prev = now;
     }
 

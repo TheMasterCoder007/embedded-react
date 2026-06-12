@@ -484,6 +484,21 @@ function collectMemos(fnBody) {
   return memos;
 }
 
+/** Collects `useEffect(() => {…}, deps)` calls → { fn, deps, node }. Deps validity is checked at compile. */
+function collectEffects(fnBody) {
+  const effects = [];
+  if (fnBody.type !== 'BlockStatement') return effects;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'ExpressionStatement') continue;
+    const call = stmt.expression;
+    if (call?.type === 'CallExpression' && call.callee.type === 'Identifier' && call.callee.name === 'useEffect') {
+      if (!isFn(call.arguments[0])) throw aotError('AOT: useEffect must take an inline function', 'write useEffect(() => { … }, []).');
+      effects.push({ fn: call.arguments[0], deps: call.arguments[1], node: call });
+    }
+  }
+  return effects;
+}
+
 /** True if a function component declares any useState (per-instance child state — not yet supported). */
 function usesState(fn) {
   if (fn.body.type !== 'BlockStatement') return false;
@@ -882,10 +897,32 @@ function compileUpdateVector(expr, env, ctx, indent) {
 }
 
 /** Compiles one handler ExpressionStatement: a state setter, ref mutation, or Animated.*(...).start(). */
+/** setInterval/setTimeout(cb, ms) → a C `er_timer_add(ms, repeat, fn)` expr; registers cb as a timer fn. */
+function compileTimerAdd(expr, env, state, ctx) {
+  const cb = expr.arguments[0];
+  if (!isFn(cb)) throw aotError('AOT: a setInterval/setTimeout callback must be an inline function', 'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).');
+  const ms = expr.arguments[1] ? emitExpr(expr.arguments[1], env).code : '0';
+  const repeat = expr.callee.name === 'setInterval';
+  const slot = ctx.out.timerFns.length;
+  const name = `er_timer_fn_${slot}`;
+  ctx.out.usesTimers = true;
+  ctx.out.timerFns.push({ name, body: null }); // reserve the slot before compiling the body (it may add more)
+  ctx.out.timerFns[slot].body = compileHandler(cb, env, state, ctx.out);
+  return `er_timer_add((int)(${ms}), ${repeat ? 'true' : 'false'}, ${name})`;
+}
+
 function compileHandlerExprImpl(expr, env, state, ctx, indent) {
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
   if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && expr.callee.name === 'updateVector') {
     return compileUpdateVector(expr, env, ctx, indent);
+  }
+  // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).
+  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && (expr.callee.name === 'setInterval' || expr.callee.name === 'setTimeout')) {
+    return [`${indent}${compileTimerAdd(expr, env, state, ctx)};`];
+  }
+  // clearInterval / clearTimeout(id) → deactivate the timer slot.
+  if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && (expr.callee.name === 'clearInterval' || expr.callee.name === 'clearTimeout')) {
+    return [`${indent}er_timer_clear(${emitExpr(expr.arguments[0], env).code});`];
   }
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
   if (expr.type === 'AssignmentExpression') {
@@ -933,12 +970,25 @@ function compileStmts(list, env, state, ctx, indent) {
       for (const decl of st.declarations) {
         if (decl.id.type !== 'Identifier') throw new Error('AOT: destructuring a handler local is not supported');
         if (!decl.init) throw new Error('AOT: a handler local must have an initializer');
-        const e = emitExpr(decl.init, env);
         const cName = `l_${decl.id.name}`;
+        // `const id = setInterval/setTimeout(…)` → an int timer-id local (so a later clearInterval(id) resolves).
+        if (decl.init.type === 'CallExpression' && decl.init.callee.type === 'Identifier' && (decl.init.callee.name === 'setInterval' || decl.init.callee.name === 'setTimeout')) {
+          // The id is only needed for a later clear*(); a mount effect drops its cleanup, so mark it used.
+          lines.push(`${indent}int ${cName} = ${compileTimerAdd(decl.init, env, state, ctx)};`, `${indent}(void)${cName};`);
+          env = { ...env, locals: new Map(env.locals).set(decl.id.name, { code: cName, cType: 'int' }) };
+          continue;
+        }
+        const e = emitExpr(decl.init, env);
         lines.push(`${indent}${e.cType === 'float' ? 'float' : 'int'} ${cName} = ${e.code};`);
         env = { ...env, locals: new Map(env.locals).set(decl.id.name, { code: cName, cType: e.cType }) };
       }
       continue;
+    }
+    // An effect's cleanup `return () => …` — not run on an MCU (the app never unmounts), so drop it. (A
+    // dep-driven effect that needs cleanup on re-run isn't supported yet; mount-only effects use this.)
+    if (st.type === 'ReturnStatement') {
+      if (ctx.allowReturn) continue;
+      throw new Error('AOT: `return` is only allowed as an effect cleanup');
     }
     if (st.type === 'IfStatement') {
       lines.push(`${indent}if (${emitExpr(st.test, env).code})`, `${indent}{`);
@@ -1516,8 +1566,22 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [] };
 const appTop = emitNode(rootJSX, scope, out, env, state);
+
+// Mount effects: each `useEffect(fn, [])` body runs ONCE after the initial app_update (typically to start a
+// host-tick timer). Compiled after emit so out.timerFns/usesTimers also reflect timers created in handlers.
+for (const eff of collectEffects(component.body)) {
+  if (!eff.deps || eff.deps.type !== 'ArrayExpression' || eff.deps.elements.length !== 0) {
+    throw aotError('AOT: only useEffect(fn, []) — run once on mount — is supported for now', 'use an empty deps array []; dependency-driven effects (re-run when a value changes) are not yet supported.');
+  }
+  const b = eff.fn.body;
+  const stmts = b.type === 'BlockStatement' ? b.body : [{ type: 'ExpressionStatement', expression: b }];
+  const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
+  const lines = compileStmts(stmts, env, state, ctx, '    ');
+  if (ctx.stateChanged) lines.push('    app_update();');
+  out.mountEffects.push(...lines);
+}
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
 const stateRecords = [...state.byName.values()];
@@ -1583,8 +1647,93 @@ const updateBlock = (() => {
 const handlerDefs = out.handlers
   .map((h) => `static void ${h.name}(ERNode* node, const EREventData* data, void* user_data)\n{\n    (void)node;\n    (void)data;\n    (void)user_data;\n${h.body.join('\n')}\n}`)
   .join('\n\n');
-// <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers).
-const usesMath = out.needsMath || /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test([stateBlock, refDecls, vectorBuilderBlock, updateBlock, handlerDefs, out.build.join('\n')].join('\n'));
+
+// setInterval/setTimeout → a small fixed timer table advanced by er_app_tick(dt) (the host calls it each
+// frame). The table + helpers are emitted only when timers are used; er_app_tick is always defined (a no-op
+// otherwise) so a host can call it unconditionally. Timer callbacks become parameterless C functions.
+const timerTableBlock = out.usesTimers
+  ? `#include <stdbool.h>
+
+#ifndef ER_AOT_MAX_TIMERS
+#define ER_AOT_MAX_TIMERS 8
+#endif
+
+typedef struct
+{
+    int interval_ms;
+    int remaining_ms;
+    bool repeat;
+    bool active;
+    void (*fn)(void);
+} ErTimer;
+static ErTimer s_timers[ER_AOT_MAX_TIMERS];
+
+static int er_timer_add(int ms, bool repeat, void (*fn)(void))
+{
+    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
+    {
+        if (!s_timers[i].active)
+        {
+            s_timers[i].interval_ms = ms < 1 ? 1 : ms;
+            s_timers[i].remaining_ms = s_timers[i].interval_ms;
+            s_timers[i].repeat = repeat;
+            s_timers[i].active = true;
+            s_timers[i].fn = fn;
+            return i;
+        }
+    }
+    return -1; /* table full (raise ER_AOT_MAX_TIMERS) */
+}
+
+static void er_timer_clear(int id)
+{
+    if (id >= 0 && id < ER_AOT_MAX_TIMERS)
+    {
+        s_timers[id].active = false;
+    }
+}`
+  : '';
+
+const timerFnDefs = out.timerFns.map((t) => `static void ${t.name}(void)\n{\n${t.body.join('\n')}\n}`).join('\n\n');
+
+const appTickFn = out.usesTimers
+  ? `void er_app_tick(int dt_ms)
+{
+    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
+    {
+        if (!s_timers[i].active)
+        {
+            continue;
+        }
+        s_timers[i].remaining_ms -= dt_ms;
+        if (s_timers[i].remaining_ms <= 0)
+        {
+            void (*fn)(void) = s_timers[i].fn;
+            if (s_timers[i].repeat)
+            {
+                s_timers[i].remaining_ms += s_timers[i].interval_ms;
+                if (s_timers[i].remaining_ms <= 0)
+                {
+                    s_timers[i].remaining_ms = s_timers[i].interval_ms; /* dt ran long; don't spiral */
+                }
+            }
+            else
+            {
+                s_timers[i].active = false;
+            }
+            if (fn)
+            {
+                fn();
+            }
+        }
+    }
+}`
+  : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n}`;
+
+const mountEffectsBlock = out.mountEffects.length ? '\n    /* useEffect(fn, []) — run once on mount. */\n' + out.mountEffects.join('\n') + '\n' : '';
+
+// <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
+const usesMath = out.needsMath || /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test([stateBlock, refDecls, vectorBuilderBlock, updateBlock, handlerDefs, timerFnDefs, out.mountEffects.join('\n'), out.build.join('\n')].join('\n'));
 const body = `/*
  * Generated by the embedded-react Flow B AOT compiler (npm run aot -- ${demo}). DO NOT EDIT.
  * Builds the app's scene graph + state machine directly against er_scene.h — no QuickJS, no JS runtime.
@@ -1595,7 +1744,9 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}
+${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}
+${appTickFn}
+
 void er_app_build(int screen_w, int screen_h)
 {
     ERProps p;
@@ -1611,7 +1762,7 @@ ${animCreate ? '\n' + animCreate + '\n' : ''}
 ${out.build.join('\n')}
     er_tree_append_child(root, ${appTop});
     er_tree_set_root(root);
-${hasUpdate ? '\n    app_update(); /* apply initial state-dependent props */\n' : ''}}
+${hasUpdate ? '\n    app_update(); /* apply initial state-dependent props */\n' : ''}${mountEffectsBlock}}
 `;
 
 const header = `/* Generated by the embedded-react Flow B AOT compiler. DO NOT EDIT. */
@@ -1620,6 +1771,10 @@ const header = `/* Generated by the embedded-react Flow B AOT compiler. DO NOT E
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
+
+/** @brief Advances app timers (setInterval/setTimeout). Call once per frame with the elapsed ms; a no-op
+ *         for apps that use no timers, so it is always safe to call. */
+void er_app_tick(int dt_ms);
 
 #endif
 `;
