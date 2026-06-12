@@ -224,4 +224,15 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
  */
 void er_text_input_key(uint32_t keycode, const char* utf8_char);
 
+/** @brief True when the software keyboard should be drawn (enabled + a TextInput is focused). */
+bool er_keyboard_active(void);
+
+/** @brief Draws the on-screen keyboard strip over the bottom of the screen (no-op when inactive). Honours
+ *         the active clip / band, so it composites on top of the scene within the current repaint region. */
+void er_keyboard_draw(int screen_w, int screen_h);
+
+/** @brief Routes a touch to the on-screen keyboard. Returns true (consumed) when the keyboard is active and
+ *         the point is inside its strip — a key DOWN types into the focused input; otherwise false. */
+bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y);
+
 #endif

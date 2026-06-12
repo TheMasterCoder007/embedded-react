@@ -28,6 +28,49 @@ static int to_px(int logical, float scale)
     return (int)((float)logical * scale + 0.5f);
 }
 
+/* ---- Demo of full app keyboard customisation (layout + colours), all in host code, no engine edit. ----
+ * A QWERTY whose shift key reads "shift", drawn as white keys with black labels. */
+#define KC(s) {(s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU}
+#define KSPACE {NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU}
+#define KBKSP {"<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU}
+#define KDONE {"OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU}
+#define KSHIFT(tgt, hl) {"shift", NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)}
+#define KSW3(lbl, tgt) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, 0xFFU}
+#define KSW4(lbl, tgt) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU}
+
+static const ERKeyboardKey K0r0[] = {KC("q"), KC("w"), KC("e"), KC("r"), KC("t"), KC("y"), KC("u"), KC("i"), KC("o"), KC("p")};
+static const ERKeyboardKey K0r1[] = {KC("a"), KC("s"), KC("d"), KC("f"), KC("g"), KC("h"), KC("j"), KC("k"), KC("l")};
+static const ERKeyboardKey K0r2[] = {KSHIFT(1, 1), KC("z"), KC("x"), KC("c"), KC("v"), KC("b"), KC("n"), KC("m"), KBKSP};
+static const ERKeyboardKey Krow3[] = {KSW4("123", 2), KSPACE, KDONE};
+static const ERKeyboardRow K0rows[] = {{K0r0, 10}, {K0r1, 9}, {K0r2, 9}, {Krow3, 3}};
+
+static const ERKeyboardKey K1r0[] = {KC("Q"), KC("W"), KC("E"), KC("R"), KC("T"), KC("Y"), KC("U"), KC("I"), KC("O"), KC("P")};
+static const ERKeyboardKey K1r1[] = {KC("A"), KC("S"), KC("D"), KC("F"), KC("G"), KC("H"), KC("J"), KC("K"), KC("L")};
+static const ERKeyboardKey K1r2[] = {KSHIFT(0, 1), KC("Z"), KC("X"), KC("C"), KC("V"), KC("B"), KC("N"), KC("M"), KBKSP};
+static const ERKeyboardRow K1rows[] = {{K1r0, 10}, {K1r1, 9}, {K1r2, 9}, {Krow3, 3}};
+
+static const ERKeyboardKey K2r0[] = {KC("1"), KC("2"), KC("3"), KC("4"), KC("5"), KC("6"), KC("7"), KC("8"), KC("9"), KC("0")};
+static const ERKeyboardKey K2r1[] = {KC("-"), KC("/"), KC(":"), KC(";"), KC("("), KC(")"), KC("$"), KC("&"), KC("@"), KC("\"")};
+static const ERKeyboardKey K2r2[] = {KSW3("#+=", 3), KC("."), KC(","), KC("?"), KC("!"), KC("'"), KBKSP};
+static const ERKeyboardKey Krow3b[] = {KSW4("ABC", 0), KSPACE, KDONE};
+static const ERKeyboardRow K2rows[] = {{K2r0, 10}, {K2r1, 10}, {K2r2, 7}, {Krow3b, 3}};
+
+static const ERKeyboardKey K3r0[] = {KC("["), KC("]"), KC("{"), KC("}"), KC("#"), KC("%"), KC("^"), KC("*"), KC("+"), KC("=")};
+static const ERKeyboardKey K3r1[] = {KC("_"), KC("\\"), KC("|"), KC("~"), KC("<"), KC(">"), KC("$"), KC("`")};
+static const ERKeyboardKey K3r2[] = {KSW3("123", 2), KC("."), KC(","), KC("?"), KC("!"), KC("'"), KBKSP};
+static const ERKeyboardRow K3rows[] = {{K3r0, 10}, {K3r1, 8}, {K3r2, 7}, {Krow3b, 3}};
+
+static const ERKeyboardLayer g_kbd_layers[4] = {{K0rows, 4}, {K1rows, 4}, {K2rows, 4}, {K3rows, 4}};
+static const ERKeyboardConfig g_desktop_kbd = {
+    g_kbd_layers, 4,    /* custom layout (shift reads "shift") */
+    0, 0,               /* grid_cols, row_height_px → defaults */
+    5, 10, 22,          /* key_gap_px, key_radius_px, font_size_px */
+    0xFF303030U,        /* panel: dark grey so white keys stand out */
+    0xFFFFFFFFU,        /* key: white */
+    0xFFA8C8F0U,        /* active key (shift): light blue */
+    0xFF101010U,        /* label: near-black */
+};
+
 /**
  * @brief Entry point: bring up SDL + the engine, build the AOT app once, run the frame loop.
  *
@@ -81,6 +124,11 @@ int main(void)
     /* Build the compiled app's scene graph (no JS — just er_scene.h calls baked at build time). */
     er_app_build(phys_w, phys_h);
     SDL_Log("AOT app built at %dx%d (no QuickJS)", phys_w, phys_h);
+    /* The on-screen keyboard is compiled into this host (ERUI_ONSCREEN_KEYBOARD=ON in CMakeLists.txt) and
+     * auto-shows whenever a TextInput is focused. As a demo of full app customisation, this desktop host
+     * restyles it (bigger font, rounder keys, a blue shift accent) via a static ERKeyboardConfig — keeping
+     * the built-in QWERTY layout (layers = NULL) and overriding only colours/sizes. No engine edit. */
+    er_keyboard_set_config(&g_desktop_kbd);
 
     /* Optional one-shot screenshot for verification: ER_AOT_SHOT=<path.bmp> renders one frame, saves
        it, and exits. Lets a headless run confirm the pixels without a visible window. */
@@ -139,6 +187,47 @@ int main(void)
                 er_commit();
                 embedded_renderer_tick(16);
                 er_app_tick(16);
+            }
+        }
+
+        /* ER_AOT_TAPS="x,y x,y …": tap each point in order (down+up), committing + settling between — for
+           multi-target flows like focusing a TextInput then tapping on-screen keyboard keys. */
+        {
+            char taps[512] = {0};
+            const char* s = SDL_getenv("ER_AOT_TAPS");
+            if (s)
+            {
+                SDL_strlcpy(taps, s, sizeof(taps));
+            }
+            if (taps[0])
+            {
+                er_commit(); /* layout + hit areas before the first tap */
+                char* p = taps;
+                while (*p)
+                {
+                    while (*p == ' ')
+                    {
+                        p++;
+                    }
+                    if (!*p)
+                    {
+                        break;
+                    }
+                    const int tx = SDL_atoi(p);
+                    char* comma = SDL_strchr(p, ',');
+                    const int ty = comma ? SDL_atoi(comma + 1) : 0;
+                    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
+                    er_commit();
+                    embedded_renderer_tick(16);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+                    er_commit();
+                    embedded_renderer_tick(16);
+                    while (*p && *p != ' ')
+                    {
+                        p++;
+                    }
+                }
+                SDL_Log("tapped sequence \"%s\"", taps);
             }
         }
 

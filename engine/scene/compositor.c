@@ -30,6 +30,8 @@ static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint32_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
+static bool s_kbd_dirty = false; /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
+static uint8_t s_kbd_layer = 0;  /**< Active key layer index into the (default or app-supplied) layout. */
 
 /* Dirty-rect tracking: union of all screen rects repainted during the current er_commit(). */
 static ERRect s_dirty_rect;
@@ -1565,6 +1567,9 @@ void er_text_input_focus(ERNode* node)
     if (node && node->type != ER_NODE_TEXT_INPUT)
         return;
 
+    s_kbd_dirty = true; /* focus is changing → repaint the on-screen keyboard strip (show or hide) */
+    s_kbd_layer = 0;    /* a freshly focused input starts on the lowercase layer */
+
     /* Blur the currently focused node first. */
     if (s_focused_input_tag != ER_INVALID_TAG)
     {
@@ -1988,6 +1993,301 @@ void er_text_input_key(uint32_t keycode, const char* utf8_char)
     }
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - On-screen keyboard — compiled in only when ERUI_ONSCREEN_KEYBOARD=1 (touch-only devices). The layout and
+ - appearance are entirely data-driven (ERKeyboardConfig): an app overrides them via er_keyboard_set_config()
+ - without touching the engine. Rows are laid out span-proportionally, so one config flexes to any screen.
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#ifndef ERUI_ONSCREEN_KEYBOARD
+#define ERUI_ONSCREEN_KEYBOARD 0
+#endif
+
+#if ERUI_ONSCREEN_KEYBOARD
+
+/* ---- Built-in default layout: lowercase / UPPERCASE / numbers / symbols, the iOS-style QWERTY pages. ---- */
+#define KCH(s) {(s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU}                  /* char key, span 2 */
+#define KSPACE {NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU}               /* blank space bar */
+#define KBKSP {"<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU}
+#define KDONE {"OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU}
+#define KSW3(lbl, tgt, hl) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)} /* row-2 left switch */
+#define KSW4(lbl, tgt) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU}    /* row-3 left switch */
+
+static const ERKeyboardKey L0r0[] = {KCH("q"), KCH("w"), KCH("e"), KCH("r"), KCH("t"), KCH("y"), KCH("u"), KCH("i"), KCH("o"), KCH("p")};
+static const ERKeyboardKey L0r1[] = {KCH("a"), KCH("s"), KCH("d"), KCH("f"), KCH("g"), KCH("h"), KCH("j"), KCH("k"), KCH("l")};
+static const ERKeyboardKey L0r2[] = {KSW3("^", 1, 1), KCH("z"), KCH("x"), KCH("c"), KCH("v"), KCH("b"), KCH("n"), KCH("m"), KBKSP};
+static const ERKeyboardKey L0r3[] = {KSW4("123", 2), KSPACE, KDONE};
+static const ERKeyboardRow L0rows[] = {{L0r0, 10}, {L0r1, 9}, {L0r2, 9}, {L0r3, 3}};
+
+static const ERKeyboardKey L1r0[] = {KCH("Q"), KCH("W"), KCH("E"), KCH("R"), KCH("T"), KCH("Y"), KCH("U"), KCH("I"), KCH("O"), KCH("P")};
+static const ERKeyboardKey L1r1[] = {KCH("A"), KCH("S"), KCH("D"), KCH("F"), KCH("G"), KCH("H"), KCH("J"), KCH("K"), KCH("L")};
+static const ERKeyboardKey L1r2[] = {KSW3("^", 0, 1), KCH("Z"), KCH("X"), KCH("C"), KCH("V"), KCH("B"), KCH("N"), KCH("M"), KBKSP};
+static const ERKeyboardRow L1rows[] = {{L1r0, 10}, {L1r1, 9}, {L1r2, 9}, {L0r3, 3}};
+
+static const ERKeyboardKey L2r0[] = {KCH("1"), KCH("2"), KCH("3"), KCH("4"), KCH("5"), KCH("6"), KCH("7"), KCH("8"), KCH("9"), KCH("0")};
+static const ERKeyboardKey L2r1[] = {KCH("-"), KCH("/"), KCH(":"), KCH(";"), KCH("("), KCH(")"), KCH("$"), KCH("&"), KCH("@"), KCH("\"")};
+static const ERKeyboardKey L2r2[] = {KSW3("#+=", 3, 0xFFU), KCH("."), KCH(","), KCH("?"), KCH("!"), KCH("'"), KBKSP};
+static const ERKeyboardKey L2r3[] = {KSW4("ABC", 0), KSPACE, KDONE};
+static const ERKeyboardRow L2rows[] = {{L2r0, 10}, {L2r1, 10}, {L2r2, 7}, {L2r3, 3}};
+
+static const ERKeyboardKey L3r0[] = {KCH("["), KCH("]"), KCH("{"), KCH("}"), KCH("#"), KCH("%"), KCH("^"), KCH("*"), KCH("+"), KCH("=")};
+static const ERKeyboardKey L3r1[] = {KCH("_"), KCH("\\"), KCH("|"), KCH("~"), KCH("<"), KCH(">"), KCH("$"), KCH("`")};
+static const ERKeyboardKey L3r2[] = {KSW3("123", 2, 0xFFU), KCH("."), KCH(","), KCH("?"), KCH("!"), KCH("'"), KBKSP};
+static const ERKeyboardRow L3rows[] = {{L3r0, 10}, {L3r1, 8}, {L3r2, 7}, {L2r3, 3}};
+
+#undef KCH
+#undef KSPACE
+#undef KBKSP
+#undef KDONE
+#undef KSW3
+#undef KSW4
+
+static const ERKeyboardLayer s_kbd_default_layers[4] = {{L0rows, 4}, {L1rows, 4}, {L2rows, 4}, {L3rows, 4}};
+static const ERKeyboardConfig s_kbd_default_cfg = {s_kbd_default_layers, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static const ERKeyboardConfig* s_kbd_cfg = NULL; /**< app override; NULL = built-in default */
+
+/** @brief The active keyboard config (app-supplied or the built-in default). */
+static const ERKeyboardConfig* er_kbd_cfg(void)
+{
+    return s_kbd_cfg ? s_kbd_cfg : &s_kbd_default_cfg;
+}
+
+/** @brief The active layout — falls back to the built-in QWERTY when a config leaves `layers` NULL, so an
+ *         app can override only colours/sizes and keep the default keys. Returns the layer array + count. */
+static const ERKeyboardLayer* er_kbd_layers(uint8_t* count)
+{
+    const ERKeyboardConfig* c = er_kbd_cfg();
+    if (c->layers && c->layer_count)
+    {
+        *count = c->layer_count;
+        return c->layers;
+    }
+    *count = 4;
+    return s_kbd_default_layers;
+}
+
+void er_keyboard_set_config(const ERKeyboardConfig* cfg)
+{
+    s_kbd_cfg = cfg;
+    s_kbd_layer = 0;
+    s_kbd_dirty = true;
+}
+
+bool er_keyboard_active(void)
+{
+    return s_focused_input_tag != ER_INVALID_TAG;
+}
+
+/** @brief Largest row count across the config's layers (so the strip rect is stable across layer switches). */
+static int er_kbd_rows(void)
+{
+    uint8_t lc;
+    const ERKeyboardLayer* layers = er_kbd_layers(&lc);
+    int m = 0;
+    for (uint8_t i = 0; i < lc; i++)
+        if ((int)layers[i].count > m)
+            m = layers[i].count;
+    return m ? m : 1;
+}
+
+/** @brief Per-row height: configured, else ≈1/11 of screen height; clamped so the strip stays ≤ half-screen. */
+static int er_kbd_row_h(int screen_h)
+{
+    const ERKeyboardConfig* c = er_kbd_cfg();
+    int rh = c->row_height_px ? (int)c->row_height_px : (screen_h / 11);
+    if (rh < 24)
+        rh = 24;
+    const int rows = er_kbd_rows();
+    if (rh * rows > screen_h / 2)
+        rh = (screen_h / 2) / rows;
+    return rh;
+}
+
+/** @brief Bottom strip the keyboard occupies. */
+static void er_keyboard_rect(int screen_w, int screen_h, ERRect* out)
+{
+    const int kh = er_kbd_row_h(screen_h) * er_kbd_rows();
+    out->x = 0;
+    out->y = screen_h - kh;
+    out->w = screen_w;
+    out->h = kh;
+}
+
+/** One laid-out key: its screen rect, the source key descriptor, and whether to draw it highlighted. */
+typedef struct
+{
+    int x, y, w, h;
+    const ERKeyboardKey* key;
+    bool highlight;
+} ERKbdHit1;
+typedef void (*er_kbd_key_fn)(const ERKbdHit1* key, void* ud);
+
+/** Invokes `fn` for every key of the active layer, positioned span-proportionally and centred per row. */
+static void er_kbd_foreach(int screen_w, int screen_h, er_kbd_key_fn fn, void* ud)
+{
+    const ERKeyboardConfig* c = er_kbd_cfg();
+    uint8_t lc;
+    const ERKeyboardLayer* layers = er_kbd_layers(&lc);
+    if (s_kbd_layer >= lc)
+        return;
+    ERRect kr;
+    er_keyboard_rect(screen_w, screen_h, &kr);
+    const int grid = c->grid_cols ? (int)c->grid_cols : 20;
+    const int cw = kr.w / grid;
+    const int rh = er_kbd_row_h(screen_h);
+    const int pad = c->key_gap_px ? (int)c->key_gap_px : 2;
+    const ERKeyboardLayer* L = &layers[s_kbd_layer];
+
+    for (uint8_t r = 0; r < L->count; r++)
+    {
+        const ERKeyboardRow* row = &L->rows[r];
+        int total = 0;
+        for (uint8_t i = 0; i < row->count; i++)
+            total += row->keys[i].span ? row->keys[i].span : 1;
+        int xc = (grid - total) / 2;
+        if (xc < 0)
+            xc = 0;
+        for (uint8_t i = 0; i < row->count; i++)
+        {
+            const ERKeyboardKey* kk = &row->keys[i];
+            const int span = kk->span ? kk->span : 1;
+            ERKbdHit1 lk;
+            lk.x = kr.x + xc * cw + pad;
+            lk.y = kr.y + r * rh + pad;
+            lk.w = span * cw - 2 * pad;
+            lk.h = rh - 2 * pad;
+            lk.key = kk;
+            lk.highlight = (kk->type == ER_KBD_KEY_LAYER && kk->highlight_layer == s_kbd_layer);
+            fn(&lk, ud);
+            xc += span;
+        }
+    }
+}
+
+/** Draws one key: a rounded fill (brighter when highlighted) + its centred label. */
+static void er_kbd_draw_key(const ERKbdHit1* k, void* ud)
+{
+    const ERKeyboardConfig* c = (const ERKeyboardConfig*)ud;
+    const uint32_t key_bg = c->key_color ? c->key_color : 0xFF2A3340U;
+    const uint32_t act_bg = c->key_active_color ? c->key_active_color : 0xFF4A6488U;
+    const uint32_t label_color = c->label_color ? c->label_color : 0xFFE7EDF5U;
+    const int radius = c->key_radius_px ? (int)c->key_radius_px : 5;
+    const int fs = c->font_size_px ? (int)c->font_size_px : 16;
+    er_rrect_fill_bordered(k->highlight ? act_bg : key_bg, 0xFF000000U, 0, k->x, k->y, k->w, k->h, radius);
+    const char* label = k->key->label ? k->key->label : k->key->text;
+    if (label && label[0] && label[0] != ' ') /* the space bar (text " ") stays blank */
+    {
+        ERTextRenderParams par;
+        memset(&par, 0, sizeof(par));
+        par.text = label;
+        /* Keep the glyph top where it reads centred, but extend the clip to the key's bottom edge so
+         * descenders (p g q y j) are not cut. */
+        const int top = k->y + (k->h - fs) / 2;
+        par.clip = (ERRect){k->x, top, k->w, (k->y + k->h) - top};
+        par.color = label_color;
+        par.font_size = (uint16_t)fs;
+        par.text_align = ER_TEXT_ALIGN_CENTER;
+        par.number_of_lines = 1;
+        er_text_render(&par);
+    }
+}
+
+void er_keyboard_draw(int screen_w, int screen_h)
+{
+    if (!er_keyboard_active())
+        return;
+    const ERKeyboardConfig* c = er_kbd_cfg();
+    ERRect kr;
+    er_keyboard_rect(screen_w, screen_h, &kr);
+    er_blit_fill(c->panel_color ? c->panel_color : 0xFF12181FU, kr.x, kr.y, kr.w, kr.h);
+    er_kbd_foreach(screen_w, screen_h, er_kbd_draw_key, (void*)c);
+}
+
+/** Hit-test accumulator: the first key under (x, y). */
+typedef struct
+{
+    int x, y;
+    const ERKeyboardKey* key;
+} ERKbdHit;
+
+static void er_kbd_hit_one(const ERKbdHit1* k, void* ud)
+{
+    ERKbdHit* h = (ERKbdHit*)ud;
+    if (h->key)
+        return;
+    if (h->x >= k->x && h->x < k->x + k->w && h->y >= k->y && h->y < k->y + k->h)
+        h->key = k->key;
+}
+
+bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
+{
+    if (!er_keyboard_active())
+        return false;
+    ERNode* root = er_get_node(s_root_tag);
+    if (!root)
+        return false;
+    const int sw = (int)root->computed.w;
+    const int sh = (int)root->computed.h;
+    ERRect kr;
+    er_keyboard_rect(sw, sh, &kr);
+    if (x < kr.x || x >= kr.x + kr.w || y < kr.y || y >= kr.y + kr.h)
+        return false; /* outside the keyboard → let the scene handle the touch */
+    if (phase == ER_TOUCH_DOWN)
+    {
+        ERKbdHit h;
+        h.x = x;
+        h.y = y;
+        h.key = NULL;
+        er_kbd_foreach(sw, sh, er_kbd_hit_one, &h);
+        if (h.key)
+        {
+            switch (h.key->type)
+            {
+                case ER_KBD_KEY_LAYER:
+                    s_kbd_layer = h.key->layer;
+                    s_kbd_dirty = true; /* the whole keyboard relabels → repaint its strip next commit */
+                    break;
+                case ER_KBD_KEY_BACKSPACE:
+                    er_text_input_key(ER_KEY_BACKSPACE, NULL);
+                    break;
+                case ER_KBD_KEY_DONE:
+                    er_text_input_key(ER_KEY_ESCAPE, NULL);
+                    break;
+                case ER_KBD_KEY_CHAR:
+                default:
+                    er_text_input_key(0, h.key->text ? h.key->text : "");
+                    break;
+            }
+        }
+    }
+    return true; /* consume all phases inside the keyboard so they never reach the scene */
+}
+
+#else /* ERUI_ONSCREEN_KEYBOARD: compiled out — trivial stubs so callers need no #ifs. */
+
+bool er_keyboard_active(void)
+{
+    return false;
+}
+void er_keyboard_draw(int screen_w, int screen_h)
+{
+    (void)screen_w;
+    (void)screen_h;
+}
+bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
+{
+    (void)phase;
+    (void)x;
+    (void)y;
+    return false;
+}
+void er_keyboard_set_config(const ERKeyboardConfig* cfg)
+{
+    (void)cfg;
+}
+
+#endif /* ERUI_ONSCREEN_KEYBOARD */
+
 /**
  * @brief Unlinks a child from its current parent's sibling list, if it has one.
  *
@@ -2259,6 +2559,15 @@ void er_commit(void)
         /* Seed with any pixels vacated by removed/destroyed nodes since the last commit. */
         if (s_have_removed_damage)
             damage_union(&clip, &have, s_removed_damage.x, s_removed_damage.y, s_removed_damage.w, s_removed_damage.h);
+#if ERUI_ONSCREEN_KEYBOARD
+        /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
+        if (s_kbd_dirty)
+        {
+            ERRect kr;
+            er_keyboard_rect((int)root->computed.w, (int)root->computed.h, &kr);
+            damage_union(&clip, &have, kr.x, kr.y, kr.w, kr.h);
+        }
+#endif
         for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
         {
             ERNode* n = er_get_node(tag);
@@ -2378,6 +2687,7 @@ void er_commit(void)
                     backend->band_begin(fx, sy, fw, sh, backend->ctx);
                 er_set_band(sy, sh);
                 render_tree(root, true, 0, 0);
+                er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
                 if (backend->band_flush)
                     backend->band_flush(backend->ctx);
             }
@@ -2397,11 +2707,13 @@ void er_commit(void)
             clipped = true;
         }
         render_tree(root, false, 0, 0);
+        er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
         if (clipped)
             er_pop_clip_rect();
     }
 
     s_force_full_repaint = false;
+    s_kbd_dirty = false;           /* the keyboard strip (if any) was repainted this commit */
     s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
 }
 

@@ -1213,6 +1213,76 @@ extern "C"
      */
     void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data);
 
+    /*------------------------------------------------------------------------------------------------------
+     - On-screen software keyboard (compiled in only when ERUI_ONSCREEN_KEYBOARD=1; for touch-only devices)
+     ------------------------------------------------------------------------------------------------------*/
+
+    /** @brief What a keyboard key does when pressed. */
+    typedef enum ERKeyboardKeyType
+    {
+        ER_KBD_KEY_CHAR = 0,   /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
+        ER_KBD_KEY_BACKSPACE,  /**< deletes the character before the cursor */
+        ER_KBD_KEY_DONE,       /**< dismisses the keyboard (blurs the input) */
+        ER_KBD_KEY_LAYER       /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
+    } ERKeyboardKeyType;
+
+    /** @brief One key. `span` is its width in grid columns; rows are laid out proportionally so keys flex
+     *         to any screen width. For ER_KBD_KEY_LAYER, `highlight_layer` (else 0xFF) draws the key active
+     *         when that layer is showing — e.g. a shift key lit on the UPPERCASE layer. */
+    typedef struct ERKeyboardKey
+    {
+        const char* label;     /**< text shown on the key; NULL falls back to `text` */
+        const char* text;      /**< string typed for ER_KBD_KEY_CHAR (e.g. "a", " "); ignored otherwise */
+        uint8_t type;          /**< ERKeyboardKeyType */
+        uint8_t layer;         /**< target layer for ER_KBD_KEY_LAYER */
+        uint8_t span;          /**< width in grid columns (>= 1) */
+        uint8_t highlight_layer; /**< highlight this key while this layer shows (0xFF = never) */
+    } ERKeyboardKey;
+
+    /** @brief A row of keys (laid out left→right, centred when narrower than the grid). */
+    typedef struct ERKeyboardRow
+    {
+        const ERKeyboardKey* keys;
+        uint8_t count;
+    } ERKeyboardRow;
+
+    /** @brief One layer (page) of rows — e.g. lowercase, UPPERCASE, numbers, symbols. */
+    typedef struct ERKeyboardLayer
+    {
+        const ERKeyboardRow* rows;
+        uint8_t count;
+    } ERKeyboardLayer;
+
+    /** @brief Full keyboard description supplied by the app. Any color/size left 0 uses the engine default,
+     *         so a caller can override just a few fields. `layers` NULL keeps the built-in QWERTY layout. */
+    typedef struct ERKeyboardConfig
+    {
+        const ERKeyboardLayer* layers; /**< layer array; NULL = built-in QWERTY (lower/UPPER/123/#+=) */
+        uint8_t layer_count;
+        uint8_t grid_cols;             /**< total columns a row's spans add up to (0 = 20) */
+        uint16_t row_height_px;        /**< height of each key row (0 = auto, ~1/11 of the screen height) */
+        uint8_t key_gap_px;            /**< gap inset around each key (0 = 2) */
+        uint8_t key_radius_px;         /**< key corner radius (0 = 5) */
+        uint8_t font_size_px;          /**< label font size (0 = 16) */
+        uint32_t panel_color;          /**< strip backdrop ARGB (0 = default) */
+        uint32_t key_color;            /**< key fill ARGB (0 = default) */
+        uint32_t key_active_color;     /**< highlighted-key fill ARGB (0 = default) */
+        uint32_t label_color;          /**< key label ARGB (0 = default) */
+    } ERKeyboardConfig;
+
+    /**
+     * @brief Supplies a custom on-screen-keyboard layout / appearance, replacing the built-in QWERTY.
+     *
+     * Only takes effect when the engine is built with ERUI_ONSCREEN_KEYBOARD=1 (a no-op otherwise). The
+     * config (and every array / string it points at) must stay alive for as long as the keyboard is used —
+     * pass static data. Pass NULL to restore the built-in default. Layout is span-proportional, so the same
+     * config flexes across screen sizes. There is no auto-scroll-into-view yet, so place inputs above the
+     * keyboard's bottom strip.
+     *
+     * @param[in] cfg  Keyboard description, or NULL for the built-in QWERTY.
+     */
+    void er_keyboard_set_config(const ERKeyboardConfig* cfg);
+
     /**
      * @brief Gives keyboard focus to a TextInput node.
      *

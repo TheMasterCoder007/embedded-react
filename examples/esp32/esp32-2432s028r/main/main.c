@@ -58,6 +58,9 @@ static void run_app(void)
 
     /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
     er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    /* The software keyboard is compiled in via ERUI_ONSCREEN_KEYBOARD=1 (components/engine/CMakeLists.txt)
+     * and auto-shows whenever a TextInput is focused — no runtime call needed. Customise its layout/colours
+     * with er_keyboard_set_config(&cfg) here if desired. */
     ESP_LOGI(TAG, "AOT app built at %dx%d (no QuickJS)", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
     ESP_LOGI(TAG, "free internal RAM after boot: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 

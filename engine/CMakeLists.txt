@@ -20,6 +20,7 @@ option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRA
 option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
 option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
 option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
+option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
 
 # TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
 # FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
@@ -99,6 +100,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_BILINEAR_SCALE=$<BOOL:${ERUI_BILINEAR_SCALE}>
         ERUI_GRADIENT=$<BOOL:${ERUI_GRADIENT}>
         ERUI_GRADIENT_RADIAL=$<BOOL:${ERUI_GRADIENT_RADIAL}>
+        ERUI_ONSCREEN_KEYBOARD=$<BOOL:${ERUI_ONSCREEN_KEYBOARD}>
         ERUI_TRANSFORMS_${ERUI_TRANSFORMS}=1
         ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
         ERUI_MAX_NODES=${ERUI_MAX_NODES}

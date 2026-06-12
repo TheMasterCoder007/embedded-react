@@ -752,6 +752,11 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
     if (finger_id >= ER_MAX_TOUCHES)
         return;
 
+    /* On-screen keyboard (if active) gets first refusal: taps inside its strip type into the focused input
+     * and are consumed so they never reach the scene below it. */
+    if (er_keyboard_dispatch_touch(phase, x, y))
+        return;
+
     ERTouchState* touch = &s_touches[finger_id];
 
     switch (phase)
