@@ -75,6 +75,7 @@ const FLEX_DIRECTION = {
   'row-reverse': 'ER_FLEX_ROW_REVERSE',
   'column-reverse': 'ER_FLEX_COL_REVERSE',
 };
+const POSITION = { relative: 'ER_POS_RELATIVE', absolute: 'ER_POS_ABSOLUTE' };
 
 const enumKey = (table, name) => (v) => {
   const c = table[v];
@@ -140,6 +141,12 @@ const KEYS = {
   alignItems: (v) => [{ field: 'align_items', expr: enumKey(ALIGN, 'alignItems')(v) }],
   alignSelf: (v) => [{ field: 'align_self', expr: enumKey(ALIGN, 'alignSelf')(v) }],
   justifyContent: (v) => [{ field: 'justify_content', expr: enumKey(JUSTIFY, 'justifyContent')(v) }],
+  // Positioning: `position: 'absolute'` takes a node out of flow; left/top/right/bottom are its anchors.
+  position: (v) => [{ field: 'position', expr: enumKey(POSITION, 'position')(v) }],
+  left: (v) => [{ field: 'left', expr: dim(v) }],
+  top: (v) => [{ field: 'top', expr: dim(v) }],
+  right: (v) => [{ field: 'right', expr: dim(v) }],
+  bottom: (v) => [{ field: 'bottom', expr: dim(v) }],
   // `flex: n` → grow=n, shrink=1, basis=0 (RN semantics; matches native_ui_bridge apply_flex).
   flex: (v) => {
     const n = Number(v);

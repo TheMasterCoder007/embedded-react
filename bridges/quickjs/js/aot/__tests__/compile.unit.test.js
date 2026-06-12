@@ -636,3 +636,37 @@ describe('AOT ActivityIndicator', () => {
     expect(c).toContain('p.width = 48;');
   });
 });
+
+describe('AOT Modal', () => {
+  it('lowers <Modal> to ER_NODE_MODAL: state-driven visibility, backdrop, full-screen-centred overlay defaults', () => {
+    const c = gen(`${PRE}
+      import { Modal } from 'embedded-react';
+      export function App() {
+        const [show, setShow] = useState(false);
+        return (<Modal visible={show} backdropColor="#000000cc"><Text>Hi</Text></Modal>);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_MODAL)');
+    expect(c).toContain('p.modal_visible = (uint8_t)((s_state.show) ? 1 : 0);');
+    expect(c).toContain('p.backdrop_color = 0xCC000000u;');
+    expect(c).toContain('p.position = ER_POS_ABSOLUTE;'); // overlay defaults…
+    expect(c).toContain('p.right = 0;'); // …filled via 4 insets
+    expect(c).toContain('p.align_items = ER_ALIGN_CENTER;');
+    expect(c).toContain('"Hi"'); // content (children) emitted
+  });
+
+  it('throws when a Modal has no visible prop', () => {
+    expect(() =>
+      gen(`${PRE}
+        import { Modal } from 'embedded-react';
+        export function App() { return (<Modal><Text>x</Text></Modal>); }`),
+    ).toThrow(/needs a visible prop/);
+  });
+
+  it('lowers position:absolute + left/top to ERProps (new style keys)', () => {
+    const c = gen(`${PRE}
+      export function App() { return (<View style={{ position: 'absolute', left: 10, top: 20 }}><Text>x</Text></View>); }`);
+    expect(c).toContain('p.position = ER_POS_ABSOLUTE;');
+    expect(c).toContain('p.left = 10;');
+    expect(c).toContain('p.top = 20;');
+  });
+});

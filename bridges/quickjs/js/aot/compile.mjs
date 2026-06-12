@@ -1580,12 +1580,70 @@ function emitActivityIndicator(el, scope, out, env) {
   return v;
 }
 
+/**
+ * <Modal visible={show} backdropColor=… style=…>{content}</Modal> → ER_NODE_MODAL. The engine draws a
+ * full-screen backdrop then the modal + its children when visible, and toggles the node's layout display
+ * from `visible`. Defaults to an absolute full-screen overlay centring its content (style can override).
+ * transparent / animationType / onRequestClose are accepted but currently no-ops.
+ */
+function emitModal(el, scope, out, env, state) {
+  const v = `n${out.n++}`;
+  const { staticAssigns, dynAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+  const hasField = (f) => staticAssigns.some((a) => a.field === f) || dynAssigns.some((a) => a.field === f);
+  // Overlay defaults: absolute, fill the parent via four 0 insets (the robust "stretch" for an absolute
+  // node), centre the content. The user's style overrides any of these.
+  const DEFAULTS = [
+    ['position', 'ER_POS_ABSOLUTE'],
+    ['left', '0'],
+    ['top', '0'],
+    ['right', '0'],
+    ['bottom', '0'],
+    ['align_items', 'ER_ALIGN_CENTER'],
+    ['justify_content', 'ER_JUSTIFY_CENTER'],
+  ];
+  for (const [f, expr] of DEFAULTS) if (!hasField(f)) staticAssigns.push({ field: f, expr });
+
+  let visibleNode = null;
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute') throw aotError('AOT: spread props on <Modal> are not supported');
+    const name = attr.name.name;
+    if (name === 'style' || name === 'ref' || name === 'key') continue;
+    const node = attrExpr(attr);
+    if (name === 'visible') visibleNode = node;
+    else if (name === 'backdropColor') staticAssigns.push({ field: 'backdrop_color', expr: colorLiteral(String(evalStatic(node, scope))) });
+    else if (name === 'transparent' || name === 'animationType' || name === 'onRequestClose' || name === 'statusBarTranslucent') {
+      /* accepted for RN compatibility; no-op in the AOT today */
+    } else throw aotError(`AOT: <Modal> prop "${name}" is not supported`, 'supported: visible, backdropColor, style, children (transparent / animationType / onRequestClose are accepted but no-ops).');
+  }
+  if (!visibleNode) throw aotError('AOT: a <Modal> needs a visible prop', '<Modal visible={show}>…</Modal>');
+  try {
+    staticAssigns.push({ field: 'modal_visible', expr: evalStatic(visibleNode, scope) ? '1' : '0' });
+  } catch {
+    dynAssigns.push({ field: 'modal_visible', code: `(uint8_t)((${emitExpr(visibleNode, env).code}) ? 1 : 0)` });
+  }
+
+  const isDynamic = dynAssigns.length > 0;
+  out.build.push(`    ${v} = er_node_create(ER_NODE_MODAL);`);
+  if (isDynamic) {
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({ v, styleAssigns: staticAssigns, text: null, dynAssigns });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+  emitRefBind(v, el.openingElement, out, env);
+  emitChildren(el.children, v, scope, out, env, state); // the modal's content (shown/hidden with the modal)
+  return v;
+}
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
   if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
-  if (tag === 'ActivityIndicator') return emitActivityIndicator(el, scope, out, env);
+  if (tag === 'Modal') return emitModal(el, scope, out, env, state);
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     if (out.components.has(tag)) return emitComponent(el, scope, out, env, state, opts);
