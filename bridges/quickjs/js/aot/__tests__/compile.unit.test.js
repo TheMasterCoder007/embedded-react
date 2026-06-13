@@ -1127,3 +1127,44 @@ export function App() { return (<View><Counter start={5} /></View>); }`;
     expect(compileSource(src, 'demo').c).toContain('.c0_n = 5');
   });
 });
+
+describe('AOT per-instance child hooks (self-contained components)', () => {
+  it('gives each instance its own useAnimatedValue handle', () => {
+    const src = `import { View, Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
+function Card({ label }) {
+  const scale = useAnimatedValue(1);
+  return (<Pressable onPressIn={() => Animated.spring(scale, { toValue: 0.7 }).start()} style={{ transform: [{ scale: scale }] }}><Text>{label}</Text></Pressable>);
+}
+export function App() { return (<View><Card label="A" /><Card label="B" /></View>); }`;
+    const c = compileSource(src, 'demo').c;
+    expect(c).toContain('s_av_c0_scale = er_anim_value_create(1.0f);');
+    expect(c).toContain('s_av_c1_scale = er_anim_value_create(1.0f);');
+    // each instance's bind targets its OWN value
+    expect(c).toContain('er_anim_value_bind(s_av_c0_scale,');
+    expect(c).toContain('er_anim_value_bind(s_av_c1_scale,');
+  });
+
+  it('gives each instance its own useRef slot', () => {
+    const src = `import { View, Text, Pressable } from 'embedded-react';
+import { useRef } from 'react';
+function Tally() { const t = useRef(0); return (<Pressable onPress={() => { t.current = t.current + 1; }}><Text>x</Text></Pressable>); }
+export function App() { return (<View><Tally /><Tally /></View>); }`;
+    const c = compileSource(src, 'demo').c;
+    expect(c).toContain('static int s_ref_c0_t = 0;');
+    expect(c).toContain('static int s_ref_c1_t = 0;');
+    expect(c).toContain('s_ref_c0_t = (s_ref_c0_t + 1);');
+    expect(c).toContain('s_ref_c1_t = (s_ref_c1_t + 1);');
+  });
+
+  it('compiles each instance useCallback into its own distinct handler', () => {
+    const src = `import { View, Text, Pressable } from 'embedded-react';
+import { useState, useCallback } from 'react';
+function Btn() { const [n, setN] = useState(0); const tap = useCallback(() => setN(n + 1), [n]); return (<Pressable onPress={tap}><Text>{n}</Text></Pressable>); }
+export function App() { return (<View><Btn /><Btn /></View>); }`;
+    const c = compileSource(src, 'demo').c;
+    expect(c).toContain('static void er_cb_c0_tap(');
+    expect(c).toContain('static void er_cb_c1_tap(');
+    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // c0's handler mutates c0's state
+    expect(c).toContain('s_state.c1_n = (s_state.c1_n + 1);');
+  });
+});

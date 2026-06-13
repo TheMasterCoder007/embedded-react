@@ -621,8 +621,9 @@ function usesState(fn) {
 // per-frame JS, no app_update needed for the motion itself.
 // ---------------------------------------------------------------------------------------------------
 
-/** Collects `const x = useAnimatedValue(initial)` → Map(name → {cVar, initCode}). */
-function collectAnims(fnBody, scope) {
+/** Collects `const x = useAnimatedValue(initial)` → Map(name → {cVar, initCode}). `prefix` namespaces the
+ *  C var (`s_av_<prefix><name>`) so each inlined child instance gets its own engine value handle. */
+function collectAnims(fnBody, scope, prefix = '') {
   const anims = new Map();
   if (fnBody.type !== 'BlockStatement') return anims;
   for (const stmt of fnBody.body) {
@@ -631,7 +632,7 @@ function collectAnims(fnBody, scope) {
       const init = decl.init;
       if (init?.type === 'CallExpression' && init.callee.name === 'useAnimatedValue' && decl.id.type === 'Identifier') {
         const initVal = init.arguments[0] ? evalStatic(init.arguments[0], scope) : 0;
-        anims.set(decl.id.name, { cVar: `s_av_${decl.id.name}`, initCode: floatLit(initVal) });
+        anims.set(decl.id.name, { cVar: `s_av_${prefix}${decl.id.name}`, initCode: floatLit(initVal) });
       }
     }
   }
@@ -645,7 +646,7 @@ function collectAnims(fnBody, scope) {
  *  - NODE ref (`useRef()` / `useRef(null)`): holds an `ERNode*`, captured by `ref={r}` on an element and
  *    used as the target of imperative calls like updateVector(r, …). kind === 'node'.
  */
-function collectRefs(fnBody, scope) {
+function collectRefs(fnBody, scope, prefix = '') {
   const refs = new Map();
   if (fnBody.type !== 'BlockStatement') return refs;
   for (const stmt of fnBody.body) {
@@ -653,7 +654,7 @@ function collectRefs(fnBody, scope) {
     for (const decl of stmt.declarations) {
       const init = decl.init;
       if (init?.type === 'CallExpression' && init.callee.name === 'useRef' && decl.id.type === 'Identifier') {
-        const cVar = `s_ref_${decl.id.name}`;
+        const cVar = `s_ref_${prefix}${decl.id.name}`;
         const arg = init.arguments[0];
         if (!arg || (arg.type === 'NullLiteral')) {
           refs.set(decl.id.name, { cVar, cType: 'ERNode*', initCode: 'NULL', kind: 'node' });
@@ -1560,17 +1561,59 @@ function emitComponent(el, scope, out, env, state, opts) {
   }
   const children = childNodes.length ? { nodes: childNodes, scope, env, ref: childrenRef } : null;
 
-  // Per-instance state: if the child declares useState, give THIS instance its own C storage — a unique
-  // field prefix (`c<N>_`) in the shared ErAppState — so two <Counter/>s keep independent counts. The
-  // child's setters mutate its own fields and call the global app_update() (which re-applies all dynamic
-  // nodes, the existing coarse model). Initials fold against the child's static-prop scope. With no
-  // useState, childState stays the caller's state (env.state unchanged) — backward compatible.
+  // Per-instance hooks: a child component is inlined, so EACH instance gets its OWN state, refs, animated
+  // values, callbacks, memos and mount-effects — namespaced by a unique prefix (`c<N>_`) so two instances
+  // (e.g. two animated <Card/>s) stay fully independent. The child sees ITS OWN hooks (not the parent's),
+  // exactly like a React component — it receives everything else through props. All initials/values fold
+  // against the child's static-prop scope. prefix is per-instance; the App keeps the bare (unprefixed) names.
+  const prefix = `c${out.instN++}_`;
+  const childAnims = collectAnims(fn.body, childScope, prefix);
+  const childRefs = collectRefs(fn.body, childScope, prefix);
+  const childCallbacks = collectCallbacks(fn.body);
+  const childMemos = collectMemos(fn.body);
   let childState = state;
   if (usesState(fn)) {
-    childState = collectState(fn.body, childScope, `c${out.instN++}_`);
+    childState = collectState(fn.body, childScope, prefix);
     out.childStateRecords.push(...childState.byName.values());
   }
-  const childEnv = { ...env, consts: childScope, locals: childLocals, children, fnProps, state: childState.byName };
+  out.childRefs.push(...childRefs.values());
+  out.childAnims.push(...childAnims.values());
+
+  const childEnv = {
+    ...env,
+    consts: childScope,
+    locals: childLocals,
+    children,
+    fnProps,
+    state: childState.byName,
+    anims: childAnims,
+    refs: childRefs,
+    callbacks: childCallbacks,
+    cbPrefix: prefix,
+  };
+
+  // Resolve the child's memos in declaration order (fold to a const, else inline as a local C expr), then
+  // run its mount-once useEffect(fn, []) bodies — both compiled in the child's own env/state.
+  for (const [name, expr] of childMemos) {
+    try {
+      childScope[name] = evalStatic(expr, childScope);
+    } catch {
+      const e = emitExpr(expr, childEnv);
+      childLocals.set(name, { code: `(${e.code})`, cType: e.cType });
+    }
+  }
+  for (const eff of collectEffects(fn.body)) {
+    if (!eff.deps || eff.deps.type !== 'ArrayExpression' || eff.deps.elements.length !== 0) {
+      throw aotError('AOT: only useEffect(fn, []) — run once on mount — is supported for now', 'use an empty deps array []; dependency-driven effects are not yet supported.');
+    }
+    const b = eff.fn.body;
+    const stmts = b.type === 'BlockStatement' ? b.body : [{ type: 'ExpressionStatement', expression: b }];
+    const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
+    const lines = compileStmts(stmts, childEnv, childState, ctx, '    ');
+    if (ctx.stateChanged) lines.push('    app_update();');
+    out.mountEffects.push(...lines);
+  }
+
   return emitNode(componentReturnJSX(fn, childScope), childScope, out, childEnv, childState, opts);
 }
 
@@ -2409,11 +2452,14 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     const fn = attrExpr(attr);
     let handlerName;
     if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
-      // onPress={fn} where fn is a useCallback → emit one shared handler, reused across elements.
-      handlerName = out.cbEmitted.get(fn.name);
+      // onPress={fn} where fn is a useCallback → emit one shared handler, reused across elements. The
+      // cbPrefix namespaces it per child instance (so two instances' same-named callbacks stay distinct,
+      // each compiled in its own env/state); '' for the App — unchanged.
+      const key = `${env.cbPrefix ?? ''}${fn.name}`;
+      handlerName = out.cbEmitted.get(key);
       if (!handlerName) {
-        handlerName = `er_cb_${fn.name}`;
-        out.cbEmitted.set(fn.name, handlerName);
+        handlerName = `er_cb_${key}`;
+        out.cbEmitted.set(key, handlerName);
         out.handlers.push({ name: handlerName, body: compileHandler(env.callbacks.get(fn.name), env, state, out) });
       }
     } else if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
@@ -2578,7 +2624,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [] };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [], childRefs: [], childAnims: [] };
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
@@ -2622,7 +2668,7 @@ const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 const handleDecls = out.handles.map((v) => `static ERNode* s_${v};`).join('\n');
 
 // Value refs — a plain mutable static each (escape-hatch state that does not trigger a re-render).
-const refDecls = [...refs.values()].map((r) => `static ${r.cType} ${r.cVar} = ${r.initCode};`).join('\n');
+const refDecls = [...refs.values(), ...out.childRefs].map((r) => `static ${r.cType} ${r.cVar} = ${r.initCode};`).join('\n');
 
 // Baked vector op-tapes + paint tables (static <Svg> geometry), emitted at file scope.
 const vectorBlock = out.vectorData.join('\n\n');
@@ -2630,7 +2676,7 @@ const vectorBlock = out.vectorData.join('\n\n');
 const vectorBuilderBlock = out.vectorBuilders.join('\n\n');
 
 // Animated values — one engine-side handle each, created at the top of er_app_build (binds reference them).
-const animList = [...anims.values()];
+const animList = [...anims.values(), ...out.childAnims];
 const animDecls = animList.map((a) => `static ERAnimValueHandle ${a.cVar};`).join('\n');
 const animCreate = animList.map((a) => `    ${a.cVar} = er_anim_value_create(${a.initCode});`).join('\n');
 
