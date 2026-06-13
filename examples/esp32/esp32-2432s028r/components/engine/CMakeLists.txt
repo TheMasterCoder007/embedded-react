@@ -7,7 +7,8 @@
 #   - The opacity/transform SCRATCH pool is DEPTH x W x H x 4 bytes; kept tiny (8x8x1). A node with
 #     opacity < 255 that doesn't fit the scratch simply renders OPAQUE (graceful — no crash), so the
 #     demo's art-dim effect is skipped here but everything else works.
-#   - Shadows / gradients / 3D transforms / bilinear scaling are off (code + RAM).
+#   - Shadows / gradients / 3D transforms are off (code + RAM). Bilinear <Image> scaling is ON (it reuses
+#     the existing scaler row buffer — no extra RAM — so downscaled icons don't alias).
 set(E "${EMBEDDED_REACT_SRC_DIR}/engine")
 
 idf_component_register(
@@ -52,7 +53,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_SHADOWS=0
     ERUI_BORDER_AA=1
     ERUI_3D_TRANSFORMS=0
-    ERUI_BILINEAR_SCALE=0
+    ERUI_BILINEAR_SCALE=1
     ERUI_GRADIENT=0
     ERUI_GRADIENT_RADIAL=0
     ERUI_ONSCREEN_KEYBOARD=1

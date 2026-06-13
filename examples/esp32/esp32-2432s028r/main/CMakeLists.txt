@@ -15,8 +15,11 @@ if(EMBEDDED_REACT_SRC_DIR AND NOT EXISTS "${APP_GEN}")
         "    cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat")
 endif()
 
+# assets.generated.c (baked <Image> assets + er_register_assets) is produced alongside app.gen.c by
+# `npm run aot` — always written (a no-op register fn when the demo imports no images), so it is always
+# safe to link + call. main.c calls er_register_assets() before er_app_build().
 idf_component_register(
-    SRCS "main.c" "board.c" "${APP_GEN}"
+    SRCS "main.c" "board.c" "${APP_GEN}" "${APP_GEN_DIR}/assets.generated.c"
     INCLUDE_DIRS "." "${APP_GEN_DIR}"
     REQUIRES engine esp32-spi-lcd-backend esp_lcd driver esp_timer
 )

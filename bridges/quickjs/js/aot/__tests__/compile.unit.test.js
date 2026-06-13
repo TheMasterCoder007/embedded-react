@@ -1028,3 +1028,52 @@ import { View, Text, TextInput } from 'embedded-react';
     ).toThrow(/not supported/);
   });
 });
+
+describe('AOT images', () => {
+  // `import x from './x.png'` + <Image source={x}> → the node's image_name is the file's basename, and
+  // compileSource returns the import so the CLI can bake it (er_register_assets).
+  const IMG = `import { View, Image } from 'embedded-react';
+import logo from './assets/logo.png';
+`;
+  it('resolves an imported image to image_name + returns it for baking', () => {
+    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} style={{ width: 40, height: 40 }} />); }`, 'demo');
+    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "logo");');
+    expect(r.images).toEqual([{ name: 'logo', importPath: './assets/logo.png' }]);
+  });
+
+  it('lowers resizeMode to the ERResizeMode enum', () => {
+    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} resizeMode="contain" />); }`, 'demo');
+    expect(r.c).toContain('p.resize_mode = ER_RESIZE_CONTAIN;');
+  });
+
+  it('lowers tintColor to an ARGB literal', () => {
+    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} tintColor="#ff0000" />); }`, 'demo');
+    expect(r.c).toContain('p.tint_color = 0xFFFF0000u;');
+  });
+
+  it('accepts source={{ uri }} as a bare asset name (no import to bake)', () => {
+    const r = compileSource(`import { Image } from 'embedded-react';\nexport function App() { return (<Image source={{ uri: 'wx_sun' }} />); }`, 'demo');
+    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");');
+    expect(r.images).toEqual([]);
+  });
+
+  it('rejects a runtime/dynamic <Image source> with a located hint', () => {
+    let err;
+    try {
+      compileSource(
+        `import { View, Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [a] = useState([{ icon: 'x' }]); return (<View>{a.map((d) => (<Image key={d.icon} source={d.icon} />))}</View>); }`,
+        'demo',
+        { filename: 'demos/demo/App.jsx' },
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toContain('could not resolve <Image source>');
+    expect(err.message).toContain('demos/demo/App.jsx:');
+    expect(err.message).toContain('hint:');
+  });
+
+  it('rejects an unsupported resizeMode', () => {
+    expect(() => compileSource(`${IMG}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`, 'demo')).toThrow(/unsupported <Image resizeMode>/);
+  });
+});

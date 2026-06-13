@@ -41,7 +41,10 @@ if (NOT EXISTS "${ER_APP_GEN_DIR}/app.gen.c")
             "    cd bridges/quickjs/js && npm run aot -- <demo>   (e.g. music-player)")
 endif ()
 
-add_executable(embedded-react-desktop-aot main.c "${ER_APP_GEN_DIR}/app.gen.c")
+# app.gen.c + assets.generated.c are produced together by `npm run aot`: the app tree and the baked-image
+# table (er_register_assets, called by main.c before er_app_build). assets.generated.c is always written —
+# a no-op register fn when the demo imports no images — so it is always safe to link + call.
+add_executable(embedded-react-desktop-aot main.c "${ER_APP_GEN_DIR}/app.gen.c" "${ER_APP_GEN_DIR}/assets.generated.c")
 target_include_directories(embedded-react-desktop-aot PRIVATE "${ER_APP_GEN_DIR}")
 target_link_libraries(embedded-react-desktop-aot PRIVATE er-backend-sdl embedded-react)
 

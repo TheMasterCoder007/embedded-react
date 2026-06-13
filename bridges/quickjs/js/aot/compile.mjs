@@ -24,6 +24,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
 import { flattenSvg, parseColor, parsePath } from '../src/embedded-react/svg-ops.js';
+import { bakeAssets } from '../assets/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const repoRoot = resolve(here, '../../../..');
@@ -510,6 +511,28 @@ function collectComponents(program) {
       }
   }
   return comps;
+}
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
+/**
+ * Collects image imports — `import wxSun from './assets/wx_sun.png'` → Map(local → { name, importPath }).
+ * `name` is the file's basename without extension (the asset key `<Image source>` resolves to and that the
+ * Flow A bundler also uses); `importPath` is the source-relative path the CLI bakes from. Mirrors the Flow A
+ * esbuild asset plugin so the same `import → basename` convention holds in both flows.
+ */
+function collectImageImports(program) {
+  const byLocal = new Map();
+  for (const stmt of program.body) {
+    if (stmt.type !== 'ImportDeclaration' || typeof stmt.source.value !== 'string') continue;
+    const importPath = stmt.source.value;
+    if (!IMAGE_EXT_RE.test(importPath)) continue;
+    const name = importPath.split(/[\\/]/).pop().replace(IMAGE_EXT_RE, '');
+    for (const spec of stmt.specifiers) {
+      if (spec.type === 'ImportDefaultSpecifier') byLocal.set(spec.local.name, { name, importPath });
+    }
+  }
+  return byLocal;
 }
 
 /** Collects `const fn = useCallback((...) => {...}, deps)` → Map(name → arrow fn node). Deps are ignored:
@@ -2173,6 +2196,76 @@ function emitFlatList(el, scope, out, env, state, opts) {
   return emitNode(scrollView, scope, out, env, state, opts);
 }
 
+const RESIZE_MODES = {
+  cover: 'ER_RESIZE_COVER',
+  contain: 'ER_RESIZE_CONTAIN',
+  stretch: 'ER_RESIZE_STRETCH',
+  repeat: 'ER_RESIZE_REPEAT',
+  center: 'ER_RESIZE_CENTER',
+};
+
+/** Resolves an <Image source>/imageName expression to its baked asset NAME (a string), or null if it can't
+ *  be resolved at compile time (a runtime/dynamic source). Records the import actually used in out.images
+ *  (name → importPath) so the CLI bakes only what the app references. */
+function imageNameFromSource(expr, env, out) {
+  if (!expr) return null;
+  if (expr.type === 'StringLiteral') return expr.value; // source="wx_sun" / imageName="wx_sun"
+  if (expr.type === 'Identifier') {
+    const imp = env.imageImports?.get(expr.name); // import wxSun from './wx_sun.png'
+    if (imp) {
+      out.images.set(imp.name, imp.importPath);
+      return imp.name;
+    }
+    const c = env.consts?.[expr.name]; // const NAME = 'wx_sun'
+    return typeof c === 'string' ? c : null;
+  }
+  if (expr.type === 'ObjectExpression') {
+    // source={{ uri: 'wx_sun' }} — RN's remote-image shape; here the uri IS the baked asset name.
+    const uri = expr.properties.find((p) => p.type === 'ObjectProperty' && (p.key.name === 'uri' || p.key.value === 'uri'));
+    if (uri?.value?.type === 'StringLiteral') return uri.value.value;
+  }
+  return null;
+}
+
+/** Resolves an <Image>'s source/imageName/resizeMode/tintColor to static C values for the node props. */
+function resolveImageAttrs(el, env, out) {
+  const attrs = el.openingElement.attributes;
+  const find = (n) => attrs.find((a) => a.type === 'JSXAttribute' && a.name.name === n);
+  const imAttr = find('imageName');
+  const srcAttr = find('source');
+  const srcExpr = imAttr ? attrExpr(imAttr) : srcAttr ? attrExpr(srcAttr) : null;
+  let imageName = null;
+  if (srcExpr) {
+    imageName = imageNameFromSource(srcExpr, env, out);
+    if (imageName == null) {
+      const e = aotError(
+        'AOT: could not resolve <Image source> to a baked asset',
+        "an <Image>'s source must be a compile-time asset: `import logo from './logo.png'` then source={logo}, source=\"logo\", or source={{ uri: 'logo' }}. A runtime/state-driven source (e.g. a list-item field) isn't supported yet — split it into static <Image>s or a compile-time conditional.",
+      );
+      if (srcExpr.loc) e.aotLoc = srcExpr.loc.start;
+      throw e;
+    }
+  }
+  let resizeMode = null;
+  const rmAttr = find('resizeMode');
+  if (rmAttr) {
+    const rm = evalStaticOr(attrExpr(rmAttr), env, null);
+    resizeMode = RESIZE_MODES[rm];
+    if (!resizeMode) {
+      const e = aotError(`AOT: unsupported <Image resizeMode> "${rm}"`, `resizeMode must be one of: ${Object.keys(RESIZE_MODES).join(' / ')}.`);
+      if (rmAttr.loc) e.aotLoc = rmAttr.loc.start;
+      throw e;
+    }
+  }
+  let tintColor = null;
+  const tcAttr = find('tintColor');
+  if (tcAttr) {
+    const tc = evalStaticOr(attrExpr(tcAttr), env, null);
+    if (typeof tc === 'string' || typeof tc === 'number') tintColor = '0x' + (parseColor(String(tc)) >>> 0).toString(16).padStart(8, '0').toUpperCase() + 'u';
+  }
+  return { imageName, resizeMode, tintColor };
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Node emitter — the element dispatcher + the generic host node. emitNodeImpl is the entry point for
 // every JSX element: it routes Svg / typed components / FlatList / components to their emitters above,
@@ -2213,12 +2306,23 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   // A <Text> with a nested <Text> becomes inline SPANS; otherwise a single (possibly dynamic) string.
   const spans = tag === 'Text' ? collectTextSpans(el.children, scope, env) : null;
   const text = tag === 'Text' && !spans ? buildText(el.children, scope, env) : null;
+  // An <Image>'s baked-asset name + resize/tint (resolved at compile time; the source is a compile-time import).
+  const image = tag === 'Image' ? resolveImageAttrs(el, env, out) : null;
 
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
   // `display` flips between flex and none in app_update (joining any state-driven style assigns).
   if (opts.displayCode) dynAssigns.push({ field: 'display', code: `((${opts.displayCode}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)` });
 
   const isDynamic = !!text?.dynamic || dynAssigns.length > 0;
+
+  // An <Image>'s asset/resize/tint are static (resolved from a compile-time import); a state-driven
+  // (dynamic-styled) <Image> would take the deferred-props path below, which doesn't carry them.
+  if (image && isDynamic) {
+    throw aotError(
+      'AOT: a state-driven <Image> (dynamic styles) is not supported yet',
+      'give the <Image> static styles; only its layout box can currently be animated (via an animated transform/opacity bind), not state-driven style props.',
+    );
+  }
 
   out.build.push(`    ${v} = er_node_create(${nodeType});`);
   if (isDynamic) {
@@ -2230,6 +2334,9 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     out.build.push(`    er_props_default(&p);`);
     for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
     if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
+    if (image?.imageName != null) out.build.push(`    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(image.imageName)});`);
+    if (image?.resizeMode) out.build.push(`    p.resize_mode = ${image.resizeMode};`);
+    if (image?.tintColor) out.build.push(`    p.tint_color = ${image.tintColor};`);
     out.build.push(`    er_node_set_props(${v}, &p);`);
   }
 
@@ -2425,7 +2532,8 @@ const anims = collectAnims(component.body, scope);
 const refs = collectRefs(component.body, scope);
 const callbacks = collectCallbacks(component.body);
 const memos = collectMemos(component.body);
-const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks };
+const imageImports = collectImageImports(ast.program);
+const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, imageImports };
 // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
 // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
 // tracking re-applies dependent nodes anyway). Done before emit so references resolve.
@@ -2437,7 +2545,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '' };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map() };
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
@@ -2659,7 +2767,10 @@ void er_app_tick(int dt_ms);
 #endif
 `;
 
-  return { c: body, h: header, nodes: out.n, state: stateRecords.length, handlers: out.handlers.length, updates: out.updates.length };
+  // images: the baked-image imports the app actually references (name + source-relative path) — the CLI
+  // resolves each path against the demo dir and bakes them into assets.generated.c (er_register_assets).
+  const images = [...out.images.entries()].map(([name, importPath]) => ({ name, importPath }));
+  return { c: body, h: header, nodes: out.n, state: stateRecords.length, handlers: out.handlers.length, updates: out.updates.length, images };
 }
 
 /** Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
@@ -2699,5 +2810,20 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   mkdirSync(distDir, { recursive: true });
   writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
   writeFileSync(resolve(distDir, 'app.gen.h'), result.h);
-  console.log(`AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ${result.handlers} handler(s), ${result.updates} dynamic)`);
+
+  // Bake the images the app imports into dist/assets.generated.{c,h} (er_register_assets) — the SAME baker
+  // Flow A uses. Always written (even with 0 images → a no-op register fn) so the AOT host can always
+  // compile + call it. Each importPath is source-relative to the demo's App.jsx.
+  const imageJobs = result.images.map((im) => ({ name: im.name, path: resolve(demosDir, demo, im.importPath) }));
+  for (const j of imageJobs) {
+    if (!existsSync(j.path)) {
+      console.error(`AOT: <Image> asset "${j.name}" not found at ${j.path}`);
+      process.exit(1);
+    }
+  }
+  const baked = bakeAssets({ images: imageJobs, fonts: [], outDir: distDir });
+  console.log(
+    `AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ` +
+      `${result.handlers} handler(s), ${result.updates} dynamic) + ${baked.images} image(s) -> dist/assets.generated.c`,
+  );
 }
