@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef EMBEDDED_REACT_ESP32_SPI_LCD_BACKEND_H
 #define EMBEDDED_REACT_ESP32_SPI_LCD_BACKEND_H
 
@@ -38,7 +54,8 @@ extern "C"
      *
      * @return true on success; false on a framebuffer allocation failure (not enough internal RAM).
      */
-    bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_io_handle_t io, int width, int height);
+    bool
+    er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_io_handle_t io, int width, int height);
 
     /**
      * @brief Flushes the painted (dirty) rows of the framebuffer to the panel.

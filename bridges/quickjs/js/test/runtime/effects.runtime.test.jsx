@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Runtime e2e: with §2 timers + job-queue pumping in place, React's passive effects (useEffect)
 // must flush. Passive effects are scheduled (not run during the commit), so they only run once the
 // host pumps — which NativeUI.tick does. This is the concrete payoff of wiring the scheduler clock.

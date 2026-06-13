@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "native_ui_bridge.h"
 
 #include "er_scene.h"
@@ -3446,7 +3462,8 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setRoot", JS_NewCFunction(ctx, js_set_root, "setRoot", 1));
     JS_SetPropertyStr(ctx, native_ui, "setProps", JS_NewCFunction(ctx, js_set_props, "setProps", 2));
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
-    JS_SetPropertyStr(ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
+    JS_SetPropertyStr(
+        ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 4));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));

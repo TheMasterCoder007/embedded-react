@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Emits the generated C for baked assets: one .c with the image pixel arrays + font BitmapFont data,
 // and one .h declaring er_register_assets(). The .c depends only on the public engine header
 // (er_scene.h, which exposes both er_image_load/er_font_register and the BitmapFont format), so it

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef EMBEDDED_REACT_ER_SCENE_H
 #define EMBEDDED_REACT_ER_SCENE_H
 
@@ -1220,10 +1236,10 @@ extern "C"
     /** @brief What a keyboard key does when pressed. */
     typedef enum ERKeyboardKeyType
     {
-        ER_KBD_KEY_CHAR = 0,   /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
-        ER_KBD_KEY_BACKSPACE,  /**< deletes the character before the cursor */
-        ER_KBD_KEY_DONE,       /**< dismisses the keyboard (blurs the input) */
-        ER_KBD_KEY_LAYER       /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
+        ER_KBD_KEY_CHAR = 0,  /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
+        ER_KBD_KEY_BACKSPACE, /**< deletes the character before the cursor */
+        ER_KBD_KEY_DONE,      /**< dismisses the keyboard (blurs the input) */
+        ER_KBD_KEY_LAYER      /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
     } ERKeyboardKeyType;
 
     /** @brief One key. `span` is its width in grid columns; rows are laid out proportionally so keys flex
@@ -1231,11 +1247,11 @@ extern "C"
      *         when that layer is showing — e.g. a shift key lit on the UPPERCASE layer. */
     typedef struct ERKeyboardKey
     {
-        const char* label;     /**< text shown on the key; NULL falls back to `text` */
-        const char* text;      /**< string typed for ER_KBD_KEY_CHAR (e.g. "a", " "); ignored otherwise */
-        uint8_t type;          /**< ERKeyboardKeyType */
-        uint8_t layer;         /**< target layer for ER_KBD_KEY_LAYER */
-        uint8_t span;          /**< width in grid columns (>= 1) */
+        const char* label;       /**< text shown on the key; NULL falls back to `text` */
+        const char* text;        /**< string typed for ER_KBD_KEY_CHAR (e.g. "a", " "); ignored otherwise */
+        uint8_t type;            /**< ERKeyboardKeyType */
+        uint8_t layer;           /**< target layer for ER_KBD_KEY_LAYER */
+        uint8_t span;            /**< width in grid columns (>= 1) */
         uint8_t highlight_layer; /**< highlight this key while this layer shows (0xFF = never) */
     } ERKeyboardKey;
 
@@ -1259,15 +1275,15 @@ extern "C"
     {
         const ERKeyboardLayer* layers; /**< layer array; NULL = built-in QWERTY (lower/UPPER/123/#+=) */
         uint8_t layer_count;
-        uint8_t grid_cols;             /**< total columns a row's spans add up to (0 = 20) */
-        uint16_t row_height_px;        /**< height of each key row (0 = auto, ~1/11 of the screen height) */
-        uint8_t key_gap_px;            /**< gap inset around each key (0 = 2) */
-        uint8_t key_radius_px;         /**< key corner radius (0 = 5) */
-        uint8_t font_size_px;          /**< label font size (0 = 16) */
-        uint32_t panel_color;          /**< strip backdrop ARGB (0 = default) */
-        uint32_t key_color;            /**< key fill ARGB (0 = default) */
-        uint32_t key_active_color;     /**< highlighted-key fill ARGB (0 = default) */
-        uint32_t label_color;          /**< key label ARGB (0 = default) */
+        uint8_t grid_cols;         /**< total columns a row's spans add up to (0 = 20) */
+        uint16_t row_height_px;    /**< height of each key row (0 = auto, ~1/11 of the screen height) */
+        uint8_t key_gap_px;        /**< gap inset around each key (0 = 2) */
+        uint8_t key_radius_px;     /**< key corner radius (0 = 5) */
+        uint8_t font_size_px;      /**< label font size (0 = 16) */
+        uint32_t panel_color;      /**< strip backdrop ARGB (0 = default) */
+        uint32_t key_color;        /**< key fill ARGB (0 = default) */
+        uint32_t key_active_color; /**< highlighted-key fill ARGB (0 = default) */
+        uint32_t label_color;      /**< key label ARGB (0 = default) */
     } ERKeyboardConfig;
 
     /**

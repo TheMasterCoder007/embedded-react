@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef ER_RUNTIME_H
 #define ER_RUNTIME_H
 
@@ -34,18 +50,18 @@
 /** @brief Configuration for er_runtime_init (and re-applied on er_runtime_reset). */
 typedef struct
 {
-    int screen_width;              /**< `screen.width` exposed to JS (framebuffer pixels). */
-    int screen_height;             /**< `screen.height`. */
-    float screen_scale;            /**< `screen.scale` (DPI); <= 0 is treated as 1.0. */
-    bool install_persist;          /**< Expose `__erPersist` so usePersistentState survives a reload
-                                        (dev/simulator). Off on devices, where it falls back to useState. */
-    void (*log)(const char* line); /**< console.log/warn/error + error sink (one line, no newline).
-                                        NULL → stdout. On a device, point this at your UART logger. */
+    int screen_width;                          /**< `screen.width` exposed to JS (framebuffer pixels). */
+    int screen_height;                         /**< `screen.height`. */
+    float screen_scale;                        /**< `screen.scale` (DPI); <= 0 is treated as 1.0. */
+    bool install_persist;                      /**< Expose `__erPersist` so usePersistentState survives a reload
+                                                    (dev/simulator). Off on devices, where it falls back to useState. */
+    void (*log)(const char* line);             /**< console.log/warn/error + error sink (one line, no newline).
+                                                    NULL → stdout. On a device, point this at your UART logger. */
     const JSMallocFunctions* malloc_functions; /**< Custom JS-heap allocator, or NULL for the QuickJS
                                         default. On an MCU with external RAM, point the JS heap at PSRAM
                                         (JS_NewRuntime2). Must outlive the runtime. */
-    size_t max_stack_size;             /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
-                                        QuickJS default. Set below the host/task stack on an MCU. */
+    size_t max_stack_size;                     /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
+                                                QuickJS default. Set below the host/task stack on an MCU. */
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------

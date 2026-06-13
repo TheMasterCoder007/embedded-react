@@ -1,4 +1,20 @@
 /*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
  * DIYmall ESP32-2432S028R "Cheap Yellow Display" (CYD) v3 bring-up.
  *
  * Board-specific: the 240x320 ST7789 SPI panel (HSPI) + backlight, and the XPT2046 resistive touch
@@ -38,7 +54,7 @@ static const char* TAG = "board";
 #define LCD_PCLK_HZ (40 * 1000 * 1000) /* 40 MHz for snappy flushes; if this unit glitches, step down (26/30) */
 
 #define BOARD_LCD_INVERT false /* this unit shows correct brightness without inversion */
-#define BOARD_LCD_BGR false    /* set true if red/blue are swapped */
+#define BOARD_LCD_BGR false /* set true if red/blue are swapped */
 #define BOARD_LCD_MIRROR_X true /* this unit's panel scans X reversed (text was mirrored) */
 #define BOARD_LCD_MIRROR_Y false
 
@@ -127,7 +143,12 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel, esp_lcd_panel_io_hand
     esp_lcd_panel_mirror(panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y);
     esp_lcd_panel_disp_on_off(panel, true);
 
-    ESP_LOGI(TAG, "ST7789 panel up: %dx%d (invert=%d, bgr=%d)", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT, BOARD_LCD_INVERT, BOARD_LCD_BGR);
+    ESP_LOGI(TAG,
+             "ST7789 panel up: %dx%d (invert=%d, bgr=%d)",
+             BOARD_LCD_WIDTH,
+             BOARD_LCD_HEIGHT,
+             BOARD_LCD_INVERT,
+             BOARD_LCD_BGR);
     *out_panel = panel;
     *out_io = io;
     return true;

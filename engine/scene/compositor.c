@@ -1,3 +1,19 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "er_node_internal.h"
 #include "gradient.h"
 #include "image_scaler.h"
@@ -30,11 +46,12 @@ static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint32_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
-static bool s_kbd_dirty = false; /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
-static uint8_t s_kbd_layer = 0;  /**< Active key layer index into the (default or app-supplied) layout. */
-static int s_kbd_avoid_y = 0;    /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
-                                      (0 when no keyboard / input already visible). Applied in render_tree +
-                                      node_screen_rect so render and damage stay in sync. */
+static bool s_kbd_dirty =
+    false;                      /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
+static uint8_t s_kbd_layer = 0; /**< Active key layer index into the (default or app-supplied) layout. */
+static int s_kbd_avoid_y = 0;   /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
+                                     (0 when no keyboard / input already visible). Applied in render_tree +
+                                     node_screen_rect so render and damage stay in sync. */
 
 /* Dirty-rect tracking: union of all screen rects repainted during the current er_commit(). */
 static ERRect s_dirty_rect;
@@ -1687,7 +1704,8 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
-static void vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
+static void
+vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
 {
     float span = a1 - a0;
     if (span < 0.0f)
@@ -1715,7 +1733,18 @@ static void vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float*
  * @brief Diffs old vs new op-tape (+ paints) and writes a node-local damage rect of the changed geometry.
  * @return true if a tight rect was computed; false → caller must repaint the full node box.
  */
-static bool vec_diff_dirty_rect(const float* o, int on, const ERVectorPaint* op, int onp, const float* nw, int nn, const ERVectorPaint* np, int nnp, int* rx, int* ry, int* rw, int* rh)
+static bool vec_diff_dirty_rect(const float* o,
+                                int on,
+                                const ERVectorPaint* op,
+                                int onp,
+                                const float* nw,
+                                int nn,
+                                const ERVectorPaint* np,
+                                int nnp,
+                                int* rx,
+                                int* ry,
+                                int* rw,
+                                int* rh)
 {
     if (!o || on <= 0 || on != nn || onp != nnp)
         return false;
@@ -1724,19 +1753,19 @@ static bool vec_diff_dirty_rect(const float* o, int on, const ERVectorPaint* op,
 
     float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
     bool any = false;
-#define VADD(X, Y)                                                                                                      \
-    do                                                                                                                  \
-    {                                                                                                                   \
-        const float _x = (X), _y = (Y);                                                                                 \
-        if (_x < minx)                                                                                                  \
-            minx = _x;                                                                                                  \
-        if (_y < miny)                                                                                                  \
-            miny = _y;                                                                                                  \
-        if (_x > maxx)                                                                                                  \
-            maxx = _x;                                                                                                  \
-        if (_y > maxy)                                                                                                  \
-            maxy = _y;                                                                                                  \
-        any = true;                                                                                                     \
+#define VADD(X, Y)                                                                                                     \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        const float _x = (X), _y = (Y);                                                                                \
+        if (_x < minx)                                                                                                 \
+            minx = _x;                                                                                                 \
+        if (_y < miny)                                                                                                 \
+            miny = _y;                                                                                                 \
+        if (_x > maxx)                                                                                                 \
+            maxx = _x;                                                                                                 \
+        if (_y > maxy)                                                                                                 \
+            maxy = _y;                                                                                                 \
+        any = true;                                                                                                    \
     } while (0)
 
     int i = 0;
@@ -1806,7 +1835,8 @@ static bool vec_diff_dirty_rect(const float* o, int on, const ERVectorPaint* op,
             if (i + 6 > on)
                 return false;
             const float ocx = o[i], ocy = o[i + 1], orr = o[i + 2], oa0 = o[i + 3], oa1 = o[i + 4], occw = o[i + 5];
-            const float ncx = nw[i], ncy = nw[i + 1], nrr = nw[i + 2], na0 = nw[i + 3], na1 = nw[i + 4], nccw = nw[i + 5];
+            const float ncx = nw[i], ncy = nw[i + 1], nrr = nw[i + 2], na0 = nw[i + 3], na1 = nw[i + 4],
+                        nccw = nw[i + 5];
             if (ocx != ncx || ocy != ncy || orr != nrr || oa0 != na0 || oa1 != na1 || occw != nccw)
             {
                 if (ocx == ncx && ocy == ncy && orr == nrr && occw == nccw)
@@ -1895,12 +1925,14 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
         const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
         /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
          * state) → nothing changed, so skip the repaint entirely. */
-        if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0 &&
-            (n_paints <= 0 || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0)))
+        if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
+            && (n_paints <= 0
+                || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0)))
         {
             return;
         }
-        tight = vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
+        tight =
+            vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
     }
 
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints);
@@ -2009,31 +2041,58 @@ void er_text_input_key(uint32_t keycode, const char* utf8_char)
 #if ERUI_ONSCREEN_KEYBOARD
 
 /* ---- Built-in default layout: lowercase / UPPERCASE / numbers / symbols, the iOS-style QWERTY pages. ---- */
-#define KCH(s) {(s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU}                  /* char key, span 2 */
-#define KSPACE {NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU}               /* blank space bar */
-#define KBKSP {"<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU}
-#define KDONE {"OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU}
-#define KSW3(lbl, tgt, hl) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)} /* row-2 left switch */
-#define KSW4(lbl, tgt) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU}    /* row-3 left switch */
+#define KCH(s)                                                                                                         \
+    {                                                                                                                  \
+        (s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU                                                                         \
+    } /* char key, span 2 */
+#define KSPACE                                                                                                         \
+    {                                                                                                                  \
+        NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU                                                                       \
+    } /* blank space bar */
+#define KBKSP                                                                                                          \
+    {                                                                                                                  \
+        "<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU                                                                   \
+    }
+#define KDONE                                                                                                          \
+    {                                                                                                                  \
+        "OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU                                                                       \
+    }
+#define KSW3(lbl, tgt, hl)                                                                                             \
+    {                                                                                                                  \
+        (lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)                                                                  \
+    } /* row-2 left switch */
+#define KSW4(lbl, tgt)                                                                                                 \
+    {                                                                                                                  \
+        (lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU                                                                 \
+    } /* row-3 left switch */
 
-static const ERKeyboardKey L0r0[] = {KCH("q"), KCH("w"), KCH("e"), KCH("r"), KCH("t"), KCH("y"), KCH("u"), KCH("i"), KCH("o"), KCH("p")};
-static const ERKeyboardKey L0r1[] = {KCH("a"), KCH("s"), KCH("d"), KCH("f"), KCH("g"), KCH("h"), KCH("j"), KCH("k"), KCH("l")};
-static const ERKeyboardKey L0r2[] = {KSW3("^", 1, 1), KCH("z"), KCH("x"), KCH("c"), KCH("v"), KCH("b"), KCH("n"), KCH("m"), KBKSP};
+static const ERKeyboardKey L0r0[] = {
+    KCH("q"), KCH("w"), KCH("e"), KCH("r"), KCH("t"), KCH("y"), KCH("u"), KCH("i"), KCH("o"), KCH("p")};
+static const ERKeyboardKey L0r1[] = {
+    KCH("a"), KCH("s"), KCH("d"), KCH("f"), KCH("g"), KCH("h"), KCH("j"), KCH("k"), KCH("l")};
+static const ERKeyboardKey L0r2[] = {
+    KSW3("^", 1, 1), KCH("z"), KCH("x"), KCH("c"), KCH("v"), KCH("b"), KCH("n"), KCH("m"), KBKSP};
 static const ERKeyboardKey L0r3[] = {KSW4("123", 2), KSPACE, KDONE};
 static const ERKeyboardRow L0rows[] = {{L0r0, 10}, {L0r1, 9}, {L0r2, 9}, {L0r3, 3}};
 
-static const ERKeyboardKey L1r0[] = {KCH("Q"), KCH("W"), KCH("E"), KCH("R"), KCH("T"), KCH("Y"), KCH("U"), KCH("I"), KCH("O"), KCH("P")};
-static const ERKeyboardKey L1r1[] = {KCH("A"), KCH("S"), KCH("D"), KCH("F"), KCH("G"), KCH("H"), KCH("J"), KCH("K"), KCH("L")};
-static const ERKeyboardKey L1r2[] = {KSW3("^", 0, 1), KCH("Z"), KCH("X"), KCH("C"), KCH("V"), KCH("B"), KCH("N"), KCH("M"), KBKSP};
+static const ERKeyboardKey L1r0[] = {
+    KCH("Q"), KCH("W"), KCH("E"), KCH("R"), KCH("T"), KCH("Y"), KCH("U"), KCH("I"), KCH("O"), KCH("P")};
+static const ERKeyboardKey L1r1[] = {
+    KCH("A"), KCH("S"), KCH("D"), KCH("F"), KCH("G"), KCH("H"), KCH("J"), KCH("K"), KCH("L")};
+static const ERKeyboardKey L1r2[] = {
+    KSW3("^", 0, 1), KCH("Z"), KCH("X"), KCH("C"), KCH("V"), KCH("B"), KCH("N"), KCH("M"), KBKSP};
 static const ERKeyboardRow L1rows[] = {{L1r0, 10}, {L1r1, 9}, {L1r2, 9}, {L0r3, 3}};
 
-static const ERKeyboardKey L2r0[] = {KCH("1"), KCH("2"), KCH("3"), KCH("4"), KCH("5"), KCH("6"), KCH("7"), KCH("8"), KCH("9"), KCH("0")};
-static const ERKeyboardKey L2r1[] = {KCH("-"), KCH("/"), KCH(":"), KCH(";"), KCH("("), KCH(")"), KCH("$"), KCH("&"), KCH("@"), KCH("\"")};
+static const ERKeyboardKey L2r0[] = {
+    KCH("1"), KCH("2"), KCH("3"), KCH("4"), KCH("5"), KCH("6"), KCH("7"), KCH("8"), KCH("9"), KCH("0")};
+static const ERKeyboardKey L2r1[] = {
+    KCH("-"), KCH("/"), KCH(":"), KCH(";"), KCH("("), KCH(")"), KCH("$"), KCH("&"), KCH("@"), KCH("\"")};
 static const ERKeyboardKey L2r2[] = {KSW3("#+=", 3, 0xFFU), KCH("."), KCH(","), KCH("?"), KCH("!"), KCH("'"), KBKSP};
 static const ERKeyboardKey L2r3[] = {KSW4("ABC", 0), KSPACE, KDONE};
 static const ERKeyboardRow L2rows[] = {{L2r0, 10}, {L2r1, 10}, {L2r2, 7}, {L2r3, 3}};
 
-static const ERKeyboardKey L3r0[] = {KCH("["), KCH("]"), KCH("{"), KCH("}"), KCH("#"), KCH("%"), KCH("^"), KCH("*"), KCH("+"), KCH("=")};
+static const ERKeyboardKey L3r0[] = {
+    KCH("["), KCH("]"), KCH("{"), KCH("}"), KCH("#"), KCH("%"), KCH("^"), KCH("*"), KCH("+"), KCH("=")};
 static const ERKeyboardKey L3r1[] = {KCH("_"), KCH("\\"), KCH("|"), KCH("~"), KCH("<"), KCH(">"), KCH("$"), KCH("`")};
 static const ERKeyboardKey L3r2[] = {KSW3("123", 2, 0xFFU), KCH("."), KCH(","), KCH("?"), KCH("!"), KCH("'"), KBKSP};
 static const ERKeyboardRow L3rows[] = {{L3r0, 10}, {L3r1, 8}, {L3r2, 7}, {L2r3, 3}};
@@ -2532,7 +2591,7 @@ void er_commit(void)
                 ERRect kr;
                 er_keyboard_rect((int)root->computed.w, (int)root->computed.h, &kr);
                 const int input_bottom = (int)inp->animated.y + (int)inp->animated.h; /* unshifted layout pos */
-                const int needed = input_bottom + 8 - kr.y;                            /* 8px above the strip */
+                const int needed = input_bottom + 8 - kr.y;                           /* 8px above the strip */
                 if (needed > 0)
                     want = needed;
             }
@@ -2650,7 +2709,8 @@ void er_commit(void)
                 damage_union(&clip, &have, nx, ny, nw, nh); /* new position */
             if (n->has_last_paint)
             {
-                int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+                int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
+                    oh = (int)n->last_paint_rect.h;
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 if (ow > 0 && oh > 0)
                     damage_union(&clip, &have, ox, oy, ow, oh); /* old position (erase trail) */
@@ -2725,7 +2785,7 @@ void er_commit(void)
                 if (backend->band_begin)
                     backend->band_begin(fx, sy, fw, sh, backend->ctx);
                 er_set_band(sy, sh);
-                render_tree(root, true, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+                render_tree(root, true, 0, s_kbd_avoid_y);   /* whole scene shifted up to clear the keyboard */
                 er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
                 if (backend->band_flush)
                     backend->band_flush(backend->ctx);

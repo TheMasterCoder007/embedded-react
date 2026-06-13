@@ -1,76 +1,10 @@
 # embedded-react
 
 **React Native for embedded MCUs.**
-Write a React app, compile it, flash it onto a microcontroller.
-
-`embedded-react` brings the React Native developer experience to bare-metal hardware. You
-write the same JSX components, the same `Animated` API, and the same Yoga-flexbox styles
-you would on iOS or Android — and your app runs on an STM32, ESP32, or RP2040 instead.
-The runtime is pure C99, so it ports cleanly to any board with a writable framebuffer; the
-toolchain hides the firmware build behind a `react-native`-style developer flow.
-
----
-
-## Repo layout
-
-This is a monorepo with five top-level concerns:
-
-```
-engine/      Pure C99 runtime — scene graph, layout, rendering, text, animation.
-             Runtime-agnostic; doesn't know about React.
-
-backends/    Hardware adapters. One folder per rendering API or peripheral
-             (dma2d, sdl, opengl, esp32-lcd, software, framebuffer, web).
-
-bridges/     Frontends that drive the engine. quickjs/ hosts a React reconciler
-             — the supported developer path. Others (Lua, JSON UI, visual
-             editor, AOT compiler) can be added later without touching the engine.
-
-demos/       JSX demo apps written against the public `embedded-react` API — one
-             folder per demo (thermostat, …). The bundler picks one; the examples run it.
-
-examples/    End-to-end host integrations — one engine + one backend + one bridge,
-             packaged for a specific board (stm32h7, esp32, raspberry-pi, linux).
-```
-
-Each top-level folder has its own README with more detail. Engine contributors should
-start with [`engine/README.md`](engine/README.md). Backend authors:
-[`backends/README.md`](backends/README.md). Anyone curious about the long-term
-architecture: [`PLAN.md`](PLAN.md).
-
----
-
-## Status
-
-This is an in-progress project. Here's what is and isn't real today:
-
-| Layer                                   | Status      | Notes                                                                                                                                                                                                                                                            |
-|-----------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **C engine** (`engine/`)                | In progress | Scene graph, Yoga flexbox layout, text rendering, font system, rounded rectangle rasterizer (with AA), Pressable/touch interactions with zIndex-aware stacking, timing animations for existing color/opacity props, and host-side CTest (animation, input, layout, text, rendering/rrect) work today. Shadows, transforms, ScrollView gestures, TextInput focus/input, and image scaling remain scaffolded or incomplete. |
-| **Backends** (`backends/`)              | In progress | `backends/sdl/` (desktop) and `backends/esp32-lcd/` (Waveshare 7" RGB panel, runs on hardware) implemented. The other backends remain stubs.                                                                                                                     |
-| **QuickJS bridge** (`bridges/quickjs/`) | Working     | Flow A end-to-end: the `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, and build-time image/font bakers. A JSX app runs on the desktop host and on ESP32-S3 hardware.                                                                  |
-| **Examples** (`examples/`)              | Partial     | `examples/linux/` (desktop, SDL) and `examples/esp32/esp32-s3/` (ESP32-S3 + RGB panel) run the same JSX bundle end-to-end. The other example boards are READMEs only.                                                                                            |
-
-If you're looking for a finished embedded UI framework today, this isn't it yet. If you
-want to follow along — or contribute to the engine, the toolchain, or a backend — read
-on.
-
----
-
-## What it will look like
-
-The eventual developer flow:
-
-```
-$ npx create-embedded-react my-app
-$ cd my-app
-$ vim src/App.jsx
-$ npm run build -- --target stm32h7
-$ npm run flash
-```
+Write a React app, compile it, flash it onto a microcontroller — the UI runs *on the device*, with no browser, no phone, and no OS required.
 
 ```jsx
-// src/App.jsx
+// src/App.jsx — the same component you'd write for iOS or Android…
 import {View, Text, Animated, Pressable, useRef, useEffect} from 'embedded-react';
 
 export default function App() {
@@ -82,7 +16,7 @@ export default function App() {
 
     return (
         <Animated.View style={{opacity, flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
-            <Text style={{color: '#fff', fontSize: 24}}>Hello from an STM32.</Text>
+            <Text style={{color: '#fff', fontSize: 24}}>Hello from an ESP32.</Text>
             <Pressable onPress={() => console.log('tapped')}>
                 <Text style={{color: '#e94560', marginTop: 12}}>Tap me</Text>
             </Pressable>
@@ -91,125 +25,186 @@ export default function App() {
 }
 ```
 
-Writing JSX and running it on the engine **works today** on the desktop host (`examples/linux`,
-SDL) and on ESP32-S3 hardware (`examples/esp32/esp32-s3`) — same bundle, swap the backend. What's
-still aspirational is the polished CLI wrapper above (`npx create-embedded-react`, `npm run flash`);
-today you build the bundle with `npm run build` in `bridges/quickjs/js` and run the example target.
-See [`bridges/quickjs/js/README.md`](bridges/quickjs/js/README.md).
+…runs natively on a microcontroller driving a raw SPI or RGB display.
 
 ---
 
-## How it works
+## What this is — and what it isn't
 
-The supported path is Flow A: React on QuickJS. It looks like this:
+Most projects that pair "React" with an "ESP32" run **React in a web browser** on your phone or laptop, talking to the microcontroller over REST or BLE. The MCU is just a backend; the component tree, layout, and rendering all live somewhere else.
+
+**embedded-react is the opposite.** It takes React Native's approach: React is a *component and reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (`div`, CSS, the browser layout engine) for native ones (`View`, Yoga, native draw calls). embedded-react does that swap again, one level deeper — the host primitives are a **pure C99 engine drawing straight into a framebuffer or SPI display**, with no operating system underneath and no JavaScript engine required.
+
+You write the same JSX components, the same `Animated` API, and the same Yoga-flexbox styles you'd use on iOS or Android. Your app runs on an ESP32, STM32, or RP2040 instead of a phone.
+
+---
+
+## Two ways to ship the same app
+
+The same JSX source can reach the device through one of two flows. Both target the **same C engine** and the same `<View>`/`<Text>`/flexbox model — the only difference is *when* the dynamism is resolved.
+
+### Flow A — C engine + QuickJS  *(runtime)*
+
+The faithful React Native architecture: a real JavaScript runtime ([QuickJS](https://bellard.org/quickjs/)) hosts a React reconciler that drives the native engine at runtime.
 
 ```
-JSX source  →  bundler  →  QuickJS bytecode + JS  →  flashed to MCU
-                                                          ↓
-                                       React reconciler runs on QuickJS  (bridges/quickjs/)
-                                                          ↓
-                                       calls into er_scene.h             (engine/)
-                                                          ↓
-                                       Yoga layout + render pass         (engine/layout, engine/scene)
-                                                          ↓
-                                       backend fill / copy / blend       (backends/<api>/)
-                                                          ↓
-                                              framebuffer  →  display
+JSX  →  esbuild bundle  →  QuickJS bytecode  →  flashed to MCU
+                                                     ↓
+                              React reconciler runs on QuickJS   (bridges/quickjs/js)
+                                                     ↓
+                              NativeUI bridge → er_scene.h        (bridges/quickjs/*.c)
+                                                     ↓
+                              Yoga layout + render pass           (engine/)
+                                                     ↓
+                              backend fill / copy / blend         (backends/<api>/)
+                                                     ↓
+                                     framebuffer  →  display
 ```
 
-The reconciler is a small piece of JS (ported from React Native's host config) that turns
-React's diff output into `er_*` C calls. The engine owns the scene tree, runs the layout
-pass, and dispatches paint calls through five backend function pointers (`fill_rect`,
-`copy_rect`, `blend_rect`, optional `wait`, optional `frame_ready`). Your display driver
-implements those five callbacks once; the rest of the stack is portable.
+You keep **full runtime dynamism** — live state, anything JS can express, and hot reload during development. The cost is RAM and per-frame dispatch, so Flow A wants a chip with PSRAM (e.g., ESP32-S3).
 
-A later Flow B shortcuts the JS engine entirely: the same JSX source is consumed by an
-AOT compiler that emits C code targeting `er_scene.h` directly. Smaller binary, smaller
-RAM, no garbage collector — at the cost of giving up runtime JS features. The runtime ABI
-is the same, so Flow A apps and Flow B apps can share components. See `PLAN.md` for the
-full picture.
+### Flow B — C engine + AOT compiler  *(compile-time)*
+
+The thing React Native *can't* do. An ahead-of-time compiler consumes the same JSX and **emits C** targeting the engine directly — no JS engine, no garbage collector, no reconciler on the device. The component tree, `useState` state machine, event handlers, and animations are all baked into C at compile time.
+
+```
+JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c / app.gen.h  →  compiled into firmware
+                                                                                    ↓
+                                                          calls er_scene.h directly  (engine/)
+```
+
+Smaller binary, far less RAM, deterministic — at the cost of giving up runtime JS. This is what makes **no-PSRAM microcontrollers** (the class of hardware the browser/RN approaches structurally exclude) viable. The AOT path is built and verified on hardware today.
+
+**One model, one engine, two flows.** A developer writes the same RN-style JSX either way; the choice of runtime-vs-compiled is a build decision, not a rewrite.
+
+---
+
+## Status
+
+In-progress project. Here's what is **verified working** vs. still scaffolded:
+
+| Layer | Status | Notes |
+|---|---|---|
+| **C engine** (`engine/`) | Working | Scene graph, Yoga flexbox layout, UTF-8 text + font system, anti-aliased rounded rects, borders, shadows, 2D/3D transforms, opacity compositing, image scaling + tint, gradients, the `Animated` value engine, zIndex-aware multitouch hit-testing, ScrollView momentum, and banded RGB565 rendering for low-RAM boards. Host-side CTest suites pass (layout, text, rendering, animation, input, scroll, resources). |
+| **Flow A** — React on QuickJS (`bridges/quickjs/`) | Working | End-to-end: `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, build-time image/font bakers, ERPK asset container. Runs on the desktop host and on ESP32-S3 hardware. |
+| **Flow B** — AOT JSX→C (`bridges/quickjs/js/aot/`) | Working | Compiles `useState`, `setState` (incl. updater form), events, conditionals, `.map` lists, child components, refs/`useCallback`/`useMemo`, dynamic styles, the full `Animated` API (timing/spring/decay/sequence/parallel/loop), and static + state-driven `Svg`. Runs on desktop **and on a no-PSRAM ESP32** (Cheap Yellow Display). |
+| **Backends** (`backends/`) | Partial | `sdl` (desktop), `esp32-lcd` (RGB parallel), and `esp32-spi-lcd` (banded RGB565) are implemented and run on hardware. `dma2d`, `software`, `opengl`, `framebuffer`, and `web` are stubs. |
+| **Simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop: file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation across reloads. See [`SIMULATOR.md`](SIMULATOR.md). |
+| **Examples** (`examples/`) | Partial | Four run end-to-end (below). `stm32h7`, `raspberry-pi`, and others are READMEs only. |
+
+If you want a finished, drop-in embedded UI framework today, this isn't that yet. If you want to follow along — or contribute to the engine, a backend, or the toolchain — read on.
+
+---
+
+## Working examples
+
+The same demo JSX (`demos/thermostat`, `demos/music-player`) runs across all four:
+
+| Example | Flow | Hardware | Backend |
+|---|---|---|---|
+| [`examples/linux/`](examples/linux/README.md) | A (QuickJS) | desktop | `sdl` |
+| [`examples/esp32/esp32-s3/`](examples/esp32/esp32-s3/README.md) | A (QuickJS) | ESP32-S3 + Waveshare 7" RGB panel | `esp32-lcd` |
+| [`examples/linux-aot/`](examples/linux-aot) | B (AOT) | desktop | `sdl` |
+| [`examples/esp32/esp32-2432s028r/`](examples/esp32/esp32-2432s028r/README.md) | B (AOT) | ESP32-2432S028R "Cheap Yellow Display", **no PSRAM** | `esp32-spi-lcd` |
+
+---
+
+## Repo layout
+
+A monorepo with one self-contained CMake/npm project per concern:
+
+```
+engine/      Pure C99 runtime — scene graph, layout, rendering, text, animation.
+             Runtime-agnostic; knows nothing about React. er_scene.h is a plain C ABI.
+
+backends/    Hardware adapters. One folder per rendering API / peripheral. A backend
+             implements five function pointers (fill_rect, copy_rect, blend_rect,
+             optional wait, optional frame_ready) — the rest of the stack is portable.
+
+bridges/     Frontends that drive the engine.
+               quickjs/        Flow A: React reconciler + NativeUI C bridge over QuickJS.
+               quickjs/js/aot/ Flow B: the JSX→C ahead-of-time compiler.
+               quickjs/js/     The toolchain — bundler, asset bakers, simulator, scaffold.
+
+demos/       JSX demo apps (thermostat, music-player) written against the public
+             `embedded-react` API. Each compiles through both Flow A and Flow B.
+
+examples/    End-to-end host integrations — one engine + one backend + one flow,
+             packaged for a specific board (linux, linux-aot, esp32-s3, esp32-2432s028r).
+
+tools/       Developer tooling, including the hot-reload simulator.
+```
+
+Each top-level folder has its own README. Engine contributors start with
+[`engine/README.md`](engine/README.md); backend authors with
+[`backends/README.md`](backends/README.md); the long-term architecture lives in
+[`PLAN.md`](PLAN.md), the engine internals in [`ENGINE.md`](ENGINE.md), and the
+Flow A bridge in [`BRIDGE.md`](BRIDGE.md).
 
 ---
 
 ## Why a runtime-agnostic engine?
 
-The engine in `engine/` deliberately doesn't know about React. `er_scene.h` is a pure C
-ABI: anything that can call C functions can drive it. React-on-QuickJS is the supported
-frontend today (Flow A), and React-AOT-to-C is the planned second frontend (Flow B). But
-the layering leaves the door open for other frontends without forking the engine — Lua
-UI, JSON UI loaders, a desktop visual editor that emits a scene-graph format, scripting
-APIs.
+`engine/` deliberately doesn't know about React. `er_scene.h` is a pure C ABI — anything that can call C functions can drive it. That layering is exactly what makes the two-flow design possible: Flow A drives the engine from a JS reconciler, Flow B drives it from generated C, and both share one renderer. It also leaves the door open to other frontends (Lua UI, JSON UI loaders, a visual editor that emits a scene-graph format) without forking the engine.
 
-That doesn't change the project's identity. **embedded-react is React Native for embedded
-MCUs.** React is the supported developer path; other frontends are architectural
-possibilities the layering enables, not roadmap items.
+That doesn't change the project's identity. **embedded-react is React Native for embedded MCUs.** React is the developer-facing model; the engine's neutrality is an implementation choice that keeps the two flows honest.
 
 ---
 
-## Roadmap
+## Toolchain
 
-**Engine (in progress)**
-
-- Finish runtime: shadows, transforms, full animation engine, image scaling
-
-**Flow A — React on QuickJS** (working)
-
-- ✅ `NativeUI` bridge over `er_scene.h`; React reconciler hosted in QuickJS
-- ✅ esbuild bundler + QuickJS bytecode precompiler + build-time image/font bakers
-- ✅ `examples/linux/` end-to-end — write JSX, run on the desktop SDL host
-- ✅ `examples/esp32/esp32-s3/` — ESP32-S3 (+PSRAM) bring-up, running on the Waveshare 7" panel
-- ✅ Hot-reload **simulator** (`npm run sim`) — file-watch live reload, error overlay, transparent state preservation (`/SIMULATOR.md`)
-- ✅ App **scaffold** (in-repo: `npm run create -- <name>`); standalone `npx create-embedded-react` awaits npm publishing
-- Remaining: published packages; on-device hot reload; `examples/stm32h7/` (+ `backends/dma2d/`) bring-up
-
-**Flow B — React as a compile target** (later)
-
-- JSX → C source AOT compiler
-- Static layout / static animation passes
-- Benchmarks: Flow A vs. Flow B on the same app (binary size, RAM, frame time)
-
----
-
-## Hardware support
-
-| Platform               | Backend                 | Status                                 |
-|------------------------|-------------------------|----------------------------------------|
-| Linux + SDL2           | `backends/sdl/`         | **Implemented** — dev / test target    |
-| STM32H7 + DMA2D        | `backends/dma2d/`       | Reference (planned first MCU bring-up) |
-| ESP32-S3 + LCD         | `backends/esp32-lcd/`   | Planned                                |
-| RP2040 / bare-metal    | `backends/software/`    | Planned                                |
-| Raspberry Pi / Android | `backends/opengl/`      | Planned                                |
-| Embedded Linux SBC     | `backends/framebuffer/` | Planned                                |
-| WebAssembly            | `backends/web/`         | Planned                                |
-
-A new board needs a C99 compiler, `<math.h>`, and a writable framebuffer — RGB565,
-ARGB8888, or anything the backend can convert to. No RTOS required; FreeRTOS, Zephyr,
-and bare-metal all work.
-
----
-
-## Building
+From `bridges/quickjs/js/` (pick a demo via the build scripts):
 
 ```
-cmake -S . -B build -DBUILD_TESTING=ON
+npm run build      # Flow A: bundle JSX → QuickJS bytecode + baked assets
+npm run pack       # Flow A: pack an ERPK app container (bytecode + assets + CRC)
+npm run aot        # Flow B: compile JSX → app.gen.c / app.gen.h
+npm run sim        # hot-reload simulator (file-watch, redbox, state preservation)
+npm run create     # scaffold a new app
+npm test           # unit tests (vitest)
+npm run parity     # verify Flow A / Flow B render parity
+```
+
+The polished `npx create-embedded-react` / `npm run flash` CLI wrapper is still aspirational — today you drive the flows through the scripts above and run an example target.
+
+---
+
+## Building the engine
+
+The root `CMakeLists.txt` builds **nothing** — it only hosts repo-wide `clang-format`
+targets. Each component is its own CMake project; configure whichever you're working on:
+
+```
+# Engine + host tests
+cmake -S engine -B build -DBUILD_TESTING=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The engine builds a single static library `embedded-react`. Backends, bridges, and most
-examples are not built by the top-level CMakeLists yet. `examples/linux/` is a standalone
-CMake project that pulls in the engine and SDL backend directly.
+The engine compiles to a single static library, `embedded-react`. The bridge and the
+examples pull the engine in themselves via a relative `add_subdirectory`. For a board
+bring-up, configure the example directly (e.g. `examples/linux`, or an ESP-IDF build for
+the ESP32 targets) — see that example's README.
+
+A new board needs only a C99 compiler, `<math.h>`, and a writable framebuffer (RGB565,
+ARGB8888, or anything the backend converts to). No RTOS required — FreeRTOS, Zephyr, and
+bare-metal all work.
 
 ---
 
 ## Architecture and contributing
 
 The engine is intentionally small and self-contained — pure C99, no MCU SDK headers, no
-platform `#ifdef`s. If you want to dig into the architecture (Yoga implementation,
-scratch buffer model, premultiplied ARGB pipeline, compile-time feature flags) read
-[`PLAN.md`](PLAN.md), especially its appendices.
+platform `#ifdef`s. For the internals (Yoga implementation, scratch-buffer model,
+premultiplied-ARGB pipeline, banded rendering, compile-time feature flags) read
+[`ENGINE.md`](ENGINE.md) and [`PLAN.md`](PLAN.md). Code formatting and documentation
+rules live in [`RULES.md`](RULES.md).
 
-Code formatting and documentation rules live in [`RULES.md`](RULES.md).
+Contributions are welcome on any layer: the engine, a backend, the Flow A bridge, or the
+Flow B AOT compiler.
 
-Contributions are welcome on any of the three layers: engine, backends, or bridges
-(including the React/QuickJS frontend).
+---
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). Created and authored by **Cory Lamming** — see [`NOTICE`](NOTICE).

@@ -1,0 +1,58 @@
+embedded-react
+Copyright 2026 Cory Lamming
+
+This product was created and is authored by Cory Lamming.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use the files in this project except in compliance with the License. You may
+obtain a copy of the License in the accompanying LICENSE file or at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+------------------------------------------------------------------------------
+Attribution
+------------------------------------------------------------------------------
+
+All original source code in this repository -- the C99 rendering engine, the
+hardware backends, the QuickJS bridge and NativeUI host config, the JSX-to-C
+ahead-of-time compiler, the toolchain, the simulator, and the demos -- is the
+original work of Cory Lamming, unless explicitly attributed otherwise.
+
+If you redistribute this work or derivative works, you must retain this NOTICE
+file and the attribution above, as required by Section 4 of the Apache License,
+Version 2.0.
+
+------------------------------------------------------------------------------
+Third-Party Components
+------------------------------------------------------------------------------
+
+This project builds against the following third-party software. These
+components are NOT redistributed in this repository's source tree; they are
+fetched as build-time dependencies (via CMake FetchContent and npm) and remain
+under their own respective licenses and copyrights:
+
+  * QuickJS / quickjs-ng -- a small embeddable JavaScript engine.
+    Copyright (c) Fabrice Bellard, Charlie Gordon, and the quickjs-ng
+    contributors. Licensed under the MIT License.
+    Used by the Flow A runtime bridge (bridges/quickjs/).
+
+  * React and react-reconciler -- the React component and reconciliation model.
+    Copyright (c) Meta Platforms, Inc. and affiliates.
+    Licensed under the MIT License.
+    Used by the Flow A bridge to drive the native engine.
+
+The embedded-react public API (e.g. the View / Text / Pressable / Animated /
+StyleSheet modules under bridges/quickjs/js/src/embedded-react/) is an original,
+independent reimplementation inspired by the React Native API surface. It is not
+derived from or copied out of React Native's source, and is the original work of
+Cory Lamming.
+
+Trademarks referenced in this project (including "React" and "React Native") are
+the property of their respective owners and are used here only for descriptive
+and interoperability purposes.
