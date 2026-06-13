@@ -751,6 +751,11 @@ function attrExpr(attr) {
   return v;
 }
 
+/** A static ARGB8888 C literal (`0xAARRGGBBu`) from a CSS color string or number. */
+function argbLiteral(value) {
+  return '0x' + (parseColor(String(value)) >>> 0).toString(16).padStart(8, '0').toUpperCase() + 'u';
+}
+
 /** Lowers a dynamic (state-referencing) color expression to a C ARGB expression. */
 function emitColorExpr(node, env) {
   if (node.type === 'StringLiteral') return colorLiteral(node.value);
@@ -2261,7 +2266,7 @@ function resolveImageAttrs(el, env, out) {
   const tcAttr = find('tintColor');
   if (tcAttr) {
     const tc = evalStaticOr(attrExpr(tcAttr), env, null);
-    if (typeof tc === 'string' || typeof tc === 'number') tintColor = '0x' + (parseColor(String(tc)) >>> 0).toString(16).padStart(8, '0').toUpperCase() + 'u';
+    if (typeof tc === 'string' || typeof tc === 'number') tintColor = argbLiteral(tc);
   }
   return { imageName, resizeMode, tintColor };
 }
@@ -2406,11 +2411,9 @@ const emitNode = withLoc(emitNodeImpl);
 // (ERKeyboardKey/Row/Layer + ERKeyboardConfig) that er_app_build hands to er_keyboard_set_config.
 // ---------------------------------------------------------------------------------------------------
 
-/** Formats a color value (string like "#303030" or a number) as a C ARGB literal; null/undefined → "0". */
+/** A keyboard-config color → C ARGB literal; null/undefined → "0" (the engine's "use default" sentinel). */
 function kbdColor(v) {
-  if (v == null) return '0';
-  const argb = parseColor(String(v)) >>> 0;
-  return '0x' + argb.toString(16).padStart(8, '0').toUpperCase() + 'u';
+  return v == null ? '0' : argbLiteral(v);
 }
 
 /** One JS keyboard key object → a C ERKeyboardKey initializer. `li` is its layer index (for shift highlight).
