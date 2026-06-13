@@ -1093,3 +1093,37 @@ import logo from './assets/logo.png';
     expect(() => compileSource(`${IMG}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`, 'demo')).toThrow(/unsupported <Image resizeMode>/);
   });
 });
+
+describe('AOT per-instance child state', () => {
+  const C = `import { View, Text, Pressable } from 'embedded-react';
+import { useState } from 'react';
+function Counter({ label }) {
+  const [n, setN] = useState(0);
+  return (<Pressable onPress={() => setN(n + 1)}><Text>{label}: {n}</Text></Pressable>);
+}
+`;
+  it('gives a stateful child its own namespaced field in ErAppState', () => {
+    const c = compileSource(`${C}\nexport function App() { return (<View><Counter label="A" /></View>); }`, 'demo').c;
+    expect(c).toContain('int c0_n;');
+    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // the child's setter mutates its own field
+  });
+
+  it('keeps two instances of the same component independent', () => {
+    const c = compileSource(`${C}\nexport function App() { return (<View><Counter label="A" /><Counter label="B" /></View>); }`, 'demo').c;
+    expect(c).toContain('int c0_n;');
+    expect(c).toContain('int c1_n;'); // distinct storage per instance
+    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);');
+    expect(c).toContain('s_state.c1_n = (s_state.c1_n + 1);');
+    // each instance's text reads its OWN field
+    expect(c).toMatch(/"A: %d",\s*s_state\.c0_n/);
+    expect(c).toMatch(/"B: %d",\s*s_state\.c1_n/);
+  });
+
+  it('folds a child useState initial against a static prop', () => {
+    const src = `import { View, Text, Pressable } from 'embedded-react';
+import { useState } from 'react';
+function Counter({ start }) { const [n, setN] = useState(start); return (<Pressable onPress={() => setN(n + 1)}><Text>{n}</Text></Pressable>); }
+export function App() { return (<View><Counter start={5} /></View>); }`;
+    expect(compileSource(src, 'demo').c).toContain('.c0_n = 5');
+  });
+});

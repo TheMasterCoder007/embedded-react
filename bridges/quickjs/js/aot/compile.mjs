@@ -409,7 +409,13 @@ function inferItemStruct(items, name) {
   return { fields };
 }
 
-function collectState(fnBody, scope) {
+/**
+ * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
+ * name (writes). `prefix` namespaces the C STORAGE so each inlined child instance gets its own slots: the
+ * lookup keys stay the bare JS names (`count`), but the C field / array / count derive from `cField`
+ * (`<prefix>count`). prefix='' (the App) leaves storage names exactly as the JS names — backward compatible.
+ */
+function collectState(fnBody, scope, prefix = '') {
   const byName = new Map();
   const bySetter = new Map();
   for (const stmt of fnBody.body) {
@@ -420,6 +426,7 @@ function collectState(fnBody, scope) {
       const name = decl.id.elements[0]?.name;
       const setter = decl.id.elements[1]?.name;
       if (!name) continue;
+      const cField = prefix + name; // C storage name (== name for the App; instance-unique for a child)
       const initArg = init.arguments[0];
 
       let rec;
@@ -438,7 +445,7 @@ function collectState(fnBody, scope) {
           if (initArg.loc && !e.aotLoc) e.aotLoc = initArg.loc.start; // collectState isn't withLoc-wrapped
           throw e;
         }
-        rec = { name, setter, kind: 'list', struct, items, cap: LIST_CAP, cTypeName: `ErItem_${name}`, arrayName: `s_${name}`, countMember: `s_${name}_count` };
+        rec = { name, cField, setter, kind: 'list', struct, items, cap: LIST_CAP, cTypeName: `ErItem_${cField}`, arrayName: `s_${cField}`, countMember: `s_${cField}_count` };
       } else {
         const initVal = initArg
           ? evalStaticOrThrow(
@@ -457,7 +464,7 @@ function collectState(fnBody, scope) {
         }
         // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
         const initCode = cType === 'string' ? cstr(String(initVal)) : cType === 'float' ? floatLit(initVal) : String(Number(initVal));
-        rec = { name, setter, kind: 'scalar', cType, cMember: `s_state.${name}`, initCode };
+        rec = { name, cField, setter, kind: 'scalar', cType, cMember: `s_state.${cField}`, initCode };
       }
       byName.set(name, rec);
       if (setter) bySetter.set(setter, rec);
@@ -1529,11 +1536,6 @@ function isChildrenRef(expr, env) {
 function emitComponent(el, scope, out, env, state, opts) {
   const tag = el.openingElement.name.name;
   const fn = out.components.get(tag);
-  if (usesState(fn))
-    throw aotError(
-      `AOT: component <${tag}> uses useState — per-instance child state not yet supported`,
-      `child components are inlined at compile time and can't yet own state. Lift the state into the parent (<${tag}>'s caller) and pass value + a setter callback down as props, or keep <${tag}> presentational (props only).`,
-    );
   const childNodes = el.children.filter((c) => c.type === 'JSXElement' || (c.type === 'JSXExpressionContainer' && c.expression.type !== 'JSXEmptyExpression'));
 
   // How the body refers to children: destructured `{ children }` (a local) or whole `props` → props.children.
@@ -1557,7 +1559,19 @@ function emitComponent(el, scope, out, env, state, opts) {
     else childLocals.set(name, { code: d.code, cType: d.cType, struct: d.struct });
   }
   const children = childNodes.length ? { nodes: childNodes, scope, env, ref: childrenRef } : null;
-  return emitNode(componentReturnJSX(fn, childScope), childScope, out, { ...env, consts: childScope, locals: childLocals, children, fnProps }, state, opts);
+
+  // Per-instance state: if the child declares useState, give THIS instance its own C storage — a unique
+  // field prefix (`c<N>_`) in the shared ErAppState — so two <Counter/>s keep independent counts. The
+  // child's setters mutate its own fields and call the global app_update() (which re-applies all dynamic
+  // nodes, the existing coarse model). Initials fold against the child's static-prop scope. With no
+  // useState, childState stays the caller's state (env.state unchanged) — backward compatible.
+  let childState = state;
+  if (usesState(fn)) {
+    childState = collectState(fn.body, childScope, `c${out.instN++}_`);
+    out.childStateRecords.push(...childState.byName.values());
+  }
+  const childEnv = { ...env, consts: childScope, locals: childLocals, children, fnProps, state: childState.byName };
+  return emitNode(componentReturnJSX(fn, childScope), childScope, out, childEnv, childState, opts);
 }
 
 /** Emits an element / component child and appends it to the parent. opts.displayCode toggles its show. */
@@ -2564,7 +2578,7 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map() };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [] };
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
@@ -2583,7 +2597,8 @@ for (const eff of collectEffects(component.body)) {
 }
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
-const stateRecords = [...state.byName.values()];
+// App state + every inlined child instance's per-instance state (each already namespaced via cField).
+const stateRecords = [...state.byName.values(), ...out.childStateRecords];
 const scalarRecords = stateRecords.filter((s) => s.kind === 'scalar');
 const listRecords = stateRecords.filter((s) => s.kind === 'list');
 
@@ -2598,9 +2613,9 @@ const listBlocks = listRecords
       `static int ${s.countMember} = ${s.items.length};\n`,
   )
   .join('\n');
-const scalarFieldDecl = (s) => (s.cType === 'string' ? `    char ${s.name}[${LIST_STR_CAP}];` : `    ${s.cType === 'float' ? 'float' : 'int'} ${s.name};`);
+const scalarFieldDecl = (s) => (s.cType === 'string' ? `    char ${s.cField}[${LIST_STR_CAP}];` : `    ${s.cType === 'float' ? 'float' : 'int'} ${s.cField};`);
 const scalarBlock = scalarRecords.length
-  ? `typedef struct\n{\n${scalarRecords.map(scalarFieldDecl).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map((s) => ` .${s.name} = ${s.initCode}`).join(',')} };\n`
+  ? `typedef struct\n{\n${scalarRecords.map(scalarFieldDecl).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map((s) => ` .${s.cField} = ${s.initCode}`).join(',')} };\n`
   : '';
 const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 
