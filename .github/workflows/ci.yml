@@ -1,0 +1,73 @@
+# CI — runs on every PR + push to master. Fast, display-free checks (the parity harness opens real SDL
+# windows, so it stays a dev-machine check, not CI). Three independent jobs:
+#   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
+#   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
+#   aot     — compile a demo to C with the Flow B AOT, then gcc the generated C against the engine headers
+#             (verifies the output compiles + the embedded-react version-pin _Static_assert holds).
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  js:
+    name: JS tests + version drift
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridges/quickjs/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bridges/quickjs/js/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+      - name: Version + LICENSE/NOTICE in sync with VERSION
+        run: node ../../../tools/sync-version.mjs --check
+
+  engine:
+    name: Engine build + ctests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S engine -B engine/build-ci
+      - name: Build
+        run: cmake --build engine/build-ci
+      - name: Test
+        run: ctest --test-dir engine/build-ci --output-on-failure
+
+  aot:
+    name: AOT compile smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridges/quickjs/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bridges/quickjs/js/package-lock.json
+      - run: npm ci
+      # gcc the generated C against the public engine headers — no SDL, no display. -fsyntax-only still
+      # evaluates the version-pin _Static_assert, so an ABI/version mismatch fails here.
+      - name: music-player → C → gcc
+        run: |
+          node aot/compile.mjs music-player
+          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
+          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
+      - name: thermostat (compact) → C → gcc
+        run: |
+          ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mjs thermostat
+          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
+          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c

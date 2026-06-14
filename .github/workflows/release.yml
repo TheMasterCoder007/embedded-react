@@ -1,0 +1,94 @@
+# Release — fires on a pushed version tag (vX.Y.Z, made by `node tools/release.mjs X.Y.Z`). Gates that the
+# the committed version matches the tag, re-runs the fast checks, then publishes the SAME version to all channels.
+# Each publisher step is gated, so you can enable channels incrementally.
+#
+# npm: uses OIDC TRUSTED PUBLISHING — NO long-lived token. Set it up once on npmjs.com → the package's
+#   Settings → Trusted Publisher → GitHub Actions (repo TheMasterCoder007/embedded-react, workflow
+#   release.yml), then set the repo VARIABLE `PUBLISH_NPM=true` to enable the step. (First publish of a brand-
+#   new package may need one manual `npm publish` to create it, then Trusted Publishing for every release after.)
+#
+# Token secrets (the registries below have no OIDC equivalent):
+#   IDF_COMPONENT_API_TOKEN  — ESP Component Registry token (components.espressif.com → Tokens)
+#   PLATFORMIO_AUTH_TOKEN    — PlatformIO account token (`pio account token`)
+# And set IDF_COMPONENT_NAMESPACE below to your registry namespace before the first ESP-IDF publish.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # npm provenance (OIDC)
+
+env:
+  IDF_COMPONENT_NAMESPACE: TheMasterCoder007 # your ESP Component Registry namespace (your GitHub handle)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      IDF_COMPONENT_API_TOKEN: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
+      PLATFORMIO_AUTH_TOKEN: ${{ secrets.PLATFORMIO_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bridges/quickjs/js/package-lock.json
+
+      # The release gate: the committed VERSION + every synced artifact must equal the tag (minus the 'v').
+      # `node tools/release.mjs` makes this true by construction; this catches a hand-made / mismatched tag.
+      - name: Gate — tag matches committed version
+        run: node tools/sync-version.mjs --check "${GITHUB_REF_NAME#v}"
+
+      # Fast, display-free verification before anything is published.
+      - name: JS tests
+        working-directory: bridges/quickjs/js
+        run: npm ci && npx vitest run
+      - name: Engine ctests
+        run: |
+          cmake -S engine -B engine/build-ci
+          cmake --build engine/build-ci
+          ctest --test-dir engine/build-ci --output-on-failure
+      - name: AOT compile smoke
+        working-directory: bridges/quickjs/js
+        run: |
+          node aot/compile.mjs music-player
+          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
+
+      # --- Channel 1: npm (OIDC Trusted Publishing — no token; provenance is automatic) ---
+      # Enable by setting repo variable PUBLISH_NPM=true AFTER configuring the trusted publisher on npmjs.com.
+      - name: Publish to npm
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        working-directory: bridges/quickjs/js
+        run: |
+          npm install -g npm@latest   # ensure an npm with OIDC trusted-publishing support
+          npm publish --provenance --access public
+
+      # --- Channel 2: ESP-IDF Component Registry (the engine/ component) ---
+      - name: Publish to the ESP Component Registry
+        if: ${{ env.IDF_COMPONENT_API_TOKEN != '' }}
+        uses: espressif/upload-components-ci-action@v1
+        with:
+          name: embedded-react
+          namespace: ${{ env.IDF_COMPONENT_NAMESPACE }}
+          directories: engine
+          api_token: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
+
+      # --- Channel 3: PlatformIO registry (reads root library.json) ---
+      - name: Publish to PlatformIO
+        if: ${{ env.PLATFORMIO_AUTH_TOKEN != '' }}
+        run: |
+          python -m pip install --upgrade platformio
+          pio pkg publish --no-interactive
+
+      # --- Channel 4: GitHub Release + engine source bundle (the CMake / FetchContent channel) ---
+      - name: Build engine source bundle
+        run: tar -czf embedded-react-${GITHUB_REF_NAME}-engine-src.tar.gz engine backends LICENSE NOTICE README.md
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: embedded-react-*-engine-src.tar.gz

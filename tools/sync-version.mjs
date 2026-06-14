@@ -28,10 +28,31 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const check = process.argv.includes('--check');
+const VERSION_FILE = resolve(ROOT, 'VERSION');
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
-const version = readFileSync(resolve(ROOT, 'VERSION'), 'utf8').trim();
-const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+// Modes:
+//   (default)        write VERSION → every artifact.
+//   --set X.Y.Z      first write X.Y.Z into VERSION, then sync (used by the release helper).
+//   --check          verify every artifact matches the VERSION file.
+//   --check X.Y.Z    verify every artifact AND the VERSION file match X.Y.Z (the release tag gate).
+const args = process.argv.slice(2);
+const check = args.includes('--check');
+const setIdx = args.indexOf('--set');
+const setVersion = setIdx >= 0 ? args[setIdx + 1] : null;
+const versionArg = args.find((a, i) => SEMVER.test(a) && i !== setIdx + 1); // bare X.Y.Z (not the --set value)
+
+if (setVersion && !SEMVER.test(setVersion)) {
+  console.error(`--set needs a MAJOR.MINOR.PATCH version (got "${setVersion ?? ''}")`);
+  process.exit(2);
+}
+// In --set mode, the new version IS the source of truth — write it into VERSION up front.
+if (setVersion && !check) writeFileSync(VERSION_FILE, setVersion + '\n');
+
+// The version everything is expected to be: --check <tag> uses the tag; otherwise the VERSION file.
+const expected = check && versionArg ? versionArg : readFileSync(VERSION_FILE, 'utf8').trim();
+const version = expected;
+const m = SEMVER.exec(version);
 if (!m) {
   console.error(`VERSION must be "MAJOR.MINOR.PATCH" (got "${version}")`);
   process.exit(2);
@@ -40,6 +61,12 @@ const [, major, minor, patch] = m;
 
 const drift = []; // { file, found } when --check finds a mismatch
 const wrote = [];
+
+// In `--check <tag>` mode the VERSION file itself must equal the tag (catches the "forgot to bump" case).
+if (check && versionArg) {
+  const fileVersion = readFileSync(VERSION_FILE, 'utf8').trim();
+  if (fileVersion !== versionArg) drift.push({ file: 'VERSION', found: fileVersion });
+}
 
 /** Reads a file, applies `transform(text) → newText`, then writes (or, in --check, records any drift). */
 function apply(relPath, transform, currentVersionOf) {

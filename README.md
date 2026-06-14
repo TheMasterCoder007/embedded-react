@@ -169,6 +169,49 @@ The polished `npx create-embedded-react` / `npm run flash` CLI wrapper is still 
 
 ---
 
+## Install
+
+The whole project ships at **one lockstep version** across four channels (all the same `vX.Y.Z`):
+
+**npm** — the JSX component API + reconciler (Flow A authoring) and the Flow B AOT compiler:
+
+```
+npm install embedded-react
+```
+
+```jsx
+import { View, Text, Pressable, StyleSheet } from 'embedded-react';
+```
+
+**CMake / FetchContent** — the C engine as a source (you add a backend and your app):
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(embedded-react
+  GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
+  GIT_TAG        v0.1.0
+  SOURCE_SUBDIR  engine)
+FetchContent_MakeAvailable(embedded-react)
+target_link_libraries(my_firmware PRIVATE embedded-react)
+```
+
+**ESP-IDF** — the engine as a managed component:
+
+```
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.1.0"
+```
+
+**PlatformIO** — add to `platformio.ini`:
+
+```ini
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.1.0
+```
+
+The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`
+for reference wiring). Tune the `ERUI_*` RAM/feature flags for your board (the defaults are desktop-sized).
+
+---
+
 ## Building the engine
 
 The root `CMakeLists.txt` builds **nothing** — it only hosts repo-wide `clang-format`
@@ -202,6 +245,31 @@ rules live in [`RULES.md`](RULES.md).
 
 Contributions are welcome on any layer: the engine, a backend, the Flow A bridge, or the
 Flow B AOT compiler.
+
+---
+
+## Releasing
+
+Every artifact (npm, the engine source bundle, the ESP-IDF component, the PlatformIO library) shares one
+**lockstep** version, synced from the repo-root [`VERSION`](VERSION) file into `package.json`, `library.json`,
+`engine/idf_component.yml`, and `engine/include/er_version.h` (plus a `LICENSE`/`NOTICE` copy per package).
+
+To cut a release:
+
+```
+node tools/release.mjs 0.2.0     # bump VERSION + sync all manifests, commit "release: v0.2.0", tag v0.2.0
+git push --follow-tags           # the Release workflow gates (tag == VERSION) then publishes every channel
+```
+
+- `node tools/sync-version.mjs --check` (also run in CI) fails if any manifest drifts from `VERSION`; the
+  release gate additionally requires the **tag to equal `VERSION`**.
+- The Flow B AOT compiler stamps its version into the generated C and `_Static_assert`s it against the engine
+  header, so an app built against a mismatched engine fails at **compile time**, not on-device.
+- First-time setup (each publisher is gated, so enable channels incrementally):
+  - **npm** uses OIDC **Trusted Publishing** (no token) — configure the trusted publisher on npmjs.com (the
+    package's Settings → repo + `release.yml`), then set repo variable `PUBLISH_NPM=true`.
+  - **ESP-IDF / PlatformIO** use API tokens — add repo secrets `IDF_COMPONENT_API_TOKEN`,
+    `PLATFORMIO_AUTH_TOKEN`, and set the ESP namespace in [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ---
 

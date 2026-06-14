@@ -55,6 +55,7 @@
     "parity": "node parity.mjs",
     "version:sync": "node ../../../tools/sync-version.mjs",
     "version:check": "node ../../../tools/sync-version.mjs --check",
+    "release": "node ../../../tools/release.mjs",
     "build:builtin-font": "node assets/build-builtin-font.mjs",
     "sim": "node sim.mjs",
     "create": "node create-embedded-react.mjs",

@@ -1,12 +1,25 @@
-# embedded-react — QuickJS JS layer (React reconciler)
+# embedded-react
 
-The JavaScript half of Flow A: a [`react-reconciler`](https://www.npmjs.com/package/react-reconciler)
-host config that maps React's host API onto the `NativeUI` bridge, so **JSX components drive the
-C engine**. Bundled to a single classic script that QuickJS runs with a plain `JS_Eval`.
+**React Native for embedded MCUs** — write JSX, run it on a microcontroller. This npm package is the
+**JavaScript layer**: the React-Native-style component API you import, the
+[`react-reconciler`](https://www.npmjs.com/package/react-reconciler) host config that drives the C engine
+at runtime (**Flow A**), and the JSX→C ahead-of-time compiler (**Flow B**, `aot/`).
 
 ```
 React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scene.h (engine)
 ```
+
+> ### Part of a monorepo
+> This package is just the `bridges/quickjs/js` folder of the **embedded-react** project. The C rendering
+> engine, the hardware backends, the runnable examples, the demo apps, and the simulator all live in the
+> main repo — **https://github.com/TheMasterCoder007/embedded-react**. The engine itself is distributed
+> separately as C source (CMake `FetchContent`, the ESP-IDF Component Registry, and PlatformIO) — see the
+> repos **Install** section. Everything ships at one lockstep version (this package's version == the engine's).
+>
+> The end-to-end app workflow below (bundling, packing, the simulator, running on a board) assumes a **clone
+> of the repo** — the CLIs operate on the repo's `demos/` and `examples/`. A standalone project scaffolder
+> (`create-embedded-react`) that works in your own directory is still to come (see Status). Until then,
+> `npm install embedded-react` gives you the importable component API + the AOT compiler module.
 
 ## What an app imports
 
@@ -58,10 +71,10 @@ pack-container.mjs         bundle + bytecode-compile + bake → dist/app.erpkg c
 vitest.config.js           unit test config
 ```
 
-The demo apps themselves live in the top-level **`demos/`** folder (one folder per demo), *not*
-here — this package is the library + reconciler + tests. `build.mjs` bundles a selected demo and
-resolves its `'embedded-react'` import to `src/embedded-react/index.js` via an esbuild alias. See
-[`demos/README.md`](../../../demos/README.md).
+The demo apps themselves live in the repo's top-level **`demos/`** folder (one folder per demo), *not*
+in this package — this package is the library + reconciler + AOT compiler + tests. `build.mjs` bundles a
+selected demo and resolves its `'embedded-react'` import to `src/embedded-react/index.js`. See
+[demos/ in the repo](https://github.com/TheMasterCoder007/embedded-react/tree/master/demos).
 
 The host config flattens RN `style` (+ nested arrays) into the flat prop bag, routes `on*`
 handlers to `setEvent`, and uses `shouldSetTextContent` so a flattenable `<Text>` subtree (a string,
@@ -220,5 +233,6 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
 - ✅ **State survives hot reload** — in the simulator, plain `useState` transparently persists across
   saves (a sim-only build transform rewrites it to a persisting helper; press R to reset). On a device
   it's just `useState`, so the same app code runs everywhere. `usePersistentState` is the underlying
-  helper, also exported for explicit use. See `/SIMULATOR.md`.
+  helper, also exported for explicit use. See
+  [SIMULATOR.md in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/SIMULATOR.md).
 - ⏳ **`create-embedded-react` scaffold** — the project-init CLI is still to come (§4).
