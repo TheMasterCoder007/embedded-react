@@ -1277,3 +1277,12 @@ export function App() {
     expect(r.images.map((i) => i.name).sort()).toEqual(['a', 'b']);
   });
 });
+
+describe('AOT version-pin', () => {
+  it('stamps a compile-time engine-version assert into the generated C', () => {
+    const c = compileSource(`${PRE}\nexport function App() { return (<Text>hi</Text>); }`, 'demo');
+    expect(c.c).toContain('#include "er_version.h"');
+    expect(c.c).toMatch(/_Static_assert\(ER_VERSION_MAJOR == \d+ && ER_VERSION_MINOR == \d+,/);
+    expect(c.c).toContain('version mismatch');
+  });
+});

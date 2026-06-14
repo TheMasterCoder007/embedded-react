@@ -1,4 +1,4 @@
-version: "0.0.1"
+version: "0.1.0"
 description: "React Native for embedded MCUs — write JSX, run it on a microcontroller."
 url: "https://github.com/TheMasterCoder007/embedded-react"
 targets:

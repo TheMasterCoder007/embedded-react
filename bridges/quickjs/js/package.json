@@ -1,6 +1,6 @@
 {
   "name": "embedded-react",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "React Native-style component package + reconciler that drives the embedded-react C engine through the QuickJS NativeUI bridge (Flow A).",
@@ -13,6 +13,8 @@
     "aot": "node aot/compile.mjs",
     "aot:smoke": "node aot/screenshot-smoke.mjs",
     "parity": "node parity.mjs",
+    "version:sync": "node ../../../tools/sync-version.mjs",
+    "version:check": "node ../../../tools/sync-version.mjs --check",
     "build:builtin-font": "node assets/build-builtin-font.mjs",
     "sim": "node sim.mjs",
     "create": "node create-embedded-react.mjs",
