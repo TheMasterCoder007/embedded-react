@@ -1253,3 +1253,27 @@ export { App };`, 'demo'),
     ).toThrow(/parallel\/stagger animation is not yet supported/);
   });
 });
+
+describe('AOT image baking (usage-based)', () => {
+  it('does not bake an image import used only in a folded-away (responsive) branch', () => {
+    // wide=screen.width>=600 is folded false at 320px, so the <Image> below is never emitted → not baked.
+    const src = `import { View, Text, Image } from 'embedded-react';
+import wxSun from './a/wx_sun.png';
+const wide = screen.width >= 600;
+export function App() {
+  if (wide) { return (<View><Image source={wxSun} /></View>); }
+  return (<View><Text>compact</Text></View>);
+}`;
+    const r = compileSource(src, 'demo', { screen: { width: 320, height: 480 } });
+    expect(r.images).toEqual([]); // wxSun is imported but unreached → not baked
+    expect(r.c).not.toContain('wx_sun');
+  });
+
+  it('bakes ALL imports when a reached source is dynamic (can\'t be enumerated)', () => {
+    const r = compileSource(
+      `import { Image, Pressable } from 'embedded-react';\nimport a from './a/a.png';\nimport b from './a/b.png';\nimport { useState } from 'react';\nexport function App() { const [f, setF] = useState(true); return (<Pressable onPress={() => setF(!f)}><Image source={f ? a : b} /></Pressable>); }`,
+      'demo',
+    );
+    expect(r.images.map((i) => i.name).sort()).toEqual(['a', 'b']);
+  });
+});

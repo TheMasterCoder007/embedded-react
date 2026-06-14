@@ -1391,10 +1391,18 @@ function compileTimerAdd(expr, env, state, ctx) {
  *  as C locals, then compiles the helper body here in the current env/state/ctx. Guards against recursion. */
 function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
   ctx.inlining = ctx.inlining ?? new Set();
-  if (ctx.inlining.has(name)) throw aotError(`AOT: helper "${name}" is recursive — can't be inlined into a handler`);
+  if (ctx.inlining.has(name))
+    throw aotError(
+      `AOT: helper "${name}" is recursive — can't be inlined into a handler`,
+      'handlers are flattened to straight-line C, so a helper that calls itself (directly or via another helper) has no base case to unroll. Move recursive logic out of the handler, or precompute the value.',
+    );
   const locals = new Map(env.locals);
   fn.params.forEach((p, i) => {
-    if (p.type !== 'Identifier') throw aotError(`AOT: helper "${name}" must take simple (identifier) params to be inlined`);
+    if (p.type !== 'Identifier')
+      throw aotError(
+        `AOT: helper "${name}" must take simple (identifier) params to be inlined`,
+        'a helper called from a handler must use plain positional params (e.g. `(a, b) => …`) — destructuring or default params in the signature are not supported.',
+      );
     if (args[i]) {
       const e = emitExpr(args[i], env);
       locals.set(p.name, { code: e.code, cType: e.cType });
@@ -2422,7 +2430,10 @@ function imageNameFromSource(expr, env) {
   return null;
 }
 
-/** Resolves an <Image>'s source/imageName/resizeMode/tintColor to static C values for the node props. */
+/** Resolves an <Image>'s source/imageName/resizeMode/tintColor for the node props (static name, a dynamic
+ *  name expr, resize mode, tint). Records baking intent in `out`: a static name that matches an import is
+ *  marked used (out.images); a dynamic source flips out.bakeAllImages (its asset can't be enumerated). So
+ *  only REACHED images are baked — an import used solely in a folded-away branch costs no flash. */
 function resolveImageAttrs(el, env, out) {
   const attrs = el.openingElement.attributes;
   const find = (n) => attrs.find((a) => a.type === 'JSXAttribute' && a.name.name === n);
@@ -2433,9 +2444,14 @@ function resolveImageAttrs(el, env, out) {
   let imageNameDyn = null; // … a runtime C string expr (a list-item field / state) set in app_update.
   if (srcExpr) {
     imageName = imageNameFromSource(srcExpr, env);
-    if (imageName == null) {
-      // Dynamic source: emit it as a runtime string. The engine resolves it against the image registry each
-      // frame, so the referenced assets must still be baked — every image import in the file is (see compile).
+    if (imageName != null) {
+      const path = env.imageNames?.get(imageName); // a baked import (vs a bare {uri} name the app supplies)
+      if (path) out.images.set(imageName, path);
+    } else {
+      // Dynamic source: emit it as a runtime string. The engine resolves it against the image registry by
+      // name each frame, so the candidate assets must be baked — and they can't be enumerated, so bake them
+      // ALL (out.bakeAllImages). Only triggered when a dynamic source is actually REACHED.
+      out.bakeAllImages = true;
       const e = emitExpr(srcExpr, env);
       if (e.cType !== 'string') {
         const err = aotError(
@@ -2734,7 +2750,8 @@ const refs = collectRefs(component.body, scope);
 const callbacks = collectCallbacks(component.body);
 const memos = collectMemos(component.body);
 const helpers = collectHelpers(component.body, ast.program);
-const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, imageImports, helpers };
+const imageNames = new Map([...imageImports].map(([, imp]) => [imp.name, imp.importPath])); // asset name → path
+const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, helpers, imageNames };
 // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
 // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
 // tracking re-applies dependent nodes anyway). Done before emit so references resolve.
@@ -2746,12 +2763,14 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [], childRefs: [], childAnims: [], program: ast.program, effN: 0, effectFns: [], effectDecls: [], depEffects: [] };
-// Bake EVERY image the file imports (not just statically-referenced ones): a dynamic source resolves its
-// asset by name at runtime, so the compiler can't know which are reachable — bake them all (er_register_assets).
-for (const [, imp] of imageImports) out.images.set(imp.name, imp.importPath);
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), bakeAllImages: false, instN: 0, childStateRecords: [], childRefs: [], childAnims: [], program: ast.program, effN: 0, effectFns: [], effectDecls: [], depEffects: [] };
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
+
+// Image baking: a REACHED static source registered its import in out.images during emit. If any reached
+// source is DYNAMIC (resolved by name at runtime), we can't enumerate it — fall back to baking every import.
+// Either way, an image used only in a folded-away branch (never emitted) costs no flash.
+if (out.bakeAllImages) for (const [, imp] of imageImports) out.images.set(imp.name, imp.importPath);
 
 // Effects: `useEffect(fn, [])` runs once at mount; `useEffect(fn, [dep…])` re-runs from app_update when a
 // dep changes (see compileEffect). Compiled after emit so out.timerFns/usesTimers reflect handler timers too.
