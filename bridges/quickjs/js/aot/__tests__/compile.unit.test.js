@@ -1090,20 +1090,37 @@ import logo from './assets/logo.png';
     expect(r.images).toEqual([]);
   });
 
-  it('rejects a runtime/dynamic <Image source> with a located hint', () => {
-    let err;
-    try {
-      compileSource(
-        `import { View, Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [a] = useState([{ icon: 'x' }]); return (<View>{a.map((d) => (<Image key={d.icon} source={d.icon} />))}</View>); }`,
-        'demo',
-        { filename: 'demos/demo/App.jsx' },
-      );
-    } catch (e) {
-      err = e;
-    }
-    expect(err.message).toContain('could not resolve <Image source>');
-    expect(err.message).toContain('demos/demo/App.jsx:');
-    expect(err.message).toContain('hint:');
+  it('folds a static <Image source={item.icon}> in an unrolled .map to literal asset names + bakes them', () => {
+    const r = compileSource(
+      `import { View, Image } from 'embedded-react';\nimport wxSun from './a/wx_sun.png';\nimport wxRain from './a/wx_rain.png';\nconst DAYS = [{ icon: wxSun }, { icon: wxRain }];\nexport function App() { return (<View>{DAYS.map((f, i) => (<Image key={i} source={f.icon} />))}</View>); }`,
+      'demo',
+    );
+    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");');
+    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_rain");');
+    expect(r.images.map((i) => i.name).sort()).toEqual(['wx_rain', 'wx_sun']);
+  });
+
+  it('emits a dynamic <Image source> from a list-state field (set in app_update)', () => {
+    const c = compileSource(
+      `import { View, Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [items] = useState([{ icon: 'wx_sun' }]); return (<View>{items.map((d, i) => (<Image key={i} source={d.icon} />))}</View>); }`,
+      'demo',
+    ).c;
+    expect(c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", s_items[0].icon);');
+  });
+
+  it('emits a dynamic <Image source> from a state ternary + bakes both branches', () => {
+    const r = compileSource(
+      `import { Image, Pressable } from 'embedded-react';\nimport sun from './a/sun.png';\nimport moon from './a/moon.png';\nimport { useState } from 'react';\nexport function App() { const [day, setDay] = useState(true); return (<Pressable onPress={() => setDay(!day)}><Image source={day ? sun : moon} /></Pressable>); }`,
+      'demo',
+    );
+    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", (s_state.day ? "sun" : "moon"));');
+    expect(r.images.map((i) => i.name).sort()).toEqual(['moon', 'sun']);
+  });
+
+  it('rejects an <Image source> that is not a string (e.g. a number)', () => {
+    expect(() =>
+      compileSource(`import { Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [n] = useState(5); return (<Image source={n} />); }`, 'demo'),
+    ).toThrow(/must resolve to an asset NAME/);
   });
 
   it('rejects an unsupported resizeMode', () => {

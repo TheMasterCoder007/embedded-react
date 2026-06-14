@@ -363,8 +363,10 @@ function findComponent(program) {
 const SCREEN_W = Number(process.env.ER_AOT_SCREEN_W) || 800;
 const SCREEN_H = Number(process.env.ER_AOT_SCREEN_H) || 480;
 
-function moduleScope(program, screen) {
-  const scope = { screen };
+function moduleScope(program, screen, seed = {}) {
+  // `seed` pre-populates the scope (e.g. image imports as their asset-name strings) BEFORE module consts are
+  // folded, so a const that references one — `const DAYS = [{ icon: wxSun }]` — folds correctly.
+  const scope = { screen, ...seed };
   for (const stmt of program.body) {
     const d = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
     if (d?.type !== 'VariableDeclaration') continue;
@@ -2400,20 +2402,17 @@ const RESIZE_MODES = {
   center: 'ER_RESIZE_CENTER',
 };
 
-/** Resolves an <Image source>/imageName expression to its baked asset NAME (a string), or null if it can't
- *  be resolved at compile time (a runtime/dynamic source). Records the import actually used in out.images
- *  (name → importPath) so the CLI bakes only what the app references. */
-function imageNameFromSource(expr, env, out) {
+/** Resolves an <Image source>/imageName expression to its baked asset NAME (a string) if it folds at compile
+ *  time, else null (a runtime/dynamic source — the caller emits a dynamic image_name). Image imports live in
+ *  the const scope as their asset-name string, so this folds `wxSun`, `item.icon` (unrolled map), and static
+ *  ternaries; `{ uri }` is the explicit remote-shape escape. */
+function imageNameFromSource(expr, env) {
   if (!expr) return null;
-  if (expr.type === 'StringLiteral') return expr.value; // source="wx_sun" / imageName="wx_sun"
-  if (expr.type === 'Identifier') {
-    const imp = env.imageImports?.get(expr.name); // import wxSun from './wx_sun.png'
-    if (imp) {
-      out.images.set(imp.name, imp.importPath);
-      return imp.name;
-    }
-    const c = env.consts?.[expr.name]; // const NAME = 'wx_sun'
-    return typeof c === 'string' ? c : null;
+  try {
+    const v = evalStatic(expr, env.consts ?? {});
+    if (typeof v === 'string') return v;
+  } catch {
+    /* not a compile-time constant — fall through to {uri}, else dynamic */
   }
   if (expr.type === 'ObjectExpression') {
     // source={{ uri: 'wx_sun' }} — RN's remote-image shape; here the uri IS the baked asset name.
@@ -2430,16 +2429,23 @@ function resolveImageAttrs(el, env, out) {
   const imAttr = find('imageName');
   const srcAttr = find('source');
   const srcExpr = imAttr ? attrExpr(imAttr) : srcAttr ? attrExpr(srcAttr) : null;
-  let imageName = null;
+  let imageName = null; // static asset name (a literal), OR …
+  let imageNameDyn = null; // … a runtime C string expr (a list-item field / state) set in app_update.
   if (srcExpr) {
-    imageName = imageNameFromSource(srcExpr, env, out);
+    imageName = imageNameFromSource(srcExpr, env);
     if (imageName == null) {
-      const e = aotError(
-        'AOT: could not resolve <Image source> to a baked asset',
-        "an <Image>'s source must be a compile-time asset: `import logo from './logo.png'` then source={logo}, source=\"logo\", or source={{ uri: 'logo' }}. A runtime/state-driven source (e.g. a list-item field) isn't supported yet — split it into static <Image>s or a compile-time conditional.",
-      );
-      if (srcExpr.loc) e.aotLoc = srcExpr.loc.start;
-      throw e;
+      // Dynamic source: emit it as a runtime string. The engine resolves it against the image registry each
+      // frame, so the referenced assets must still be baked — every image import in the file is (see compile).
+      const e = emitExpr(srcExpr, env);
+      if (e.cType !== 'string') {
+        const err = aotError(
+          'AOT: an <Image source> must resolve to an asset NAME (a string)',
+          "use an imported image (`import logo from './logo.png'` → source={logo}), a string asset name, source={{ uri: 'name' }}, or a string-valued state / list-item field for a dynamic source.",
+        );
+        if (srcExpr.loc) err.aotLoc = srcExpr.loc.start;
+        throw err;
+      }
+      imageNameDyn = e.code;
     }
   }
   let resizeMode = null;
@@ -2459,7 +2465,7 @@ function resolveImageAttrs(el, env, out) {
     const tc = evalStaticOr(attrExpr(tcAttr), env, null);
     if (typeof tc === 'string' || typeof tc === 'number') tintColor = argbLiteral(tc);
   }
-  return { imageName, resizeMode, tintColor };
+  return { imageName, imageNameDyn, resizeMode, tintColor };
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2502,37 +2508,31 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   // A <Text> with a nested <Text> becomes inline SPANS; otherwise a single (possibly dynamic) string.
   const spans = tag === 'Text' ? collectTextSpans(el.children, scope, env) : null;
   const text = tag === 'Text' && !spans ? buildText(el.children, scope, env) : null;
-  // An <Image>'s baked-asset name + resize/tint (resolved at compile time; the source is a compile-time import).
+  // An <Image>'s baked-asset name + resize/tint. resize/tint are static → fold into staticAssigns so both
+  // the static and (deferred) dynamic paths apply them; the asset name is a char buffer (set via snprintf),
+  // either a compile-time literal (image.imageName) or a runtime string expr (image.imageNameDyn).
   const image = tag === 'Image' ? resolveImageAttrs(el, env, out) : null;
+  if (image?.resizeMode) staticAssigns.push({ field: 'resize_mode', expr: image.resizeMode });
+  if (image?.tintColor) staticAssigns.push({ field: 'tint_color', expr: image.tintColor });
 
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
   // `display` flips between flex and none in app_update (joining any state-driven style assigns).
   if (opts.displayCode) dynAssigns.push({ field: 'display', code: `((${opts.displayCode}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)` });
 
-  const isDynamic = !!text?.dynamic || dynAssigns.length > 0;
-
-  // An <Image>'s asset/resize/tint are static (resolved from a compile-time import); a state-driven
-  // (dynamic-styled) <Image> would take the deferred-props path below, which doesn't carry them.
-  if (image && isDynamic) {
-    throw aotError(
-      'AOT: a state-driven <Image> (dynamic styles) is not supported yet',
-      'give the <Image> static styles; only its layout box can currently be animated (via an animated transform/opacity bind), not state-driven style props.',
-    );
-  }
+  const isDynamic = !!text?.dynamic || dynAssigns.length > 0 || !!image?.imageNameDyn;
 
   out.build.push(`    ${v} = er_node_create(${nodeType});`);
   if (isDynamic) {
-    // Props are (re)applied in app_update(); here just create the node and remember its handle.
+    // Props are (re)applied in app_update(); here just create the node and remember its handle. A dynamic
+    // <Image> carries its runtime asset name (imageName) so app_update re-snprintf's p.image_name each pass.
     out.build.push(`    s_${v} = ${v};`);
     out.handles.push(v);
-    out.updates.push({ v, styleAssigns: staticAssigns, text, dynAssigns });
+    out.updates.push({ v, styleAssigns: staticAssigns, text, dynAssigns, imageName: image?.imageNameDyn });
   } else {
     out.build.push(`    er_props_default(&p);`);
     for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
     if (text) out.build.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`);
     if (image?.imageName != null) out.build.push(`    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(image.imageName)});`);
-    if (image?.resizeMode) out.build.push(`    p.resize_mode = ${image.resizeMode};`);
-    if (image?.tintColor) out.build.push(`    p.tint_color = ${image.tintColor};`);
     out.build.push(`    er_node_set_props(${v}, &p);`);
   }
 
@@ -2706,7 +2706,11 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
 const ast = parse(src, { sourceType: 'module', plugins: ['jsx'] });
 
 const screen = opts.screen ?? { width: SCREEN_W, height: SCREEN_H };
-const scope = moduleScope(ast.program, screen);
+// Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
+// array of `{ icon: wxSun }` needs wxSun resolvable). An image import is just its baked-name string.
+const imageImports = collectImageImports(ast.program);
+const imageSeed = Object.fromEntries([...imageImports].map(([local, imp]) => [local, imp.name]));
+const scope = moduleScope(ast.program, screen, imageSeed);
 const component = findComponent(ast.program);
 // Fold statically-derived component-local consts (e.g. `const compact = screen.width < 400`) into the
 // const scope, so responsive `if` branches and styles can switch on them at compile time. Dynamic consts
@@ -2729,7 +2733,6 @@ const anims = collectAnims(component.body, scope);
 const refs = collectRefs(component.body, scope);
 const callbacks = collectCallbacks(component.body);
 const memos = collectMemos(component.body);
-const imageImports = collectImageImports(ast.program);
 const helpers = collectHelpers(component.body, ast.program);
 const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, imageImports, helpers };
 // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
@@ -2744,6 +2747,9 @@ for (const [name, expr] of memos) {
   }
 }
 const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [], childRefs: [], childAnims: [], program: ast.program, effN: 0, effectFns: [], effectDecls: [], depEffects: [] };
+// Bake EVERY image the file imports (not just statically-referenced ones): a dynamic source resolves its
+// asset by name at runtime, so the compiler can't know which are reachable — bake them all (er_register_assets).
+for (const [, imp] of imageImports) out.images.set(imp.name, imp.importPath);
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
@@ -2801,6 +2807,7 @@ const updateBlock = (() => {
     for (const a of u.styleAssigns) lines.push(`    p.${a.field} = ${a.expr};`);
     for (const a of u.dynAssigns) lines.push(`    p.${a.field} = ${a.code};`);
     if (u.placeholder != null) lines.push(`    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(u.placeholder)});`);
+    if (u.imageName != null) lines.push(`    snprintf(p.image_name, sizeof(p.image_name), "%s", ${u.imageName});`);
     if (u.text) {
       if (u.text.args.length) lines.push(`    snprintf(p.text, sizeof(p.text), ${cstr(u.text.format)}, ${u.text.args.join(', ')});`);
       else lines.push(`    snprintf(p.text, sizeof(p.text), "%s", ${cstr(u.text.format.replace(/%%/g, '%'))});`);
