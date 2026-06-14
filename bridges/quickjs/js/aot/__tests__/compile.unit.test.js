@@ -741,15 +741,32 @@ describe('AOT effects & timers', () => {
     expect(c).not.toContain('er_timer_add');
   });
 
-  it('throws (clearly) on a dependency-driven useEffect — only [] is supported', () => {
-    expect(() =>
-      gen(`${PRE}
-        export function App() {
-          const [n, setN] = useState(0);
-          useEffect(() => { setN(1); }, [n]);
-          return (<Text>{n}</Text>);
-        }`),
-    ).toThrow(/only useEffect\(fn, \[\]\)/);
+  it('re-runs a dependency-driven useEffect from app_update when the dep changes', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [doubled, setDoubled] = useState(0);
+        useEffect(() => { setDoubled(n * 2); }, [n]);
+        return (<Pressable onPress={() => setN(n + 1)}><Text>{doubled}</Text></Pressable>);
+      }`);
+    expect(c).toContain('static int s_eff0_d0;'); // a stored previous value for the dep
+    expect(c).toContain('static void er_effect_0(void)'); // the effect body as a C fn
+    expect(c).toContain('er_effect_0();'); // run at mount + on change
+    // app_update detects the change and runs the effect
+    expect(c).toMatch(/er_d0 = s_state\.n; if \(er_d0 != s_eff0_d0\)/);
+    expect(c).toContain('if (er_changed) er_effect_0();');
+  });
+
+  it('compares a string useEffect dependency with strcmp', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [name, setName] = useState('Ada');
+        const [len, setLen] = useState(0);
+        useEffect(() => { setLen(1); }, [name]);
+        return (<Pressable onPress={() => setName('Bob')}><Text>{len}</Text></Pressable>);
+      }`);
+    expect(c).toContain('static char s_eff0_d0['); // string prev buffer
+    expect(c).toContain('strcmp(s_eff0_d0, s_state.name)'); // strcmp-based change detection
   });
 });
 
@@ -1166,5 +1183,56 @@ export function App() { return (<View><Btn /><Btn /></View>); }`;
     expect(c).toContain('static void er_cb_c1_tap(');
     expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // c0's handler mutates c0's state
     expect(c).toContain('s_state.c1_n = (s_state.c1_n + 1);');
+  });
+});
+
+describe('AOT handler follow-ons', () => {
+  it('inlines a helper call in a handler (component-local arrow), binding its args', () => {
+    const c = compileSource(`import { View, Text, Pressable } from 'embedded-react';
+import { useState } from 'react';
+function App() {
+  const [a, setA] = useState(0);
+  const [b, setB] = useState(0);
+  const reset = () => { setA(0); setB(0); };
+  const bump = (k) => setA(a + k);
+  return (<Pressable onPress={() => { reset(); bump(5); }}><Text>{a}</Text></Pressable>);
+}
+export { App };`, 'demo').c;
+    expect(c).toContain('s_state.a = 0;');
+    expect(c).toContain('s_state.b = 0;');
+    expect(c).toContain('s_state.a = (s_state.a + 5);'); // bump(5): arg bound
+  });
+
+  it('detects a recursive helper and errors instead of looping forever', () => {
+    expect(() =>
+      compileSource(`import { Text, Pressable } from 'embedded-react';
+function App() { const loop = () => { loop(); }; return (<Pressable onPress={() => { loop(); }}><Text>x</Text></Pressable>); }
+export { App };`, 'demo'),
+    ).toThrow(/recursive/);
+  });
+
+  it('wires a .start(onComplete) callback to the animation on_complete', () => {
+    const c = compileSource(`import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
+import { useState } from 'react';
+function App() {
+  const [done, setDone] = useState(false);
+  const x = useAnimatedValue(0);
+  return (<Pressable onPress={() => Animated.timing(x, { toValue: 1, duration: 100 }).start(() => setDone(true))}><Text>x</Text></Pressable>);
+}
+export { App };`, 'demo').c;
+    expect(c).toContain('.on_complete = er_donecb_0;');
+    expect(c).toContain('static void er_donecb_0(bool finished, void* user_data)');
+    expect(c).toContain('s_state.done = 1;'); // completion sets state
+  });
+
+  it('rejects a completion callback on a parallel animation (not yet supported)', () => {
+    expect(() =>
+      compileSource(`import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
+function App() {
+  const a = useAnimatedValue(0); const b = useAnimatedValue(0);
+  return (<Pressable onPress={() => Animated.parallel([Animated.timing(a, { toValue: 1 }), Animated.timing(b, { toValue: 1 })]).start(() => {})}><Text>x</Text></Pressable>);
+}
+export { App };`, 'demo'),
+    ).toThrow(/parallel\/stagger animation is not yet supported/);
   });
 });

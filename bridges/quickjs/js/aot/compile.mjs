@@ -536,6 +536,32 @@ function collectComponents(program) {
   return comps;
 }
 
+/**
+ * Collects callable HELPER functions (non-component, non-hook) a handler can inline: module-level
+ * `function f(){}` / `const f = () => {}` and the component's own local `const f = (args) => {…}` arrows.
+ * A helper is any function that does NOT return JSX (those are components) and is a plain function (not a
+ * useCallback/useMemo/useState call). Returns Map(name → fn node). Re-collected per component (cheap).
+ */
+function collectHelpers(componentBody, program) {
+  const helpers = new Map();
+  const add = (name, fn) => {
+    if (name && name !== 'App' && isFn(fn) && !fnReturnsJSX(fn)) helpers.set(name, fn);
+  };
+  for (const stmt of program.body) {
+    const d = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+    if (!d) continue;
+    if (d.type === 'FunctionDeclaration' && d.id) add(d.id.name, d);
+    if (d.type === 'VariableDeclaration') for (const decl of d.declarations) if (decl.id?.type === 'Identifier') add(decl.id.name, decl.init);
+  }
+  if (componentBody.type === 'BlockStatement') {
+    for (const stmt of componentBody.body) {
+      if (stmt.type !== 'VariableDeclaration') continue;
+      for (const decl of stmt.declarations) if (decl.id?.type === 'Identifier') add(decl.id.name, decl.init);
+    }
+  }
+  return helpers;
+}
+
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
 /**
@@ -1172,7 +1198,7 @@ function flattenAnim(node, env, baseDelay, loop) {
  *  steps share a value (out-and-back) — er_anim_value_animate cancels the running anim on a value, so
  *  synchronous same-value animates would cancel each other — and needs no fixed duration (spring/decay OK).
  *  delay() entries fold into the next step's delay_ms. Nested parallel/stagger/loop in a sequence throws. */
-function compileSequenceChain(seqNode, env, ctx) {
+function compileSequenceChain(seqNode, env, ctx, doneCb = null) {
   const list = seqNode.arguments[0];
   if (list?.type !== 'ArrayExpression') throw aotError('AOT: Animated.sequence(...) needs an array of animations');
   const steps = [];
@@ -1201,7 +1227,8 @@ function compileSequenceChain(seqNode, env, ctx) {
   // Build from the tail so each step knows its successor's callback name. Step 0 runs inline; the rest
   // become on_complete callbacks pushed to out.animCbs (emitted at file scope).
   for (let i = steps.length - 1; i >= 0; i--) {
-    const nextCb = i < steps.length - 1 ? `er_seqcb_${seqId}_${i + 1}` : null;
+    // The last step's on_complete is the .start(onComplete) callback (if any) — the sequence is "done".
+    const nextCb = i < steps.length - 1 ? `er_seqcb_${seqId}_${i + 1}` : doneCb;
     const lines = emitAnimEntry(steps[i], env, `${seqId}_${i}`, nextCb);
     if (i === 0) firstLines = lines;
     else ctx.out.animCbs.push({ name: `er_seqcb_${seqId}_${i}`, body: lines });
@@ -1213,14 +1240,41 @@ function compileSequenceChain(seqNode, env, ctx) {
  *  (sequence/parallel/stagger/delay/loop). A top-level sequence chains via on_complete (compileSequenceChain);
  *  everything else flattens to one ERAnimConfig + er_anim_value_animate per atomic entry, composition
  *  expressed through per-entry delay_ms. Native-driven; sets no React state. */
-function compileAnimateStart(expr, env, ctx) {
+/** Compiles a `.start(onComplete)` completion callback to a file-scope C fn (ERAnimCompleteFn) set as the
+ *  animation's on_complete; its body runs setters/refs/etc. and re-applies state via app_update if needed. */
+function emitCompletionCb(fnNode, env, state, ctx) {
+  const id = ctx.out.seqN++; // GLOBAL — callback names are file-scope
+  const name = `er_donecb_${id}`;
+  // `start(({ finished }) => …)`: expose the engine's `finished` bool as that local; a bare param is ignored.
+  const locals = new Map(env.locals);
+  const param = fnNode.params[0];
+  if (param?.type === 'ObjectPattern') {
+    for (const p of param.properties) if ((p.key?.name ?? p.key?.value) === 'finished') locals.set(p.value?.name ?? 'finished', { code: 'finished', cType: 'int' });
+  }
+  const body = fnNode.body;
+  const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+  const cctx = { stateChanged: false, animIdx: 0, out: ctx.out };
+  const lines = compileStmts(list, { ...env, locals }, state, cctx, '    ');
+  if (cctx.stateChanged) lines.push('    app_update();');
+  ctx.out.animCbs.push({ name, body: lines });
+  return name;
+}
+
+function compileAnimateStart(expr, env, state, ctx) {
+  // .start(onComplete?) — an optional completion callback fired when the animation finishes.
+  const doneCb = isFn(expr.arguments[0]) ? emitCompletionCb(expr.arguments[0], env, state, ctx) : null;
   const receiver = expr.callee.object;
   if (receiver?.type === 'CallExpression' && receiver.callee.type === 'MemberExpression' && receiver.callee.object?.name === 'Animated' && receiver.callee.property.name === 'sequence') {
-    return compileSequenceChain(receiver, env, ctx);
+    return compileSequenceChain(receiver, env, ctx, doneCb);
   }
   const { entries } = flattenAnim(receiver, env, 0, false);
+  if (doneCb && entries.length > 1)
+    throw aotError(
+      'AOT: a .start(onComplete) callback on a parallel/stagger animation is not yet supported',
+      'attach the completion callback to a single animation or an Animated.sequence(...). For "after all parallel anims", restructure as a sequence.',
+    );
   const lines = [];
-  for (const e of entries) lines.push(...emitAnimEntry(e, env, ctx.animIdx++));
+  entries.forEach((e, i) => lines.push(...emitAnimEntry(e, env, ctx.animIdx++, i === entries.length - 1 ? doneCb : null)));
   return lines;
 }
 
@@ -1331,6 +1385,27 @@ function compileTimerAdd(expr, env, state, ctx) {
   return `er_timer_add((int)(${ms}), ${repeat ? 'true' : 'false'}, ${name})`;
 }
 
+/** Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params
+ *  as C locals, then compiles the helper body here in the current env/state/ctx. Guards against recursion. */
+function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
+  ctx.inlining = ctx.inlining ?? new Set();
+  if (ctx.inlining.has(name)) throw aotError(`AOT: helper "${name}" is recursive — can't be inlined into a handler`);
+  const locals = new Map(env.locals);
+  fn.params.forEach((p, i) => {
+    if (p.type !== 'Identifier') throw aotError(`AOT: helper "${name}" must take simple (identifier) params to be inlined`);
+    if (args[i]) {
+      const e = emitExpr(args[i], env);
+      locals.set(p.name, { code: e.code, cType: e.cType });
+    }
+  });
+  const body = fn.body;
+  const list = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+  ctx.inlining.add(name);
+  const lines = compileStmts(list, { ...env, locals }, state, ctx, indent);
+  ctx.inlining.delete(name);
+  return lines;
+}
+
 function compileHandlerExprImpl(expr, env, state, ctx, indent) {
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
   if (expr.type === 'CallExpression' && expr.callee.type === 'Identifier' && expr.callee.name === 'updateVector') {
@@ -1359,9 +1434,12 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
   // Animated.*(…).start() — single timing/spring/decay OR a sequence/parallel/stagger/delay/loop
   // composition; native-driven, sets no React state, needs no app_update.
   if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression' && expr.callee.property.name === 'start') {
-    return compileAnimateStart(expr, env, ctx);
+    return compileAnimateStart(expr, env, state, ctx);
   }
   if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') throw aotError('AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()', 'each statement in a handler must be one of: setX(value) / setX(prev => …), a `ref.current = …` write, an `updateVector(…)` call, or `Animated.timing|spring(v, …).start()`. Wrap conditional logic in `if (…) { … }`.');
+  // A call to a helper / useCallback (e.g. `reset();`) → inline its body here so handlers can compose logic.
+  const helperFn = env.helpers?.get(expr.callee.name) ?? env.callbacks?.get(expr.callee.name);
+  if (helperFn) return inlineHelperCall(expr.callee.name, helperFn, expr.arguments, env, state, ctx, indent);
   const rec = state.bySetter.get(expr.callee.name);
   if (!rec)
     throw aotError(
@@ -1434,6 +1512,53 @@ function compileStmts(list, env, state, ctx, indent) {
     lines.push(...compileHandlerExpr(st.expression, env, state, ctx, indent));
   }
   return lines;
+}
+
+/**
+ * Compiles a useEffect (App or child) into C. Two shapes:
+ *  - `useEffect(fn, [])` — MOUNT-ONCE: body runs after the initial app_update (in er_app_build).
+ *  - `useEffect(fn, [dep…])` — DEP-DRIVEN: body becomes a file-scope `er_effect_N()`; runs once at mount,
+ *    then again from app_update whenever a SCALAR dep changes (compared against a stored prev). The body is
+ *    compiled WITHOUT a trailing app_update — it runs INSIDE app_update / at mount, so re-applying state it
+ *    sets happens on the next app_update (one-frame), and it can never re-enter app_update (no infinite loop).
+ */
+function compileEffect(eff, env, state, out) {
+  const body = eff.fn.body;
+  const stmts = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+  const isMount = !eff.deps || (eff.deps.type === 'ArrayExpression' && eff.deps.elements.length === 0);
+  if (isMount) {
+    const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
+    const lines = compileStmts(stmts, env, state, ctx, '    ');
+    if (ctx.stateChanged) lines.push('    app_update();');
+    out.mountEffects.push(...lines);
+    return;
+  }
+  if (eff.deps.type !== 'ArrayExpression') throw aotError('AOT: a useEffect dependency list must be an array literal', 'pass `[]` (run once) or `[a, b]` (re-run when a/b change).');
+  const id = out.effN++;
+  const name = `er_effect_${id}`;
+  const deps = eff.deps.elements.map((d) => {
+    if (!d) throw aotError('AOT: a useEffect dependency must be an expression');
+    const e = emitExpr(d, env);
+    if (e.cType !== 'int' && e.cType !== 'float' && e.cType !== 'string')
+      throw aotError('AOT: useEffect dependencies must be scalar (number / bool / string)', 'depend on scalar state values; object/array dependencies are not yet supported.');
+    return e;
+  });
+  const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
+  out.effectFns.push({ name, body: compileStmts(stmts, env, state, ctx, '    ') });
+  // A static "previous value" per dep; snapshot at mount, then app_update detects changes against it.
+  deps.forEach((d, j) => out.effectDecls.push(d.cType === 'string' ? `static char s_eff${id}_d${j}[${LIST_STR_CAP}];` : `static ${d.cType === 'float' ? 'float' : 'int'} s_eff${id}_d${j};`));
+  const snap = (j, d) => (d.cType === 'string' ? `snprintf(s_eff${id}_d${j}, sizeof(s_eff${id}_d${j}), "%s", ${d.code})` : `s_eff${id}_d${j} = ${d.code}`);
+  out.mountEffects.push(`    ${name}();`, ...deps.map((d, j) => `    ${snap(j, d)};`));
+  const check = ['    {', '        int er_changed = 0;'];
+  deps.forEach((d, j) => {
+    if (d.cType === 'string') check.push(`        if (strcmp(s_eff${id}_d${j}, ${d.code}) != 0) { ${snap(j, d)}; er_changed = 1; }`);
+    else {
+      const t = d.cType === 'float' ? 'float' : 'int';
+      check.push(`        ${t} er_d${j} = ${d.code}; if (er_d${j} != s_eff${id}_d${j}) { s_eff${id}_d${j} = er_d${j}; er_changed = 1; }`);
+    }
+  });
+  check.push(`        if (er_changed) ${name}();`, '    }');
+  out.depEffects.push(check.join('\n'));
 }
 
 function compileHandler(fnNode, env, state, out) {
@@ -1589,6 +1714,7 @@ function emitComponent(el, scope, out, env, state, opts) {
     anims: childAnims,
     refs: childRefs,
     callbacks: childCallbacks,
+    helpers: collectHelpers(fn.body, out.program),
     cbPrefix: prefix,
   };
 
@@ -1603,15 +1729,7 @@ function emitComponent(el, scope, out, env, state, opts) {
     }
   }
   for (const eff of collectEffects(fn.body)) {
-    if (!eff.deps || eff.deps.type !== 'ArrayExpression' || eff.deps.elements.length !== 0) {
-      throw aotError('AOT: only useEffect(fn, []) — run once on mount — is supported for now', 'use an empty deps array []; dependency-driven effects are not yet supported.');
-    }
-    const b = eff.fn.body;
-    const stmts = b.type === 'BlockStatement' ? b.body : [{ type: 'ExpressionStatement', expression: b }];
-    const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
-    const lines = compileStmts(stmts, childEnv, childState, ctx, '    ');
-    if (ctx.stateChanged) lines.push('    app_update();');
-    out.mountEffects.push(...lines);
+    compileEffect(eff, childEnv, childState, out);
   }
 
   return emitNode(componentReturnJSX(fn, childScope), childScope, out, childEnv, childState, opts);
@@ -2612,7 +2730,8 @@ const refs = collectRefs(component.body, scope);
 const callbacks = collectCallbacks(component.body);
 const memos = collectMemos(component.body);
 const imageImports = collectImageImports(ast.program);
-const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, imageImports };
+const helpers = collectHelpers(component.body, ast.program);
+const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, imageImports, helpers };
 // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
 // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
 // tracking re-applies dependent nodes anyway). Done before emit so references resolve.
@@ -2624,22 +2743,14 @@ for (const [name, expr] of memos) {
     env.locals.set(name, { code: `(${e.code})`, cType: e.cType });
   }
 }
-const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [], childRefs: [], childAnims: [] };
+const out = { n: 0, build: [], handlers: [], updates: [], handles: [], components: collectComponents(ast.program), cbEmitted: new Map(), vectorData: [], vectorBuilders: [], svgUpdates: [], svgN: 0, needsMath: false, timerFns: [], usesTimers: false, mountEffects: [], animCbs: [], seqN: 0, kbdData: '', kbdSetup: '', images: new Map(), instN: 0, childStateRecords: [], childRefs: [], childAnims: [], program: ast.program, effN: 0, effectFns: [], effectDecls: [], depEffects: [] };
 compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
 const appTop = emitNode(rootJSX, scope, out, env, state);
 
-// Mount effects: each `useEffect(fn, [])` body runs ONCE after the initial app_update (typically to start a
-// host-tick timer). Compiled after emit so out.timerFns/usesTimers also reflect timers created in handlers.
+// Effects: `useEffect(fn, [])` runs once at mount; `useEffect(fn, [dep…])` re-runs from app_update when a
+// dep changes (see compileEffect). Compiled after emit so out.timerFns/usesTimers reflect handler timers too.
 for (const eff of collectEffects(component.body)) {
-  if (!eff.deps || eff.deps.type !== 'ArrayExpression' || eff.deps.elements.length !== 0) {
-    throw aotError('AOT: only useEffect(fn, []) — run once on mount — is supported for now', 'use an empty deps array []; dependency-driven effects (re-run when a value changes) are not yet supported.');
-  }
-  const b = eff.fn.body;
-  const stmts = b.type === 'BlockStatement' ? b.body : [{ type: 'ExpressionStatement', expression: b }];
-  const ctx = { stateChanged: false, animIdx: 0, out, allowReturn: true };
-  const lines = compileStmts(stmts, env, state, ctx, '    ');
-  if (ctx.stateChanged) lines.push('    app_update();');
-  out.mountEffects.push(...lines);
+  compileEffect(eff, env, state, out);
 }
 
 const nodeDecls = Array.from({ length: out.n }, (_, i) => `n${i}`);
@@ -2680,7 +2791,7 @@ const animList = [...anims.values(), ...out.childAnims];
 const animDecls = animList.map((a) => `static ERAnimValueHandle ${a.cVar};`).join('\n');
 const animCreate = animList.map((a) => `    ${a.cVar} = er_anim_value_create(${a.initCode});`).join('\n');
 
-const hasUpdate = out.updates.length > 0 || out.svgUpdates.length > 0;
+const hasUpdate = out.updates.length > 0 || out.svgUpdates.length > 0 || out.depEffects.length > 0;
 const updateBlock = (() => {
   if (!hasUpdate) return '';
   const lines = ['static void app_update(void)', '{'];
@@ -2701,6 +2812,8 @@ const updateBlock = (() => {
     lines.push(`    build_svg${s.id}();`);
     lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints});`);
   }
+  // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
+  for (const block of out.depEffects) lines.push(block);
   lines.push('}');
   return lines.join('\n');
 })();
@@ -2708,6 +2821,12 @@ const updateBlock = (() => {
 const handlerDefs = out.handlers
   .map((h) => `static void ${h.name}(ERNode* node, const EREventData* data, void* user_data)\n{\n    (void)node;\n    (void)data;\n    (void)user_data;\n${h.body.join('\n')}\n}`)
   .join('\n\n');
+
+// Dep-driven useEffect: a static "previous value" per dependency, a forward decl (app_update calls each
+// er_effect_N before it's defined), and the effect body as a parameterless C function.
+const effectDeclsBlock = out.effectDecls.join('\n');
+const effectFwdDecls = out.effectFns.map((f) => `static void ${f.name}(void);`).join('\n');
+const effectFnDefs = out.effectFns.map((f) => `static void ${f.name}(void)\n{\n${f.body.join('\n')}\n}`).join('\n\n');
 
 // setInterval/setTimeout → a small fixed timer table advanced by er_app_tick(dt) (the host calls it each
 // frame). The table + helpers are emitted only when timers are used; er_app_tick is always defined (a no-op
@@ -2812,7 +2931,7 @@ const body = `/*
 
 #include <stdio.h>
 #include <string.h>
-${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 
 void er_app_build(int screen_w, int screen_h)
