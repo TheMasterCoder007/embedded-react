@@ -1286,3 +1286,14 @@ describe('AOT version-pin', () => {
     expect(c.c).toContain('version mismatch');
   });
 });
+
+describe('AOT generated-C portability', () => {
+  it('emits a guarded M_PI fallback when the app uses math (M_PI is not in ISO C99 <math.h>)', () => {
+    const c = compileSource(`import { Text } from 'embedded-react';
+import { useState } from 'react';
+export function App() { const [n] = useState(0); return (<Text>{Math.round(n * Math.PI)}</Text>); }`, 'demo').c;
+    expect(c).toContain('#include <math.h>');
+    expect(c).toContain('#ifndef M_PI');
+    expect(c).toContain('#define M_PI 3.14159');
+  });
+});
