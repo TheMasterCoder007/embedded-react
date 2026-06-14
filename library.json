@@ -1,0 +1,51 @@
+{
+  "name": "embedded-react",
+  "version": "0.1.0",
+  "description": "React Native for embedded MCUs — a tiny C99 UI engine you drive with JSX. Backend-agnostic (you provide the framebuffer flush); authored with the embedded-react npm toolchain (Flow A interpreted via QuickJS, or Flow B compiled ahead-of-time to C).",
+  "keywords": "gui, ui, react, react-native, embedded, display, lcd, tft, graphics, jsx",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/TheMasterCoder007/embedded-react",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheMasterCoder007/embedded-react.git"
+  },
+  "authors": [
+    {
+      "name": "Cory Lamming",
+      "url": "https://github.com/TheMasterCoder007",
+      "maintainer": true
+    }
+  ],
+  "frameworks": "*",
+  "platforms": "*",
+  "headers": "er_scene.h",
+  "export": {
+    "include": [
+      "engine/**",
+      "LICENSE",
+      "NOTICE",
+      "library.json"
+    ],
+    "exclude": [
+      "engine/tests/**",
+      "engine/build/**",
+      "engine/cmake-build-*/**",
+      "engine/CMakeLists.txt"
+    ]
+  },
+  "build": {
+    "srcDir": "engine",
+    "srcFilter": "+<**/*.c> -<tests/> -<build/> -<cmake-build-*/>",
+    "flags": [
+      "-Iengine/include",
+      "-Iengine/core",
+      "-Iengine/scene",
+      "-Iengine/layout",
+      "-Iengine/rendering",
+      "-Iengine/text",
+      "-Iengine/animation",
+      "-Iengine/font"
+    ],
+    "libArchive": true
+  }
+}

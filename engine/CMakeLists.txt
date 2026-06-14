@@ -1,43 +1,6 @@
-cmake_minimum_required(VERSION 3.14)
-project(embedded-react-engine C)
-include(CTest)
-
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-
 # ---------------------------------------------------------------------------
-# Feature flags ("Compile-Time Feature Flags" — see /PLAN.md appendix)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Defaults are tuned for resource-constrained MCUs (minimum flash / RAM).
-# You build should override these as needed — see examples/linux/CMakeLists.txt
-# for a reference configuration that enables everything.
-# ---------------------------------------------------------------------------
-option(ERUI_SHADOWS "Enable box shadow rasterizer (significant flash + scratch RAM)" OFF)
-option(ERUI_BORDER_AA "Anti-aliased corner edges on rounded rects" ON)
-option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRANSFORMS=FULL)" OFF)
-option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
-option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
-option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
-option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
-
-# TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
-# FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
-# Set to FULL on desktop or any target that can afford the scratch RAM.
-set(ERUI_TRANSFORMS "TRANSLATE_ONLY" CACHE STRING "FULL or TRANSLATE_ONLY")
-set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
-set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
-set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
-set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
-set(ERUI_SCRATCH_H "240" CACHE STRING "Scratch buffer height in pixels (max compositable node height)")
-set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
-set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
-set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
-set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
-
-# ---------------------------------------------------------------------------
-# Sources — grouped by subsystem to match the engine/ folder layout
+# Engine sources — grouped by subsystem to match the engine/ folder layout. Shared by BOTH build modes
+# below (ESP-IDF component + standalone CMake), so it is defined once, up front.
 # ---------------------------------------------------------------------------
 set(EMBEDDED_REACT_SOURCES
         # core: backend glue, frame tick
@@ -75,6 +38,65 @@ set(EMBEDDED_REACT_SOURCES
         font/font_data.c
         font/font_registry.c
 )
+
+# ---------------------------------------------------------------------------
+# ESP-IDF component mode: when built inside ESP-IDF (ESP_PLATFORM is set), register as a component and STOP.
+# The engine compiles with its built-in #ifndef defaults (desktop-sized: 512 nodes / 240x240 scratch), so a
+# RAM-constrained consumer MUST shrink the ERUI_* flags from their own project build, e.g. in the app's
+# CMakeLists.txt:
+#     idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=64;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8" APPEND)
+# (A Kconfig / menuconfig front-end for these knobs is a planned follow-up.) libm is part of the IDF toolchain,
+# so no extra link is needed here.
+# ---------------------------------------------------------------------------
+if (ESP_PLATFORM)
+    idf_component_register(
+            SRCS ${EMBEDDED_REACT_SOURCES}
+            INCLUDE_DIRS "include"
+            PRIV_INCLUDE_DIRS "core" "scene" "layout" "rendering" "text" "animation" "font" "platform"
+    )
+    return()
+endif ()
+
+# ---------------------------------------------------------------------------
+# Standalone / host CMake (desktop, CMake FetchContent consumers, the host test suite).
+# ---------------------------------------------------------------------------
+cmake_minimum_required(VERSION 3.14)
+project(embedded-react-engine C)
+include(CTest)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+# ---------------------------------------------------------------------------
+# Feature flags ("Compile-Time Feature Flags" — see /PLAN.md appendix)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Defaults are tuned for resource-constrained MCUs (minimum flash / RAM).
+# You build should override these as needed — see examples/linux/CMakeLists.txt
+# for a reference configuration that enables everything.
+# ---------------------------------------------------------------------------
+option(ERUI_SHADOWS "Enable box shadow rasterizer (significant flash + scratch RAM)" OFF)
+option(ERUI_BORDER_AA "Anti-aliased corner edges on rounded rects" ON)
+option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRANSFORMS=FULL)" OFF)
+option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
+option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
+option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
+option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
+
+# TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
+# FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
+# Set to FULL on desktop or any target that can afford the scratch RAM.
+set(ERUI_TRANSFORMS "TRANSLATE_ONLY" CACHE STRING "FULL or TRANSLATE_ONLY")
+set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
+set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
+set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
+set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
+set(ERUI_SCRATCH_H "240" CACHE STRING "Scratch buffer height in pixels (max compositable node height)")
+set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
+set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
+set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
+set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
 
 add_library(embedded-react STATIC ${EMBEDDED_REACT_SOURCES})
 

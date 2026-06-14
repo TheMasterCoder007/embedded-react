@@ -1,0 +1,20 @@
+version: "0.1.0"
+description: "embedded-react engine — a tiny C99 UI engine for MCUs you drive with JSX (Flow B AOT, or Flow A via the QuickJS bridge). Backend-agnostic: you provide the framebuffer flush."
+url: "https://github.com/TheMasterCoder007/embedded-react"
+repository: "https://github.com/TheMasterCoder007/embedded-react.git"
+documentation: "https://github.com/TheMasterCoder007/embedded-react#readme"
+issues: "https://github.com/TheMasterCoder007/embedded-react/issues"
+targets:
+  - esp32
+  - esp32s3
+  - esp32p4
+dependencies:
+  idf:
+    version: ">=5.0"
+# Keep the published component lean: ship only the engine sources + public headers, never the host tests
+# or local build trees. Paths are relative to this component dir (engine/).
+files:
+  exclude:
+    - "tests/**/*"
+    - "build/**/*"
+    - "cmake-build-*/**/*"

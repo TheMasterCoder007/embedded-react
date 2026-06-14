@@ -20,7 +20,7 @@
 //   node tools/sync-version.mjs           # write VERSION into all targets
 //   node tools/sync-version.mjs --check   # verify all targets already match VERSION (CI gate; non-zero on drift)
 //
-// Targets: bridges/quickjs/js/package.json, idf_component.yml, library.json (if present), engine/include/er_version.h.
+// Targets: bridges/quickjs/js/package.json, engine/idf_component.yml, library.json, engine/include/er_version.h.
 // To release: edit VERSION, run this, commit, tag vX.Y.Z.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -72,7 +72,7 @@ apply('library.json', setJsonVersion, jsonVersion);
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
 const YAML_VER = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
 apply(
-  'idf_component.yml',
+  'engine/idf_component.yml', // the ESP-IDF component lives in engine/ (the engine IS the component)
   (text) => text.replace(YAML_VER, `version: "${version}"`),
   (text) => YAML_VER.exec(text)?.[1]?.trim(),
 );
@@ -90,14 +90,34 @@ apply(
   (text) => H_VER.exec(text)?.[1],
 );
 
+// LICENSE + NOTICE: each independently published artifact (the npm package; the engine as a CMake /
+// ESP-IDF / PlatformIO component) is its OWN distribution, so per Apache-2.0 §4 it must carry its own
+// LICENSE and NOTICE. The repo-root copies are the source of truth; mirror them into each package dir so
+// `npm pack` / `compote upload` / `pio publish` include them (and never drift — --check verifies).
+const LEGAL_FILES = ['LICENSE', 'NOTICE'];
+const PACKAGE_DIRS = ['bridges/quickjs/js', 'engine'];
+for (const dir of PACKAGE_DIRS) {
+  for (const f of LEGAL_FILES) {
+    const want = readFileSync(resolve(ROOT, f), 'utf8');
+    const dst = resolve(ROOT, dir, f);
+    const have = existsSync(dst) ? readFileSync(dst, 'utf8') : null;
+    if (check) {
+      if (have !== want) drift.push({ file: `${dir}/${f}`, found: have == null ? '(missing)' : 'differs from root' });
+    } else if (have !== want) {
+      writeFileSync(dst, want);
+      wrote.push(`${dir}/${f}`);
+    }
+  }
+}
+
 if (check) {
   if (drift.length) {
-    console.error(`Version drift — these don't match VERSION (${version}):`);
+    console.error(`Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`);
     for (const d of drift) console.error(`  ${d.file}: ${d.found}`);
     console.error('Run `node tools/sync-version.mjs` and commit.');
     process.exit(1);
   }
-  console.log(`✓ all artifacts at ${version}`);
+  console.log(`✓ all artifacts at ${version}; LICENSE + NOTICE in sync`);
 } else {
   console.log(`Synced to ${version}${wrote.length ? ' → ' + wrote.join(', ') : ' (all already current)'}`);
 }
