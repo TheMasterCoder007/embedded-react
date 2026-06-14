@@ -78,7 +78,13 @@ if (dryRun) {
 }
 
 node(resolve(ROOT, 'tools/sync-version.mjs'), '--set', version); // 1. bump + sync
-git('add', ...FILES); // 2.
-git('commit', '-m', `release: ${tag}`); // 3.
-git('tag', tag); // 4.
-console.log(`\n✓ committed + tagged ${tag}. Push to release:  git push --follow-tags`);
+git('add', ...FILES); // 2. stage only the version files
+// 3. Commit the bump — unless the version is already current (nothing staged), in which case we are simply
+// tagging the already-committed version (re-releasing the current commit), so skip the empty commit.
+if (gitOut('diff', '--cached', '--name-only')) {
+  git('commit', '-m', `release: ${tag}`);
+} else {
+  console.log(`VERSION is already ${version} and committed — tagging the current commit (no bump needed).`);
+}
+git('tag', '-a', tag, '-m', `release: ${tag}`); // 4. annotated tag (carries tagger/date + works with --follow-tags)
+console.log(`\n✓ tagged ${tag}. Push to release:  git push --follow-tags`);
