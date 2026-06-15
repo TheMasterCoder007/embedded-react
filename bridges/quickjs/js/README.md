@@ -50,8 +50,16 @@ npx embedded-react dev --port 4000
 
 Open the printed URL. The canvas fills the viewport, so the browser's device toolbar drives the board size
 (e.g., 240×320) — pixel-accurate to a hardware ARGB panel. Imported images/fonts are baked and hot-reload too.
-This is the same simulator as the repo's `tools/web-sim` (see
+A floating gear chip locks to a specific panel size and can wrap the screen in a **device frame** (bezel) for a
+true-to-hardware preview. This is the same simulator as the repo's `tools/web-sim` (see
 [WASM_SIM.md](https://github.com/TheMasterCoder007/embedded-react/blob/master/WASM_SIM.md)).
+
+To **share** a UI, export a self-contained static playground — `index.html` + the prebuilt `.wasm` + your
+bundled app — that runs in any browser with no server, ready for GitHub Pages / Netlify / a docs' iframe:
+
+```bash
+npx embedded-react export --out sim-export   # then: npx serve sim-export  (or deploy the folder anywhere)
+```
 
 ## Layout
 

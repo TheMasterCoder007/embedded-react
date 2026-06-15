@@ -34,7 +34,7 @@ const PUBLIC = resolve(HERE, 'public');
 const args = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
 const port = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 3333;
-const demo = args.find((a, i) => !a.startsWith('--') && i !== portIdx + 1) || process.env.DEMO || 'music-player';
+const demo = args.find((a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1)) || process.env.DEMO || 'music-player';
 
 const demoDir = resolve(REPO, 'demos', demo);
 const entry = resolve(demoDir, 'index.jsx');

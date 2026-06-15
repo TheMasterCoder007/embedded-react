@@ -23,11 +23,11 @@
 // embedded-react.wasm host page, and hot-reloads on save (useState preserved). No native toolchain — the
 // .wasm ships prebuilt in this package. See WASM_SIM.md.
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runDevServer } from './sim-server.mjs';
+import { buildApp, runDevServer } from './sim-server.mjs';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -35,11 +35,26 @@ function usage() {
   console.log(`embedded-react — React Native for embedded MCUs
 
 Usage:
-  embedded-react dev [entry] [--port <n>]    Run the WASM simulator with hot reload
+  embedded-react dev [entry] [--port <n>]      Run the WASM simulator with hot reload
+  embedded-react export [entry] [--out <dir>]  Build a self-contained static playground (no server)
 
   entry   App entry file. Defaults to ./index.jsx, ./src/index.jsx, or package.json "main".
 `);
 }
+
+/** Locate the package's prebuilt simulator assets (the .wasm ships with this package). */
+function simDirOrExit() {
+  const simDir = resolve(PKG_ROOT, 'sim');
+  if (!existsSync(resolve(simDir, 'embedded-react.wasm'))) {
+    console.error('The prebuilt simulator (sim/embedded-react.wasm) is missing from this install.');
+    console.error('A published embedded-react package ships it; building from source needs the Emscripten SDK.');
+    process.exit(1);
+  }
+  return simDir;
+}
+
+const libSrc = () => resolve(PKG_ROOT, 'src/embedded-react/index.js');
+const nodePaths = (cwd) => [resolve(PKG_ROOT, 'node_modules'), resolve(cwd, 'node_modules')];
 
 /** Resolve the app entry: an explicit arg, else common conventions, else package.json "main"/"source". */
 function resolveEntry(cwd, explicit) {
@@ -78,15 +93,9 @@ async function dev(args) {
   const cwd = process.cwd();
   const portIdx = args.indexOf('--port');
   const port = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 3333;
-  const explicit = args.find((a, i) => !a.startsWith('--') && a !== args[portIdx + 1]);
+  const explicit = args.find((a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1));
 
-  const simDir = resolve(PKG_ROOT, 'sim');
-  if (!existsSync(resolve(simDir, 'embedded-react.wasm'))) {
-    console.error('The prebuilt simulator (sim/embedded-react.wasm) is missing from this install.');
-    console.error('A published embedded-react package ships it; building from source needs the Emscripten SDK.');
-    process.exit(1);
-  }
-
+  const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
   const outDir = resolve(tmpdir(), 'embedded-react-sim');
   mkdirSync(outDir, { recursive: true });
@@ -94,8 +103,8 @@ async function dev(args) {
   await runDevServer({
     entry,
     projectRoot: cwd,
-    libSrc: resolve(PKG_ROOT, 'src/embedded-react/index.js'),
-    nodePaths: [resolve(PKG_ROOT, 'node_modules'), resolve(cwd, 'node_modules')],
+    libSrc: libSrc(),
+    nodePaths: nodePaths(cwd),
     indexHtml: resolve(simDir, 'index.html'),
     simDir,
     outDir,
@@ -104,9 +113,31 @@ async function dev(args) {
   });
 }
 
+async function exportApp(args) {
+  const cwd = process.cwd();
+  const outIdx = args.indexOf('--out');
+  const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'sim-export');
+  const explicit = args.find((a, i) => !a.startsWith('--') && (outIdx < 0 || i !== outIdx + 1));
+
+  const simDir = simDirOrExit();
+  const entry = resolveEntry(cwd, explicit);
+  const pub = resolve(outDir, 'public');
+  mkdirSync(pub, { recursive: true });
+
+  // Bundle the app + bake assets into public/, then drop the prebuilt module + host page alongside.
+  await buildApp({ entry, projectRoot: cwd, libSrc: libSrc(), nodePaths: nodePaths(cwd), outDir: pub });
+  for (const f of ['embedded-react.js', 'embedded-react.wasm']) copyFileSync(resolve(simDir, f), resolve(pub, f));
+  copyFileSync(resolve(simDir, 'index.html'), resolve(outDir, 'index.html'));
+
+  console.log(`✓ exported a static playground → ${relative(cwd, outDir) || '.'}/`);
+  console.log(`  serve it over http (e.g. \`npx serve ${relative(cwd, outDir) || '.'}\`) or deploy the folder to any static host.`);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === 'dev') {
   await dev(rest);
+} else if (cmd === 'export') {
+  await exportApp(rest);
 } else if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
   usage();
 } else {

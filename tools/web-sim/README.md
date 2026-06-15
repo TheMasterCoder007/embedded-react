@@ -7,11 +7,16 @@ that ships in the npm package (`npx embedded-react dev`, eventually) — no nati
 
 See the full design — architecture, exported C ABI, packaging, phasing — in [**WASM_SIM.md**](../../WASM_SIM.md).
 
-## Status — phase W4 (shipped consumer CLI)
+## Status — phase W5 (polish: device frame + static export)
 
-W4 wraps the dev loop as **`npx embedded-react dev`** (in the npm package): it runs the simulator on a
+W5 adds two finishing touches (both in the shipped CLI): a **device-frame chrome** (a cosmetic bezel + speaker
+slit + home indicator around the canvas, toggled from the gear chip at a locked size — purely visual) and a
+**static export** — `embedded-react export` produces a self-contained folder (`index.html` + the prebuilt
+`.wasm` + your bundled app) that runs in any browser with no server, for GitHub Pages / docs iframes / sharing.
+
+W4 wrapped the dev loop as **`npx embedded-react dev`** (in the npm package): it runs the simulator on a
 consumer's own project (cwd), with the engine `.wasm` shipped prebuilt so consumers need no Emscripten. The
-dev-server core is shared — [`bridges/quickjs/js/sim-server.mjs`](../../bridges/quickjs/js/sim-server.mjs)
+bundler + dev-server core is shared — [`bridges/quickjs/js/sim-server.mjs`](../../bridges/quickjs/js/sim-server.mjs)
 drives both the shipped CLI ([`cli.mjs`](../../bridges/quickjs/js/cli.mjs)) and this repo's `dev.mjs`; only the
 paths differ. CI builds the `.wasm` (emsdk) and stages it into the package on release.
 

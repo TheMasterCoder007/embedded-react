@@ -14,7 +14,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>embedded-react — WASM simulator (W1)</title>
+    <title>embedded-react — WASM simulator</title>
     <style>
       :root { color-scheme: dark; }
       html, body { height: 100%; }
@@ -41,6 +41,27 @@
         -webkit-user-select: none;
         -webkit-touch-callout: none;
       }
+
+      /* Optional device-frame chrome (locked sizes only): a cosmetic bezel + speaker slit + home indicator
+         around the canvas so the preview reads like the physical panel. Purely visual — no effect on render. */
+      #device.framed {
+        position: relative;
+        padding: 26px 12px 30px;
+        background: #15181d;
+        border: 1px solid #2a313c;
+        border-radius: 26px;
+      }
+      #device.framed::before {
+        content: '';
+        position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
+        width: 42px; height: 5px; border-radius: 3px; background: #2a313c;
+      }
+      #device.framed::after {
+        content: '';
+        position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+        width: 60px; height: 5px; border-radius: 3px; background: #2a313c;
+      }
+      #device.framed canvas { border-radius: 4px; }
 
       /* Floating, collapsible controls — position:fixed so they overlay the render area without taking any
          layout space (the framebuffer always gets the full viewport). Expanded, it wraps within the viewport
@@ -86,7 +107,7 @@
         border-color: #2a313c;
         backdrop-filter: blur(4px);
       }
-      select, input, button.act {
+      select, input:not([type='checkbox']), button.act {
         background: #161a20;
         color: #c8d2e0;
         border: 1px solid #2a313c;
@@ -95,13 +116,14 @@
         font: inherit;
       }
       input[type='number'] { width: 58px; }
+      .controls .chk { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
       button.act { cursor: pointer; }
       .controls label { opacity: 0.65; }
       #sizeLabel { opacity: 0.65; font-variant-numeric: tabular-nums; white-space: nowrap; }
     </style>
   </head>
   <body>
-    <div id="stage"><canvas id="screen"></canvas></div>
+    <div id="stage"><div id="device"><canvas id="screen"></canvas></div></div>
     <div id="panel" class="collapsed">
       <button id="toggle" title="Size controls" aria-label="Size controls">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
@@ -117,6 +139,7 @@
         <span>×</span>
         <input id="h" type="number" min="64" max="4096" step="1" />
         <button id="apply" class="act">Lock</button>
+        <label class="chk"><input id="frame" type="checkbox" />frame</label>
         <span id="sizeLabel">loading…</span>
       </div>
     </div>
@@ -133,6 +156,9 @@
         const presetSel = document.getElementById('preset');
         const wIn = document.getElementById('w');
         const hIn = document.getElementById('h');
+        const device = document.getElementById('device');
+        const frameChk = document.getElementById('frame');
+        let framed = false;
         const fail = (msg) => { sizeLabel.textContent = msg; panel.classList.remove('collapsed'); };
 
         // "Fit to window" (the full viewport) is the default — the browser's responsive/device toolbar drives
@@ -229,14 +255,17 @@
         };
         loadApp();
 
-        // Hot reload (W3): the dev server (dev.mjs) pushes a Server-Sent "reload" event on every rebuild;
-        // re-load the new pack + bundle. Harmless when served statically (the endpoint just isn't there).
-        try {
-          const es = new EventSource('/reload');
-          es.onmessage = () => loadApp();
-          es.onerror = () => {}; /* static serve.mjs has no /reload — ignore the retry noise */
-        } catch {
-          /* EventSource unavailable — static mode, no hot reload */
+        // Hot reload: the dev server pushes a Server-Sent "reload" on every rebuild; re-load the new pack +
+        // bundle. window.__erHot is injected only when served by the dev server, so a static export (no
+        // server) doesn't poll a nonexistent /reload endpoint.
+        if (window.__erHot) {
+          try {
+            const es = new EventSource('/reload');
+            es.onmessage = () => loadApp();
+            es.onerror = () => {};
+          } catch {
+            /* EventSource unavailable */
+          }
         }
 
         let w = 0;
@@ -251,9 +280,14 @@
           canvas.width = w;
           canvas.height = h;
           // Fit: fill the viewport (backing already equals it, so still 1:1). Locked: native size, centered,
-          // scroll if larger than the window.
+          // scroll if larger than the window. The #device wrapper fills the stage in Fit mode or shrinks to
+          // the canvas (+ bezel when framed) when locked.
           canvas.style.width = mode === 'fit' ? '100%' : w + 'px';
           canvas.style.height = mode === 'fit' ? '100%' : h + 'px';
+          device.style.display = mode === 'fit' ? 'block' : 'inline-block';
+          device.style.width = mode === 'fit' ? '100%' : 'auto';
+          device.style.height = mode === 'fit' ? '100%' : 'auto';
+          device.classList.toggle('framed', framed && mode === 'fixed');
           image = ctx.createImageData(w, h);
           wIn.value = w;
           hIn.value = h;
@@ -298,6 +332,15 @@
             ? `${+wIn.value}x${+hIn.value}`
             : 'fit';
           applySize(+wIn.value, +hIn.value);
+          syncCanvas();
+        });
+        // Device-frame chrome only makes sense at a locked size, so enabling it locks the current size.
+        frameChk.addEventListener('change', () => {
+          framed = frameChk.checked;
+          if (framed && mode === 'fit') {
+            mode = 'fixed';
+            presetSel.value = PRESETS.some(([a, b]) => a === w && b === h) ? `${w}x${h}` : 'fit';
+          }
           syncCanvas();
         });
 

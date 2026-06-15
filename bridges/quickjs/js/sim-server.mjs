@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-// sim-server.mjs — the shared WASM-simulator dev server.
+// sim-server.mjs — the shared WASM-simulator bundler + dev server.
 //
-// esbuild --watch a JSX app → app.js, bake its imported images/fonts → assets.pack, serve the prebuilt
-// embedded-react.{js,wasm} host page, and push a Server-Sent "reload" on every rebuild so the open browser
-// hot-reloads with no wasm rebuild. useState survives the reload via the Babel persist transform.
+// esbuild-bundles a JSX app → app.js, bakes its imported images/fonts → assets.pack, and either (a) serves
+// the prebuilt embedded-react.{js,wasm} host page with live hot reload (runDevServer), or (b) produces those
+// files once for a static export (buildApp). useState survives a hot reload via the Babel persist transform.
 //
-// Used by both the consumer CLI (cli.mjs → `npx embedded-react dev`) and the repo dev loop
-// (tools/web-sim/dev.mjs). The only differences between the two are paths, passed in here.
+// Used by the consumer CLI (cli.mjs → `npx embedded-react dev` / `export`) and the repo dev loop
+// (tools/web-sim/dev.mjs). The only differences are paths, passed in here.
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -52,34 +52,24 @@ const mtime = (p) => {
 };
 
 /**
- * Run the simulator dev server: watch + bundle + bake assets + serve + hot reload.
+ * Build the esbuild config + asset baker for one app bundle. Owns its own asset-discovery state, so it is
+ * safe to use for either a one-shot build or a watching context.
  *
- * @param {object}   o
- * @param {string}   o.entry        App entry (index.jsx) to bundle.
- * @param {string}   o.projectRoot  Dir whose files get the persist transform (the app's own code).
- * @param {string}   o.libSrc       Path to embedded-react's src index (alias target for `embedded-react`).
- * @param {string[]} o.nodePaths    Extra node_modules dirs for esbuild resolution.
- * @param {string}   o.indexHtml    Host page to serve at `/`.
- * @param {string}   o.simDir       Dir holding embedded-react.{js,wasm}.
- * @param {string}   o.outDir       Dir to write app.js + assets.pack (also served).
- * @param {number}   o.port         HTTP port.
- * @param {string}   o.label        App/demo name for logs.
+ * @param {object}        o
+ * @param {string}        o.entry, o.projectRoot, o.libSrc, o.outDir
+ * @param {string[]}      o.nodePaths
+ * @param {boolean}       [o.persist]    Apply the useState→persist transform (dev hot reload). Default true.
+ * @param {() => void}    [o.onRebuilt]  Called after each successful build + asset bake (e.g. broadcast reload).
+ * @returns {{ options: object, bundlePath: string, packPath: string }}
  */
-export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, indexHtml, simDir, outDir, port, label }) {
+function createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist = true, onRebuilt }) {
   const bundlePath = resolve(outDir, 'app.js');
   const packPath = resolve(outDir, 'assets.pack');
   const projNorm = projectRoot.replace(/\\/g, '/');
-
-  // SSE reload channel.
-  const clients = new Set();
-  const broadcastReload = () => {
-    for (const res of clients) res.write('data: reload\n\n');
-  };
-
-  // Per-build asset discovery → ERPK pack.
   const images = new Map();
   const fonts = new Map();
   let lastAssetSig = null;
+
   async function bakePack() {
     const discoveredSizes = [
       ...new Set(
@@ -115,7 +105,7 @@ export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, inde
     }
   }
 
-  const ctx = await esbuild.context({
+  const options = {
     entryPoints: [entry],
     bundle: true,
     format: 'iife',
@@ -136,9 +126,8 @@ export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, inde
             images.clear();
             fonts.clear();
           });
-          // App files (not the library/React): rewrite useState → a persisting helper so state survives reload.
           b.onLoad({ filter: /\.(jsx?|tsx?)$/ }, (a) => {
-            if (!a.path.replace(/\\/g, '/').startsWith(projNorm)) return undefined;
+            if (!persist || !a.path.replace(/\\/g, '/').startsWith(projNorm)) return undefined;
             try {
               return { contents: transformPersist(readFileSync(a.path, 'utf8'), relative(projectRoot, a.path).replace(/\\/g, '/')), loader: 'jsx' };
             } catch (e) {
@@ -155,23 +144,54 @@ export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, inde
           });
           b.onEnd(async (r) => {
             if (r.errors.length) {
-              console.error(`✗ build failed (${r.errors.length} error(s)) — fix and save to retry`);
+              console.error(`✗ build failed (${r.errors.length} error(s))`);
               return;
             }
             await bakePack();
-            console.log('↻ rebuilt → reloading');
-            broadcastReload();
+            if (onRebuilt) onRebuilt();
           });
         },
       },
     ],
-  });
+  };
 
+  return { options, bundlePath, packPath };
+}
+
+/**
+ * One-shot bundle + asset bake into outDir (app.js [+ assets.pack]). For the static export.
+ * Persist transform is off (a static page has no hot reload to preserve state across).
+ */
+export async function buildApp({ entry, projectRoot, libSrc, nodePaths, outDir }) {
+  const { options } = createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist: false });
+  await esbuild.build(options);
+}
+
+/**
+ * Run the simulator dev server: watch + bundle + bake + serve + hot reload.
+ *
+ * @param {object}   o
+ * @param {string}   o.entry, o.projectRoot, o.libSrc, o.indexHtml, o.simDir, o.outDir, o.label
+ * @param {string[]} o.nodePaths
+ * @param {number}   o.port
+ */
+export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, indexHtml, simDir, outDir, port, label }) {
+  const clients = new Set();
+  const broadcastReload = () => {
+    for (const res of clients) res.write('data: reload\n\n');
+  };
+
+  const { options } = createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist: true, onRebuilt: () => {
+    console.log('↻ rebuilt → reloading');
+    broadcastReload();
+  } });
+
+  const ctx = await esbuild.context(options);
   await ctx.rebuild();
   await ctx.watch();
 
-  // Static server. The host page references ./public/<name>; embedded-react.{js,wasm} come from simDir, the
-  // freshly bundled app.js/assets.pack from outDir.
+  // Serve the host page; embedded-react.{js,wasm} from simDir, the freshly bundled app.js/assets.pack from
+  // outDir. The page references ./public/<name>. window.__erHot is injected so the page connects to /reload.
   const send = async (res, file) => {
     try {
       res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(file));
@@ -179,7 +199,7 @@ export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, inde
       res.writeHead(404).end('not found');
     }
   };
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
     if (path === '/reload') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -188,7 +208,15 @@ export async function runDevServer({ entry, projectRoot, libSrc, nodePaths, inde
       req.on('close', () => clients.delete(res));
       return;
     }
-    if (path === '/' || path === '/index.html') return void send(res, indexHtml);
+    if (path === '/' || path === '/index.html') {
+      try {
+        const html = (await readFile(indexHtml, 'utf8')).replace('</head>', '<script>window.__erHot=true</script></head>');
+        res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }).end(html);
+      } catch {
+        res.writeHead(404).end('not found');
+      }
+      return;
+    }
     if (path.startsWith('/public/')) {
       const name = basename(path); // flat filename only
       const dir = name === 'embedded-react.js' || name === 'embedded-react.wasm' ? simDir : outDir;
