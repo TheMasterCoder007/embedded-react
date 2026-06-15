@@ -7,13 +7,18 @@ that ships in the npm package (`npx embedded-react dev`, eventually) — no nati
 
 See the full design — architecture, exported C ABI, packaging, phasing — in [**WASM_SIM.md**](../../WASM_SIM.md).
 
-## Status — phase W3 (hot-reload dev loop)
+## Status — phase W4 (shipped consumer CLI)
 
-W3 adds the **dev server** (`dev.mjs`): esbuild `--watch` rebundles on every save, bakes imported images/fonts
-into an ERPK pack (loaded via `er_web_load_pack`), and pushes a Server-Sent reload event so the open page
-re-loads the new bundle/pack with **no wasm rebuild** — the React Native inner loop in a browser. `useState`
-survives the reload via the same Babel persist transform the SDL simulator uses. (W2 brought interactive Flow A
-on `er_runtime`; the `.wasm` bundles engine + QuickJS-ng + bridge, ~1.2 MB, and is app-agnostic.)
+W4 wraps the dev loop as **`npx embedded-react dev`** (in the npm package): it runs the simulator on a
+consumer's own project (cwd), with the engine `.wasm` shipped prebuilt so consumers need no Emscripten. The
+dev-server core is shared — [`bridges/quickjs/js/sim-server.mjs`](../../bridges/quickjs/js/sim-server.mjs)
+drives both the shipped CLI ([`cli.mjs`](../../bridges/quickjs/js/cli.mjs)) and this repo's `dev.mjs`; only the
+paths differ. CI builds the `.wasm` (emsdk) and stages it into the package on release.
+
+The dev loop itself (W3): esbuild `--watch` rebundles on save, bakes imported images/fonts into an ERPK pack
+(`er_web_load_pack`), and pushes a Server-Sent reload so the page hot-reloads with **no wasm rebuild**;
+`useState` survives via the Babel persist transform. (W2: interactive Flow A on `er_runtime`; the `.wasm`
+bundles engine + QuickJS-ng + bridge, ~1.2 MB, app-agnostic.)
 
 ## Develop (hot reload)
 
@@ -45,12 +50,16 @@ node tools/web-sim/serve.mjs               # static server → http://localhost:
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
-| `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/embedded-react.{js,wasm}` |
-| `dev.mjs` | dev server: esbuild `--watch` + asset baking + SSE hot reload (the main dev loop) |
+| `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/` + stages the package's `sim/` |
+| `dev.mjs` | repo dev loop over `demos/` — a thin wrapper over the shared `sim-server.mjs` |
 | `bundle-app.mjs` | one-shot esbuild a demo's JSX → `public/app.js` (for a static preview) |
 | `serve.mjs` | minimal static server (correct MIME); for previewing a prebuilt bundle |
 | `index.html` | host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData`, pointer → touch, SSE reload |
 | `public/` | build + bundle output (git-ignored; the wasm is shipped prebuilt by CI) |
+
+The shared dev-server core and the consumer CLI live in the npm package:
+[`sim-server.mjs`](../../bridges/quickjs/js/sim-server.mjs) (watch + bake + serve + SSE) and
+[`cli.mjs`](../../bridges/quickjs/js/cli.mjs) (`npx embedded-react dev`).
 
 The exported C ABI lives in [`backends/web/web_backend.h`](../../backends/web/web_backend.h); the present
 layer (ARGB→RGBA) is [`backends/web/renderer_backend.c`](../../backends/web/renderer_backend.c).

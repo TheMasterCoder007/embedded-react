@@ -58,6 +58,19 @@ jobs:
           node aot/compile.mjs music-player
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
 
+      # Build the prebuilt WASM simulator (engine + QuickJS + backends → embedded-react.{js,wasm}) and stage
+      # it into the npm package's sim/ dir so `npx embedded-react dev` ships ready-to-run — consumers need no
+      # Emscripten. Only when publishing npm (it's a few-minute emsdk build). build.mjs derives the toolchain
+      # from $EMSDK and uses Unix Makefiles on Linux.
+      - name: Set up Emscripten
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.13
+      - name: Build + stage the prebuilt WASM simulator
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        run: node tools/web-sim/build.mjs
+
       # --- Channel 1: npm (OIDC Trusted Publishing — no token; provenance is automatic) ---
       # Enable by setting repo variable PUBLISH_NPM=true AFTER configuring the trusted publisher on npmjs.com.
       - name: Publish to npm

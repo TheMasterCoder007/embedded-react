@@ -113,4 +113,15 @@ try {
 for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
   copyFileSync(resolve(BUILD_DIR, f), resolve(OUT_DIR, f));
 }
-console.log('✓ built embedded-react.{js,wasm} — serve with: node tools/web-sim/serve.mjs');
+
+// Stage the prebuilt module + host page into the npm package's sim/ dir so `npx embedded-react dev` ships
+// with it (the `files` whitelist includes sim/). This is what CI builds + publishes; not committed.
+const PKG_SIM = resolve(HERE, '../../bridges/quickjs/js/sim');
+mkdirSync(PKG_SIM, { recursive: true });
+for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
+  copyFileSync(resolve(BUILD_DIR, f), resolve(PKG_SIM, f));
+}
+copyFileSync(resolve(HERE, 'index.html'), resolve(PKG_SIM, 'index.html'));
+
+console.log('✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + bridges/quickjs/js/sim/');
+console.log('  repo preview: node tools/web-sim/dev.mjs [demo]   ·   consumer CLI: npx embedded-react dev');

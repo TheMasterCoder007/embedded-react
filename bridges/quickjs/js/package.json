@@ -34,6 +34,9 @@
   "exports": {
     ".": "./src/embedded-react/index.js"
   },
+  "bin": {
+    "embedded-react": "./cli.mjs"
+  },
   "files": [
     "src/",
     "aot/",
@@ -41,6 +44,9 @@
     "build.mjs",
     "pack-container.mjs",
     "persist-transform.mjs",
+    "cli.mjs",
+    "sim-server.mjs",
+    "sim/",
     "README.md",
     "LICENSE",
     "NOTICE",
@@ -58,6 +64,7 @@
     "release": "node ../../../tools/release.mjs",
     "build:builtin-font": "node assets/build-builtin-font.mjs",
     "sim": "node sim.mjs",
+    "dev": "node cli.mjs dev",
     "create": "node create-embedded-react.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -65,15 +72,15 @@
     "test:bytecode": "node test/runtime/run.mjs --bytecode"
   },
   "dependencies": {
-    "react": "18.3.1",
-    "react-reconciler": "0.29.2"
-  },
-  "devDependencies": {
     "@babel/core": "^7.29.7",
     "@babel/plugin-syntax-jsx": "^7.29.7",
     "esbuild": "^0.24.0",
     "opentype.js": "^2.0.0",
     "pngjs": "^7.0.0",
+    "react": "18.3.1",
+    "react-reconciler": "0.29.2"
+  },
+  "devDependencies": {
     "vitest": "^2.1.0"
   }
 }

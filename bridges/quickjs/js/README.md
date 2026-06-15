@@ -16,10 +16,10 @@ React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scen
 > separately as C source (CMake `FetchContent`, the ESP-IDF Component Registry, and PlatformIO) — see the
 > repos **Install** section. Everything ships at one lockstep version (this package's version == the engine's).
 >
-> The end-to-end app workflow below (bundling, packing, the simulator, running on a board) assumes a **clone
-> of the repo** — the CLIs operate on the repo's `demos/` and `examples/`. A standalone project scaffolder
-> (`create-embedded-react`) that works in your own directory is still to come (see Status). Until then,
-> `npm install embedded-react` gives you the importable component API + the AOT compiler module.
+> **`npx embedded-react dev` works in your own project** — it runs the WASM simulator on your app with hot
+> reload, no clone, and no native toolchain (the simulator `.wasm` ships prebuilt in this package). The other
+> end-to-end CLIs below (`npm run pack`/`build`/AOT, running on a board) still operate on the repo's `demos/`
+> and `examples/`; a standalone project scaffolder (`create-embedded-react`) is still to come (see Status).
 
 ## What an app imports
 
@@ -35,6 +35,23 @@ AppRegistry.registerComponent('demo', () => App);
 
 `embedded-react` resolves as a Node **package self-reference** (`package.json` `name` + `exports`),
 so esbuild and Vitest find it with no aliases.
+
+## Simulate — `npx embedded-react dev`
+
+Run your app in a browser with hot reload — no native toolchain, no repo clone. The engine is compiled to
+WebAssembly and ships **prebuilt** in this package; the CLI bundles your JSX, serves it, and re-loads on save
+(your `useState` survives the reload).
+
+```bash
+npx embedded-react dev            # finds ./index.jsx, ./src/index.jsx, or package.json "main"
+npx embedded-react dev app.jsx    # or pass the entry explicitly
+npx embedded-react dev --port 4000
+```
+
+Open the printed URL. The canvas fills the viewport, so the browser's device toolbar drives the board size
+(e.g., 240×320) — pixel-accurate to a hardware ARGB panel. Imported images/fonts are baked and hot-reload too.
+This is the same simulator as the repo's `tools/web-sim` (see
+[WASM_SIM.md](https://github.com/TheMasterCoder007/embedded-react/blob/master/WASM_SIM.md)).
 
 ## Layout
 
@@ -235,4 +252,7 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   it's just `useState`, so the same app code runs everywhere. `usePersistentState` is the underlying
   helper, also exported for explicit use. See
   [SIMULATOR.md in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/SIMULATOR.md).
-- ⏳ **`create-embedded-react` scaffold** — the project-init CLI is still to come (§4).
+- ✅ **`npx embedded-react dev`** — the WASM simulator runs your app in a browser with hot reload, from your
+  own project directory, with the engine `.wasm` shipped prebuilt (no Emscripten for consumers). See above.
+- ⏳ **`create-embedded-react` scaffold** — the project-init CLI (a new app skeleton in your own directory) is
+  still to come.
