@@ -1,0 +1,387 @@
+<!doctype html>
+<!--
+  Copyright 2026 Cory Lamming
+  Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+  WASM simulator host page. Loads embedded-react.wasm and runs a requestAnimationFrame loop:
+  er_web_pump(dt) -> read the RGBA framebuffer -> putImageData. The canvas fills the whole viewport, so in
+  "Fit to window" mode the board size IS the viewport — set the browser's device toolbar to 240x320 and the
+  app renders at exactly 240x320 (same workflow as a responsive web project). The size controls are a small
+  floating, collapsible chip so they never steal render space. You can also lock to a real panel size. W1
+  renders a static C scene (er_web_demo_scene); Flow A bundles + hot reload arrive in W2/W3. See WASM_SIM.md.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>embedded-react — WASM simulator</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { height: 100%; }
+      body { margin: 0; overflow: hidden; background: #0b0d10; color: #c8d2e0; font: 13px/1.4 system-ui, sans-serif; }
+
+      /* Stage fills the whole viewport. The canvas fills it in Fit mode, or sits centered at its native size
+         in a locked mode (overflow scrolls if the board is larger than the window). */
+      #stage {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+      }
+      /* 1:1 — backing store equals the board size, shown at native resolution (no upscale → crisp).
+         touch-action:none — give the engine raw pointer events: the browser must not treat a drag as a scroll
+         (which would swallow pointermove and break drags) or allow double-tap-zoom on the canvas. */
+      canvas {
+        image-rendering: pixelated;
+        display: block;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+
+      /* Optional device-frame chrome (locked sizes only): a cosmetic bezel + speaker slit + home indicator
+         around the canvas so the preview reads like the physical panel. Purely visual — no effect on render. */
+      #device.framed {
+        position: relative;
+        padding: 26px 12px 30px;
+        background: #15181d;
+        border: 1px solid #2a313c;
+        border-radius: 26px;
+      }
+      #device.framed::before {
+        content: '';
+        position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
+        width: 42px; height: 5px; border-radius: 3px; background: #2a313c;
+      }
+      #device.framed::after {
+        content: '';
+        position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+        width: 60px; height: 5px; border-radius: 3px; background: #2a313c;
+      }
+      #device.framed canvas { border-radius: 4px; }
+
+      /* Floating, collapsible controls — position:fixed so they overlay the render area without taking any
+         layout space (the framebuffer always gets the full viewport). Expanded, it wraps within the viewport
+         so nothing is cut off on a small board; collapsed, it is just a square icon button. */
+      #panel {
+        position: fixed;
+        left: 8px;
+        bottom: 8px;
+        z-index: 10;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        box-sizing: border-box;
+        max-width: calc(100vw - 16px);
+        border-radius: 8px;
+      }
+      #panel:not(.collapsed) {
+        padding: 6px 8px;
+        background: rgba(14, 17, 22, 0.92);
+        border: 1px solid #2a313c;
+        backdrop-filter: blur(4px);
+      }
+      #panel.collapsed .controls { display: none; }
+      .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      /* Square icon toggle: bordered chip when collapsed, plain icon when the dock is open. */
+      #toggle {
+        flex: 0 0 auto;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border-radius: 8px;
+        cursor: pointer;
+        color: #c8d2e0;
+        background: transparent;
+        border: 1px solid transparent;
+      }
+      #panel.collapsed #toggle {
+        background: rgba(14, 17, 22, 0.92);
+        border-color: #2a313c;
+        backdrop-filter: blur(4px);
+      }
+      select, input:not([type='checkbox']), button.act {
+        background: #161a20;
+        color: #c8d2e0;
+        border: 1px solid #2a313c;
+        border-radius: 5px;
+        padding: 3px 7px;
+        font: inherit;
+      }
+      input[type='number'] { width: 58px; }
+      .controls .chk { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+      button.act { cursor: pointer; }
+      .controls label { opacity: 0.65; }
+      #sizeLabel { opacity: 0.65; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"><div id="device"><canvas id="screen"></canvas></div></div>
+    <div id="panel" class="collapsed">
+      <button id="toggle" title="Size controls" aria-label="Size controls">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+      <div class="controls">
+        <label for="preset">size</label>
+        <select id="preset"></select>
+        <input id="w" type="number" min="64" max="4096" step="1" />
+        <span>×</span>
+        <input id="h" type="number" min="64" max="4096" step="1" />
+        <button id="apply" class="act">Lock</button>
+        <label class="chk"><input id="frame" type="checkbox" />frame</label>
+        <span id="sizeLabel">loading…</span>
+      </div>
+    </div>
+
+    <script src="./public/embedded-react.js"></script>
+    <script>
+      (async () => {
+        const stage = document.getElementById('stage');
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const panel = document.getElementById('panel');
+        const toggle = document.getElementById('toggle');
+        const sizeLabel = document.getElementById('sizeLabel');
+        const presetSel = document.getElementById('preset');
+        const wIn = document.getElementById('w');
+        const hIn = document.getElementById('h');
+        const device = document.getElementById('device');
+        const frameChk = document.getElementById('frame');
+        let framed = false;
+        const fail = (msg) => { sizeLabel.textContent = msg; panel.classList.remove('collapsed'); };
+
+        // "Fit to window" (the full viewport) is the default — the browser's responsive/device toolbar drives
+        // the board directly. Presets lock to a real panel size.
+        const PRESETS = [
+          [800, 480],
+          [1024, 600],
+          [480, 320],
+          [320, 240],
+          [240, 320],
+        ];
+        const fitOpt = document.createElement('option');
+        fitOpt.value = 'fit';
+        fitOpt.textContent = 'Fit to window';
+        presetSel.appendChild(fitOpt);
+        for (const [pw, ph] of PRESETS) {
+          const o = document.createElement('option');
+          o.value = `${pw}x${ph}`;
+          o.textContent = `${pw} × ${ph}`;
+          presetSel.appendChild(o);
+        }
+
+        toggle.addEventListener('click', () => panel.classList.toggle('collapsed'));
+
+        let Module;
+        try {
+          Module = await createEmbeddedReact();
+        } catch (e) {
+          fail('load failed — run build.mjs');
+          throw e;
+        }
+
+        const init = Module.cwrap('er_web_init', 'number', ['number', 'number']);
+        const demoScene = Module.cwrap('er_web_demo_scene', null, []);
+        const loadSource = Module.cwrap('er_web_load_source', null, ['number', 'number']);
+        const loadPack = Module.cwrap('er_web_load_pack', 'number', ['number', 'number']);
+        const resize = Module.cwrap('er_web_resize', 'number', ['number', 'number']);
+        const pump = Module.cwrap('er_web_pump', null, ['number']);
+        const touch = Module.cwrap('er_web_touch', null, ['number', 'number', 'number']);
+        const framebuffer = Module.cwrap('er_web_framebuffer', 'number', []);
+        const fbWidth = Module.cwrap('er_web_fb_width', 'number', []);
+        const fbHeight = Module.cwrap('er_web_fb_height', 'number', []);
+
+        const clamp = (n) => Math.max(64, Math.min(4096, n | 0));
+        // The stage is inset:0, so its client size is the full viewport (the floating panel never shrinks it).
+        const stageSize = () => [clamp(stage.clientWidth), clamp(stage.clientHeight)];
+
+        // Initial size: ?screen=WxH locks to that size; otherwise fit the viewport.
+        const params = new URLSearchParams(location.search);
+        let mode = 'fit';
+        let [W, H] = stageSize();
+        const initial = params.get('screen');
+        if (initial) {
+          const [iw, ih] = initial.split('x').map((n) => parseInt(n, 10) || 0);
+          if (iw && ih) {
+            mode = 'fixed';
+            W = clamp(iw);
+            H = clamp(ih);
+          }
+        }
+        presetSel.value = mode === 'fit' ? 'fit' : PRESETS.some(([a, b]) => a === W && b === H) ? `${W}x${H}` : 'fit';
+
+        if (!init(W, H)) {
+          fail('init failed');
+          return;
+        }
+
+        // Copy bytes into wasm memory, hand the pointer to a C function, then free.
+        const withWasmBytes = (bytes, fn) => {
+          const ptr = Module._malloc(bytes.length);
+          Module.HEAPU8.set(bytes, ptr);
+          fn(ptr, bytes.length);
+          Module._free(ptr);
+        };
+        const fetchBytes = async (url) => {
+          const res = await fetch(url, { cache: 'no-store' });
+          return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+        };
+
+        // Load the asset pack (if any) BEFORE the bundle so <Image>/custom-font nodes resolve, then run the
+        // Flow A app in the QuickJS runtime. Re-runnable: the dev server calls this on every hot reload, and
+        // er_web_load_source resets + re-evaluates (useState is preserved by the persist transform). Falls
+        // back to the built-in static scene if no app.js is served.
+        const loadApp = async () => {
+          const pack = await fetchBytes('./public/assets.pack');
+          if (pack) withWasmBytes(pack, loadPack);
+          const app = await fetchBytes('./public/app.js');
+          if (!app) {
+            console.warn('no app.js — showing the built-in demo scene');
+            demoScene();
+            return;
+          }
+          withWasmBytes(app, loadSource);
+        };
+        loadApp();
+
+        // Hot reload: the dev server pushes a Server-Sent "reload" on every rebuild; re-load the new pack +
+        // bundle. window.__erHot is injected only when served by the dev server, so a static export (no
+        // server) doesn't poll a nonexistent /reload endpoint.
+        if (window.__erHot) {
+          try {
+            const es = new EventSource('/reload');
+            es.onmessage = () => loadApp();
+            es.onerror = () => {};
+          } catch {
+            /* EventSource unavailable */
+          }
+        }
+
+        let w = 0;
+        let h = 0;
+        let len = 0;
+        let image = null;
+
+        const syncCanvas = () => {
+          w = fbWidth();
+          h = fbHeight();
+          len = w * h * 4;
+          canvas.width = w;
+          canvas.height = h;
+          // Fit: fill the viewport (backing already equals it, so still 1:1). Locked: native size, centered,
+          // scroll if larger than the window. The #device wrapper fills the stage in Fit mode or shrinks to
+          // the canvas (+ bezel when framed) when locked.
+          canvas.style.width = mode === 'fit' ? '100%' : w + 'px';
+          canvas.style.height = mode === 'fit' ? '100%' : h + 'px';
+          device.style.display = mode === 'fit' ? 'block' : 'inline-block';
+          device.style.width = mode === 'fit' ? '100%' : 'auto';
+          device.style.height = mode === 'fit' ? '100%' : 'auto';
+          device.classList.toggle('framed', framed && mode === 'fixed');
+          image = ctx.createImageData(w, h);
+          wIn.value = w;
+          hIn.value = h;
+          sizeLabel.textContent = `${w}×${h}${mode === 'fit' ? ' · fit' : ''}`;
+        };
+        syncCanvas();
+
+        const applySize = (nw, nh) => {
+          nw = clamp(nw);
+          nh = clamp(nh);
+          if (nw === w && nh === h) return;
+          if (resize(nw, nh)) syncCanvas();
+        };
+
+        // Debounced refit while the viewport changes (window drag, device toolbar, rotate). Driven by the
+        // window 'resize' event (fires reliably for viewport changes) with a ResizeObserver as backup, and a
+        // setTimeout debounce (runs even when the tab is backgrounded, unlike requestAnimationFrame).
+        let resizeTimer = 0;
+        const refit = () => {
+          if (mode !== 'fit') return;
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => applySize(...stageSize()), 60);
+        };
+        window.addEventListener('resize', refit);
+        new ResizeObserver(refit).observe(stage);
+        // Initial fit once layout has settled (the first synchronous measure can predate viewport layout).
+        setTimeout(() => mode === 'fit' && applySize(...stageSize()), 0);
+
+        presetSel.addEventListener('change', () => {
+          if (presetSel.value === 'fit') {
+            mode = 'fit';
+            applySize(...stageSize());
+          } else {
+            mode = 'fixed';
+            applySize(...presetSel.value.split('x').map((n) => parseInt(n, 10)));
+          }
+          syncCanvas();
+        });
+        document.getElementById('apply').addEventListener('click', () => {
+          mode = 'fixed';
+          presetSel.value = PRESETS.some(([a, b]) => a === +wIn.value && b === +hIn.value)
+            ? `${+wIn.value}x${+hIn.value}`
+            : 'fit';
+          applySize(+wIn.value, +hIn.value);
+          syncCanvas();
+        });
+        // Device-frame chrome only makes sense at a locked size, so enabling it locks the current size.
+        frameChk.addEventListener('change', () => {
+          framed = frameChk.checked;
+          if (framed && mode === 'fit') {
+            mode = 'fixed';
+            presetSel.value = PRESETS.some(([a, b]) => a === w && b === h) ? `${w}x${h}` : 'fit';
+          }
+          syncCanvas();
+        });
+
+        // Pointer -> touch. Map CSS pixels to framebuffer pixels (the canvas may be stretched in Fit mode).
+        let down = false;
+        const toFb = (e) => {
+          const r = canvas.getBoundingClientRect();
+          const x = Math.round(((e.clientX - r.left) / r.width) * w);
+          const y = Math.round(((e.clientY - r.top) / r.height) * h);
+          return [x, y];
+        };
+        canvas.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          down = true;
+          canvas.setPointerCapture(e.pointerId);
+          touch(0, ...toFb(e));
+        });
+        canvas.addEventListener('pointermove', (e) => {
+          if (down) touch(1, ...toFb(e));
+        });
+        const release = (e) => {
+          if (!down) return;
+          down = false;
+          touch(2, ...toFb(e));
+        };
+        canvas.addEventListener('pointerup', release);
+        canvas.addEventListener('pointercancel', release);
+
+        let prev = performance.now();
+        const frame = (now) => {
+          const dt = Math.min(100, now - prev);
+          prev = now;
+          pump(Math.round(dt));
+          // HEAPU8 may detach when WASM memory grows, so wrap a fresh view each frame, then copy into the
+          // persistent ImageData (robust against detach during the copy).
+          image.data.set(new Uint8ClampedArray(Module.HEAPU8.buffer, framebuffer(), len));
+          ctx.putImageData(image, 0, 0);
+          requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      })();
+    </script>
+  </body>
+</html>

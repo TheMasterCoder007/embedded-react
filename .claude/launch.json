@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "wasm-sim",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/web-sim/serve.mjs", "--port", "3333"],
+      "port": 3333
+    }
+  ]
+}

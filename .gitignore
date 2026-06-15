@@ -28,6 +28,12 @@ Testing/
 node_modules/
 .vite/
 
+# WASM simulator build output — the .wasm/.js are built (locally or by CI) and shipped prebuilt in the
+# npm package, never committed (mirrors how dist/ is handled). See WASM_SIM.md.
+tools/web-sim/public/
+# Prebuilt sim assets staged into the npm package by build.mjs (shipped via the package's files whitelist).
+bridges/quickjs/js/sim/
+
 # OS
 .DS_Store
 Thumbs.db
