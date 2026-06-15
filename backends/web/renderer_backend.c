@@ -16,12 +16,14 @@
 
 #include "web_backend.h"
 
+#include "er_runtime.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "software_backend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -33,13 +35,53 @@
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint8_t* s_rgba; /**< Canvas-facing RGBA buffer (R,G,B,A), screen_w * screen_h * 4 bytes. */
-static int s_w;         /**< Framebuffer width in pixels. */
-static int s_h;         /**< Framebuffer height in pixels. */
+static uint8_t* s_rgba;   /**< Canvas-facing RGBA buffer (R,G,B,A), screen_w * screen_h * 4 bytes. */
+static int s_w;           /**< Framebuffer width in pixels. */
+static int s_h;           /**< Framebuffer height in pixels. */
+static char* s_src;       /**< Private copy of the loaded app bundle (for hot reload + resize); NUL-terminated. */
+static int s_src_len;     /**< Byte length of s_src. */
+static bool s_app_loaded; /**< An app bundle has been evaluated at least once. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Builds the er_runtime configuration for a given board size.
+ *
+ * @param[in] w  Screen width exposed to JS as screen.width.
+ * @param[in] h  Screen height exposed to JS as screen.height.
+ *
+ * @return A populated ErRuntimeConfig (by value).
+ */
+static ErRuntimeConfig runtime_cfg(int w, int h)
+{
+    ErRuntimeConfig rt;
+    memset(&rt, 0, sizeof rt);
+    rt.screen_width = w;
+    rt.screen_height = h;
+    rt.screen_scale = 1.0f;
+    rt.install_persist = true; /* usePersistentState survives a hot reload (dev loop); plain useState on a device */
+    rt.log = NULL;             /* console.* -> stdout, which Emscripten routes to the browser console */
+    rt.malloc_functions = NULL;
+    rt.max_stack_size = 0; /* QuickJS default guard; the wasm stack (-sSTACK_SIZE) is sized well above it */
+    return rt;
+}
+
+/** @brief Runs the stored app bundle (redbox on JS error), or the static fallback scene if none is loaded. */
+static void run_app_or_demo(void)
+{
+    if (s_src)
+    {
+        if (!er_runtime_load_source(s_src, (size_t)s_src_len, "<app>"))
+            er_runtime_show_error();
+        s_app_loaded = true;
+    }
+    else
+    {
+        er_web_demo_scene();
+    }
+}
 
 /**
  * @brief Converts the software ARGB8888 framebuffer into the RGBA present buffer.
@@ -97,7 +139,42 @@ int er_web_init(int screen_w, int screen_h)
     }
     s_w = screen_w;
     s_h = screen_h;
+
+    /* Boot the portable QuickJS host core (bridge + console + screen + persist). The render backend must
+       already be set, which it is. */
+    ErRuntimeConfig rt = runtime_cfg(screen_w, screen_h);
+    if (!er_runtime_init(&rt))
+    {
+        free(s_rgba);
+        s_rgba = NULL;
+        er_software_backend_destroy();
+        return 0;
+    }
     return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void er_web_load_source(const char* js, int len)
+{
+    if (!js || len <= 0)
+        return;
+
+    /* Keep a private copy so a hot reload (er_web_reset) or a resize can re-run the same app. */
+    char* copy = malloc((size_t)len + 1U);
+    if (!copy)
+        return;
+    memcpy(copy, js, (size_t)len);
+    copy[len] = '\0';
+    free(s_src);
+    s_src = copy;
+    s_src_len = len;
+
+    /* Replacing a running app: reset to a fresh context first (full remount). */
+    if (s_app_loaded)
+        er_runtime_reset();
+    if (!er_runtime_load_source(s_src, (size_t)len, "<app>"))
+        er_runtime_show_error();
+    s_app_loaded = true;
 }
 
 /** @brief Clamps @p v to [lo, hi]. */
@@ -185,14 +262,20 @@ int er_web_resize(int screen_w, int screen_h)
     s_w = screen_w;
     s_h = screen_h;
 
-    er_reset();          /* clear scene/anim/input pools so the rebuild does not exhaust the node pool */
-    er_web_demo_scene(); /* W1: rebuild centered at the new size. W2+: re-run the loaded app at the new size. */
+    /* Re-init the runtime at the new screen size so the app re-runs responsively (new screen.width/height) —
+       the on-device responsive-layout path. The engine pools are reset so nodes don't leak across resizes. */
+    er_runtime_shutdown();
+    er_reset();
+    ErRuntimeConfig rt = runtime_cfg(screen_w, screen_h);
+    er_runtime_init(&rt);
+    run_app_or_demo();
     return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE
 void er_web_pump(int dt_ms)
 {
+    er_runtime_pump(); /* drain Promises/microtasks + fire due timers before painting */
     er_commit();
     embedded_renderer_tick(dt_ms > 0 ? (uint32_t)dt_ms : 0U);
     present();
@@ -223,9 +306,18 @@ void er_web_touch(int phase, int x, int y)
 EMSCRIPTEN_KEEPALIVE
 void er_web_reset(void)
 {
-    /* W1: visually clear. W2 wires er_runtime_reset() + reload of the new bundle/pack. */
-    er_software_clear(0xFF000000U);
-    present();
+    /* Hot reload: drop the JS context + reset the engine, then re-run the stored bundle (full remount). */
+    if (s_app_loaded)
+    {
+        er_runtime_reset();
+        if (s_src && !er_runtime_load_source(s_src, (size_t)s_src_len, "<app>"))
+            er_runtime_show_error();
+    }
+    else
+    {
+        er_software_clear(0xFF000000U);
+        present();
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE

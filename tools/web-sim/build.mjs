@@ -14,142 +14,103 @@
  * limitations under the License.
  */
 
-// build.mjs — compile the engine + software + web backends to embedded-react.wasm via Emscripten.
+// build.mjs — compile embedded-react.{js,wasm} via Emscripten + CMake.
 //
-//   node tools/web-sim/build.mjs            build to tools/web-sim/public/
-//   node tools/web-sim/build.mjs --debug    -O0 -g, assertions on
+//   node tools/web-sim/build.mjs            configure (if needed) + build to tools/web-sim/public/
+//   node tools/web-sim/build.mjs --debug    Debug build (-O0 -g, assertions)
+//   node tools/web-sim/build.mjs --clean    wipe the CMake build dir first
 //
-// W1 scope: NO QuickJS. The module renders a static C scene (er_web_demo_scene) to prove the
-// engine -> WASM -> canvas pipeline. Flow A (QuickJS inside WASM, er_web_load_source) lands in W2.
+// Uses the CMake project in tools/web-sim/CMakeLists.txt, which reuses bridges/quickjs (engine + QuickJS-ng +
+// er_runtime + bridge) so the module runs Flow A (QuickJS inside WASM). The .wasm is app-agnostic — built once
+// and shipped prebuilt in the npm package (CI does this on release); consumers never need emsdk. See WASM_SIM.md.
 //
-// Because it runs Flow A later, the .wasm is app-agnostic and is built once and shipped prebuilt in the
-// npm package (CI does this on release) — consumers never need emsdk. See WASM_SIM.md.
+// We pass the Emscripten CMake toolchain file directly (derived from `emcc` on PATH) rather than going through
+// `emcmake`, which on some setups doesn't inject the toolchain and falls back to the native compiler.
 
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, copyFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, '..', '..');
+const BUILD_DIR = resolve(HERE, 'build');
 const OUT_DIR = resolve(HERE, 'public');
 const debug = process.argv.includes('--debug');
+const clean = process.argv.includes('--clean');
+const buildType = debug ? 'Debug' : 'Release';
 
-// Engine sources — kept in lockstep with engine/CMakeLists.txt (EMBEDDED_REACT_SOURCES).
-const ENGINE_SOURCES = [
-  'core/native_renderer.c',
-  'scene/compositor.c',
-  'scene/hit_test.c',
-  'layout/layout_engine.c',
-  'rendering/canvas_bindings.c',
-  'rendering/gradient.c',
-  'rendering/image_registry.c',
-  'rendering/image_scaler.c',
-  'rendering/perf_overlay.c',
-  'rendering/rrect.c',
-  'rendering/scratch_pool.c',
-  'rendering/shadow.c',
-  'rendering/transform.c',
-  'rendering/vector.c',
-  'text/text_renderer.c',
-  'animation/animation.c',
-  'animation/layout_anim.c',
-  'font/font_bitmap.c',
-  'font/font_blob.c',
-  'font/font_data.c',
-  'font/font_registry.c',
-].map((s) => resolve(ROOT, 'engine', s));
+const run = (cmd) => execSync(cmd, { stdio: 'inherit', cwd: HERE });
+const has = (c) => {
+  try {
+    execSync(process.platform === 'win32' ? `where ${c}` : `command -v ${c}`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+};
 
-const SOURCES = [
-  ...ENGINE_SOURCES,
-  resolve(ROOT, 'backends/software/renderer_backend.c'),
-  resolve(ROOT, 'backends/web/renderer_backend.c'),
-];
+/** Pick a generator that doesn't need MSVC: Ninja if present, else MinGW Makefiles on Windows, else default. */
+function pickGenerator() {
+  if (has('ninja')) return 'Ninja';
+  if (process.platform === 'win32') return 'MinGW Makefiles';
+  return null; // CMake default (Unix Makefiles on Linux/macOS)
+}
 
-const INCLUDE_DIRS = [
-  'engine/include',
-  'engine/core',
-  'engine/scene',
-  'engine/layout',
-  'engine/rendering',
-  'engine/text',
-  'engine/animation',
-  'engine/font',
-  'engine/platform',
-  'backends/software',
-  'backends/web',
-].map((d) => `-I${resolve(ROOT, d)}`);
+/** Locate the Emscripten install dir (holds emcc + the CMake toolchain) from $EMSDK or `emcc` on PATH. */
+function emscriptenDir() {
+  if (process.env.EMSDK) {
+    const p = resolve(process.env.EMSDK, 'upstream/emscripten');
+    if (existsSync(p)) return p;
+  }
+  try {
+    const which = process.platform === 'win32' ? 'where emcc' : 'command -v emcc';
+    const first = execSync(which, { encoding: 'utf8' }).split(/\r?\n/).find(Boolean);
+    if (first) return dirname(first.trim());
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
 
-// Engine feature flags — a capable, desktop-class preview (faithful to an ARGB device). Gradient + full
-// transforms + bilinear + AA on; shadows off to keep the module small (toggle later if a demo needs them).
-// Scratch is sized to cover a full-width node on common boards (<= 480 px) under transforms/opacity.
-const DEFINES = [
-  'ERUI_BORDER_AA=1',
-  'ERUI_GRADIENT=1',
-  'ERUI_GRADIENT_RADIAL=1',
-  'ERUI_BILINEAR_SCALE=1',
-  'ERUI_SHADOWS=0',
-  'ERUI_3D_TRANSFORMS=0',
-  'ERUI_ONSCREEN_KEYBOARD=0',
-  'ERUI_TRANSFORMS_FULL=1',
-  'ERUI_FONT_SIZES=7',
-  'ERUI_MAX_NODES=512',
-  'ERUI_MAX_OPACITY_DEPTH=4',
-  'ERUI_SCRATCH_W=480',
-  'ERUI_SCRATCH_H=480',
-].map((d) => `-D${d}`);
+const emDir = emscriptenDir();
+const toolchain = emDir && resolve(emDir, 'cmake/Modules/Platform/Emscripten.cmake');
+if (!toolchain || !existsSync(toolchain)) {
+  console.error('Could not find the Emscripten SDK (emcc / the CMake toolchain) on PATH.');
+  console.error('Install + activate emsdk: https://emscripten.org/docs/getting_started/downloads.html');
+  process.exit(1);
+}
 
-// The flat C ABI the host page calls via cwrap (leading underscore = C symbol name in the .wasm).
-const EXPORTS = [
-  '_er_web_init',
-  '_er_web_demo_scene',
-  '_er_web_resize',
-  '_er_web_pump',
-  '_er_web_touch',
-  '_er_web_reset',
-  '_er_web_framebuffer',
-  '_er_web_fb_width',
-  '_er_web_fb_height',
-  '_malloc',
-  '_free',
-];
+const gen = pickGenerator();
+const genArg = gen ? `-G "${gen}" ` : '';
 
-const EMFLAGS = [
-  '-sMODULARIZE=1',
-  '-sEXPORT_NAME=createEmbeddedReact',
-  '-sALLOW_MEMORY_GROWTH=1',
-  '-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8',
-  `-sEXPORTED_FUNCTIONS=${EXPORTS.join(',')}`,
-  '-sENVIRONMENT=web',
-];
-
-const optFlags = debug
-  ? ['-O0', '-g', '-sASSERTIONS=1', '-sSAFE_HEAP=1']
-  : ['-O2', '-sASSERTIONS=0'];
-
+// A cache from a failed/native configure (wrong compiler) or a different generator can't be reconfigured in
+// place — wipe it. (Also honor an explicit --clean.)
+const cachePath = resolve(BUILD_DIR, 'CMakeCache.txt');
+let needWipe = clean;
+if (!needWipe && existsSync(cachePath)) {
+  const cache = readFileSync(cachePath, 'utf8');
+  const cachedGen = (cache.match(/^CMAKE_GENERATOR:INTERNAL=(.*)$/m) || [])[1];
+  const cachedCC = (cache.match(/^CMAKE_C_COMPILER:[^=]*=(.*)$/m) || [])[1] || '';
+  const genOk = !gen || cachedGen === gen;
+  const ccOk = /emcc/i.test(cachedCC);
+  needWipe = !genOk || !ccOk;
+}
+if (needWipe) {
+  rmSync(BUILD_DIR, { recursive: true, force: true });
+}
 mkdirSync(OUT_DIR, { recursive: true });
-
-const args = [
-  '-std=c99',
-  ...optFlags,
-  ...DEFINES,
-  ...INCLUDE_DIRS,
-  ...SOURCES,
-  ...EMFLAGS,
-  '-o',
-  resolve(OUT_DIR, 'embedded-react.js'),
-];
-
-// emcc is a shim (.bat / shell script) on most installs; run it through the shell as a single command
-// string so PATH lookup + the right extension resolve the same way they do in an interactive terminal.
-const quote = (a) => (/[\s]/.test(a) ? `"${a}"` : a);
-const cmd = ['emcc', ...args].map(quote).join(' ');
-console.log(`emcc -> ${resolve(OUT_DIR, 'embedded-react.{js,wasm}')}${debug ? '  (debug)' : ''}`);
+console.log(`cmake (Emscripten, ${buildType}${gen ? `, ${gen}` : ''}) → ${OUT_DIR}`);
 try {
-  execSync(cmd, { stdio: 'inherit', cwd: ROOT });
+  // Configure once; re-runs are cheap and pick up CMakeLists edits. First configure clones + builds
+  // QuickJS-ng (FetchContent) — a few minutes; subsequent builds are incremental.
+  run(`cmake -S "${HERE}" -B "${BUILD_DIR}" ${genArg}-DCMAKE_TOOLCHAIN_FILE="${toolchain}" -DCMAKE_BUILD_TYPE=${buildType}`);
+  run(`cmake --build "${BUILD_DIR}" -j`);
 } catch (e) {
-  console.error('\nemcc build failed. Is the Emscripten SDK installed and `emcc` on PATH?');
-  console.error('Install: https://emscripten.org/docs/getting_started/downloads.html');
+  console.error('\nbuild failed (see output above).');
   process.exit(e.status || 1);
 }
-console.log('✓ built embedded-react.wasm — open tools/web-sim/index.html via `node tools/web-sim/serve.mjs`');
+
+for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
+  copyFileSync(resolve(BUILD_DIR, f), resolve(OUT_DIR, f));
+}
+console.log('✓ built embedded-react.{js,wasm} — serve with: node tools/web-sim/serve.mjs');

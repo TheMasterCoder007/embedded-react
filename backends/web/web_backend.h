@@ -31,8 +31,8 @@ extern "C"
      * ARGB8888 framebuffer; this layer converts that to canvas-ready RGBA and exposes a small flat ABI the
      * host page drives via cwrap. See WASM_SIM.md for the full design.
      *
-     * Phase W1 implements the pipeline end to end with a *static* scene (er_web_demo_scene). Driving a real
-     * Flow A bundle (er_web_load_source) and asset packs (er_web_load_pack) arrive in W2/W3.
+     * Phase W2 runs a real Flow A bundle (QuickJS-in-WASM) via er_web_load_source on top of the portable
+     * er_runtime host core. Asset packs (er_web_load_pack) and esbuild-watch hot reload arrive in W3.
      */
 
     /**
@@ -46,11 +46,23 @@ extern "C"
     int er_web_init(int screen_w, int screen_h);
 
     /**
-     * @brief Builds a static demo scene (W1 scaffolding to prove engine -> WASM -> canvas).
+     * @brief Builds a static demo scene (W1 fallback when no app bundle has been loaded).
      *
-     * Replaced by er_web_load_source() (Flow A) in W2. Safe to call once after er_web_init().
+     * Safe to call once after er_web_init(). In W2+ the host normally calls er_web_load_source() instead.
      */
     void er_web_demo_scene(void);
+
+    /**
+     * @brief Evaluates a Flow A app bundle (esbuild output) in the QuickJS runtime, replacing any running
+     *        app.
+     *
+     * A private copy is kept so er_web_reset() (hot reload) and er_web_resize() can re-run it. On a JS error
+     * an on-screen redbox is shown. The bytes are UTF-8 source text, not bytecode.
+     *
+     * @param[in] js   App bundle source (UTF-8; not required to be NUL-terminated).
+     * @param[in] len  Byte length of @p js.
+     */
+    void er_web_load_source(const char* js, int len);
 
     /**
      * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).

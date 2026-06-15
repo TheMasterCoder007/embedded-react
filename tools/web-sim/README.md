@@ -7,25 +7,28 @@ that ships in the npm package (`npx embedded-react dev`, eventually) — no nati
 
 See the full design — architecture, exported C ABI, packaging, phasing — in [**WASM_SIM.md**](../../WASM_SIM.md).
 
-## Status — phase W1 (pipeline proven)
+## Status — phase W2 (interactive Flow A)
 
-W1 renders a **static C scene** (`er_web_demo_scene`) to prove the `engine → WASM → canvas` path and the
-ARGB→RGBA swizzle end to end. There is **no QuickJS yet** — the `.wasm` is engine-only (~215 KB). Driving a
-real Flow A bundle (`er_web_load_source`), pointer-driven interactivity, asset packs, and hot reload arrive
-in W2–W4.
+W2 runs a **real Flow A app** (QuickJS-in-WASM) on the portable [`er_runtime`](../../bridges/quickjs/er_runtime.h)
+host core: an esbuild bundle is handed to `er_web_load_source`, pointer events drive it, and `er_web_pump`
+services Promises/timers each frame. The `.wasm` now bundles the engine + QuickJS-ng + the bridge (~1 MB), and
+is **app-agnostic** — the same module runs any bundle. Asset packs (`<Image>`/custom fonts) and esbuild-watch
+hot reload arrive in W3.
 
 ## Build & run
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` on PATH).
 
 ```bash
-node tools/web-sim/build.mjs          # → tools/web-sim/public/embedded-react.{js,wasm}
-node tools/web-sim/serve.mjs          # → http://localhost:3333/
+node tools/web-sim/build.mjs               # → public/embedded-react.{js,wasm}  (first run also fetches+builds QuickJS-ng)
+node tools/web-sim/bundle-app.mjs [demo]   # → public/app.js   (default: music-player; an asset-free demo)
+node tools/web-sim/serve.mjs               # → http://localhost:3333/
 ```
 
-Open the URL. The canvas renders **1:1** (native resolution, no upscale, so it stays crisp). The board size
-defaults to **800×480** and can be changed at runtime from the size selector (presets + a custom W×H) — like
-resizing a responsive web preview; the scene rebuilds to fit. `?screen=WxH` sets the initial size.
+Open the URL — the bundled app runs interactively. The canvas renders **1:1** (native resolution, no upscale,
+so it stays crisp) and fills the viewport, so the browser's device toolbar drives the board size (set it to
+240×320 and the app renders at exactly 240×320, like a responsive web project). The floating gear chip locks
+to a specific panel size or a custom W×H. `?screen=WxH` sets the initial size.
 
 The dev-server port defaults to **3333** (off the usual front-end ports so it won't collide with a Vite/CRA
 server); override with `--port`. `build.mjs --debug` builds `-O0 -g` with assertions for troubleshooting.
@@ -34,9 +37,11 @@ server); override with `--port`. `build.mjs --debug` builds `-O0 -g` with assert
 
 | File | Role |
 |---|---|
-| `build.mjs` | emcc build: engine + `backends/software` + `backends/web` → `public/embedded-react.{js,wasm}` |
+| `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
+| `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/embedded-react.{js,wasm}` |
+| `bundle-app.mjs` | esbuild a demo's JSX → `public/app.js` (the Flow A bundle the page loads) |
 | `serve.mjs` | minimal static server (correct `application/wasm` MIME); grows into the W3 dev server |
-| `index.html` | host page: loads the module, sizes the canvas, rAF pump → `putImageData`, pointer → touch |
+| `index.html` | host page: loads the module, fetches `app.js` → `er_web_load_source`, rAF pump → `putImageData`, pointer → touch |
 | `public/` | build output (git-ignored; built locally or shipped prebuilt by CI) |
 
 The exported C ABI lives in [`backends/web/web_backend.h`](../../backends/web/web_backend.h); the present
