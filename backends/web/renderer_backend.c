@@ -16,6 +16,7 @@
 
 #include "web_backend.h"
 
+#include "er_assets.h"
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "native_renderer.h"
@@ -41,6 +42,7 @@ static int s_h;           /**< Framebuffer height in pixels. */
 static char* s_src;       /**< Private copy of the loaded app bundle (for hot reload + resize); NUL-terminated. */
 static int s_src_len;     /**< Byte length of s_src. */
 static bool s_app_loaded; /**< An app bundle has been evaluated at least once. */
+static uint8_t* s_pack;   /**< Private copy of the latest asset pack (engine references its pixels by pointer). */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -175,6 +177,28 @@ void er_web_load_source(const char* js, int len)
     if (!er_runtime_load_source(s_src, (size_t)len, "<app>"))
         er_runtime_show_error();
     s_app_loaded = true;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int er_web_load_pack(const uint8_t* buf, int len)
+{
+    if (!buf || len <= 0)
+        return 0;
+
+    /* The engine references the pack's pixels + glyph bitmaps by pointer, so keep a private copy alive. */
+    uint8_t* copy = malloc((size_t)len);
+    if (!copy)
+        return 0;
+    memcpy(copy, buf, (size_t)len);
+    if (!er_assets_load_pack(copy, (size_t)len))
+    {
+        free(copy);
+        return 0;
+    }
+    /* The new pack re-registers asset names; after the next reset/reload the old pixels are unreferenced. */
+    free(s_pack);
+    s_pack = copy;
+    return 1;
 }
 
 /** @brief Clamps @p v to [lo, hi]. */

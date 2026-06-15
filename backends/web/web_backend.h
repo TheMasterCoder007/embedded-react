@@ -65,6 +65,21 @@ extern "C"
     void er_web_load_source(const char* js, int len);
 
     /**
+     * @brief Registers a baked ERPK asset pack (images + fonts) so the app's <Image>/custom-font nodes
+     *        resolve.
+     *
+     * Call before er_web_load_source on first load, and again (followed by er_web_reset) when assets change
+     * during a hot reload. A private copy of the pack is kept alive because the engine references its pixels +
+     * glyph bitmaps by pointer.
+     *
+     * @param[in] buf  ERPK pack bytes (as produced by the JS asset baker).
+     * @param[in] len  Byte length of @p buf.
+     *
+     * @return 1 on success, 0 on a malformed pack or allocation failure.
+     */
+    int er_web_load_pack(const uint8_t* buf, int len);
+
+    /**
      * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).
      *
      * Resizes the framebuffer + present buffer, resets the engine pools, and rebuilds the current scene at

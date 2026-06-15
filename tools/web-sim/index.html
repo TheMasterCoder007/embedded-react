@@ -13,7 +13,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>embedded-react — WASM simulator (W1)</title>
     <style>
       :root { color-scheme: dark; }
@@ -30,8 +30,17 @@
         justify-content: center;
         overflow: auto;
       }
-      /* 1:1 — backing store equals the board size, shown at native resolution (no upscale → crisp). */
-      canvas { image-rendering: pixelated; display: block; }
+      /* 1:1 — backing store equals the board size, shown at native resolution (no upscale → crisp).
+         touch-action:none — give the engine raw pointer events: the browser must not treat a drag as a scroll
+         (which would swallow pointermove and break drags) or allow double-tap-zoom on the canvas. */
+      canvas {
+        image-rendering: pixelated;
+        display: block;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
 
       /* Floating, collapsible controls — position:fixed so they overlay the render area without taking any
          layout space (the framebuffer always gets the full viewport). Expanded, it wraps within the viewport
@@ -159,6 +168,7 @@
         const init = Module.cwrap('er_web_init', 'number', ['number', 'number']);
         const demoScene = Module.cwrap('er_web_demo_scene', null, []);
         const loadSource = Module.cwrap('er_web_load_source', null, ['number', 'number']);
+        const loadPack = Module.cwrap('er_web_load_pack', 'number', ['number', 'number']);
         const resize = Module.cwrap('er_web_resize', 'number', ['number', 'number']);
         const pump = Module.cwrap('er_web_pump', null, ['number']);
         const touch = Module.cwrap('er_web_touch', null, ['number', 'number', 'number']);
@@ -190,23 +200,44 @@
           return;
         }
 
-        // Load the Flow A app bundle (esbuild output) and run it in the QuickJS runtime. Falls back to the
-        // built-in static scene if no app.js is served. The bundle is copied into wasm memory, then freed.
+        // Copy bytes into wasm memory, hand the pointer to a C function, then free.
+        const withWasmBytes = (bytes, fn) => {
+          const ptr = Module._malloc(bytes.length);
+          Module.HEAPU8.set(bytes, ptr);
+          fn(ptr, bytes.length);
+          Module._free(ptr);
+        };
+        const fetchBytes = async (url) => {
+          const res = await fetch(url, { cache: 'no-store' });
+          return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+        };
+
+        // Load the asset pack (if any) BEFORE the bundle so <Image>/custom-font nodes resolve, then run the
+        // Flow A app in the QuickJS runtime. Re-runnable: the dev server calls this on every hot reload, and
+        // er_web_load_source resets + re-evaluates (useState is preserved by the persist transform). Falls
+        // back to the built-in static scene if no app.js is served.
         const loadApp = async () => {
-          try {
-            const res = await fetch('./public/app.js', { cache: 'no-store' });
-            if (!res.ok) throw new Error(`app.js ${res.status}`);
-            const bytes = new Uint8Array(await res.arrayBuffer());
-            const ptr = Module._malloc(bytes.length);
-            Module.HEAPU8.set(bytes, ptr);
-            loadSource(ptr, bytes.length);
-            Module._free(ptr);
-          } catch (e) {
-            console.warn('no app.js — showing the built-in demo scene', e);
+          const pack = await fetchBytes('./public/assets.pack');
+          if (pack) withWasmBytes(pack, loadPack);
+          const app = await fetchBytes('./public/app.js');
+          if (!app) {
+            console.warn('no app.js — showing the built-in demo scene');
             demoScene();
+            return;
           }
+          withWasmBytes(app, loadSource);
         };
         loadApp();
+
+        // Hot reload (W3): the dev server (dev.mjs) pushes a Server-Sent "reload" event on every rebuild;
+        // re-load the new pack + bundle. Harmless when served statically (the endpoint just isn't there).
+        try {
+          const es = new EventSource('/reload');
+          es.onmessage = () => loadApp();
+          es.onerror = () => {}; /* static serve.mjs has no /reload — ignore the retry noise */
+        } catch {
+          /* EventSource unavailable — static mode, no hot reload */
+        }
 
         let w = 0;
         let h = 0;
@@ -279,6 +310,7 @@
           return [x, y];
         };
         canvas.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
           down = true;
           canvas.setPointerCapture(e.pointerId);
           touch(0, ...toFb(e));

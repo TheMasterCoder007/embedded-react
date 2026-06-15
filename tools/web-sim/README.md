@@ -7,31 +7,38 @@ that ships in the npm package (`npx embedded-react dev`, eventually) — no nati
 
 See the full design — architecture, exported C ABI, packaging, phasing — in [**WASM_SIM.md**](../../WASM_SIM.md).
 
-## Status — phase W2 (interactive Flow A)
+## Status — phase W3 (hot-reload dev loop)
 
-W2 runs a **real Flow A app** (QuickJS-in-WASM) on the portable [`er_runtime`](../../bridges/quickjs/er_runtime.h)
-host core: an esbuild bundle is handed to `er_web_load_source`, pointer events drive it, and `er_web_pump`
-services Promises/timers each frame. The `.wasm` now bundles the engine + QuickJS-ng + the bridge (~1 MB), and
-is **app-agnostic** — the same module runs any bundle. Asset packs (`<Image>`/custom fonts) and esbuild-watch
-hot reload arrive in W3.
+W3 adds the **dev server** (`dev.mjs`): esbuild `--watch` rebundles on every save, bakes imported images/fonts
+into an ERPK pack (loaded via `er_web_load_pack`), and pushes a Server-Sent reload event so the open page
+re-loads the new bundle/pack with **no wasm rebuild** — the React Native inner loop in a browser. `useState`
+survives the reload via the same Babel persist transform the SDL simulator uses. (W2 brought interactive Flow A
+on `er_runtime`; the `.wasm` bundles engine + QuickJS-ng + bridge, ~1.2 MB, and is app-agnostic.)
 
-## Build & run
+## Develop (hot reload)
 
-Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` on PATH).
+Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` on PATH) once
+to build the module; after that, day-to-day dev is just `dev.mjs`.
 
 ```bash
-node tools/web-sim/build.mjs               # → public/embedded-react.{js,wasm}  (first run also fetches+builds QuickJS-ng)
-node tools/web-sim/bundle-app.mjs [demo]   # → public/app.js   (default: music-player; an asset-free demo)
-node tools/web-sim/serve.mjs               # → http://localhost:3333/
+node tools/web-sim/build.mjs          # once → public/embedded-react.{js,wasm} (also fetches+builds QuickJS-ng)
+node tools/web-sim/dev.mjs [demo]     # watch + bake assets + hot reload → http://localhost:3333/  (default: music-player)
 ```
 
-Open the URL — the bundled app runs interactively. The canvas renders **1:1** (native resolution, no upscale,
-so it stays crisp) and fills the viewport, so the browser's device toolbar drives the board size (set it to
-240×320 and the app renders at exactly 240×320, like a responsive web project). The floating gear chip locks
-to a specific panel size or a custom W×H. `?screen=WxH` sets the initial size.
+Open the URL and edit the demo's JSX (or an image/font) — the page hot-reloads on save, preserving component
+state. The canvas renders **1:1** (crisp, no upscale) and fills the viewport, so the browser's device toolbar
+drives the board size (set it to 240×320 and the app renders at exactly 240×320, like a responsive web
+project). The floating gear chip locks to a specific panel size or a custom W×H. `?screen=WxH` sets the
+initial size. Port defaults to **3333** (override with `--port`).
 
-The dev-server port defaults to **3333** (off the usual front-end ports so it won't collide with a Vite/CRA
-server); override with `--port`. `build.mjs --debug` builds `-O0 -g` with assertions for troubleshooting.
+For a **static** preview of an already-built bundle (no watch), use `bundle-app.mjs` + `serve.mjs`:
+
+```bash
+node tools/web-sim/bundle-app.mjs [demo]   # one-shot → public/app.js
+node tools/web-sim/serve.mjs               # static server → http://localhost:3333/
+```
+
+`build.mjs --debug` builds `-O0 -g` with assertions for troubleshooting.
 
 ## Layout
 
@@ -39,10 +46,11 @@ server); override with `--port`. `build.mjs --debug` builds `-O0 -g` with assert
 |---|---|
 | `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
 | `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/embedded-react.{js,wasm}` |
-| `bundle-app.mjs` | esbuild a demo's JSX → `public/app.js` (the Flow A bundle the page loads) |
-| `serve.mjs` | minimal static server (correct `application/wasm` MIME); grows into the W3 dev server |
-| `index.html` | host page: loads the module, fetches `app.js` → `er_web_load_source`, rAF pump → `putImageData`, pointer → touch |
-| `public/` | build output (git-ignored; built locally or shipped prebuilt by CI) |
+| `dev.mjs` | dev server: esbuild `--watch` + asset baking + SSE hot reload (the main dev loop) |
+| `bundle-app.mjs` | one-shot esbuild a demo's JSX → `public/app.js` (for a static preview) |
+| `serve.mjs` | minimal static server (correct MIME); for previewing a prebuilt bundle |
+| `index.html` | host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData`, pointer → touch, SSE reload |
+| `public/` | build + bundle output (git-ignored; the wasm is shipped prebuilt by CI) |
 
 The exported C ABI lives in [`backends/web/web_backend.h`](../../backends/web/web_backend.h); the present
 layer (ARGB→RGBA) is [`backends/web/renderer_backend.c`](../../backends/web/renderer_backend.c).

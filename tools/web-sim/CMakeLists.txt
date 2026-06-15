@@ -53,7 +53,7 @@ target_link_libraries(websim PRIVATE er-bridge-quickjs)
 
 # The flat C ABI the host page drives via cwrap (leading underscore = C symbol in the wasm).
 set(ER_WEB_EXPORTS
-        "_er_web_init,_er_web_demo_scene,_er_web_load_source,_er_web_resize,_er_web_pump,_er_web_touch,_er_web_reset,_er_web_framebuffer,_er_web_fb_width,_er_web_fb_height,_malloc,_free")
+        "_er_web_init,_er_web_demo_scene,_er_web_load_source,_er_web_load_pack,_er_web_resize,_er_web_pump,_er_web_touch,_er_web_reset,_er_web_framebuffer,_er_web_fb_width,_er_web_fb_height,_malloc,_free")
 
 target_link_options(websim PRIVATE
         "-sMODULARIZE=1"
