@@ -51,7 +51,7 @@ dev server/CLI. No new rendering, reconciler, asset, or reload logic.
 ```
   esbuild --watch  ─►  app.bundle.js  +  assets.pack
         │                      │
-   dev server  ◄── websocket ──►  browser page
+   dev server  ──── SSE reload ──►  browser page
    (Node)                          │  loads
                                    ▼
                           embedded-react.wasm  (built once, app-agnostic)
@@ -110,11 +110,14 @@ framebuffer → `putImageData`. Wires `pointerdown/move/up` → `er_web_touch`, 
 shows the redbox on a load error. (HEAPU8 views detach if memory grows — re-create the view each present.)
 
 ### 4. Dev server + CLI
-Extend `sim.mjs`: serve the page / `.wasm` / bundle / pack; on an esbuild rebuild, bake assets → pack and
-push a websocket **"reload"** → the page calls `er_web_reset()` + reloads the new bundle (+ pack). Wrap as:
+The shared core `bridges/quickjs/js/sim-server.mjs`: serve the page / `.wasm` / bundle / pack; on an esbuild
+rebuild, bake assets → pack and push a **Server-Sent Events** `"reload"` (SSE — one-way server→client, so no
+WebSocket dependency) → the page re-loads the new bundle (+ pack). Both the repo loop (`tools/web-sim/dev.mjs`)
+and the shipped CLI (`bridges/quickjs/js/cli.mjs`) wrap it:
 
 ```
-npx embedded-react dev [--screen 240x320] [--port 5173] [--device cyd]
+npx embedded-react dev [entry] [--port 3333]      # watch + hot reload
+npx embedded-react export [entry] [--out dir]     # a static, server-free playground
 ```
 
 This is also the **first consumer-facing CLI** (it operates on the user's cwd, unlike today's repo-bound
@@ -150,24 +153,30 @@ consumers need no Emscripten:
 
 ---
 
-## Phasing
-- **W1** — `backends/web` present layer and the Emscripten build; render a *static* scene to a canvas to prove
-  the engine→WASM→canvas pipeline (and the ARGB→RGBA swizzle) end to end.
-- **W2** — wire `er_runtime`; `er_web_load_source` a real bundle (Flow A); pointer→touch → interactive.
-- **W3** — dev server + esbuild watch + websocket hot-reload + the asset pack.
-- **W4** — `npx embedded-react dev` CLI; CI builds + ships the prebuilt `.wasm` in the npm package.
-- **W5 (optional)** — RGB565 preview, device-frame chrome, a static "share this UI" export (a web
-  playground / docs embeds).
+## Phasing — W1–W5 BUILT
+- **W1 ✅** — `backends/software` CPU compositor + `backends/web` present layer (ARGB→RGBA swizzle) + the
+  Emscripten build; renders a static scene to a canvas, proving the engine→WASM→canvas pipeline.
+- **W2 ✅** — `er_runtime` wired (QuickJS-in-WASM); `er_web_load_source` runs a real Flow A bundle;
+  pointer→touch → interactive. Build moved to CMake + the Emscripten toolchain (reuses `bridges/quickjs`).
+- **W3 ✅** — the dev server (`tools/web-sim/dev.mjs`): esbuild `--watch`, the ERPK asset pack
+  (`er_web_load_pack`), and hot reload over **Server-Sent Events** (SSE — a WebSocket would need an extra
+  dependency; SSE is one-way server→client, which is all reload needs). `useState` survives via the Babel
+  persist transform.
+- **W4 ✅** — `npx embedded-react dev` (and `export`), the consumer CLI in the npm package; the dev-server core
+  is shared (`bridges/quickjs/js/sim-server.mjs`); CI builds + ships the prebuilt `.wasm`. **Decision:** the
+  dev/export CLI lives in the **main `embedded-react` package** (it's a dev/authoring toolchain, not the device
+  runtime); the project **scaffolder** is a separate `create-embedded-react` package (`npm create embedded-react`).
+- **W5 ✅** (RGB565 preview deferred) — device-frame chrome (a cosmetic bezel toggle) and a static
+  `embedded-react export` playground (a self-contained folder, no server).
 
-## Risks / open questions
-- **QuickJS on WASM** — heap/stack tuning (mitigated: `er_runtime` already parameterizes both); validate the
-  Promise/timer pump under `requestAnimationFrame`.
-- **emsdk in CI** — adds an `mymindstorm/setup-emsdk` (or similar) step to the release workflow; first-time
-  toolchain caching.
-- **Pixel format** — validate the ARGB→RGBA swizzle against a desktop screenshot (a good first parity test).
-- **`.wasm` size** — engine + QuickJS ≈ a few hundred KB to ~1 MB; fine for a dev tool, but worth tracking.
-- **Decision deferred:** whether the dev server/CLI lives in the main `embedded-react` package or a separate
-  `create-embedded-react` / `@embedded-react/dev` package (ties into the broader consumer-CLI productization).
+## Resolved risks / notes
+- **QuickJS on WASM** — runs fine; `-sSTACK_SIZE=4MB` gives the parser/eval headroom above QuickJS's own guard;
+  the Promise/timer pump is driven per-frame from the rAF loop via `er_web_pump` → `er_runtime_pump`.
+- **emsdk in CI** — `mymindstorm/setup-emsdk` + `node tools/web-sim/build.mjs`, gated on `PUBLISH_NPM`, before
+  the npm publish step (`release.yml`). `build.mjs` derives the toolchain from `$EMSDK`/`emcc`.
+- **Pixel format** — the ARGB→RGBA swizzle is verified (a 0xAARRGGBB background renders as the exact `R,G,B`
+  bytes; confirmed against native renders).
+- **`.wasm` size** — ~1.2 MB (engine + QuickJS-ng + bridge). Fine for a dev tool.
 
 ---
 

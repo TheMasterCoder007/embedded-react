@@ -3,7 +3,7 @@
 The browser dev loop for embedded-react front-ends: the engine compiled to WebAssembly, rendering through
 the [software backend](../../backends/software/) into a `<canvas>`. A React app authored against
 `embedded-react` runs **unmodified in a browser**, pixel-accurate to an ARGB device. This is the simulator
-that ships in the npm package (`npx embedded-react dev`, eventually) — no native toolchain for consumers.
+that ships in the npm package as `npx embedded-react dev` — no native toolchain for consumers.
 
 See the full design — architecture, exported C ABI, packaging, phasing — in [**WASM_SIM.md**](../../WASM_SIM.md).
 
