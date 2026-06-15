@@ -1,0 +1,40 @@
+{
+  "name": "create-embedded-react",
+  "version": "0.1.1",
+  "description": "Scaffold a new embedded-react app — `npm create embedded-react@latest`.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Cory Lamming",
+  "homepage": "https://github.com/TheMasterCoder007/embedded-react#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheMasterCoder007/embedded-react.git",
+    "directory": "create-embedded-react"
+  },
+  "bugs": {
+    "url": "https://github.com/TheMasterCoder007/embedded-react/issues"
+  },
+  "keywords": [
+    "create",
+    "scaffold",
+    "template",
+    "embedded-react",
+    "react-native",
+    "embedded",
+    "mcu",
+    "esp32"
+  ],
+  "bin": {
+    "create-embedded-react": "./index.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.mjs",
+    "template/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ]
+}

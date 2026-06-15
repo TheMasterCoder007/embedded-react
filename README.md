@@ -171,9 +171,17 @@ The polished `npx create-embedded-react` / `npm run flash` CLI wrapper is still 
 
 ## Install
 
-The whole project ships at **one lockstep version** across four channels (all the same `vX.Y.Z`):
+**Start a new app** (scaffolds a project and opens the browser simulator with hot reload):
 
-**npm** — the JSX component API + reconciler (Flow A authoring) and the Flow B AOT compiler:
+```
+npm create embedded-react@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+The whole project ships at **one lockstep version** across the channels below (all the same `vX.Y.Z`):
+
+**npm** — the JSX component API + reconciler (Flow A authoring), the Flow B AOT compiler, and the WASM
+simulator CLI (`npx embedded-react dev`):
 
 ```
 npm install embedded-react

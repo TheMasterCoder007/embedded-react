@@ -19,7 +19,8 @@ React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scen
 > **`npx embedded-react dev` works in your own project** — it runs the WASM simulator on your app with hot
 > reload, no clone, and no native toolchain (the simulator `.wasm` ships prebuilt in this package). The other
 > end-to-end CLIs below (`npm run pack`/`build`/AOT, running on a board) still operate on the repo's `demos/`
-> and `examples/`; a standalone project scaffolder (`create-embedded-react`) is still to come (see Status).
+> and `examples/`. To start a **fresh standalone project** in your own directory, use the scaffolder:
+> `npm create embedded-react@latest my-app`.
 
 ## What an app imports
 
@@ -262,5 +263,6 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   [SIMULATOR.md in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/SIMULATOR.md).
 - ✅ **`npx embedded-react dev`** — the WASM simulator runs your app in a browser with hot reload, from your
   own project directory, with the engine `.wasm` shipped prebuilt (no Emscripten for consumers). See above.
-- ⏳ **`create-embedded-react` scaffold** — the project-init CLI (a new app skeleton in your own directory) is
-  still to come.
+- ✅ **`npm create embedded-react@latest my-app`** — scaffolds a fresh standalone project (a styled card with a
+  pulsing logo + a `count is N` button) wired for `npm run dev` (simulator) and `npm run export` (static
+  playground). Published as the `create-embedded-react` package.
