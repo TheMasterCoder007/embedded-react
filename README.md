@@ -88,8 +88,9 @@ In-progress project. Here's what is **verified working** vs. still scaffolded:
 | **C engine** (`engine/`) | Working | Scene graph, Yoga flexbox layout, UTF-8 text + font system, anti-aliased rounded rects, borders, shadows, 2D/3D transforms, opacity compositing, image scaling + tint, gradients, the `Animated` value engine, zIndex-aware multitouch hit-testing, ScrollView momentum, and banded RGB565 rendering for low-RAM boards. Host-side CTest suites pass (layout, text, rendering, animation, input, scroll, resources). |
 | **Flow A** — React on QuickJS (`bridges/quickjs/`) | Working | End-to-end: `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, build-time image/font bakers, ERPK asset container. Runs on the desktop host and on ESP32-S3 hardware. |
 | **Flow B** — AOT JSX→C (`bridges/quickjs/js/aot/`) | Working | Compiles `useState`, `setState` (incl. updater form), events, conditionals, `.map` lists, child components, refs/`useCallback`/`useMemo`, dynamic styles, the full `Animated` API (timing/spring/decay/sequence/parallel/loop), and static + state-driven `Svg`. Runs on desktop **and on a no-PSRAM ESP32** (Cheap Yellow Display). |
-| **Backends** (`backends/`) | Partial | `sdl` (desktop), `esp32-lcd` (RGB parallel), and `esp32-spi-lcd` (banded RGB565) are implemented and run on hardware. `dma2d`, `software`, `opengl`, `framebuffer`, and `web` are stubs. |
-| **Simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop: file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation across reloads. See [`SIMULATOR.md`](SIMULATOR.md). |
+| **Backends** (`backends/`) | Partial | `sdl` (desktop), `esp32-lcd` (RGB parallel), and `esp32-spi-lcd` (banded RGB565) run on hardware; `software` (a CPU ARGB compositor) and `web` (the WASM present layer) power the browser simulator. `dma2d`, `opengl`, and `framebuffer` are stubs. |
+| **SDL simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop (maintainer tool): file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation. See [`SIMULATOR.md`](SIMULATOR.md). |
+| **WASM simulator** (`tools/web-sim/`) | Working | Browser dev loop — the engine compiled to WebAssembly (Flow A in QuickJS), with hot reload, a responsive/device-frame preview, and a static export. Shipped to consumers as `npx embedded-react dev`. See [`WASM_SIM.md`](WASM_SIM.md). |
 | **Examples** (`examples/`) | Partial | Four run end-to-end (below). `stm32h7`, `raspberry-pi`, and others are READMEs only. |
 
 If you want a finished, drop-in embedded UI framework today, this isn't that yet. If you want to follow along — or contribute to the engine, a backend, or the toolchain — read on.
@@ -124,7 +125,10 @@ backends/    Hardware adapters. One folder per rendering API / peripheral. A bac
 bridges/     Frontends that drive the engine.
                quickjs/        Flow A: React reconciler + NativeUI C bridge over QuickJS.
                quickjs/js/aot/ Flow B: the JSX→C ahead-of-time compiler.
-               quickjs/js/     The toolchain — bundler, asset bakers, simulator, scaffold.
+               quickjs/js/     The npm package (`embedded-react`) — components + reconciler,
+                               bundler, asset bakers, and the `dev`/`export` CLI (cli.mjs).
+
+create-embedded-react/  The `npm create embedded-react` scaffolder + starter template.
 
 demos/       JSX demo apps (thermostat, music-player) written against the public
              `embedded-react` API. Each compiles through both Flow A and Flow B.
@@ -132,7 +136,8 @@ demos/       JSX demo apps (thermostat, music-player) written against the public
 examples/    End-to-end host integrations — one engine + one backend + one flow,
              packaged for a specific board (linux, linux-aot, esp32-s3, esp32-2432s028r).
 
-tools/       Developer tooling, including the hot-reload simulator.
+tools/       Developer tooling — the SDL simulator (`simulator/`) and the WASM
+             simulator build + dev server (`web-sim/`).
 ```
 
 Each top-level folder has its own README. Engine contributors start with
@@ -159,21 +164,33 @@ From `bridges/quickjs/js/` (pick a demo via the build scripts):
 npm run build      # Flow A: bundle JSX → QuickJS bytecode + baked assets
 npm run pack       # Flow A: pack an ERPK app container (bytecode + assets + CRC)
 npm run aot        # Flow B: compile JSX → app.gen.c / app.gen.h
-npm run sim        # hot-reload simulator (file-watch, redbox, state preservation)
-npm run create     # scaffold a new app
+npm run sim        # SDL hot-reload simulator (file-watch, redbox, state preservation)
+npm run create     # scaffold a new in-repo demo (demos/<name>)
 npm test           # unit tests (vitest)
 npm run parity     # verify Flow A / Flow B render parity
 ```
 
-The polished `npx create-embedded-react` / `npm run flash` CLI wrapper is still aspirational — today you drive the flows through the scripts above and run an example target.
+The **browser** simulator + the consumer-facing CLI live in the npm package: `npx embedded-react dev` (hot
+reload) and `npx embedded-react export` (static playground); `npm create embedded-react` scaffolds a fresh
+standalone project. To build the simulator `.wasm` locally, `node tools/web-sim/build.mjs` (needs the Emscripten
+SDK). A device `flash`/upload wrapper is still aspirational — today you flash through each example's board
+toolchain.
 
 ---
 
 ## Install
 
-The whole project ships at **one lockstep version** across four channels (all the same `vX.Y.Z`):
+**Start a new app** (scaffolds a project and opens the browser simulator with hot reload):
 
-**npm** — the JSX component API + reconciler (Flow A authoring) and the Flow B AOT compiler:
+```
+npm create embedded-react@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+The whole project ships at **one lockstep version** across the channels below (all the same `vX.Y.Z`):
+
+**npm** — the JSX component API + reconciler (Flow A authoring), the Flow B AOT compiler, and the WASM
+simulator CLI (`npx embedded-react dev`):
 
 ```
 npm install embedded-react

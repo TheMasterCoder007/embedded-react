@@ -80,6 +80,13 @@ jobs:
           npm install -g npm@latest   # ensure an npm with OIDC trusted-publishing support
           npm publish --provenance --access public
 
+      # The scaffolder (`npm create embedded-react`). Lockstep version; needs its OWN trusted publisher
+      # configured on npmjs.com (package create-embedded-react → Settings → Trusted Publisher → this workflow).
+      - name: Publish create-embedded-react to npm
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        working-directory: create-embedded-react
+        run: npm publish --provenance --access public
+
       # --- Channel 2: ESP-IDF Component Registry (the engine/ component) ---
       - name: Publish to the ESP Component Registry
         if: ${{ env.IDF_COMPONENT_API_TOKEN != '' }}

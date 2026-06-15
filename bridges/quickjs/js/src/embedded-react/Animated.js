@@ -146,6 +146,11 @@ export function sequence(animations) {
   let stopped = false;
   return {
     start(onComplete) {
+      // Reset the per-run state so the sequence is restartable — e.g., each iteration of Animated.loop calls
+      // start() again. Without this, `current` stays at animations.length from the previous run, so the next
+      // start() completes instantly and the loop re-enters synchronously → stack overflow.
+      current = 0;
+      stopped = false;
       const done = once(onComplete);
       const next = (result) => {
         if (stopped || !result || result.finished === false) {

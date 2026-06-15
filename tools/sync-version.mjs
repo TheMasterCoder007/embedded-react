@@ -94,6 +94,7 @@ const setJsonVersion = (text) => {
 };
 
 apply('bridges/quickjs/js/package.json', setJsonVersion, jsonVersion);
+apply('create-embedded-react/package.json', setJsonVersion, jsonVersion);
 apply('library.json', setJsonVersion, jsonVersion);
 
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
@@ -122,7 +123,7 @@ apply(
 // LICENSE and NOTICE. The repo-root copies are the source of truth; mirror them into each package dir so
 // `npm pack` / `compote upload` / `pio publish` include them (and never drift — --check verifies).
 const LEGAL_FILES = ['LICENSE', 'NOTICE'];
-const PACKAGE_DIRS = ['bridges/quickjs/js', 'engine'];
+const PACKAGE_DIRS = ['bridges/quickjs/js', 'create-embedded-react', 'engine'];
 for (const dir of PACKAGE_DIRS) {
   for (const f of LEGAL_FILES) {
     const want = readFileSync(resolve(ROOT, f), 'utf8');

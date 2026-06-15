@@ -11,6 +11,29 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Added
+
+- **WASM simulator** — the engine compiled to WebAssembly, running React (Flow A on
+  QuickJS) in the browser. A CPU compositor (`backends/software`) renders into an
+  ARGB framebuffer that a canvas present layer (`backends/web`) shows; pointer events
+  drive it, imported images/fonts are baked into an asset pack, the canvas is 1:1 and
+  responsive (with optional device-frame chrome), and edits hot-reload over
+  Server-Sent Events. The prebuilt `.wasm` ships in the npm package, so consumers need
+  no Emscripten. See [WASM_SIM.md](WASM_SIM.md).
+- **`embedded-react` CLI** — `npx embedded-react dev [entry]` runs the simulator on your
+  own project with hot reload (`useState` preserved); `npx embedded-react export` builds
+  a self-contained static playground (no server) for sharing or docs embeds.
+- **`create-embedded-react`** — `npm create embedded-react@latest my-app` scaffolds a
+  fresh standalone project (a styled starter: a pulsing logo + a `count is N` button),
+  wired for `npm run dev` and `npm run export`. Published as a second lockstep package.
+
+### Fixed
+
+- `Animated.sequence` was not restartable: its internal step index was never reset, so
+  `Animated.loop(Animated.sequence([…]))` (the ping-pong pattern) re-entered synchronously
+  on the second iteration and overflowed the stack, freezing the animation. Sequences now
+  reset their state on each `start()`.
+
 ## [0.1.1] - 2026-06-14
 
 ### Fixed

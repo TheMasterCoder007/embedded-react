@@ -1,0 +1,14 @@
+{
+  "name": "__APP_NAME__",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "embedded-react dev",
+    "export": "embedded-react export --out sim-export"
+  },
+  "dependencies": {
+    "embedded-react": "__ER_VERSION__",
+    "react": "18.3.1"
+  }
+}

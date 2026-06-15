@@ -1,0 +1,145 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Embedded React">
+  <defs>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="traceGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="coreGlow" x="-160%" y="-160%" width="420%" height="420%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#0d2035"/>
+      <stop offset="100%" stop-color="#040b16"/>
+    </radialGradient>
+    <radialGradient id="substrate" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#122034"/>
+      <stop offset="55%"  stop-color="#0a1828"/>
+      <stop offset="100%" stop-color="#060f1e"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ── Background ── -->
+  <circle cx="100" cy="100" r="97" fill="url(#bg)"/>
+  <circle cx="100" cy="100" r="97" fill="none" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.14"/>
+
+  <!-- ════════════════════════
+       16 QFN PADS · 22.5° pitch
+       ════════════════════════ -->
+  <g fill="#38BDF8" fill-opacity="0.85" filter="url(#glow)">
+    <g transform="translate(100,100) rotate(0)">     <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(22.5)">  <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(45)">    <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(67.5)">  <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(90)">    <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(112.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(135)">   <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(157.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(180)">   <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(202.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(225)">   <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(247.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(270)">   <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(292.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(315)">   <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+    <g transform="translate(100,100) rotate(337.5)"> <rect x="72" y="-5.5" width="11.5" height="11" rx="1.8"/></g>
+  </g>
+
+  <!-- ── Chip body ── -->
+  <circle cx="100" cy="100" r="73"
+          fill="url(#substrate)"
+          stroke="#38BDF8" stroke-width="1.6" stroke-opacity="0.6"
+          filter="url(#glow)"/>
+
+  <!-- Pin-1 silkscreen dot -->
+  <circle cx="148" cy="52" r="2.6" fill="#38BDF8" fill-opacity="0.65"/>
+
+  <!-- ── Hub ring ── -->
+  <circle cx="100" cy="100" r="22"
+          fill="none" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.35"
+          filter="url(#traceGlow)"/>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       PCB TRACES — all from center (100,100)
+
+       CENTER / MIDDLE unchanged.
+
+       OUTER — 3px initial kick (half of previous 6px):
+         horizontal runs sit at y=97 (top) and y=103 (bottom)
+         giving 6px clearance between them.
+         All turns remain exactly 45°.
+  ════════════════════════════════════════════════════════════════ -->
+
+  <g stroke="#38BDF8" stroke-width="1.3" stroke-linecap="round"
+     stroke-linejoin="round" fill="none"
+     stroke-opacity="0.78" filter="url(#traceGlow)">
+
+    <!-- CENTER -->
+    <line x1="100" y1="100" x2="100" y2="65"/>
+    <line x1="100" y1="100" x2="100" y2="135"/>
+
+    <!-- MIDDLE LEFT -->
+    <polyline points="100,100 76,76 76,65"/>
+    <polyline points="100,100 76,124 76,135"/>
+
+    <!-- MIDDLE RIGHT -->
+    <polyline points="100,100 124,76 124,65"/>
+    <polyline points="100,100 124,124 124,135"/>
+
+    <!-- OUTER LEFT
+         top:    NW 3px → W → NW  horizontal at y=97  via (58,79)
+         bottom: SW 3px → W → SW  horizontal at y=103 via (58,121) -->
+    <polyline points="100,100 97,97 76,97 58,79"/>
+    <polyline points="100,100 97,103 76,103 58,121"/>
+
+    <!-- OUTER RIGHT
+         top:    NE 3px → E → NE  horizontal at y=97  via (142,79)
+         bottom: SE 3px → E → SE  horizontal at y=103 via (142,121) -->
+    <polyline points="100,100 103,97 124,97 142,79"/>
+    <polyline points="100,100 103,103 124,103 142,121"/>
+
+  </g>
+
+  <!-- ════════════════════════════════════════
+       VIA PADS — annular ring + centre dot
+       ════════════════════════════════════════ -->
+  <g filter="url(#traceGlow)">
+    <g fill="none" stroke="#38BDF8" stroke-width="1.2" stroke-opacity="0.72">
+      <!-- top -->
+      <circle cx="58"  cy="79"  r="3.5"/>
+      <circle cx="76"  cy="65"  r="3.5"/>
+      <circle cx="100" cy="65"  r="3.5"/>
+      <circle cx="124" cy="65"  r="3.5"/>
+      <circle cx="142" cy="79"  r="3.5"/>
+      <!-- bottom -->
+      <circle cx="58"  cy="121" r="3.5"/>
+      <circle cx="76"  cy="135" r="3.5"/>
+      <circle cx="100" cy="135" r="3.5"/>
+      <circle cx="124" cy="135" r="3.5"/>
+      <circle cx="142" cy="121" r="3.5"/>
+    </g>
+    <g fill="#38BDF8" fill-opacity="0.82">
+      <!-- top -->
+      <circle cx="58"  cy="79"  r="1.5"/>
+      <circle cx="76"  cy="65"  r="1.5"/>
+      <circle cx="100" cy="65"  r="1.5"/>
+      <circle cx="124" cy="65"  r="1.5"/>
+      <circle cx="142" cy="79"  r="1.5"/>
+      <!-- bottom -->
+      <circle cx="58"  cy="121" r="1.5"/>
+      <circle cx="76"  cy="135" r="1.5"/>
+      <circle cx="100" cy="135" r="1.5"/>
+      <circle cx="124" cy="135" r="1.5"/>
+      <circle cx="142" cy="121" r="1.5"/>
+    </g>
+  </g>
+
+  <!-- ── Core / CPU nucleus ── -->
+  <circle cx="100" cy="100" r="15" fill="#38BDF8" fill-opacity="0.06"/>
+  <circle cx="100" cy="100" r="8"  fill="#38BDF8" filter="url(#coreGlow)"/>
+  <circle cx="97.5" cy="97.5" r="2.5" fill="white" fill-opacity="0.38"/>
+</svg>
