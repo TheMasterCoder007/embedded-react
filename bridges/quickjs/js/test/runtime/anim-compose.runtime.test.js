@@ -108,6 +108,32 @@ const lin = { duration: 100, easing: Easing.linear };
   check(done && done.finished === true, 'loop completes after the configured iterations');
 }
 
+// --- loop of a SEQUENCE re-starts it each iteration (regression) ------------------------------
+// The sequence's internal `current` index must reset on every start(); otherwise the 2nd iteration
+// finds current === length, completes instantly, and loop re-enters synchronously → stack overflow.
+{
+  const v = new Animated.Value(0);
+  let done = null;
+  Animated.loop(
+    Animated.sequence([
+      Animated.timing(v, { toValue: 100, ...lin }),
+      Animated.timing(v, { toValue: 0, ...lin }),
+    ]),
+    { iterations: 3 },
+  ).start((r) => (done = r));
+
+  // Each iteration is two 100ms legs; one tick fires one completion, so tick per leg.
+  NativeUI.tick(110);
+  NativeUI.tick(110); // iteration 1 done
+  check(done === null, 'looped sequence still running after iteration 1');
+  NativeUI.tick(110);
+  NativeUI.tick(110); // iteration 2 done — must NOT instant-complete (the bug)
+  check(done === null, 'looped sequence still running after iteration 2 (no instant re-entry)');
+  NativeUI.tick(110);
+  NativeUI.tick(110); // iteration 3 done
+  check(done && done.finished === true, 'looped sequence completes after the configured iterations');
+}
+
 // --- stop() halts a sequence and reports not-finished ----------------------------------------
 {
   const v = new Animated.Value(0);
