@@ -210,7 +210,7 @@ import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.1.0
+  GIT_TAG        v0.2.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -219,13 +219,13 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 **ESP-IDF** — the engine as a managed component:
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.1.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.2.0"
 ```
 
 **PlatformIO** — add to `platformio.ini`:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.1.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.2.0
 ```
 
 The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`

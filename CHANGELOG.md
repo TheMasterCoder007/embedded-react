@@ -11,6 +11,10 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-15
+
+First beta.
+
 ### Added
 
 - **WASM simulator** — the engine compiled to WebAssembly, running React (Flow A on
@@ -98,6 +102,7 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TheMasterCoder007/embedded-react/releases/tag/v0.1.0
