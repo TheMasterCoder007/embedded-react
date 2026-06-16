@@ -89,9 +89,28 @@ async function main() {
 
   const git = (...a) => execFileSync('git', a, { cwd: ROOT, stdio: 'inherit' });
   const gitOut = (...a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
+  const gitTry = (...a) => {
+    try {
+      return gitOut(...a);
+    } catch {
+      return '';
+    }
+  };
   const node = (...a) => execFileSync(process.execPath, a, { cwd: ROOT, stdio: 'inherit' });
 
   // Preconditions (checked even in dry-run so the preview is honest).
+
+  // Release only from the default branch. A tag cut on a feature branch still triggers the publish
+  // workflow (it fires on the tag, not the branch), so you'd ship off-branch code — and once the branch
+  // is squash/rebase-merged the tag dangles off master's history. Override with --allow-branch.
+  const branch = gitTry('rev-parse', '--abbrev-ref', 'HEAD');
+  const defaultBranch = gitTry('symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD').replace(/^refs\/remotes\/origin\//, '') || 'master';
+  if (!args.includes('--allow-branch') && branch && branch !== defaultBranch) {
+    console.error(`release must be cut from the default branch (${defaultBranch}); you are on "${branch}".`);
+    console.error(`merge your work into ${defaultBranch} and run it there, or pass --allow-branch to override.`);
+    process.exit(1);
+  }
+
   if (gitOut('tag', '--list', tag)) {
     console.error(`tag ${tag} already exists — pick a new version or delete the tag first`);
     process.exit(1);
