@@ -32,6 +32,8 @@ jobs:
       PLATFORMIO_AUTH_TOKEN: ${{ secrets.PLATFORMIO_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the "tag is on master" gate can compute a merge-base
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -47,6 +49,19 @@ jobs:
       # `node tools/release.mjs` makes this true by construction; this catches a hand-made / mismatched tag.
       - name: Gate — tag matches committed version
         run: node tools/sync-version.mjs --check "${GITHUB_REF_NAME#v}"
+
+      # Gate: the tagged commit must be on master. This workflow fires on the TAG, not a branch, so without
+      # this a tag cut on a feature branch would publish off-branch code (and dangle once the branch is
+      # squash/rebase-merged). release.mjs also refuses to run off the default branch; this is the
+      # server-side net that also catches a hand-made or force-pushed tag.
+      - name: Gate — released commit is on master
+        run: |
+          git fetch --no-tags --quiet origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::tag ${GITHUB_REF_NAME} points at a commit not on origin/master — release only from master"
+            exit 1
+          fi
+          echo "✓ ${GITHUB_REF_NAME} is on master"
 
       # Fast, display-free verification before anything is published.
       - name: JS tests
