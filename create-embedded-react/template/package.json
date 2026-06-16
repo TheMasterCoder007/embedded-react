@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "embedded-react dev",
-    "export": "embedded-react export --out sim-export"
+    "export": "embedded-react export --out sim-export",
+    "build": "embedded-react build"
   },
   "dependencies": {
     "embedded-react": "__ER_VERSION__",

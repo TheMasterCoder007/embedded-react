@@ -180,6 +180,19 @@ void er_web_load_source(const char* js, int len)
 }
 
 EMSCRIPTEN_KEEPALIVE
+const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len)
+{
+    /* Build-time `qjsc` for the consumer CLI: compile a JS bundle to QuickJS bytecode using the QuickJS
+       already inside this module — no native toolchain. The host reads *out_len bytes from the returned
+       pointer and frees it with Module._free. Independent of any running app (throwaway runtime). */
+    size_t n = 0;
+    uint8_t* bc = (src && len > 0) ? er_runtime_compile_bytecode(src, (size_t)len, &n) : NULL;
+    if (out_len)
+        *out_len = (int)n;
+    return bc;
+}
+
+EMSCRIPTEN_KEEPALIVE
 int er_web_load_pack(const uint8_t* buf, int len)
 {
     if (!buf || len <= 0)

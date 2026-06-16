@@ -19,6 +19,19 @@ npm run export       # → sim-export/  (a self-contained static playground, no 
 npx serve sim-export # serve it locally, or deploy the folder to any static host
 ```
 
+## Build for a device
+
+```bash
+npm run build        # → dist/app.erpkg  (QuickJS bytecode + baked assets)
+```
+
+Upload `dist/app.erpkg` to your device's config region — your firmware loads it with
+`er_runtime_load_container()` (Flow A; needs a PSRAM-class chip). For no-PSRAM boards, compile the app
+ahead-of-time to C instead: `npx embedded-react build --aot` emits `app.gen.c` (+ `assets.generated.c`)
+to compile into your firmware — note the AOT path supports a subset of the API (e.g., animation
+composition like `Animated.loop`/`sequence` isn't supported yet). See the
+[repo](https://github.com/TheMasterCoder007/embedded-react) for board wiring and examples.
+
 ## Layout
 
 ```

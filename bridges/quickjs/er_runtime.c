@@ -375,6 +375,70 @@ bool er_runtime_load_bytecode(const void* buf, size_t len)
     return ok;
 }
 
+uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len)
+{
+    if (out_len)
+    {
+        *out_len = 0;
+    }
+    /* A throwaway runtime — compiling must not touch the app runtime (or require it to exist). */
+    JSRuntime* rt = JS_NewRuntime();
+    if (!rt)
+    {
+        return NULL;
+    }
+    JSContext* ctx = JS_NewContext(rt);
+    if (!ctx)
+    {
+        JS_FreeRuntime(rt);
+        return NULL;
+    }
+
+    /* COMPILE_ONLY returns the program's function bytecode without running it, so the bundle's
+       references to NativeUI/screen/console are left unresolved (resolved at load time). */
+    JSValue obj = JS_Eval(ctx, src, len, "<app>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    uint8_t* out = NULL;
+    if (JS_IsException(obj))
+    {
+        /* Print the compile error (message + stack) to stderr → the host's console. */
+        JSValue exc = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, exc);
+        fprintf(stderr, "er_runtime_compile_bytecode: %s\n", msg ? msg : "(unknown)");
+        if (msg)
+        {
+            JS_FreeCString(ctx, msg);
+        }
+        JS_FreeValue(ctx, exc);
+    }
+    else
+    {
+        size_t bc_len = 0;
+        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, JS_WRITE_OBJ_BYTECODE);
+        if (bc)
+        {
+            out = (uint8_t*)malloc(bc_len);
+            if (out)
+            {
+                memcpy(out, bc, bc_len);
+                if (out_len)
+                {
+                    *out_len = bc_len;
+                }
+            }
+            js_free(ctx, bc);
+        }
+    }
+    JS_FreeValue(ctx, obj);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    return out;
+}
+
+void er_runtime_free(void* p)
+{
+    free(p);
+}
+
 /* --- ERCF config container ------------------------------------------------------------------------
  * Layout (little-endian): "ERCF" | format_version u32 | crc32 u32 (over everything after it) |
  *   qjs_tag (u16 len + bytes) | section_count u32 | sections[ type u32 | len u32 | bytes ]

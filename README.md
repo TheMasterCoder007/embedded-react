@@ -114,6 +114,33 @@ The same demo JSX (`demos/thermostat`, `demos/music-player`) runs across all fou
 
 ---
 
+## Build & deploy to a device
+
+Shipping an app has **two halves**, meeting at a single generated artifact:
+
+1. **The app (front end)** — you write JSX and build it with the `embedded-react` CLI. This produces the
+   artifact and never touches your firmware.
+2. **The firmware (your C project)** — brings up the display and input and hands the artifact to the engine.
+   **How the artifact reaches the device is yours to decide** (flash partition, SD card, OTA, serial, or
+   compiled in) — the engine is transport-agnostic. The example projects show one wiring each.
+
+Pick the flow that fits your board; each command emits **only** the files for that flow:
+
+| | Flow A — runtime (QuickJS) | Flow B — AOT (compiled) |
+|---|---|---|
+| Build | `embedded-react build` | `embedded-react build --aot` |
+| Generates | `dist/app.erpkg` — one binary (bytecode + assets + CRC) | `dist/app.gen.c` + `.h` + `assets.generated.c` |
+| Firmware uses it by | loading it at runtime — `er_runtime_load_container(bytes, len)` | compiling the C into the firmware image |
+| Update the UI by | replacing `app.erpkg` — **no firmware rebuild** | recompile + reflash |
+| Needs | a PSRAM-class chip (hosts QuickJS) | no JS engine — runs on no-PSRAM MCUs |
+| Reference wiring | [`examples/esp32/esp32-s3/`](examples/esp32/esp32-s3/README.md) | [`examples/esp32/esp32-2432s028r/`](examples/esp32/esp32-2432s028r/README.md) |
+
+The firmware side is small — provide the display backend (five callbacks) and a frame loop. See
+[`bridges/quickjs/README.md`](bridges/quickjs/README.md) for the portable `er_runtime` host core (Flow A),
+and the example READMEs above for end-to-end board wiring.
+
+---
+
 ## Repo layout
 
 A monorepo with one self-contained CMake/npm project per concern:
@@ -174,11 +201,11 @@ npm test           # unit tests (vitest)
 npm run parity     # verify Flow A / Flow B render parity
 ```
 
-The **browser** simulator + the consumer-facing CLI live in the npm package: `npx embedded-react dev` (hot
-reload) and `npx embedded-react export` (static playground); `npm create embedded-react` scaffolds a fresh
-standalone project. To build the simulator `.wasm` locally, `node tools/web-sim/build.mjs` (needs the Emscripten
-SDK). A device `flash`/upload wrapper is still aspirational — today you flash through each example's board
-toolchain.
+The consumer-facing CLI lives in the npm package: `npx embedded-react dev` (hot reload), `npx
+embedded-react export` (static playground), and `npx embedded-react build [--aot]` (the device artifact —
+see [Build & deploy](#build--deploy-to-a-device)); `npm create embedded-react` scaffolds a fresh standalone
+project. To build the simulator `.wasm` locally, `node tools/web-sim/build.mjs` (needs the Emscripten SDK).
+Getting the built artifact onto the board is firmware-specific — the example projects show how.
 
 ---
 
@@ -210,7 +237,7 @@ import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.2.0
+  GIT_TAG        v0.2.3
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -219,13 +246,13 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 **ESP-IDF** — the engine as a managed component:
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.2.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.2.3"
 ```
 
 **PlatformIO** — add to `platformio.ini`:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.2.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.2.3
 ```
 
 The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`
