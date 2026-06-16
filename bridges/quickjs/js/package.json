@@ -35,7 +35,7 @@
     ".": "./src/embedded-react/index.js"
   },
   "bin": {
-    "embedded-react": "./cli.mjs"
+    "embedded-react": "cli.mjs"
   },
   "files": [
     "src/",

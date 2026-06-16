@@ -25,7 +25,7 @@
     "esp32"
   ],
   "bin": {
-    "create-embedded-react": "./index.mjs"
+    "create-embedded-react": "index.mjs"
   },
   "engines": {
     "node": ">=18"

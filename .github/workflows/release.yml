@@ -35,6 +35,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          # Required for npm OIDC trusted publishing: writes the registry into .npmrc so npm engages the
+          # OIDC token exchange (without it, npm falls back to token auth and fails with ENEEDAUTH). No
+          # NODE_AUTH_TOKEN is set — the OIDC handshake provides credentials.
+          registry-url: 'https://registry.npmjs.org'
           cache: npm
           cache-dependency-path: bridges/quickjs/js/package-lock.json
 
