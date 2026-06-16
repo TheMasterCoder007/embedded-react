@@ -69,7 +69,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 # ---------------------------------------------------------------------------
-# Feature flags ("Compile-Time Feature Flags" — see /PLAN.md appendix)
+# Feature flags ("Compile-time feature flags" — see engine/README.md)
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Defaults are tuned for resource-constrained MCUs (minimum flash / RAM).

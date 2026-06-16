@@ -29,7 +29,7 @@ extern "C"
      *
      * This is the C side of the browser simulator. The engine renders through backends/software into an
      * ARGB8888 framebuffer; this layer converts that to canvas-ready RGBA and exposes a small flat ABI the
-     * host page drives via cwrap. See WASM_SIM.md for the full design.
+     * host page drives via cwrap. See tools/web-sim/README.md for the full design.
      *
      * Phase W2 runs a real Flow A bundle (QuickJS-in-WASM) via er_web_load_source on top of the portable
      * er_runtime host core. Asset packs (er_web_load_pack) and esbuild-watch hot reload arrive in W3.

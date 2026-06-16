@@ -20,7 +20,7 @@
 //
 // A thin wrapper over the shared dev server (bridges/quickjs/js/sim-server.mjs) — the same core the shipped
 // `npx embedded-react dev` CLI uses — pointed at a repo demo + the locally built module in public/. Build the
-// module once first: `node tools/web-sim/build.mjs`. See WASM_SIM.md.
+// module once first: `node tools/web-sim/build.mjs`. See tools/web-sim/README.md.
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';

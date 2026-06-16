@@ -857,7 +857,7 @@ extern "C"
      *        animation, layout-animation, vector, and input subsystems.
      *
      * Intended for mid-process teardown before re-running a fresh app (the simulator's live reload —
-     * see /SIMULATOR.md). Keeps the active render backend, registered images (er_image_load), and
+     * see tools/simulator/README.md). Keeps the active render backend, registered images (er_image_load), and
      * registered fonts (er_font_register / built-in) — only the scene graph and its derived state are
      * cleared. The next er_commit() fully repaints. The monotonic clock (er_now_ms) is preserved.
      *

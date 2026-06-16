@@ -15,7 +15,7 @@
  */
 
 /*
- * embedded-react simulator — the dev tool (see /SIMULATOR.md).
+ * embedded-react simulator — the dev tool (see tools/simulator/README.md).
  *
  * Runs a JSX bundle on the desktop SDL host (the shared host core, examples/linux/host.c) and
  * LIVE-RELOADS it whenever the watched bundle file changes on disk. This is the file-watch transport

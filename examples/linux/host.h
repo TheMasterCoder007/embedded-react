@@ -19,7 +19,7 @@
 
 /*
  * Desktop host core (SDL + QuickJS + engine bridge) — shared by the desktop demo (main.c) and the
- * simulator (see /SIMULATOR.md). The demo is a thin driver: er_host_start → er_host_load_config →
+ * simulator (see tools/simulator/README.md). The demo is a thin driver: er_host_start → er_host_load_config →
  * er_host_run → er_host_shutdown. The simulator drives the same core one frame at a time with
  * er_host_step (loading an explicit bundle via er_host_load_app) so it can interleave file-watching
  * + reload.
@@ -111,7 +111,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path);
  * @brief Live-reloads the app: frees the JS context, resets the engine to an empty scene, brings up a
  *        fresh context (bridge + globals reinstalled), and re-runs the app. Component state is not
  *        preserved. Registered images/fonts survive (baked assets keep resolving). The simulator
- *        calls this when the watched bundle changes. See /SIMULATOR.md.
+ *        calls this when the watched bundle changes. See tools/simulator/README.md.
  *
  * @param[in] host           Started host.
  * @param[in] explicit_path  App path to reload (typically the watched bundle).

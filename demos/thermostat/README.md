@@ -26,7 +26,7 @@ for the full asset workflow (including fonts and `assets.config.js`).
 From this folder:
 
 ```
-npm run sim      # live-reload simulator (hot reload on save) — see /SIMULATOR.md for one-time setup
+npm run sim      # live-reload simulator (hot reload on save) — see tools/simulator/README.md for one-time setup
 npm run build    # just bundle + bake assets -> bridges/quickjs/js/dist/app.bundle.js
 ```
 

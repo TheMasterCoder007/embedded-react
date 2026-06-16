@@ -441,7 +441,7 @@ static bool parse_css_color(const char* s, uint32_t* out)
         return parse_rgb_func(s, out);
     }
 
-    /* Minimal named-color set; extend as needed (BRIDGE.md Open Decisions #3). */
+    /* Minimal named-color set; extend as needed. */
     static const struct
     {
         const char* name;
@@ -3434,7 +3434,7 @@ void er_bridge_install(JSContext* ctx)
     s_bridge_ctx = ctx;
 
     /* Start with an empty node-handle table so a re-install on a fresh context (the simulator's live
-     * reload — see /SIMULATOR.md) doesn't alias stale handles onto newly created nodes. Pair this with
+     * reload — see tools/simulator/README.md) doesn't alias stale handles onto newly created nodes. Pair this with
      * er_reset() on the engine side, which empties the node pool the handles point into. */
     memset(s_node_by_handle, 0, sizeof(s_node_by_handle));
     s_free_top = 0;

@@ -35,7 +35,7 @@ extern "C"
      * Creates the global `NativeUI` object whose methods forward React host-config calls
      * (createNode, setProps, appendChild, commit, …) to the engine's er_scene.h API. Call
      * once per JSContext after the runtime is initialized and before evaluating any app
-     * bundle. The method surface is fleshed out incrementally — see BRIDGE.md §1.
+     * bundle. The method surface is documented in js/README.md.
      *
      * @param[in] ctx  QuickJS context to install the bridge into.
      */

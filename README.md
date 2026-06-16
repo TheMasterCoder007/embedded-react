@@ -81,7 +81,9 @@ Smaller binary, far less RAM, deterministic — at the cost of giving up runtime
 
 ## Status
 
-In-progress project. Here's what is **verified working** vs. still scaffolded:
+Beta. The engine, both flows, the backends that run on hardware, and the simulators are
+built and verified; from here the work is fixes and feature additions (tracked in
+[`ROADMAP.md`](ROADMAP.md)). Here's what is **verified working** vs. still scaffolded:
 
 | Layer | Status | Notes |
 |---|---|---|
@@ -89,11 +91,13 @@ In-progress project. Here's what is **verified working** vs. still scaffolded:
 | **Flow A** — React on QuickJS (`bridges/quickjs/`) | Working | End-to-end: `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, build-time image/font bakers, ERPK asset container. Runs on the desktop host and on ESP32-S3 hardware. |
 | **Flow B** — AOT JSX→C (`bridges/quickjs/js/aot/`) | Working | Compiles `useState`, `setState` (incl. updater form), events, conditionals, `.map` lists, child components, refs/`useCallback`/`useMemo`, dynamic styles, the full `Animated` API (timing/spring/decay/sequence/parallel/loop), and static + state-driven `Svg`. Runs on desktop **and on a no-PSRAM ESP32** (Cheap Yellow Display). |
 | **Backends** (`backends/`) | Partial | `sdl` (desktop), `esp32-lcd` (RGB parallel), and `esp32-spi-lcd` (banded RGB565) run on hardware; `software` (a CPU ARGB compositor) and `web` (the WASM present layer) power the browser simulator. `dma2d`, `opengl`, and `framebuffer` are stubs. |
-| **SDL simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop (maintainer tool): file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation. See [`SIMULATOR.md`](SIMULATOR.md). |
-| **WASM simulator** (`tools/web-sim/`) | Working | Browser dev loop — the engine compiled to WebAssembly (Flow A in QuickJS), with hot reload, a responsive/device-frame preview, and a static export. Shipped to consumers as `npx embedded-react dev`. See [`WASM_SIM.md`](WASM_SIM.md). |
+| **SDL simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop (maintainer tool): file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation. See [`tools/simulator/`](tools/simulator/README.md). |
+| **WASM simulator** (`tools/web-sim/`) | Working | Browser dev loop — the engine compiled to WebAssembly (Flow A in QuickJS), with hot reload, a responsive/device-frame preview, and a static export. Shipped to consumers as `npx embedded-react dev`. See [`tools/web-sim/`](tools/web-sim/README.md). |
 | **Examples** (`examples/`) | Partial | Four run end-to-end (below). `stm32h7`, `raspberry-pi`, and others are READMEs only. |
 
-If you want a finished, drop-in embedded UI framework today, this isn't that yet. If you want to follow along — or contribute to the engine, a backend, or the toolchain — read on.
+This is a beta — some backends and examples are still scaffolds (see the tables above and
+[`ROADMAP.md`](ROADMAP.md)). If you want to build on it, or contribute to the engine, a
+backend, or the toolchain — read on.
 
 ---
 
@@ -142,9 +146,9 @@ tools/       Developer tooling — the SDL simulator (`simulator/`) and the WASM
 
 Each top-level folder has its own README. Engine contributors start with
 [`engine/README.md`](engine/README.md); backend authors with
-[`backends/README.md`](backends/README.md); the long-term architecture lives in
-[`PLAN.md`](PLAN.md), the engine internals in [`ENGINE.md`](ENGINE.md), and the
-Flow A bridge in [`BRIDGE.md`](BRIDGE.md).
+[`backends/README.md`](backends/README.md); the Flow A / Flow B bridges with
+[`bridges/README.md`](bridges/README.md). What's planned and known-broken lives in
+[`ROADMAP.md`](ROADMAP.md); project-wide rules in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
@@ -206,7 +210,7 @@ import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.1.0
+  GIT_TAG        v0.2.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -215,13 +219,13 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 **ESP-IDF** — the engine as a managed component:
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.1.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.2.0"
 ```
 
 **PlatformIO** — add to `platformio.ini`:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.1.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.2.0
 ```
 
 The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`
@@ -257,11 +261,12 @@ bare-metal all work.
 The engine is intentionally small and self-contained — pure C99, no MCU SDK headers, no
 platform `#ifdef`s. For the internals (Yoga implementation, scratch-buffer model,
 premultiplied-ARGB pipeline, banded rendering, compile-time feature flags) read
-[`ENGINE.md`](ENGINE.md) and [`PLAN.md`](PLAN.md). Code formatting and documentation
-rules live in [`RULES.md`](RULES.md).
+[`engine/README.md`](engine/README.md).
 
 Contributions are welcome on any layer: the engine, a backend, the Flow A bridge, or the
-Flow B AOT compiler.
+Flow B AOT compiler. The engine invariants, documentation conventions, and code-style
+rules live in [`CONTRIBUTING.md`](CONTRIBUTING.md); what's planned and known-broken in
+[`ROADMAP.md`](ROADMAP.md).
 
 ---
 

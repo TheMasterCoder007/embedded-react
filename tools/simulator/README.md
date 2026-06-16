@@ -20,4 +20,5 @@ cd demos/thermostat && npm run sim
 ```
 
 `npm run sim` runs `esbuild --watch` (rebundling on save) and launches the simulator, which reloads on
-change. Full design, decisions, and the phase plan: [/SIMULATOR.md](../../SIMULATOR.md).
+change. Remaining work (on-device hot reload, Fast Refresh, a prebuilt sim binary) is tracked in
+[`/ROADMAP.md`](../../ROADMAP.md).

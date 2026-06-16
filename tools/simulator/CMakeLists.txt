@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(embedded-react-simulator C)
 
 # ---------------------------------------------------------------------------
-# embedded-react simulator — the dev tool (see /SIMULATOR.md).
+# embedded-react simulator — the dev tool (see tools/simulator/README.md).
 #
 # The same SDL + QuickJS + engine host as the desktop demo: it reuses the shared host core
 # (examples/linux/host.c) and adds a watch + live-reload loop (sim_main.c). The demo

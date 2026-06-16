@@ -7,8 +7,8 @@
   er_web_pump(dt) -> read the RGBA framebuffer -> putImageData. The canvas fills the whole viewport, so in
   "Fit to window" mode the board size IS the viewport — set the browser's device toolbar to 240x320 and the
   app renders at exactly 240x320 (same workflow as a responsive web project). The size controls are a small
-  floating, collapsible chip so they never steal render space. You can also lock to a real panel size. W1
-  renders a static C scene (er_web_demo_scene); Flow A bundles + hot reload arrive in W2/W3. See WASM_SIM.md.
+  floating, collapsible chip so they never steal render space. You can also lock to a real panel size. It
+  runs Flow A bundles (QuickJS in WASM) with hot reload. See tools/web-sim/README.md.
 -->
 <html lang="en">
   <head>
