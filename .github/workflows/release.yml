@@ -78,14 +78,31 @@ jobs:
         working-directory: bridges/quickjs/js
         run: |
           npm install -g npm@latest   # ensure an npm with OIDC trusted-publishing support
-          npm publish --provenance --access public
+          # Idempotent: skip if this exact version is already on the registry, so a re-run (after a
+          # transient failure or a partial release) never dies on "cannot publish over existing version".
+          pkg=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          if npm view "$pkg@$ver" version >/dev/null 2>&1; then
+            echo "$pkg@$ver already published — skipping"
+          else
+            npm publish --provenance --access public
+          fi
 
       # The scaffolder (`npm create embedded-react`). Lockstep version; needs its OWN trusted publisher
       # configured on npmjs.com (package create-embedded-react → Settings → Trusted Publisher → this workflow).
+      # First publish of this brand-new package can't use Trusted Publishing (it doesn't exist yet) — do one
+      # manual `npm publish` to create it, then configure its trusted publisher for every release after.
       - name: Publish create-embedded-react to npm
         if: ${{ vars.PUBLISH_NPM == 'true' }}
         working-directory: create-embedded-react
-        run: npm publish --provenance --access public
+        run: |
+          pkg=$(node -p "require('./package.json').name")
+          ver=$(node -p "require('./package.json').version")
+          if npm view "$pkg@$ver" version >/dev/null 2>&1; then
+            echo "$pkg@$ver already published — skipping"
+          else
+            npm publish --provenance --access public
+          fi
 
       # --- Channel 2: ESP-IDF Component Registry (the engine/ component) ---
       - name: Publish to the ESP Component Registry
