@@ -87,6 +87,23 @@ function persistPlugin({ types: t }) {
 }
 
 /**
+ * Whether `absPath` is an app source file that should receive the persist transform: under the project
+ * root, but NOT a dependency. The library itself lives under the project root in a consumer install
+ * (`<project>/node_modules/embedded-react`), and transforming it would rewrite the `useState` *inside*
+ * `usePersistentState` into a call to `usePersistentState` — infinite self-recursion → stack overflow.
+ * Excluding `node_modules` is what keeps the helper (and react) untransformed in a published install,
+ * not just in the monorepo (where the library happens to sit outside the demo's project root).
+ *
+ * @param {string} absPath          Absolute path of the module esbuild is loading.
+ * @param {string} projectRootNorm  Project root, forward-slash normalized.
+ * @returns {boolean}
+ */
+export function shouldPersist(absPath, projectRootNorm) {
+  const p = absPath.replace(/\\/g, '/');
+  return p.startsWith(projectRootNorm) && !p.includes('/node_modules/');
+}
+
+/**
  * Applies the persist transform to a module's source.
  *
  * @param {string} code      Module source (JSX allowed).

@@ -34,7 +34,7 @@ const HERE = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,
 const require = createRequire(import.meta.url);
 const esbuild = require('esbuild');
 const { bakeAssetPack } = await import(pathToFileURL(resolve(HERE, 'assets/index.mjs')).href);
-const { transformPersist } = await import(pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href);
+const { transformPersist, shouldPersist } = await import(pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -127,7 +127,9 @@ function createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist =
             fonts.clear();
           });
           b.onLoad({ filter: /\.(jsx?|tsx?)$/ }, (a) => {
-            if (!persist || !a.path.replace(/\\/g, '/').startsWith(projNorm)) return undefined;
+            // Transform ONLY the app's own source — never dependencies (see shouldPersist: excluding
+            // node_modules is what stops the library's usePersistentState being rewritten to call itself).
+            if (!persist || !shouldPersist(a.path, projNorm)) return undefined;
             try {
               return { contents: transformPersist(readFileSync(a.path, 'utf8'), relative(projectRoot, a.path).replace(/\\/g, '/')), loader: 'jsx' };
             } catch (e) {

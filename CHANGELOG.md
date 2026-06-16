@@ -11,16 +11,27 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-15
+
+### Fixed
+
+- **The scaffolded starter (and any consumer app) crashed on `npx embedded-react dev`** with
+  "Maximum call stack size exceeded". The simulator's `useState`→persist transform was applied to every
+  file under the project root — which, in a published install, includes
+  `node_modules/embedded-react`. It therefore rewrote the library's own `usePersistentState` into a
+  call to itself, recursing forever. The transform now excludes `node_modules`, so only the app's own
+  source is rewritten. This only reproduced in a real install (in the monorepo the library sits outside
+  the project root, which is why it was missed). Covered by a regression test on the file-selection rule.
+
 ## [0.2.2] - 2026-06-15
 
 ### Fixed
 
-- `Animated.loop` no longer overflows the stack ("Maximum call stack size exceeded") when a child
-  animation completes synchronously — which is what made the `create-embedded-react` starter's
-  pulsing-logo loop crash in the simulator on a large catch-up frame. The loop now defers each
-  iteration to the next frame instead of restarting inline, so a completion never recurses into the
-  next iteration. (The 0.2.0 fix addressed the sequence's instant-restart; this covers the remaining
-  synchronous-completion path.)
+- `Animated.loop` now defers each iteration (instead of restarting it inline from the completion
+  callback), so a child animation that completes synchronously can't recurse into the next iteration.
+  Defensive hardening of the loop/sequence composition; complements the 0.2.0 sequence-restart fix.
+  (Note: this did **not** fix the scaffolded-starter crash — that was the persist transform, fixed in
+  0.2.3.)
 
 ## [0.2.1] - 2026-06-15
 
@@ -137,7 +148,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.1...v0.2.0
