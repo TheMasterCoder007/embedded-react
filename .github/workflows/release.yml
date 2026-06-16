@@ -35,12 +35,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: 'https://registry.npmjs.org'
           cache: npm
           cache-dependency-path: bridges/quickjs/js/package-lock.json
-          # NOTE: deliberately NO `registry-url` — it writes an .npmrc with `_authToken=${NODE_AUTH_TOKEN}`
-          # (empty here), and npm then tries that empty token on publish instead of doing the OIDC token
-          # exchange → E404 "not found or no permission". npm OIDC trusted publishing (npm >= 11.5.1 +
-          # `id-token: write` + a trusted publisher configured on npmjs.com) authenticates on its own.
+          # OIDC trusted publishing: with `id-token: write`, npm >= 11.5.1, and a trusted publisher set up
+          # on npmjs.com, npm authenticates with no token. GOTCHA: the trusted publisher's owner/repo must
+          # match the GitHub OIDC claim's EXACT case — `TheMasterCoder007`, not `themastercoder007` — or the
+          # token exchange silently fails and npm falls back to static auth (→ ENEEDAUTH / E404).
 
       # The release gate: the committed VERSION + every synced artifact must equal the tag (minus the 'v').
       # `node tools/release.mjs` makes this true by construction; this catches a hand-made / mismatched tag.
