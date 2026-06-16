@@ -45,8 +45,12 @@ export async function compileToBytecode(jsSource, simDir = resolve(HERE, 'sim'))
   const Module = await factory();
 
   const bytes = new TextEncoder().encode(jsSource);
-  const srcPtr = Module._malloc(bytes.length);
+  // QuickJS's JS_Eval requires the source buffer to be NUL-terminated (buf[len] === 0). Allocate one
+  // extra byte and zero it: without the terminator the lexer reads an uninitialized sentinel and can
+  // stop early ("unexpected token ''") — a heap-state-dependent failure that only bites on larger inputs.
+  const srcPtr = Module._malloc(bytes.length + 1);
   Module.HEAPU8.set(bytes, srcPtr);
+  Module.HEAPU8[srcPtr + bytes.length] = 0;
   const outLenPtr = Module._malloc(4);
 
   const compile = Module.cwrap('er_web_compile_bytecode', 'number', ['number', 'number', 'number']);

@@ -76,6 +76,13 @@ jobs:
         if: ${{ vars.PUBLISH_NPM == 'true' }}
         run: node tools/web-sim/build.mjs
 
+      # Gate the publish on the packaged consumer flow: pack → install into a throwaway app → build the
+      # device artifact both ways. Reuses the wasm staged above, so this is the cheap, last line of defense
+      # against shipping a package that fails the moment a real user runs `embedded-react build`.
+      - name: Consumer smoke (pack + install + build)
+        if: ${{ vars.PUBLISH_NPM == 'true' }}
+        run: node tools/consumer-smoke.mjs
+
       # --- Channel 1: npm (OIDC Trusted Publishing — no token; provenance is automatic) ---
       # Enable by setting repo variable PUBLISH_NPM=true AFTER configuring the trusted publisher on npmjs.com.
       - name: Publish to npm

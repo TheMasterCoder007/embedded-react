@@ -71,3 +71,24 @@ jobs:
           ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mjs thermostat
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
+
+  consumer:
+    name: Consumer smoke (pack + install + build)
+    # Exercises the PACKAGED + INSTALLED flow that unit tests can't reach: npm pack → install into a
+    # throwaway app → `embedded-react build` (Flow A app.erpkg, via the wasm bytecode compiler) and
+    # `--aot` (Flow B app.gen.c). Catches files-whitelist gaps, ESM/CJS resolution, and the bytecode
+    # path. Builds the wasm (emsdk) so the Flow A leg runs — the only way to cover it on a PR.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.13
+      - name: Build the prebuilt WASM simulator
+        run: node tools/web-sim/build.mjs
+      - name: Pack → install → build (Flow A + AOT)
+        run: node tools/consumer-smoke.mjs
