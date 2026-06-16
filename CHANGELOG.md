@@ -11,6 +11,17 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-15
+
+### Fixed
+
+- `Animated.loop` no longer overflows the stack ("Maximum call stack size exceeded") when a child
+  animation completes synchronously — which is what made the `create-embedded-react` starter's
+  pulsing-logo loop crash in the simulator on a large catch-up frame. The loop now defers each
+  iteration to the next frame instead of restarting inline, so a completion never recurses into the
+  next iteration. (The 0.2.0 fix addressed the sequence's instant-restart; this covers the remaining
+  synchronous-completion path.)
+
 ## [0.2.1] - 2026-06-15
 
 Maintenance release — dependency, security, and release-pipeline fixes. No changes to the component
@@ -126,7 +137,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.0...v0.1.1

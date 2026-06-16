@@ -280,8 +280,8 @@ export function loop(animation, config) {
       const done = once(onComplete);
       const startValue = resetBeforeIteration && animation._value ? animation._value.__getValue() : null;
       let count = 0;
-      const run = (result) => {
-        if (stopped || !result || result.finished === false) {
+      const startIteration = () => {
+        if (stopped) {
           done({ finished: false });
           return;
         }
@@ -293,9 +293,22 @@ export function loop(animation, config) {
         if (resetBeforeIteration && animation._value && startValue != null && count > 1) {
           animation._value.setValue(startValue);
         }
-        animation.start(run);
+        animation.start(onIterationDone);
       };
-      run({ finished: true });
+      const onIterationDone = (result) => {
+        if (stopped || !result || result.finished === false) {
+          done({ finished: false });
+          return;
+        }
+        // Defer the next iteration to a fresh task instead of starting it inline. A child animation can
+        // complete *synchronously* (a long-duration timing finishing inside one large catch-up frame in
+        // the simulator), and starting the next iteration from within, that completion callback would
+        // recurse — loop → child → completion → loop → … — until the stack overflows. setTimeout breaks
+        // the chain: the host pump runs it on the next frame, by which point real time has advanced so
+        // the animation runs its full duration again. (Negligible cost in the normal async case.)
+        setTimeout(startIteration, 0);
+      };
+      startIteration();
     },
     stop() {
       stopped = true;
