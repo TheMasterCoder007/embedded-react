@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-// usePersistentState — a useState that survives the simulator's hot reload (see /SIMULATOR.md, Phase
-// 3). The simulator's build transform (persist-transform.mjs) rewrites the app's plain `useState`
+// usePersistentState — a useState that survives the simulator's hot reload (see
+// tools/simulator/README.md). The simulator's build transform (persist-transform.mjs) rewrites the app's plain `useState`
 // into this helper, so persistence is transparent — you normally never call this directly; it's also
 // exported for explicit use. Outside the simulator (e.g., on a device, where the host doesn't install
 // `__erPersist`) it is exactly useState, so the same app code runs everywhere.

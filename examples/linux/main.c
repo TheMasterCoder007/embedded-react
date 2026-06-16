@@ -21,7 +21,7 @@
  * MCU does — the firmware (this exe) ships no app and no baked assets, and at boot loads a config
  * container (app.erpkg) from the "config slot" next to the executable. No config / a corrupt one shows
  * an on-screen panel and the window stays up (no built-in fallback), just like firmware. It is a
- * *demo*, not the dev tool — hot-reload-driven development lives in the simulator (see /SIMULATOR.md).
+ * *demo*, not the dev tool — hot-reload-driven development lives in the simulator (see tools/simulator/README.md).
  * All the runtime lives in the shared host core (host.c); main() just drives it.
  *
  * Build a config with `npm run pack` (in bridges/quickjs/js); the build copies it into the slot. To

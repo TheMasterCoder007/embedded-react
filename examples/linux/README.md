@@ -20,7 +20,7 @@ panel (no built-in fallback), and the window stays up — just like firmware. Th
 
 > The old handwritten C-API showcase has been removed — this project is "JSX on embedded", so the
 > desktop demo is the JSX end-to-end path, not a separate C scene. The host core is factored out
-> (`host.c`) so the upcoming **simulator** (`/SIMULATOR.md`) can reuse it — the demo drives it
+> (`host.c`) so the **simulator** ([`tools/simulator/`](../../tools/simulator/README.md)) can reuse it — the demo drives it
 > one-shot (`er_host_run`); the simulator will step it (`er_host_step`) around a watch + reload loop.
 
 ---

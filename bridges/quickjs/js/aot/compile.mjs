@@ -29,7 +29,7 @@
 //     +-*/% , comparisons, ?:)
 //
 // The compiler tracks which nodes depend on which state, so a state change re-sets ONLY the dependent
-// nodes (er_node_set_props) — no diffing, no reconciler. See /PLAN.md Flow B.
+// nodes (er_node_set_props) — no diffing, no reconciler. See the root README (Flow B).
 //
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
 //   npm run aot -- music-player      # a specific demo by folder name
@@ -1591,7 +1591,7 @@ function compileHandler(fnNode, env, state, out) {
 // ---------------------------------------------------------------------------------------------------
 // Emit — control flow (components / conditionals / lists) all unroll at COMPILE TIME into fixed nodes.
 // Runtime-dynamic conditionals/lists (where the node COUNT changes with state) are not yet supported
-// and throw a clear "AOT: ..." — see /PLAN.md Flow B.
+// and throw a clear "AOT: ..." — see the root README (Flow B).
 // ---------------------------------------------------------------------------------------------------
 
 /** Reads a component instance's props (attributes) as static values; dynamic props throw (for now). */

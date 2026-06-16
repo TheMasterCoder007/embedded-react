@@ -4,7 +4,7 @@
 # Compiles the engine + backends/software + backends/web + the QuickJS bridge (er_runtime + native_ui_bridge
 # + QuickJS-ng) into one app-agnostic embedded-react.{js,wasm}. It runs Flow A (QuickJS inside WASM), so a JS
 # edit reloads by re-evaluating a new bundle string with no wasm rebuild — the .wasm is built once and shipped
-# prebuilt in the npm package. See WASM_SIM.md.
+# prebuilt in the npm package. See tools/web-sim/README.md.
 #
 # Build via tools/web-sim/build.mjs (which wraps emcmake), or directly:
 #   emcmake cmake -S tools/web-sim -B tools/web-sim/build -DCMAKE_BUILD_TYPE=Release

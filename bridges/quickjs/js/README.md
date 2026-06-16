@@ -53,7 +53,7 @@ Open the printed URL. The canvas fills the viewport, so the browser's device too
 (e.g., 240×320) — pixel-accurate to a hardware ARGB panel. Imported images/fonts are baked and hot-reload too.
 A floating gear chip locks to a specific panel size and can wrap the screen in a **device frame** (bezel) for a
 true-to-hardware preview. This is the same simulator as the repo's `tools/web-sim` (see
-[WASM_SIM.md](https://github.com/TheMasterCoder007/embedded-react/blob/master/WASM_SIM.md)).
+[tools/web-sim](https://github.com/TheMasterCoder007/embedded-react/blob/master/tools/web-sim/README.md)).
 
 To **share** a UI, export a self-contained static playground — `index.html` + the prebuilt `.wasm` + your
 bundled app — that runs in any browser with no server, ready for GitHub Pages / Netlify / a docs' iframe:
@@ -106,7 +106,7 @@ The host config flattens RN `style` (+ nested arrays) into the flat prop bag, ro
 handlers to `setEvent`, and uses `shouldSetTextContent` so a flattenable `<Text>` subtree (a string,
 interpolation like `Hi {name}`, or nested `<Text>` runs) becomes the node's `text` + inline spans.
 `Animated`, `Easing`, and the web timer globals (`setTimeout` / `setInterval`) are all available;
-`useEffect` flushes via the host pump (BRIDGE.md §1.2, §1.4, §2).
+`useEffect` flushes via the host pump.
 
 ## Build
 
@@ -260,7 +260,7 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   saves (a sim-only build transform rewrites it to a persisting helper; press R to reset). On a device
   it's just `useState`, so the same app code runs everywhere. `usePersistentState` is the underlying
   helper, also exported for explicit use. See
-  [SIMULATOR.md in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/SIMULATOR.md).
+  [tools/simulator in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/tools/simulator/README.md).
 - ✅ **`npx embedded-react dev`** — the WASM simulator runs your app in a browser with hot reload, from your
   own project directory, with the engine `.wasm` shipped prebuilt (no Emscripten for consumers). See above.
 - ✅ **`npm create embedded-react@latest my-app`** — scaffolds a fresh standalone project (a styled card with a

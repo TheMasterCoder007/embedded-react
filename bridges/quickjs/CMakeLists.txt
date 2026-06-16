@@ -6,7 +6,7 @@ project(embedded-react-quickjs-bridge C)
 #
 # Publishes the NativeUI surface into a QuickJS context and forwards it to the
 # engine's er_scene.h API. QuickJS-ng is pulled in via FetchContent, pinned to
-# a release tag (see BRIDGE.md "Open Decisions").
+# a release tag.
 #
 # Configure standalone (link smoke test):
 #   cmake -S bridges/quickjs -B build-bridge -G "MinGW Makefiles"
@@ -106,7 +106,7 @@ endif ()
 # embedding in MCU flash). Links only `qjs` (no engine/bridge needed to compile). Hosts load the
 # blob with JS_ReadObject instead of parsing source — the §4 boot/RAM lever for ESP32-S3 / STM32H7.
 # NOTE: this is a parse-time optimization for Flow A; the QuickJS VM still runs the bytecode. It is
-# NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see PLAN.md.
+# NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see js/aot/.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_COMPILE "Build the QuickJS bytecode precompiler tool" ON)
 

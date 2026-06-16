@@ -19,13 +19,23 @@ artifact. See [README](README.md#releasing) for the release process.
   drive it, imported images/fonts are baked into an asset pack, the canvas is 1:1 and
   responsive (with optional device-frame chrome), and edits hot-reload over
   Server-Sent Events. The prebuilt `.wasm` ships in the npm package, so consumers need
-  no Emscripten. See [WASM_SIM.md](WASM_SIM.md).
+  no Emscripten. See [tools/web-sim](tools/web-sim/README.md).
 - **`embedded-react` CLI** — `npx embedded-react dev [entry]` runs the simulator on your
   own project with hot reload (`useState` preserved); `npx embedded-react export` builds
   a self-contained static playground (no server) for sharing or docs embeds.
 - **`create-embedded-react`** — `npm create embedded-react@latest my-app` scaffolds a
   fresh standalone project (a styled starter: a pulsing logo + a `count is N` button),
   wired for `npm run dev` and `npm run export`. Published as a second lockstep package.
+
+### Changed
+
+- **Documentation restructured for the beta.** The standalone design docs (`ENGINE.md`,
+  `BRIDGE.md`, `PLAN.md`, `SIMULATOR.md`, `WASM_SIM.md`) are removed; the project now
+  carries READMEs only, plus a single root [`ROADMAP.md`](ROADMAP.md) (known issues,
+  planned work, performance backlog, vision) and [`CONTRIBUTING.md`](CONTRIBUTING.md)
+  (engine invariants + code/doc rules, formerly `RULES.md`). Engine internals (Yoga
+  passes, pixel format, scratch model, the `ERUI_*` feature-flag table) moved into
+  [`engine/README.md`](engine/README.md).
 
 ### Fixed
 

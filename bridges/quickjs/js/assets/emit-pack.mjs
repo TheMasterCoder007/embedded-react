@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// ERPK — a binary asset pack for the simulator's runtime loader (see /SIMULATOR.md, Phase 2b).
+// ERPK — a binary asset pack for the simulator's runtime loader (see tools/simulator/README.md).
 //
 // Produced from the SAME JS bakers (bake-image.mjs / bake-font.mjs) as the device's baked C, so the
 // simulator renders pixel-identical images and fonts. The sim host (tools/simulator/asset_pack.c)

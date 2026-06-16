@@ -22,7 +22,7 @@
  *
  * Headless: a no-op backend is installed so the font registry initialises and
  * the paint path executes without a window. Verification reads back the layout
- * pass count and the repainted dirty rectangle (BRIDGE.md §0). The SDL-window
+ * pass count and the repainted dirty rectangle. The SDL-window
  * milestone is folded into examples/linux later.
  */
 

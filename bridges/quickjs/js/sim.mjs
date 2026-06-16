@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// `npm run sim [demo]` — the embedded-react simulator launcher (see /SIMULATOR.md).
+// `npm run sim [demo]` — the embedded-react simulator launcher (see tools/simulator/README.md).
 //
 // Runs esbuild in watch mode (rebundling demos/<demo> → dist/app.bundle.js on every save), bakes the
 // demo's imported assets into a binary pack (dist/assets.pack) the simulator loads at runtime, and

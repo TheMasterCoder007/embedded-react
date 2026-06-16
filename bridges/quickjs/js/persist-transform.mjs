@@ -15,7 +15,7 @@
  */
 
 // Simulator-only Babel transform: rewrites `useState(init)` in app code to a persisting helper so
-// state transparently survives a hot reload (see /SIMULATOR.md, Phase 3 — transparent variant). Plain
+// state transparently survives a hot reload (see tools/simulator/README.md). Plain
 // `useState` from 'react' just persists in the simulator; on a device (no transform, no __erPersist)
 // it's exactly useState. Only the app's own files are transformed — never the library or React (so
 // the helper itself isn't rewritten).

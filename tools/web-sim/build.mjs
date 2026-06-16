@@ -22,7 +22,7 @@
 //
 // Uses the CMake project in tools/web-sim/CMakeLists.txt, which reuses bridges/quickjs (engine + QuickJS-ng +
 // er_runtime + bridge) so the module runs Flow A (QuickJS inside WASM). The .wasm is app-agnostic — built once
-// and shipped prebuilt in the npm package (CI does this on release); consumers never need emsdk. See WASM_SIM.md.
+// and shipped prebuilt in the npm package (CI does this on release); consumers never need emsdk. See tools/web-sim/README.md.
 //
 // We pass the Emscripten CMake toolchain file directly (derived from `emcc` on PATH) rather than going through
 // `emcmake`, which on some setups doesn't inject the toolchain and falls back to the native compiler.

@@ -4,13 +4,13 @@ QuickJS bridge — the reference frontend. Hosts a React reconciler inside Quick
 maps React's host-config calls (`createInstance`, `appendChild`, `commitUpdate`, etc.) to
 the engine's `er_scene.h` API.
 
-This is what makes "write JSX, run it on an MCU" actually work in Flow A (see
-`/PLAN.md`).
+This is what makes "write JSX, run it on an MCU" actually work in Flow A (see the
+[root README](../../README.md) for how Flow A and Flow B relate).
 
 **Status:** Working. `native_ui_bridge.c` publishes the full `NativeUI` surface (nodes, props,
 events, Animated, timers/job-queue, text spans, LayoutAnimation) into QuickJS-ng (v0.15.0, via
-FetchContent), and the React reconciler in `js/` drives it. See `BRIDGE.md` for the per-feature
-checklist and `js/README.md` for the JS layer.
+FetchContent), and the React reconciler in `js/` drives it. See [`js/README.md`](js/README.md)
+for the JS layer and its per-feature status.
 
 **`er_runtime` — the portable host core** (`er_runtime.{c,h}`): the few-function QuickJS host every
 integration shares — create the runtime + context, install the bridge + host globals (console,
@@ -28,4 +28,4 @@ MCU flash).
 
 > The bytecode precompiler is a Flow A boot/RAM optimization — it skips the on-device parser, but
 > the QuickJS VM still runs the bytecode. It is **not** the Flow B AOT compiler (which compiles JSX
-> to C and drops QuickJS entirely; see `/PLAN.md`).
+> to C and drops QuickJS entirely; that lives in [`js/aot/`](js/aot/)).

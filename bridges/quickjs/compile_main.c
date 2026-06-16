@@ -25,7 +25,7 @@
  * NOTE — this is NOT the Flow B "AOT compiler". This only moves the *parse* step from boot to build
  * time; the QuickJS VM still interprets the bytecode at runtime (QuickJS is still linked and running).
  * Flow B is a separate effort that compiles JSX straight to C against er_scene.h and removes QuickJS
- * entirely (for MCUs without the external RAM to host the VM). See PLAN.md.
+ * entirely (for MCUs without the external RAM to host the VM). See js/aot/.
  *
  * Usage:
  *   er-bridge-quickjs-compile <input.js> <output.qbc>                  # raw bytecode blob

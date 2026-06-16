@@ -21,7 +21,7 @@
 //
 // Runs the WASM simulator against the app in your current project: bundles your JSX, serves the prebuilt
 // embedded-react.wasm host page, and hot-reloads on save (useState preserved). No native toolchain — the
-// .wasm ships prebuilt in this package. See WASM_SIM.md.
+// .wasm ships prebuilt in this package. See tools/web-sim/README.md.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

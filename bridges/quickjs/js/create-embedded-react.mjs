@@ -110,7 +110,7 @@ AppRegistry.registerComponent('${name}', () => App);
 An embedded-react app. From this folder:
 
 \`\`\`
-npm run sim      # live-reload simulator (hot reload on save) — see /SIMULATOR.md for one-time setup
+npm run sim      # live-reload simulator (hot reload on save) — see tools/simulator/README.md for one-time setup
 npm run build    # bundle + bake assets -> bridges/quickjs/js/dist/app.bundle.js
 \`\`\`
 
@@ -120,7 +120,7 @@ npm run build    # bundle + bake assets -> bridges/quickjs/js/dist/app.bundle.js
   \`<Image source={logo}/>\` / \`fontFamily={Inter}\`. \`npm run build\`/\`sim\` bakes them automatically.
 - After \`npm run build\`, run a host (\`examples/linux\` desktop, or \`examples/esp32/esp32-s3\` device).
 
-See the [thermostat demo](../thermostat/) for a fuller example and \`/SIMULATOR.md\` for the dev loop.
+See the [thermostat demo](../thermostat/) for a fuller example and \`tools/simulator/README.md\` for the dev loop.
 `,
 
   'assets/.gitkeep': '',
@@ -135,5 +135,5 @@ console.log(`Created demos/${name}/`);
 console.log('  App.jsx  index.jsx  package.json  README.md  assets/');
 console.log('\nNext:');
 console.log(`  cd demos/${name}`);
-console.log('  npm run sim      # hot-reload simulator (build the sim binary once — see /SIMULATOR.md)');
+console.log('  npm run sim      # hot-reload simulator (build the sim binary once — see tools/simulator/README.md)');
 console.log('  npm run build    # just bundle + bake assets');
