@@ -11,6 +11,7 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-16
 ### Added
 
 - **`embedded-react build`** — produce the device artifact from your own project, the deploy step
@@ -167,7 +168,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...v0.2.1
