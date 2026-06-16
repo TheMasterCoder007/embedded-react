@@ -110,17 +110,21 @@ try {
   process.exit(e.status || 1);
 }
 
-for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
-  copyFileSync(resolve(BUILD_DIR, f), resolve(OUT_DIR, f));
-}
+// Stage a .cjs copy alongside the .js: the host page loads the .js as a classic <script>, but the npm
+// package is "type": "module", so Node would treat the .js as ESM and the emscripten CommonJS export
+// would never run. `embedded-react build` requires the .cjs (forced CommonJS) to compile bytecode in Node.
+const stage = (dir) => {
+  copyFileSync(resolve(BUILD_DIR, 'embedded-react.js'), resolve(dir, 'embedded-react.js'));
+  copyFileSync(resolve(BUILD_DIR, 'embedded-react.js'), resolve(dir, 'embedded-react.cjs'));
+  copyFileSync(resolve(BUILD_DIR, 'embedded-react.wasm'), resolve(dir, 'embedded-react.wasm'));
+};
+stage(OUT_DIR);
 
 // Stage the prebuilt module + host page into the npm package's sim/ dir so `npx embedded-react dev` ships
 // with it (the `files` whitelist includes sim/). This is what CI builds + publishes; not committed.
 const PKG_SIM = resolve(HERE, '../../bridges/quickjs/js/sim');
 mkdirSync(PKG_SIM, { recursive: true });
-for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
-  copyFileSync(resolve(BUILD_DIR, f), resolve(PKG_SIM, f));
-}
+stage(PKG_SIM);
 copyFileSync(resolve(HERE, 'index.html'), resolve(PKG_SIM, 'index.html'));
 
 console.log('✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + bridges/quickjs/js/sim/');

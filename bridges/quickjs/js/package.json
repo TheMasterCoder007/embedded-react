@@ -46,6 +46,7 @@
     "persist-transform.mjs",
     "cli.mjs",
     "sim-server.mjs",
+    "qjsc-wasm.mjs",
     "sim/",
     "README.md",
     "LICENSE",

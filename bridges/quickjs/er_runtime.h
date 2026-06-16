@@ -134,6 +134,24 @@ const char* er_runtime_container_status_str(ErContainerStatus status);
 bool er_runtime_load_bytecode(const void* buf, size_t len);
 
 /**
+ * @brief Compiles JS source to a QuickJS bytecode blob (the build-time `qjsc` step, without the native
+ *        tool). Uses a throwaway runtime so it never touches the app runtime; the bytecode targets the
+ *        same QuickJS version `er_runtime_load_bytecode` expects. COMPILE_ONLY — the bundle's references
+ *        to NativeUI/screen/console are resolved only at load time, not here.
+ *
+ * @param[in]  src      Source text (UTF-8; need not be NUL-terminated).
+ * @param[in]  len      Byte length of @p src.
+ * @param[out] out_len  Receives the bytecode byte length (0 on failure).
+ *
+ * @return malloc'd bytecode buffer the caller must release with er_runtime_free(), or NULL on a compile
+ *         error (see er_runtime_last_error).
+ */
+uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len);
+
+/** @brief Frees a buffer returned by er_runtime_compile_bytecode (plain free; safe on NULL). */
+void er_runtime_free(void* p);
+
+/**
  * @brief Evaluates an app from JS source text, then pumps once.
  *
  * @param[in] src   Source text.

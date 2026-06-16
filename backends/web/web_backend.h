@@ -80,6 +80,21 @@ extern "C"
     int er_web_load_pack(const uint8_t* buf, int len);
 
     /**
+     * @brief Build-time `qjsc`: compiles a JS app bundle to a QuickJS bytecode blob using the QuickJS already
+     *        embedded in this module — so the consumer `embedded-react build` needs no native toolchain.
+     *
+     * Uses a throwaway runtime (independent of any running app). The caller reads @p *out_len bytes from the
+     * returned pointer and frees it with `Module._free`.
+     *
+     * @param[in]  src      App bundle source (UTF-8).
+     * @param[in]  len      Byte length of @p src.
+     * @param[out] out_len  Receives the bytecode byte length (0 on a compile error → returns NULL).
+     *
+     * @return Pointer to the bytecode in wasm memory (caller frees), or NULL on error.
+     */
+    const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len);
+
+    /**
      * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).
      *
      * Resizes the framebuffer + present buffer, resets the engine pools, and rebuilds the current scene at

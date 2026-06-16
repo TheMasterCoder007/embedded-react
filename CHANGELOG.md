@@ -11,6 +11,25 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Added
+
+- **`embedded-react build`** — produce the device artifact from your own project, the deploy step
+  alongside `dev`/`export`:
+  - default → **`dist/app.erpkg`** (Flow A): the app bundle compiled to **QuickJS bytecode** + baked
+    assets + CRC, ready to upload to a device's config region (`er_runtime_load_container`). The bytecode
+    is compiled through the prebuilt simulator `.wasm`, so this needs **no native toolchain**.
+  - `--aot` → **`dist/app.gen.c` / `.h` + `assets.generated.c`** (Flow B): the app compiled
+    ahead-of-time to C for no-PSRAM boards (compiled into firmware; supports the AOT subset — animation
+    composition such as `Animated.loop`/`sequence` isn't supported yet and reports a located error).
+  The scaffolder template gains a `build` script.
+
+### Changed
+
+- The WASM simulator module now also targets Node (`-sENVIRONMENT=web,node`) and exports
+  `er_web_compile_bytecode` (a `qjsc`-style entry, backed by the new `er_runtime_compile_bytecode`), so
+  `embedded-react build` compiles bytecode with no native compiler. A `.cjs` copy of the module ships
+  for Node `require` (the package is ESM).
+
 ## [0.2.3] - 2026-06-15
 
 ### Fixed

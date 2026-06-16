@@ -61,13 +61,30 @@ const headerWrite = (text, version) => {
     .replace(/#define ER_VERSION_STRING "[^"]*"/, `#define ER_VERSION_STRING "${version}"`);
 };
 
-// Version-bearing manifests — each independently published artifact, plus the engine's C header.
+// README.md — the install snippets pin the version (so copy-paste installs match the release):
+// CMake FetchContent GIT_TAG, ESP-IDF `^x`, PlatformIO `#vx`. Each regex captures the prefix (group 1)
+// and the MAJOR.MINOR.PATCH (group 2). Drift here ships a README that tells users to pin the wrong tag.
+const README_PINS = [
+  /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/,        // CMake FetchContent
+  /(embedded-react\^)(\d+\.\d+\.\d+)/,   // ESP-IDF add-dependency
+  /(embedded-react\.git#v)(\d+\.\d+\.\d+)/, // PlatformIO lib_deps
+];
+const readmeRead = (text) => {
+  const found = README_PINS.map((re) => re.exec(text)?.[2]).filter(Boolean);
+  if (!found.length) return undefined;
+  return found.every((v) => v === found[0]) ? found[0] : `${found[0]} (install pins disagree)`;
+};
+const readmeWrite = (text, version) => README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
+
+// Version-bearing manifests — each independently published artifact, the engine's C header, and the
+// README install pins.
 const MANIFESTS = [
   { path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite },
   { path: 'create-embedded-react/package.json', read: jsonRead, write: jsonWrite },
   { path: 'library.json', read: jsonRead, write: jsonWrite },
   { path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite },
   { path: 'engine/include/er_version.h', read: headerRead, write: headerWrite },
+  { path: 'README.md', read: readmeRead, write: readmeWrite },
 ];
 
 // LICENSE + NOTICE: each independently published artifact (the npm packages; the engine as a CMake /

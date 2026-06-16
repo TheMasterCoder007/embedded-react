@@ -113,6 +113,10 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 - **Workspace packages.** The JS layer incubates in-repo at `bridges/quickjs/js`. Once
   the public surface stabilizes, extract it into published workspace packages.
 
+> **Done:** `embedded-react build` now produces the device artifact from a consumer project —
+> `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
+> `--aot` → `app.gen.c` (Flow B). The AOT subset still excludes animation composition (see Flow B above).
+
 ---
 
 ## Performance backlog (engine)
