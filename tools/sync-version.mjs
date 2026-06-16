@@ -20,132 +20,163 @@
 //   node tools/sync-version.mjs           # write VERSION into all targets
 //   node tools/sync-version.mjs --check   # verify all targets already match VERSION (CI gate; non-zero on drift)
 //
-// Targets: bridges/quickjs/js/package.json, engine/idf_component.yml, library.json, engine/include/er_version.h.
+// The exact set of files a version bump touches is exported as versionedFiles() so tools/release.mjs can
+// stage precisely those — one source of truth, so the writer and the release commit can never disagree.
 // To release: edit VERSION, run this, commit, tag vX.Y.Z.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION_FILE = resolve(ROOT, 'VERSION');
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
-// Modes:
-//   (default)        write VERSION → every artifact.
-//   --set X.Y.Z      first write X.Y.Z into VERSION, then sync (used by the release helper).
-//   --check          verify every artifact matches the VERSION file.
-//   --check X.Y.Z    verify every artifact AND the VERSION file match X.Y.Z (the release tag gate).
-const args = process.argv.slice(2);
-const check = args.includes('--check');
-const setIdx = args.indexOf('--set');
-const setVersion = setIdx >= 0 ? args[setIdx + 1] : null;
-const versionArg = args.find((a, i) => SEMVER.test(a) && i !== setIdx + 1); // bare X.Y.Z (not the --set value)
+/*----------------------------------------------------------------------------------------------------------------------
+ - Targets: the single source of truth for which files carry the version
+ ---------------------------------------------------------------------------------------------------------------------*/
 
-if (setVersion && !SEMVER.test(setVersion)) {
-  console.error(`--set needs a MAJOR.MINOR.PATCH version (got "${setVersion ?? ''}")`);
-  process.exit(2);
-}
-// In --set mode, the new version IS the source of truth — write it into VERSION up front.
-if (setVersion && !check) writeFileSync(VERSION_FILE, setVersion + '\n');
-
-// The version everything is expected to be: --check <tag> uses the tag; otherwise the VERSION file.
-const expected = check && versionArg ? versionArg : readFileSync(VERSION_FILE, 'utf8').trim();
-const version = expected;
-const m = SEMVER.exec(version);
-if (!m) {
-  console.error(`VERSION must be "MAJOR.MINOR.PATCH" (got "${version}")`);
-  process.exit(2);
-}
-const [, major, minor, patch] = m;
-
-const drift = []; // { file, found } when --check finds a mismatch
-const wrote = [];
-
-// In `--check <tag>` mode the VERSION file itself must equal the tag (catches the "forgot to bump" case).
-if (check && versionArg) {
-  const fileVersion = readFileSync(VERSION_FILE, 'utf8').trim();
-  if (fileVersion !== versionArg) drift.push({ file: 'VERSION', found: fileVersion });
-}
-
-/** Reads a file, applies `transform(text) → newText`, then writes (or, in --check, records any drift). */
-function apply(relPath, transform, currentVersionOf) {
-  const path = resolve(ROOT, relPath);
-  if (!existsSync(path)) return; // optional target (e.g. library.json before Phase 2)
-  const text = readFileSync(path, 'utf8');
-  const found = currentVersionOf(text);
-  if (check) {
-    if (found !== version) drift.push({ file: relPath, found });
-    return;
-  }
-  const next = transform(text);
-  if (next !== text) {
-    writeFileSync(path, next);
-    wrote.push(relPath);
-  }
-}
-
-// package.json / library.json — JSON "version" field (preserve 2-space formatting + trailing newline).
-const jsonVersion = (text) => JSON.parse(text).version;
-const setJsonVersion = (text) => {
+// JSON manifests — the "version" field (preserve 2-space formatting + trailing newline).
+const jsonRead = (text) => JSON.parse(text).version;
+const jsonWrite = (text, version) => {
   const obj = JSON.parse(text);
   obj.version = version;
   return JSON.stringify(obj, null, 2) + '\n';
 };
 
-apply('bridges/quickjs/js/package.json', setJsonVersion, jsonVersion);
-apply('create-embedded-react/package.json', setJsonVersion, jsonVersion);
-apply('library.json', setJsonVersion, jsonVersion);
-
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
 const YAML_VER = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
-apply(
-  'engine/idf_component.yml', // the ESP-IDF component lives in engine/ (the engine IS the component)
-  (text) => text.replace(YAML_VER, `version: "${version}"`),
-  (text) => YAML_VER.exec(text)?.[1]?.trim(),
-);
+const yamlRead = (text) => YAML_VER.exec(text)?.[1]?.trim();
+const yamlWrite = (text, version) => text.replace(YAML_VER, `version: "${version}"`);
 
-// engine/include/er_version.h — regenerate the macro block (the C single-source-of-truth header).
+// er_version.h — the C single-source-of-truth header; regenerate the macro block.
 const H_VER = /#define ER_VERSION_STRING "([^"]+)"/;
-apply(
-  'engine/include/er_version.h',
-  (text) =>
-    text
-      .replace(/#define ER_VERSION_MAJOR \d+/, `#define ER_VERSION_MAJOR ${major}`)
-      .replace(/#define ER_VERSION_MINOR \d+/, `#define ER_VERSION_MINOR ${minor}`)
-      .replace(/#define ER_VERSION_PATCH \d+/, `#define ER_VERSION_PATCH ${patch}`)
-      .replace(/#define ER_VERSION_STRING "[^"]*"/, `#define ER_VERSION_STRING "${version}"`),
-  (text) => H_VER.exec(text)?.[1],
-);
+const headerRead = (text) => H_VER.exec(text)?.[1];
+const headerWrite = (text, version) => {
+  const [, major, minor, patch] = SEMVER.exec(version);
+  return text
+    .replace(/#define ER_VERSION_MAJOR \d+/, `#define ER_VERSION_MAJOR ${major}`)
+    .replace(/#define ER_VERSION_MINOR \d+/, `#define ER_VERSION_MINOR ${minor}`)
+    .replace(/#define ER_VERSION_PATCH \d+/, `#define ER_VERSION_PATCH ${patch}`)
+    .replace(/#define ER_VERSION_STRING "[^"]*"/, `#define ER_VERSION_STRING "${version}"`);
+};
 
-// LICENSE + NOTICE: each independently published artifact (the npm package; the engine as a CMake /
+// Version-bearing manifests — each independently published artifact, plus the engine's C header.
+const MANIFESTS = [
+  { path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite },
+  { path: 'create-embedded-react/package.json', read: jsonRead, write: jsonWrite },
+  { path: 'library.json', read: jsonRead, write: jsonWrite },
+  { path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite },
+  { path: 'engine/include/er_version.h', read: headerRead, write: headerWrite },
+];
+
+// LICENSE + NOTICE: each independently published artifact (the npm packages; the engine as a CMake /
 // ESP-IDF / PlatformIO component) is its OWN distribution, so per Apache-2.0 §4 it must carry its own
 // LICENSE and NOTICE. The repo-root copies are the source of truth; mirror them into each package dir so
 // `npm pack` / `compote upload` / `pio publish` include them (and never drift — --check verifies).
 const LEGAL_FILES = ['LICENSE', 'NOTICE'];
 const PACKAGE_DIRS = ['bridges/quickjs/js', 'create-embedded-react', 'engine'];
-for (const dir of PACKAGE_DIRS) {
-  for (const f of LEGAL_FILES) {
-    const want = readFileSync(resolve(ROOT, f), 'utf8');
-    const dst = resolve(ROOT, dir, f);
-    const have = existsSync(dst) ? readFileSync(dst, 'utf8') : null;
+const legalMirrors = () => PACKAGE_DIRS.flatMap((dir) => LEGAL_FILES.map((f) => `${dir}/${f}`));
+
+/**
+ * @brief The complete set of repo-relative files a version bump touches: the VERSION file, every
+ *        version-bearing manifest, and each package's mirrored LICENSE/NOTICE. tools/release.mjs imports
+ *        this so it stages exactly the files this script writes — the two can never drift apart.
+ *
+ * @return Array of repo-root-relative paths.
+ */
+export function versionedFiles() {
+  return ['VERSION', ...MANIFESTS.map((t) => t.path), ...legalMirrors()];
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Main: run only when invoked directly (a no-op side-effect-free import otherwise)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Syncs (or, with --check, verifies) every versioned artifact against the repo-root VERSION.
+ *
+ * @return Does not return; exits the process with a status code (0 ok, 1 drift, 2 bad args).
+ */
+function main() {
+  // Modes:
+  //   (default)        write VERSION → every artifact.
+  //   --set X.Y.Z      first write X.Y.Z into VERSION, then sync (used by the release helper).
+  //   --check          verify every artifact matches the VERSION file.
+  //   --check X.Y.Z    verify every artifact AND the VERSION file match X.Y.Z (the release tag gate).
+  const args = process.argv.slice(2);
+  const check = args.includes('--check');
+  const setIdx = args.indexOf('--set');
+  const setVersion = setIdx >= 0 ? args[setIdx + 1] : null;
+  const versionArg = args.find((a, i) => SEMVER.test(a) && i !== setIdx + 1); // bare X.Y.Z (not the --set value)
+
+  if (setVersion && !SEMVER.test(setVersion)) {
+    console.error(`--set needs a MAJOR.MINOR.PATCH version (got "${setVersion ?? ''}")`);
+    process.exit(2);
+  }
+  // In --set mode, the new version IS the source of truth — write it into VERSION up front.
+  if (setVersion && !check) writeFileSync(VERSION_FILE, setVersion + '\n');
+
+  // The version everything is expected to be: --check <tag> uses the tag; otherwise the VERSION file.
+  const version = check && versionArg ? versionArg : readFileSync(VERSION_FILE, 'utf8').trim();
+  if (!SEMVER.test(version)) {
+    console.error(`VERSION must be "MAJOR.MINOR.PATCH" (got "${version}")`);
+    process.exit(2);
+  }
+
+  const drift = []; // { file, found } when --check finds a mismatch
+  const wrote = [];
+
+  // In `--check <tag>` mode the VERSION file itself must equal the tag (catches the "forgot to bump" case).
+  if (check && versionArg) {
+    const fileVersion = readFileSync(VERSION_FILE, 'utf8').trim();
+    if (fileVersion !== versionArg) drift.push({ file: 'VERSION', found: fileVersion });
+  }
+
+  // Version-bearing manifests.
+  for (const t of MANIFESTS) {
+    const path = resolve(ROOT, t.path);
+    if (!existsSync(path)) continue; // optional target (e.g. library.json before Phase 2)
+    const text = readFileSync(path, 'utf8');
     if (check) {
-      if (have !== want) drift.push({ file: `${dir}/${f}`, found: have == null ? '(missing)' : 'differs from root' });
-    } else if (have !== want) {
-      writeFileSync(dst, want);
-      wrote.push(`${dir}/${f}`);
+      const found = t.read(text);
+      if (found !== version) drift.push({ file: t.path, found });
+      continue;
     }
+    const next = t.write(text, version);
+    if (next !== text) {
+      writeFileSync(path, next);
+      wrote.push(t.path);
+    }
+  }
+
+  // Per-package LICENSE + NOTICE mirrors.
+  for (const dir of PACKAGE_DIRS) {
+    for (const f of LEGAL_FILES) {
+      const want = readFileSync(resolve(ROOT, f), 'utf8');
+      const dst = resolve(ROOT, dir, f);
+      const have = existsSync(dst) ? readFileSync(dst, 'utf8') : null;
+      if (check) {
+        if (have !== want) drift.push({ file: `${dir}/${f}`, found: have == null ? '(missing)' : 'differs from root' });
+      } else if (have !== want) {
+        writeFileSync(dst, want);
+        wrote.push(`${dir}/${f}`);
+      }
+    }
+  }
+
+  if (check) {
+    if (drift.length) {
+      console.error(`Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`);
+      for (const d of drift) console.error(`  ${d.file}: ${d.found}`);
+      console.error('Run `node tools/sync-version.mjs` and commit.');
+      process.exit(1);
+    }
+    console.log(`✓ all artifacts at ${version}; LICENSE + NOTICE in sync`);
+  } else {
+    console.log(`Synced to ${version}${wrote.length ? ' → ' + wrote.join(', ') : ' (all already current)'}`);
   }
 }
 
-if (check) {
-  if (drift.length) {
-    console.error(`Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`);
-    for (const d of drift) console.error(`  ${d.file}: ${d.found}`);
-    console.error('Run `node tools/sync-version.mjs` and commit.');
-    process.exit(1);
-  }
-  console.log(`✓ all artifacts at ${version}; LICENSE + NOTICE in sync`);
-} else {
-  console.log(`Synced to ${version}${wrote.length ? ' → ' + wrote.join(', ') : ' (all already current)'}`);
-}
+// Run only when executed directly (`node tools/sync-version.mjs ...`), not when imported (release.mjs).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

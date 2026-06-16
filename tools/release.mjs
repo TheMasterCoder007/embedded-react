@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { versionedFiles } from './sync-version.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -40,18 +41,12 @@ if (!version) {
 }
 const tag = `v${version}`;
 
-// The files the version bump touches — committed together, added explicitly (never `git add -A`).
-const FILES = [
-  'VERSION',
-  'bridges/quickjs/js/package.json',
-  'library.json',
-  'engine/idf_component.yml',
-  'engine/include/er_version.h',
-  'bridges/quickjs/js/LICENSE',
-  'bridges/quickjs/js/NOTICE',
-  'engine/LICENSE',
-  'engine/NOTICE',
-];
+// The files the version bump touches — committed together, added explicitly (never `git add -A`), so
+// unrelated working-tree changes are never swept into the release commit. The list is sourced from
+// tools/sync-version.mjs (versionedFiles()) — the same script that WRITES them — so the writer and the
+// release commit can't drift apart. (A file synced but not staged would land on disk yet never commit,
+// shipping a tag that fails CI's `--check`.)
+const FILES = versionedFiles();
 
 const git = (...a) => execFileSync('git', a, { cwd: ROOT, stdio: 'inherit' });
 const gitOut = (...a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
