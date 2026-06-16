@@ -11,6 +11,30 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-15
+
+Maintenance release — dependency, security, and release-pipeline fixes. No changes to the component
+API, the engine, or runtime behavior.
+
+### Security
+
+- Updated `esbuild` (the build-time bundler dependency) from 0.24 to **0.28.1**, clearing two
+  high-severity esbuild advisories (dev-server arbitrary file read; Deno binary integrity).
+  embedded-react does not expose esbuild's dev server, so real-world impact was low, but the dependency
+  is now patched.
+
+### Changed
+
+- Dev toolchain: pinned `vitest` to **3.x** and added an `esbuild` override so `npm audit` reports zero
+  vulnerabilities and `npm ci` installs reproducibly across platforms. (vitest 4's oxc transformer pulled
+  nested, platform-specific optional deps that npm could not capture cross-platform, breaking `npm ci`.)
+
+### Fixed
+
+- Release workflow: restored `registry-url` so npm OIDC **trusted publishing** completes its token
+  exchange (tokenless publish). Documented the gotcha that the trusted-publisher owner/repo must match
+  the GitHub OIDC claim's exact case (`TheMasterCoder007`).
+
 ## [0.2.0] - 2026-06-15
 
 First beta.
@@ -102,7 +126,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TheMasterCoder007/embedded-react/releases/tag/v0.1.0

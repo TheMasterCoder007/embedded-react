@@ -81,6 +81,9 @@
     "react-reconciler": "0.29.2"
   },
   "devDependencies": {
-    "vitest": "^4.1.9"
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
   }
 }
