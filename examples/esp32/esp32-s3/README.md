@@ -19,6 +19,12 @@ time** (CMake `FetchContent`, the same mechanism the desktop build uses) — not
 `components/`. Copy `examples/esp32/esp32-s3/` to its own repo and `idf.py build` pulls everything it needs.
 It's the seed a `create-embedded-react` scaffold would emit.
 
+**This is the canonical Flow A template** — Flow A uses `FetchContent`, *not* the ESP-IDF Component
+Registry. The registry ships only the engine (which is all Flow B needs). Flow A additionally needs
+QuickJS-ng, a plain CMake project that isn't an ESP-IDF component, so `idf.py add-dependency` can't manage
+it — `FetchContent` can, and pulls the engine + bridge + QuickJS together. (For the AOT path that *does*
+use the registry, see [examples/esp32/esp32-2432s028r](../esp32-2432s028r/README.md).)
+
 ```
 CMakeLists.txt            top-level IDF project — FetchContent of QuickJS + embedded-react
 sdkconfig.defaults        ESP32-S3, octal PSRAM, 16MB flash, big task stack
@@ -42,12 +48,19 @@ What the top-level `CMakeLists.txt` fetches:
   so a mismatch shows a panel instead of running garbage.
 - **embedded-react (engine + bridge)** — uses the **local monorepo checkout when building in-tree**
   (so development picks up your live edits with no sync step), otherwise **fetched from GitHub**
-  (`github.com/TheMasterCoder007/react-embedded`, branch `master`). The components reference whichever
-  source the top CMakeLists resolved.
+  (`github.com/TheMasterCoder007/embedded-react`, pinned to tag `v0.3.0`). The components reference
+  whichever source the top CMakeLists resolved.
 
 The fetched sources land in the gitignored `build/` dir — they're build inputs, never committed. The
 firmware builds standalone (no app required at build time); the config (`app.erpkg`) is a separate
 artifact you flash into the `config` partition (next section).
+
+**Adapting to another board.** Two board-specific pieces: `main/board.c` / `board.h` bring up *this*
+panel + touch (the Waveshare 7" 800×480 RGB panel, GT911, CH422G), and the render backend
+(`components/esp32-lcd-backend` → `backends/esp32-lcd`) flushes pixels over an `esp_lcd` panel handle. For
+another **RGB / I80 parallel** panel, keep that backend and rewrite `board.c` for your panel and touch. For
+an **SPI display** (ILI9341/ST7789 etc.), swap the backend to `backends/esp32-spi-lcd` (banded RGB565, the
+one the [CYD example](../esp32-2432s028r/README.md) uses). The engine itself is backend-agnostic.
 
 ## Build
 
@@ -67,10 +80,19 @@ idf.py build flash monitor      # picks the right port automatically, or pass -p
 
 The firmware builds with no app — until a config is flashed, it shows a **"No config loaded"** panel.
 
-**2. Pack a config and flash it into the `config` partition.** From the repo root:
+**2. Pack a config and flash it into the `config` partition.**
+
+From **your own app project** (a `create-embedded-react` scaffold, or any project that depends on
+`embedded-react`) — this is the path a consumer uses, outside this monorepo:
 
 ```bash
-# Build the config container from a demo in demos/ (bytecode + assets + version + CRC → one .erpkg).
+npx embedded-react build           # → ./dist/app.erpkg  (bytecode + assets + version + CRC)
+parttool.py write_partition --partition-name=config --input dist/app.erpkg
+```
+
+From **inside this monorepo** (packing a demo from `demos/`), the equivalent is `npm run pack`:
+
+```bash
 # `npm run pack` packs the default demo (demos/thermostat); `npm run pack -- <name>` picks another.
 cd bridges/quickjs/js && npm run pack            # → dist/app.erpkg
 cd ../../..                                       # back to repo root

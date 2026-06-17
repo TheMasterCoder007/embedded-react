@@ -76,8 +76,17 @@ const readmeRead = (text) => {
 };
 const readmeWrite = (text, version) => README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
 
-// Version-bearing manifests — each independently published artifact, the engine's C header, and the
-// README install pins.
+// ESP32 example CMakeLists — the Flow A / Flow B fetch templates pin the embedded-react release they pull
+// when copied OUT of the monorepo (`FetchContent ... GIT_TAG vX.Y.Z`). The pin must track the release, or a
+// copied-out template re-drifts every bump and fetches the wrong tag. The regex matches only the
+// `GIT_TAG <space> vX.Y.Z` form (the embedded_react declare) — NOT QuickJS's `GIT_TAG ${QUICKJS_GIT_TAG}`
+// (no literal version) — so the QuickJS pin is left untouched.
+const GIT_TAG_PIN = /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/;
+const gitTagRead = (text) => GIT_TAG_PIN.exec(text)?.[2];
+const gitTagWrite = (text, version) => text.replace(GIT_TAG_PIN, `$1${version}`);
+
+// Version-bearing manifests — each independently published artifact, the engine's C header, the README
+// install pins, and the ESP32 example fetch-template tags.
 const MANIFESTS = [
   { path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite },
   { path: 'create-embedded-react/package.json', read: jsonRead, write: jsonWrite },
@@ -85,6 +94,8 @@ const MANIFESTS = [
   { path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite },
   { path: 'engine/include/er_version.h', read: headerRead, write: headerWrite },
   { path: 'README.md', read: readmeRead, write: readmeWrite },
+  { path: 'examples/esp32/esp32-s3/CMakeLists.txt', read: gitTagRead, write: gitTagWrite },
+  { path: 'examples/esp32/esp32-2432s028r/CMakeLists.txt', read: gitTagRead, write: gitTagWrite },
 ];
 
 // LICENSE + NOTICE: each independently published artifact (the npm packages; the engine as a CMake /

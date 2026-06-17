@@ -243,17 +243,35 @@ FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
 ```
 
-**ESP-IDF** — the engine as a managed component:
+**ESP32 (ESP-IDF)** — pick a flow first; the flow decides how you pull the engine:
+
+|                | **Flow A** — interpreted (QuickJS)        | **Flow B** — AOT (compiled)                       |
+| -------------- | ----------------------------------------- | ------------------------------------------------- |
+| Runtime        | QuickJS interprets your JS on-device      | App compiled to C — no JS engine at runtime       |
+| RAM            | needs **PSRAM** (the JS heap)             | runs in **internal RAM** (no-PSRAM boards OK)     |
+| Deploy a UI    | upload `app.erpkg` to a config partition — **no reflash** | linked into the firmware (reflash to update) |
+| Pull the engine | **`FetchContent`** (engine + bridge + QuickJS) | **`idf.py add-dependency`** (registry) *or* `FetchContent` |
+| Step-by-step   | [examples/esp32/esp32-s3](examples/esp32/esp32-s3/README.md) | [examples/esp32/esp32-2432s028r](examples/esp32/esp32-2432s028r/README.md) |
+
+**Flow B** can use the engine as a managed component — the app is compiled C, so the engine is all it
+needs from us (`npx embedded-react build --aot` emits the C):
 
 ```
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.3.0"
 ```
 
-**PlatformIO** — add to `platformio.ini`:
+**Flow A** uses `FetchContent`, not the component registry: it additionally needs QuickJS, which is a
+plain CMake project (not an ESP-IDF component), so the registry's managed-dependency model can't pull it —
+`FetchContent` can. The [esp32-s3 example](examples/esp32/esp32-s3/README.md) is a copy-out-ready template.
+
+**PlatformIO** — the engine (Flow B) installs as a library:
 
 ```ini
 lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.3.0
 ```
+
+Flow A on PlatformIO is best-effort (add the bridge + QuickJS as extra git `lib_deps`); the ESP-IDF +
+`FetchContent` path above is the supported Flow A route.
 
 The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`
 for reference wiring). Tune the `ERUI_*` RAM/feature flags for your board (the defaults are desktop-sized).

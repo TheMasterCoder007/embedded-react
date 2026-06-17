@@ -34,8 +34,8 @@ if(EXISTS "${_er_local}/engine/include/er_scene.h")
     message(STATUS "embedded-react: using local monorepo source at ${_er_local}")
 else()
     FetchContent_Declare(embedded_react
-        GIT_REPOSITORY https://github.com/TheMasterCoder007/react-embedded.git
-        GIT_TAG        master
+        GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
+        GIT_TAG        v0.3.0
         GIT_SHALLOW    TRUE
         SOURCE_SUBDIR  _skip_cmake_
     )
