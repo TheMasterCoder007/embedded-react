@@ -43,6 +43,10 @@ ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat    # → dist/
 cd ../../..
 ```
 
+> From **your own app project** (outside this monorepo), the consumer equivalent is
+> `npx embedded-react build --aot`, which emits `app.gen.c` / `app.gen.h` (+ `assets.generated.c`) for the
+> app in your project. `npm run aot` shown above is the in-repo form that compiles a demo from `demos/`.
+
 **2. Build + flash:**
 
 ```bash
@@ -112,5 +116,17 @@ witnessmenow's ESP32-Cheap-Yellow-Display)
 ## Self-contained via fetch
 
 Like the esp32-s3 example, dependencies are the **local monorepo when building in-tree**, else
-**fetched from GitHub** — but Flow B pulls in only the engine + SPI backend (no QuickJS). Copy this
+**fetched from GitHub** — but Flow B pulls in only the engine and SPI backend (no QuickJS). Copy this
 folder out and `idf.py build` pulls what it needs. The AOT `app.gen.c` is generated separately (step 1).
+
+**Alternative: the engine from the Component Registry.** Because Flow B needs only the engine (the app is
+compiled C), you can pull it as a managed component instead of `FetchContent`:
+
+```bash
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.3.0"
+```
+
+Then drop `app.gen.c` / `app.gen.h` into `main/` and provide a backend. Note the SPI backend
+(`backends/esp32-spi-lcd`) is **not** on the registry — this example compiles it from the fetched/local
+source via its component shim; with the registry route you'd vendor or fetch the backend yourself. This is
+why the example defaults to `FetchContent` (one mechanism for both engine and backend).
