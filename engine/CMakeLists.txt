@@ -24,6 +24,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/shadow.c
         rendering/transform.c
         rendering/vector.c
+        rendering/vector_store.c
 
         # text: UTF-8 + glyph blits
         text/text_renderer.c

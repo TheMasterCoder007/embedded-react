@@ -25,7 +25,46 @@
  * Vector rasterizer + the engine-owned op-tape/paint storage pool for ER_NODE_VECTOR nodes.
  * The op-tape/paint encoding is the public contract in er_scene.h; this header is internal to the
  * engine (included by the compositor), exposing the rasterizer and the per-node storage slots.
+ *
+ * Implementation note: the rasterizer (vector.c) and the per-node storage pool (vector_store.c) are
+ * SEPARATE translation units so a target can place the cold storage pool in slower far memory (e.g.
+ * ESP32 PSRAM, via a linker fragment) while the hot per-pixel rasterize scratch stays in fast RAM.
  */
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Pool-overflow diagnostics (shared by the rasterizer + the storage pool)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* When a static pool is exhausted the vector code silently drops geometry — correct and memory-safe, but a
+ * truncated shape is easy to mistake for a bug. With diagnostics on, the first overflow of each pool prints
+ * a one-line warning naming the macro to raise. Defaults ON for debug builds and OFF when NDEBUG is defined,
+ * so a release MCU pulls in no <stdio.h> and pays no code; force it with -DERUI_VECTOR_DIAGNOSTICS=0/1. */
+#ifndef ERUI_VECTOR_DIAGNOSTICS
+#ifdef NDEBUG
+#define ERUI_VECTOR_DIAGNOSTICS 0
+#else
+#define ERUI_VECTOR_DIAGNOSTICS 1
+#endif
+#endif
+
+#if ERUI_VECTOR_DIAGNOSTICS
+#include <stdio.h>
+/* Warn once per call site per process: an overflow can recur every frame, and one line is enough to act on.
+ * The latch is static to each macro expansion, so each pool warns independently. */
+#define ERUI_VEC_WARN_ONCE(macro_name, cap)                                                                            \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        static bool er_vec_warned_ = false;                                                                            \
+        if (!er_vec_warned_)                                                                                           \
+        {                                                                                                              \
+            er_vec_warned_ = true;                                                                                     \
+            fprintf(stderr, "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name,    \
+                    (int)(cap));                                                                                       \
+        }                                                                                                              \
+    } while (0)
+#else
+#define ERUI_VEC_WARN_ONCE(macro_name, cap) ((void)0)
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Rasterizer

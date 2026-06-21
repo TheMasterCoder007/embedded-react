@@ -8,13 +8,18 @@
 # Note: PSRAM is cache-fronted and slower than internal SRAM; if compositing perf needs it later,
 # shrink ERUI_SCRATCH_W/H or keep hot buffers internal. For bring-up, correctness first.
 #
-# EXCEPTION: vector.o's static buffers (the path rasterizer's edge list, coverage row, crossing list)
-# are touched hundreds of thousands of times per frame in tight scanline loops. In PSRAM that made a
-# dial re-rasterize ~290 ms (measured); keeping them in internal DRAM cuts it ~20x. A more specific
-# object entry overrides the archive wildcard, so vector.o stays in internal RAM while the big
-# node/scratch pools still go to PSRAM. (vector.o's buffers are sized to fit — see vector.c.)
+# EXCEPTION — vector.o stays INTERNAL: the path rasterizer's edge list / coverage row / crossing list
+# (vector.c) are touched hundreds of thousands of times per frame in tight scanline loops. In PSRAM that
+# made a dial re-rasterize ~290 ms (measured); internal DRAM is ~20x faster. A more specific object entry
+# overrides the archive wildcard, so vector.o stays internal.
+#
+# vector_store.o (the per-node op-tape/paint pool, vector_store.c) is COLD — read once per node when it
+# re-rasterizes, NOT in the scanline loop — so it goes to PSRAM with everything else. That is what lets
+# ERUI_MAX_VECTOR_NODES be raised well past the internal-RAM-bound default: the per-node storage no longer
+# competes with the hot scratch for internal DRAM. Listed explicitly for clarity (the wildcard catches it too).
 [mapping:engine_psram_bss]
 archive: libengine.a
 entries:
     vector (default)
+    vector_store (extram_bss)
     * (extram_bss)

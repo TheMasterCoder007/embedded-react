@@ -27,6 +27,7 @@ idf_component_register(
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
         "${E}/rendering/vector.c"
+        "${E}/rendering/vector_store.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
         "${E}/animation/layout_anim.c"

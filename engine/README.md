@@ -123,6 +123,16 @@ At the defaults that's ~122 KB. The fastest-growing terms are `MAX_EDGES` (~32 B
 three lists) and the **per-node op-tape**: persistent storage is `MAX_VECTOR_NODES ×
 VECTOR_TAPE_MAX × 4` bytes, so "many nodes" and "large tape" multiply.
 
+**Placement (PSRAM targets).** The vector code is two objects: `vector.c` (the **hot** per-pixel
+rasterize scratch — edge/coverage/crossing lists) and `vector_store.c` (the **cold** per-node
+op-tape/paint pool). The storage pool is read once per node when it re-rasterizes, not in the
+scanline inner loop, so a target with far memory can place `vector_store.o`'s `.bss` there — e.g.,
+ESP32 PSRAM via a linker fragment — while the hot scratch stays in fast internal RAM. With the
+storage in PSRAM, **`ERUI_MAX_VECTOR_NODES` (and `ERUI_VECTOR_TAPE_MAX`) can be raised well past
+the internal-RAM-bound default**. See `examples/esp32/esp32-s3` —
+`components/engine/linker_psram.lf` maps `vector_store` to `extram_bss` and the component sets
+`ERUI_MAX_VECTOR_NODES=32`.
+
 **Overflow is silent truncation, not a crash** — an over-complex shape is clipped or dropped.
 A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the
 macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a

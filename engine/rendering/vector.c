@@ -61,15 +61,8 @@
 #define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in px (coverage row buffer). */
 #endif
 
-#ifndef ERUI_MAX_VECTOR_NODES
-#define ERUI_MAX_VECTOR_NODES 8 /**< Concurrent vector nodes that can hold geometry. */
-#endif
-#ifndef ERUI_VECTOR_TAPE_MAX
-#define ERUI_VECTOR_TAPE_MAX 1024 /**< Op-tape floats stored per vector node. */
-#endif
-#ifndef ERUI_VECTOR_PAINTS_MAX
-#define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries stored per vector node. */
-#endif
+/* The per-node STORAGE pools (ERUI_MAX_VECTOR_NODES / ERUI_VECTOR_TAPE_MAX / ERUI_VECTOR_PAINTS_MAX) live
+ * with that pool in vector_store.c so it can be placed in PSRAM independently of this file's hot scratch. */
 
 #define VEC_SUBSAMPLES 4   /**< Vertical AA sub-scanlines per pixel row. */
 #define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
@@ -79,41 +72,7 @@
              value visibly facets small curves (the knob most of all). */
 #define VEC_PI 3.14159265358979323846f
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Pool-overflow diagnostics
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/* When a static pool above is exhausted the rasterizer silently drops geometry — correct and memory-safe,
- * but a truncated shape is easy to mistake for a bug. With diagnostics on, the first overflow of each pool
- * prints a one-line warning naming the macro to raise. Defaults ON for debug builds and OFF when NDEBUG is
- * defined, so a release MCU pulls in no <stdio.h> and pays no code; force it either way with
- * -DERUI_VECTOR_DIAGNOSTICS=0/1. */
-#ifndef ERUI_VECTOR_DIAGNOSTICS
-#ifdef NDEBUG
-#define ERUI_VECTOR_DIAGNOSTICS 0
-#else
-#define ERUI_VECTOR_DIAGNOSTICS 1
-#endif
-#endif
-
-#if ERUI_VECTOR_DIAGNOSTICS
-#include <stdio.h>
-/* Warn once per call site per process: an overflow can recur every frame, and one line is enough to act on.
- * The latch is static to each macro expansion, so each pool warns independently. */
-#define ERUI_VEC_WARN_ONCE(macro_name, cap)                                                                            \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        static bool er_vec_warned_ = false;                                                                            \
-        if (!er_vec_warned_)                                                                                           \
-        {                                                                                                              \
-            er_vec_warned_ = true;                                                                                     \
-            fprintf(stderr, "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name,    \
-                    (int)(cap));                                                                                       \
-        }                                                                                                              \
-    } while (0)
-#else
-#define ERUI_VEC_WARN_ONCE(macro_name, cap) ((void)0)
-#endif
+/* ERUI_VECTOR_DIAGNOSTICS + ERUI_VEC_WARN_ONCE live in vector.h (shared with vector_store.c). */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Working state (static, reused per render)
@@ -148,99 +107,9 @@ static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
 static int s_cross_d[ERUI_VECTOR_MAX_EDGES];
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Per-node storage pool
- ---------------------------------------------------------------------------------------------------------------------*/
-
-typedef struct
-{
-    bool used;
-    float ops[ERUI_VECTOR_TAPE_MAX];
-    int n_ops;
-    ERVectorPaint paints[ERUI_VECTOR_PAINTS_MAX];
-    int n_paints;
-} VecSlot;
-
-static VecSlot s_slots[ERUI_MAX_VECTOR_NODES];
-
-int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
-{
-    if (slot < 0)
-    {
-        for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
-        {
-            if (!s_slots[i].used)
-            {
-                slot = i;
-                break;
-            }
-        }
-        if (slot < 0)
-        {
-            ERUI_VEC_WARN_ONCE("ERUI_MAX_VECTOR_NODES", ERUI_MAX_VECTOR_NODES);
-            return -1; /* pool exhausted; node renders nothing */
-        }
-    }
-    if (slot >= ERUI_MAX_VECTOR_NODES)
-        return -1;
-
-    VecSlot* s = &s_slots[slot];
-    s->used = true;
-    if (n_ops > ERUI_VECTOR_TAPE_MAX)
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_TAPE_MAX", ERUI_VECTOR_TAPE_MAX);
-    int no = (n_ops < 0) ? 0 : (n_ops > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : n_ops);
-    if (ops && no > 0)
-        memcpy(s->ops, ops, (size_t)no * sizeof(float));
-    s->n_ops = no;
-    if (n_paints > ERUI_VECTOR_PAINTS_MAX)
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_PAINTS_MAX", ERUI_VECTOR_PAINTS_MAX);
-    int np = (n_paints < 0) ? 0 : (n_paints > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : n_paints);
-    if (paints && np > 0)
-        memcpy(s->paints, paints, (size_t)np * sizeof(ERVectorPaint));
-    s->n_paints = np;
-    return slot;
-}
-
-void er_vector_free(int slot)
-{
-    if (slot >= 0 && slot < ERUI_MAX_VECTOR_NODES)
-        s_slots[slot].used = false;
-}
-
-void er_vector_reset(void)
-{
-    /* Free every storage slot; the rasterization scratch is per-call, but zero it for tidiness. */
-    memset(s_slots, 0, sizeof(s_slots));
-    s_npts = 0;
-    s_nsub = 0;
-    s_nedges = 0;
-}
-
-const float* er_vector_slot_ops(int slot, int* n_ops)
-{
-    if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
-    {
-        if (n_ops)
-            *n_ops = 0;
-        return 0;
-    }
-    if (n_ops)
-        *n_ops = s_slots[slot].n_ops;
-    return s_slots[slot].ops;
-}
-
-const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
-{
-    if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
-    {
-        if (n_paints)
-            *n_paints = 0;
-        return 0;
-    }
-    if (n_paints)
-        *n_paints = s_slots[slot].n_paints;
-    return s_slots[slot].paints;
-}
+/* The per-node op-tape/paint storage pool (er_vector_store/free/reset/slot_ops/slot_paints + s_slots) lives
+ * in vector_store.c — a separate translation unit so a target can place that cold pool in PSRAM (via the
+ * engine's linker fragment) while this file's hot per-pixel scratch above stays in fast internal RAM. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Geometry building
