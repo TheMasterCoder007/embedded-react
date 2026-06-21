@@ -3465,6 +3465,10 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(
         ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 4));
+    /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
+     * silently truncates the op-tape / paint table otherwise (see warnVectorCaps in svg-ops.js). */
+    JS_SetPropertyStr(ctx, native_ui, "maxVectorOps", JS_NewInt32(ctx, VEC_BRIDGE_MAX_OPS));
+    JS_SetPropertyStr(ctx, native_ui, "maxVectorPaints", JS_NewInt32(ctx, VEC_BRIDGE_MAX_PAINTS));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));

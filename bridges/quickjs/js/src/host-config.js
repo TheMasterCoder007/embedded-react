@@ -21,7 +21,7 @@
 import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
 import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
-import { flattenSvg } from './embedded-react/svg-ops.js';
+import { flattenSvg, warnVectorCaps } from './embedded-react/svg-ops.js';
 import { splitAnimatedStyle } from './embedded-react/split-style.js';
 
 /**
@@ -54,6 +54,7 @@ function applyTextSpans(type, handle, props) {
 function applyVectorOps(type, handle, props) {
   if (type !== 'Svg') return;
   const { ops, paints } = flattenSvg(props);
+  warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints);
   NativeUI.setVectorOps(handle, ops, paints);
 }
 

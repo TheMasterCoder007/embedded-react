@@ -80,6 +80,42 @@
 #define VEC_PI 3.14159265358979323846f
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Pool-overflow diagnostics
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* When a static pool above is exhausted the rasterizer silently drops geometry — correct and memory-safe,
+ * but a truncated shape is easy to mistake for a bug. With diagnostics on, the first overflow of each pool
+ * prints a one-line warning naming the macro to raise. Defaults ON for debug builds and OFF when NDEBUG is
+ * defined, so a release MCU pulls in no <stdio.h> and pays no code; force it either way with
+ * -DERUI_VECTOR_DIAGNOSTICS=0/1. */
+#ifndef ERUI_VECTOR_DIAGNOSTICS
+#ifdef NDEBUG
+#define ERUI_VECTOR_DIAGNOSTICS 0
+#else
+#define ERUI_VECTOR_DIAGNOSTICS 1
+#endif
+#endif
+
+#if ERUI_VECTOR_DIAGNOSTICS
+#include <stdio.h>
+/* Warn once per call site per process: an overflow can recur every frame, and one line is enough to act on.
+ * The latch is static to each macro expansion, so each pool warns independently. */
+#define ERUI_VEC_WARN_ONCE(macro_name, cap)                                                                            \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        static bool er_vec_warned_ = false;                                                                            \
+        if (!er_vec_warned_)                                                                                           \
+        {                                                                                                              \
+            er_vec_warned_ = true;                                                                                     \
+            fprintf(stderr, "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name,    \
+                    (int)(cap));                                                                                       \
+        }                                                                                                              \
+    } while (0)
+#else
+#define ERUI_VEC_WARN_ONCE(macro_name, cap) ((void)0)
+#endif
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Working state (static, reused per render)
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -140,17 +176,24 @@ int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* 
             }
         }
         if (slot < 0)
+        {
+            ERUI_VEC_WARN_ONCE("ERUI_MAX_VECTOR_NODES", ERUI_MAX_VECTOR_NODES);
             return -1; /* pool exhausted; node renders nothing */
+        }
     }
     if (slot >= ERUI_MAX_VECTOR_NODES)
         return -1;
 
     VecSlot* s = &s_slots[slot];
     s->used = true;
+    if (n_ops > ERUI_VECTOR_TAPE_MAX)
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_TAPE_MAX", ERUI_VECTOR_TAPE_MAX);
     int no = (n_ops < 0) ? 0 : (n_ops > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : n_ops);
     if (ops && no > 0)
         memcpy(s->ops, ops, (size_t)no * sizeof(float));
     s->n_ops = no;
+    if (n_paints > ERUI_VECTOR_PAINTS_MAX)
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_PAINTS_MAX", ERUI_VECTOR_PAINTS_MAX);
     int np = (n_paints < 0) ? 0 : (n_paints > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : n_paints);
     if (paints && np > 0)
         memcpy(s->paints, paints, (size_t)np * sizeof(ERVectorPaint));
@@ -206,7 +249,12 @@ const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
 /** @brief Appends a vertex to the current subpath (last entry of s_sub). */
 static void pt_add(float x, float y)
 {
-    if (s_npts >= ERUI_VECTOR_MAX_PTS || s_nsub == 0)
+    if (s_npts >= ERUI_VECTOR_MAX_PTS)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_PTS", ERUI_VECTOR_MAX_PTS);
+        return;
+    }
+    if (s_nsub == 0)
         return;
     /* Drop exact duplicates (zero-length segments add nothing and bloat the edge list). */
     VecSub* sp = &s_sub[s_nsub - 1];
@@ -226,7 +274,10 @@ static void pt_add(float x, float y)
 static void sub_begin(float x, float y)
 {
     if (s_nsub >= ERUI_VECTOR_MAX_SUBPATHS)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_SUBPATHS", ERUI_VECTOR_MAX_SUBPATHS);
         return;
+    }
     s_sub[s_nsub].start = s_npts;
     s_sub[s_nsub].count = 0;
     s_sub[s_nsub].closed = 0;
@@ -298,8 +349,13 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
 /** @brief Adds a non-horizontal edge to the rasterizer edge list (normalized so y0 <= y1). */
 static void edge_add(float x0, float y0, float x1, float y1)
 {
-    if (y0 == y1 || s_nedges >= ERUI_VECTOR_MAX_EDGES)
+    if (y0 == y1)
         return;
+    if (s_nedges >= ERUI_VECTOR_MAX_EDGES)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
+        return;
+    }
     VecEdge* e = &s_edges[s_nedges++];
     if (y0 < y1)
     {
@@ -322,6 +378,10 @@ static void edge_add(float x0, float y0, float x1, float y1)
 /** @brief Adds coverage for a covered horizontal span [xs,xe] (screen px) at the given weight. */
 static void cover_span(float xs, float xe, float weight, int clipx0, int width)
 {
+    /* Reject non-finite spans: NaN/inf coordinates (from a malformed path) survive the clamps below and
+     * turn (int)floorf(...) into a wild index that writes s_cover[] out of bounds. Defense in depth. */
+    if (!isfinite(xs) || !isfinite(xe))
+        return;
     xs -= (float)clipx0;
     xe -= (float)clipx0;
     if (xs < 0.0f)
@@ -426,8 +486,13 @@ static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int c
     if (s_nedges == 0 || ((color >> 24) & 0xFFU) == 0U)
         return;
     const int width = clipx1 - clipx0;
-    if (width <= 0 || width > ERUI_VECTOR_MAX_ROW)
+    if (width <= 0)
         return;
+    if (width > ERUI_VECTOR_MAX_ROW)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_ROW", ERUI_VECTOR_MAX_ROW);
+        return;
+    }
 
     /* Sort edges top-to-bottom so each scanline only tests the few edges actually crossing it (an
      * active-edge table) instead of all of them — the difference between O(edges*rows) and ~O(rows),
@@ -775,6 +840,16 @@ void er_vector_render(const float* ops,
         while (i < n_ops && ops[i] != ER_VOP_SHAPE)
         {
             const float op = ops[i++];
+            /* Verify this op's args fit within the tape before reading them. A tape truncated mid-op —
+             * e.g. the JS bridge capping it at ERUI_VECTOR_TAPE_MAX, or any malformed input — would
+             * otherwise read past n_ops into adjacent memory, producing NaN/garbage coordinates that
+             * index s_cover[] out of bounds and crash. Stop parsing the shape's tail instead. */
+            const int op_args = (op == ER_VOP_MOVE || op == ER_VOP_LINE)  ? 2
+                                : (op == ER_VOP_QUAD)                      ? 4
+                                : (op == ER_VOP_CUBIC || op == ER_VOP_ARC) ? 6
+                                                                           : 0;
+            if (i + op_args > n_ops)
+                break;
             if (op == ER_VOP_MOVE)
             {
                 cur_x = (float)px + ops[i++];

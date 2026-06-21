@@ -562,3 +562,40 @@ export function flattenSvg(props) {
   walk(props.children, PAINT_DEFAULT, root);
   return { ops, paints };
 }
+
+// --- Bridge-cap diagnostics ----------------------------------------------------------------------
+
+let _warnedVecOps = false;
+let _warnedVecPaints = false;
+
+/**
+ * Warns (once per kind) when an <Svg>'s compiled geometry exceeds the native bridge's caps and will be
+ * SILENTLY TRUNCATED. The bridge (native_ui_bridge.c) copies the op-tape into a fixed buffer and caps the
+ * paint table; past the cap, geometry/shapes are dropped. The engine has its own pool diagnostics (on
+ * stderr, debug builds) for what happens further in; this surfaces the JS->engine boundary truncation in
+ * the developer's console. Pass the live caps from NativeUI.maxVectorOps / NativeUI.maxVectorPaints
+ * (undefined on an older bridge => no-op).
+ *
+ * @param {number} opsLen     Op-tape length (flat float count).
+ * @param {number} paintsLen  Paint-table length (7 numbers per shape).
+ * @param {number} maxOps     Bridge op-tape cap (NativeUI.maxVectorOps).
+ * @param {number} maxPaints  Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
+ */
+export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints) {
+  if (!_warnedVecOps && maxOps > 0 && opsLen > maxOps) {
+    _warnedVecOps = true;
+    console.warn(
+      `embedded-react: an <Svg> op-tape is too long (${opsLen} > ${maxOps} floats) and will be truncated — ` +
+        `the shape gets cut off. Simplify the path (fewer/coarser curves) or split it across <Svg> nodes; ` +
+        `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`
+    );
+  }
+  const shapes = (paintsLen / 7) | 0;
+  if (!_warnedVecPaints && maxPaints > 0 && shapes > maxPaints) {
+    _warnedVecPaints = true;
+    console.warn(
+      `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
+        `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`
+    );
+  }
+}
