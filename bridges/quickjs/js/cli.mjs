@@ -199,6 +199,7 @@ async function buildContainer(cwd, explicit, outDir) {
   const { bakeFont } = await import('./assets/bake-font.mjs');
   const { emitAssetPack } = await import('./assets/emit-pack.mjs');
   const { emitContainer } = await import('./assets/emit-container.mjs');
+  const { registerSvgVectorLoader } = await import('./assets/svg-loader.mjs');
   const { compileToBytecode } = await import('./qjsc-wasm.mjs');
 
   const simDir = simDirOrExit();
@@ -220,6 +221,7 @@ async function buildContainer(cwd, explicit, outDir) {
         fonts.set(f, a.path);
         return { contents: `module.exports = ${JSON.stringify(f)};`, loader: 'js' };
       });
+      registerSvgVectorLoader(b);
     },
   };
   // The bundle is an intermediate (it becomes bytecode in the .erpkg) — keep it out of the user's outDir

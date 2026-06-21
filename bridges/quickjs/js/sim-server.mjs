@@ -34,6 +34,7 @@ const HERE = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,
 const require = createRequire(import.meta.url);
 const esbuild = require('esbuild');
 const { bakeAssetPack } = await import(pathToFileURL(resolve(HERE, 'assets/index.mjs')).href);
+const { registerSvgVectorLoader } = await import(pathToFileURL(resolve(HERE, 'assets/svg-loader.mjs')).href);
 const { transformPersist, shouldPersist } = await import(pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href);
 
 const MIME = {
@@ -144,6 +145,7 @@ function createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist =
             fonts.set(assetName(a.path), a.path);
             return { contents: `module.exports = ${JSON.stringify(assetName(a.path))};`, loader: 'js' };
           });
+          registerSvgVectorLoader(b);
           b.onEnd(async (r) => {
             if (r.errors.length) {
               console.error(`✗ build failed (${r.errors.length} error(s))`);
