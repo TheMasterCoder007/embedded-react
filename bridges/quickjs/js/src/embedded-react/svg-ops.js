@@ -22,16 +22,18 @@
 // shapes to path ops, bakes viewBox + <G> translate/scale into coordinates, and resolves inherited
 // paint. The opcodes below MUST stay in sync with er_scene.h.
 
-const VOP_SHAPE = 0;
-const VOP_MOVE = 1;
-const VOP_LINE = 2;
-const VOP_QUAD = 3;
-const VOP_CUBIC = 4;
-const VOP_ARC = 5;
-const VOP_CLOSE = 6;
+// Op-tape vocabulary — exported so the build-time SVG baker (assets/bake-svg.mjs) can reuse it without
+// duplicating the encoding (and without pulling its SVG-parser dependency into this runtime module).
+export const VOP_SHAPE = 0;
+export const VOP_MOVE = 1;
+export const VOP_LINE = 2;
+export const VOP_QUAD = 3;
+export const VOP_CUBIC = 4;
+export const VOP_ARC = 5;
+export const VOP_CLOSE = 6;
 
-const CAP = { butt: 0, round: 1, square: 2 };
-const JOIN = { miter: 0, round: 1, bevel: 2 };
+export const CAP = { butt: 0, round: 1, square: 2 };
+export const JOIN = { miter: 0, round: 1, bevel: 2 };
 
 // Minimal named-color set (extend as needed); everything else goes through hex/rgb parsing.
 const NAMED = {
