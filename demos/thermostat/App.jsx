@@ -275,7 +275,7 @@ export function App() {
     <View style={styles.thermo}>
       <View style={styles.card}>
         <Header />
-        <Dial value={value} min={MIN} max={MAX} current={CURRENT} mode={mode} size="100%" sz={SZ} theme={theme} onValue={setValue} />
+        <Dial value={value} min={MIN} max={MAX} current={CURRENT} mode={mode} size={wide ? "80%" : "50%"} sz={SZ} theme={theme} onValue={setValue} />
         <View style={{width: '100%', height: 'fit-content', alignItems: 'center'}}>
           <View style={styles.stepRow}>
             <StepButton label="−" onPress={dec} />
@@ -332,9 +332,12 @@ const styles = StyleSheet.create({
 
   // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', height: '100%', width: '100%', overflow: 'hidden' },
-  // Portrait/stacked layout: the thermostat over the weather panel, centered.
-  stack: { gap: GAP, alignItems: 'center' },
-  thermo: { height: '100%', width: compact ? '100%' : '48%' },
+  // Portrait/stacked layout: the thermostat over the weather panel. The stack fills the screen so the two
+  // cards' 48% heights resolve against it (without a definite height they'd each grow to their content and
+  // the second would overflow off the bottom).
+  stack: { gap: GAP, alignItems: 'center', width: '100%', height: '100%', justifyContent: 'center' },
+  // Wide: a 48%-wide column filling the row height. Portrait: a 90%-wide card at 48% of the stack height.
+  thermo: { height: wide ? '100%' : '48%', width: wide ? '48%' : '90%' },
   header: { flexDirection: 'row', alignSelf: 'flex-start' },
   pill: {
     backgroundColor: theme.metricBg,
@@ -376,8 +379,8 @@ const styles = StyleSheet.create({
 
   // --- Weather panel (right column when wide; below the thermostat when stacked) ---
   weatherCard: {
-    height: '100%',
-    width: wide ? '48%' : 400,
+    height: wide ? '100%' : '48%', // wide: fills the row; portrait: 48% of the stack (matches the thermostat)
+    width: wide ? '48%' : '90%',
     backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.cardBorder,
