@@ -46,17 +46,17 @@ static const char* TAG = "board";
 
 /* --- CH422G (7-bit I2C addresses of its command registers) --- */
 #define CH422G_ADDR_WR_SET 0x24 /* system setting: IO mode */
-#define CH422G_ADDR_WR_IO 0x38 /* latch for output bits IO0..IO7 (= EXIO0..EXIO7) */
+#define CH422G_ADDR_WR_IO 0x38  /* latch for output bits IO0..IO7 (= EXIO0..EXIO7) */
 #define CH422G_MODE_OUTPUT 0x01 /* enable push-pull output on the IO pins */
 
 /* CH422G output-bit assignments (Waveshare ESP32-S3-Touch-LCD-7). */
-#define EXIO_TP_RST_BIT (1U << 1) /* touch reset (GT911) */
+#define EXIO_TP_RST_BIT (1U << 1)  /* touch reset (GT911) */
 #define EXIO_DISP_BL_BIT (1U << 2) /* DISP / backlight enable */
 #define EXIO_LCD_RST_BIT (1U << 3) /* LCD reset (active low) */
 
 /* --- GT911 capacitive touch (shares the I2C bus; INT=GPIO4, RST=CH422G EXIO1) --- */
 #define BOARD_TOUCH_INT_GPIO 4 /* TP_IRQ — driven during reset to latch the I2C address, then input */
-#define GT911_ADDR 0x5D /* default address when INT is held low across the reset rising edge */
+#define GT911_ADDR 0x5D        /* default address when INT is held low across the reset rising edge */
 #define GT911_REG_PRODUCT_ID 0x8140
 #define GT911_REG_STATUS 0x814E /* bit7 = buffer ready, bits0..3 = number of touch points */
 #define GT911_REG_POINT1 0x8150 /* first point coords: [xL, xH, yL, yH] (track id is the prior reg, 0x814F) */

@@ -902,7 +902,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                             if (gy + gh < cly1)
                                 cly1 = gy + gh;
                         }
-                        er_vector_render(vops, no, vpa, np, px, py, clx0, cly0, clx1, cly1);
+                        er_vector_render(vops, no, vpa, np, NULL, 0, px, py, clx0, cly0, clx1, cly1);
                     }
                 }
                 n->vec_has_dirty = false; /* one-shot: consumed by this commit */
@@ -2041,30 +2041,12 @@ void er_text_input_key(uint32_t keycode, const char* utf8_char)
 #if ERUI_ONSCREEN_KEYBOARD
 
 /* ---- Built-in default layout: lowercase / UPPERCASE / numbers / symbols, the iOS-style QWERTY pages. ---- */
-#define KCH(s)                                                                                                         \
-    {                                                                                                                  \
-        (s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU                                                                         \
-    } /* char key, span 2 */
-#define KSPACE                                                                                                         \
-    {                                                                                                                  \
-        NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU                                                                       \
-    } /* blank space bar */
-#define KBKSP                                                                                                          \
-    {                                                                                                                  \
-        "<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU                                                                   \
-    }
-#define KDONE                                                                                                          \
-    {                                                                                                                  \
-        "OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU                                                                       \
-    }
-#define KSW3(lbl, tgt, hl)                                                                                             \
-    {                                                                                                                  \
-        (lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)                                                                  \
-    } /* row-2 left switch */
-#define KSW4(lbl, tgt)                                                                                                 \
-    {                                                                                                                  \
-        (lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU                                                                 \
-    } /* row-3 left switch */
+#define KCH(s) {(s), (s), ER_KBD_KEY_CHAR, 0, 2, 0xFFU} /* char key, span 2 */
+#define KSPACE {NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU} /* blank space bar */
+#define KBKSP {"<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU}
+#define KDONE {"OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU}
+#define KSW3(lbl, tgt, hl) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 3, (hl)} /* row-2 left switch */
+#define KSW4(lbl, tgt) {(lbl), NULL, ER_KBD_KEY_LAYER, (tgt), 4, 0xFFU} /* row-3 left switch */
 
 static const ERKeyboardKey L0r0[] = {
     KCH("q"), KCH("w"), KCH("e"), KCH("r"), KCH("t"), KCH("y"), KCH("u"), KCH("i"), KCH("o"), KCH("p")};

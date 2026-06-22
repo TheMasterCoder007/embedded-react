@@ -58,7 +58,9 @@
         if (!er_vec_warned_)                                                                                           \
         {                                                                                                              \
             er_vec_warned_ = true;                                                                                     \
-            fprintf(stderr, "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name,    \
+            fprintf(stderr,                                                                                            \
+                    "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n",                         \
+                    macro_name,                                                                                        \
                     (int)(cap));                                                                                       \
         }                                                                                                              \
     } while (0)
@@ -82,6 +84,8 @@
  * @param[in] n_ops     Number of floats in @p ops.
  * @param[in] paints    Paint table (one ERVectorPaint per entry).
  * @param[in] n_paints  Number of paint entries.
+ * @param[in] grads     Gradient table; a paint's 1-based fill_grad indexes it (NULL/0 when none). ERUI_GRADIENT.
+ * @param[in] n_grads   Number of gradient entries.
  * @param[in] px        Geometry origin X in framebuffer pixels (node box left).
  * @param[in] py        Geometry origin Y in framebuffer pixels (node box top).
  * @param[in] clipx0    Clip box left edge (rasterize + paint are limited to this rect).
@@ -93,6 +97,8 @@ void er_vector_render(const float* ops,
                       int n_ops,
                       const ERVectorPaint* paints,
                       int n_paints,
+                      const ERVectorGradient* grads,
+                      int n_grads,
                       int px,
                       int py,
                       int clipx0,

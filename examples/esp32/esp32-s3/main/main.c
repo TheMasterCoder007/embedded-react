@@ -198,9 +198,15 @@ static void noop_blend(const void* src, int stride, uint8_t alpha, int x, int y,
 }
 
 static const EmbeddedRenderBackend k_noop_backend = {
-    noop_fill, noop_copy, noop_blend, NULL, NULL, NULL, /* fill / copy / blend / wait / frame_ready / ctx */
-    0,                                                  /* band_height: 0 = classic full-framebuffer path */
-    NULL, NULL                                          /* band_begin / band_flush (unused without banding) */
+    noop_fill,
+    noop_copy,
+    noop_blend,
+    NULL,
+    NULL,
+    NULL, /* fill / copy / blend / wait / frame_ready / ctx */
+    0,    /* band_height: 0 = classic full-framebuffer path */
+    NULL,
+    NULL /* band_begin / band_flush (unused without banding) */
 };
 
 /*----------------------------------------------------------------------------------------------------------------------

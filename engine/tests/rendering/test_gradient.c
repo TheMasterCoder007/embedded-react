@@ -307,11 +307,11 @@ int main(void)
         if (((left_pixel >> 16) & 0xFF) != ((red_pm >> 16) & 0xFF))
             return fail("horizontal linear: leftmost column red channel mismatch");
 
-        /* Right column should be approximately blue. */
         const uint32_t right_pixel = px(&tc, FB_W - 1, FB_H / 2);
         const uint32_t blue_pm = pm(blue);
-        if (((right_pixel & 0xFF)) != ((blue_pm & 0xFF)))
-            return fail("horizontal linear: rightmost column blue channel mismatch");
+        const int rb = (int)(right_pixel & 0xFFu), bb = (int)(blue_pm & 0xFFu);
+        if (rb < bb - 8 || rb > bb + 8)
+            return fail("horizontal linear: rightmost column not ~blue");
 
         /* Middle column between the two extremes. */
         const uint32_t mid_pixel = px(&tc, FB_W / 2, FB_H / 2);

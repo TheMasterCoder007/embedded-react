@@ -73,7 +73,7 @@ static uint32_t lerp_argb(uint32_t c0, uint32_t c1, float t)
  *
  * @return Straight-alpha ARGB8888 color at position t.
  */
-static uint32_t eval_stops(const ERGradientStop* stops, int count, float t)
+uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t)
 {
     if (count <= 0)
         return 0u;
@@ -102,7 +102,7 @@ static uint32_t eval_stops(const ERGradientStop* stops, int count, float t)
  *
  * @return Premultiplied ARGB8888 equivalent.
  */
-static uint32_t premul(uint32_t sa)
+uint32_t er_gradient_premul(uint32_t sa)
 {
     const uint32_t a = (sa >> 24) & 0xFFu;
     const uint32_t r = (((sa >> 16) & 0xFFu) * a) / 255u;
@@ -172,7 +172,8 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
                 t = 0.0f;
             if (t > 1.0f)
                 t = 1.0f;
-            s_grad_row[col] = premul(eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
+            s_grad_row[col] =
+                er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
         er_blit_blend(s_grad_row, capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
     }
@@ -215,7 +216,8 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
             float t = sqrtf(dx2 + dy2) * inv_r;
             if (t > 1.0f)
                 t = 1.0f;
-            s_grad_row[col] = premul(eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
+            s_grad_row[col] =
+                er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
         er_blit_blend(s_grad_row, capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
     }

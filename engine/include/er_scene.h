@@ -135,6 +135,7 @@ extern "C"
         uint8_t cap;       /**< ER_VCAP_*. */
         uint8_t join;      /**< ER_VJOIN_*. */
         uint8_t fill_rule; /**< ER_VFILL_*. */
+        int16_t fill_grad; /**< 1-based index into the vector gradient table (0 = solid `fill`). ERUI_GRADIENT. */
     } ERVectorPaint;
 
     /**
@@ -342,6 +343,26 @@ extern "C"
         uint32_t color; /**< Stop color in straight-alpha ARGB8888. */
         float position; /**< Stop position along the gradient axis [0.0–1.0]. */
     } ERGradientStop;
+
+    /**
+     * @brief A gradient fill for a vector shape (referenced by ERVectorPaint.fill_grad, 1-based).
+     *
+     * Unlike the View-background gradient (angle within the node box), a vector gradient uses explicit SVG
+     * axis geometry in op-tape (node-local) coordinates; the rasterizer offsets it by the node origin. A
+     * linear gradient runs along the axis (ax,ay)->(bx,by); a radial gradient is centred at (ax,ay) with
+     * radius r. Requires ERUI_GRADIENT (radial additionally requires ERUI_GRADIENT_RADIAL).
+     */
+    typedef struct
+    {
+        uint8_t type;                                /**< ERGradientType: LINEAR or RADIAL. */
+        uint8_t stop_count;                          /**< Stop count [2–ER_GRADIENT_MAX_STOPS]. */
+        ERGradientStop stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops, ascending position. */
+        float ax;                                    /**< Linear: axis start x. Radial: centre x. */
+        float ay;                                    /**< Linear: axis start y. Radial: centre y. */
+        float bx;                                    /**< Linear: axis end x. Radial: unused. */
+        float by;                                    /**< Linear: axis end y. Radial: unused. */
+        float r;                                     /**< Radial: radius. Linear: unused. */
+    } ERVectorGradient;
 
     /**
      * @brief Gesture responder query types used with er_responder_query_set().

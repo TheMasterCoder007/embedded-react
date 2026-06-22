@@ -53,8 +53,8 @@ static const char* TAG = "board";
 #define PIN_LCD_BL 21
 #define LCD_PCLK_HZ (40 * 1000 * 1000) /* 40 MHz for snappy flushes; if this unit glitches, step down (26/30) */
 
-#define BOARD_LCD_INVERT false /* this unit shows correct brightness without inversion */
-#define BOARD_LCD_BGR false /* set true if red/blue are swapped */
+#define BOARD_LCD_INVERT false  /* this unit shows correct brightness without inversion */
+#define BOARD_LCD_BGR false     /* set true if red/blue are swapped */
 #define BOARD_LCD_MIRROR_X true /* this unit's panel scans X reversed (text was mirrored) */
 #define BOARD_LCD_MIRROR_Y false
 

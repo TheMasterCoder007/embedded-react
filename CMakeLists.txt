@@ -39,13 +39,14 @@ if (CLANG_FORMAT_EXE)
     # (build/, cmake-build-*/). Without these excludes, `format` rewrites ~150 third-party/generated
     # files. (.clang-format-ignore would also cover this, but only on clang-format >= 18 — older
     # versions silently ignore that file, so the filtering must happen here to be version-proof.)
-    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/build/")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/build[-/]")
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/cmake-build")
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/_deps/")
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/node_modules/")
 
     # Exclude generated files
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX ".*/font_data\\.c$")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/dist/")
 
     add_custom_target(format
             COMMAND ${CLANG_FORMAT_EXE} -i ${FORMAT_SOURCES}
