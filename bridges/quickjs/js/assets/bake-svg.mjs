@@ -162,7 +162,18 @@ function polyPath(a, close) {
 }
 
 // --- Paint resolution (presentation attrs + inline style + inheritance) ------------------------------
-const PAINT_KEYS = ['fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'fill-rule'];
+const PAINT_KEYS = [
+  'fill',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-miterlimit',
+  'fill-rule',
+  'opacity',
+  'fill-opacity',
+  'stroke-opacity',
+];
 const DEFAULT_PAINT = {
   fill: 'black',
   stroke: 'none',
@@ -197,6 +208,17 @@ function resolvePaint(attrs, inherited) {
 function colorOf(v) {
   if (typeof v === 'string' && v.trim().startsWith('url(')) return 0;
   return parseColor(v);
+}
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Multiplies an ARGB color's alpha by @p f (SVG opacity / fill-opacity / stroke-opacity, baked in). */
+function applyAlpha(argb, f) {
+  if (f >= 1) return argb >>> 0;
+  const a = Math.round(((argb >>> 24) & 0xff) * clamp01(f));
+  return ((a << 24) | (argb & 0xffffff)) >>> 0;
 }
 
 /**
@@ -252,10 +274,11 @@ export async function svgToVector(svgString) {
       if (!shapeOps.length) continue;
 
       const paintIndex = paints.length / 7;
+      const op = clamp01(num(cp.opacity, 1));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, cm));
       paints.push(
-        colorOf(cp.fill ?? 'black'),
-        colorOf(cp.stroke ?? 'none'),
+        applyAlpha(colorOf(cp.fill ?? 'black'), op * clamp01(num(cp['fill-opacity'], 1))),
+        applyAlpha(colorOf(cp.stroke ?? 'none'), op * clamp01(num(cp['stroke-opacity'], 1))),
         num(cp['stroke-width'], 1) * scaleOf(cm),
         num(cp['stroke-miterlimit'], 4),
         CAP[cp['stroke-linecap']] ?? 0,

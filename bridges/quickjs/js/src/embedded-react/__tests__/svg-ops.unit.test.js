@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseColor, parsePath, flattenSvg, shapesToVector } from '../svg-ops.js';
+import { parseColor, parsePath, flattenSvg, shapesToVector, scaleVectorArtifact } from '../svg-ops.js';
 
 // Opcodes mirror er_scene.h.
 const SHAPE = 0;
@@ -231,5 +231,22 @@ describe('shapesToVector (imperative)', () => {
     const b = shapesToVector([{ line: [0, 0, 1, 1], stroke: '#000' }]);
     expect(b.ops).toEqual([SHAPE, 0, MOVE, 0, 0, LINE, 1, 1]); // no trailing ops from the longer prior call
     expect(b.ops.length).toBeLessThan(lenA);
+  });
+});
+
+describe('scaleVectorArtifact (<Svg source> box scaling)', () => {
+  it('returns the artifact arrays untouched when the box equals the intrinsic size', () => {
+    const art = { kind: 'vector', ops: [SHAPE, 0, MOVE, 1, 2], paints: [0xff000000, 0, 3, 4, 0, 0, 0], width: 10, height: 10 };
+    const r = scaleVectorArtifact(art, 10, 10);
+    expect(r.ops).toBe(art.ops); // same reference — no needless copy
+    expect(r.paints).toBe(art.paints);
+  });
+
+  it('scales coordinates + stroke width to the target box, leaving paint indices + colors alone', () => {
+    const art = { kind: 'vector', ops: [SHAPE, 0, MOVE, 5, 5, LINE, 10, 0], paints: [0xff112233, 0, 4, 4, 0, 0, 0], width: 10, height: 10 };
+    const r = scaleVectorArtifact(art, 20, 20); // 2x
+    expect(r.ops).toEqual([SHAPE, 0, MOVE, 10, 10, LINE, 20, 0]); // coords doubled; SHAPE's paint index (0) untouched
+    expect(r.paints[2]).toBe(8); // strokeWidth 4 -> 8
+    expect(r.paints[0]).toBe(0xff112233); // fill color untouched
   });
 });

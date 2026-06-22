@@ -29,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, basename, relative } from 'node:path';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { bakeAssetPack } from './assets/index.mjs';
+import { registerSvgVectorLoader } from './assets/svg-loader.mjs';
 import { transformPersist } from './persist-transform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
@@ -151,6 +152,7 @@ const ctx = await context({
           fonts.set(family, args.path);
           return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
         });
+        registerSvgVectorLoader(b);
         b.onEnd(async (r) => {
           if (r.errors.length) {
             console.error(`✗ build failed (${r.errors.length} error(s)) — fix and save to retry`);

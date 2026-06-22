@@ -21,7 +21,7 @@
 import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
 import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
-import { flattenSvg, warnVectorCaps } from './embedded-react/svg-ops.js';
+import { flattenSvg, warnVectorCaps, scaleVectorArtifact } from './embedded-react/svg-ops.js';
 import { splitAnimatedStyle } from './embedded-react/split-style.js';
 
 /**
@@ -46,14 +46,30 @@ function applyTextSpans(type, handle, props) {
   if (type === 'Text') NativeUI.setTextSpans(handle, buildTextSpans(props));
 }
 
+/** Resolves an <Svg>'s render-box dimension from style/props, falling back to the source's intrinsic size. */
+function svgBoxSize(props, dim, intrinsic) {
+  const s = props.style && typeof props.style[dim] === 'number' ? props.style[dim] : undefined;
+  const p = typeof props[dim] === 'number' ? props[dim] : undefined;
+  return s ?? p ?? intrinsic;
+}
+
 /**
- * Compiles an <Svg>'s declarative children (Path/Circle/G/...) into the node's vector op-tape. Like
- * text spans, the Svg owns its subtree — React does not mount the shape children (see
- * shouldSetTextContent), so we flatten props.children here on create and every update.
+ * Sets an <Svg>'s vector op-tape. Two sources, source prop wins:
+ *   <Svg source={imported}>  — an imported .svg's baked artifact ({kind:'vector', ops, paints, width,
+ *                              height}); we scale its op-tape from intrinsic px to the node's box.
+ *   <Svg><Path/>...</Svg>    — declarative children flattened here (the Svg owns its subtree; React does
+ *                              not mount the shape children, so we compile them on create + every update).
  */
 function applyVectorOps(type, handle, props) {
   if (type !== 'Svg') return;
-  const { ops, paints } = flattenSvg(props);
+  let ops;
+  let paints;
+  const src = props.source;
+  if (src && src.kind === 'vector' && Array.isArray(src.ops)) {
+    ({ ops, paints } = scaleVectorArtifact(src, svgBoxSize(props, 'width', src.width), svgBoxSize(props, 'height', src.height)));
+  } else {
+    ({ ops, paints } = flattenSvg(props));
+  }
   warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints);
   NativeUI.setVectorOps(handle, ops, paints);
 }

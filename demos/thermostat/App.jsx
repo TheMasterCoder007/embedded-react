@@ -15,7 +15,7 @@
  */
 
 import { useState, useRef, useCallback, memo } from 'react';
-import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc, updateVector, updateText } from 'embedded-react';
+import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc } from 'embedded-react';
 // Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
 // basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
 // build` decodes the PNGs and emits them into dist/assets.generated.c (er_register_assets()).
@@ -23,6 +23,9 @@ import wxSun from './assets/wx_sun.png';
 import wxCloud from './assets/wx_cloud.png';
 import wxPartly from './assets/wx_partly.png';
 import wxRain from './assets/wx_rain.png';
+// The rich Flow A dial is a self-contained component — App passes it the value, range, size, font sizes,
+// and theme as props (so it imports nothing back from here). The compact (AOT) branch draws its own dial.
+import { Dial } from './components/climate-dial.jsx';
 
 // Thermostat arc dial — a climate control built around a draggable 270° arc (a physical-thermostat
 // metaphor). Dragging the handle around the arc sets the target temperature.
@@ -37,7 +40,6 @@ const STEP = 1;
 const SWEEP = 270; // arc covers 270°, with a 90° gap at the bottom
 const A_START = -135; // bottom-left, degrees clockwise from 12 o'clock
 const DEG = SWEEP / (MAX - MIN); // degrees per °F (folds to 6) — used by the compact inline dial
-const DEADBAND = 0.5; // prevents Heating/Cooling flicker when target ≈ current
 const CURRENT = 68.7; // live room reading °F (static in this demo)
 // Drag jitter deadband (°F): a resistive touch panel reports a few px of noise even when held still, which
 // — now that the value is continuous — would wiggle the handle. Ignore sub-threshold moves so a held finger
@@ -63,7 +65,7 @@ const theme = {
   metricBg: '#1b2738',
   text: '#e7edf5',
   subtext: '#9aa5b1',
-  track: '#2c3a4f', // inactive arc dots
+  track: '#2c3a4f',
   modeActiveBg: '#26344a',
   modeBorder: '#2c3a4f',
 };
@@ -73,25 +75,6 @@ const theme = {
 // ----------------------------------------------------------------------------------------------------
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
-}
-
-// value → angle (degrees, clockwise from top). MIN → -135°, MAX → +135°.
-function angleForValue(v) {
-  return A_START + ((v - MIN) / (MAX - MIN)) * SWEEP;
-}
-
-// A point on the arc. The minus on cos puts 0° at the top and grows y downward (SVG convention).
-function pointOnArc(angleDeg, cx, cy, r) {
-  const t = (angleDeg * Math.PI) / 180;
-  return { x: cx + r * Math.sin(t), y: cy - r * Math.cos(t) };
-}
-
-// Center status word from target vs. current (spec §3). The deadband stops flicker near equality.
-function statusFor(mode, value, current) {
-  if (mode === 'off') return 'Off';
-  if (mode !== 'cool' && value > current + DEADBAND) return 'Heating';
-  if (mode !== 'heat' && value < current - DEADBAND) return 'Cooling';
-  return 'Holding';
 }
 
 // ----------------------------------------------------------------------------------------------------
@@ -110,148 +93,12 @@ const wide = !compact && SW >= 760;
 // Font sizes snap to the engine's baked Inter sizes (10/12/16/20/24/32/48), so pick from that set.
 const SZ = compact
   ? { R: 72, stroke: 12, handle: 10, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
-  : { R: 104, stroke: 14, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
+  : { R: 106, stroke: 14, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
 
 const PAD = compact ? 10 : 20;
 const GAP = compact ? 8 : 16;
 const BOX = 2 * (SZ.R + SZ.handle + 6); // square that holds the dial; center at (BOX/2, BOX/2)
 const DIAL_C = BOX / 2;
-
-// Node-local bbox of just the change when the value goes a -> b: the swept arc sector plus the handle,
-// padded for the stroke half-width and AA. Handed to the engine, so a drag step repaints only this area
-// of the dial, not the whole box.
-function dirtyRectFor(a, b) {
-  const a0 = angleForValue(Math.min(a, b));
-  const a1 = angleForValue(Math.max(a, b));
-  let minx = Infinity;
-  let miny = Infinity;
-  let maxx = -Infinity;
-  let maxy = -Infinity;
-  const steps = Math.max(1, Math.ceil((a1 - a0) / 12));
-  for (let i = 0; i <= steps; i++) {
-    const p = pointOnArc(a0 + ((a1 - a0) * i) / steps, DIAL_C, DIAL_C, SZ.R);
-    if (p.x < minx) minx = p.x;
-    if (p.y < miny) miny = p.y;
-    if (p.x > maxx) maxx = p.x;
-    if (p.y > maxy) maxy = p.y;
-  }
-  const m = SZ.stroke / 2 + SZ.handle + 4; // half stroke + handle radius + AA pad
-  return [Math.floor(minx - m), Math.floor(miny - m), Math.ceil(maxx - minx + 2 * m), Math.ceil(maxy - miny + 2 * m)];
-}
-
-// Reused shape buffers for the drag hot path. Rebuilding these objects/arrays on every pointer move was
-// a measurable slice of the JS dispatch cost, so they are mutated in place instead.
-const _track = { arc: [DIAL_C, DIAL_C, SZ.R, A_START, -A_START], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' };
-const _prog = { arc: [DIAL_C, DIAL_C, SZ.R, A_START, 0], stroke: theme.track, strokeWidth: SZ.stroke, cap: 'round' };
-const _knob = { circle: [0, 0, SZ.handle], fill: theme.card, stroke: theme.track, strokeWidth: 3 };
-const _dialShapes = [];
-
-// Build the dial's shapes for (continuous) value v — track arc, mode-colored progress arc, and the
-// handle knob. Mutates the shared buffers above (no per-move allocation) and returns the shared array.
-function buildDialShapes(v, color) {
-  const ang = angleForValue(v);
-  const h = pointOnArc(ang, DIAL_C, DIAL_C, SZ.R);
-  _dialShapes.length = 0;
-  _dialShapes.push(_track);
-  if (v > MIN) {
-    _prog.arc[4] = ang;
-    _prog.stroke = color;
-    _dialShapes.push(_prog);
-  }
-  _knob.circle[0] = h.x;
-  _knob.circle[1] = h.y;
-  _knob.stroke = color;
-  _dialShapes.push(_knob);
-  return _dialShapes;
-}
-
-// ----------------------------------------------------------------------------------------------------
-// The arc dial
-// ----------------------------------------------------------------------------------------------------
-function Dial({ value, current, mode, color, onValue }) {
-  // Dial center in absolute screen coords, captured from onLayout (a ref, so it never re-renders).
-  const centerRef = useRef({ x: 0, y: 0 });
-  // Handles to the dial's vector node + the big number, for imperative (no-React) updates during drag.
-  const dialRef = useRef(null);
-  const numRef = useRef(null);
-  // The CONTINUOUS value currently on screen (a float — the handle follows the finger sub-degree for a
-  // smooth drag). Synced to committed `value` every render, advanced imperatively during a drag (no
-  // setState). `shownRound` tracks the displayed whole degree so the number only re-renders when it ticks.
-  const shownRef = useRef(value);
-  shownRef.current = value;
-  const shownRoundRef = useRef(Math.round(value));
-  shownRoundRef.current = Math.round(value);
-
-  const onLayout = (e) => {
-    centerRef.current = { x: e.layout.x + e.layout.width / 2, y: e.layout.y + e.layout.height / 2 };
-  };
-
-  // pointer → continuous value (spec §2): angle from the rendered center, clamp the bottom 90° gap. The
-  // drag updates the dial IMPERATIVELY at the continuous value (smooth, no stepping) with a tight
-  // dirtyRect, and commits to React state only on release — so a drag never pays React's reconcile cost.
-  const onTouch = (e) => {
-    const c = centerRef.current;
-    let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
-    theta = clamp(theta, A_START, -A_START); // bottom gap snaps to -135/+135
-    const v = clamp(MIN + ((theta - A_START) / SWEEP) * (MAX - MIN), MIN, MAX); // continuous, NOT rounded
-    const old = shownRef.current;
-    if (Math.abs(v - old) < 0.08) return; // < ~1px of handle motion: skip
-    shownRef.current = v;
-    updateVector(dialRef.current, buildDialShapes(v, color), dirtyRectFor(old, v));
-    // The big number only changes on whole-degree ticks (and only then damages the center).
-    const r = Math.round(v);
-    if (r !== shownRoundRef.current) {
-      shownRoundRef.current = r;
-      updateText(numRef.current, r + '°');
-    }
-  };
-
-  const onTouchEnd = () => {
-    if (shownRef.current !== value) onValue(shownRef.current); // commit the continuous value (no snap)
-  };
-
-  const handle = pointOnArc(angleForValue(value), DIAL_C, DIAL_C, SZ.R);
-
-  return (
-    <View
-      onLayout={onLayout}
-      onTouchStart={onTouch}
-      onTouchMove={onTouch}
-      onTouchEnd={onTouchEnd}
-      style={{ width: BOX, height: BOX }}
-    >
-      {/* The dial is ONE vector node: a muted track arc, the mode-colored progress arc, and the handle
-          knob. At REST React renders it declaratively; during a DRAG we update it imperatively through
-          dialRef (drawDial), bypassing React's reconcile — the expensive part on a PSRAM device. */}
-      <Svg ref={dialRef} style={{ position: 'absolute', left: 0, top: 0, width: BOX, height: BOX }}>
-        <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-        {value > MIN && (
-          <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={angleForValue(value)} stroke={color} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-        )}
-        {/* Handle: a knob in the card color with a 3px stroke in the mode color (spec §5). */}
-        <Circle cx={handle.x} cy={handle.y} r={SZ.handle} fill={theme.card} stroke={color} strokeWidth={3} />
-      </Svg>
-
-      {/* Center readout, absolutely centered over the dial. The big number has a ref so the drag can
-          update it imperatively too (updateText keeps its style). */}
-      <View
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: BOX,
-          height: BOX,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>{statusFor(mode, value, current)}</Text>
-        <Text ref={numRef} style={{ color: theme.text, fontSize: SZ.big, fontWeight: '500' }}>{Math.round(value)}°</Text>
-        <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>now {current}°</Text>
-      </View>
-    </View>
-  );
-}
 
 // ----------------------------------------------------------------------------------------------------
 // Small building blocks — all memoised so a value drag (which re-renders App) never reconciles them.
@@ -320,10 +167,6 @@ const Header = memo(function Header() {
     <View style={styles.header}>
       <View>
         <Text style={{ color: theme.text, fontSize: SZ.title, fontWeight: '500' }}>Thermostat</Text>
-        <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>Living room</Text>
-      </View>
-      <View style={styles.pill}>
-        <Text style={{ color: theme.subtext, fontSize: SZ.label }}>{compact ? 'Eco on' : 'Eco schedule on'}</Text>
       </View>
     </View>
   );
@@ -419,7 +262,6 @@ export function App() {
   // Below here is the rich runtime experience — the draggable Dial and the <Image>-backed weather panel.
   // The AOT never reaches it (it folds the compact branch on the small boards it targets), so it is free
   // to use the full Flow A feature set: per-instance hooks, callback props, helper calls, baked assets.
-  const color = MODES.find((m) => m.key === mode).color;
 
   // Stable callbacks so the memoised children below don't re-render on a value drag. The stepper rounds
   // first so a press after a fractional drag lands on a whole degree.
@@ -431,21 +273,19 @@ export function App() {
   // panel on the right.
   const thermostat = (
     <View style={styles.thermo}>
-      <Header />
       <View style={styles.card}>
-        <Dial value={value} current={CURRENT} mode={mode} color={color} onValue={setValue} />
-
-        {/* Stepper row */}
-        <View style={styles.stepRow}>
-          <StepButton label="−" onPress={dec} />
-          <StepButton label="+" onPress={inc} />
-        </View>
-
-        {/* Mode selector */}
-        <View style={styles.modeRow}>
-          {MODES.map((m) => (
-            <ModeButton key={m.key} item={m} active={mode === m.key} onSelect={selectMode} />
-          ))}
+        <Header />
+        <Dial value={value} min={MIN} max={MAX} current={CURRENT} mode={mode} size="100%" sz={SZ} theme={theme} onValue={setValue} />
+        <View style={{width: '100%', height: 'fit-content', alignItems: 'center'}}>
+          <View style={styles.stepRow}>
+            <StepButton label="−" onPress={dec} />
+            <StepButton label="+" onPress={inc} />
+          </View>
+          <View style={styles.modeRow}>
+            {MODES.map((m) => (
+              <ModeButton key={m.key} item={m} active={mode === m.key} onSelect={selectMode} />
+            ))}
+          </View>
         </View>
       </View>
     </View>
@@ -478,10 +318,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: theme.bg,
-    paddingHorizontal: PAD,
-    paddingVertical: PAD,
+    padding: PAD,
     alignItems: 'center',
-    justifyContent: compact ? 'flex-start' : 'center',
+    justifyContent: 'flex-start',
   },
   // --- Compact (AOT) inline thermostat ---
   cTitle: { color: theme.text, fontSize: SZ.title, fontWeight: 'bold', marginBottom: 10 },
@@ -492,11 +331,11 @@ const styles = StyleSheet.create({
   cSub: { color: theme.subtext, fontSize: SZ.sub },
 
   // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
-  row: { flexDirection: 'row', gap: GAP, alignItems: 'flex-start' },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', height: '100%', width: '100%', overflow: 'hidden' },
   // Portrait/stacked layout: the thermostat over the weather panel, centered.
   stack: { gap: GAP, alignItems: 'center' },
-  thermo: { width: compact ? '100%' : 400, gap: GAP },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  thermo: { height: '100%', width: compact ? '100%' : '48%' },
+  header: { flexDirection: 'row', alignSelf: 'flex-start' },
   pill: {
     backgroundColor: theme.metricBg,
     borderRadius: 999,
@@ -504,12 +343,13 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   card: {
+    height: '100%',
     backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.cardBorder,
     borderRadius: 12,
     padding: compact ? 8 : 16,
-    gap: GAP,
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
   stepRow: { flexDirection: 'row', gap: GAP, marginBottom: 15 },
@@ -536,7 +376,8 @@ const styles = StyleSheet.create({
 
   // --- Weather panel (right column when wide; below the thermostat when stacked) ---
   weatherCard: {
-    width: wide ? 344 : 400,
+    height: '100%',
+    width: wide ? '48%' : 400,
     backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.cardBorder,

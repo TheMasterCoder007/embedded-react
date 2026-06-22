@@ -99,4 +99,13 @@ describe('bake-svg: svgToVector', () => {
     );
     expect(paints[0]).toBe(0); // no fill yet — Track B/C handle gradients
   });
+
+  it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
+    const a = await svgToVector('<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>');
+    expect(a.paints[0] >>> 24).toBe(0x80); // 0xff * 0.5 -> 128
+    expect(a.paints[0] & 0xffffff).toBe(0xff0000); // color preserved
+
+    const b = await svgToVector('<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" stroke="#00ff00" stroke-opacity="0.25"/></svg>');
+    expect(b.paints[1] >>> 24).toBe(0x40); // 0xff * 0.25 -> 64, stroke only
+  });
 });

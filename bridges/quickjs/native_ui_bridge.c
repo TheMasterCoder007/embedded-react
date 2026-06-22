@@ -2482,9 +2482,15 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
-/* Bridge-side caps; the engine clamps again to its own storage limits. */
+/* Bridge-side caps; the engine clamps again to its own storage limits. Overridable (e.g. for large
+ * imported SVGs) — keep these >= the engine's ERUI_VECTOR_TAPE_MAX / ERUI_VECTOR_PAINTS_MAX, or the bridge
+ * truncates the op-tape before the engine ever sees it. */
+#ifndef VEC_BRIDGE_MAX_OPS
 #define VEC_BRIDGE_MAX_OPS 1024
+#endif
+#ifndef VEC_BRIDGE_MAX_PAINTS
 #define VEC_BRIDGE_MAX_PAINTS 16
+#endif
 
 /**
  * @brief NativeUI.setVectorOps(handle, ops, paints) — sets the path geometry on an Svg node.

@@ -565,6 +565,41 @@ export function flattenSvg(props) {
   return { ops, paints };
 }
 
+// --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
+
+/** Scales a full op-tape (with SHAPE headers) by (sx, sy): coordinates only, paint indices untouched. */
+function scaleTape(ops, sx, sy) {
+  const out = [];
+  let i = 0;
+  while (i < ops.length) {
+    const op = ops[i++];
+    out.push(op);
+    if (op === VOP_SHAPE) out.push(ops[i++]); // paint index — copy, do not scale
+    else if (op === VOP_MOVE || op === VOP_LINE) out.push(ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_QUAD) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_CUBIC)
+      out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_ARC) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++], ops[i++], ops[i++]);
+    // VOP_CLOSE has no args.
+  }
+  return out;
+}
+
+/**
+ * Scales an imported vector artifact ({ops, paints, width, height} from the .svg baker) from its intrinsic
+ * size to a target box, also scaling stroke widths. Returns the original arrays untouched when no scaling
+ * is needed (the common <Svg source> case where the box equals the intrinsic size).
+ */
+export function scaleVectorArtifact(art, targetW, targetH) {
+  const sx = art.width ? targetW / art.width : 1;
+  const sy = art.height ? targetH / art.height : 1;
+  if (sx === 1 && sy === 1) return { ops: art.ops, paints: art.paints };
+  const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width scale
+  const paints = art.paints.slice();
+  for (let k = 2; k < paints.length; k += 7) paints[k] *= sw; // index 2 of each 7-float record = strokeWidth
+  return { ops: scaleTape(art.ops, sx, sy), paints };
+}
+
 // --- Bridge-cap diagnostics ----------------------------------------------------------------------
 
 let _warnedVecOps = false;
