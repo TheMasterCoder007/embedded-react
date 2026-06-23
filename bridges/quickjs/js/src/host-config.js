@@ -21,7 +21,7 @@
 import { DefaultEventPriority } from 'react-reconciler/constants';
 import { NativeUI } from './native-ui.js';
 import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
-import { flattenSvg, warnVectorCaps, scaleVectorArtifact } from './embedded-react/svg-ops.js';
+import { flattenSvg, warnVectorCaps, scaleVectorArtifact, encodeVectorGradients } from './embedded-react/svg-ops.js';
 import { splitAnimatedStyle } from './embedded-react/split-style.js';
 
 /**
@@ -64,14 +64,15 @@ function applyVectorOps(type, handle, props) {
   if (type !== 'Svg') return;
   let ops;
   let paints;
+  let gradients;
   const src = props.source;
   if (src && src.kind === 'vector' && Array.isArray(src.ops)) {
-    ({ ops, paints } = scaleVectorArtifact(src, svgBoxSize(props, 'width', src.width), svgBoxSize(props, 'height', src.height)));
+    ({ ops, paints, gradients } = scaleVectorArtifact(src, svgBoxSize(props, 'width', src.width), svgBoxSize(props, 'height', src.height)));
   } else {
     ({ ops, paints } = flattenSvg(props));
   }
   warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints);
-  NativeUI.setVectorOps(handle, ops, paints);
+  NativeUI.setVectorOps(handle, ops, paints, gradients && gradients.length ? encodeVectorGradients(gradients) : undefined);
 }
 
 /**

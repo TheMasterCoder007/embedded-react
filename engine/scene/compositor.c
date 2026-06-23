@@ -878,9 +878,10 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             case ER_NODE_VECTOR:
                 if (n->vector_slot >= 0)
                 {
-                    int no = 0, np = 0;
+                    int no = 0, np = 0, ng = 0;
                     const float* vops = er_vector_slot_ops(n->vector_slot, &no);
                     const ERVectorPaint* vpa = er_vector_slot_paints(n->vector_slot, &np);
+                    const ERVectorGradient* vg = er_vector_slot_grads(n->vector_slot, &ng);
                     if (vops && no > 0)
                     {
                         /* Clip the rasterize to the CURRENT DAMAGE REGION (the active scissor), not just
@@ -902,7 +903,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                             if (gy + gh < cly1)
                                 cly1 = gy + gh;
                         }
-                        er_vector_render(vops, no, vpa, np, NULL, 0, px, py, clx0, cly0, clx1, cly1);
+                        er_vector_render(vops, no, vpa, np, vg, ng, px, py, clx0, cly0, clx1, cly1);
                     }
                 }
                 n->vec_has_dirty = false; /* one-shot: consumed by this commit */
@@ -1896,7 +1897,13 @@ static bool vec_diff_dirty_rect(const float* o,
     return (*rw > 0 && *rh > 0);
 }
 
-void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
+void er_node_set_vector_ops(ERNode* node,
+                            const float* ops,
+                            int n_ops,
+                            const ERVectorPaint* paints,
+                            int n_paints,
+                            const ERVectorGradient* grads,
+                            int n_grads)
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
@@ -1920,14 +1927,18 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
     bool tight = false;
     if (node->vector_slot >= 0)
     {
-        int old_n = 0, old_np = 0;
+        int old_n = 0, old_np = 0, old_ng = 0;
         const float* old_ops = er_vector_slot_ops(node->vector_slot, &old_n);
         const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
+        const ERVectorGradient* old_grads = er_vector_slot_grads(node->vector_slot, &old_ng);
         /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
          * state) → nothing changed, so skip the repaint entirely. */
         if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
             && (n_paints <= 0
-                || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0)))
+                || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0))
+            && old_ng == n_grads
+            && (n_grads <= 0
+                || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0)))
         {
             return;
         }
@@ -1935,7 +1946,7 @@ void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERV
             vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
     }
 
-    node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints);
+    node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints, grads, n_grads);
     if (tight)
     {
         node->vec_dirty_x = (int16_t)dx;

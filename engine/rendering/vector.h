@@ -121,7 +121,13 @@ void er_vector_render(const float* ops,
  *
  * @return The slot index now holding the data, or -1 if no slot was available.
  */
-int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints);
+int er_vector_store(int slot,
+                    const float* ops,
+                    int n_ops,
+                    const ERVectorPaint* paints,
+                    int n_paints,
+                    const ERVectorGradient* grads,
+                    int n_grads);
 
 /** @brief Releases a storage slot back to the pool (no-op for an invalid slot). */
 void er_vector_free(int slot);
@@ -134,5 +140,8 @@ const float* er_vector_slot_ops(int slot, int* n_ops);
 
 /** @brief Returns a slot's paint table and writes its count to @p n_paints (NULL/0 for an empty slot). */
 const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints);
+
+/** @brief Returns a slot's gradient table and writes its count to @p n_grads (NULL/0 when none / no ERUI_GRADIENT). */
+const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads);
 
 #endif

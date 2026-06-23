@@ -35,7 +35,7 @@ export function updateVector(handle, shapes, dirtyRect) {
   if (handle == null) return;
   const { ops, paints } = shapesToVector(shapes);
   warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints);
-  NativeUI.setVectorOps(handle, ops, paints, dirtyRect);
+  NativeUI.setVectorOps(handle, ops, paints, undefined /* gradients: imperative shapes are solid */, dirtyRect);
 }
 
 /**
@@ -50,9 +50,9 @@ export function updateText(handle, text) {
 }
 
 /**
- * Customises the on-screen software keyboard's appearance and/or layout. Only effective when the engine was
+ * Customizes the on-screen software keyboard's appearance and/or layout. Only effective when the engine was
  * built with the keyboard enabled (ERUI_ONSCREEN_KEYBOARD=1); a no-op otherwise. The config is a plain
- * object of colours/sizes plus an optional `layers` array; omit `layers` to keep the built-in QWERTY:
+ * object of colors/sizes plus an optional `layers` array; omit `layers` to keep the built-in QWERTY:
  *
  *   setKeyboardConfig({ keyColor: '#fff', labelColor: '#111', fontSize: 20,
  *     layers: [ [ [ { char: 'a' }, ... ],                                    // a row

@@ -2491,14 +2491,23 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
 #ifndef VEC_BRIDGE_MAX_PAINTS
 #define VEC_BRIDGE_MAX_PAINTS 16
 #endif
+#ifndef VEC_BRIDGE_MAX_GRADS
+#define VEC_BRIDGE_MAX_GRADS 16
+#endif
+/* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad. */
+#define VEC_PAINT_STRIDE 8
+/* JS gradient record width (kept in sync with svg-ops.js encodeVectorGradients):
+ * [type, stop_count, (color, position) × ER_GRADIENT_MAX_STOPS, ax, ay, bx, by, r]. */
+#define VEC_GRAD_STRIDE (2 + ER_GRADIENT_MAX_STOPS * 2 + 5)
 
 /**
- * @brief NativeUI.setVectorOps(handle, ops, paints) — sets the path geometry on an Svg node.
+ * @brief NativeUI.setVectorOps(handle, ops, paints, gradients, dirtyRect) — sets the path geometry on an Svg.
  *
- * @p ops is a flat number array (the op-tape; see the ER_VOP_* contract). @p paints is a flat number
- * array of 7 fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule, ...] where
- * fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly). A missing/empty ops array clears the
- * node's geometry.
+ * @p ops is a flat number array (the op-tape; see the ER_VOP_* contract). @p paints is a flat number array
+ * of VEC_PAINT_STRIDE (8) fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule,
+ * fillGrad] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGrad is a 1-based
+ * index into @p gradients (0 = solid). @p gradients is an optional flat array of VEC_GRAD_STRIDE fields per
+ * gradient. A missing/empty ops array clears the node's geometry.
  *
  * @return JS_UNDEFINED.
  */
@@ -2516,7 +2525,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     }
     if (argc < 2 || !JS_IsArray(argv[1]))
     {
-        er_node_set_vector_ops(node, NULL, 0, NULL, 0);
+        er_node_set_vector_ops(node, NULL, 0, NULL, 0, NULL, 0);
         return JS_UNDEFINED;
     }
 
@@ -2528,7 +2537,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     JS_FreeValue(ctx, olv);
     if (olen <= 0)
     {
-        er_node_set_vector_ops(node, NULL, 0, NULL, 0);
+        er_node_set_vector_ops(node, NULL, 0, NULL, 0, NULL, 0);
         return JS_UNDEFINED;
     }
     if (olen > VEC_BRIDGE_MAX_OPS)
@@ -2553,17 +2562,17 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
         int32_t plen = 0;
         JS_ToInt32(ctx, &plen, plv);
         JS_FreeValue(ctx, plv);
-        np = plen / 7;
+        np = plen / VEC_PAINT_STRIDE;
         if (np > VEC_BRIDGE_MAX_PAINTS)
         {
             np = VEC_BRIDGE_MAX_PAINTS;
         }
         for (int i = 0; i < np; i++)
         {
-            double f[7];
-            for (int j = 0; j < 7; j++)
+            double f[VEC_PAINT_STRIDE];
+            for (int j = 0; j < VEC_PAINT_STRIDE; j++)
             {
-                JSValue e = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)(i * 7 + j));
+                JSValue e = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)(i * VEC_PAINT_STRIDE + j));
                 double d = 0.0;
                 JS_ToFloat64(ctx, &d, e);
                 f[j] = d;
@@ -2577,15 +2586,57 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             paints[i].cap = (uint8_t)f[4];
             paints[i].join = (uint8_t)f[5];
             paints[i].fill_rule = (uint8_t)f[6];
+            paints[i].fill_grad = (int16_t)f[7]; /* 1-based index into the gradient table (0 = solid) */
         }
     }
 
-    er_node_set_vector_ops(node, ops, olen, paints, np);
-
-    /* Optional 4th arg: a [x, y, w, h] node-local sub-rect to restrict this commit's damage to. */
+    /* Gradient table (optional 4th arg): VEC_GRAD_STRIDE numbers per gradient. */
+    ERVectorGradient grads[VEC_BRIDGE_MAX_GRADS];
+    int ngr = 0;
     if (argc >= 4 && JS_IsArray(argv[3]))
     {
-        JSValue dlv = JS_GetPropertyStr(ctx, argv[3], "length");
+        JSValue glv = JS_GetPropertyStr(ctx, argv[3], "length");
+        int32_t glen = 0;
+        JS_ToInt32(ctx, &glen, glv);
+        JS_FreeValue(ctx, glv);
+        ngr = glen / VEC_GRAD_STRIDE;
+        if (ngr > VEC_BRIDGE_MAX_GRADS)
+        {
+            ngr = VEC_BRIDGE_MAX_GRADS;
+        }
+        for (int i = 0; i < ngr; i++)
+        {
+            double g[VEC_GRAD_STRIDE];
+            for (int j = 0; j < VEC_GRAD_STRIDE; j++)
+            {
+                JSValue e = JS_GetPropertyUint32(ctx, argv[3], (uint32_t)(i * VEC_GRAD_STRIDE + j));
+                double d = 0.0;
+                JS_ToFloat64(ctx, &d, e);
+                g[j] = d;
+                JS_FreeValue(ctx, e);
+            }
+            grads[i].type = (uint8_t)g[0];
+            grads[i].stop_count = (uint8_t)g[1];
+            for (int s = 0; s < ER_GRADIENT_MAX_STOPS; s++)
+            {
+                grads[i].stops[s].color = (uint32_t)g[2 + s * 2];
+                grads[i].stops[s].position = (float)g[3 + s * 2];
+            }
+            const int geo = 2 + ER_GRADIENT_MAX_STOPS * 2;
+            grads[i].ax = (float)g[geo + 0];
+            grads[i].ay = (float)g[geo + 1];
+            grads[i].bx = (float)g[geo + 2];
+            grads[i].by = (float)g[geo + 3];
+            grads[i].r = (float)g[geo + 4];
+        }
+    }
+
+    er_node_set_vector_ops(node, ops, olen, paints, np, grads, ngr);
+
+    /* Optional 5th arg: a [x, y, w, h] node-local sub-rect to restrict this commit's damage to. */
+    if (argc >= 5 && JS_IsArray(argv[4]))
+    {
+        JSValue dlv = JS_GetPropertyStr(ctx, argv[4], "length");
         int32_t dlen = 0;
         JS_ToInt32(ctx, &dlen, dlv);
         JS_FreeValue(ctx, dlv);
@@ -2594,7 +2645,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             double d[4];
             for (int k = 0; k < 4; k++)
             {
-                JSValue e = JS_GetPropertyUint32(ctx, argv[3], (uint32_t)k);
+                JSValue e = JS_GetPropertyUint32(ctx, argv[4], (uint32_t)k);
                 d[k] = 0.0;
                 JS_ToFloat64(ctx, &d[k], e);
                 JS_FreeValue(ctx, e);
@@ -3470,11 +3521,12 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
     JS_SetPropertyStr(
         ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
-    JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 4));
+    JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 5));
     /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
      * silently truncates the op-tape / paint table otherwise (see warnVectorCaps in svg-ops.js). */
     JS_SetPropertyStr(ctx, native_ui, "maxVectorOps", JS_NewInt32(ctx, VEC_BRIDGE_MAX_OPS));
     JS_SetPropertyStr(ctx, native_ui, "maxVectorPaints", JS_NewInt32(ctx, VEC_BRIDGE_MAX_PAINTS));
+    JS_SetPropertyStr(ctx, native_ui, "maxVectorGrads", JS_NewInt32(ctx, VEC_BRIDGE_MAX_GRADS));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));

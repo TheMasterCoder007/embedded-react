@@ -44,6 +44,9 @@
 #ifndef ERUI_VECTOR_PAINTS_MAX
 #define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries stored per vector node. */
 #endif
+#ifndef ERUI_VECTOR_GRADS_MAX
+#define ERUI_VECTOR_GRADS_MAX 8 /**< Gradient entries stored per vector node (ERUI_GRADIENT only). */
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Pool
@@ -56,11 +59,21 @@ typedef struct
     int n_ops;
     ERVectorPaint paints[ERUI_VECTOR_PAINTS_MAX];
     int n_paints;
+#if ERUI_GRADIENT
+    ERVectorGradient grads[ERUI_VECTOR_GRADS_MAX]; /**< Gradient table; a paint's fill_grad indexes it (1-based). */
+    int n_grads;
+#endif
 } VecSlot;
 
 static VecSlot s_slots[ERUI_MAX_VECTOR_NODES];
 
-int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
+int er_vector_store(int slot,
+                    const float* ops,
+                    int n_ops,
+                    const ERVectorPaint* paints,
+                    int n_paints,
+                    const ERVectorGradient* grads,
+                    int n_grads)
 {
     if (slot < 0)
     {
@@ -95,6 +108,17 @@ int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* 
     if (paints && np > 0)
         memcpy(s->paints, paints, (size_t)np * sizeof(ERVectorPaint));
     s->n_paints = np;
+#if ERUI_GRADIENT
+    if (n_grads > ERUI_VECTOR_GRADS_MAX)
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_GRADS_MAX", ERUI_VECTOR_GRADS_MAX);
+    int ng = (n_grads < 0) ? 0 : (n_grads > ERUI_VECTOR_GRADS_MAX ? ERUI_VECTOR_GRADS_MAX : n_grads);
+    if (grads && ng > 0)
+        memcpy(s->grads, grads, (size_t)ng * sizeof(ERVectorGradient));
+    s->n_grads = ng;
+#else
+    (void)grads;
+    (void)n_grads;
+#endif
     return slot;
 }
 
@@ -135,4 +159,24 @@ const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
     if (n_paints)
         *n_paints = s_slots[slot].n_paints;
     return s_slots[slot].paints;
+}
+
+const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads)
+{
+#if ERUI_GRADIENT
+    if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
+    {
+        if (n_grads)
+            *n_grads = 0;
+        return 0;
+    }
+    if (n_grads)
+        *n_grads = s_slots[slot].n_grads;
+    return s_slots[slot].grads;
+#else
+    (void)slot;
+    if (n_grads)
+        *n_grads = 0;
+    return 0;
+#endif
 }

@@ -35,6 +35,9 @@ import {
   VOP_CUBIC,
   CAP,
   JOIN,
+  PAINT_STRIDE,
+  GRAD_LINEAR,
+  GRAD_RADIAL,
 } from '../src/embedded-react/svg-ops.js';
 
 // --- 2D affine matrix [a, b, c, d, e, f]:  x' = a*x + c*y + e ;  y' = b*x + d*y + f ------------------
@@ -221,6 +224,102 @@ function applyAlpha(argb, f) {
   return ((a << 24) | (argb & 0xffffff)) >>> 0;
 }
 
+// --- Gradients (<linearGradient> / <radialGradient>) -------------------------------------------------
+
+/** Parses <stop>s into [{ color: uint32 (stop-opacity baked in), offset: 0..1 }], in authored order. */
+function parseStops(node) {
+  const out = [];
+  for (const c of node.children || []) {
+    if (c.type !== 'element' || c.name !== 'stop') continue;
+    const a = c.attributes || {};
+    const style = parseStyle(a.style);
+    const col = style['stop-color'] ?? a['stop-color'] ?? 'black';
+    const so = clamp01(num(style['stop-opacity'] ?? a['stop-opacity'], 1));
+    let off = String(a.offset ?? '0').trim();
+    off = off.endsWith('%') ? parseFloat(off) / 100 : parseFloat(off);
+    out.push({ color: applyAlpha(parseColor(col), so), offset: clamp01(Number.isNaN(off) ? 0 : off) });
+  }
+  return out;
+}
+
+/** Collects every <linearGradient>/<radialGradient> by id (searched anywhere, including <defs>). */
+function collectGradients(root) {
+  const map = new Map();
+  const visit = (node) => {
+    for (const c of node.children || []) {
+      if (c.type !== 'element') continue;
+      if ((c.name === 'linearGradient' || c.name === 'radialGradient') && c.attributes && c.attributes.id)
+        map.set(c.attributes.id, { name: c.name, attrs: c.attributes, stops: parseStops(c) });
+      visit(c);
+    }
+  };
+  visit(root);
+  return map;
+}
+
+/** "url(#id)" -> "id" (else null). */
+function urlRef(v) {
+  const m = typeof v === 'string' && v.trim().match(/^url\(\s*#([^)\s]+)\s*\)/);
+  return m ? m[1] : null;
+}
+
+/** A gradient coordinate: "50%" -> 0.5; a plain number passes through. */
+function gradCoord(v, dflt) {
+  if (v == null) return dflt;
+  const s = String(v).trim();
+  return s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
+}
+
+/** Local-space bounding box of a path-op array (no SHAPE header; MOVE/LINE/QUAD/CUBIC, CLOSE has no args). */
+function opsBBox(ops) {
+  let minx = Infinity;
+  let miny = Infinity;
+  let maxx = -Infinity;
+  let maxy = -Infinity;
+  let i = 0;
+  while (i < ops.length) {
+    const op = ops[i++];
+    const n = op === VOP_MOVE || op === VOP_LINE ? 2 : op === VOP_QUAD ? 4 : op === VOP_CUBIC ? 6 : 0;
+    for (let k = 0; k < n; k += 2) {
+      const x = ops[i + k];
+      const y = ops[i + k + 1];
+      if (x < minx) minx = x;
+      if (x > maxx) maxx = x;
+      if (y < miny) miny = y;
+      if (y > maxy) maxy = y;
+    }
+    i += n;
+  }
+  if (!Number.isFinite(minx)) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: minx, y: miny, w: maxx - minx, h: maxy - miny };
+}
+
+/**
+ * Bakes a gradient definition into an engine gradient descriptor in the path's BAKED coordinate space.
+ * objectBoundingBox units (the SVG default) map [0,1] onto the shape's local bbox; userSpaceOnUse uses the
+ * coords as-is. gradientTransform and the shape's cumulative matrix are both applied. The radial radius is
+ * uniform (a non-square objectBoundingBox / non-uniform scale is approximated — a Track B follow-up).
+ */
+function bakeGradient(def, cm, bbox) {
+  const a = def.attrs;
+  const obb = (a.gradientUnits || 'objectBoundingBox') !== 'userSpaceOnUse';
+  const gt = parseTransform(a.gradientTransform);
+  const toBaked = (gx, gy) => {
+    const ux = obb ? bbox.x + gx * bbox.w : gx;
+    const uy = obb ? bbox.y + gy * bbox.h : gy;
+    const [tx, ty] = pt(gt, ux, uy);
+    return pt(cm, tx, ty);
+  };
+  if (def.name === 'radialGradient') {
+    const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
+    const rUser = (obb ? gradCoord(a.r, 0.5) * (Math.hypot(bbox.w, bbox.h) / Math.SQRT2) : gradCoord(a.r, 0.5));
+    return { type: GRAD_RADIAL, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: rUser * scaleOf(cm) * scaleOf(gt) };
+  }
+  const [ax, ay] = toBaked(gradCoord(a.x1, 0), gradCoord(a.y1, 0));
+  const [bx, by] = toBaked(gradCoord(a.x2, 1), gradCoord(a.y2, 0));
+  return { type: GRAD_LINEAR, stops: def.stops, ax, ay, bx, by, r: 0 };
+}
+
 /**
  * Compiles an SVG document string into the engine vector op-tape.
  *
@@ -246,6 +345,8 @@ export async function svgToVector(svgString) {
 
   const ops = [];
   const paints = [];
+  const gradients = [];
+  const gradDefs = collectGradients(root);
 
   const walk = (node, m, paint) => {
     for (const child of node.children || []) {
@@ -273,8 +374,19 @@ export async function svgToVector(svgString) {
       const shapeOps = parsePath(d);
       if (!shapeOps.length) continue;
 
-      const paintIndex = paints.length / 7;
+      const paintIndex = paints.length / PAINT_STRIDE;
       const op = clamp01(num(cp.opacity, 1));
+      // A url(#id) fill referencing a parsed gradient bakes to a gradient-table entry (1-based fill_grad); the
+      // solid fill stays 0 (colorOf returns 0 for url()). Stroke gradients aren't supported yet.
+      const fillRef = urlRef(cp.fill);
+      let fillGrad = 0;
+      if (fillRef) {
+        const def = gradDefs.get(fillRef);
+        if (def && def.stops.length >= 2) {
+          gradients.push(bakeGradient(def, cm, opsBBox(shapeOps)));
+          fillGrad = gradients.length; // 1-based
+        }
+      }
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, cm));
       paints.push(
         applyAlpha(colorOf(cp.fill ?? 'black'), op * clamp01(num(cp['fill-opacity'], 1))),
@@ -283,11 +395,12 @@ export async function svgToVector(svgString) {
         num(cp['stroke-miterlimit'], 4),
         CAP[cp['stroke-linecap']] ?? 0,
         JOIN[cp['stroke-linejoin']] ?? 0,
-        cp['fill-rule'] === 'evenodd' ? 1 : 0
+        cp['fill-rule'] === 'evenodd' ? 1 : 0,
+        fillGrad
       );
     }
   };
 
   walk(root, rootM, DEFAULT_PAINT);
-  return { ops, paints, width, height };
+  return { ops, paints, gradients, width, height };
 }

@@ -1390,7 +1390,13 @@ extern "C"
      * @param[in] paints    Paint table (one ERVectorPaint per shape).
      * @param[in] n_paints  Number of paint entries.
      */
-    void er_node_set_vector_ops(ERNode* node, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints);
+    void er_node_set_vector_ops(ERNode* node,
+                                const float* ops,
+                                int n_ops,
+                                const ERVectorPaint* paints,
+                                int n_paints,
+                                const ERVectorGradient* grads,
+                                int n_grads);
 
     /**
      * @brief Restricts the next commit's damage for a vector node to a sub-region of its box.

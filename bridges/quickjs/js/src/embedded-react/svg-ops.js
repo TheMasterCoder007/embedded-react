@@ -35,6 +35,36 @@ export const VOP_CLOSE = 6;
 export const CAP = { butt: 0, round: 1, square: 2 };
 export const JOIN = { miter: 0, round: 1, bevel: 2 };
 
+// Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
+// fillGrad]. fillGrad is a 1-based index into the gradient table (0 = solid). MUST match the bridge's
+// VEC_PAINT_STRIDE (native_ui_bridge.c) and the AOT's paint emission.
+export const PAINT_STRIDE = 8;
+
+// Gradient table encoding — a gradient descriptor is { type, stops: [{color, offset}], ax, ay, bx, by, r }.
+// type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
+// [type, stopCount, (color, offset) × GRAD_MAX_STOPS, ax, ay, bx, by, r]; MUST match the bridge's
+// VEC_GRAD_STRIDE and the engine's ER_GRADIENT_MAX_STOPS.
+export const GRAD_MAX_STOPS = 4;
+export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 15
+export const GRAD_LINEAR = 1;
+export const GRAD_RADIAL = 2;
+
+/** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient). */
+export function encodeVectorGradients(grads) {
+  const out = [];
+  if (!grads) return out;
+  for (const g of grads) {
+    const stops = g.stops || [];
+    out.push(g.type, Math.min(stops.length, GRAD_MAX_STOPS));
+    for (let s = 0; s < GRAD_MAX_STOPS; s++) {
+      const st = stops[s];
+      out.push(st ? st.color >>> 0 : 0, st ? st.offset : 0);
+    }
+    out.push(g.ax || 0, g.ay || 0, g.bx || 0, g.by || 0, g.r || 0);
+  }
+  return out;
+}
+
 // Minimal named-color set (extend as needed); everything else goes through hex/rgb parsing.
 const NAMED = {
   none: 0,
@@ -403,7 +433,7 @@ export function shapesToVector(shapes) {
   for (let si = 0; si < shapes.length; si++) {
     const s = shapes[si];
     const opStart = ops.length;
-    const paintIndex = paints.length / 7;
+    const paintIndex = paints.length / PAINT_STRIDE;
     ops.push(VOP_SHAPE, paintIndex);
     if (s.arc) {
       const cx = s.arc[0];
@@ -440,7 +470,8 @@ export function shapesToVector(shapes) {
       num(s.miter, 4),
       CAP[s.cap] ?? 0,
       JOIN[s.join] ?? 0,
-      s.fillRule === 'evenodd' ? 1 : 0
+      s.fillRule === 'evenodd' ? 1 : 0,
+      0 // fill_grad: the imperative path has no gradients
     );
   }
   return { ops, paints };
@@ -464,7 +495,7 @@ function mergePaint(base, props) {
   return out;
 }
 
-/** Maps the resolved paint to the 7-number paint-table record [fill,stroke,w,miter,cap,join,rule]. */
+/** Maps the resolved paint to the PAINT_STRIDE-number record [fill,stroke,w,miter,cap,join,rule,fillGrad]. */
 function paintRecord(paint, scale) {
   return [
     parseColor(paint.fill),
@@ -474,6 +505,7 @@ function paintRecord(paint, scale) {
     CAP[paint.strokeLinecap] ?? 0,
     JOIN[paint.strokeLinejoin] ?? 0,
     paint.fillRule === 'evenodd' ? 1 : 0,
+    0, // fill_grad: inline <Svg> children don't reference gradients (baked <Svg source> does)
   ];
 }
 
@@ -554,7 +586,7 @@ export function flattenSvg(props) {
         shapeOps = arcOpsCW(num(p.cx, 0), num(p.cy, 0), num(p.r, 0), num(p.startAngle, 0), num(p.endAngle, 0));
       if (!shapeOps || shapeOps.length === 0) continue;
 
-      const paintIndex = paints.length / 7;
+      const paintIndex = paints.length / PAINT_STRIDE;
       const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
       paints.push(...paintRecord(merged, scale));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
@@ -593,11 +625,21 @@ function scaleTape(ops, sx, sy) {
 export function scaleVectorArtifact(art, targetW, targetH) {
   const sx = art.width ? targetW / art.width : 1;
   const sy = art.height ? targetH / art.height : 1;
-  if (sx === 1 && sy === 1) return { ops: art.ops, paints: art.paints };
-  const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width scale
+  const grads = art.gradients || [];
+  if (sx === 1 && sy === 1) return { ops: art.ops, paints: art.paints, gradients: grads };
+  const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width / radius scale
   const paints = art.paints.slice();
-  for (let k = 2; k < paints.length; k += 7) paints[k] *= sw; // index 2 of each 7-float record = strokeWidth
-  return { ops: scaleTape(art.ops, sx, sy), paints };
+  for (let k = 2; k < paints.length; k += PAINT_STRIDE) paints[k] *= sw; // index 2 of each record = strokeWidth
+  // Gradient geometry lives in the same coordinate space as the path, so it scales with it (radius uniformly).
+  const gradients = grads.map((g) => ({
+    ...g,
+    ax: (g.ax || 0) * sx,
+    ay: (g.ay || 0) * sy,
+    bx: (g.bx || 0) * sx,
+    by: (g.by || 0) * sy,
+    r: (g.r || 0) * sw,
+  }));
+  return { ops: scaleTape(art.ops, sx, sy), paints, gradients };
 }
 
 // --- Bridge-cap diagnostics ----------------------------------------------------------------------
@@ -627,7 +669,7 @@ export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints) {
         `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`
     );
   }
-  const shapes = (paintsLen / 7) | 0;
+  const shapes = (paintsLen / PAINT_STRIDE) | 0;
   if (!_warnedVecPaints && maxPaints > 0 && shapes > maxPaints) {
     _warnedVecPaints = true;
     console.warn(

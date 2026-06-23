@@ -39,7 +39,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
-import { flattenSvg, parseColor, parsePath } from '../src/embedded-react/svg-ops.js';
+import { flattenSvg, parseColor, parsePath, PAINT_STRIDE } from '../src/embedded-react/svg-ops.js';
 import { bakeAssets } from '../assets/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
@@ -2035,10 +2035,11 @@ function emitSvgStatic(el, scope, out, env) {
   const { ops, paints } = flattenSvg(svgEl.props);
   const v = `n${out.n++}`;
   const id = out.svgN++;
-  const nPaints = paints.length / 7;
+  const nPaints = paints.length / PAINT_STRIDE;
   if (ops.length) {
     out.vectorData.push(`static const float s_svg${id}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
-    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * 7, i * 7 + 7))).join(',\n')}\n};`);
+    // flattenSvg paints are PAINT_STRIDE-wide; emit the first 7 (fill_grad zero-inits in C — Flow B has no gradients yet).
+    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * PAINT_STRIDE, i * PAINT_STRIDE + 7))).join(',\n')}\n};`);
   }
   emitSvgBox(v, svgEl.props.width, svgEl.props.height, el.openingElement, scope, out, env);
   if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints});`);

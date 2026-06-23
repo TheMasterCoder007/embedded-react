@@ -93,11 +93,45 @@ describe('bake-svg: svgToVector', () => {
     expect(Math.round(y)).toBe(10);
   });
 
-  it('url() paints (gradients) bake to nothing in v1', async () => {
-    const { paints } = await svgToVector(
-      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="url(#grad)"/></svg>'
+  it('an undefined url() fill (no matching gradient) bakes to nothing', async () => {
+    const { paints, gradients } = await svgToVector(
+      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="url(#missing)"/></svg>'
     );
-    expect(paints[0]).toBe(0); // no fill yet — Track B/C handle gradients
+    expect(paints[0]).toBe(0); // no solid fill
+    expect(paints[7]).toBe(0); // no gradient assigned (fill_grad = 0)
+    expect(gradients).toHaveLength(0);
+  });
+
+  it('bakes a <linearGradient> fill into the gradient table with a 1-based fill_grad', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10">' +
+        '<defs><linearGradient id="g"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
+        '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
+        '</svg>'
+    );
+    expect(a.gradients).toHaveLength(1);
+    const g = a.gradients[0];
+    expect(g.type).toBe(1); // GRAD_LINEAR
+    expect(g.stops.map((s) => s.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
+    // objectBoundingBox default: axis (0,0)->(1,0) maps onto the rect's bbox (0,0,10,10).
+    expect([Math.round(g.ax), Math.round(g.ay), Math.round(g.bx), Math.round(g.by)]).toEqual([0, 0, 10, 0]);
+    // The rect's paint: solid fill 0, fill_grad = 1 (1-based; the 8th paint field).
+    expect(a.paints[0]).toBe(0);
+    expect(a.paints[7]).toBe(1);
+  });
+
+  it('bakes a <radialGradient> fill (centre + radius)', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 100 100">' +
+        '<defs><radialGradient id="r"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/></radialGradient></defs>' +
+        '<rect x="0" y="0" width="100" height="100" fill="url(#r)"/>' +
+        '</svg>'
+    );
+    expect(a.gradients).toHaveLength(1);
+    expect(a.gradients[0].type).toBe(2); // GRAD_RADIAL
+    expect([Math.round(a.gradients[0].ax), Math.round(a.gradients[0].ay)]).toEqual([50, 50]); // bbox centre
+    expect(a.gradients[0].r).toBeGreaterThan(0);
+    expect(a.paints[7]).toBe(1);
   });
 
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
