@@ -270,6 +270,55 @@ describe('AOT baseline (regression)', () => {
     expect(c).not.toContain('s_svg0_paints[0].stroke =');                   // paint NOT reassigned per update
   });
 
+  it('emits a baked <Svg source> with its gradient table (Flow B gradients via opts.svgArtifacts)', () => {
+    const artifact = {
+      ops: [0, 0, 1, 0, 0, 2, 10, 0, 2, 10, 10, 6], // SHAPE 0, MOVE 0,0, LINE 10,0, LINE 10,10, CLOSE
+      paints: [0, 0, 4, 4, 0, 0, 0, 0, 1], // one 9-wide paint: solid fill 0, stroke_grad = 1 (a conic-stroked path)
+      gradients: [
+        { type: 3, stops: [{ color: 0xff39bdf8, offset: 0 }, { color: 0xfff04741, offset: 0.75 }], ax: 5, ay: 5, bx: 0, by: 0, r: -2.356 },
+      ],
+      width: 20,
+      height: 20,
+    };
+    const c = compileSource(
+      `import { View, Svg } from 'embedded-react';\nimport dial from './climate.svg';\nexport function App() { return <View><Svg source={dial} width={20} height={20} /></View>; }`,
+      'test',
+      { svgArtifacts: { climate: artifact } },
+    ).c;
+    expect(c).toContain('static const ERVectorGradient s_svg0_grads[] = {'); // gradient table emitted
+    expect(c).toContain('.type = 3, .stop_count = 2'); // conic, 2 stops
+    expect(c).toContain('.stroke_grad = 1'); // the stroked path references the gradient (1-based)
+    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, 12, s_svg0_paints, 1, s_svg0_grads, 1\);/);
+  });
+
+  it('scales a <Svg source> at compile time but leaves a conic gradient start ANGLE unscaled', () => {
+    const artifact = {
+      ops: [0, 0, 1, 0, 0, 2, 10, 10, 6],
+      paints: [0, 0, 2, 4, 0, 0, 0, 0, 1],
+      gradients: [{ type: 3, stops: [{ color: 0xff000000, offset: 0 }, { color: 0xffffffff, offset: 1 }], ax: 5, ay: 5, bx: 0, by: 0, r: 1.5 }],
+      width: 10,
+      height: 10,
+    };
+    // width 20 on a 10px-intrinsic artifact → sx=2: centre (5,5) -> (10,10); conic r (an angle) stays 1.5.
+    const c = compileSource(
+      `import { View, Svg } from 'embedded-react';\nimport d from './d.svg';\nexport function App() { return <View><Svg source={d} width={20} height={20} /></View>; }`,
+      'test',
+      { svgArtifacts: { d: artifact } },
+    ).c;
+    expect(c).toMatch(/\.ax = 10(\.0+)?f, \.ay = 10(\.0+)?f/); // centre scaled x2
+    expect(c).toContain('.r = 1.5f'); // angle NOT scaled
+  });
+
+  it('throws a clear error when <Svg source> is not an imported .svg', () => {
+    expect(() =>
+      compileSource(
+        `import { View, Svg } from 'embedded-react';\nexport function App() { return <View><Svg source={{}} width={10} height={10} /></View>; }`,
+        'test',
+        {},
+      ),
+    ).toThrow(/<Svg source> must reference an imported \.svg/);
+  });
+
   it('captures a node ref and lowers updateVector(ref, shapes, dirtyRect) imperatively', () => {
     const c = gen(`${PRE}
       import { useRef } from 'react';

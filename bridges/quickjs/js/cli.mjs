@@ -166,12 +166,16 @@ function resolveAppComponent(cwd, explicit) {
 
 /** Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. */
 async function buildAot(cwd, explicit, outDir) {
-  const { compileSource } = await import('./aot/compile.mjs');
+  const { compileSource, bakeSvgArtifacts } = await import('./aot/compile.mjs');
   const { bakeAssets } = await import('./assets/index.mjs');
   const appPath = resolveAppComponent(cwd, explicit);
+  const appDir = dirname(appPath);
+  const src = readFileSync(appPath, 'utf8');
   let result;
   try {
-    result = compileSource(readFileSync(appPath, 'utf8'), 'app', { filename: appPath });
+    // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
+    const svgArtifacts = await bakeSvgArtifacts(src, appDir);
+    result = compileSource(src, 'app', { filename: appPath, svgArtifacts });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);
@@ -179,7 +183,6 @@ async function buildAot(cwd, explicit, outDir) {
   writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
   writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
 
-  const appDir = dirname(appPath);
   const imageJobs = result.images.map((im) => ({ name: im.name, path: resolve(appDir, im.importPath) }));
   for (const j of imageJobs) {
     if (!existsSync(j.path)) {
