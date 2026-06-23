@@ -2497,8 +2497,8 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
 /* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
 #define VEC_PAINT_STRIDE 9
 /* JS gradient record width (kept in sync with svg-ops.js encodeVectorGradients):
- * [type, stop_count, (color, position) × ER_GRADIENT_MAX_STOPS, ax, ay, bx, by, r]. */
-#define VEC_GRAD_STRIDE (2 + ER_GRADIENT_MAX_STOPS * 2 + 5)
+ * [type, stop_count, (color, position) × ER_VGRAD_MAX_STOPS, ax, ay, bx, by, r]. */
+#define VEC_GRAD_STRIDE (2 + ER_VGRAD_MAX_STOPS * 2 + 5)
 
 /**
  * @brief NativeUI.setVectorOps(handle, ops, paints, gradients, dirtyRect) — sets the path geometry on an Svg.
@@ -2618,12 +2618,12 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             }
             grads[i].type = (uint8_t)g[0];
             grads[i].stop_count = (uint8_t)g[1];
-            for (int s = 0; s < ER_GRADIENT_MAX_STOPS; s++)
+            for (int s = 0; s < ER_VGRAD_MAX_STOPS; s++)
             {
                 grads[i].stops[s].color = (uint32_t)g[2 + s * 2];
                 grads[i].stops[s].position = (float)g[3 + s * 2];
             }
-            const int geo = 2 + ER_GRADIENT_MAX_STOPS * 2;
+            const int geo = 2 + ER_VGRAD_MAX_STOPS * 2;
             grads[i].ax = (float)g[geo + 0];
             grads[i].ay = (float)g[geo + 1];
             grads[i].bx = (float)g[geo + 2];

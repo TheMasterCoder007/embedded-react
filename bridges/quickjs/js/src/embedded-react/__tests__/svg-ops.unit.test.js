@@ -15,7 +15,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseColor, parsePath, flattenSvg, shapesToVector, scaleVectorArtifact } from '../svg-ops.js';
+import {
+  parseColor,
+  parsePath,
+  flattenSvg,
+  shapesToVector,
+  scaleVectorArtifact,
+  encodeVectorGradients,
+  GRAD_STRIDE,
+  GRAD_MAX_STOPS,
+  GRAD_LINEAR,
+} from '../svg-ops.js';
 
 // Opcodes mirror er_scene.h.
 const SHAPE = 0;
@@ -252,5 +262,49 @@ describe('scaleVectorArtifact (<Svg source> box scaling)', () => {
     expect(r.ops).toEqual([SHAPE, 0, MOVE, 10, 10, LINE, 20, 0]); // coords doubled; SHAPE's paint index (0) untouched
     expect(r.paints[2]).toBe(8); // strokeWidth 4 -> 8
     expect(r.paints[0]).toBe(0xff112233); // fill color untouched
+  });
+});
+
+describe('encodeVectorGradients', () => {
+  it('encodes a gradient to GRAD_STRIDE floats with its stops + geometry', () => {
+    const out = encodeVectorGradients([
+      {
+        type: GRAD_LINEAR,
+        stops: [
+          { color: 0xffff0000, offset: 0 },
+          { color: 0xff0000ff, offset: 1 },
+        ],
+        ax: 1,
+        ay: 2,
+        bx: 3,
+        by: 4,
+        r: 0,
+      },
+    ]);
+    expect(out.length).toBe(GRAD_STRIDE);
+    expect(out[0]).toBe(GRAD_LINEAR); // type
+    expect(out[1]).toBe(2); // stop_count
+    expect(out[2] >>> 0).toBe(0xffff0000); // stop0 color
+    expect(out[3]).toBe(0); // stop0 offset
+    expect(out[4] >>> 0).toBe(0xff0000ff); // stop1 color
+    const geo = 2 + GRAD_MAX_STOPS * 2; // geometry follows the (padded) stop slots
+    expect([out[geo], out[geo + 1], out[geo + 2], out[geo + 3]]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('resamples a gradient with more than GRAD_MAX_STOPS stops down to the cap (no truncation)', () => {
+    const N = GRAD_MAX_STOPS + 4;
+    const stops = [];
+    for (let i = 0; i < N; i++) {
+      const color = i === 0 ? 0xffff0000 : i === N - 1 ? 0xff0000ff : 0xff00ff00;
+      stops.push({ color, offset: i / (N - 1) });
+    }
+    const out = encodeVectorGradients([{ type: GRAD_LINEAR, stops, ax: 0, ay: 0, bx: 0, by: 0, r: 0 }]);
+    expect(out[1]).toBe(GRAD_MAX_STOPS); // capped, not truncated
+    // Endpoints preserved by the even resample.
+    expect(out[2] >>> 0).toBe(0xffff0000); // first stop = first colour
+    const last = 2 + (GRAD_MAX_STOPS - 1) * 2;
+    expect(out[last] >>> 0).toBe(0xff0000ff); // last resampled stop = last colour
+    expect(out[3]).toBe(0); // offsets span [0,1] ascending
+    expect(out[last + 1]).toBe(1);
   });
 });

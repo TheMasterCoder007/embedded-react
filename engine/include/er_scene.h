@@ -128,12 +128,12 @@ extern "C"
      */
     typedef struct
     {
-        uint32_t fill;     /**< Fill ARGB8888; alpha 0 => no fill. */
-        uint32_t stroke;   /**< Stroke ARGB8888; alpha 0 => no stroke. */
-        float stroke_w;    /**< Stroke width in px; <= 0 => no stroke. */
-        float miter;       /**< Miter limit; <= 0 => default 4. */
-        uint8_t cap;       /**< ER_VCAP_*. */
-        uint8_t join;      /**< ER_VJOIN_*. */
+        uint32_t fill;       /**< Fill ARGB8888; alpha 0 => no fill. */
+        uint32_t stroke;     /**< Stroke ARGB8888; alpha 0 => no stroke. */
+        float stroke_w;      /**< Stroke width in px; <= 0 => no stroke. */
+        float miter;         /**< Miter limit; <= 0 => default 4. */
+        uint8_t cap;         /**< ER_VCAP_*. */
+        uint8_t join;        /**< ER_VJOIN_*. */
         uint8_t fill_rule;   /**< ER_VFILL_*. */
         int16_t fill_grad;   /**< 1-based index into the gradient table for the FILL (0 = solid). ERUI_GRADIENT. */
         int16_t stroke_grad; /**< 1-based index into the gradient table for the STROKE (0 = solid). ERUI_GRADIENT. */
@@ -309,8 +309,12 @@ extern "C"
         ER_BORDER_DOTTED = 2, /**< Small filled dots at regular intervals (3 px on, 3 px off). */
     } ERBorderStyle;
 
-/** @brief Maximum number of color stops in a gradient. */
+/** @brief Maximum number of color stops in a View-background gradient (stored in every node's props). */
 #define ER_GRADIENT_MAX_STOPS 4
+
+/** @brief Maximum number of color stops in a VECTOR gradient. Larger than the View cap (vector gradients
+ *         live in the small per-node vector pool, not in every node), and the baker downsamples beyond it. */
+#define ER_VGRAD_MAX_STOPS 8
 
 /** @brief Maximum number of inline text spans in a Text node. */
 #define ER_TEXT_MAX_SPANS 4
@@ -355,14 +359,14 @@ extern "C"
      */
     typedef struct
     {
-        uint8_t type;                                /**< ERGradientType: LINEAR or RADIAL. */
-        uint8_t stop_count;                          /**< Stop count [2–ER_GRADIENT_MAX_STOPS]. */
-        ERGradientStop stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops, ascending position. */
-        float ax;                                    /**< Linear: axis start x. Radial: centre x. */
-        float ay;                                    /**< Linear: axis start y. Radial: centre y. */
-        float bx;                                    /**< Linear: axis end x. Radial: unused. */
-        float by;                                    /**< Linear: axis end y. Radial: unused. */
-        float r;                                     /**< Radial: radius. Linear: unused. */
+        uint8_t type;                             /**< ERGradientType: LINEAR or RADIAL. */
+        uint8_t stop_count;                       /**< Stop count [2–ER_VGRAD_MAX_STOPS]. */
+        ERGradientStop stops[ER_VGRAD_MAX_STOPS]; /**< Color stops, ascending position. */
+        float ax;                                 /**< Linear: axis start x. Radial: centre x. */
+        float ay;                                 /**< Linear: axis start y. Radial: centre y. */
+        float bx;                                 /**< Linear: axis end x. Radial: unused. */
+        float by;                                 /**< Linear: axis end y. Radial: unused. */
+        float r;                                  /**< Radial: radius. Linear: unused. */
     } ERVectorGradient;
 
     /**

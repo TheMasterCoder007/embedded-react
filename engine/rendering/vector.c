@@ -756,7 +756,16 @@ static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float 
 }
 
 /** @brief Builds stroke geometry for all subpaths and rasterizes it. */
-static void stroke_shape(uint32_t color, const ERVectorGradient* grad, float sw, int cap, int join, float miter, int cx0, int cy0, int cx1, int cy1)
+static void stroke_shape(uint32_t color,
+                         const ERVectorGradient* grad,
+                         float sw,
+                         int cap,
+                         int join,
+                         float miter,
+                         int cx0,
+                         int cy0,
+                         int cx1,
+                         int cy1)
 {
     if (sw <= 0.0f)
         return;
@@ -905,8 +914,16 @@ void er_vector_render(const float* ops,
             if (fg || ((pt->fill >> 24) & 0xFFU) != 0U)
                 fill_shape(pt->fill, fg, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
             if ((sg || ((pt->stroke >> 24) & 0xFFU) != 0U) && pt->stroke_w > 0.0f)
-                stroke_shape(pt->stroke, sg, pt->stroke_w, pt->cap, pt->join, pt->miter > 0.0f ? pt->miter : 4.0f, cx0,
-                             cy0, cx1, cy1);
+                stroke_shape(pt->stroke,
+                             sg,
+                             pt->stroke_w,
+                             pt->cap,
+                             pt->join,
+                             pt->miter > 0.0f ? pt->miter : 4.0f,
+                             cx0,
+                             cy0,
+                             cx1,
+                             cy1);
         }
     }
 }

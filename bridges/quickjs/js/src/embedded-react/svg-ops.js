@@ -44,18 +44,59 @@ export const PAINT_STRIDE = 9;
 // type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
 // [type, stopCount, (color, offset) × GRAD_MAX_STOPS, ax, ay, bx, by, r]; MUST match the bridge's
 // VEC_GRAD_STRIDE and the engine's ER_GRADIENT_MAX_STOPS.
-export const GRAD_MAX_STOPS = 4;
-export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 15
+export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VGRAD_MAX_STOPS (er_scene.h)
+export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 23
 export const GRAD_LINEAR = 1;
 export const GRAD_RADIAL = 2;
 
-/** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient). */
+/** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
+function lerpArgb(c0, c1, t) {
+  const lp = (sh) => {
+    const a = (c0 >>> sh) & 0xff;
+    const b = (c1 >>> sh) & 0xff;
+    return Math.round(a + (b - a) * t) & 0xff;
+  };
+  return ((lp(24) << 24) | (lp(16) << 16) | (lp(8) << 8) | lp(0)) >>> 0;
+}
+
+/** Gradient color at position t (stops ascending by offset; clamps to the endpoint colors). */
+function evalStopsAt(stops, t) {
+  if (!stops.length) return 0;
+  if (t <= stops[0].offset) return stops[0].color >>> 0;
+  const last = stops[stops.length - 1];
+  if (t >= last.offset) return last.color >>> 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    if (t <= b.offset) {
+      const span = b.offset - a.offset;
+      return lerpArgb(a.color >>> 0, b.color >>> 0, span > 0 ? (t - a.offset) / span : 0);
+    }
+  }
+  return last.color >>> 0;
+}
+
+/** Reduces a stop list to at most `max` entries, resampling evenly across the stop range when it's over. */
+function capStops(stops, max) {
+  if (stops.length <= max) return stops;
+  const lo = stops[0].offset;
+  const hi = stops[stops.length - 1].offset;
+  const out = [];
+  for (let i = 0; i < max; i++) {
+    const t = max === 1 ? lo : lo + (hi - lo) * (i / (max - 1));
+    out.push({ color: evalStopsAt(stops, t), offset: t });
+  }
+  return out;
+}
+
+/** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient).
+ *  A gradient with more than GRAD_MAX_STOPS stops is resampled down (not truncated) so it still ramps right. */
 export function encodeVectorGradients(grads) {
   const out = [];
   if (!grads) return out;
   for (const g of grads) {
-    const stops = g.stops || [];
-    out.push(g.type, Math.min(stops.length, GRAD_MAX_STOPS));
+    const stops = capStops(g.stops || [], GRAD_MAX_STOPS);
+    out.push(g.type, stops.length);
     for (let s = 0; s < GRAD_MAX_STOPS; s++) {
       const st = stops[s];
       out.push(st ? st.color >>> 0 : 0, st ? st.offset : 0);
