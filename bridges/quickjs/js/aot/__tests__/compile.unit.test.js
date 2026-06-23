@@ -203,7 +203,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('er_node_create(ER_NODE_VECTOR)');
     expect(c).toContain('static const float s_svg0_ops[]');
     expect(c).toContain('static const ERVectorPaint s_svg0_paints[]');
-    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/);
+    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/);
     expect(c).toContain('.stroke_w = 3.0f');           // circle stroke width baked
     expect(c).toContain('p.width = (int16_t)100;');     // node box from Svg width
   });
@@ -228,7 +228,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('cosf(');                            // arc trig in C
     expect(c).toContain('(s_state.temp * 2)');               // dynamic endAngle expression
     expect(c).toContain('build_svg0();');
-    expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2\);/); // re-upload in app_update
+    expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/); // re-upload in app_update
   });
 
   it('lowers a state-driven <Svg> paint (stroke color/width) to a mutable paint table rebuilt from state', () => {
@@ -290,7 +290,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toMatch(/static float s_uv0_ops\[\d+\];/);          // imperative op buffer
     expect(c).toContain('s_uv0_ops[0] = ER_VOP_SHAPE;');
     expect(c).toContain('data->x');                                // event coord in arc endAngle
-    expect(c).toMatch(/er_node_set_vector_ops\(s_ref_dial, s_uv0_ops, \d+, s_uv0_paints, 1\);/);
+    expect(c).toMatch(/er_node_set_vector_ops\(s_ref_dial, s_uv0_ops, \d+, s_uv0_paints, 1, NULL, 0\);/);
     expect(c).toContain('er_node_set_vector_dirty_rect(s_ref_dial, 0, 0, 200, 200);');
   });
 

@@ -1368,7 +1368,7 @@ function compileUpdateVector(expr, env, ctx, indent) {
   out.vectorData.push(`static float s_uv${id}_ops[${len}];`);
   out.vectorData.push(`static const ERVectorPaint s_uv${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
   const lines = entries.map((e, i) => `${indent}s_uv${id}_ops[${i}] = ${e};`);
-  lines.push(`${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length});`);
+  lines.push(`${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length}, NULL, 0);`);
   if (dirtyArg) {
     if (dirtyArg.type !== 'ArrayExpression' || dirtyArg.elements.length < 4) throw new Error('AOT: updateVector dirtyRect must be a [x, y, w, h] array literal');
     const [x, y, w, h] = dirtyArg.elements.map((el) => emitExpr(el, env).code);
@@ -2042,7 +2042,7 @@ function emitSvgStatic(el, scope, out, env) {
     out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * PAINT_STRIDE, i * PAINT_STRIDE + 7))).join(',\n')}\n};`);
   }
   emitSvgBox(v, svgEl.props.width, svgEl.props.height, el.openingElement, scope, out, env);
-  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints});`);
+  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints}, NULL, 0);`);
   return v;
 }
 
@@ -2079,7 +2079,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${builderLines.join('\n')}\n}`);
 
   emitSvgBox(v, svgA.width, svgA.height, el.openingElement, scope, out, env);
-  out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints});`, `    s_${v} = ${v};`);
+  out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints}, NULL, 0);`, `    s_${v} = ${v};`);
   out.handles.push(v);
   out.svgUpdates.push({ id, len, nPaints, nodeVar: `s_${v}` });
   return v;
@@ -2842,7 +2842,7 @@ const updateBlock = (() => {
   // State-driven Svgs: recompute the op-tape from state and re-upload.
   for (const s of out.svgUpdates) {
     lines.push(`    build_svg${s.id}();`);
-    lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints});`);
+    lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints}, NULL, 0);`);
   }
   // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
   for (const block of out.depEffects) lines.push(block);
