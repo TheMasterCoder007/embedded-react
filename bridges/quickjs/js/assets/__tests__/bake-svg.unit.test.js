@@ -134,6 +134,20 @@ describe('bake-svg: svgToVector', () => {
     expect(a.paints[7]).toBe(1);
   });
 
+  it('bakes a STROKE gradient into stroke_grad while the fill stays solid', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10">' +
+        '<defs><linearGradient id="s"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
+        '<rect x="0" y="0" width="10" height="10" fill="#101010" stroke="url(#s)" stroke-width="2"/>' +
+        '</svg>'
+    );
+    expect(a.gradients).toHaveLength(1);
+    expect(a.gradients[0].type).toBe(1); // GRAD_LINEAR
+    expect(a.paints[0] & 0xffffff).toBe(0x101010); // solid fill kept
+    expect(a.paints[7]).toBe(0); // fill_grad = none
+    expect(a.paints[8]).toBe(1); // stroke_grad = 1 (the 9th paint field)
+  });
+
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
     const a = await svgToVector('<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>');
     expect(a.paints[0] >>> 24).toBe(0x80); // 0xff * 0.5 -> 128

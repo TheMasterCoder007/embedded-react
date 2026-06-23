@@ -2494,8 +2494,8 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
 #ifndef VEC_BRIDGE_MAX_GRADS
 #define VEC_BRIDGE_MAX_GRADS 16
 #endif
-/* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad. */
-#define VEC_PAINT_STRIDE 8
+/* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
+#define VEC_PAINT_STRIDE 9
 /* JS gradient record width (kept in sync with svg-ops.js encodeVectorGradients):
  * [type, stop_count, (color, position) × ER_GRADIENT_MAX_STOPS, ax, ay, bx, by, r]. */
 #define VEC_GRAD_STRIDE (2 + ER_GRADIENT_MAX_STOPS * 2 + 5)
@@ -2586,7 +2586,8 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             paints[i].cap = (uint8_t)f[4];
             paints[i].join = (uint8_t)f[5];
             paints[i].fill_rule = (uint8_t)f[6];
-            paints[i].fill_grad = (int16_t)f[7]; /* 1-based index into the gradient table (0 = solid) */
+            paints[i].fill_grad = (int16_t)f[7];   /* 1-based fill gradient index (0 = solid) */
+            paints[i].stroke_grad = (int16_t)f[8]; /* 1-based stroke gradient index (0 = solid) */
         }
     }
 

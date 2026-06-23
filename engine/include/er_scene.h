@@ -134,8 +134,9 @@ extern "C"
         float miter;       /**< Miter limit; <= 0 => default 4. */
         uint8_t cap;       /**< ER_VCAP_*. */
         uint8_t join;      /**< ER_VJOIN_*. */
-        uint8_t fill_rule; /**< ER_VFILL_*. */
-        int16_t fill_grad; /**< 1-based index into the vector gradient table (0 = solid `fill`). ERUI_GRADIENT. */
+        uint8_t fill_rule;   /**< ER_VFILL_*. */
+        int16_t fill_grad;   /**< 1-based index into the gradient table for the FILL (0 = solid). ERUI_GRADIENT. */
+        int16_t stroke_grad; /**< 1-based index into the gradient table for the STROKE (0 = solid). ERUI_GRADIENT. */
     } ERVectorPaint;
 
     /**

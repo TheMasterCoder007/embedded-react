@@ -376,17 +376,19 @@ export async function svgToVector(svgString) {
 
       const paintIndex = paints.length / PAINT_STRIDE;
       const op = clamp01(num(cp.opacity, 1));
-      // A url(#id) fill referencing a parsed gradient bakes to a gradient-table entry (1-based fill_grad); the
-      // solid fill stays 0 (colorOf returns 0 for url()). Stroke gradients aren't supported yet.
-      const fillRef = urlRef(cp.fill);
-      let fillGrad = 0;
-      if (fillRef) {
-        const def = gradDefs.get(fillRef);
-        if (def && def.stops.length >= 2) {
-          gradients.push(bakeGradient(def, cm, opsBBox(shapeOps)));
-          fillGrad = gradients.length; // 1-based
-        }
-      }
+      // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index; the
+      // solid color stays 0 (colorOf returns 0 for url()). The shape's bbox is computed once, lazily.
+      let bbox = null;
+      const refGrad = (ref) => {
+        if (!ref) return 0;
+        const def = gradDefs.get(ref);
+        if (!def || def.stops.length < 2) return 0;
+        if (!bbox) bbox = opsBBox(shapeOps);
+        gradients.push(bakeGradient(def, cm, bbox));
+        return gradients.length; // 1-based
+      };
+      const fillGrad = refGrad(urlRef(cp.fill));
+      const strokeGrad = refGrad(urlRef(cp.stroke));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, cm));
       paints.push(
         applyAlpha(colorOf(cp.fill ?? 'black'), op * clamp01(num(cp['fill-opacity'], 1))),
@@ -396,7 +398,8 @@ export async function svgToVector(svgString) {
         CAP[cp['stroke-linecap']] ?? 0,
         JOIN[cp['stroke-linejoin']] ?? 0,
         cp['fill-rule'] === 'evenodd' ? 1 : 0,
-        fillGrad
+        fillGrad,
+        strokeGrad
       );
     }
   };

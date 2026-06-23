@@ -100,7 +100,7 @@ describe('parsePath', () => {
 });
 
 describe('flattenSvg', () => {
-  it('emits one SHAPE per shape with an 8-field paint each', () => {
+  it('emits one SHAPE per shape with a 9-field paint each', () => {
     const props = {
       children: [
         el('Path', { d: 'M0 0 L10 0', stroke: '#4cc9f0', strokeWidth: 3, strokeLinecap: 'round', fill: 'none' }),
@@ -108,18 +108,20 @@ describe('flattenSvg', () => {
       ],
     };
     const { ops, paints } = flattenSvg(props);
-    // Two shapes => two 8-field paint records (16 numbers).
-    expect(paints.length).toBe(16);
-    // Path paint: fill none(0), stroke blue, width 3, cap round(1), no gradient(0).
+    // Two shapes => two 9-field paint records (18 numbers).
+    expect(paints.length).toBe(18);
+    // Path paint: fill none(0), stroke blue, width 3, cap round(1), no gradients(0).
     expect(paints[0]).toBe(0); // fill
     expect(paints[1] >>> 0).toBe(0xff4cc9f0); // stroke
     expect(paints[2]).toBe(3); // width
     expect(paints[4]).toBe(1); // round cap
     expect(paints[7]).toBe(0); // fill_grad
-    // Circle paint (record 2 starts at index 8): fill set, stroke none.
-    expect(paints[8] >>> 0).toBe(0xff16202f);
-    expect(paints[9]).toBe(0);
-    expect(paints[15]).toBe(0); // fill_grad
+    expect(paints[8]).toBe(0); // stroke_grad
+    // Circle paint (record 2 starts at index 9): fill set, stroke none.
+    expect(paints[9] >>> 0).toBe(0xff16202f);
+    expect(paints[10]).toBe(0);
+    expect(paints[16]).toBe(0); // fill_grad
+    expect(paints[17]).toBe(0); // stroke_grad
     // Tape starts with a SHAPE op and contains two of them.
     expect(ops[0]).toBe(SHAPE);
     expect(ops.filter((_, i) => ops[i - 1] === undefined)).toBeTruthy();
@@ -175,7 +177,7 @@ describe('shapesToVector (imperative)', () => {
     expect(ops[5]).toBe(ARC);
     expect(ops.slice(6, 9)).toEqual([100, 100, 80]); // cx, cy, r
     expect(ops[ops.length - 1]).toBe(0); // ccw flag
-    expect(paints.length).toBe(8);
+    expect(paints.length).toBe(9);
     expect(paints[0]).toBe(0); // fill none
     expect(paints[1] >>> 0).toBe(0xfff4a261); // stroke
     expect(paints[2]).toBe(14); // width
@@ -206,7 +208,7 @@ describe('shapesToVector (imperative)', () => {
       { line: [0, 0, 1, 1], stroke: '#000' },
       { circle: [0, 0, 1], fill: '#f00' },
     ]);
-    expect(paints.length).toBe(24); // 3 * 8
+    expect(paints.length).toBe(27); // 3 * 9
     expect(shapeIndices(ops)).toEqual([0, 1, 2]);
   });
 
@@ -225,7 +227,7 @@ describe('shapesToVector (imperative)', () => {
     const { ops, paints } = shapesToVector([{ foo: 1 }, { rect: [0, 0, 2, 2], fill: '#fff' }]);
     expect(ops[0]).toBe(SHAPE);
     expect(ops[1]).toBe(0); // the rect's paint index is 0 — the unknown shape emitted nothing
-    expect(paints.length).toBe(8);
+    expect(paints.length).toBe(9);
   });
 
   it('reuses its output buffers but resets them each call (no stale leakage)', () => {

@@ -323,6 +323,34 @@ int main(void)
         if (px(&tc, 5, 5) != 0)
             return fail("linear gradient: pixel outside the rect was filled");
     }
+
+    /* --- linear gradient STROKE: a thick horizontal line whose stroke ramps red -> blue along its length --- */
+    {
+        reset(&tc);
+        const float ops[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 40, 30, ER_VOP_LINE, 80, 30};
+        /* fill 0, stroke 0 (no solid colour), width 10, round caps, fill_grad 0, stroke_grad 1. */
+        const ERVectorPaint p = {0, 0, 10.0f, 4.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 1};
+        ERVectorGradient g;
+        memset(&g, 0, sizeof(g));
+        g.type = ER_GRADIENT_LINEAR;
+        g.stop_count = 2;
+        g.stops[0].color = 0xFFFF0000u;
+        g.stops[0].position = 0.0f;
+        g.stops[1].color = 0xFF0000FFu;
+        g.stops[1].position = 1.0f;
+        g.ax = 40.0f;
+        g.ay = 30.0f;
+        g.bx = 80.0f;
+        g.by = 30.0f; /* horizontal axis along the line */
+        er_vector_render(ops, (int)(sizeof(ops) / sizeof(ops[0])), &p, 1, &g, 1, 0, 0, 0, 0, FB_W, FB_H);
+        const uint32_t L = px(&tc, 45, 30), R = px(&tc, 75, 30);
+        if (((L >> 24) & 0xFFu) != 0xFFu)
+            return fail("gradient stroke: band pixel not opaque");
+        if (!(redOf(L) > 180 && bluOf(L) < 80))
+            return fail("gradient stroke: left of the band should be ~red");
+        if (!(bluOf(R) > 180 && redOf(R) < 80))
+            return fail("gradient stroke: right of the band should be ~blue");
+    }
 #endif
 
 #if ERUI_GRADIENT_RADIAL

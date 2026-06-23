@@ -36,9 +36,9 @@ export const CAP = { butt: 0, round: 1, square: 2 };
 export const JOIN = { miter: 0, round: 1, bevel: 2 };
 
 // Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
-// fillGrad]. fillGrad is a 1-based index into the gradient table (0 = solid). MUST match the bridge's
-// VEC_PAINT_STRIDE (native_ui_bridge.c) and the AOT's paint emission.
-export const PAINT_STRIDE = 8;
+// fillGrad, strokeGrad]. fillGrad/strokeGrad are 1-based indices into the gradient table (0 = solid). MUST
+// match the bridge's VEC_PAINT_STRIDE (native_ui_bridge.c) and the AOT's paint emission.
+export const PAINT_STRIDE = 9;
 
 // Gradient table encoding — a gradient descriptor is { type, stops: [{color, offset}], ax, ay, bx, by, r }.
 // type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
@@ -471,7 +471,8 @@ export function shapesToVector(shapes) {
       CAP[s.cap] ?? 0,
       JOIN[s.join] ?? 0,
       s.fillRule === 'evenodd' ? 1 : 0,
-      0 // fill_grad: the imperative path has no gradients
+      0, // fill_grad
+      0 // stroke_grad — the imperative path has no gradients
     );
   }
   return { ops, paints };
@@ -506,6 +507,7 @@ function paintRecord(paint, scale) {
     JOIN[paint.strokeLinejoin] ?? 0,
     paint.fillRule === 'evenodd' ? 1 : 0,
     0, // fill_grad: inline <Svg> children don't reference gradients (baked <Svg source> does)
+    0, // stroke_grad
   ];
 }
 

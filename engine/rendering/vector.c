@@ -338,6 +338,27 @@ static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
         return ((fx - g->ax) * dx + (fy - g->ay) * dy) / len2;
     }
 }
+
+/**
+ * @brief Resolves a paint's 1-based gradient index into a framebuffer-space gradient (or NULL).
+ *        Copies the table entry into @p buf, offsets its op-tape (node-local) geometry by the node origin
+ *        (px,py) to match the flattened path, and returns @p buf — or NULL if the index is out of range,
+ *        the type is unsupported in this build, or there are < 2 stops. Used for both fill and stroke.
+ */
+static const ERVectorGradient*
+resolve_grad(int idx1, const ERVectorGradient* grads, int n_grads, int px, int py, ERVectorGradient* buf)
+{
+    if (idx1 <= 0 || idx1 > n_grads)
+        return NULL;
+    *buf = grads[idx1 - 1];
+    if (!vgrad_supported(buf->type) || buf->stop_count < 2)
+        return NULL;
+    buf->ax += (float)px; /* r is a length and is NOT offset */
+    buf->ay += (float)py;
+    buf->bx += (float)px;
+    buf->by += (float)py;
+    return buf;
+}
 #endif /* ERUI_GRADIENT */
 
 /**
@@ -735,7 +756,7 @@ static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float 
 }
 
 /** @brief Builds stroke geometry for all subpaths and rasterizes it. */
-static void stroke_shape(uint32_t color, float sw, int cap, int join, float miter, int cx0, int cy0, int cx1, int cy1)
+static void stroke_shape(uint32_t color, const ERVectorGradient* grad, float sw, int cap, int join, float miter, int cx0, int cy0, int cx1, int cy1)
 {
     if (sw <= 0.0f)
         return;
@@ -743,7 +764,7 @@ static void stroke_shape(uint32_t color, float sw, int cap, int join, float mite
     for (int si = 0; si < s_nsub; si++)
         if (s_sub[si].count >= 1)
             stroke_subpath(&s_sub[si], sw, cap, join, miter);
-    rasterize(color, NULL /* strokes are solid for now (Track B does fills first) */, 0, cx0, cy0, cx1, cy1);
+    rasterize(color, grad, 0, cx0, cy0, cx1, cy1);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -875,35 +896,17 @@ void er_vector_render(const float* ops,
         if (pt)
         {
             const ERVectorGradient* fg = NULL;
+            const ERVectorGradient* sg = NULL;
 #if ERUI_GRADIENT
-            ERVectorGradient fgbuf;
-            if (pt->fill_grad > 0 && pt->fill_grad <= n_grads)
-            {
-                fgbuf = grads[pt->fill_grad - 1];
-                if (vgrad_supported(fgbuf.type) && fgbuf.stop_count >= 2)
-                {
-                    /* The gradient geometry is op-tape (node-local) space; offset it to framebuffer space to
-                     * match the flattened path (which had px,py added). r is a length and is NOT offset. */
-                    fgbuf.ax += (float)px;
-                    fgbuf.ay += (float)py;
-                    fgbuf.bx += (float)px;
-                    fgbuf.by += (float)py;
-                    fg = &fgbuf;
-                }
-            }
+            ERVectorGradient fgbuf, sgbuf;
+            fg = resolve_grad(pt->fill_grad, grads, n_grads, px, py, &fgbuf);
+            sg = resolve_grad(pt->stroke_grad, grads, n_grads, px, py, &sgbuf);
 #endif
             if (fg || ((pt->fill >> 24) & 0xFFU) != 0U)
                 fill_shape(pt->fill, fg, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
-            if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
-                stroke_shape(pt->stroke,
-                             pt->stroke_w,
-                             pt->cap,
-                             pt->join,
-                             pt->miter > 0.0f ? pt->miter : 4.0f,
-                             cx0,
-                             cy0,
-                             cx1,
-                             cy1);
+            if ((sg || ((pt->stroke >> 24) & 0xFFU) != 0U) && pt->stroke_w > 0.0f)
+                stroke_shape(pt->stroke, sg, pt->stroke_w, pt->cap, pt->join, pt->miter > 0.0f ? pt->miter : 4.0f, cx0,
+                             cy0, cx1, cy1);
         }
     }
 }
