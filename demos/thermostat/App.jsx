@@ -15,7 +15,7 @@
  */
 
 import { useState, useRef, useCallback, memo } from 'react';
-import { View, Text, Pressable, Image, StyleSheet, Svg, Circle, Arc } from 'embedded-react';
+import { View, Text, Pressable, Image, StyleSheet, Svg, Circle } from 'embedded-react';
 // Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
 // basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
 // build` decodes the PNGs and emits them into dist/assets.generated.c (er_register_assets()).
@@ -23,6 +23,9 @@ import wxSun from './assets/wx_sun.png';
 import wxCloud from './assets/wx_cloud.png';
 import wxPartly from './assets/wx_partly.png';
 import wxRain from './assets/wx_rain.png';
+// The compact (AOT) dial's face — the SAME baked SVG the Flow A <Dial> uses (dark track + cool→warm CONIC
+// ghost gradient + inner rings). Its gradients now render under Flow B too, so the small-board dial gets it.
+import climateFace from './assets/climate-face.svg';
 // The rich Flow A dial is a self-contained component — App passes it the value, range, size, font sizes,
 // and theme as props (so it imports nothing back from here). The compact (AOT) branch draws its own dial.
 import { Dial } from './components/climate-dial.jsx';
@@ -46,8 +49,6 @@ const CURRENT = 68.7; // live room reading °F (static in this demo)
 // stays put; a real drag moves more than this and still tracks. Raise if the handle still dances; lower if
 // a slow drag feels steppy.
 const DRAG_JITTER = 0.5;
-const ACCENT = '#f4a261'; // dial accent (amber). The compact (AOT) dial uses a STATIC arc/handle color —
-//                           dynamic vector paint isn't in the compile-time subset — so it stays amber there.
 
 const MODES = [
   { key: 'heat', label: 'Heat', color: '#f4a261' }, // warning / amber
@@ -99,6 +100,12 @@ const PAD = compact ? 10 : 20;
 const GAP = compact ? 8 : 16;
 const BOX = 2 * (SZ.R + SZ.handle + 6); // square that holds the dial; center at (BOX/2, BOX/2)
 const DIAL_C = BOX / 2;
+// The compact dial's state-driven handle rides the SAME radius as climate-face.svg's baked track (authoring
+// radius 185 in a 410 box), so the overlay lines up exactly on the baked conic face.
+const FACE_R = (185 / 410) * BOX;
+// Knob scale: climate-knob.svg is authored in a 72-unit box; the Flow A <Dial> scales it by 72/410·box, so
+// the same knob circles map into our BOX space by BOX/410. We draw that knob inline (see the compact dial).
+const KS = BOX / 410;
 
 // ----------------------------------------------------------------------------------------------------
 // Small building blocks — all memoised so a value drag (which re-renders App) never reconciles them.
@@ -218,17 +225,13 @@ export function App() {
           onTouchStart={onDrag}
           onTouchMove={onDrag}
         >
-          <Svg width={BOX} height={BOX}>
-            <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={-A_START} stroke={theme.track} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-            <Arc cx={DIAL_C} cy={DIAL_C} r={SZ.R} startAngle={A_START} endAngle={A_START + (value - MIN) * DEG} stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT} strokeWidth={SZ.stroke} strokeLinecap="round" fill="none" />
-            <Circle
-              cx={DIAL_C + SZ.R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
-              cy={DIAL_C - SZ.R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)}
-              r={SZ.handle}
-              fill={theme.card}
-              stroke={mode === 'cool' ? '#4cc9f0' : mode === 'auto' ? '#2a9d8f' : mode === 'off' ? '#7d8896' : ACCENT}
-              strokeWidth={3}
-            />
+          <Svg source={climateFace} width={BOX} height={BOX} />
+          <Svg width={BOX} height={BOX} style={{ position: 'absolute', left: 0, top: 0 }}>
+            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={36 * KS} fill="#c0e6f733" />
+            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={22 * KS} fill="#121212" />
+            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={19 * KS} fill="#c0e6f7" />
+            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={21 * KS} fill="none" stroke="#ffffff" strokeWidth={2.5 * KS} />
+            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={5 * KS} fill="#fffffff2" />
           </Svg>
         </View>
 

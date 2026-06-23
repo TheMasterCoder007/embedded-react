@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileSource } from '../compile.mjs';
+import { compileSource, bakeSvgArtifacts } from '../compile.mjs';
 
 // Regression guard: the AOT-targeted demos must keep compiling end-to-end (no thrown "AOT: …"). This is
 // the cheap counterpart to a full compile-and-screenshot harness — it would have caught any compiler change
@@ -34,10 +34,15 @@ describe('AOT demo compile smoke', () => {
     expect(r.nodes).toBeGreaterThan(0);
   });
 
-  it('compiles the thermostat demo for a 240×320 (CYD) screen — the compact dial branch', () => {
-    const r = compileSource(appSrc('thermostat'), 'thermostat', { screen: { width: 240, height: 320 }, filename: 'demos/thermostat/App.jsx' });
+  it('compiles the thermostat demo for a 240×320 (CYD) screen — the compact dial branch', async () => {
+    const src = appSrc('thermostat');
+    // The compact dial now layers a baked <Svg source={climateFace}> (conic face) under the state-driven
+    // arc, so the CLI's .svg bake must run before compile (mirrors `npm run aot`).
+    const svgArtifacts = await bakeSvgArtifacts(src, resolve(demosDir, 'thermostat'));
+    const r = compileSource(src, 'thermostat', { screen: { width: 240, height: 320 }, filename: 'demos/thermostat/App.jsx', svgArtifacts });
     expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
-    expect(r.c).toContain('build_svg0'); // the state-driven dial
+    expect(r.c).toContain('static const ERVectorGradient s_svg0_grads'); // the baked CONIC dial face
+    expect(r.c).toMatch(/build_svg\d+\(/); // the state-driven setpoint overlay (arc + handle)
     expect(r.c).toContain('er_cb_onDrag'); // touch-drag handler
     expect(r.handlers).toBeGreaterThan(0);
   });
