@@ -134,6 +134,20 @@ describe('bake-svg: svgToVector', () => {
     expect(a.paints[7]).toBe(1);
   });
 
+  it('bakes a <conicGradient> fill (centre + start angle in radians)', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 100 100">' +
+        '<defs><conicGradient id="c" from="90"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></conicGradient></defs>' +
+        '<rect x="0" y="0" width="100" height="100" fill="url(#c)"/>' +
+        '</svg>'
+    );
+    expect(a.gradients).toHaveLength(1);
+    expect(a.gradients[0].type).toBe(3); // GRAD_CONIC
+    expect([Math.round(a.gradients[0].ax), Math.round(a.gradients[0].ay)]).toEqual([50, 50]); // bbox centre
+    expect(a.gradients[0].r).toBeCloseTo(Math.PI / 2, 3); // from="90deg" -> π/2 rad start angle
+    expect(a.paints[7]).toBe(1);
+  });
+
   it('bakes a STROKE gradient into stroke_grad while the fill stays solid', async () => {
     const a = await svgToVector(
       '<svg viewBox="0 0 10 10">' +

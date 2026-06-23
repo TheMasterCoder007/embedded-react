@@ -48,6 +48,7 @@ export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VGRAD_MAX_STOPS (
 export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 23
 export const GRAD_LINEAR = 1;
 export const GRAD_RADIAL = 2;
+export const GRAD_CONIC = 3;
 
 /** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
 function lerpArgb(c0, c1, t) {
@@ -680,7 +681,8 @@ export function scaleVectorArtifact(art, targetW, targetH) {
     ay: (g.ay || 0) * sy,
     bx: (g.bx || 0) * sx,
     by: (g.by || 0) * sy,
-    r: (g.r || 0) * sw,
+    // Radial r is a length (scales); conic r is a start angle (invariant under uniform scale) — don't scale it.
+    r: g.type === GRAD_CONIC ? g.r || 0 : (g.r || 0) * sw,
   }));
   return { ops: scaleTape(art.ops, sx, sy), paints, gradients };
 }

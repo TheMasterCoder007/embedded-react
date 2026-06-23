@@ -393,5 +393,47 @@ int main(void)
     }
 #endif
 
+#if ERUI_GRADIENT_CONIC
+    /* --- conic gradient fill: colour sweeps by ANGLE around the centre (red at top -> green at bottom) --- */
+    {
+        reset(&tc);
+        const float ops[] = {ER_VOP_SHAPE,
+                             0,
+                             ER_VOP_MOVE,
+                             10,
+                             10,
+                             ER_VOP_LINE,
+                             50,
+                             10,
+                             ER_VOP_LINE,
+                             50,
+                             50,
+                             ER_VOP_LINE,
+                             10,
+                             50,
+                             ER_VOP_CLOSE};
+        const ERVectorPaint p = {0, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 1, 0};
+        ERVectorGradient g;
+        memset(&g, 0, sizeof(g));
+        g.type = ER_GRADIENT_CONIC;
+        g.stop_count = 3;
+        g.stops[0].color = 0xFFFF0000u; /* t=0   (top)    red   */
+        g.stops[0].position = 0.0f;
+        g.stops[1].color = 0xFF00FF00u; /* t=0.5 (bottom) green */
+        g.stops[1].position = 0.5f;
+        g.stops[2].color = 0xFF0000FFu; /* t=1   (top)    blue  */
+        g.stops[2].position = 1.0f;
+        g.ax = 30.0f;
+        g.ay = 30.0f;
+        g.r = 0.0f; /* start angle */
+        er_vector_render(ops, (int)(sizeof(ops) / sizeof(ops[0])), &p, 1, &g, 1, 0, 0, 0, 0, FB_W, FB_H);
+        const uint32_t T = px(&tc, 30, 14), B = px(&tc, 30, 46); /* directly above / below the centre */
+        if (!(redOf(T) > 180 && grnOf(T) < 90))
+            return fail("conic gradient: top (t=0) should be ~red");
+        if (!(grnOf(B) > 180 && redOf(B) < 90))
+            return fail("conic gradient: bottom (t=0.5) should be ~green");
+    }
+#endif
+
     return EXIT_SUCCESS;
 }

@@ -313,12 +313,17 @@ static int vgrad_supported(int type)
     if (type == ER_GRADIENT_RADIAL)
         return 1;
 #endif
+#if ERUI_GRADIENT_CONIC
+    if (type == ER_GRADIENT_CONIC)
+        return 1;
+#endif
     return 0;
 }
 
 /**
  * @brief Gradient parameter t at a framebuffer pixel centre (geometry is already in framebuffer space).
  *        Linear: projection onto the axis A->B, normalized. Radial: distance from the centre over r.
+ *        Conic: angle of (pixel - centre), clockwise from the top, minus the start angle, wrapped to [0,1).
  *        er_gradient_eval_stops() clamps t to the endpoint colours, so t is left unclamped here.
  */
 static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
@@ -328,6 +333,15 @@ static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
     {
         const float dx = fx - g->ax, dy = fy - g->ay;
         return (g->r > 1e-6f) ? sqrtf(dx * dx + dy * dy) / g->r : 0.0f;
+    }
+#endif
+#if ERUI_GRADIENT_CONIC
+    if (g->type == ER_GRADIENT_CONIC)
+    {
+        /* atan2(dx, -dy): 0 at the top, increasing clockwise. Subtract the start angle, wrap to [0,1). */
+        float a = (atan2f(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * VEC_PI);
+        a -= floorf(a);
+        return a;
     }
 #endif
     {

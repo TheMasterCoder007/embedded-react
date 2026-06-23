@@ -38,6 +38,7 @@ import {
   PAINT_STRIDE,
   GRAD_LINEAR,
   GRAD_RADIAL,
+  GRAD_CONIC,
 } from '../src/embedded-react/svg-ops.js';
 
 // --- 2D affine matrix [a, b, c, d, e, f]:  x' = a*x + c*y + e ;  y' = b*x + d*y + f ------------------
@@ -248,7 +249,11 @@ function collectGradients(root) {
   const visit = (node) => {
     for (const c of node.children || []) {
       if (c.type !== 'element') continue;
-      if ((c.name === 'linearGradient' || c.name === 'radialGradient') && c.attributes && c.attributes.id)
+      if (
+        (c.name === 'linearGradient' || c.name === 'radialGradient' || c.name === 'conicGradient') &&
+        c.attributes &&
+        c.attributes.id
+      )
         map.set(c.attributes.id, { name: c.name, attrs: c.attributes, stops: parseStops(c) });
       visit(c);
     }
@@ -314,6 +319,13 @@ function bakeGradient(def, cm, bbox) {
     const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
     const rUser = (obb ? gradCoord(a.r, 0.5) * (Math.hypot(bbox.w, bbox.h) / Math.SQRT2) : gradCoord(a.r, 0.5));
     return { type: GRAD_RADIAL, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: rUser * scaleOf(cm) * scaleOf(gt) };
+  }
+  if (def.name === 'conicGradient') {
+    const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
+    // `from` (degrees, clockwise from the top, CSS conic-gradient convention) -> radians, plus the rotation
+    // baked into the gradient + path transforms so the sweep orients correctly in the final coordinate space.
+    const rot = Math.atan2(cm[1], cm[0]) + Math.atan2(gt[1], gt[0]);
+    return { type: GRAD_CONIC, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: (num(a.from, 0) * Math.PI) / 180 + rot };
   }
   const [ax, ay] = toBaked(gradCoord(a.x1, 0), gradCoord(a.y1, 0));
   const [bx, by] = toBaked(gradCoord(a.x2, 1), gradCoord(a.y2, 0));

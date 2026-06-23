@@ -334,6 +334,7 @@ extern "C"
         ER_GRADIENT_NONE = 0,   /**< No gradient — background_color is used (default). */
         ER_GRADIENT_LINEAR = 1, /**< Linear gradient at a configurable angle. */
         ER_GRADIENT_RADIAL = 2, /**< Radial gradient from the rect centre outward (requires ERUI_GRADIENT_RADIAL). */
+        ER_GRADIENT_CONIC = 3,  /**< Conic/angular gradient (VECTOR fills only; requires ERUI_GRADIENT_CONIC). */
     } ERGradientType;
 
     /**
@@ -355,18 +356,20 @@ extern "C"
      * Unlike the View-background gradient (angle within the node box), a vector gradient uses explicit SVG
      * axis geometry in op-tape (node-local) coordinates; the rasterizer offsets it by the node origin. A
      * linear gradient runs along the axis (ax,ay)->(bx,by); a radial gradient is centred at (ax,ay) with
-     * radius r. Requires ERUI_GRADIENT (radial additionally requires ERUI_GRADIENT_RADIAL).
+     * radius r; a conic/angular gradient is centred at (ax,ay) and sweeps by angle from a start angle r
+     * (radians, clockwise from the top). Requires ERUI_GRADIENT (radial/conic additionally require
+     * ERUI_GRADIENT_RADIAL / ERUI_GRADIENT_CONIC).
      */
     typedef struct
     {
-        uint8_t type;                             /**< ERGradientType: LINEAR or RADIAL. */
+        uint8_t type;                             /**< ERGradientType: LINEAR, RADIAL, or CONIC. */
         uint8_t stop_count;                       /**< Stop count [2–ER_VGRAD_MAX_STOPS]. */
         ERGradientStop stops[ER_VGRAD_MAX_STOPS]; /**< Color stops, ascending position. */
-        float ax;                                 /**< Linear: axis start x. Radial: centre x. */
-        float ay;                                 /**< Linear: axis start y. Radial: centre y. */
-        float bx;                                 /**< Linear: axis end x. Radial: unused. */
-        float by;                                 /**< Linear: axis end y. Radial: unused. */
-        float r;                                  /**< Radial: radius. Linear: unused. */
+        float ax;                                 /**< Linear: axis start x. Radial/Conic: centre x. */
+        float ay;                                 /**< Linear: axis start y. Radial/Conic: centre y. */
+        float bx;                                 /**< Linear: axis end x. Radial/Conic: unused. */
+        float by;                                 /**< Linear: axis end y. Radial/Conic: unused. */
+        float r;                                  /**< Radial: radius. Conic: start angle (rad). Linear: unused. */
     } ERVectorGradient;
 
     /**

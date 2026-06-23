@@ -33,6 +33,7 @@ set(ERUI_3D_TRANSFORMS     ON             CACHE BOOL   "Enable rotateX/rotateY/p
 set(ERUI_BILINEAR_SCALE    ON             CACHE BOOL   "Bilinear image scaling"                     FORCE)
 set(ERUI_GRADIENT          ON             CACHE BOOL   "Enable gradient rasterizer"                 FORCE)
 set(ERUI_GRADIENT_RADIAL   ON             CACHE BOOL   "Enable radial gradients"                    FORCE)
+set(ERUI_GRADIENT_CONIC    ON             CACHE BOOL   "Enable conic/angular vector gradients"      FORCE)
 set(ERUI_ONSCREEN_KEYBOARD ON             CACHE BOOL   "Built-in on-screen software keyboard"        FORCE)
 set(ERUI_TRANSFORMS        "FULL"         CACHE STRING "FULL 2D affine transform path"              FORCE)
 set(ERUI_SCRATCH_W         "512"          CACHE STRING "Scratch buffer width in pixels"             FORCE)
