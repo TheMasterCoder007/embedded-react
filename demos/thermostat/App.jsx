@@ -106,6 +106,8 @@ const FACE_R = (185 / 410) * BOX;
 // Knob scale: climate-knob.svg is authored in a 72-unit box; the Flow A <Dial> scales it by 72/410·box, so
 // the same knob circles map into our BOX space by BOX/410. We draw that knob inline (see the compact dial).
 const KS = BOX / 410;
+const pad = FACE_R + 36 * KS - BOX / 2 + 4;
+const KNOB_C = DIAL_C + pad;
 
 // ----------------------------------------------------------------------------------------------------
 // Small building blocks — all memoised so a value drag (which re-renders App) never reconciles them.
@@ -226,12 +228,12 @@ export function App() {
           onTouchMove={onDrag}
         >
           <Svg source={climateFace} width={BOX} height={BOX} />
-          <Svg width={BOX} height={BOX} style={{ position: 'absolute', left: 0, top: 0 }}>
-            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={36 * KS} fill="#c0e6f733" />
-            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={22 * KS} fill="#121212" />
-            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={19 * KS} fill="#c0e6f7" />
-            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={21 * KS} fill="none" stroke="#ffffff" strokeWidth={2.5 * KS} />
-            <Circle cx={DIAL_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={DIAL_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={5 * KS} fill="#fffffff2" />
+          <Svg width={BOX + 2 * pad} height={BOX + 2 * pad} style={{ position: 'absolute', left: -pad, top: -pad }}>
+            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={36 * KS} fill="#c0e6f733" />
+            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={22 * KS} fill="#121212" />
+            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={19 * KS} fill="#c0e6f7" />
+            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={21 * KS} fill="none" stroke="#ffffff" strokeWidth={2.5 * KS} />
+            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={5 * KS} fill="#fffffff2" />
           </Svg>
         </View>
 
