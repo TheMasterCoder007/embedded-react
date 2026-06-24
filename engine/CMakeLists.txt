@@ -112,6 +112,7 @@ set(ERUI_MAX_VECTOR_NODES "8" CACHE STRING "Vector: concurrent vector nodes hold
 set(ERUI_VECTOR_TAPE_MAX "1024" CACHE STRING "Vector: op-tape floats stored per node")
 set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per node")
 set(ERUI_VECTOR_GRADS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
+set(ERUI_VECTOR_GRAD_LUT "256" CACHE STRING "Vector: gradient colour-LUT entries (ERUI_GRADIENT; 1KB internal at 256)")
 
 add_library(embedded-react STATIC ${EMBEDDED_REACT_SOURCES})
 
@@ -160,6 +161,7 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_VECTOR_TAPE_MAX=${ERUI_VECTOR_TAPE_MAX}
         ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
         ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
+        ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
 )
 
 target_link_libraries(embedded-react PUBLIC m)

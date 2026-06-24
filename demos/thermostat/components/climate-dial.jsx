@@ -84,6 +84,8 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   const DIAL_C = box / 2;
   const DIAL_R = (185 / SVG_BOX) * box; // radius (screen px) the knob travels — matches the SVG arc's radius
   const S = box / SVG_BOX; // authoring-unit → screen-px scale (for the knob circles)
+  const pad = Math.max(0, Math.ceil(DIAL_R + KNOB_R_MAX * S - box / 2) + 2);
+  const KNOB_C = DIAL_C + pad;
 
   // Dial center in absolute screen coords, captured from onLayout (a ref, so it never re-renders).
   const centerRef = useRef({ x: 0, y: 0 });
@@ -117,7 +119,7 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   const onTouch = (e) => {
     const starting = !draggingRef.current;
     draggingRef.current = true;
-    if (starting) prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), DIAL_C, DIAL_C, DIAL_R);
+    if (starting) prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), KNOB_C, KNOB_C, DIAL_R);
 
     const c = centerRef.current;
     let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
@@ -127,7 +129,7 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
     lastRef.current = v;
 
     // Imperative update — no setShown, so React never reconciles this subtree mid-drag.
-    const k = pointOnArc(angleForValue(v, min, max), DIAL_C, DIAL_C, DIAL_R);
+    const k = pointOnArc(angleForValue(v, min, max), KNOB_C, KNOB_C, DIAL_R);
     const pk = prevKRef.current;
     const m = KNOB_R_MAX * S + 3; // repaint margin around the knob (largest circle + AA)
     // Only the old∪new knob box is re-rasterized (the face conic underneath repaints just there, not whole-dial).
@@ -150,7 +152,7 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   };
 
   // Declarative knob center (for mounts / steppers / the post-release render; the drag path is imperative).
-  const k = pointOnArc(angleForValue(shown, min, max), DIAL_C, DIAL_C, DIAL_R);
+  const k = pointOnArc(angleForValue(shown, min, max), KNOB_C, KNOB_C, DIAL_R);
 
   return (
     <View
@@ -163,10 +165,11 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
       {/* Dial face: the imported conic SVG (dark track + cool→warm ghost arc) — a static op-tape, never
           re-uploaded during a drag. */}
       <Svg source={climateFace} style={{ position: 'absolute', left: 0, top: 0, width: box, height: box }} />
-      {/* Knob: a full-box <Svg> drawn from primitive circles, so a drag can move it imperatively
-          (updateVector on knobRef) without a React render. The same circles render declaratively here for
+      {/* Knob: its own <Svg>, drawn from primitive circles so a drag can move it imperatively (updateVector
+          on knobRef) without a React render. The node is oversized by `pad` (and offset by -pad) so the knob
+          isn't clipped where the arc nears the dial edge; the same circles render declaratively here for
           mounts / steppers / the post-release re-sync. */}
-      <Svg ref={knobRef} style={{ position: 'absolute', left: 0, top: 0, width: box, height: box }}>
+      <Svg ref={knobRef} style={{ position: 'absolute', left: -pad, top: -pad, width: box + 2 * pad, height: box + 2 * pad }}>
         {KNOB.map((cc, i) => (
           <Circle key={i} cx={k.x} cy={k.y} r={cc.r * S} fill={cc.fill} stroke={cc.stroke} strokeWidth={cc.sw * S} />
         ))}

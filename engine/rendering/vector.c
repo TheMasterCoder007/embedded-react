@@ -304,6 +304,60 @@ uint32_t er_gradient_premul(uint32_t sa);
 /* Per-row premultiplied scratch for a gradient fill span (sized like the coverage row). */
 static uint32_t s_vgrad_row[ERUI_VECTOR_MAX_ROW];
 
+/* Precomputed colour ramp: ERUI_VECTOR_GRAD_LUT premultiplied-ARGB entries sampled across t∈[0,1), rebuilt
+ * once per gradient shape (build_grad_lut). The per-pixel sampler then indexes this instead of re-running the
+ * stop search/interpolation (er_gradient_eval_stops) every pixel — the bulk of the conic dial's drag cost.
+ * 256 matches 8-bit colour resolution; a RAM-tight board may lower it (a 1 KB internal buffer at 256) at the
+ * cost of coarser colour steps. Tunable like the other vector pools (CMake cache var; see engine/README). */
+#ifndef ERUI_VECTOR_GRAD_LUT
+#define ERUI_VECTOR_GRAD_LUT 256
+#endif
+static uint32_t s_vgrad_lut[ERUI_VECTOR_GRAD_LUT];
+
+/** @brief Builds the premultiplied colour LUT for a gradient (one er_gradient_eval_stops per entry). */
+static void build_grad_lut(const ERVectorGradient* g)
+{
+    for (int i = 0; i < ERUI_VECTOR_GRAD_LUT; i++)
+    {
+        const float t = ((float)i + 0.5f) / (float)ERUI_VECTOR_GRAD_LUT;
+        s_vgrad_lut[i] = er_gradient_premul(er_gradient_eval_stops(g->stops, g->stop_count, t));
+    }
+}
+
+/** @brief Scales a premultiplied-ARGB pixel by an 8-bit coverage (all four channels), rounding to nearest. */
+static inline uint32_t vgrad_scale(uint32_t p, uint32_t cov)
+{
+    const uint32_t a = (((p >> 24) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t r = (((p >> 16) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t gg = (((p >> 8) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t b = ((p & 0xFFU) * cov + 127U) / 255U;
+    return (a << 24) | (r << 16) | (gg << 8) | b;
+}
+
+#if ERUI_GRADIENT_CONIC
+/**
+ * @brief Fast atan2 approximation (max error ~0.0015 rad), to avoid the soft-float atan2f libm call in the
+ *        per-pixel conic sampler. Same argument order as atan2f(y, x); range (-PI, PI]. A 256-entry colour
+ *        LUT quantizes the angle to ~1.4° steps anyway, so this error is invisible.
+ */
+static inline float vgrad_fast_atan2(float y, float x)
+{
+    const float ax = fabsf(x), ay = fabsf(y);
+    if (ax < 1e-12f && ay < 1e-12f)
+        return 0.0f;
+    const float a = (ax > ay) ? (ay / ax) : (ax / ay); /* ratio in [0,1] */
+    const float s = a * a;
+    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a; /* atan(a) */
+    if (ay > ax)
+        r = 1.57079637f - r; /* PI/2 - r */
+    if (x < 0.0f)
+        r = 3.14159274f - r;
+    if (y < 0.0f)
+        r = -r;
+    return r;
+}
+#endif
+
 /** @brief True if a gradient type is supported in this build (radial gated on ERUI_GRADIENT_RADIAL). */
 static int vgrad_supported(int type)
 {
@@ -338,8 +392,9 @@ static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
 #if ERUI_GRADIENT_CONIC
     if (g->type == ER_GRADIENT_CONIC)
     {
-        /* atan2(dx, -dy): 0 at the top, increasing clockwise. Subtract the start angle, wrap to [0,1). */
-        float a = (atan2f(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * VEC_PI);
+        /* atan2(dx, -dy): 0 at the top, increasing clockwise. Subtract the start angle, wrap to [0,1).
+         * Uses the polynomial atan2 approximation — this runs per covered pixel on the drag hot path. */
+        float a = (vgrad_fast_atan2(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * VEC_PI);
         a -= floorf(a);
         return a;
     }
@@ -402,10 +457,16 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
             }
             if (c > 1.0f)
                 c = 1.0f;
+            /* t -> LUT index (clamped; eval clamps to the endpoint colours, so out-of-range t pins to an end).
+             * The LUT entry is premultiplied, so scaling all four channels by coverage finishes the pixel —
+             * no per-pixel stop interpolation or premultiply. */
             const float t = vgrad_t(grad, (float)(clipx0 + lo + xx) + 0.5f, (float)iy + 0.5f);
-            const uint32_t gc = er_gradient_eval_stops(grad->stops, grad->stop_count, t);
-            const uint32_t a = (((gc >> 24) & 0xFFU) * (uint32_t)(c * 255.0f + 0.5f) + 127U) / 255U;
-            s_vgrad_row[xx] = er_gradient_premul((a << 24) | (gc & 0x00FFFFFFU));
+            int idx = (int)(t * (float)ERUI_VECTOR_GRAD_LUT);
+            if (idx < 0)
+                idx = 0;
+            else if (idx >= ERUI_VECTOR_GRAD_LUT)
+                idx = ERUI_VECTOR_GRAD_LUT - 1;
+            s_vgrad_row[xx] = vgrad_scale(s_vgrad_lut[idx], (uint32_t)(c * 255.0f + 0.5f));
         }
         er_blit_blend(s_vgrad_row, (int)(sizeof(uint32_t) * (size_t)n), 255, clipx0 + lo, iy, n, 1);
         return;
@@ -473,6 +534,12 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
         ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_ROW", ERUI_VECTOR_MAX_ROW);
         return;
     }
+#if ERUI_GRADIENT
+    /* Build the colour LUT once per gradient shape — the per-pixel sampler (emit_row) then indexes it
+     * instead of interpolating the stops every pixel. */
+    if (grad)
+        build_grad_lut(grad);
+#endif
 
     /* Sort edges top-to-bottom so each scanline only tests the few edges actually crossing it (an
      * active-edge table) instead of all of them — the difference between O(edges*rows) and ~O(rows),

@@ -118,6 +118,12 @@ into transient rasterize scratch (reused per shape) and persistent per-node stor
 | `ERUI_MAX_VECTOR_NODES` | 8 | concurrent `<Svg>` nodes with geometry | `NODES × (TAPE_MAX×4 + PAINTS_MAX×20)` B |
 | `ERUI_VECTOR_TAPE_MAX` | 1024 | op-tape floats stored per node | (in the per-node cost) |
 | `ERUI_VECTOR_PAINTS_MAX` | 16 | paint entries (shapes) per node | (in the per-node cost) |
+| `ERUI_VECTOR_GRAD_LUT` | 256 | gradient colour-LUT entries (`ERUI_GRADIENT` only) | `LUT × 4` B internal |
+
+`ERUI_VECTOR_GRAD_LUT` sizes the per-gradient color ramp the rasteriser samples per pixel (built once per
+gradient shape) instead of interpolating the stops each pixel — the bulk of an interactive gradient drag's
+cost. 256 matches 8-bit color resolution; a RAM-tight board can lower it (e.g., 64–128) for coarser steps,
+and there's little benefit above 256.
 
 At the defaults that's ~122 KB. The fastest-growing terms are `MAX_EDGES` (~32 B each, across
 three lists) and the **per-node op-tape**: persistent storage is `MAX_VECTOR_NODES ×
