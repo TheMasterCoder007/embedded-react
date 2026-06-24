@@ -15,12 +15,8 @@
  */
 
 import { useState, useRef } from 'react';
-import { View, Text, Svg } from 'embedded-react';
-// The dial face + knob are imported SVGs, baked to vector op-tapes by the bundler's .svg loader and drawn
-// with <Svg source>. climate-face.svg is the static face (dark track, full-arc ghost gradient, inner
-// rings); climate-knob.svg is just the knob, repositioned each render to the value's point on the arc.
+import { View, Text, Svg, Circle, updateVector, updateText } from 'embedded-react';
 import climateFace from '../assets/climate-face.svg';
-import climateKnob from '../assets/climate-knob.svg';
 
 // A self-contained dial: it takes its data (value/range), dimensions (size/font sizes), and colors (theme)
 // as PROPS, so it imports nothing from the app and can be reused or moved freely. (The app can't expose its
@@ -31,8 +27,6 @@ import climateKnob from '../assets/climate-knob.svg';
 const SWEEP = 270; // the arc spans 270°, with a 90° gap at the bottom
 const A_START = -135; // bottom-left, degrees clockwise from 12 o'clock
 const DEADBAND = 0.5; // stops the Heating/Cooling status flickering when target ≈ current
-// climate-face.svg is cropped tight to the dial: a 410×410 authoring box with the dial centred, the arc at
-// radius 185, and (in those same units) the knob art a 72-unit square. SVG_BOX maps that box onto `size`.
 const SVG_BOX = 410;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -51,10 +45,19 @@ const statusFor = (mode, value, current) => {
   return 'Holding';
 };
 
+const KNOB = [
+  { r: 36, fill: '#c0e6f733' },
+  { r: 22, fill: '#121212' },
+  { r: 19, fill: '#c0e6f7' },
+  { r: 21, fill: 'none', stroke: '#ffffff', sw: 2.5 },
+  { r: 5, fill: '#fffffff2' },
+];
+const KNOB_R_MAX = 36; // largest circle radius (authoring units) — sizes the imperative repaint box
+
 // ----------------------------------------------------------------------------------------------------
-// The arc dial — the rich Flow A (interactive) dial. Face and knob both come from imported SVGs; a drag
-// moves the knob (its own <Svg>, translated to the value's point) and updates the center readout. Only the
-// wide / stacked layouts render this; the compact (AOT) branch in App draws its own inline arc dial.
+// The arc dial — the rich Flow A (interactive) dial. The face is the imported conic SVG; a drag moves the
+// knob (imperatively, no React re-render) and updates the center readout. Only the wide / stacked layouts
+// render this; the compact (AOT) branch in App draws its own inline arc dial.
 //
 //   value    current target temperature (°F, a float)
 //   min/max  the temperature range the arc spans
@@ -80,17 +83,20 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   // SVG authoring space → screen, from the pixel box.
   const DIAL_C = box / 2;
   const DIAL_R = (185 / SVG_BOX) * box; // radius (screen px) the knob travels — matches the SVG arc's radius
-  const KNOB_BOX = (72 / SVG_BOX) * box; // knob art's box size in screen px
+  const S = box / SVG_BOX; // authoring-unit → screen-px scale (for the knob circles)
 
   // Dial center in absolute screen coords, captured from onLayout (a ref, so it never re-renders).
   const centerRef = useRef({ x: 0, y: 0 });
-  // The CONTINUOUS value on screen (a float — the knob follows the finger sub-degree). It drives the knob
-  // position + readout via state, so a drag re-renders only this subtree (the memoised siblings don't
-  // reconcile). The face/knob SVG op-tapes are unchanged across renders, so only the knob node's position
-  // updates — no re-raster. Committed back to React state (`value`) on release.
+  // The value shown on screen. It drives the DECLARATIVE render (mount, ± steppers, post-drag re-sync). During
+  // a drag we DON'T setShown — the knob + readout is pushed imperatively (below) so React never reconciles —
+  // and commit the final value back to React state only on release.
   const [shown, setShown] = useState(value);
   const draggingRef = useRef(false);
   const lastRef = useRef(value); // latest continuous value, tracked synchronously (state batches)
+  const prevKRef = useRef(null);
+  const knobRef = useRef(null);
+  const numRef = useRef(null);
+  const statusRef = useRef(null);
   // Re-sync to the committed value when not mid-drag (e.g., the ± steppers move it). Conditional
   // setState-during-render is React's idiom for "adjust state when a prop changes".
   if (!draggingRef.current && shown !== value) {
@@ -103,25 +109,47 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
     if (isPct && Math.abs(e.layout.width - measured) > 0.5) setMeasured(e.layout.width); // resolved px edge
   };
 
-  // pointer → continuous value: angle from the rendered center, clamp the bottom 90° gap. Drag advances
-  // `shown` (sub-degree, smooth) and commits to React state only on release.
+  // Knob geometry at value `v`: the arc point + the five circles, as imperative shape descriptors.
+  const knobShapes = (k) => KNOB.map((c) => ({ circle: [k.x, k.y, c.r * S], fill: c.fill, stroke: c.stroke, strokeWidth: c.sw * S }));
+
+  // pointer → continuous value: angle from the rendered center, clamp the bottom 90° gap. A drag pushes the
+  // knob + readout straight to the engine (no React) and commits to React state only on release.
   const onTouch = (e) => {
+    const starting = !draggingRef.current;
     draggingRef.current = true;
+    if (starting) prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), DIAL_C, DIAL_C, DIAL_R);
+
     const c = centerRef.current;
     let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
     theta = clamp(theta, A_START, -A_START); // bottom gap snaps to -135/+135
     const v = clamp(min + ((theta - A_START) / SWEEP) * (max - min), min, max); // continuous, NOT rounded
     if (Math.abs(v - lastRef.current) < 0.08) return; // < ~1px of knob motion: skip
     lastRef.current = v;
-    setShown(v);
+
+    // Imperative update — no setShown, so React never reconciles this subtree mid-drag.
+    const k = pointOnArc(angleForValue(v, min, max), DIAL_C, DIAL_C, DIAL_R);
+    const pk = prevKRef.current;
+    const m = KNOB_R_MAX * S + 3; // repaint margin around the knob (largest circle + AA)
+    // Only the old∪new knob box is re-rasterized (the face conic underneath repaints just there, not whole-dial).
+    const dirty = [
+      Math.min(pk.x, k.x) - m,
+      Math.min(pk.y, k.y) - m,
+      Math.abs(k.x - pk.x) + 2 * m,
+      Math.abs(k.y - pk.y) + 2 * m,
+    ];
+    updateVector(knobRef.current, knobShapes(k), dirty);
+    updateText(numRef.current, `${Math.round(v)}°`);
+    updateText(statusRef.current, statusFor(mode, v, current));
+    prevKRef.current = k;
   };
 
   const onTouchEnd = () => {
     draggingRef.current = false;
     if (lastRef.current !== value) onValue(lastRef.current); // commit the continuous value (no snap)
+    setShown(lastRef.current); // re-sync React state so the declarative tree matches the imperative pixels
   };
 
-  // Knob center: the value's point on the SVG dial's arc (authoring radius 185 → DIAL_R on screen).
+  // Declarative knob center (for mounts / steppers / the post-release render; the drag path is imperative).
   const k = pointOnArc(angleForValue(shown, min, max), DIAL_C, DIAL_C, DIAL_R);
 
   return (
@@ -132,17 +160,20 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
       onTouchEnd={onTouchEnd}
       style={{ ...boxStyle }}
     >
-      {/* Dial face: the imported SVG (dark track, full-arc ghost gradient, inner rings) — a static op-tape
-          baked from climate-face.svg. */}
+      {/* Dial face: the imported conic SVG (dark track + cool→warm ghost arc) — a static op-tape, never
+          re-uploaded during a drag. */}
       <Svg source={climateFace} style={{ position: 'absolute', left: 0, top: 0, width: box, height: box }} />
-      {/* Knob: the SVG's knob art, translated to the value's point on the arc. It's radially symmetric, so
-          a translate tracks the drag exactly across the whole range (no rotation, no wrap at the ends). */}
-      <Svg
-        source={climateKnob}
-        style={{ position: 'absolute', left: k.x - KNOB_BOX / 2, top: k.y - KNOB_BOX / 2, width: KNOB_BOX, height: KNOB_BOX }}
-      />
+      {/* Knob: a full-box <Svg> drawn from primitive circles, so a drag can move it imperatively
+          (updateVector on knobRef) without a React render. The same circles render declaratively here for
+          mounts / steppers / the post-release re-sync. */}
+      <Svg ref={knobRef} style={{ position: 'absolute', left: 0, top: 0, width: box, height: box }}>
+        {KNOB.map((cc, i) => (
+          <Circle key={i} cx={k.x} cy={k.y} r={cc.r * S} fill={cc.fill} stroke={cc.stroke} strokeWidth={cc.sw * S} />
+        ))}
+      </Svg>
 
-      {/* Center readout, absolutely centered over the dial. */}
+      {/* Center readout, absolutely centered over the dial. The status + number are ref'd so the drag path can
+          update them imperatively (updateText); "now {current}°" never changes during a drag. */}
       <View
         style={{
           position: 'absolute',
@@ -154,8 +185,8 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
           justifyContent: 'center',
         }}
       >
-        <Text style={{ color: theme.subtext, fontSize: sz.sub }}>{statusFor(mode, shown, current)}</Text>
-        <Text style={{ color: theme.text, fontSize: sz.big, fontWeight: '500' }}>{Math.round(shown)}°</Text>
+        <Text ref={statusRef} style={{ color: theme.subtext, fontSize: sz.sub }}>{statusFor(mode, shown, current)}</Text>
+        <Text ref={numRef} style={{ color: theme.text, fontSize: sz.big, fontWeight: '500' }}>{Math.round(shown)}°</Text>
         <Text style={{ color: theme.subtext, fontSize: sz.sub }}>now {current}°</Text>
       </View>
     </View>
