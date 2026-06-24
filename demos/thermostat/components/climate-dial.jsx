@@ -99,6 +99,13 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   const knobRef = useRef(null);
   const numRef = useRef(null);
   const statusRef = useRef(null);
+  // What the center readout currently shows on screen. The drag path compares against these and only pushes a
+  // text update (updateText) when the string actually changes — the number changes once per whole degree, the
+  // status word rarely. Skipping the no-op updates keeps the center text box OUT of the frame's damage rect, so
+  // the conic face underneath isn't re-rasterized across a center-to-rim union every move (it would be otherwise:
+  // the readout is centered, the knob is at the rim, and the compositor repaints the face across their union).
+  const shownIntRef = useRef(Math.round(value));
+  const statusWordRef = useRef(statusFor(mode, value, current));
   // Re-sync to the committed value when not mid-drag (e.g., the ± steppers move it). Conditional
   // setState-during-render is React's idiom for "adjust state when a prop changes".
   if (!draggingRef.current && shown !== value) {
@@ -111,15 +118,36 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
     if (isPct && Math.abs(e.layout.width - measured) > 0.5) setMeasured(e.layout.width); // resolved px edge
   };
 
-  // Knob geometry at value `v`: the arc point + the five circles, as imperative shape descriptors.
-  const knobShapes = (k) => KNOB.map((c) => ({ circle: [k.x, k.y, c.r * S], fill: c.fill, stroke: c.stroke, strokeWidth: c.sw * S }));
+  // Knob geometry at value `k`: the five circles as imperative shape descriptors. The radii/colors are fixed
+  // for a given dial size, so the descriptor array is built once (per S) and cached — each move only mutates the
+  // shared cx/cy, avoiding five fresh objects + arrays per touch event. (QuickJS allocation + GC in PSRAM is the
+  // hot-path cost here.) updateVector serializes the array synchronously, so reusing it across moves is safe.
+  const shapesRef = useRef(null);
+  const shapesSRef = useRef(-1);
+  const knobShapes = (k) => {
+    let arr = shapesRef.current;
+    if (!arr || shapesSRef.current !== S) {
+      arr = KNOB.map((c) => ({ circle: [0, 0, c.r * S], fill: c.fill, stroke: c.stroke, strokeWidth: c.sw * S }));
+      shapesRef.current = arr;
+      shapesSRef.current = S;
+    }
+    for (let i = 0; i < arr.length; i++) {
+      arr[i].circle[0] = k.x;
+      arr[i].circle[1] = k.y;
+    }
+    return arr;
+  };
 
   // pointer → continuous value: angle from the rendered center, clamp the bottom 90° gap. A drag pushes the
   // knob + readout straight to the engine (no React) and commits to React state only on release.
   const onTouch = (e) => {
     const starting = !draggingRef.current;
     draggingRef.current = true;
-    if (starting) prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), KNOB_C, KNOB_C, DIAL_R);
+    if (starting) {
+      prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), KNOB_C, KNOB_C, DIAL_R);
+      shownIntRef.current = Math.round(lastRef.current);
+      statusWordRef.current = statusFor(mode, lastRef.current, current);
+    }
 
     const c = centerRef.current;
     let theta = (Math.atan2(e.x - c.x, -(e.y - c.y)) * 180) / Math.PI; // clockwise-from-top
@@ -140,8 +168,18 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
       Math.abs(k.y - pk.y) + 2 * m,
     ];
     updateVector(knobRef.current, knobShapes(k), dirty);
-    updateText(numRef.current, `${Math.round(v)}°`);
-    updateText(statusRef.current, statusFor(mode, v, current));
+    // Only touch the readout when its string actually changes — otherwise its (centered) box would join the
+    // damage rect every move and force a center-to-rim re-raster of the conic face for no visible change.
+    const ri = Math.round(v);
+    if (ri !== shownIntRef.current) {
+      shownIntRef.current = ri;
+      updateText(numRef.current, `${ri}°`);
+    }
+    const sw = statusFor(mode, v, current);
+    if (sw !== statusWordRef.current) {
+      statusWordRef.current = sw;
+      updateText(statusRef.current, sw);
+    }
     prevKRef.current = k;
   };
 
