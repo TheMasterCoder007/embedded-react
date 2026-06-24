@@ -76,6 +76,30 @@ function applyVectorOps(type, handle, props) {
 }
 
 /**
+ * Decides whether a committed <Svg> update actually needs its op-tape re-uploaded.
+ *
+ * Re-marshaling a baked vector op-tape across the JS->C bridge every frame is expensive (it dominates an
+ * interactive drag on PSRAM-QuickJS), and it's pure waste when only the node's POSITION changed: a
+ * `<Svg source>` whose imported artifact and resolved box are unchanged renders identical geometry, and its
+ * on-screen movement is already handled by the layout props (left/top/width/height) via applyProps. So we
+ * re-upload only when the source artifact reference changes or the resolved box size changes. Declarative
+ * `<Svg><Path/></Svg>` has no `source` — its shapes live in props/children, which we can't cheaply diff
+ * here, so it always re-flattens (unchanged behavior).
+ */
+function vectorNeedsUpload(type, prevProps, nextProps) {
+  if (type !== 'Svg') return false;
+  if (!nextProps.source) return true; // declarative children: re-flatten as before
+  if (!prevProps || prevProps.source !== nextProps.source) return true;
+  const src = nextProps.source;
+  const iw = src && src.kind === 'vector' ? src.width : undefined;
+  const ih = src && src.kind === 'vector' ? src.height : undefined;
+  return (
+    svgBoxSize(prevProps, 'width', iw) !== svgBoxSize(nextProps, 'width', iw) ||
+    svgBoxSize(prevProps, 'height', ih) !== svgBoxSize(nextProps, 'height', ih)
+  );
+}
+
+/**
  * Registers/clears on* event handlers. A handler present in old but not new props is cleared.
  */
 function applyEvents(handle, prevProps, nextProps) {
@@ -182,7 +206,7 @@ export const hostConfig = {
   commitUpdate(instance, _payload, type, prevProps, nextProps) {
     applyProps(type, instance, nextProps);
     applyTextSpans(type, instance, nextProps);
-    applyVectorOps(type, instance, nextProps);
+    if (vectorNeedsUpload(type, prevProps, nextProps)) applyVectorOps(type, instance, nextProps);
     applyEvents(instance, prevProps, nextProps);
   },
   commitTextUpdate(textInstance, _oldText, newText) {

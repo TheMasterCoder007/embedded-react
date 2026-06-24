@@ -37,6 +37,7 @@ import { bakeImage } from './assets/bake-image.mjs';
 import { bakeFont } from './assets/bake-font.mjs';
 import { emitAssetPack } from './assets/emit-pack.mjs';
 import { emitContainer } from './assets/emit-container.mjs';
+import { registerSvgVectorLoader } from './assets/svg-loader.mjs';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
 // bridges/quickjs/CMakeLists.txt and ER_QUICKJS_TAG in er_runtime.c. The loader rejects a mismatch.
@@ -94,6 +95,7 @@ const assetPlugin = {
       fonts.set(family, args.path);
       return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
     });
+    registerSvgVectorLoader(b);
   },
 };
 
