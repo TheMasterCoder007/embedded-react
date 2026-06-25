@@ -626,9 +626,9 @@ export async function bakeSvgArtifacts(src, baseDir) {
     if (!existsSync(p)) throw new Error(`AOT: <Svg source> asset "${imp.name}" not found at ${p}`);
     const svg = readFileSync(p, 'utf8');
     const art = await svgToVector(svg);
-    // Track C raster fallback (Flow B): an SVG that uses features the vector baker can't represent is
-    // rasterized via resvg and baked as a PNG (emitSvgSource emits an Image node for a kind:'raster'
-    // artifact + registers the PNG into the AOT image baker), so the content renders instead of dropping.
+    // Raster fallback (Flow B): an SVG that uses features the vector baker can't represent is rasterized via
+    // resvg and baked as a PNG (emitSvgSource emits an Image node for a kind:'raster' artifact + registers the
+    // PNG into the AOT image baker), so the content renders instead of dropping.
     if (art.dropped && art.dropped.length) {
       console.warn(
         `embedded-react: ${imp.name}.svg uses unsupported SVG feature(s) [${art.dropped.join(', ')}] — ` +
@@ -1921,7 +1921,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
 // ---------------------------------------------------------------------------------------------------
 
 /** Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
- *  statically evaluating every attribute. Dynamic attrs/children throw (state-driven Svg is Phase 6b). */
+ *  statically evaluating every attribute. Dynamic attrs/children throw (a state-driven Svg is not supported). */
 function jsxToSvgElement(node, scope) {
   if (node.type !== 'JSXElement') return null;
   const type = node.openingElement.name.name;

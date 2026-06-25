@@ -296,7 +296,7 @@ static int rule_inside(int acc, int evenodd)
 }
 
 #if ERUI_GRADIENT
-/* Vector gradient fill (Track B). Reuses gradient.c's always-compiled colour helpers, forward-declared here
+/* Vector gradient fill. Reuses gradient.c's always-compiled colour helpers, forward-declared here
  * to keep this TU decoupled from the node internals that gradient.h would pull in. */
 uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t);
 uint32_t er_gradient_premul(uint32_t sa);

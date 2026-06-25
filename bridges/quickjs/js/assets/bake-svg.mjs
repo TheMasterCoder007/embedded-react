@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-// Build-time SVG -> engine op-tape baker (Phase 3 Track A). Turns an .svg FILE into the same
+// Build-time SVG -> engine op-tape baker. Turns an .svg FILE into the same
 // {ops, paints} op-tape an inline <Svg> compiles to, so `import logo from './logo.svg'` can render as a
 // crisp on-device vector. Every transform (matrix/translate/rotate/scale/skew, nested) is BAKED into
 // absolute path coordinates here, so the device needs no transform support — full SVG transform fidelity
 // for free. svgson (the XML parser) is a build-time dependency only; it never reaches the device bundle.
 //
-// v1 scope: <path> + <rect>/<circle>/<ellipse>/<line>/<polygon>/<polyline> + <g> nesting + viewBox + solid
-// fill/stroke (presentation attrs + inline style + inheritance). url() paints (gradients) bake to nothing
-// for now (Track B adds engine gradients; Track C rasterizes the rest). Primitives are emitted as
+// Supports <path> + <rect>/<circle>/<ellipse>/<line>/<polygon>/<polyline> + <g> nesting + viewBox + solid
+// AND gradient fill/stroke (linear/radial/conic via url() refs; presentation attrs + inline style +
+// inheritance). Features the op-tape can't represent (<text>, <mask>, <filter>, <use>, …) are recorded in
+// `dropped` so the caller can rasterize the whole SVG as a fallback image instead. Primitives are emitted as
 // line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
 import { parse } from 'svgson';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -306,8 +307,11 @@ function opsBBox(ops) {
 /**
  * Bakes a gradient definition into an engine gradient descriptor in the path's BAKED coordinate space.
  * objectBoundingBox units (the SVG default) map [0,1] onto the shape's local bbox; userSpaceOnUse uses the
- * coords as-is. gradientTransform and the shape's cumulative matrix are both applied. The radial radius is
- * uniform (a non-square objectBoundingBox / non-uniform scale is approximated — a Track B follow-up).
+ * coords as-is. Both the gradientTransform and the shape's cumulative matrix are applied. Linear gradients
+ * are exact under any affine transform (the endpoints map directly). The engine's radial is CIRCULAR, so an
+ * elliptical radial — from a non-square objectBoundingBox or a non-uniform/sheared transform — is reduced to
+ * its best-fit circle: the radius is the geometric mean of the two axis radii (radii multiply by sqrt(|det|)
+ * under a transform, and a non-square OBB contributes sqrt(w*h)). Conic likewise keeps only the rotation.
  */
 function bakeGradient(def, cm, bbox) {
   const a = def.attrs;
@@ -321,7 +325,9 @@ function bakeGradient(def, cm, bbox) {
   };
   if (def.name === 'radialGradient') {
     const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
-    const rUser = (obb ? gradCoord(a.r, 0.5) * (Math.hypot(bbox.w, bbox.h) / Math.SQRT2) : gradCoord(a.r, 0.5));
+    // objectBoundingBox radius r=0.5 spans half the box; for a non-square box the geometric mean sqrt(w*h)
+    // is the best-fit circle (vs the diagonal, which oversizes a wide/tall box).
+    const rUser = obb ? gradCoord(a.r, 0.5) * Math.sqrt(bbox.w * bbox.h) : gradCoord(a.r, 0.5);
     return { type: GRAD_RADIAL, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: rUser * scaleOf(cm) * scaleOf(gt) };
   }
   if (def.name === 'conicGradient') {
@@ -439,8 +445,8 @@ export async function svgToVector(svgString) {
 }
 
 /**
- * Rasterizes an SVG to a premultiplied-nothing RGBA PNG at its intrinsic size — the Track C raster fallback
- * for SVGs that use features the vector baker can't represent (text, masks, filters, patterns, …). resvg is
+ * Rasterizes an SVG to an RGBA PNG at its intrinsic size — the raster fallback for SVGs that use features
+ * the vector baker can't represent (text, masks, filters, patterns, …). resvg is
  * imported lazily, so vector-only builds never load it. The PNG flows through the normal image pipeline
  * (bake-image → asset pack), and a <Svg source> whose artifact is {kind:'raster'} renders it as an image.
  *

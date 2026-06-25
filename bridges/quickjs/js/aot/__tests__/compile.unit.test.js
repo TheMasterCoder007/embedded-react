@@ -443,7 +443,7 @@ describe('AOT baseline (regression)', () => {
   });
 });
 
-describe('AOT animation completeness (Phase 11)', () => {
+describe('AOT animation completeness', () => {
   const A = `import { View, Animated, Easing, useAnimatedValue } from 'embedded-react';`;
   // Wraps a handler body in an App with two animated values a and b, on an onPress View.
   const app = (body, style = '') =>

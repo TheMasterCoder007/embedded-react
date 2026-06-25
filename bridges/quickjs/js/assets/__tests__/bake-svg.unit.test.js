@@ -172,7 +172,7 @@ describe('bake-svg: svgToVector', () => {
   });
 });
 
-describe('svgToVector — dropped-feature detection (Track C trigger)', () => {
+describe('svgToVector — dropped-feature detection (raster-fallback trigger)', () => {
   it('reports no dropped features for a fully vector SVG', async () => {
     const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10"/><circle cx="5" cy="5" r="3"/></svg>');
     expect(a.dropped).toEqual([]);

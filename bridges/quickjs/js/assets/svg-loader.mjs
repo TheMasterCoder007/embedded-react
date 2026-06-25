@@ -15,9 +15,9 @@
  */
 
 // esbuild loader for `import logo from './logo.svg'`. Two outcomes, decided at bake time:
-//   - VECTOR (Track A): the SVG is fully representable as the engine's op-tape — bake it and INLINE a
+//   - VECTOR: the SVG is fully representable as the engine's op-tape — bake it and INLINE a
 //     {kind:'vector', ops, paints, gradients, width, height} artifact (small numeric data) into the bundle.
-//   - RASTER (Track C): the SVG uses features the vector baker can't represent (text, mask, filter, use,
+//   - RASTER: the SVG uses features the vector baker can't represent (text, mask, filter, use,
 //     pattern, …). We warn, rasterize the whole SVG via resvg to a PNG, register that PNG through the
 //     bundler's normal image pipeline (a small `addRasterAsset(name, pngPath)` callback), and inline a
 //     {kind:'raster', name, width, height} artifact. A <Svg source> renders kind:'vector' as a vector node

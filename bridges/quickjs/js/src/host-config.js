@@ -54,8 +54,8 @@ function svgBoxSize(props, dim, intrinsic) {
 }
 
 /**
- * A `<Svg source={imported}>` whose imported .svg fell back to a RASTER image at build time (Track C — the
- * SVG used features the vector baker can't represent). Returns the artifact, or null for a vector/declarative
+ * A `<Svg source={imported}>` whose imported .svg fell back to a RASTER image at build time (the SVG used
+ * features the vector baker can't represent). Returns the artifact, or null for a vector/declarative
  * Svg. Such a Svg is rendered as an IMAGE node, not a vector node — `props.source.kind` is the discriminator
  * (an imported artifact's kind is fixed at build time, so it never flips for a given element).
  */

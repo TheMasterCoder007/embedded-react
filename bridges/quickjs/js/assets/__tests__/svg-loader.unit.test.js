@@ -62,7 +62,7 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
     await expect(bundleWithSvg('<svg><path d="M0 0"')).rejects.toThrow(); // malformed XML
   });
 
-  it('falls back to a raster image artifact when the SVG uses unsupported features (Track C)', async () => {
+  it('falls back to a raster image artifact when the SVG uses unsupported features', async () => {
     const assets = new Map();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const out = await bundleWithSvg(
