@@ -1956,9 +1956,11 @@ function emitVectorPaint(p) {
  *  ({color, position}); the engine zero-inits the rest of stops[ER_VGRAD_MAX_STOPS]. Geometry meaning per
  *  type: linear axis (ax,ay)->(bx,by); radial centre (ax,ay)+radius r; conic centre (ax,ay)+start angle r. */
 function emitVectorGradient(g) {
-  const stops = (g.stops || []).map((s) => `{ ${(s.color >>> 0)}u, ${floatLit(s.offset)} }`).join(', ');
+  const inStops = g.stops || [];
+  const capped = inStops.length > 8 ? inStops.slice(0, 8) : inStops;
+  const stops = capped.map((s) => `{ ${(s.color >>> 0)}u, ${floatLit(s.offset)} }`).join(', ');
   return (
-    `{ .type = ${g.type | 0}, .stop_count = ${(g.stops || []).length}, .stops = { ${stops} }, ` +
+    `{ .type = ${g.type | 0}, .stop_count = ${capped.length}, .stops = { ${stops} }, ` +
     `.ax = ${floatLit(g.ax || 0)}, .ay = ${floatLit(g.ay || 0)}, .bx = ${floatLit(g.bx || 0)}, ` +
     `.by = ${floatLit(g.by || 0)}, .r = ${floatLit(g.r || 0)} }`
   );
