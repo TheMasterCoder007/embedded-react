@@ -89,7 +89,7 @@ function applyVectorOps(type, handle, props) {
   } else {
     ({ ops, paints } = flattenSvg(props));
   }
-  warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints);
+  warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints, gradients ? gradients.length : 0, NativeUI.maxVectorGrads);
   NativeUI.setVectorOps(handle, ops, paints, gradients && gradients.length ? encodeVectorGradients(gradients) : undefined);
 }
 

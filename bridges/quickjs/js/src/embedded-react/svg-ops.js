@@ -691,21 +691,24 @@ export function scaleVectorArtifact(art, targetW, targetH) {
 
 let _warnedVecOps = false;
 let _warnedVecPaints = false;
+let _warnedVecGrads = false;
 
 /**
  * Warns (once per kind) when an <Svg>'s compiled geometry exceeds the native bridge's caps and will be
  * SILENTLY TRUNCATED. The bridge (native_ui_bridge.c) copies the op-tape into a fixed buffer and caps the
  * paint table; past the cap, geometry/shapes are dropped. The engine has its own pool diagnostics (on
  * stderr, debug builds) for what happens further in; this surfaces the JS->engine boundary truncation in
- * the developer's console. Pass the live caps from NativeUI.maxVectorOps / NativeUI.maxVectorPaints
+ * the developer's console. Pass the live caps from NativeUI.maxVectorOps / maxVectorPaints / maxVectorGrads
  * (undefined on an older bridge => no-op).
  *
  * @param {number} opsLen     Op-tape length (flat float count).
  * @param {number} paintsLen  Paint-table length (PAINT_STRIDE numbers per shape).
  * @param {number} maxOps     Bridge op-tape cap (NativeUI.maxVectorOps).
  * @param {number} maxPaints  Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
+ * @param {number} [gradsLen] Gradient count (number of gradients referenced by the shapes).
+ * @param {number} [maxGrads] Bridge gradient cap (NativeUI.maxVectorGrads).
  */
-export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints) {
+export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints, gradsLen, maxGrads) {
   if (!_warnedVecOps && maxOps > 0 && opsLen > maxOps) {
     _warnedVecOps = true;
     console.warn(
@@ -720,6 +723,14 @@ export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints) {
     console.warn(
       `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
         `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`
+    );
+  }
+  if (!_warnedVecGrads && maxGrads > 0 && gradsLen > maxGrads) {
+    _warnedVecGrads = true;
+    console.warn(
+      `embedded-react: an <Svg> references ${gradsLen} gradients (> ${maxGrads}) — the extra gradients are ` +
+        `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
+        `shapes; raising the limit needs VEC_BRIDGE_MAX_GRADS + ERUI_VECTOR_GRADS_MAX.`
     );
   }
 }

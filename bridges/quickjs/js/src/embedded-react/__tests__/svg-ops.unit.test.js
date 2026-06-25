@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseColor,
   parsePath,
@@ -22,9 +22,11 @@ import {
   shapesToVector,
   scaleVectorArtifact,
   encodeVectorGradients,
+  warnVectorCaps,
   GRAD_STRIDE,
   GRAD_MAX_STOPS,
   GRAD_LINEAR,
+  PAINT_STRIDE,
 } from '../svg-ops.js';
 
 // Opcodes mirror er_scene.h.
@@ -306,5 +308,28 @@ describe('encodeVectorGradients', () => {
     expect(out[last] >>> 0).toBe(0xff0000ff); // last resampled stop = last colour
     expect(out[3]).toBe(0); // offsets span [0,1] ascending
     expect(out[last + 1]).toBe(1);
+  });
+});
+
+describe('warnVectorCaps — gradient cap', () => {
+  it('warns once when the gradient count exceeds the bridge cap (shapes would fall back to solid)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // ops/paints within cap, gradients OVER cap → only the gradient warning fires.
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 20, 16);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/20 gradients \(> 16\)/);
+    expect(String(warn.mock.calls[0][0])).toMatch(/solid fills\/strokes/);
+    // warn-once: a second over-cap call must not warn again
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 30, 16);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('does not warn for gradients within cap, or when maxGrads is absent (older bridge)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 8, 16); // within cap
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 99); // no maxGrads → no-op
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
