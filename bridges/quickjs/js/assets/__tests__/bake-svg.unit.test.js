@@ -171,3 +171,22 @@ describe('bake-svg: svgToVector', () => {
     expect(b.paints[1] >>> 24).toBe(0x40); // 0xff * 0.25 -> 64, stroke only
   });
 });
+
+describe('svgToVector — dropped-feature detection (Track C trigger)', () => {
+  it('reports no dropped features for a fully vector SVG', async () => {
+    const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10"/><circle cx="5" cy="5" r="3"/></svg>');
+    expect(a.dropped).toEqual([]);
+  });
+
+  it('flags unsupported visual elements (text/image/use) but not metadata/defs/gradients', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><text x="0" y="9">hi</text></svg>'
+    );
+    expect(a.dropped).toEqual(['text']); // title/defs ignored; rect baked; text recorded
+  });
+
+  it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {
+    const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>');
+    expect(a.dropped).toContain('filter');
+  });
+});

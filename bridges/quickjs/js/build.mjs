@@ -75,8 +75,7 @@ const assetPlugin = {
       fonts.set(family, args.path);
       return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
     });
-    // .svg imports bake to an inline vector op-tape artifact (no asset-pack entry — see svg-loader.mjs).
-    registerSvgVectorLoader(build);
+    registerSvgVectorLoader(build, (name, p) => images.set(name, p));
   },
 };
 

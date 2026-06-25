@@ -54,6 +54,24 @@ function svgBoxSize(props, dim, intrinsic) {
 }
 
 /**
+ * A `<Svg source={imported}>` whose imported .svg fell back to a RASTER image at build time (Track C — the
+ * SVG used features the vector baker can't represent). Returns the artifact, or null for a vector/declarative
+ * Svg. Such a Svg is rendered as an IMAGE node, not a vector node — `props.source.kind` is the discriminator
+ * (an imported artifact's kind is fixed at build time, so it never flips for a given element).
+ */
+function rasterSvgArtifact(type, props) {
+  const src = props && props.source;
+  return type === 'Svg' && src && src.kind === 'raster' ? src : null;
+}
+
+/** Maps a raster `<Svg source>` to equivalent `<Image>` props: the baked asset name + the resolved box size. */
+function rasterImageProps(props, art) {
+  const width = svgBoxSize(props, 'width', art.width);
+  const height = svgBoxSize(props, 'height', art.height);
+  return { ...props, source: art.name, style: { ...(props.style || {}), width, height } };
+}
+
+/**
  * Sets an <Svg>'s vector op-tape. Two sources, source prop wins:
  *   <Svg source={imported}>  — an imported .svg's baked artifact ({kind:'vector', ops, paints, width,
  *                              height}); we scale its op-tape from intrinsic px to the node's box.
@@ -146,6 +164,14 @@ export const hostConfig = {
 
   // --- Creation ---
   createInstance(type, props) {
+    // A raster-fallback <Svg source> becomes a real Image node (the SVG was rasterized at build time).
+    const raster = rasterSvgArtifact(type, props);
+    if (raster) {
+      const handle = NativeUI.createNode('Image');
+      applyProps('Image', handle, rasterImageProps(props, raster));
+      applyEvents(handle, null, props);
+      return handle;
+    }
     const handle = NativeUI.createNode(type);
     applyProps(type, handle, props);
     applyTextSpans(type, handle, props);
@@ -204,6 +230,13 @@ export const hostConfig = {
     return true;
   },
   commitUpdate(instance, _payload, type, prevProps, nextProps) {
+    const raster = rasterSvgArtifact(type, nextProps);
+    if (raster) {
+      // The Svg instance is an Image node (raster fallback); re-apply as image props, never vector ops.
+      applyProps('Image', instance, rasterImageProps(nextProps, raster));
+      applyEvents(instance, prevProps, nextProps);
+      return;
+    }
     applyProps(type, instance, nextProps);
     applyTextSpans(type, instance, nextProps);
     if (vectorNeedsUpload(type, prevProps, nextProps)) applyVectorOps(type, instance, nextProps);

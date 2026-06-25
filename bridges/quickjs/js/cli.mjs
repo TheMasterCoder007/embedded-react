@@ -224,7 +224,7 @@ async function buildContainer(cwd, explicit, outDir) {
         fonts.set(f, a.path);
         return { contents: `module.exports = ${JSON.stringify(f)};`, loader: 'js' };
       });
-      registerSvgVectorLoader(b);
+      registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
     },
   };
   // The bundle is an intermediate (it becomes bytecode in the .erpkg) — keep it out of the user's outDir

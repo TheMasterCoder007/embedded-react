@@ -152,7 +152,7 @@ const ctx = await context({
           fonts.set(family, args.path);
           return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
         });
-        registerSvgVectorLoader(b);
+        registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
         b.onEnd(async (r) => {
           if (r.errors.length) {
             console.error(`✗ build failed (${r.errors.length} error(s)) — fix and save to retry`);

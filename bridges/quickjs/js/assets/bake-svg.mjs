@@ -360,6 +360,12 @@ export async function svgToVector(svgString) {
   const gradients = [];
   const gradDefs = collectGradients(root);
 
+  // Elements we intentionally skip without losing visible content (gradient defs are collected separately,
+  // the rest are metadata). Anything else hitting the skip branch — text/image/use/mask/filter/pattern/… —
+  // is unsupported VISUAL content, recorded in `dropped` so the loader can warn + fall back to raster.
+  const SVG_IGNORABLE = new Set(['defs', 'title', 'desc', 'metadata', 'linearGradient', 'radialGradient', 'conicGradient']);
+  const dropped = new Set();
+
   const walk = (node, m, paint) => {
     for (const child of node.children || []) {
       if (child.type !== 'element') continue;
@@ -380,8 +386,16 @@ export async function svgToVector(svgString) {
       else if (child.name === 'line') d = linePath(attrs);
       else if (child.name === 'polygon') d = polyPath(attrs, true);
       else if (child.name === 'polyline') d = polyPath(attrs, false);
-      else continue; // defs / use / text / style / mask / ... -> not vector-baked (raster fallback later)
+      else {
+        if (!SVG_IGNORABLE.has(child.name)) dropped.add(child.name); // unsupported visual element → raster
+        continue;
+      }
       if (!d) continue;
+
+      // A filter/mask/clip applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
+      for (const fk of ['filter', 'mask', 'clip-path']) {
+        if (attrs[fk] && attrs[fk] !== 'none') dropped.add(fk);
+      }
 
       const shapeOps = parsePath(d);
       if (!shapeOps.length) continue;
@@ -417,5 +431,28 @@ export async function svgToVector(svgString) {
   };
 
   walk(root, rootM, DEFAULT_PAINT);
-  return { ops, paints, gradients, width, height };
+  return { ops, paints, gradients, width, height, dropped: [...dropped].sort() };
+}
+
+/**
+ * Rasterizes an SVG to a premultiplied-nothing RGBA PNG at its intrinsic size — the Track C raster fallback
+ * for SVGs that use features the vector baker can't represent (text, masks, filters, patterns, …). resvg is
+ * imported lazily, so vector-only builds never load it. The PNG flows through the normal image pipeline
+ * (bake-image → asset pack), and a <Svg source> whose artifact is {kind:'raster'} renders it as an image.
+ *
+ * @param {string} svgString  The SVG document.
+ * @returns {Promise<{width:number, height:number, png:Buffer}>}  Rendered size and PNG bytes.
+ */
+export async function svgToRaster(svgString) {
+  const { Resvg } = await import('@resvg/resvg-js');
+  // resvg (usvg) requires the SVG namespace; svgson (the vector baker) is lenient and many hand-authored
+  // SVGs omit it, so inject it when absent or resvg rejects the document ("does not have a root node").
+  let s = String(svgString);
+  if (!/<svg\b[^>]*\sxmlns\s*=/i.test(s)) s = s.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  const r = new Resvg(s, { background: 'rgba(0,0,0,0)' }); // transparent so it composites
+  const img = r.render();
+  const png = img.asPng();
+  const { width, height } = img;
+  img.free?.();
+  return { width, height, png };
 }

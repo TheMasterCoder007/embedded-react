@@ -624,7 +624,17 @@ export async function bakeSvgArtifacts(src, baseDir) {
   for (const [, imp] of imports) {
     const p = resolve(baseDir, imp.importPath);
     if (!existsSync(p)) throw new Error(`AOT: <Svg source> asset "${imp.name}" not found at ${p}`);
-    artifacts[imp.name] = await svgToVector(readFileSync(p, 'utf8'));
+    const art = await svgToVector(readFileSync(p, 'utf8'));
+    // Flow B (AOT) has no raster fallback in v1 — unsupported elements are baked away. Warn so dropped
+    // content isn't a silent surprise on a no-PSRAM/AOT board (Flow A would rasterize these instead).
+    if (art.dropped && art.dropped.length) {
+      console.warn(
+        `embedded-react: ${imp.name}.svg uses unsupported SVG feature(s) [${art.dropped.join(', ')}] — ` +
+          `Flow B (AOT) bakes only the vector subset, so that content will NOT render. Simplify the SVG, or use ` +
+          `the Flow A (QuickJS) path, which rasterizes such SVGs as a fallback image.`
+      );
+    }
+    artifacts[imp.name] = art;
   }
   return artifacts;
 }

@@ -145,7 +145,7 @@ function createBundle({ entry, projectRoot, libSrc, nodePaths, outDir, persist =
             fonts.set(assetName(a.path), a.path);
             return { contents: `module.exports = ${JSON.stringify(assetName(a.path))};`, loader: 'js' };
           });
-          registerSvgVectorLoader(b);
+          registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
           b.onEnd(async (r) => {
             if (r.errors.length) {
               console.error(`✗ build failed (${r.errors.length} error(s))`);

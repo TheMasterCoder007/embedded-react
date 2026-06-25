@@ -95,7 +95,7 @@ const assetPlugin = {
       fonts.set(family, args.path);
       return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
     });
-    registerSvgVectorLoader(b);
+    registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
   },
 };
 

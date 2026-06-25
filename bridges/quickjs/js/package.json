@@ -75,6 +75,7 @@
   "dependencies": {
     "@babel/core": "^7.29.7",
     "@babel/plugin-syntax-jsx": "^7.29.7",
+    "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.28.1",
     "opentype.js": "^2.0.0",
     "pngjs": "^7.0.0",
