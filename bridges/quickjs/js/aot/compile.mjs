@@ -619,22 +619,27 @@ export async function bakeSvgArtifacts(src, baseDir) {
   const program = parse(src, { sourceType: 'module', plugins: ['jsx'] }).program;
   const imports = collectSvgImports(program);
   if (imports.size === 0) return {};
-  const { svgToVector } = await import('../assets/bake-svg.mjs');
+  const { svgToVector, svgToRaster, writeRasterPng } = await import('../assets/bake-svg.mjs');
   const artifacts = {};
   for (const [, imp] of imports) {
     const p = resolve(baseDir, imp.importPath);
     if (!existsSync(p)) throw new Error(`AOT: <Svg source> asset "${imp.name}" not found at ${p}`);
-    const art = await svgToVector(readFileSync(p, 'utf8'));
-    // Flow B (AOT) has no raster fallback in v1 — unsupported elements are baked away. Warn so dropped
-    // content isn't a silent surprise on a no-PSRAM/AOT board (Flow A would rasterize these instead).
+    const svg = readFileSync(p, 'utf8');
+    const art = await svgToVector(svg);
+    // Track C raster fallback (Flow B): an SVG that uses features the vector baker can't represent is
+    // rasterized via resvg and baked as a PNG (emitSvgSource emits an Image node for a kind:'raster'
+    // artifact + registers the PNG into the AOT image baker), so the content renders instead of dropping.
     if (art.dropped && art.dropped.length) {
       console.warn(
         `embedded-react: ${imp.name}.svg uses unsupported SVG feature(s) [${art.dropped.join(', ')}] — ` +
-          `Flow B (AOT) bakes only the vector subset, so that content will NOT render. Simplify the SVG, or use ` +
-          `the Flow A (QuickJS) path, which rasterizes such SVGs as a fallback image.`
+          `rasterizing it as a fallback image (Flow B bakes the PNG into assets.generated.c). Simplify the SVG ` +
+          `to keep it a live vector.`
       );
+      const { width, height, png } = await svgToRaster(svg);
+      artifacts[imp.name] = { kind: 'raster', name: imp.name, width, height, png: writeRasterPng(imp.name, png) };
+    } else {
+      artifacts[imp.name] = art;
     }
-    artifacts[imp.name] = art;
   }
   return artifacts;
 }
@@ -2139,6 +2144,24 @@ function emitSvgSource(el, sourceAttr, scope, out, env) {
   };
   const w = numAttr('width', art.width);
   const h = numAttr('height', art.height);
+
+  // Raster fallback: the .svg used unsupported features and was rasterized to a PNG at bake time
+  // (bakeSvgArtifacts). Emit it as an Image node sized to the box, and register the PNG so it bakes into
+  // assets.generated.c (the CLI resolves importPath; an absolute temp path passes through resolve() as-is).
+  if (art.kind === 'raster') {
+    if (art.png) out.images.set(art.name, art.png);
+    const vimg = `n${out.n++}`;
+    const { staticAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+    out.build.push(`    ${vimg} = er_node_create(${NODE_TYPES.Image});`, `    er_props_default(&p);`);
+    if (typeof w === 'number') out.build.push(`    p.width = (int16_t)${Math.round(w)};`);
+    if (typeof h === 'number') out.build.push(`    p.height = (int16_t)${Math.round(h)};`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    out.build.push(`    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(art.name)});`);
+    out.build.push(`    er_node_set_props(${vimg}, &p);`);
+    emitRefBind(vimg, el.openingElement, out, env);
+    return vimg;
+  }
+
   const scaled = scaleVectorArtifact(art, w, h);
   const ops = scaled.ops;
   const paints = scaled.paints;

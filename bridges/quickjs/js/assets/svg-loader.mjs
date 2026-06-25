@@ -23,13 +23,10 @@
 //     {kind:'raster', name, width, height} artifact. A <Svg source> renders kind:'vector' as a vector node
 //     and kind:'raster' as an image node (host-config), so the fallback is transparent to the app.
 // Shared by every Flow A bundler so the .svg handling lives in one place.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
-import { svgToVector, svgToRaster } from './bake-svg.mjs';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { svgToVector, svgToRaster, writeRasterPng } from './bake-svg.mjs';
 
-const RASTER_DIR = join(tmpdir(), 'embedded-react-svg-raster');
 const assetName = (p) => basename(p).replace(/\.[^.]+$/, '');
 
 /**
@@ -55,10 +52,7 @@ export function registerSvgVectorLoader(build, addRasterAsset) {
           );
           const { width, height, png } = await svgToRaster(svg);
           const name = assetName(args.path);
-          mkdirSync(RASTER_DIR, { recursive: true });
-          const file = join(RASTER_DIR, `${name}-${createHash('sha1').update(png).digest('hex').slice(0, 8)}.png`);
-          writeFileSync(file, png);
-          addRasterAsset(name, file);
+          addRasterAsset(name, writeRasterPng(name, png));
           return { contents: `module.exports = ${JSON.stringify({ kind: 'raster', name, width, height })};`, loader: 'js' };
         }
         console.warn(

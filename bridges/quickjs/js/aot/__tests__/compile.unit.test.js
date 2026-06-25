@@ -291,6 +291,21 @@ describe('AOT baseline (regression)', () => {
     expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, 12, s_svg0_paints, 1, s_svg0_grads, 1\);/);
   });
 
+  it('emits a raster-fallback <Svg source> as an Image node + registers its PNG (Flow B)', () => {
+    // bakeSvgArtifacts produces this for an SVG that used unsupported features (e.g. <text>): rasterized to
+    // a PNG. emitSvgSource must render it as an Image node, NOT a vector op-tape, and bake the PNG.
+    const artifact = { kind: 'raster', name: 'badge', width: 20, height: 20, png: 'C:/tmp/badge-abcd1234.png' };
+    const res = compileSource(
+      `import { View, Svg } from 'embedded-react';\nimport badge from './badge.svg';\nexport function App() { return <View><Svg source={badge} width={20} height={20} /></View>; }`,
+      'test',
+      { svgArtifacts: { badge: artifact } },
+    );
+    expect(res.c).toContain('er_node_create(ER_NODE_IMAGE)'); // raster → image node
+    expect(res.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "badge")');
+    expect(res.c).not.toContain('s_svg0_ops'); // no vector op-tape emitted for the rastered svg
+    expect(res.images.some((im) => im.name === 'badge' && /badge-abcd1234\.png$/.test(im.importPath))).toBe(true);
+  });
+
   it('scales a <Svg source> at compile time but leaves a conic gradient start ANGLE unscaled', () => {
     const artifact = {
       ops: [0, 0, 1, 0, 0, 2, 10, 10, 6],

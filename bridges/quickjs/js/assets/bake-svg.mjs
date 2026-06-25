@@ -25,6 +25,10 @@
 // for now (Track B adds engine gradients; Track C rasterizes the rest). Primitives are emitted as
 // line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
 import { parse } from 'svgson';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import {
   parsePath,
   parseColor,
@@ -455,4 +459,21 @@ export async function svgToRaster(svgString) {
   const { width, height } = img;
   img.free?.();
   return { width, height, png };
+}
+
+/**
+ * Writes a rasterized-SVG PNG to a temp file and returns its path (content-hashed so rebuilds are stable).
+ * The image pipeline (bakeImage) reads PNGs by path, so the raster fallback writes one here and registers it
+ * as an asset. Shared by the Flow A loader and the Flow B (AOT) baker.
+ *
+ * @param {string} name   Asset name (the SVG's basename) — used in the filename.
+ * @param {Buffer} png    PNG bytes from svgToRaster.
+ * @returns {string}      Absolute path to the written .png.
+ */
+export function writeRasterPng(name, png) {
+  const dir = join(tmpdir(), 'embedded-react-svg-raster');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${name}-${createHash('sha1').update(png).digest('hex').slice(0, 8)}.png`);
+  writeFileSync(file, png);
+  return file;
 }
