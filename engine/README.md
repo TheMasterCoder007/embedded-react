@@ -101,6 +101,56 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_SCRATCH_POOL_DEPTH` | `ERUI_MAX_OPACITY_DEPTH + 2` | Number of live scratch slots |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
 
+### Vector pools (SVG / `<Svg>` rasteriser)
+
+The vector rasteriser (`rendering/vector.c`) pre-allocates static buffers sized by the
+macros below. Unlike the framebuffer-sized scratch pool, these stay in **internal RAM** on
+a PSRAM board (the scanline loops touch them per pixel), so they're sized to fit there —
+raise them for bigger / more complex SVGs and watch the internal-RAM budget. They split
+into transient rasterize scratch (reused per shape) and persistent per-node storage.
+
+| Flag | Default | Bounds | Static cost |
+|---|---|---|---|
+| `ERUI_VECTOR_MAX_PTS` | 2048 | flattened vertices in one shape | `2 × PTS × 4` B |
+| `ERUI_VECTOR_MAX_SUBPATHS` | 256 | contours / holes in one shape | `SUBPATHS × 12` B |
+| `ERUI_VECTOR_MAX_EDGES` | 2048 | edges in one rasterise pass | `EDGES × 32` B (edge + crossing + active lists) |
+| `ERUI_VECTOR_MAX_ROW` | 1024 | max vector-node **width** in px | `ROW × 4` B |
+| `ERUI_MAX_VECTOR_NODES` | 8 | concurrent `<Svg>` nodes with geometry | `NODES × (TAPE_MAX×4 + PAINTS_MAX×20)` B |
+| `ERUI_VECTOR_TAPE_MAX` | 1024 | op-tape floats stored per node | (in the per-node cost) |
+| `ERUI_VECTOR_PAINTS_MAX` | 16 | paint entries (shapes) per node | (in the per-node cost) |
+| `ERUI_VECTOR_GRAD_LUT` | 256 | gradient colour-LUT entries (`ERUI_GRADIENT` only) | `LUT × 4` B internal |
+
+`ERUI_VECTOR_GRAD_LUT` sizes the per-gradient color ramp the rasteriser samples per pixel (built once per
+gradient shape) instead of interpolating the stops each pixel — the bulk of an interactive gradient drag's
+cost. 256 matches 8-bit color resolution; a RAM-tight board can lower it (e.g., 64–128) for coarser steps,
+and there's little benefit above 256.
+
+At the defaults that's ~122 KB. The fastest-growing terms are `MAX_EDGES` (~32 B each, across
+three lists) and the **per-node op-tape**: persistent storage is `MAX_VECTOR_NODES ×
+VECTOR_TAPE_MAX × 4` bytes, so "many nodes" and "large tape" multiply.
+
+**Placement (PSRAM targets).** The vector code is two objects: `vector.c` (the **hot** per-pixel
+rasterize scratch — edge/coverage/crossing lists) and `vector_store.c` (the **cold** per-node
+op-tape/paint pool). The storage pool is read once per node when it re-rasterizes, not in the
+scanline inner loop, so a target with far memory can place `vector_store.o`'s `.bss` there — e.g.,
+ESP32 PSRAM via a linker fragment — while the hot scratch stays in fast internal RAM. With the
+storage in PSRAM, **`ERUI_MAX_VECTOR_NODES` (and `ERUI_VECTOR_TAPE_MAX`) can be raised well past
+the internal-RAM-bound default**. See `examples/esp32/esp32-s3` —
+`components/engine/linker_psram.lf` maps `vector_store` to `extram_bss` and the component sets
+`ERUI_MAX_VECTOR_NODES=32`.
+
+**Overflow is silent truncation, not a crash** — an over-complex shape is clipped or dropped.
+A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the
+macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a
+release MCU pulls in no `<stdio.h>`.
+
+Override from CMake (`-DERUI_VECTOR_MAX_PTS=4096`), or in an ESP-IDF build from your project's
+`CMakeLists.txt`:
+
+```
+idf_build_set_property(COMPILE_DEFINITIONS "ERUI_VECTOR_MAX_PTS=4096" APPEND)
+```
+
 ## Rules
 
 - **No platform headers.** Pure C99. No `stm32h7xx_hal.h`, no `esp_lcd.h`, no

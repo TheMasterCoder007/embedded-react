@@ -39,7 +39,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lowerStyle, NODE_TYPES, DYN_FIELDS, colorLiteral } from './style-map.mjs';
-import { flattenSvg, parseColor, parsePath } from '../src/embedded-react/svg-ops.js';
+import { flattenSvg, parseColor, parsePath, PAINT_STRIDE, scaleVectorArtifact } from '../src/embedded-react/svg-ops.js';
 import { bakeAssets } from '../assets/index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
@@ -589,6 +589,59 @@ function collectImageImports(program) {
     }
   }
   return byLocal;
+}
+
+/** Collects `import x from './foo.svg'` → Map(localName → { name, importPath }). Unlike an image (whose
+ *  bytes the CLI bakes AFTER compile, so compile only needs its asset name), an <Svg source> needs the
+ *  GEOMETRY during compile — so the CLI bakes the .svg to a vector artifact up front (bakeSvgArtifacts) and
+ *  passes it in as opts.svgArtifacts, keyed by `name`. emitSvgSource resolves the local → name → artifact. */
+function collectSvgImports(program) {
+  const byLocal = new Map();
+  for (const stmt of program.body) {
+    if (stmt.type !== 'ImportDeclaration' || typeof stmt.source.value !== 'string') continue;
+    const importPath = stmt.source.value;
+    if (!/\.svg$/i.test(importPath)) continue;
+    const name = importPath.split(/[\\/]/).pop().replace(/\.svg$/i, '');
+    for (const spec of stmt.specifiers) {
+      if (spec.type === 'ImportDefaultSpecifier') byLocal.set(spec.local.name, { name, importPath });
+    }
+  }
+  return byLocal;
+}
+
+/** Bakes a Flow B app's <Svg source> imports → { assetName: artifact } via the SAME baker Flow A's esbuild
+ *  .svg loader uses (svgToVector). This is the I/O half (reads .svg files) kept OUT of the pure compileSource;
+ *  both CLI entries (aot/compile.mjs and the consumer cli.mjs) call it and hand the result to opts.svgArtifacts.
+ *  @param {string} src       App.jsx source text.
+ *  @param {string} baseDir   Directory the import paths are resolved against (the app's dir).
+ *  @returns {Promise<Object>} name → { ops, paints, gradients, width, height }. */
+export async function bakeSvgArtifacts(src, baseDir) {
+  const program = parse(src, { sourceType: 'module', plugins: ['jsx'] }).program;
+  const imports = collectSvgImports(program);
+  if (imports.size === 0) return {};
+  const { svgToVector, svgToRaster, writeRasterPng } = await import('../assets/bake-svg.mjs');
+  const artifacts = {};
+  for (const [, imp] of imports) {
+    const p = resolve(baseDir, imp.importPath);
+    if (!existsSync(p)) throw new Error(`AOT: <Svg source> asset "${imp.name}" not found at ${p}`);
+    const svg = readFileSync(p, 'utf8');
+    const art = await svgToVector(svg);
+    // Raster fallback (Flow B): an SVG that uses features the vector baker can't represent is rasterized via
+    // resvg and baked as a PNG (emitSvgSource emits an Image node for a kind:'raster' artifact + registers the
+    // PNG into the AOT image baker), so the content renders instead of dropping.
+    if (art.dropped && art.dropped.length) {
+      console.warn(
+        `embedded-react: ${imp.name}.svg uses unsupported SVG feature(s) [${art.dropped.join(', ')}] — ` +
+          `rasterizing it as a fallback image (Flow B bakes the PNG into assets.generated.c). Simplify the SVG ` +
+          `to keep it a live vector.`
+      );
+      const { width, height, png } = await svgToRaster(svg);
+      artifacts[imp.name] = { kind: 'raster', name: imp.name, width, height, png: writeRasterPng(imp.name, png) };
+    } else {
+      artifacts[imp.name] = art;
+    }
+  }
+  return artifacts;
 }
 
 /** Collects `const fn = useCallback((...) => {...}, deps)` → Map(name → arrow fn node). Deps are ignored:
@@ -1368,7 +1421,7 @@ function compileUpdateVector(expr, env, ctx, indent) {
   out.vectorData.push(`static float s_uv${id}_ops[${len}];`);
   out.vectorData.push(`static const ERVectorPaint s_uv${id}_paints[] = {\n${paints.map((p) => '    ' + emitVectorPaint(p)).join(',\n')}\n};`);
   const lines = entries.map((e, i) => `${indent}s_uv${id}_ops[${i}] = ${e};`);
-  lines.push(`${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length});`);
+  lines.push(`${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length}, NULL, 0);`);
   if (dirtyArg) {
     if (dirtyArg.type !== 'ArrayExpression' || dirtyArg.elements.length < 4) throw new Error('AOT: updateVector dirtyRect must be a [x, y, w, h] array literal');
     const [x, y, w, h] = dirtyArg.elements.map((el) => emitExpr(el, env).code);
@@ -1868,7 +1921,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
 // ---------------------------------------------------------------------------------------------------
 
 /** Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
- *  statically evaluating every attribute. Dynamic attrs/children throw (state-driven Svg is Phase 6b). */
+ *  statically evaluating every attribute. Dynamic attrs/children throw (a state-driven Svg is not supported). */
 function jsxToSvgElement(node, scope) {
   if (node.type !== 'JSXElement') return null;
   const type = node.openingElement.name.name;
@@ -1891,9 +1944,26 @@ function jsxToSvgElement(node, scope) {
   return { type, props };
 }
 
-/** Emits one ERVectorPaint initializer from a 7-number flattenSvg paint record [fill,stroke,w,miter,cap,join,rule]. */
+/** Emits one ERVectorPaint initializer from a flattenSvg paint record
+ *  [fill,stroke,w,miter,cap,join,rule, fill_grad, stroke_grad]. fill_grad/stroke_grad (1-based gradient-table
+ *  indices, 0 = solid) are absent on inline-<Svg> records (7-wide) → zero, and set on baked <Svg source>. */
 function emitVectorPaint(p) {
-  return `{ .fill = ${p[0] >>> 0}u, .stroke = ${p[1] >>> 0}u, .stroke_w = ${floatLit(p[2])}, .miter = ${floatLit(p[3])}, .cap = ${p[4] | 0}, .join = ${p[5] | 0}, .fill_rule = ${p[6] | 0} }`;
+  return `{ .fill = ${p[0] >>> 0}u, .stroke = ${p[1] >>> 0}u, .stroke_w = ${floatLit(p[2])}, .miter = ${floatLit(p[3])}, .cap = ${p[4] | 0}, .join = ${p[5] | 0}, .fill_rule = ${p[6] | 0}, .fill_grad = ${(p[7] || 0) | 0}, .stroke_grad = ${(p[8] || 0) | 0} }`;
+}
+
+/** Emits one ERVectorGradient initializer from a baked artifact gradient
+ *  { type, stops:[{color, offset}], ax, ay, bx, by, r }. Stops fill the C ERGradientStop[] positionally
+ *  ({color, position}); the engine zero-inits the rest of stops[ER_VGRAD_MAX_STOPS]. Geometry meaning per
+ *  type: linear axis (ax,ay)->(bx,by); radial centre (ax,ay)+radius r; conic centre (ax,ay)+start angle r. */
+function emitVectorGradient(g) {
+  const inStops = g.stops || [];
+  const capped = inStops.length > 8 ? inStops.slice(0, 8) : inStops;
+  const stops = capped.map((s) => `{ ${(s.color >>> 0)}u, ${floatLit(s.offset)} }`).join(', ');
+  return (
+    `{ .type = ${g.type | 0}, .stop_count = ${capped.length}, .stops = { ${stops} }, ` +
+    `.ax = ${floatLit(g.ax || 0)}, .ay = ${floatLit(g.ay || 0)}, .bx = ${floatLit(g.bx || 0)}, ` +
+    `.by = ${floatLit(g.by || 0)}, .r = ${floatLit(g.r || 0)} }`
+  );
 }
 
 /** Static numeric coercion for an SVG attribute value (mirrors svg-ops `num`). */
@@ -2026,6 +2096,8 @@ function emitSvgBox(v, width, height, openingElement, scope, out, env) {
  *  op-tape rebuilt by a generated build_svgN() at build time and on every app_update. */
 function emitSvg(el, scope, out, env, state, opts) {
   if (opts.displayCode) throw new Error('AOT: an <Svg> inside a dynamic conditional is not yet supported');
+  const sourceAttr = el.openingElement.attributes.find((a) => a.type === 'JSXAttribute' && a.name && a.name.name === 'source');
+  if (sourceAttr) return emitSvgSource(el, sourceAttr, scope, out, env);
   return svgHasDynamic(el, scope) ? emitSvgDynamic(el, scope, out, env, state) : emitSvgStatic(el, scope, out, env);
 }
 
@@ -2035,13 +2107,82 @@ function emitSvgStatic(el, scope, out, env) {
   const { ops, paints } = flattenSvg(svgEl.props);
   const v = `n${out.n++}`;
   const id = out.svgN++;
-  const nPaints = paints.length / 7;
+  const nPaints = paints.length / PAINT_STRIDE;
   if (ops.length) {
     out.vectorData.push(`static const float s_svg${id}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
-    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * 7, i * 7 + 7))).join(',\n')}\n};`);
+    // flattenSvg paints are PAINT_STRIDE-wide; inline <Svg> has no gradients so fill_grad/stroke_grad are 0.
+    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * PAINT_STRIDE, i * PAINT_STRIDE + PAINT_STRIDE))).join(',\n')}\n};`);
   }
   emitSvgBox(v, svgEl.props.width, svgEl.props.height, el.openingElement, scope, out, env);
-  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints});`);
+  if (ops.length) out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints}, NULL, 0);`);
+  return v;
+}
+
+/** Baked <Svg source={importedSvg}>: the .svg is pre-baked to a vector artifact (ops/paints/GRADIENTS) by the
+ *  CLI (bakeSvgArtifacts → opts.svgArtifacts) since compileSource is I/O-free. Scaled to the static width/height
+ *  at compile time, then emitted as const tables. This is the path that carries gradients into Flow B. */
+function emitSvgSource(el, sourceAttr, scope, out, env) {
+  const expr = sourceAttr.value && sourceAttr.value.type === 'JSXExpressionContainer' ? sourceAttr.value.expression : null;
+  if (!expr || expr.type !== 'Identifier')
+    throw new Error('AOT: <Svg source> must reference an imported .svg (source={importedSvg})');
+  const imp = env.svgImports.get(expr.name);
+  if (!imp) throw new Error(`AOT: <Svg source={${expr.name}}> — no matching \`import ${expr.name} from '...svg'\``);
+  const art = env.svgArtifacts[imp.name];
+  if (!art) throw new Error(`AOT: vector artifact for "${imp.name}" was not baked (internal: opts.svgArtifacts missing it)`);
+
+  // Static width/height (props or {expr} that folds) → scale the artifact at compile time; default = intrinsic.
+  const numAttr = (name, dflt) => {
+    const at = el.openingElement.attributes.find((a) => a.type === 'JSXAttribute' && a.name && a.name.name === name);
+    if (!at || at.value == null) return dflt;
+    if (at.value.type === 'StringLiteral') return svgNum(at.value.value, dflt);
+    if (at.value.type === 'JSXExpressionContainer') {
+      try {
+        return svgNum(evalStatic(at.value.expression, scope), dflt);
+      } catch {
+        throw new Error('AOT: <Svg source> width/height must be a static number');
+      }
+    }
+    return dflt;
+  };
+  const w = numAttr('width', art.width);
+  const h = numAttr('height', art.height);
+
+  // Raster fallback: the .svg used unsupported features and was rasterized to a PNG at bake time
+  // (bakeSvgArtifacts). Emit it as an Image node sized to the box, and register the PNG so it bakes into
+  // assets.generated.c (the CLI resolves importPath; an absolute temp path passes through resolve() as-is).
+  if (art.kind === 'raster') {
+    if (art.png) out.images.set(art.name, art.png);
+    const vimg = `n${out.n++}`;
+    const { staticAssigns } = collectStyleAssigns(el.openingElement, scope, env);
+    out.build.push(`    ${vimg} = er_node_create(${NODE_TYPES.Image});`, `    er_props_default(&p);`);
+    if (typeof w === 'number') out.build.push(`    p.width = (int16_t)${Math.round(w)};`);
+    if (typeof h === 'number') out.build.push(`    p.height = (int16_t)${Math.round(h)};`);
+    for (const a of staticAssigns) out.build.push(`    p.${a.field} = ${a.expr};`);
+    out.build.push(`    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(art.name)});`);
+    out.build.push(`    er_node_set_props(${vimg}, &p);`);
+    emitRefBind(vimg, el.openingElement, out, env);
+    return vimg;
+  }
+
+  const scaled = scaleVectorArtifact(art, w, h);
+  const ops = scaled.ops;
+  const paints = scaled.paints;
+  const gradients = scaled.gradients || [];
+
+  const v = `n${out.n++}`;
+  const id = out.svgN++;
+  const nPaints = paints.length / PAINT_STRIDE;
+  if (ops.length) {
+    out.vectorData.push(`static const float s_svg${id}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`);
+    out.vectorData.push(`static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({ length: nPaints }, (_, i) => '    ' + emitVectorPaint(paints.slice(i * PAINT_STRIDE, i * PAINT_STRIDE + PAINT_STRIDE))).join(',\n')}\n};`);
+    if (gradients.length)
+      out.vectorData.push(`static const ERVectorGradient s_svg${id}_grads[] = {\n${gradients.map((g) => '    ' + emitVectorGradient(g)).join(',\n')}\n};`);
+  }
+  emitSvgBox(v, w, h, el.openingElement, scope, out, env);
+  if (ops.length) {
+    const gradsRef = gradients.length ? `s_svg${id}_grads` : 'NULL';
+    out.build.push(`    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${ops.length}, s_svg${id}_paints, ${nPaints}, ${gradsRef}, ${gradients.length});`);
+  }
   return v;
 }
 
@@ -2078,7 +2219,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   out.vectorBuilders.push(`static void build_svg${id}(void)\n{\n${builderLines.join('\n')}\n}`);
 
   emitSvgBox(v, svgA.width, svgA.height, el.openingElement, scope, out, env);
-  out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints});`, `    s_${v} = ${v};`);
+  out.build.push(`    build_svg${id}();`, `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints}, NULL, 0);`, `    s_${v} = ${v};`);
   out.handles.push(v);
   out.svgUpdates.push({ id, len, nPaints, nodeVar: `s_${v}` });
   return v;
@@ -2730,6 +2871,7 @@ const screen = opts.screen ?? { width: SCREEN_W, height: SCREEN_H };
 // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
 // array of `{ icon: wxSun }` needs wxSun resolvable). An image import is just its baked-name string.
 const imageImports = collectImageImports(ast.program);
+const svgImports = collectSvgImports(ast.program); // <Svg source> imports → artifacts baked by the CLI (opts.svgArtifacts)
 const imageSeed = Object.fromEntries([...imageImports].map(([local, imp]) => [local, imp.name]));
 const scope = moduleScope(ast.program, screen, imageSeed);
 const component = findComponent(ast.program);
@@ -2756,7 +2898,7 @@ const callbacks = collectCallbacks(component.body);
 const memos = collectMemos(component.body);
 const helpers = collectHelpers(component.body, ast.program);
 const imageNames = new Map([...imageImports].map(([, imp]) => [imp.name, imp.importPath])); // asset name → path
-const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, helpers, imageNames };
+const env = { state: state.byName, locals: new Map(), consts: scope, anims, refs, callbacks, helpers, imageNames, svgImports, svgArtifacts: opts.svgArtifacts || {} };
 // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
 // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
 // tracking re-applies dependent nodes anyway). Done before emit so references resolve.
@@ -2841,7 +2983,7 @@ const updateBlock = (() => {
   // State-driven Svgs: recompute the op-tape from state and re-upload.
   for (const s of out.svgUpdates) {
     lines.push(`    build_svg${s.id}();`);
-    lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints});`);
+    lines.push(`    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints}, NULL, 0);`);
   }
   // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
   for (const block of out.depEffects) lines.push(block);
@@ -3035,9 +3177,12 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     console.error(`AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`);
     process.exit(1);
   }
+  const src = readFileSync(appPath, 'utf8');
   let result;
   try {
-    result = compileSource(readFileSync(appPath, 'utf8'), demo, { filename: resolve(demosDir, demo, 'App.jsx') });
+    // Bake any <Svg source> .svg imports to vector artifacts first (I/O), then compile (pure) with them in hand.
+    const svgArtifacts = await bakeSvgArtifacts(src, resolve(demosDir, demo));
+    result = compileSource(src, demo, { filename: resolve(demosDir, demo, 'App.jsx'), svgArtifacts });
   } catch (e) {
     // A located AOT error already reads as "<reason>\n  at file:line:col\n\n<frame>\n\nhint: ..."; print it
     // cleanly (no JS stack) so the developer sees exactly the unsupported construct.

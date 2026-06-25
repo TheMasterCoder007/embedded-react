@@ -24,10 +24,17 @@ set(ERUI_3D_TRANSFORMS   ON     CACHE BOOL   "" FORCE)
 set(ERUI_BILINEAR_SCALE  ON     CACHE BOOL   "" FORCE)
 set(ERUI_GRADIENT        ON     CACHE BOOL   "" FORCE)
 set(ERUI_GRADIENT_RADIAL ON     CACHE BOOL   "" FORCE)
+set(ERUI_GRADIENT_CONIC  ON     CACHE BOOL   "" FORCE)
 set(ERUI_ONSCREEN_KEYBOARD ON   CACHE BOOL   "" FORCE)
 set(ERUI_TRANSFORMS      "FULL" CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_W       "512"  CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_H       "512"  CACHE STRING "" FORCE)
+# Roomy vector pools so imported SVGs (which can have many shapes / a long op-tape) render in the browser
+# preview without truncating — the desktop-class faithful preview. Tune the per-board caps separately.
+set(ERUI_VECTOR_TAPE_MAX   "8192" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_PAINTS_MAX "1024" CACHE STRING "" FORCE)  # a designer dial face is ~100 shapes = ~700 paints
+set(ERUI_VECTOR_MAX_PTS    "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_EDGES  "4096" CACHE STRING "" FORCE)
 
 set(ER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
@@ -37,6 +44,9 @@ set(ER_BRIDGE_QUICKJS_RUNTEST OFF CACHE BOOL "" FORCE)
 set(ER_BRIDGE_QUICKJS_COMPILE OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/quickjs)
 
+# Match the engine's raised vector caps on the bridge side (it copies the JS op-tape into a fixed buffer
+# before handing it to the engine, so its caps must be >= the engine's or it truncates large SVGs first).
+target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024 VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
 # The wasm module: software compositor + web present layer/ABI, linked against the bridge. The target is
 # named `websim` (the engine library already owns the `embedded-react` target name) but emits
 # embedded-react.{js,wasm} via OUTPUT_NAME.

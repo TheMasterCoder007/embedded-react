@@ -31,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { bakeAssets } from './assets/index.mjs';
+import { registerSvgVectorLoader } from './assets/svg-loader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
@@ -74,6 +75,7 @@ const assetPlugin = {
       fonts.set(family, args.path);
       return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
     });
+    registerSvgVectorLoader(build, (name, p) => images.set(name, p));
   },
 };
 

@@ -61,15 +61,8 @@
 #define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in px (coverage row buffer). */
 #endif
 
-#ifndef ERUI_MAX_VECTOR_NODES
-#define ERUI_MAX_VECTOR_NODES 8 /**< Concurrent vector nodes that can hold geometry. */
-#endif
-#ifndef ERUI_VECTOR_TAPE_MAX
-#define ERUI_VECTOR_TAPE_MAX 1024 /**< Op-tape floats stored per vector node. */
-#endif
-#ifndef ERUI_VECTOR_PAINTS_MAX
-#define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries stored per vector node. */
-#endif
+/* The per-node STORAGE pools (ERUI_MAX_VECTOR_NODES / ERUI_VECTOR_TAPE_MAX / ERUI_VECTOR_PAINTS_MAX) live
+ * with that pool in vector_store.c so it can be placed in PSRAM independently of this file's hot scratch. */
 
 #define VEC_SUBSAMPLES 4   /**< Vertical AA sub-scanlines per pixel row. */
 #define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
@@ -78,6 +71,8 @@
              the rasterize cost is clip-area bound, not edge-count bound, and a coarse                                 \
              value visibly facets small curves (the knob most of all). */
 #define VEC_PI 3.14159265358979323846f
+
+/* ERUI_VECTOR_DIAGNOSTICS + ERUI_VEC_WARN_ONCE live in vector.h (shared with vector_store.c). */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Working state (static, reused per render)
@@ -112,92 +107,9 @@ static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
 static int s_cross_d[ERUI_VECTOR_MAX_EDGES];
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Per-node storage pool
- ---------------------------------------------------------------------------------------------------------------------*/
-
-typedef struct
-{
-    bool used;
-    float ops[ERUI_VECTOR_TAPE_MAX];
-    int n_ops;
-    ERVectorPaint paints[ERUI_VECTOR_PAINTS_MAX];
-    int n_paints;
-} VecSlot;
-
-static VecSlot s_slots[ERUI_MAX_VECTOR_NODES];
-
-int er_vector_store(int slot, const float* ops, int n_ops, const ERVectorPaint* paints, int n_paints)
-{
-    if (slot < 0)
-    {
-        for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
-        {
-            if (!s_slots[i].used)
-            {
-                slot = i;
-                break;
-            }
-        }
-        if (slot < 0)
-            return -1; /* pool exhausted; node renders nothing */
-    }
-    if (slot >= ERUI_MAX_VECTOR_NODES)
-        return -1;
-
-    VecSlot* s = &s_slots[slot];
-    s->used = true;
-    int no = (n_ops < 0) ? 0 : (n_ops > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : n_ops);
-    if (ops && no > 0)
-        memcpy(s->ops, ops, (size_t)no * sizeof(float));
-    s->n_ops = no;
-    int np = (n_paints < 0) ? 0 : (n_paints > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : n_paints);
-    if (paints && np > 0)
-        memcpy(s->paints, paints, (size_t)np * sizeof(ERVectorPaint));
-    s->n_paints = np;
-    return slot;
-}
-
-void er_vector_free(int slot)
-{
-    if (slot >= 0 && slot < ERUI_MAX_VECTOR_NODES)
-        s_slots[slot].used = false;
-}
-
-void er_vector_reset(void)
-{
-    /* Free every storage slot; the rasterization scratch is per-call, but zero it for tidiness. */
-    memset(s_slots, 0, sizeof(s_slots));
-    s_npts = 0;
-    s_nsub = 0;
-    s_nedges = 0;
-}
-
-const float* er_vector_slot_ops(int slot, int* n_ops)
-{
-    if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
-    {
-        if (n_ops)
-            *n_ops = 0;
-        return 0;
-    }
-    if (n_ops)
-        *n_ops = s_slots[slot].n_ops;
-    return s_slots[slot].ops;
-}
-
-const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
-{
-    if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
-    {
-        if (n_paints)
-            *n_paints = 0;
-        return 0;
-    }
-    if (n_paints)
-        *n_paints = s_slots[slot].n_paints;
-    return s_slots[slot].paints;
-}
+/* The per-node op-tape/paint storage pool (er_vector_store/free/reset/slot_ops/slot_paints + s_slots) lives
+ * in vector_store.c — a separate translation unit so a target can place that cold pool in PSRAM (via the
+ * engine's linker fragment) while this file's hot per-pixel scratch above stays in fast internal RAM. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Geometry building
@@ -206,7 +118,12 @@ const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
 /** @brief Appends a vertex to the current subpath (last entry of s_sub). */
 static void pt_add(float x, float y)
 {
-    if (s_npts >= ERUI_VECTOR_MAX_PTS || s_nsub == 0)
+    if (s_npts >= ERUI_VECTOR_MAX_PTS)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_PTS", ERUI_VECTOR_MAX_PTS);
+        return;
+    }
+    if (s_nsub == 0)
         return;
     /* Drop exact duplicates (zero-length segments add nothing and bloat the edge list). */
     VecSub* sp = &s_sub[s_nsub - 1];
@@ -226,7 +143,10 @@ static void pt_add(float x, float y)
 static void sub_begin(float x, float y)
 {
     if (s_nsub >= ERUI_VECTOR_MAX_SUBPATHS)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_SUBPATHS", ERUI_VECTOR_MAX_SUBPATHS);
         return;
+    }
     s_sub[s_nsub].start = s_npts;
     s_sub[s_nsub].count = 0;
     s_sub[s_nsub].closed = 0;
@@ -298,8 +218,13 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
 /** @brief Adds a non-horizontal edge to the rasterizer edge list (normalized so y0 <= y1). */
 static void edge_add(float x0, float y0, float x1, float y1)
 {
-    if (y0 == y1 || s_nedges >= ERUI_VECTOR_MAX_EDGES)
+    if (y0 == y1)
         return;
+    if (s_nedges >= ERUI_VECTOR_MAX_EDGES)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
+        return;
+    }
     VecEdge* e = &s_edges[s_nedges++];
     if (y0 < y1)
     {
@@ -322,6 +247,10 @@ static void edge_add(float x0, float y0, float x1, float y1)
 /** @brief Adds coverage for a covered horizontal span [xs,xe] (screen px) at the given weight. */
 static void cover_span(float xs, float xe, float weight, int clipx0, int width)
 {
+    /* Reject non-finite spans: NaN/inf coordinates (from a malformed path) survive the clamps below and
+     * turn (int)floorf(...) into a wild index that writes s_cover[] out of bounds. Defense in depth. */
+    if (!isfinite(xs) || !isfinite(xe))
+        return;
     xs -= (float)clipx0;
     xe -= (float)clipx0;
     if (xs < 0.0f)
@@ -366,15 +295,184 @@ static int rule_inside(int acc, int evenodd)
     return evenodd ? (acc & 1) : (acc != 0);
 }
 
+#if ERUI_GRADIENT
+/* Vector gradient fill. Reuses gradient.c's always-compiled colour helpers, forward-declared here
+ * to keep this TU decoupled from the node internals that gradient.h would pull in. */
+uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t);
+uint32_t er_gradient_premul(uint32_t sa);
+
+/* Per-row premultiplied scratch for a gradient fill span (sized like the coverage row). */
+static uint32_t s_vgrad_row[ERUI_VECTOR_MAX_ROW];
+
+/* Precomputed colour ramp: ERUI_VECTOR_GRAD_LUT premultiplied-ARGB entries sampled across t∈[0,1), rebuilt
+ * once per gradient shape (build_grad_lut). The per-pixel sampler then indexes this instead of re-running the
+ * stop search/interpolation (er_gradient_eval_stops) every pixel — the bulk of the conic dial's drag cost.
+ * 256 matches 8-bit colour resolution; a RAM-tight board may lower it (a 1 KB internal buffer at 256) at the
+ * cost of coarser colour steps. Tunable like the other vector pools (CMake cache var; see engine/README). */
+#ifndef ERUI_VECTOR_GRAD_LUT
+#define ERUI_VECTOR_GRAD_LUT 256
+#endif
+static uint32_t s_vgrad_lut[ERUI_VECTOR_GRAD_LUT];
+
+/** @brief Builds the premultiplied colour LUT for a gradient (one er_gradient_eval_stops per entry). */
+static void build_grad_lut(const ERVectorGradient* g)
+{
+    for (int i = 0; i < ERUI_VECTOR_GRAD_LUT; i++)
+    {
+        const float t = ((float)i + 0.5f) / (float)ERUI_VECTOR_GRAD_LUT;
+        s_vgrad_lut[i] = er_gradient_premul(er_gradient_eval_stops(g->stops, g->stop_count, t));
+    }
+}
+
+/** @brief Scales a premultiplied-ARGB pixel by an 8-bit coverage (all four channels), rounding to nearest. */
+static inline uint32_t vgrad_scale(uint32_t p, uint32_t cov)
+{
+    const uint32_t a = (((p >> 24) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t r = (((p >> 16) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t gg = (((p >> 8) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t b = ((p & 0xFFU) * cov + 127U) / 255U;
+    return (a << 24) | (r << 16) | (gg << 8) | b;
+}
+
+#if ERUI_GRADIENT_CONIC
+/**
+ * @brief Fast atan2 approximation (max error ~0.0015 rad), to avoid the soft-float atan2f libm call in the
+ *        per-pixel conic sampler. Same argument order as atan2f(y, x); range (-PI, PI]. A 256-entry colour
+ *        LUT quantizes the angle to ~1.4° steps anyway, so this error is invisible.
+ */
+static inline float vgrad_fast_atan2(float y, float x)
+{
+    const float ax = fabsf(x), ay = fabsf(y);
+    if (ax < 1e-12f && ay < 1e-12f)
+        return 0.0f;
+    const float a = (ax > ay) ? (ay / ax) : (ax / ay); /* ratio in [0,1] */
+    const float s = a * a;
+    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a; /* atan(a) */
+    if (ay > ax)
+        r = 1.57079637f - r; /* PI/2 - r */
+    if (x < 0.0f)
+        r = 3.14159274f - r;
+    if (y < 0.0f)
+        r = -r;
+    return r;
+}
+#endif
+
+/** @brief True if a gradient type is supported in this build (radial gated on ERUI_GRADIENT_RADIAL). */
+static int vgrad_supported(int type)
+{
+    if (type == ER_GRADIENT_LINEAR)
+        return 1;
+#if ERUI_GRADIENT_RADIAL
+    if (type == ER_GRADIENT_RADIAL)
+        return 1;
+#endif
+#if ERUI_GRADIENT_CONIC
+    if (type == ER_GRADIENT_CONIC)
+        return 1;
+#endif
+    return 0;
+}
+
+/**
+ * @brief Gradient parameter t at a framebuffer pixel centre (geometry is already in framebuffer space).
+ *        Linear: projection onto the axis A->B, normalized. Radial: distance from the centre over r.
+ *        Conic: angle of (pixel - centre), clockwise from the top, minus the start angle, wrapped to [0,1).
+ *        er_gradient_eval_stops() clamps t to the endpoint colours, so t is left unclamped here.
+ */
+static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
+{
+#if ERUI_GRADIENT_RADIAL
+    if (g->type == ER_GRADIENT_RADIAL)
+    {
+        const float dx = fx - g->ax, dy = fy - g->ay;
+        return (g->r > 1e-6f) ? sqrtf(dx * dx + dy * dy) / g->r : 0.0f;
+    }
+#endif
+#if ERUI_GRADIENT_CONIC
+    if (g->type == ER_GRADIENT_CONIC)
+    {
+        /* atan2(dx, -dy): 0 at the top, increasing clockwise. Subtract the start angle, wrap to [0,1).
+         * Uses the polynomial atan2 approximation — this runs per covered pixel on the drag hot path. */
+        float a = (vgrad_fast_atan2(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * VEC_PI);
+        a -= floorf(a);
+        return a;
+    }
+#endif
+    {
+        const float dx = g->bx - g->ax, dy = g->by - g->ay;
+        const float len2 = dx * dx + dy * dy;
+        if (len2 < 1e-6f)
+            return 0.0f;
+        return ((fx - g->ax) * dx + (fy - g->ay) * dy) / len2;
+    }
+}
+
+/**
+ * @brief Resolves a paint's 1-based gradient index into a framebuffer-space gradient (or NULL).
+ *        Copies the table entry into @p buf, offsets its op-tape (node-local) geometry by the node origin
+ *        (px,py) to match the flattened path, and returns @p buf — or NULL if the index is out of range,
+ *        the type is unsupported in this build, or there are < 2 stops. Used for both fill and stroke.
+ */
+static const ERVectorGradient*
+resolve_grad(int idx1, const ERVectorGradient* grads, int n_grads, int px, int py, ERVectorGradient* buf)
+{
+    if (idx1 <= 0 || idx1 > n_grads || !grads)
+        return NULL;
+    *buf = grads[idx1 - 1];
+        return NULL;
+    buf->ax += (float)px; /* r is a length and is NOT offset */
+    buf->ay += (float)py;
+    buf->bx += (float)px;
+    buf->by += (float)py;
+    return buf;
+}
+#endif /* ERUI_GRADIENT */
+
 /**
  * @brief Blends the accumulated coverage row into the target, coalescing equal-alpha runs.
  *
  * Scans only [lo,hi) — the x-range cover_span() actually touched this row — and zeroes each
  * consumed cell so the next row starts clean without a full-width memset. For a thin stroke in a
  * wide clip this turns the per-row floor from O(clip width) into O(covered width).
+ *
+ * When @p grad is non-NULL the fill colour is sampled per pixel from the gradient (built into a
+ * premultiplied row and flushed via er_blit_blend) instead of the constant @p color.
  */
-static void emit_row(uint32_t color, int iy, int clipx0, int lo, int hi)
+static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int clipx0, int lo, int hi)
 {
+#if ERUI_GRADIENT
+    if (grad)
+    {
+        const int n = hi - lo;
+        for (int xx = 0; xx < n; xx++)
+        {
+            float c = s_cover[lo + xx];
+            s_cover[lo + xx] = 0.0f; /* consume so the cell is clean for the next row */
+            if (c <= 0.0f)
+            {
+                s_vgrad_row[xx] = 0u; /* uncovered: alpha 0 leaves the destination untouched */
+                continue;
+            }
+            if (c > 1.0f)
+                c = 1.0f;
+            /* t -> LUT index (clamped; eval clamps to the endpoint colours, so out-of-range t pins to an end).
+             * The LUT entry is premultiplied, so scaling all four channels by coverage finishes the pixel —
+             * no per-pixel stop interpolation or premultiply. */
+            const float t = vgrad_t(grad, (float)(clipx0 + lo + xx) + 0.5f, (float)iy + 0.5f);
+            int idx = (int)(t * (float)ERUI_VECTOR_GRAD_LUT);
+            if (idx < 0)
+                idx = 0;
+            else if (idx >= ERUI_VECTOR_GRAD_LUT)
+                idx = ERUI_VECTOR_GRAD_LUT - 1;
+            s_vgrad_row[xx] = vgrad_scale(s_vgrad_lut[idx], (uint32_t)(c * 255.0f + 0.5f));
+        }
+        er_blit_blend(s_vgrad_row, (int)(sizeof(uint32_t) * (size_t)n), 255, clipx0 + lo, iy, n, 1);
+        return;
+    }
+#else
+    (void)grad;
+#endif
     const uint32_t pa = (color >> 24) & 0xFFU;
     const uint32_t rgb = color & 0x00FFFFFFU;
     int x = lo;
@@ -421,13 +519,26 @@ static int edge_cmp_y0(const void* pa, const void* pb)
 static int s_active[ERUI_VECTOR_MAX_EDGES];
 
 /** @brief Rasterizes the current edge list into the clip box with anti-aliasing. */
-static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int clipx1, int clipy1)
+static void
+rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0, int clipy0, int clipx1, int clipy1)
 {
-    if (s_nedges == 0 || ((color >> 24) & 0xFFU) == 0U)
+    /* Bail on a fully-transparent solid colour — unless a gradient supplies the fill colour instead. */
+    if (s_nedges == 0 || (!grad && ((color >> 24) & 0xFFU) == 0U))
         return;
     const int width = clipx1 - clipx0;
-    if (width <= 0 || width > ERUI_VECTOR_MAX_ROW)
+    if (width <= 0)
         return;
+    if (width > ERUI_VECTOR_MAX_ROW)
+    {
+        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_ROW", ERUI_VECTOR_MAX_ROW);
+        return;
+    }
+#if ERUI_GRADIENT
+    /* Build the colour LUT once per gradient shape — the per-pixel sampler (emit_row) then indexes it
+     * instead of interpolating the stops every pixel. */
+    if (grad)
+        build_grad_lut(grad);
+#endif
 
     /* Sort edges top-to-bottom so each scanline only tests the few edges actually crossing it (an
      * active-edge table) instead of all of them — the difference between O(edges*rows) and ~O(rows),
@@ -509,7 +620,7 @@ static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int c
             }
         }
         if (s_row_hi > s_row_lo)
-            emit_row(color, iy, clipx0, s_row_lo, s_row_hi);
+            emit_row(color, grad, iy, clipx0, s_row_lo, s_row_hi);
     }
 }
 
@@ -518,7 +629,7 @@ static void rasterize(uint32_t color, int evenodd, int clipx0, int clipy0, int c
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Builds closed edges from every subpath and rasterizes the fill. */
-static void fill_shape(uint32_t color, int evenodd, int cx0, int cy0, int cx1, int cy1)
+static void fill_shape(uint32_t color, const ERVectorGradient* grad, int evenodd, int cx0, int cy0, int cx1, int cy1)
 {
     s_nedges = 0;
     for (int si = 0; si < s_nsub; si++)
@@ -531,7 +642,7 @@ static void fill_shape(uint32_t color, int evenodd, int cx0, int cy0, int cx1, i
         /* Fill implicitly closes every subpath. */
         edge_add(s_px[sp->start + sp->count - 1], s_py[sp->start + sp->count - 1], s_px[sp->start], s_py[sp->start]);
     }
-    rasterize(color, evenodd, cx0, cy0, cx1, cy1);
+    rasterize(color, grad, evenodd, cx0, cy0, cx1, cy1);
 }
 
 /** @brief Adds a filled convex quad (4 corners, CCW or CW) as edges. */
@@ -725,7 +836,16 @@ static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float 
 }
 
 /** @brief Builds stroke geometry for all subpaths and rasterizes it. */
-static void stroke_shape(uint32_t color, float sw, int cap, int join, float miter, int cx0, int cy0, int cx1, int cy1)
+static void stroke_shape(uint32_t color,
+                         const ERVectorGradient* grad,
+                         float sw,
+                         int cap,
+                         int join,
+                         float miter,
+                         int cx0,
+                         int cy0,
+                         int cx1,
+                         int cy1)
 {
     if (sw <= 0.0f)
         return;
@@ -733,7 +853,7 @@ static void stroke_shape(uint32_t color, float sw, int cap, int join, float mite
     for (int si = 0; si < s_nsub; si++)
         if (s_sub[si].count >= 1)
             stroke_subpath(&s_sub[si], sw, cap, join, miter);
-    rasterize(color, 0 /* stroke always nonzero */, cx0, cy0, cx1, cy1);
+    rasterize(color, grad, 0, cx0, cy0, cx1, cy1);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -744,6 +864,8 @@ void er_vector_render(const float* ops,
                       int n_ops,
                       const ERVectorPaint* paints,
                       int n_paints,
+                      const ERVectorGradient* grads,
+                      int n_grads,
                       int px,
                       int py,
                       int clipx0,
@@ -753,6 +875,10 @@ void er_vector_render(const float* ops,
 {
     if (!ops || n_ops <= 0)
         return;
+#if !ERUI_GRADIENT
+    (void)grads;
+    (void)n_grads;
+#endif
     /* px,py position the geometry; the clip box bounds the rasterize compute + painting (a sub-region
      * for an interactive update, or the full node box otherwise). */
     const int cx0 = clipx0, cy0 = clipy0, cx1 = clipx1, cy1 = clipy1;
@@ -775,6 +901,16 @@ void er_vector_render(const float* ops,
         while (i < n_ops && ops[i] != ER_VOP_SHAPE)
         {
             const float op = ops[i++];
+            /* Verify this op's args fit within the tape before reading them. A tape truncated mid-op —
+             * e.g. the JS bridge capping it at ERUI_VECTOR_TAPE_MAX, or any malformed input — would
+             * otherwise read past n_ops into adjacent memory, producing NaN/garbage coordinates that
+             * index s_cover[] out of bounds and crash. Stop parsing the shape's tail instead. */
+            const int op_args = (op == ER_VOP_MOVE || op == ER_VOP_LINE)   ? 2
+                                : (op == ER_VOP_QUAD)                      ? 4
+                                : (op == ER_VOP_CUBIC || op == ER_VOP_ARC) ? 6
+                                                                           : 0;
+            if (i + op_args > n_ops)
+                break;
             if (op == ER_VOP_MOVE)
             {
                 cur_x = (float)px + ops[i++];
@@ -848,10 +984,18 @@ void er_vector_render(const float* ops,
         const ERVectorPaint* pt = (pidx >= 0 && pidx < n_paints) ? &paints[pidx] : 0;
         if (pt)
         {
-            if (((pt->fill >> 24) & 0xFFU) != 0U)
-                fill_shape(pt->fill, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
-            if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
+            const ERVectorGradient* fg = NULL;
+            const ERVectorGradient* sg = NULL;
+#if ERUI_GRADIENT
+            ERVectorGradient fgbuf, sgbuf;
+            fg = resolve_grad(pt->fill_grad, grads, n_grads, px, py, &fgbuf);
+            sg = resolve_grad(pt->stroke_grad, grads, n_grads, px, py, &sgbuf);
+#endif
+            if (fg || ((pt->fill >> 24) & 0xFFU) != 0U)
+                fill_shape(pt->fill, fg, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
+            if ((sg || ((pt->stroke >> 24) & 0xFFU) != 0U) && pt->stroke_w > 0.0f)
                 stroke_shape(pt->stroke,
+                             sg,
                              pt->stroke_w,
                              pt->cap,
                              pt->join,

@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["tools/web-sim/serve.mjs", "--port", "3333"],
       "port": 3333
+    },
+    {
+      "name": "thermostat-sim",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bridges/quickjs/js/cli.mjs", "dev", "demos/thermostat/App.jsx", "--port", "3334"],
+      "port": 3334
     }
   ]
 }

@@ -115,4 +115,51 @@ for (let a = -135; a <= 135; a += 30) {
 }
 check(true, 'imperative updateVector drag (geometry + dirtyRect + commit) did not crash');
 
+// <Svg source> — an imported .svg's baked artifact ({kind:'vector', ops, paints, width, height}) renders
+// and scales from its intrinsic size to the node's box (the path the .svg loader + scaleVectorArtifact feed).
+const importedIcon = { kind: 'vector', ops: [0, 0, 1, 10, 10, 2, 90, 90], paints: [0xfff4a261, 0, 4, 4, 0, 0, 0], width: 100, height: 100 };
+root.render(
+  <View style={{ width: 50, height: 50 }}>
+    <Svg
+      source={importedIcon}
+      style={{ position: 'absolute', left: 0, top: 0, width: 50, height: 50 }}
+      onLayout={(e) => (layouts.src = e.layout)}
+    />
+  </View>
+);
+check(layouts.src && layouts.src.width === 50 && layouts.src.height === 50, '<Svg source> mounted + laid out at its box (50x50)');
+// re-render with a different box — re-scales, must not crash
+root.render(
+  <View style={{ width: 120, height: 120 }}>
+    <Svg source={importedIcon} style={{ width: 120, height: 120 }} />
+  </View>
+);
+check(true, '<Svg source> re-scaled to a new box did not crash');
+
+// <Svg source> RASTER fallback (Track C): an imported .svg that used unsupported features was rasterized at
+// build time into a {kind:'raster', name, width, height} artifact. host-config renders it as an IMAGE node
+// (not a vector node), sized to the box. The asset name need not resolve to pixels here (no-op backend); we
+// assert it mounts + lays out at its box without crashing, proving the Svg→Image routing.
+const rasterIcon = { kind: 'raster', name: 'baked_icon', width: 100, height: 100 };
+root.render(
+  <View style={{ width: 64, height: 64 }}>
+    <Svg
+      source={rasterIcon}
+      style={{ position: 'absolute', left: 0, top: 0, width: 64, height: 64 }}
+      onLayout={(e) => (layouts.raster = e.layout)}
+    />
+  </View>
+);
+check(
+  layouts.raster && layouts.raster.width === 64 && layouts.raster.height === 64,
+  '<Svg source> raster fallback mounted as an image node and laid out at its box (64x64)'
+);
+// re-render at a new box — the raster Svg updates as an image, must not crash
+root.render(
+  <View style={{ width: 100, height: 100 }}>
+    <Svg source={rasterIcon} style={{ width: 100, height: 100 }} />
+  </View>
+);
+check(true, '<Svg source> raster fallback re-sized did not crash');
+
 report('svg');

@@ -21,6 +21,7 @@ idf_component_register(
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
         "${E}/rendering/vector.c"
+        "${E}/rendering/vector_store.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
         "${E}/animation/layout_anim.c"
@@ -49,8 +50,9 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_BORDER_AA=1
     ERUI_3D_TRANSFORMS=0
     ERUI_BILINEAR_SCALE=1
-    ERUI_GRADIENT=0
+    ERUI_GRADIENT=1
     ERUI_GRADIENT_RADIAL=0
+    ERUI_GRADIENT_CONIC=1
     ERUI_TRANSFORMS_TRANSLATE_ONLY=1
     ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=512
@@ -59,6 +61,15 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_SCRATCH_H=240
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=800
+)
+
+# Vector (SVG) pools — PRIVATE (internal to vector.c / vector_store.c; no public struct impact). The
+# per-node op-tape STORAGE pool (vector_store.o) is mapped to PSRAM by linker_psram.lf, so
+# ERUI_MAX_VECTOR_NODES can be raised well past the internal-RAM-bound default of 8 — handy for icon- or
+# vector-heavy screens. The hot rasterize scratch (vector.o) stays in internal DRAM, so its caps
+# (MAX_PTS / MAX_EDGES / MAX_ROW) keep the engine defaults.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    ERUI_MAX_VECTOR_NODES=32   # storage lives in PSRAM (see linker_psram.lf); raise as needed for many <Svg> nodes
 )
 
 # Performance overlay (FPS/CPU/memory, bottom-right). The actual drawing lives in this component's

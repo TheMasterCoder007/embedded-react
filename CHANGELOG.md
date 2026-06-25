@@ -11,6 +11,37 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Added
+
+- **Import an `.svg` file and render it as a live vector** — `import logo from './logo.svg'` then
+  `<Svg source={logo} />`. The SVG is baked to the engine's op-tape at build time, with every transform
+  (matrix/translate/rotate/scale/skew, nested) folded into absolute coordinates so the device needs no
+  transform support, and inlined into the bundle as compact numeric data. Works in both Flow A (QuickJS) and
+  Flow B (AOT). Supports `<path>`, `<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<polygon>`, `<polyline>`,
+  `<g>` nesting, `viewBox`, and presentation-attribute / inline-style / inheritance paint resolution.
+- **Vector gradients** — linear, radial, and conic gradients on both the fill and the stroke of vector
+  shapes (inline `<Svg>` children and imported `.svg` files), up to eight color stops, in both flows. Gradients
+  share a per-node table, so many shapes can reference few gradients. An elliptical radial (a non-square
+  `objectBoundingBox`, or a non-uniform / sheared `gradientTransform`) is approximated by its best-fit
+  circle. Gated by `ERUI_GRADIENT` / `ERUI_GRADIENT_RADIAL` plus the new `ERUI_GRADIENT_CONIC`.
+- **Automatic raster fallback for unsupported SVG features** — when an imported `.svg` uses features the
+  vector engine can't represent (`<text>`, `<mask>`, `<filter>`, `<use>`, `<pattern>`, a `filter`/`mask`/
+  `clip-path` on a shape, or a **dashed stroke**), the whole SVG is rasterized at build time (via resvg) and
+  rendered as a baked image instead of silently dropping the content. It is transparent to the app — the same
+  `<Svg source>` renders a live vector or a raster image — and works in Flow A (asset pack) and Flow B
+  (compiled into `assets.generated.c`). A build-time warning names the feature that triggered the fallback.
+  Adds the build-time dependency `@resvg/resvg-js` (it never reaches the device).
+- **Tunable vector pools + overflow diagnostics** — the `ERUI_VECTOR_*` pool sizes are exposed as CMake
+  cache variables (and IDF compile definitions), with debug-build diagnostics that warn — naming the macro to
+  raise — when an SVG overflows a pool instead of silently truncating. The per-node op-tape store lives in its
+  own translation unit so it can be mapped to PSRAM on boards that have it.
+
+### Changed
+
+- Vector conic-gradient rendering now builds a precomputed color LUT per shape and uses a polynomial `atan2`
+  approximation, replacing the per-pixel stop interpolation and the libm `atan2f` call — substantially faster
+  on the soft-float MCU path, with no visible change in output.
+
 ## [0.3.0] - 2026-06-16
 ### Added
 

@@ -24,6 +24,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/shadow.c
         rendering/transform.c
         rendering/vector.c
+        rendering/vector_store.c
 
         # text: UTF-8 + glyph blits
         text/text_renderer.c
@@ -82,6 +83,7 @@ option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRA
 option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
 option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
 option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
+option(ERUI_GRADIENT_CONIC "Enable conic/angular vector gradients (requires ERUI_GRADIENT)" OFF)
 option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
 
 # TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
@@ -97,6 +99,20 @@ set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts 
 set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
 set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
 set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
+
+# Vector (SVG / <Svg>) rasterizer static pools — see engine/README.md "Vector pools". Internal to
+# rendering/vector.c (they do NOT affect public struct layout), so they are PRIVATE below. Overflow is
+# silently truncated; build a debug config (or -DERUI_VECTOR_DIAGNOSTICS=1) to get a stderr warning that
+# names the pool to raise.
+set(ERUI_VECTOR_MAX_PTS "2048" CACHE STRING "Vector: flattened vertices per shape")
+set(ERUI_VECTOR_MAX_SUBPATHS "256" CACHE STRING "Vector: subpaths (contours/holes) per shape")
+set(ERUI_VECTOR_MAX_EDGES "2048" CACHE STRING "Vector: edges submitted to one rasterize pass")
+set(ERUI_VECTOR_MAX_ROW "1024" CACHE STRING "Vector: max vector-node width in px (coverage row)")
+set(ERUI_MAX_VECTOR_NODES "8" CACHE STRING "Vector: concurrent vector nodes holding geometry")
+set(ERUI_VECTOR_TAPE_MAX "1024" CACHE STRING "Vector: op-tape floats stored per node")
+set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per node")
+set(ERUI_VECTOR_GRADS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
+set(ERUI_VECTOR_GRAD_LUT "256" CACHE STRING "Vector: gradient colour-LUT entries (ERUI_GRADIENT; 1KB internal at 256)")
 
 add_library(embedded-react STATIC ${EMBEDDED_REACT_SOURCES})
 
@@ -122,6 +138,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_BILINEAR_SCALE=$<BOOL:${ERUI_BILINEAR_SCALE}>
         ERUI_GRADIENT=$<BOOL:${ERUI_GRADIENT}>
         ERUI_GRADIENT_RADIAL=$<BOOL:${ERUI_GRADIENT_RADIAL}>
+        ERUI_GRADIENT_CONIC=$<BOOL:${ERUI_GRADIENT_CONIC}>
         ERUI_ONSCREEN_KEYBOARD=$<BOOL:${ERUI_ONSCREEN_KEYBOARD}>
         ERUI_TRANSFORMS_${ERUI_TRANSFORMS}=1
         ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
@@ -136,6 +153,15 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_MAX_IMG_ROW_PIXELS=${ERUI_MAX_IMG_ROW_PIXELS}
         ERUI_MAX_ANIM_VALUES=${ERUI_MAX_ANIM_VALUES}
         ERUI_MAX_VALUE_BINDINGS=${ERUI_MAX_VALUE_BINDINGS}
+        ERUI_VECTOR_MAX_PTS=${ERUI_VECTOR_MAX_PTS}
+        ERUI_VECTOR_MAX_SUBPATHS=${ERUI_VECTOR_MAX_SUBPATHS}
+        ERUI_VECTOR_MAX_EDGES=${ERUI_VECTOR_MAX_EDGES}
+        ERUI_VECTOR_MAX_ROW=${ERUI_VECTOR_MAX_ROW}
+        ERUI_MAX_VECTOR_NODES=${ERUI_MAX_VECTOR_NODES}
+        ERUI_VECTOR_TAPE_MAX=${ERUI_VECTOR_TAPE_MAX}
+        ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
+        ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
+        ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
 )
 
 target_link_libraries(embedded-react PUBLIC m)

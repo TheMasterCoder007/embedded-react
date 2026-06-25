@@ -46,4 +46,24 @@
  */
 void er_gradient_render(const ERViewProps* vp, int x, int y, int w, int h);
 
+/**
+ * @brief Evaluates a gradient's color at parameter t. Stops are ascending by position; t is clamped to the
+ *        endpoint colors outside [stops[0], stops[count-1]]. Always available (independent of ERUI_GRADIENT)
+ *        so the vector rasterizer can reuse it.
+ *
+ * @param[in] stops  Stop array sorted by ascending position.
+ * @param[in] count  Number of stops.
+ * @param[in] t      Gradient parameter.
+ * @return Straight-alpha ARGB8888 color at t.
+ */
+uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t);
+
+/**
+ * @brief Converts a straight-alpha ARGB8888 color to premultiplied ARGB8888 (for er_blit_blend buffers).
+ *
+ * @param[in] sa  Straight-alpha ARGB8888 color.
+ * @return Premultiplied ARGB8888 equivalent.
+ */
+uint32_t er_gradient_premul(uint32_t sa);
+
 #endif /* EMBEDDED_REACT_GRADIENT_H */

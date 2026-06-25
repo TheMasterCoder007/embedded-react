@@ -22,16 +22,90 @@
 // shapes to path ops, bakes viewBox + <G> translate/scale into coordinates, and resolves inherited
 // paint. The opcodes below MUST stay in sync with er_scene.h.
 
-const VOP_SHAPE = 0;
-const VOP_MOVE = 1;
-const VOP_LINE = 2;
-const VOP_QUAD = 3;
-const VOP_CUBIC = 4;
-const VOP_ARC = 5;
-const VOP_CLOSE = 6;
+// Op-tape vocabulary — exported so the build-time SVG baker (assets/bake-svg.mjs) can reuse it without
+// duplicating the encoding (and without pulling its SVG-parser dependency into this runtime module).
+export const VOP_SHAPE = 0;
+export const VOP_MOVE = 1;
+export const VOP_LINE = 2;
+export const VOP_QUAD = 3;
+export const VOP_CUBIC = 4;
+export const VOP_ARC = 5;
+export const VOP_CLOSE = 6;
 
-const CAP = { butt: 0, round: 1, square: 2 };
-const JOIN = { miter: 0, round: 1, bevel: 2 };
+export const CAP = { butt: 0, round: 1, square: 2 };
+export const JOIN = { miter: 0, round: 1, bevel: 2 };
+
+// Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
+// fillGrad, strokeGrad]. fillGrad/strokeGrad are 1-based indices into the gradient table (0 = solid). MUST
+// match the bridge's VEC_PAINT_STRIDE (native_ui_bridge.c) and the AOT's paint emission.
+export const PAINT_STRIDE = 9;
+
+// Gradient table encoding — a gradient descriptor is { type, stops: [{color, offset}], ax, ay, bx, by, r }.
+// type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
+// [type, stopCount, (color, offset) × GRAD_MAX_STOPS, ax, ay, bx, by, r]; MUST match the bridge's
+// VEC_GRAD_STRIDE and the engine's ER_VGRAD_MAX_STOPS.
+export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VGRAD_MAX_STOPS (er_scene.h)
+export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 23
+export const GRAD_LINEAR = 1;
+export const GRAD_RADIAL = 2;
+export const GRAD_CONIC = 3;
+
+/** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
+function lerpArgb(c0, c1, t) {
+  const lp = (sh) => {
+    const a = (c0 >>> sh) & 0xff;
+    const b = (c1 >>> sh) & 0xff;
+    return Math.round(a + (b - a) * t) & 0xff;
+  };
+  return ((lp(24) << 24) | (lp(16) << 16) | (lp(8) << 8) | lp(0)) >>> 0;
+}
+
+/** Gradient color at position t (stops ascending by offset; clamps to the endpoint colors). */
+function evalStopsAt(stops, t) {
+  if (!stops.length) return 0;
+  if (t <= stops[0].offset) return stops[0].color >>> 0;
+  const last = stops[stops.length - 1];
+  if (t >= last.offset) return last.color >>> 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    if (t <= b.offset) {
+      const span = b.offset - a.offset;
+      return lerpArgb(a.color >>> 0, b.color >>> 0, span > 0 ? (t - a.offset) / span : 0);
+    }
+  }
+  return last.color >>> 0;
+}
+
+/** Reduces a stop list to at most `max` entries, resampling evenly across the stop range when it's over. */
+function capStops(stops, max) {
+  if (stops.length <= max) return stops;
+  const lo = stops[0].offset;
+  const hi = stops[stops.length - 1].offset;
+  const out = [];
+  for (let i = 0; i < max; i++) {
+    const t = max === 1 ? lo : lo + (hi - lo) * (i / (max - 1));
+    out.push({ color: evalStopsAt(stops, t), offset: t });
+  }
+  return out;
+}
+
+/** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient).
+ *  A gradient with more than GRAD_MAX_STOPS stops is resampled down (not truncated) so it still ramps right. */
+export function encodeVectorGradients(grads) {
+  const out = [];
+  if (!grads) return out;
+  for (const g of grads) {
+    const stops = capStops(g.stops || [], GRAD_MAX_STOPS);
+    out.push(g.type, stops.length);
+    for (let s = 0; s < GRAD_MAX_STOPS; s++) {
+      const st = stops[s];
+      out.push(st ? st.color >>> 0 : 0, st ? st.offset : 0);
+    }
+    out.push(g.ax || 0, g.ay || 0, g.bx || 0, g.by || 0, g.r || 0);
+  }
+  return out;
+}
 
 // Minimal named-color set (extend as needed); everything else goes through hex/rgb parsing.
 const NAMED = {
@@ -401,7 +475,7 @@ export function shapesToVector(shapes) {
   for (let si = 0; si < shapes.length; si++) {
     const s = shapes[si];
     const opStart = ops.length;
-    const paintIndex = paints.length / 7;
+    const paintIndex = paints.length / PAINT_STRIDE;
     ops.push(VOP_SHAPE, paintIndex);
     if (s.arc) {
       const cx = s.arc[0];
@@ -438,7 +512,9 @@ export function shapesToVector(shapes) {
       num(s.miter, 4),
       CAP[s.cap] ?? 0,
       JOIN[s.join] ?? 0,
-      s.fillRule === 'evenodd' ? 1 : 0
+      s.fillRule === 'evenodd' ? 1 : 0,
+      0, // fill_grad
+      0 // stroke_grad — the imperative path has no gradients
     );
   }
   return { ops, paints };
@@ -462,7 +538,7 @@ function mergePaint(base, props) {
   return out;
 }
 
-/** Maps the resolved paint to the 7-number paint-table record [fill,stroke,w,miter,cap,join,rule]. */
+/** Maps the resolved paint to the PAINT_STRIDE-number record [fill,stroke,w,miter,cap,join,rule,fillGrad]. */
 function paintRecord(paint, scale) {
   return [
     parseColor(paint.fill),
@@ -472,6 +548,8 @@ function paintRecord(paint, scale) {
     CAP[paint.strokeLinecap] ?? 0,
     JOIN[paint.strokeLinejoin] ?? 0,
     paint.fillRule === 'evenodd' ? 1 : 0,
+    0, // fill_grad: inline <Svg> children don't reference gradients (baked <Svg source> does)
+    0, // stroke_grad
   ];
 }
 
@@ -552,7 +630,7 @@ export function flattenSvg(props) {
         shapeOps = arcOpsCW(num(p.cx, 0), num(p.cy, 0), num(p.r, 0), num(p.startAngle, 0), num(p.endAngle, 0));
       if (!shapeOps || shapeOps.length === 0) continue;
 
-      const paintIndex = paints.length / 7;
+      const paintIndex = paints.length / PAINT_STRIDE;
       const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
       paints.push(...paintRecord(merged, scale));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
@@ -561,4 +639,98 @@ export function flattenSvg(props) {
 
   walk(props.children, PAINT_DEFAULT, root);
   return { ops, paints };
+}
+
+// --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
+
+/** Scales a full op-tape (with SHAPE headers) by (sx, sy): coordinates only, paint indices untouched. */
+function scaleTape(ops, sx, sy) {
+  const out = [];
+  let i = 0;
+  while (i < ops.length) {
+    const op = ops[i++];
+    out.push(op);
+    if (op === VOP_SHAPE) out.push(ops[i++]); // paint index — copy, do not scale
+    else if (op === VOP_MOVE || op === VOP_LINE) out.push(ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_QUAD) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_CUBIC)
+      out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_ARC) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++], ops[i++], ops[i++]);
+    // VOP_CLOSE has no args.
+  }
+  return out;
+}
+
+/**
+ * Scales an imported vector artifact ({ops, paints, width, height} from the .svg baker) from its intrinsic
+ * size to a target box, also scaling stroke widths. Returns the original arrays untouched when no scaling
+ * is needed (the common <Svg source> case where the box equals the intrinsic size).
+ */
+export function scaleVectorArtifact(art, targetW, targetH) {
+  const sx = art.width ? targetW / art.width : 1;
+  const sy = art.height ? targetH / art.height : 1;
+  const grads = art.gradients || [];
+  if (sx === 1 && sy === 1) return { ops: art.ops, paints: art.paints, gradients: grads };
+  const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width / radius scale
+  const paints = art.paints.slice();
+  for (let k = 2; k < paints.length; k += PAINT_STRIDE) paints[k] *= sw; // index 2 of each record = strokeWidth
+  // Gradient geometry lives in the same coordinate space as the path, so it scales with it (radius uniformly).
+  const gradients = grads.map((g) => ({
+    ...g,
+    ax: (g.ax || 0) * sx,
+    ay: (g.ay || 0) * sy,
+    bx: (g.bx || 0) * sx,
+    by: (g.by || 0) * sy,
+    // Radial r is a length (scales); conic r is a start angle (invariant under uniform scale) — don't scale it.
+    r: g.type === GRAD_CONIC ? g.r || 0 : (g.r || 0) * sw,
+  }));
+  return { ops: scaleTape(art.ops, sx, sy), paints, gradients };
+}
+
+// --- Bridge-cap diagnostics ----------------------------------------------------------------------
+
+let _warnedVecOps = false;
+let _warnedVecPaints = false;
+let _warnedVecGrads = false;
+
+/**
+ * Warns (once per kind) when an <Svg>'s compiled geometry exceeds the native bridge's caps and will be
+ * SILENTLY TRUNCATED. The bridge (native_ui_bridge.c) copies the op-tape into a fixed buffer and caps the
+ * paint table; past the cap, geometry/shapes are dropped. The engine has its own pool diagnostics (on
+ * stderr, debug builds) for what happens further in; this surfaces the JS->engine boundary truncation in
+ * the developer's console. Pass the live caps from NativeUI.maxVectorOps / maxVectorPaints / maxVectorGrads
+ * (undefined on an older bridge => no-op).
+ *
+ * @param {number} opsLen     Op-tape length (flat float count).
+ * @param {number} paintsLen  Paint-table length (PAINT_STRIDE numbers per shape).
+ * @param {number} maxOps     Bridge op-tape cap (NativeUI.maxVectorOps).
+ * @param {number} maxPaints  Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
+ * @param {number} [gradsLen] Gradient count (number of gradients referenced by the shapes).
+ * @param {number} [maxGrads] Bridge gradient cap (NativeUI.maxVectorGrads).
+ */
+export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints, gradsLen, maxGrads) {
+  if (!_warnedVecOps && maxOps > 0 && opsLen > maxOps) {
+    _warnedVecOps = true;
+    console.warn(
+      `embedded-react: an <Svg> op-tape is too long (${opsLen} > ${maxOps} floats) and will be truncated — ` +
+        `the shape gets cut off. Simplify the path (fewer/coarser curves) or split it across <Svg> nodes; ` +
+        `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`
+    );
+  }
+  const shapes = (paintsLen / PAINT_STRIDE) | 0;
+  if (!_warnedVecPaints && maxPaints > 0 && shapes > maxPaints) {
+    _warnedVecPaints = true;
+    console.warn(
+      `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
+        `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`
+    );
+  }
+  if (!_warnedVecGrads && maxGrads > 0 && gradsLen > maxGrads) {
+    _warnedVecGrads = true;
+    console.warn(
+      `embedded-react: an <Svg> references ${gradsLen} gradients (> ${maxGrads}) — the extra gradients are ` +
+        `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
+        `shapes; raising the limit needs VEC_BRIDGE_MAX_GRADS + ERUI_VECTOR_GRADS_MAX.`
+    );
+  }
 }

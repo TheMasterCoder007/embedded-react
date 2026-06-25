@@ -166,12 +166,16 @@ function resolveAppComponent(cwd, explicit) {
 
 /** Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. */
 async function buildAot(cwd, explicit, outDir) {
-  const { compileSource } = await import('./aot/compile.mjs');
+  const { compileSource, bakeSvgArtifacts } = await import('./aot/compile.mjs');
   const { bakeAssets } = await import('./assets/index.mjs');
   const appPath = resolveAppComponent(cwd, explicit);
+  const appDir = dirname(appPath);
+  const src = readFileSync(appPath, 'utf8');
   let result;
   try {
-    result = compileSource(readFileSync(appPath, 'utf8'), 'app', { filename: appPath });
+    // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
+    const svgArtifacts = await bakeSvgArtifacts(src, appDir);
+    result = compileSource(src, 'app', { filename: appPath, svgArtifacts });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);
@@ -179,7 +183,6 @@ async function buildAot(cwd, explicit, outDir) {
   writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
   writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
 
-  const appDir = dirname(appPath);
   const imageJobs = result.images.map((im) => ({ name: im.name, path: resolve(appDir, im.importPath) }));
   for (const j of imageJobs) {
     if (!existsSync(j.path)) {
@@ -199,6 +202,7 @@ async function buildContainer(cwd, explicit, outDir) {
   const { bakeFont } = await import('./assets/bake-font.mjs');
   const { emitAssetPack } = await import('./assets/emit-pack.mjs');
   const { emitContainer } = await import('./assets/emit-container.mjs');
+  const { registerSvgVectorLoader } = await import('./assets/svg-loader.mjs');
   const { compileToBytecode } = await import('./qjsc-wasm.mjs');
 
   const simDir = simDirOrExit();
@@ -220,6 +224,7 @@ async function buildContainer(cwd, explicit, outDir) {
         fonts.set(f, a.path);
         return { contents: `module.exports = ${JSON.stringify(f)};`, loader: 'js' };
       });
+      registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
     },
   };
   // The bundle is an intermediate (it becomes bytecode in the .erpkg) — keep it out of the user's outDir

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="95 95 410 410" width="410" height="410">
+
+  <defs>
+    <!-- Conic gradient: one angular sweep around the dial centre. `<conicGradient>` is an embedded-react
+         extension (SVG has no conic), so the stroke carries a fallback solid colour after the url() —
+         standard viewers (browsers, Inkscape) render a flat arc, embedded-react renders the real sweep. The
+         arc spans 270° starting at -135° (bottom-left), so the colour stops occupy t=0..0.75 of the full
+         circle (the bottom 90° gap is unstroked). -->
+    <conicGradient id="ghost" gradientUnits="userSpaceOnUse" cx="300" cy="300" from="-135">
+      <stop offset="0"     stop-color="rgb(57,189,248)"/>
+      <stop offset="0.125" stop-color="rgb(98,203,250)"/>
+      <stop offset="0.25"  stop-color="rgb(145,217,252)"/>
+      <stop offset="0.375" stop-color="rgb(224,230,215)"/>
+      <stop offset="0.5"   stop-color="rgb(253,194,86)"/>
+      <stop offset="0.625" stop-color="rgb(251,139,52)"/>
+      <stop offset="0.75"  stop-color="rgb(240,71,65)"/>
+    </conicGradient>
+  </defs>
+
+  <!-- The ONLY shape: the main arc, conic-stroked. Everything else (dark track, shimmer, inner rings,
+       shadow, dashed ring) was removed to minimise per-frame rasterization cost on-device — this leaves a
+       single conic-stroked path. -->
+  <path d="M169.19,430.81 A185,185 0 1 1 430.81,430.81" fill="none" stroke="url(#ghost) #8ad0f0" stroke-width="30" stroke-linecap="butt"/>
+
+</svg>

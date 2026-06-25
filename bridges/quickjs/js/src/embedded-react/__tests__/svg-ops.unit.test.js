@@ -14,8 +14,20 @@
  * limitations under the License.
  */
 
-import { describe, it, expect } from 'vitest';
-import { parseColor, parsePath, flattenSvg, shapesToVector } from '../svg-ops.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  parseColor,
+  parsePath,
+  flattenSvg,
+  shapesToVector,
+  scaleVectorArtifact,
+  encodeVectorGradients,
+  warnVectorCaps,
+  GRAD_STRIDE,
+  GRAD_MAX_STOPS,
+  GRAD_LINEAR,
+  PAINT_STRIDE,
+} from '../svg-ops.js';
 
 // Opcodes mirror er_scene.h.
 const SHAPE = 0;
@@ -100,7 +112,7 @@ describe('parsePath', () => {
 });
 
 describe('flattenSvg', () => {
-  it('emits one SHAPE per shape with a 7-field paint each', () => {
+  it('emits one SHAPE per shape with a 9-field paint each', () => {
     const props = {
       children: [
         el('Path', { d: 'M0 0 L10 0', stroke: '#4cc9f0', strokeWidth: 3, strokeLinecap: 'round', fill: 'none' }),
@@ -108,16 +120,20 @@ describe('flattenSvg', () => {
       ],
     };
     const { ops, paints } = flattenSvg(props);
-    // Two shapes => two paint records (14 numbers).
-    expect(paints.length).toBe(14);
-    // Path paint: fill none(0), stroke blue, width 3, cap round(1).
+    // Two shapes => two 9-field paint records (18 numbers).
+    expect(paints.length).toBe(18);
+    // Path paint: fill none(0), stroke blue, width 3, cap round(1), no gradients(0).
     expect(paints[0]).toBe(0); // fill
     expect(paints[1] >>> 0).toBe(0xff4cc9f0); // stroke
     expect(paints[2]).toBe(3); // width
     expect(paints[4]).toBe(1); // round cap
-    // Circle paint: fill set, stroke none.
-    expect(paints[7] >>> 0).toBe(0xff16202f);
-    expect(paints[8]).toBe(0);
+    expect(paints[7]).toBe(0); // fill_grad
+    expect(paints[8]).toBe(0); // stroke_grad
+    // Circle paint (record 2 starts at index 9): fill set, stroke none.
+    expect(paints[9] >>> 0).toBe(0xff16202f);
+    expect(paints[10]).toBe(0);
+    expect(paints[16]).toBe(0); // fill_grad
+    expect(paints[17]).toBe(0); // stroke_grad
     // Tape starts with a SHAPE op and contains two of them.
     expect(ops[0]).toBe(SHAPE);
     expect(ops.filter((_, i) => ops[i - 1] === undefined)).toBeTruthy();
@@ -173,7 +189,7 @@ describe('shapesToVector (imperative)', () => {
     expect(ops[5]).toBe(ARC);
     expect(ops.slice(6, 9)).toEqual([100, 100, 80]); // cx, cy, r
     expect(ops[ops.length - 1]).toBe(0); // ccw flag
-    expect(paints.length).toBe(7);
+    expect(paints.length).toBe(9);
     expect(paints[0]).toBe(0); // fill none
     expect(paints[1] >>> 0).toBe(0xfff4a261); // stroke
     expect(paints[2]).toBe(14); // width
@@ -204,7 +220,7 @@ describe('shapesToVector (imperative)', () => {
       { line: [0, 0, 1, 1], stroke: '#000' },
       { circle: [0, 0, 1], fill: '#f00' },
     ]);
-    expect(paints.length).toBe(21); // 3 * 7
+    expect(paints.length).toBe(27); // 3 * 9
     expect(shapeIndices(ops)).toEqual([0, 1, 2]);
   });
 
@@ -223,7 +239,7 @@ describe('shapesToVector (imperative)', () => {
     const { ops, paints } = shapesToVector([{ foo: 1 }, { rect: [0, 0, 2, 2], fill: '#fff' }]);
     expect(ops[0]).toBe(SHAPE);
     expect(ops[1]).toBe(0); // the rect's paint index is 0 — the unknown shape emitted nothing
-    expect(paints.length).toBe(7);
+    expect(paints.length).toBe(9);
   });
 
   it('reuses its output buffers but resets them each call (no stale leakage)', () => {
@@ -231,5 +247,89 @@ describe('shapesToVector (imperative)', () => {
     const b = shapesToVector([{ line: [0, 0, 1, 1], stroke: '#000' }]);
     expect(b.ops).toEqual([SHAPE, 0, MOVE, 0, 0, LINE, 1, 1]); // no trailing ops from the longer prior call
     expect(b.ops.length).toBeLessThan(lenA);
+  });
+});
+
+describe('scaleVectorArtifact (<Svg source> box scaling)', () => {
+  it('returns the artifact arrays untouched when the box equals the intrinsic size', () => {
+    const art = { kind: 'vector', ops: [SHAPE, 0, MOVE, 1, 2], paints: [0xff000000, 0, 3, 4, 0, 0, 0], width: 10, height: 10 };
+    const r = scaleVectorArtifact(art, 10, 10);
+    expect(r.ops).toBe(art.ops); // same reference — no needless copy
+    expect(r.paints).toBe(art.paints);
+  });
+
+  it('scales coordinates + stroke width to the target box, leaving paint indices + colors alone', () => {
+    const art = { kind: 'vector', ops: [SHAPE, 0, MOVE, 5, 5, LINE, 10, 0], paints: [0xff112233, 0, 4, 4, 0, 0, 0], width: 10, height: 10 };
+    const r = scaleVectorArtifact(art, 20, 20); // 2x
+    expect(r.ops).toEqual([SHAPE, 0, MOVE, 10, 10, LINE, 20, 0]); // coords doubled; SHAPE's paint index (0) untouched
+    expect(r.paints[2]).toBe(8); // strokeWidth 4 -> 8
+    expect(r.paints[0]).toBe(0xff112233); // fill color untouched
+  });
+});
+
+describe('encodeVectorGradients', () => {
+  it('encodes a gradient to GRAD_STRIDE floats with its stops + geometry', () => {
+    const out = encodeVectorGradients([
+      {
+        type: GRAD_LINEAR,
+        stops: [
+          { color: 0xffff0000, offset: 0 },
+          { color: 0xff0000ff, offset: 1 },
+        ],
+        ax: 1,
+        ay: 2,
+        bx: 3,
+        by: 4,
+        r: 0,
+      },
+    ]);
+    expect(out.length).toBe(GRAD_STRIDE);
+    expect(out[0]).toBe(GRAD_LINEAR); // type
+    expect(out[1]).toBe(2); // stop_count
+    expect(out[2] >>> 0).toBe(0xffff0000); // stop0 color
+    expect(out[3]).toBe(0); // stop0 offset
+    expect(out[4] >>> 0).toBe(0xff0000ff); // stop1 color
+    const geo = 2 + GRAD_MAX_STOPS * 2; // geometry follows the (padded) stop slots
+    expect([out[geo], out[geo + 1], out[geo + 2], out[geo + 3]]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('resamples a gradient with more than GRAD_MAX_STOPS stops down to the cap (no truncation)', () => {
+    const N = GRAD_MAX_STOPS + 4;
+    const stops = [];
+    for (let i = 0; i < N; i++) {
+      const color = i === 0 ? 0xffff0000 : i === N - 1 ? 0xff0000ff : 0xff00ff00;
+      stops.push({ color, offset: i / (N - 1) });
+    }
+    const out = encodeVectorGradients([{ type: GRAD_LINEAR, stops, ax: 0, ay: 0, bx: 0, by: 0, r: 0 }]);
+    expect(out[1]).toBe(GRAD_MAX_STOPS); // capped, not truncated
+    // Endpoints preserved by the even resample.
+    expect(out[2] >>> 0).toBe(0xffff0000); // first stop = first colour
+    const last = 2 + (GRAD_MAX_STOPS - 1) * 2;
+    expect(out[last] >>> 0).toBe(0xff0000ff); // last resampled stop = last colour
+    expect(out[3]).toBe(0); // offsets span [0,1] ascending
+    expect(out[last + 1]).toBe(1);
+  });
+});
+
+describe('warnVectorCaps — gradient cap', () => {
+  it('warns once when the gradient count exceeds the bridge cap (shapes would fall back to solid)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // ops/paints within cap, gradients OVER cap → only the gradient warning fires.
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 20, 16);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/20 gradients \(> 16\)/);
+    expect(String(warn.mock.calls[0][0])).toMatch(/solid fills\/strokes/);
+    // warn-once: a second over-cap call must not warn again
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 30, 16);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('does not warn for gradients within cap, or when maxGrads is absent (older bridge)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 8, 16); // within cap
+    warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 99); // no maxGrads → no-op
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
