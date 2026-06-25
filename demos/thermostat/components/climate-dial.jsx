@@ -46,13 +46,10 @@ const statusFor = (mode, value, current) => {
 };
 
 const KNOB = [
-  { r: 36, fill: '#c0e6f733' },
-  { r: 22, fill: '#121212' },
-  { r: 19, fill: '#c0e6f7' },
-  { r: 21, fill: 'none', stroke: '#ffffff', sw: 2.5 },
-  { r: 5, fill: '#fffffff2' },
+  { r: 20, fill: '#ffffff' }, // white knob body
+  { r: 13, fill: 'none', stroke: '#121212', sw: 3 }, // inner black ring
 ];
-const KNOB_R_MAX = 36; // largest circle radius (authoring units) — sizes the imperative repaint box
+const KNOB_R_MAX = 20; // largest circle radius (authoring units) — sizes the imperative repaint box
 
 // ----------------------------------------------------------------------------------------------------
 // The arc dial — the rich Flow A (interactive) dial. The face is the imported conic SVG; a drag moves the
