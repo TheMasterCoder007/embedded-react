@@ -2504,10 +2504,10 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
  * @brief NativeUI.setVectorOps(handle, ops, paints, gradients, dirtyRect) — sets the path geometry on an Svg.
  *
  * @p ops is a flat number array (the op-tape; see the ER_VOP_* contract). @p paints is a flat number array
- * of VEC_PAINT_STRIDE (8) fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule,
- * fillGrad] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGrad is a 1-based
- * index into @p gradients (0 = solid). @p gradients is an optional flat array of VEC_GRAD_STRIDE fields per
- * gradient. A missing/empty ops array clears the node's geometry.
+ * of VEC_PAINT_STRIDE (9) fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule,
+ * fillGrad, strokeGrad] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGrad /
+ * strokeGrad are 1-based indices into @p gradients (0 = solid). @p gradients is an optional flat array of
+ * VEC_GRAD_STRIDE fields per gradient. A missing/empty ops array clears the node's geometry.
  *
  * @return JS_UNDEFINED.
  */

@@ -278,7 +278,7 @@ export function App() {
       <View style={styles.card}>
         <Header />
         <Dial value={value} min={MIN} max={MAX} current={CURRENT} mode={mode} size={wide ? "80%" : "50%"} sz={SZ} theme={theme} onValue={setValue} />
-        <View style={{width: '100%', height: 'fit-content', alignItems: 'center'}}>
+        <View style={{ width: '100%', alignItems: 'center' }}>
           <View style={styles.stepRow}>
             <StepButton label="−" onPress={dec} />
             <StepButton label="+" onPress={inc} />

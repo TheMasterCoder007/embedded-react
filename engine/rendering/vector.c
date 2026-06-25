@@ -417,10 +417,9 @@ static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
 static const ERVectorGradient*
 resolve_grad(int idx1, const ERVectorGradient* grads, int n_grads, int px, int py, ERVectorGradient* buf)
 {
-    if (idx1 <= 0 || idx1 > n_grads)
+    if (idx1 <= 0 || idx1 > n_grads || !grads)
         return NULL;
     *buf = grads[idx1 - 1];
-    if (!vgrad_supported(buf->type) || buf->stop_count < 2)
         return NULL;
     buf->ax += (float)px; /* r is a length and is NOT offset */
     buf->ay += (float)py;

@@ -48,8 +48,7 @@ add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/
 
 # Match the engine's raised vector caps on the bridge side (it copies the JS op-tape into a fixed buffer
 # before the engine, so its caps must be >= the engine's or it truncates large SVGs first).
-target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024)
-
+target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024 VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
 # The shared desktop host core lives with the demo; the simulator reuses it (sim_main.c is just the
 # watch + reload loop over it). Unlike the demo/device, the simulator does NOT compile assets in: it
 # loads them at runtime from a binary pack (asset_pack.c) so images/fonts hot-reload (Phase 2b).

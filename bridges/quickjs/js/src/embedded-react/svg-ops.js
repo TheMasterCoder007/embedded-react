@@ -43,7 +43,7 @@ export const PAINT_STRIDE = 9;
 // Gradient table encoding — a gradient descriptor is { type, stops: [{color, offset}], ax, ay, bx, by, r }.
 // type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
 // [type, stopCount, (color, offset) × GRAD_MAX_STOPS, ax, ay, bx, by, r]; MUST match the bridge's
-// VEC_GRAD_STRIDE and the engine's ER_GRADIENT_MAX_STOPS.
+// VEC_GRAD_STRIDE and the engine's ER_VGRAD_MAX_STOPS.
 export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VGRAD_MAX_STOPS (er_scene.h)
 export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 23
 export const GRAD_LINEAR = 1;
@@ -701,7 +701,7 @@ let _warnedVecPaints = false;
  * (undefined on an older bridge => no-op).
  *
  * @param {number} opsLen     Op-tape length (flat float count).
- * @param {number} paintsLen  Paint-table length (7 numbers per shape).
+ * @param {number} paintsLen  Paint-table length (PAINT_STRIDE numbers per shape).
  * @param {number} maxOps     Bridge op-tape cap (NativeUI.maxVectorOps).
  * @param {number} maxPaints  Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
  */

@@ -46,8 +46,7 @@ add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/
 
 # Match the engine's raised vector caps on the bridge side (it copies the JS op-tape into a fixed buffer
 # before handing it to the engine, so its caps must be >= the engine's or it truncates large SVGs first).
-target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024)
-
+target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024 VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
 # The wasm module: software compositor + web present layer/ABI, linked against the bridge. The target is
 # named `websim` (the engine library already owns the `embedded-react` target name) but emits
 # embedded-react.{js,wasm} via OUTPUT_NAME.
