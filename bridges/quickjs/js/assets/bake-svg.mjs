@@ -182,6 +182,7 @@ const PAINT_KEYS = [
   'opacity',
   'fill-opacity',
   'stroke-opacity',
+  'stroke-dasharray',
 ];
 const DEFAULT_PAINT = {
   fill: 'black',
@@ -406,6 +407,12 @@ export async function svgToVector(svgString) {
       for (const fk of ['filter', 'mask', 'clip-path']) {
         if (attrs[fk] && attrs[fk] !== 'none') dropped.add(fk);
       }
+      // A dashed stroke can't be represented in the op-tape (the stroke is baked solid). Flag it so the SVG
+      // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
+      // by a positive pattern, so a stray stroke-dasharray on an unstroked/zero-width shape isn't penalized.
+      const dash = cp['stroke-dasharray'];
+      const stroked = cp.stroke && cp.stroke !== 'none' && num(cp['stroke-width'], 1) > 0;
+      if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash)) dropped.add('stroke-dasharray');
 
       const shapeOps = parsePath(d);
       if (!shapeOps.length) continue;

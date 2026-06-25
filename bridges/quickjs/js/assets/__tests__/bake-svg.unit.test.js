@@ -189,4 +189,23 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>');
     expect(a.dropped).toContain('filter');
   });
+
+  it('flags a dashed stroke (op-tape bakes solid → raster fallback renders the dashes)', async () => {
+    const a = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="2 1"/></svg>');
+    expect(a.dropped).toContain('stroke-dasharray');
+    // inherited from a <g> too
+    const g = await svgToVector('<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>');
+    expect(g.dropped).toContain('stroke-dasharray');
+  });
+
+  it('does NOT flag stroke-dasharray when there is no visible/positive dash', async () => {
+    // no stroke → dash is inert
+    const noStroke = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="blue" stroke-dasharray="2 1"/></svg>');
+    expect(noStroke.dropped).toEqual([]);
+    // dasharray="none" and an all-zero pattern are both solid
+    const none = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="none"/></svg>');
+    expect(none.dropped).toEqual([]);
+    const zero = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="0 0"/></svg>');
+    expect(zero.dropped).toEqual([]);
+  });
 });
