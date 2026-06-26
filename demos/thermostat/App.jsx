@@ -14,8 +14,16 @@
  * limitations under the License.
  */
 
-import { useState, useRef, useCallback, memo } from 'react';
-import { View, Text, Pressable, Image, StyleSheet, Svg, Circle } from 'embedded-react';
+import {useState, useRef, useCallback, memo} from 'react';
+import {
+  View,
+  Text,
+  Pressable,
+  Image,
+  StyleSheet,
+  Svg,
+  Circle,
+} from 'embedded-react';
 // Weather icons — the bundler's asset plugin turns each import into its baked asset name (the PNG's
 // basename), so <Image source={wxSun}> resolves to the "wx_sun" buffer registered at boot. `npm run
 // build` decodes the PNGs and emits them into dist/assets.generated.c (er_register_assets()).
@@ -28,7 +36,7 @@ import wxRain from './assets/wx_rain.png';
 import climateFace from './assets/climate-face.svg';
 // The rich Flow A dial is a self-contained component — App passes it the value, range, size, font sizes,
 // and theme as props (so it imports nothing back from here). The compact (AOT) branch draws its own dial.
-import { Dial } from './components/climate-dial.jsx';
+import {Dial} from './components/climate-dial.jsx';
 
 // Thermostat arc dial — a climate control built around a draggable 270° arc (a physical-thermostat
 // metaphor). Dragging the handle around the arc sets the target temperature.
@@ -51,10 +59,10 @@ const CURRENT = 68.7; // live room reading °F (static in this demo)
 const DRAG_JITTER = 0.5;
 
 const MODES = [
-  { key: 'heat', label: 'Heat', color: '#f4a261' }, // warning / amber
-  { key: 'cool', label: 'Cool', color: '#4cc9f0' }, // info / blue
-  { key: 'auto', label: 'Auto', color: '#2a9d8f' }, // success / green
-  { key: 'off', label: 'Off', color: '#7d8896' }, // muted / gray
+  {key: 'heat', label: 'Heat', color: '#f4a261'}, // warning / amber
+  {key: 'cool', label: 'Cool', color: '#4cc9f0'}, // info / blue
+  {key: 'auto', label: 'Auto', color: '#2a9d8f'}, // success / green
+  {key: 'off', label: 'Off', color: '#7d8896'}, // muted / gray
 ];
 
 // Color tokens — centralized so the whole UI is themeable (spec §6: drive colors from tokens, never
@@ -93,8 +101,28 @@ const wide = !compact && SW >= 760;
 
 // Font sizes snap to the engine's baked Inter sizes (10/12/16/20/24/32/48), so pick from that set.
 const SZ = compact
-  ? { R: 72, stroke: 12, handle: 10, big: 32, title: 16, sub: 12, label: 10, metric: 16, mode: 12 }
-  : { R: 106, stroke: 14, handle: 12, big: 48, title: 24, sub: 16, label: 12, metric: 24, mode: 16 };
+  ? {
+      R: 72,
+      stroke: 12,
+      handle: 10,
+      big: 32,
+      title: 16,
+      sub: 12,
+      label: 10,
+      metric: 16,
+      mode: 12,
+    }
+  : {
+      R: 106,
+      stroke: 14,
+      handle: 12,
+      big: 48,
+      title: 24,
+      sub: 16,
+      label: 12,
+      metric: 24,
+      mode: 16,
+    };
 
 const PAD = compact ? 10 : 20;
 const GAP = compact ? 8 : 16;
@@ -113,7 +141,7 @@ const KNOB_C = DIAL_C + pad;
 // Small building blocks — all memoised so a value drag (which re-renders App) never reconciles them.
 // Their callbacks are stabilized with useCallback in App so the memo comparison holds.
 // ----------------------------------------------------------------------------------------------------
-const StepButton = memo(function StepButton({ label, onPress }) {
+const StepButton = memo(function StepButton({label, onPress}) {
   return (
     <Pressable onPress={onPress} style={styles.step}>
       <Text style={styles.stepText}>{label}</Text>
@@ -121,22 +149,27 @@ const StepButton = memo(function StepButton({ label, onPress }) {
   );
 });
 
-const ModeButton = memo(function ModeButton({ item, active, onSelect }) {
+const ModeButton = memo(function ModeButton({item, active, onSelect}) {
   // Active = filled secondary bg + stronger text; inactive = outline. Color lives in the arc, NOT the
   // active button (spec §5). Only the two buttons whose `active` flips re-render on a mode switch.
   return (
-    <Pressable onPress={() => onSelect(item.key)} style={[styles.mode, active ? styles.modeActive : styles.modeIdle]}>
-      <Text style={{ color: active ? theme.text : theme.subtext, fontSize: SZ.mode }}>{item.label}</Text>
+    <Pressable
+      onPress={() => onSelect(item.key)}
+      style={[styles.mode, active ? styles.modeActive : styles.modeIdle]}>
+      <Text
+        style={{color: active ? theme.text : theme.subtext, fontSize: SZ.mode}}>
+        {item.label}
+      </Text>
     </Pressable>
   );
 });
 
 // 4-day outlook — each day's icon is an imported asset (resolved to its baked name by the bundler).
 const FORECAST = [
-  { day: 'Thu', icon: wxSun, hi: 58 },
-  { day: 'Fri', icon: wxCloud, hi: 52 },
-  { day: 'Sat', icon: wxRain, hi: 49 },
-  { day: 'Sun', icon: wxPartly, hi: 55 },
+  {day: 'Thu', icon: wxSun, hi: 58},
+  {day: 'Fri', icon: wxCloud, hi: 52},
+  {day: 'Sat', icon: wxRain, hi: 49},
+  {day: 'Sun', icon: wxPartly, hi: 55},
 ];
 
 // Weather panel — the demo's showcase for baked <Image> assets. Static content; memoised so the dial
@@ -148,21 +181,42 @@ const WeatherPanel = memo(function WeatherPanel() {
 
       {/* Current conditions: a big icon next to the reading. */}
       <View style={styles.wxNow}>
-        <Image source={wxPartly} resizeMode="contain" style={styles.wxNowIcon} />
+        <Image
+          source={wxPartly}
+          resizeMode="contain"
+          style={styles.wxNowIcon}
+        />
         <View style={styles.wxNowText}>
           <Text style={styles.wxNowTemp}>54°</Text>
-          <Text style={{ color: theme.subtext, fontSize: SZ.sub }}>Partly cloudy</Text>
-          <Text style={{ color: theme.subtext, fontSize: SZ.label }}>Humidity 44%</Text>
+          <Text style={{color: theme.subtext, fontSize: SZ.sub}}>
+            Partly cloudy
+          </Text>
+          <Text style={{color: theme.subtext, fontSize: SZ.label}}>
+            Humidity 44%
+          </Text>
         </View>
       </View>
 
       {/* 4-day forecast: a small baked icon per day. */}
       <View style={styles.wxForecast}>
-        {FORECAST.map((f) => (
+        {FORECAST.map(f => (
           <View key={f.day} style={styles.wxDay}>
-            <Text style={{ color: theme.subtext, fontSize: SZ.label }}>{f.day}</Text>
-            <Image source={f.icon} resizeMode="contain" style={styles.wxDayIcon} />
-            <Text style={{ color: theme.text, fontSize: SZ.metric, fontWeight: '500' }}>{f.hi}°</Text>
+            <Text style={{color: theme.subtext, fontSize: SZ.label}}>
+              {f.day}
+            </Text>
+            <Image
+              source={f.icon}
+              resizeMode="contain"
+              style={styles.wxDayIcon}
+            />
+            <Text
+              style={{
+                color: theme.text,
+                fontSize: SZ.metric,
+                fontWeight: '500',
+              }}>
+              {f.hi}°
+            </Text>
           </View>
         ))}
       </View>
@@ -175,7 +229,10 @@ const Header = memo(function Header() {
   return (
     <View style={styles.header}>
       <View>
-        <Text style={{ color: theme.text, fontSize: SZ.title, fontWeight: '500' }}>Thermostat</Text>
+        <Text
+          style={{color: theme.text, fontSize: SZ.title, fontWeight: '500'}}>
+          Thermostat
+        </Text>
       </View>
     </View>
   );
@@ -194,13 +251,17 @@ export function App() {
   // (The wide/Flow A layout uses the richer <Dial> with imperative redraw; these refs go unused there.)
   const cx = useRef(0);
   const cy = useRef(0);
-  const onDrag = useCallback((e) => {
-    const ang = (Math.atan2(e.x - cx.current, cy.current - e.y) * 180) / Math.PI; // clockwise from 12 o'clock
-    const clamped = ang < A_START ? A_START : ang > -A_START ? -A_START : ang;     // snap the bottom 90° gap
-    const v = MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN);                   // CONTINUOUS (sub-degree) target
-    const target = v < MIN ? MIN : v > MAX ? MAX : v;
-    if (Math.abs(target - value) > DRAG_JITTER) setValue(target); // deadband: ignore held-finger panel jitter
-  }, [value]);
+  const onDrag = useCallback(
+    e => {
+      const ang =
+        (Math.atan2(e.x - cx.current, cy.current - e.y) * 180) / Math.PI; // clockwise from 12 o'clock
+      const clamped = ang < A_START ? A_START : ang > -A_START ? -A_START : ang; // snap the bottom 90° gap
+      const v = MIN + ((clamped - A_START) / SWEEP) * (MAX - MIN); // CONTINUOUS (sub-degree) target
+      const target = v < MIN ? MIN : v > MAX ? MAX : v;
+      if (Math.abs(target - value) > DRAG_JITTER) setValue(target); // deadband: ignore held-finger panel jitter
+    },
+    [value],
+  );
 
   // ---- Compact layout (small panels, e.g., the 240×320 CYD) -------------------------------------------
   // Self-contained and within the Flow B (AOT) subset: a STATE-DRIVEN dial (arc sweep + handle follow
@@ -219,40 +280,97 @@ export function App() {
             anywhere in it sets the target to that angle (touch-down captures it, so the finger can then
             roam the whole dial). The handle/arc are inside, so grabbing them just works. */}
         <View
-          style={{ width: BOX, height: BOX }}
-          onLayout={(e) => {
+          style={{width: BOX, height: BOX}}
+          onLayout={e => {
             cx.current = e.layout.x + e.layout.width / 2;
             cy.current = e.layout.y + e.layout.height / 2;
           }}
           onTouchStart={onDrag}
-          onTouchMove={onDrag}
-        >
+          onTouchMove={onDrag}>
           <Svg source={climateFace} width={BOX} height={BOX} />
-          <Svg width={BOX + 2 * pad} height={BOX + 2 * pad} style={{ position: 'absolute', left: -pad, top: -pad }}>
-            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={20 * KS} fill="#ffffff" />
-            <Circle cx={KNOB_C + FACE_R * Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} cy={KNOB_C - FACE_R * Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)} r={13 * KS} fill="none" stroke="#121212" strokeWidth={3 * KS} />
+          <Svg
+            width={BOX + 2 * pad}
+            height={BOX + 2 * pad}
+            style={{position: 'absolute', left: -pad, top: -pad}}>
+            <Circle
+              cx={
+                KNOB_C +
+                FACE_R *
+                  Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)
+              }
+              cy={
+                KNOB_C -
+                FACE_R *
+                  Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)
+              }
+              r={20 * KS}
+              fill="#ffffff"
+            />
+            <Circle
+              cx={
+                KNOB_C +
+                FACE_R *
+                  Math.sin(((A_START + (value - MIN) * DEG) * Math.PI) / 180)
+              }
+              cy={
+                KNOB_C -
+                FACE_R *
+                  Math.cos(((A_START + (value - MIN) * DEG) * Math.PI) / 180)
+              }
+              r={13 * KS}
+              fill="none"
+              stroke="#121212"
+              strokeWidth={3 * KS}
+            />
           </Svg>
         </View>
 
         <View style={styles.cReadout}>
-          <Text style={styles.cStatus}>{mode === 'off' ? 'Off' : mode !== 'cool' && value > CURRENT ? 'Heating' : mode !== 'heat' && value < CURRENT ? 'Cooling' : 'Holding'}</Text>
+          <Text style={styles.cStatus}>
+            {mode === 'off'
+              ? 'Off'
+              : mode !== 'cool' && value > CURRENT
+                ? 'Heating'
+                : mode !== 'heat' && value < CURRENT
+                  ? 'Cooling'
+                  : 'Holding'}
+          </Text>
           <Text style={styles.cBig}>{Math.round(value)}°</Text>
           <Text style={styles.cSub}>now {CURRENT}°</Text>
         </View>
 
         <View style={styles.stepRow}>
-          <Pressable style={styles.step} onPressIn={() => setValue(Math.max(MIN, Math.round(value) - 1))}>
+          <Pressable
+            style={styles.step}
+            onPressIn={() => setValue(Math.max(MIN, Math.round(value) - 1))}>
             <Text style={styles.stepText}>−</Text>
           </Pressable>
-          <Pressable style={styles.step} onPressIn={() => setValue(Math.min(MAX, Math.round(value) + 1))}>
+          <Pressable
+            style={styles.step}
+            onPressIn={() => setValue(Math.min(MAX, Math.round(value) + 1))}>
             <Text style={styles.stepText}>+</Text>
           </Pressable>
         </View>
 
         <View style={styles.modeRow}>
-          {MODES.map((m) => (
-            <Pressable key={m.key} style={[styles.mode, { backgroundColor: mode === m.key ? theme.modeActiveBg : theme.card }]} onPress={() => setMode(m.key)}>
-              <Text style={{ color: mode === m.key ? theme.text : theme.subtext, fontSize: SZ.mode }}>{m.label}</Text>
+          {MODES.map(m => (
+            <Pressable
+              key={m.key}
+              style={[
+                styles.mode,
+                {
+                  backgroundColor:
+                    mode === m.key ? theme.modeActiveBg : theme.card,
+                },
+              ]}
+              onPress={() => setMode(m.key)}>
+              <Text
+                style={{
+                  color: mode === m.key ? theme.text : theme.subtext,
+                  fontSize: SZ.mode,
+                }}>
+                {m.label}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -267,9 +385,15 @@ export function App() {
 
   // Stable callbacks so the memoised children below don't re-render on a value drag. The stepper rounds
   // first so a press after a fractional drag lands on a whole degree.
-  const selectMode = useCallback((key) => setMode(key), []);
-  const dec = useCallback(() => setValue((v) => clamp(Math.round(v) - STEP, MIN, MAX)), []);
-  const inc = useCallback(() => setValue((v) => clamp(Math.round(v) + STEP, MIN, MAX)), []);
+  const selectMode = useCallback(key => setMode(key), []);
+  const dec = useCallback(
+    () => setValue(v => clamp(Math.round(v) - STEP, MIN, MAX)),
+    [],
+  );
+  const inc = useCallback(
+    () => setValue(v => clamp(Math.round(v) + STEP, MIN, MAX)),
+    [],
+  );
 
   // The thermostat column (left): header + the dial card. Its old metric row now lives in the weather
   // panel on the right.
@@ -277,15 +401,30 @@ export function App() {
     <View style={styles.thermo}>
       <View style={styles.card}>
         <Header />
-        <Dial value={value} min={MIN} max={MAX} current={CURRENT} mode={mode} size={wide ? "80%" : "50%"} sz={SZ} theme={theme} onValue={setValue} />
-        <View style={{ width: '100%', alignItems: 'center' }}>
+        <Dial
+          value={value}
+          min={MIN}
+          max={MAX}
+          current={CURRENT}
+          mode={mode}
+          size={wide ? '80%' : '50%'}
+          sz={SZ}
+          theme={theme}
+          onValue={setValue}
+        />
+        <View style={{width: '100%', alignItems: 'center'}}>
           <View style={styles.stepRow}>
             <StepButton label="−" onPress={dec} />
             <StepButton label="+" onPress={inc} />
           </View>
           <View style={styles.modeRow}>
-            {MODES.map((m) => (
-              <ModeButton key={m.key} item={m} active={mode === m.key} onSelect={selectMode} />
+            {MODES.map(m => (
+              <ModeButton
+                key={m.key}
+                item={m}
+                active={mode === m.key}
+                onSelect={selectMode}
+              />
             ))}
           </View>
         </View>
@@ -325,22 +464,40 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   // --- Compact (AOT) inline thermostat ---
-  cTitle: { color: theme.text, fontSize: SZ.title, fontWeight: 'bold', marginBottom: 10 },
+  cTitle: {
+    color: theme.text,
+    fontSize: SZ.title,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
   // The readout overlaps the dial: pulled up over the dial center, then padded back down past it.
-  cReadout: { alignItems: 'center', marginTop: -120, marginBottom: 58, gap: 1 },
-  cStatus: { color: theme.subtext, fontSize: SZ.sub },
-  cBig: { color: theme.text, fontSize: SZ.big, fontWeight: 'bold' },
-  cSub: { color: theme.subtext, fontSize: SZ.sub },
+  cReadout: {alignItems: 'center', marginTop: -120, marginBottom: 58, gap: 1},
+  cStatus: {color: theme.subtext, fontSize: SZ.sub},
+  cBig: {color: theme.text, fontSize: SZ.big, fontWeight: 'bold'},
+  cSub: {color: theme.subtext, fontSize: SZ.sub},
 
   // Wide layout: the thermostat + weather columns sit side by side, top-aligned.
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', height: '100%', width: '100%', overflow: 'hidden' },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    height: '100%',
+    width: '100%',
+    overflow: 'hidden',
+  },
   // Portrait/stacked layout: the thermostat over the weather panel. The stack fills the screen so the two
   // cards' 48% heights resolve against it (without a definite height they'd each grow to their content and
   // the second would overflow off the bottom).
-  stack: { gap: GAP, alignItems: 'center', width: '100%', height: '100%', justifyContent: 'center' },
+  stack: {
+    gap: GAP,
+    alignItems: 'center',
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+  },
   // Wide: a 48%-wide column filling the row height. Portrait: a 90%-wide card at 48% of the stack height.
-  thermo: { height: wide ? '100%' : '48%', width: wide ? '48%' : '90%' },
-  header: { flexDirection: 'row', alignSelf: 'flex-start' },
+  thermo: {height: wide ? '100%' : '48%', width: wide ? '48%' : '90%'},
+  header: {flexDirection: 'row', alignSelf: 'flex-start'},
   pill: {
     backgroundColor: theme.metricBg,
     borderRadius: 999,
@@ -357,7 +514,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  stepRow: { flexDirection: 'row', gap: GAP, marginBottom: 15 },
+  stepRow: {flexDirection: 'row', gap: GAP, marginBottom: 15},
   step: {
     width: compact ? 56 : 72,
     height: compact ? 32 : 40,
@@ -367,8 +524,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepText: { color: theme.text, fontSize: compact ? 20 : 24 },
-  modeRow: { flexDirection: 'row', gap: compact ? 6 : 8, alignSelf: 'stretch' },
+  stepText: {color: theme.text, fontSize: compact ? 20 : 24},
+  modeRow: {flexDirection: 'row', gap: compact ? 6 : 8, alignSelf: 'stretch'},
   mode: {
     flex: 1,
     height: compact ? 30 : 40,
@@ -376,8 +533,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modeIdle: { borderWidth: 1, borderColor: theme.modeBorder },
-  modeActive: { backgroundColor: theme.modeActiveBg },
+  modeIdle: {borderWidth: 1, borderColor: theme.modeBorder},
+  modeActive: {backgroundColor: theme.modeActiveBg},
 
   // --- Weather panel (right column when wide; below the thermostat when stacked) ---
   weatherCard: {
@@ -390,12 +547,12 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: GAP,
   },
-  wxTitle: { color: theme.text, fontSize: SZ.title, fontWeight: '500' },
-  wxNow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  wxNowIcon: { width: 88, height: 88 },
-  wxNowText: { gap: 2 },
-  wxNowTemp: { color: theme.text, fontSize: SZ.big, fontWeight: '500' },
-  wxForecast: { flexDirection: 'row', gap: 8 },
+  wxTitle: {color: theme.text, fontSize: SZ.title, fontWeight: '500'},
+  wxNow: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  wxNowIcon: {width: 88, height: 88},
+  wxNowText: {gap: 2},
+  wxNowTemp: {color: theme.text, fontSize: SZ.big, fontWeight: '500'},
+  wxForecast: {flexDirection: 'row', gap: 8},
   wxDay: {
     flex: 1,
     alignItems: 'center',
@@ -404,5 +561,5 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 4,
   },
-  wxDayIcon: { width: 44, height: 44 },
+  wxDayIcon: {width: 44, height: 44},
 });

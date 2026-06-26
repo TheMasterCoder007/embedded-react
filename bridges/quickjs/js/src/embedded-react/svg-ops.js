@@ -32,8 +32,8 @@ export const VOP_CUBIC = 4;
 export const VOP_ARC = 5;
 export const VOP_CLOSE = 6;
 
-export const CAP = { butt: 0, round: 1, square: 2 };
-export const JOIN = { miter: 0, round: 1, bevel: 2 };
+export const CAP = {butt: 0, round: 1, square: 2};
+export const JOIN = {miter: 0, round: 1, bevel: 2};
 
 // Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
 // fillGrad, strokeGrad]. fillGrad/strokeGrad are 1-based indices into the gradient table (0 = solid). MUST
@@ -52,7 +52,7 @@ export const GRAD_CONIC = 3;
 
 /** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
 function lerpArgb(c0, c1, t) {
-  const lp = (sh) => {
+  const lp = sh => {
     const a = (c0 >>> sh) & 0xff;
     const b = (c1 >>> sh) & 0xff;
     return Math.round(a + (b - a) * t) & 0xff;
@@ -71,7 +71,11 @@ function evalStopsAt(stops, t) {
     const b = stops[i + 1];
     if (t <= b.offset) {
       const span = b.offset - a.offset;
-      return lerpArgb(a.color >>> 0, b.color >>> 0, span > 0 ? (t - a.offset) / span : 0);
+      return lerpArgb(
+        a.color >>> 0,
+        b.color >>> 0,
+        span > 0 ? (t - a.offset) / span : 0,
+      );
     }
   }
   return last.color >>> 0;
@@ -85,7 +89,7 @@ function capStops(stops, max) {
   const out = [];
   for (let i = 0; i < max; i++) {
     const t = max === 1 ? lo : lo + (hi - lo) * (i / (max - 1));
-    out.push({ color: evalStopsAt(stops, t), offset: t });
+    out.push({color: evalStopsAt(stops, t), offset: t});
   }
   return out;
 }
@@ -144,7 +148,10 @@ function parseColorString(c) {
   if (s in NAMED) return NAMED[s] >>> 0;
   if (s[0] === '#') {
     s = s.slice(1);
-    let r, g, b, a = 255;
+    let r,
+      g,
+      b,
+      a = 255;
     if (s.length === 3 || s.length === 4) {
       r = parseInt(s[0] + s[0], 16);
       g = parseInt(s[1] + s[1], 16);
@@ -163,7 +170,7 @@ function parseColorString(c) {
   if (s.startsWith('rgb')) {
     const m = s.match(/rgba?\(([^)]+)\)/);
     if (m) {
-      const p = m[1].split(',').map((x) => x.trim());
+      const p = m[1].split(',').map(x => x.trim());
       const r = parseInt(p[0], 10) || 0;
       const g = parseInt(p[1], 10) || 0;
       const b = parseInt(p[2], 10) || 0;
@@ -188,7 +195,7 @@ function tokenizePath(d) {
   let cur = null;
   while ((m = re.exec(d)) !== null) {
     if (m[1]) {
-      cur = { cmd: m[1], args: [] };
+      cur = {cmd: m[1], args: []};
       out.push(cur);
     } else if (cur) {
       cur.args.push(parseFloat(m[2]));
@@ -242,7 +249,12 @@ function arcToCubics(x0, y0, rx, ry, phiDeg, largeArc, sweep, x, y) {
     return a;
   };
   const theta1 = ang(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
-  let dtheta = ang((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+  let dtheta = ang(
+    (x1p - cxp) / rx,
+    (y1p - cyp) / ry,
+    (-x1p - cxp) / rx,
+    (-y1p - cyp) / ry,
+  );
   if (!sweep && dtheta > 0) dtheta -= 2 * Math.PI;
   if (sweep && dtheta < 0) dtheta += 2 * Math.PI;
   const segs = Math.ceil(Math.abs(dtheta) / (Math.PI / 2));
@@ -265,7 +277,14 @@ function arcToCubics(x0, y0, rx, ry, phiDeg, largeArc, sweep, x, y) {
     const d1y = -rx * sinP * sin1 + ry * cosP * cos1;
     const d2x = -rx * cosP * sin2 - ry * sinP * cos2;
     const d2y = -rx * sinP * sin2 + ry * cosP * cos2;
-    out.push([px + t * d1x, py + t * d1y, e2x - t * d2x, e2y - t * d2y, e2x, e2y]);
+    out.push([
+      px + t * d1x,
+      py + t * d1y,
+      e2x - t * d2x,
+      e2y - t * d2y,
+      e2x,
+      e2y,
+    ]);
     px = e2x;
     py = e2y;
     th = th2;
@@ -293,8 +312,8 @@ export function parsePath(d) {
     const a = tk.args;
     const U = C.toUpperCase();
     let i = 0;
-    const rx = (v) => (rel ? cx + v : v);
-    const ry = (v) => (rel ? cy + v : v);
+    const rx = v => (rel ? cx + v : v);
+    const ry = v => (rel ? cy + v : v);
     if (U === 'M') {
       // First pair is moveto; later pairs are implicit linetos.
       cx = rx(a[i++]);
@@ -387,7 +406,8 @@ export function parsePath(d) {
         const ex = rx(a[i++]);
         const ey = ry(a[i++]);
         const cubics = arcToCubics(cx, cy, arx, ary, rot, laf, swf, ex, ey);
-        for (const c of cubics) ops.push(VOP_CUBIC, c[0], c[1], c[2], c[3], c[4], c[5]);
+        for (const c of cubics)
+          ops.push(VOP_CUBIC, c[0], c[1], c[2], c[3], c[4], c[5]);
         cx = ex;
         cy = ey;
       }
@@ -413,7 +433,19 @@ function circleOps(p) {
   const cy = num(p.cy, 0);
   const r = num(p.r, 0);
   // Start at angle 0, full circular arc.
-  return [VOP_MOVE, cx + r, cy, VOP_ARC, cx, cy, r, 0, 2 * Math.PI, 0, VOP_CLOSE];
+  return [
+    VOP_MOVE,
+    cx + r,
+    cy,
+    VOP_ARC,
+    cx,
+    cy,
+    r,
+    0,
+    2 * Math.PI,
+    0,
+    VOP_CLOSE,
+  ];
 }
 
 function ellipseOps(p) {
@@ -431,11 +463,32 @@ function rectOps(p) {
   const y = num(p.y, 0);
   const w = num(p.width, 0);
   const h = num(p.height, 0);
-  return [VOP_MOVE, x, y, VOP_LINE, x + w, y, VOP_LINE, x + w, y + h, VOP_LINE, x, y + h, VOP_CLOSE];
+  return [
+    VOP_MOVE,
+    x,
+    y,
+    VOP_LINE,
+    x + w,
+    y,
+    VOP_LINE,
+    x + w,
+    y + h,
+    VOP_LINE,
+    x,
+    y + h,
+    VOP_CLOSE,
+  ];
 }
 
 function lineOps(p) {
-  return [VOP_MOVE, num(p.x1, 0), num(p.y1, 0), VOP_LINE, num(p.x2, 0), num(p.y2, 0)];
+  return [
+    VOP_MOVE,
+    num(p.x1, 0),
+    num(p.y1, 0),
+    VOP_LINE,
+    num(p.x2, 0),
+    num(p.y2, 0),
+  ];
 }
 
 // Arc convenience: angles in DEGREES, clockwise from 12 o'clock (the gauge/dial convention). Emits a
@@ -445,7 +498,18 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
   // The engine's arc angle runs from +X (cos/sin); top-clockwise => subtract 90°.
   const a0 = ((a0deg - 90) * Math.PI) / 180;
   const a1 = ((a1deg - 90) * Math.PI) / 180;
-  return [VOP_MOVE, cx + r * Math.cos(a0), cy + r * Math.sin(a0), VOP_ARC, cx, cy, r, a0, a1, 0];
+  return [
+    VOP_MOVE,
+    cx + r * Math.cos(a0),
+    cy + r * Math.sin(a0),
+    VOP_ARC,
+    cx,
+    cy,
+    r,
+    a0,
+    a1,
+    0,
+  ];
 }
 
 // --- Imperative shapes -> op-tape (the fast path; no JSX, no React) -------------------------------
@@ -483,18 +547,55 @@ export function shapesToVector(shapes) {
       const r = s.arc[2];
       const a0 = ((s.arc[3] - 90) * Math.PI) / 180;
       const a1 = ((s.arc[4] - 90) * Math.PI) / 180;
-      ops.push(VOP_MOVE, cx + r * Math.cos(a0), cy + r * Math.sin(a0), VOP_ARC, cx, cy, r, a0, a1, 0);
+      ops.push(
+        VOP_MOVE,
+        cx + r * Math.cos(a0),
+        cy + r * Math.sin(a0),
+        VOP_ARC,
+        cx,
+        cy,
+        r,
+        a0,
+        a1,
+        0,
+      );
     } else if (s.circle) {
       const cx = s.circle[0];
       const cy = s.circle[1];
       const r = s.circle[2];
-      ops.push(VOP_MOVE, cx + r, cy, VOP_ARC, cx, cy, r, 0, 2 * Math.PI, 0, VOP_CLOSE);
+      ops.push(
+        VOP_MOVE,
+        cx + r,
+        cy,
+        VOP_ARC,
+        cx,
+        cy,
+        r,
+        0,
+        2 * Math.PI,
+        0,
+        VOP_CLOSE,
+      );
     } else if (s.rect) {
       const x = s.rect[0];
       const y = s.rect[1];
       const w = s.rect[2];
       const h = s.rect[3];
-      ops.push(VOP_MOVE, x, y, VOP_LINE, x + w, y, VOP_LINE, x + w, y + h, VOP_LINE, x, y + h, VOP_CLOSE);
+      ops.push(
+        VOP_MOVE,
+        x,
+        y,
+        VOP_LINE,
+        x + w,
+        y,
+        VOP_LINE,
+        x + w,
+        y + h,
+        VOP_LINE,
+        x,
+        y + h,
+        VOP_CLOSE,
+      );
     } else if (s.line) {
       ops.push(VOP_MOVE, s.line[0], s.line[1], VOP_LINE, s.line[2], s.line[3]);
     } else if (s.path) {
@@ -514,10 +615,10 @@ export function shapesToVector(shapes) {
       JOIN[s.join] ?? 0,
       s.fillRule === 'evenodd' ? 1 : 0,
       0, // fill_grad
-      0 // stroke_grad — the imperative path has no gradients
+      0, // stroke_grad — the imperative path has no gradients
     );
   }
-  return { ops, paints };
+  return {ops, paints};
 }
 
 // --- Flatten an <Svg> subtree --------------------------------------------------------------------
@@ -533,8 +634,9 @@ const PAINT_DEFAULT = {
 };
 
 function mergePaint(base, props) {
-  const out = { ...base };
-  for (const k of Object.keys(PAINT_DEFAULT)) if (props[k] != null) out[k] = props[k];
+  const out = {...base};
+  for (const k of Object.keys(PAINT_DEFAULT))
+    if (props[k] != null) out[k] = props[k];
   return out;
 }
 
@@ -557,8 +659,8 @@ function paintRecord(paint, scale) {
 function transformOps(ops, T) {
   const out = [];
   let i = 0;
-  const ax = (v) => v * T.sx + T.tx;
-  const ay = (v) => v * T.sy + T.ty;
+  const ax = v => v * T.sx + T.tx;
+  const ay = v => v * T.sy + T.ty;
   while (i < ops.length) {
     const op = ops[i++];
     out.push(op);
@@ -567,10 +669,24 @@ function transformOps(ops, T) {
     } else if (op === VOP_QUAD) {
       out.push(ax(ops[i++]), ay(ops[i++]), ax(ops[i++]), ay(ops[i++]));
     } else if (op === VOP_CUBIC) {
-      out.push(ax(ops[i++]), ay(ops[i++]), ax(ops[i++]), ay(ops[i++]), ax(ops[i++]), ay(ops[i++]));
+      out.push(
+        ax(ops[i++]),
+        ay(ops[i++]),
+        ax(ops[i++]),
+        ay(ops[i++]),
+        ax(ops[i++]),
+        ay(ops[i++]),
+      );
     } else if (op === VOP_ARC) {
       // center + radius scale (uniform scale assumed for arcs)
-      out.push(ax(ops[i++]), ay(ops[i++]), ops[i++] * T.sx, ops[i++], ops[i++], ops[i++]);
+      out.push(
+        ax(ops[i++]),
+        ay(ops[i++]),
+        ops[i++] * T.sx,
+        ops[i++],
+        ops[i++],
+        ops[i++],
+      );
     }
     // VOP_CLOSE has no args
   }
@@ -596,13 +712,16 @@ export function flattenSvg(props) {
   const paints = [];
 
   // Root transform from viewBox vs width/height.
-  let root = { sx: 1, sy: 1, tx: 0, ty: 0 };
+  let root = {sx: 1, sy: 1, tx: 0, ty: 0};
   if (props.viewBox && props.width && props.height) {
-    const vb = String(props.viewBox).trim().split(/[\s,]+/).map(parseFloat);
+    const vb = String(props.viewBox)
+      .trim()
+      .split(/[\s,]+/)
+      .map(parseFloat);
     if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
       const sx = num(props.width, vb[2]) / vb[2];
       const sy = num(props.height, vb[3]) / vb[3];
-      root = { sx, sy, tx: -vb[0] * sx, ty: -vb[1] * sy };
+      root = {sx, sy, tx: -vb[0] * sx, ty: -vb[1] * sy};
     }
   }
 
@@ -616,7 +735,12 @@ export function flattenSvg(props) {
         const s = num(p.scale, 1);
         const gx = num(p.x ?? p.translateX, 0);
         const gy = num(p.y ?? p.translateY, 0);
-        const childT = { sx: T.sx * s, sy: T.sy * s, tx: gx * T.sx + T.tx, ty: gy * T.sy + T.ty };
+        const childT = {
+          sx: T.sx * s,
+          sy: T.sy * s,
+          tx: gx * T.sx + T.tx,
+          ty: gy * T.sy + T.ty,
+        };
         walk(p.children, merged, childT);
         continue;
       }
@@ -627,7 +751,13 @@ export function flattenSvg(props) {
       else if (c.type === 'Rect') shapeOps = rectOps(p);
       else if (c.type === 'Line') shapeOps = lineOps(p);
       else if (c.type === 'Arc')
-        shapeOps = arcOpsCW(num(p.cx, 0), num(p.cy, 0), num(p.r, 0), num(p.startAngle, 0), num(p.endAngle, 0));
+        shapeOps = arcOpsCW(
+          num(p.cx, 0),
+          num(p.cy, 0),
+          num(p.r, 0),
+          num(p.startAngle, 0),
+          num(p.endAngle, 0),
+        );
       if (!shapeOps || shapeOps.length === 0) continue;
 
       const paintIndex = paints.length / PAINT_STRIDE;
@@ -638,7 +768,7 @@ export function flattenSvg(props) {
   };
 
   walk(props.children, PAINT_DEFAULT, root);
-  return { ops, paints };
+  return {ops, paints};
 }
 
 // --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
@@ -650,12 +780,30 @@ function scaleTape(ops, sx, sy) {
   while (i < ops.length) {
     const op = ops[i++];
     out.push(op);
-    if (op === VOP_SHAPE) out.push(ops[i++]); // paint index — copy, do not scale
-    else if (op === VOP_MOVE || op === VOP_LINE) out.push(ops[i++] * sx, ops[i++] * sy);
-    else if (op === VOP_QUAD) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
+    if (op === VOP_SHAPE)
+      out.push(ops[i++]); // paint index — copy, do not scale
+    else if (op === VOP_MOVE || op === VOP_LINE)
+      out.push(ops[i++] * sx, ops[i++] * sy);
+    else if (op === VOP_QUAD)
+      out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
     else if (op === VOP_CUBIC)
-      out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
-    else if (op === VOP_ARC) out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++], ops[i++], ops[i++]);
+      out.push(
+        ops[i++] * sx,
+        ops[i++] * sy,
+        ops[i++] * sx,
+        ops[i++] * sy,
+        ops[i++] * sx,
+        ops[i++] * sy,
+      );
+    else if (op === VOP_ARC)
+      out.push(
+        ops[i++] * sx,
+        ops[i++] * sy,
+        ops[i++] * sx,
+        ops[i++],
+        ops[i++],
+        ops[i++],
+      );
     // VOP_CLOSE has no args.
   }
   return out;
@@ -670,12 +818,13 @@ export function scaleVectorArtifact(art, targetW, targetH) {
   const sx = art.width ? targetW / art.width : 1;
   const sy = art.height ? targetH / art.height : 1;
   const grads = art.gradients || [];
-  if (sx === 1 && sy === 1) return { ops: art.ops, paints: art.paints, gradients: grads };
+  if (sx === 1 && sy === 1)
+    return {ops: art.ops, paints: art.paints, gradients: grads};
   const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width / radius scale
   const paints = art.paints.slice();
   for (let k = 2; k < paints.length; k += PAINT_STRIDE) paints[k] *= sw; // index 2 of each record = strokeWidth
   // Gradient geometry lives in the same coordinate space as the path, so it scales with it (radius uniformly).
-  const gradients = grads.map((g) => ({
+  const gradients = grads.map(g => ({
     ...g,
     ax: (g.ax || 0) * sx,
     ay: (g.ay || 0) * sy,
@@ -684,7 +833,7 @@ export function scaleVectorArtifact(art, targetW, targetH) {
     // Radial r is a length (scales); conic r is a start angle (invariant under uniform scale) — don't scale it.
     r: g.type === GRAD_CONIC ? g.r || 0 : (g.r || 0) * sw,
   }));
-  return { ops: scaleTape(art.ops, sx, sy), paints, gradients };
+  return {ops: scaleTape(art.ops, sx, sy), paints, gradients};
 }
 
 // --- Bridge-cap diagnostics ----------------------------------------------------------------------
@@ -708,13 +857,20 @@ let _warnedVecGrads = false;
  * @param {number} [gradsLen] Gradient count (number of gradients referenced by the shapes).
  * @param {number} [maxGrads] Bridge gradient cap (NativeUI.maxVectorGrads).
  */
-export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints, gradsLen, maxGrads) {
+export function warnVectorCaps(
+  opsLen,
+  paintsLen,
+  maxOps,
+  maxPaints,
+  gradsLen,
+  maxGrads,
+) {
   if (!_warnedVecOps && maxOps > 0 && opsLen > maxOps) {
     _warnedVecOps = true;
     console.warn(
       `embedded-react: an <Svg> op-tape is too long (${opsLen} > ${maxOps} floats) and will be truncated — ` +
         `the shape gets cut off. Simplify the path (fewer/coarser curves) or split it across <Svg> nodes; ` +
-        `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`
+        `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`,
     );
   }
   const shapes = (paintsLen / PAINT_STRIDE) | 0;
@@ -722,7 +878,7 @@ export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints, gradsLen, m
     _warnedVecPaints = true;
     console.warn(
       `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
-        `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`
+        `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`,
     );
   }
   if (!_warnedVecGrads && maxGrads > 0 && gradsLen > maxGrads) {
@@ -730,7 +886,7 @@ export function warnVectorCaps(opsLen, paintsLen, maxOps, maxPaints, gradsLen, m
     console.warn(
       `embedded-react: an <Svg> references ${gradsLen} gradients (> ${maxGrads}) — the extra gradients are ` +
         `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
-        `shapes; raising the limit needs VEC_BRIDGE_MAX_GRADS + ERUI_VECTOR_GRADS_MAX.`
+        `shapes; raising the limit needs VEC_BRIDGE_MAX_GRADS + ERUI_VECTOR_GRADS_MAX.`,
     );
   }
 }

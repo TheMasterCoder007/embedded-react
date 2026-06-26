@@ -95,15 +95,17 @@ class Writer {
  * @param {string} opts.qjsTag                 QuickJS release tag the bytecode targets (e.g. "v0.15.0").
  * @returns {Buffer} The container bytes.
  */
-export function emitContainer({ bytecode, assetPack, qjsTag }) {
-  if (!bytecode || !bytecode.length) throw new Error('emitContainer: bytecode is required');
+export function emitContainer({bytecode, assetPack, qjsTag}) {
+  if (!bytecode || !bytecode.length)
+    throw new Error('emitContainer: bytecode is required');
   if (!qjsTag) throw new Error('emitContainer: qjsTag is required');
 
   // Build the body (everything after the crc32 field) first, then prepend magic+version+crc.
   const body = new Writer();
   body.str(qjsTag);
   const sections = [];
-  if (assetPack && assetPack.length) sections.push([SECTION_ASSET_PACK, assetPack]);
+  if (assetPack && assetPack.length)
+    sections.push([SECTION_ASSET_PACK, assetPack]);
   sections.push([SECTION_BYTECODE, bytecode]);
   body.u32(sections.length);
   for (const [type, data] of sections) {

@@ -25,26 +25,32 @@
 // This is the in-repo precursor to a published `npx create-embedded-react`: today the embedded-react
 // package + firmware hosts live in this monorepo, so a scaffolded app reuses them via the demos/
 // convention rather than pulling published npm packages + emitting a standalone firmware project.
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {mkdirSync, writeFileSync, existsSync} from 'node:fs';
+import {resolve, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
 
 const name = process.argv[2];
 if (!name) {
-  console.error('Usage: npm run create -- <name>   (e.g. npm run create -- my-app)');
+  console.error(
+    'Usage: npm run create -- <name>   (e.g. npm run create -- my-app)',
+  );
   process.exit(1);
 }
 if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-  console.error(`Invalid app name "${name}". Use lowercase letters, digits, and hyphens (must start with a letter).`);
+  console.error(
+    `Invalid app name "${name}". Use lowercase letters, digits, and hyphens (must start with a letter).`,
+  );
   process.exit(1);
 }
 
 const appDir = resolve(repoRoot, 'demos', name);
 if (existsSync(appDir)) {
-  console.error(`demos/${name} already exists — pick another name or remove it first.`);
+  console.error(
+    `demos/${name} already exists — pick another name or remove it first.`,
+  );
   process.exit(1);
 }
 
@@ -126,7 +132,7 @@ See the [thermostat demo](../thermostat/) for a fuller example and \`tools/simul
   'assets/.gitkeep': '',
 };
 
-mkdirSync(resolve(appDir, 'assets'), { recursive: true });
+mkdirSync(resolve(appDir, 'assets'), {recursive: true});
 for (const [rel, contents] of Object.entries(files)) {
   writeFileSync(resolve(appDir, rel), contents);
 }
@@ -135,5 +141,7 @@ console.log(`Created demos/${name}/`);
 console.log('  App.jsx  index.jsx  package.json  README.md  assets/');
 console.log('\nNext:');
 console.log(`  cd demos/${name}`);
-console.log('  npm run sim      # hot-reload simulator (build the sim binary once — see tools/simulator/README.md)');
+console.log(
+  '  npm run sim      # hot-reload simulator (build the sim binary once — see tools/simulator/README.md)',
+);
 console.log('  npm run build    # just bundle + bake assets');

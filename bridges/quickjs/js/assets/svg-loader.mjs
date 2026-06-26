@@ -23,11 +23,11 @@
 //     {kind:'raster', name, width, height} artifact. A <Svg source> renders kind:'vector' as a vector node
 //     and kind:'raster' as an image node (host-config), so the fallback is transparent to the app.
 // Shared by every Flow A bundler so the .svg handling lives in one place.
-import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import { svgToVector, svgToRaster, writeRasterPng } from './bake-svg.mjs';
+import {readFileSync} from 'node:fs';
+import {basename} from 'node:path';
+import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mjs';
 
-const assetName = (p) => basename(p).replace(/\.[^.]+$/, '');
+const assetName = p => basename(p).replace(/\.[^.]+$/, '');
 
 /**
  * Registers a `.svg` onLoad on an esbuild build.
@@ -38,32 +38,44 @@ const assetName = (p) => basename(p).replace(/\.[^.]+$/, '');
  *        needs raster fallback is baked as a (lossy) vector and a warning notes the dropped content.
  */
 export function registerSvgVectorLoader(build, addRasterAsset) {
-  build.onLoad({ filter: /\.svg$/i }, async (args) => {
+  build.onLoad({filter: /\.svg$/i}, async args => {
     try {
       const svg = readFileSync(args.path, 'utf8');
-      const { dropped = [], ...vec } = await svgToVector(svg);
+      const {dropped = [], ...vec} = await svgToVector(svg);
       if (dropped.length) {
         const feats = dropped.join(', ');
         if (addRasterAsset) {
           console.warn(
             `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${feats}] — rasterizing ` +
               `it as a fallback image. (Raster loses scalability and costs RAM; simplify the SVG to keep it a ` +
-              `live vector.)`
+              `live vector.)`,
           );
-          const { width, height, png } = await svgToRaster(svg);
+          const {width, height, png} = await svgToRaster(svg);
           const name = assetName(args.path);
           addRasterAsset(name, writeRasterPng(name, png));
-          return { contents: `module.exports = ${JSON.stringify({ kind: 'raster', name, width, height })};`, loader: 'js' };
+          return {
+            contents: `module.exports = ${JSON.stringify({kind: 'raster', name, width, height})};`,
+            loader: 'js',
+          };
         }
         console.warn(
           `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${feats}] and this build has ` +
             `no raster fallback — that content will NOT render. Simplify the SVG, or import it via a bundler that ` +
-            `supports the image pipeline.`
+            `supports the image pipeline.`,
         );
       }
-      return { contents: `module.exports = ${JSON.stringify({ kind: 'vector', ...vec })};`, loader: 'js' };
+      return {
+        contents: `module.exports = ${JSON.stringify({kind: 'vector', ...vec})};`,
+        loader: 'js',
+      };
     } catch (e) {
-      return { errors: [{ text: `embedded-react: failed to bake SVG ${args.path}: ${e.message}` }] };
+      return {
+        errors: [
+          {
+            text: `embedded-react: failed to bake SVG ${args.path}: ${e.message}`,
+          },
+        ],
+      };
     }
   });
 }

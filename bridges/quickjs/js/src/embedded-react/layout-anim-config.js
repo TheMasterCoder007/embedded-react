@@ -63,18 +63,22 @@ export function toEngineConfig(config) {
   const update = c.update || {};
   const type = update.type || c.type || Types.easeInEaseOut;
   if (type === Types.spring) {
-    return { type: 'spring', duration };
+    return {type: 'spring', duration};
   }
-  return { type: 'timing', duration, easing: easingForType(type) };
+  return {type: 'timing', duration, easing: easingForType(type)};
 }
 
 /** Builds an RN-shaped config (duration + create/update/delete) from a type + creation property. */
-export function create(duration, type = Types.easeInEaseOut, creationProp = Properties.opacity) {
+export function create(
+  duration,
+  type = Types.easeInEaseOut,
+  creationProp = Properties.opacity,
+) {
   return {
     duration,
-    create: { type, property: creationProp },
-    update: { type },
-    delete: { type, property: creationProp },
+    create: {type, property: creationProp},
+    update: {type},
+    delete: {type, property: creationProp},
   };
 }
 
@@ -84,8 +88,8 @@ export const Presets = {
   linear: create(500, Types.linear, Properties.opacity),
   spring: {
     duration: 700,
-    create: { type: Types.linear, property: Properties.opacity },
-    update: { type: Types.spring, springDamping: 0.4 },
-    delete: { type: Types.linear, property: Properties.opacity },
+    create: {type: Types.linear, property: Properties.opacity},
+    update: {type: Types.spring, springDamping: 0.4},
+    delete: {type: Types.linear, property: Properties.opacity},
   },
 };

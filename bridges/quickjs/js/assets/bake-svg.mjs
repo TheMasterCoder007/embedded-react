@@ -25,11 +25,11 @@
 // inheritance). Features the op-tape can't represent (<text>, <mask>, <filter>, <use>, …) are recorded in
 // `dropped` so the caller can rasterize the whole SVG as a fallback image instead. Primitives are emitted as
 // line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
-import { parse } from 'svgson';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
+import {parse} from 'svgson';
+import {mkdirSync, writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import {
   parsePath,
   parseColor,
@@ -71,20 +71,30 @@ function parseTransform(str) {
   let t;
   while ((t = re.exec(str)) !== null) {
     const fn = t[1];
-    const p = t[2].split(/[\s,]+/).map(Number).filter((n) => !Number.isNaN(n));
+    const p = t[2]
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter(n => !Number.isNaN(n));
     let lm = IDENT;
-    if (fn === 'matrix') lm = [p[0] || 0, p[1] || 0, p[2] || 0, p[3] || 0, p[4] || 0, p[5] || 0];
+    if (fn === 'matrix')
+      lm = [p[0] || 0, p[1] || 0, p[2] || 0, p[3] || 0, p[4] || 0, p[5] || 0];
     else if (fn === 'translate') lm = [1, 0, 0, 1, p[0] || 0, p[1] || 0];
-    else if (fn === 'scale') lm = [p[0] ?? 1, 0, 0, p.length > 1 ? p[1] : (p[0] ?? 1), 0, 0];
+    else if (fn === 'scale')
+      lm = [p[0] ?? 1, 0, 0, p.length > 1 ? p[1] : (p[0] ?? 1), 0, 0];
     else if (fn === 'rotate') {
       const a = ((p[0] || 0) * Math.PI) / 180;
       const cos = Math.cos(a);
       const sin = Math.sin(a);
       const rot = [cos, sin, -sin, cos, 0, 0];
       // rotate(angle cx cy) rotates around a point.
-      lm = p.length >= 3 ? mul(mul([1, 0, 0, 1, p[1], p[2]], rot), [1, 0, 0, 1, -p[1], -p[2]]) : rot;
-    } else if (fn === 'skewX') lm = [1, 0, Math.tan(((p[0] || 0) * Math.PI) / 180), 1, 0, 0];
-    else if (fn === 'skewY') lm = [1, Math.tan(((p[0] || 0) * Math.PI) / 180), 0, 1, 0, 0];
+      lm =
+        p.length >= 3
+          ? mul(mul([1, 0, 0, 1, p[1], p[2]], rot), [1, 0, 0, 1, -p[1], -p[2]])
+          : rot;
+    } else if (fn === 'skewX')
+      lm = [1, 0, Math.tan(((p[0] || 0) * Math.PI) / 180), 1, 0, 0];
+    else if (fn === 'skewY')
+      lm = [1, Math.tan(((p[0] || 0) * Math.PI) / 180), 0, 1, 0, 0];
     m = mul(m, lm);
   }
   return m;
@@ -163,7 +173,7 @@ function polyPath(a, close) {
     .trim()
     .split(/[\s,]+/)
     .map(Number)
-    .filter((n) => !Number.isNaN(n));
+    .filter(n => !Number.isNaN(n));
   if (v.length < 4) return '';
   let d = `M${v[0]} ${v[1]}`;
   for (let i = 2; i + 1 < v.length; i += 2) d += `L${v[i]} ${v[i + 1]}`;
@@ -206,7 +216,7 @@ function parseStyle(s) {
 
 function resolvePaint(attrs, inherited) {
   const style = parseStyle(attrs.style);
-  const out = { ...inherited };
+  const out = {...inherited};
   for (const k of PAINT_KEYS) {
     const v = style[k] ?? attrs[k];
     if (v != null) out[k] = v;
@@ -244,7 +254,10 @@ function parseStops(node) {
     const so = clamp01(num(style['stop-opacity'] ?? a['stop-opacity'], 1));
     let off = String(a.offset ?? '0').trim();
     off = off.endsWith('%') ? parseFloat(off) / 100 : parseFloat(off);
-    out.push({ color: applyAlpha(parseColor(col), so), offset: clamp01(Number.isNaN(off) ? 0 : off) });
+    out.push({
+      color: applyAlpha(parseColor(col), so),
+      offset: clamp01(Number.isNaN(off) ? 0 : off),
+    });
   }
   return out;
 }
@@ -252,15 +265,21 @@ function parseStops(node) {
 /** Collects every <linearGradient>/<radialGradient> by id (searched anywhere, including <defs>). */
 function collectGradients(root) {
   const map = new Map();
-  const visit = (node) => {
+  const visit = node => {
     for (const c of node.children || []) {
       if (c.type !== 'element') continue;
       if (
-        (c.name === 'linearGradient' || c.name === 'radialGradient' || c.name === 'conicGradient') &&
+        (c.name === 'linearGradient' ||
+          c.name === 'radialGradient' ||
+          c.name === 'conicGradient') &&
         c.attributes &&
         c.attributes.id
       )
-        map.set(c.attributes.id, { name: c.name, attrs: c.attributes, stops: parseStops(c) });
+        map.set(c.attributes.id, {
+          name: c.name,
+          attrs: c.attributes,
+          stops: parseStops(c),
+        });
       visit(c);
     }
   };
@@ -290,7 +309,14 @@ function opsBBox(ops) {
   let i = 0;
   while (i < ops.length) {
     const op = ops[i++];
-    const n = op === VOP_MOVE || op === VOP_LINE ? 2 : op === VOP_QUAD ? 4 : op === VOP_CUBIC ? 6 : 0;
+    const n =
+      op === VOP_MOVE || op === VOP_LINE
+        ? 2
+        : op === VOP_QUAD
+          ? 4
+          : op === VOP_CUBIC
+            ? 6
+            : 0;
     for (let k = 0; k < n; k += 2) {
       const x = ops[i + k];
       const y = ops[i + k + 1];
@@ -301,8 +327,8 @@ function opsBBox(ops) {
     }
     i += n;
   }
-  if (!Number.isFinite(minx)) return { x: 0, y: 0, w: 0, h: 0 };
-  return { x: minx, y: miny, w: maxx - minx, h: maxy - miny };
+  if (!Number.isFinite(minx)) return {x: 0, y: 0, w: 0, h: 0};
+  return {x: minx, y: miny, w: maxx - minx, h: maxy - miny};
 }
 
 /**
@@ -328,19 +354,37 @@ function bakeGradient(def, cm, bbox) {
     const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
     // objectBoundingBox radius r=0.5 spans half the box; for a non-square box the geometric mean sqrt(w*h)
     // is the best-fit circle (vs the diagonal, which oversizes a wide/tall box).
-    const rUser = obb ? gradCoord(a.r, 0.5) * Math.sqrt(bbox.w * bbox.h) : gradCoord(a.r, 0.5);
-    return { type: GRAD_RADIAL, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: rUser * scaleOf(cm) * scaleOf(gt) };
+    const rUser = obb
+      ? gradCoord(a.r, 0.5) * Math.sqrt(bbox.w * bbox.h)
+      : gradCoord(a.r, 0.5);
+    return {
+      type: GRAD_RADIAL,
+      stops: def.stops,
+      ax: bcx,
+      ay: bcy,
+      bx: 0,
+      by: 0,
+      r: rUser * scaleOf(cm) * scaleOf(gt),
+    };
   }
   if (def.name === 'conicGradient') {
     const [bcx, bcy] = toBaked(gradCoord(a.cx, 0.5), gradCoord(a.cy, 0.5));
     // `from` (degrees, clockwise from the top, CSS conic-gradient convention) -> radians, plus the rotation
     // baked into the gradient + path transforms so the sweep orients correctly in the final coordinate space.
     const rot = Math.atan2(cm[1], cm[0]) + Math.atan2(gt[1], gt[0]);
-    return { type: GRAD_CONIC, stops: def.stops, ax: bcx, ay: bcy, bx: 0, by: 0, r: (num(a.from, 0) * Math.PI) / 180 + rot };
+    return {
+      type: GRAD_CONIC,
+      stops: def.stops,
+      ax: bcx,
+      ay: bcy,
+      bx: 0,
+      by: 0,
+      r: (num(a.from, 0) * Math.PI) / 180 + rot,
+    };
   }
   const [ax, ay] = toBaked(gradCoord(a.x1, 0), gradCoord(a.y1, 0));
   const [bx, by] = toBaked(gradCoord(a.x2, 1), gradCoord(a.y2, 0));
-  return { type: GRAD_LINEAR, stops: def.stops, ax, ay, bx, by, r: 0 };
+  return {type: GRAD_LINEAR, stops: def.stops, ax, ay, bx, by, r: 0};
 }
 
 /**
@@ -355,8 +399,12 @@ export async function svgToVector(svgString) {
   const root = await parse(String(svgString));
   const a = root.attributes || {};
 
-  let vb = String(a.viewBox || '').trim().split(/[\s,]+/).map(Number);
-  if (vb.length !== 4 || vb.some((n) => Number.isNaN(n))) vb = [0, 0, num(a.width, 100), num(a.height, 100)];
+  let vb = String(a.viewBox || '')
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (vb.length !== 4 || vb.some(n => Number.isNaN(n)))
+    vb = [0, 0, num(a.width, 100), num(a.height, 100)];
   const [vx, vy, vw, vh] = vb;
   const width = num(a.width, vw);
   const height = num(a.height, vh);
@@ -364,7 +412,10 @@ export async function svgToVector(svgString) {
   // Root transform: map the viewBox user-units onto the intrinsic px box (like the inline <Svg> path).
   const sx = vw ? width / vw : 1;
   const sy = vh ? height / vh : 1;
-  const rootM = mul([sx, 0, 0, sy, -vx * sx, -vy * sy], parseTransform(a.transform));
+  const rootM = mul(
+    [sx, 0, 0, sy, -vx * sx, -vy * sy],
+    parseTransform(a.transform),
+  );
 
   const ops = [];
   const paints = [];
@@ -374,7 +425,15 @@ export async function svgToVector(svgString) {
   // Elements we intentionally skip without losing visible content (gradient defs are collected separately,
   // the rest are metadata). Anything else hitting the skip branch — text/image/use/mask/filter/pattern/… —
   // is unsupported VISUAL content, recorded in `dropped` so the loader can warn + fall back to raster.
-  const SVG_IGNORABLE = new Set(['defs', 'title', 'desc', 'metadata', 'linearGradient', 'radialGradient', 'conicGradient']);
+  const SVG_IGNORABLE = new Set([
+    'defs',
+    'title',
+    'desc',
+    'metadata',
+    'linearGradient',
+    'radialGradient',
+    'conicGradient',
+  ]);
   const dropped = new Set();
 
   const walk = (node, m, paint) => {
@@ -411,8 +470,10 @@ export async function svgToVector(svgString) {
       // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
       // by a positive pattern, so a stray stroke-dasharray on an unstroked/zero-width shape isn't penalized.
       const dash = cp['stroke-dasharray'];
-      const stroked = cp.stroke && cp.stroke !== 'none' && num(cp['stroke-width'], 1) > 0;
-      if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash)) dropped.add('stroke-dasharray');
+      const stroked =
+        cp.stroke && cp.stroke !== 'none' && num(cp['stroke-width'], 1) > 0;
+      if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash))
+        dropped.add('stroke-dasharray');
 
       const shapeOps = parsePath(d);
       if (!shapeOps.length) continue;
@@ -422,7 +483,7 @@ export async function svgToVector(svgString) {
       // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index; the
       // solid color stays 0 (colorOf returns 0 for url()). The shape's bbox is computed once, lazily.
       let bbox = null;
-      const refGrad = (ref) => {
+      const refGrad = ref => {
         if (!ref) return 0;
         const def = gradDefs.get(ref);
         if (!def || def.stops.length < 2) return 0;
@@ -434,21 +495,27 @@ export async function svgToVector(svgString) {
       const strokeGrad = refGrad(urlRef(cp.stroke));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, cm));
       paints.push(
-        applyAlpha(colorOf(cp.fill ?? 'black'), op * clamp01(num(cp['fill-opacity'], 1))),
-        applyAlpha(colorOf(cp.stroke ?? 'none'), op * clamp01(num(cp['stroke-opacity'], 1))),
+        applyAlpha(
+          colorOf(cp.fill ?? 'black'),
+          op * clamp01(num(cp['fill-opacity'], 1)),
+        ),
+        applyAlpha(
+          colorOf(cp.stroke ?? 'none'),
+          op * clamp01(num(cp['stroke-opacity'], 1)),
+        ),
         num(cp['stroke-width'], 1) * scaleOf(cm),
         num(cp['stroke-miterlimit'], 4),
         CAP[cp['stroke-linecap']] ?? 0,
         JOIN[cp['stroke-linejoin']] ?? 0,
         cp['fill-rule'] === 'evenodd' ? 1 : 0,
         fillGrad,
-        strokeGrad
+        strokeGrad,
       );
     }
   };
 
   walk(root, rootM, DEFAULT_PAINT);
-  return { ops, paints, gradients, width, height, dropped: [...dropped].sort() };
+  return {ops, paints, gradients, width, height, dropped: [...dropped].sort()};
 }
 
 /**
@@ -461,17 +528,18 @@ export async function svgToVector(svgString) {
  * @returns {Promise<{width:number, height:number, png:Buffer}>}  Rendered size and PNG bytes.
  */
 export async function svgToRaster(svgString) {
-  const { Resvg } = await import('@resvg/resvg-js');
+  const {Resvg} = await import('@resvg/resvg-js');
   // resvg (usvg) requires the SVG namespace; svgson (the vector baker) is lenient and many hand-authored
   // SVGs omit it, so inject it when absent or resvg rejects the document ("does not have a root node").
   let s = String(svgString);
-  if (!/<svg\b[^>]*\sxmlns\s*=/i.test(s)) s = s.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
-  const r = new Resvg(s, { background: 'rgba(0,0,0,0)' }); // transparent so it composites
+  if (!/<svg\b[^>]*\sxmlns\s*=/i.test(s))
+    s = s.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  const r = new Resvg(s, {background: 'rgba(0,0,0,0)'}); // transparent so it composites
   const img = r.render();
   const png = img.asPng();
-  const { width, height } = img;
+  const {width, height} = img;
   img.free?.();
-  return { width, height, png };
+  return {width, height, png};
 }
 
 /**
@@ -485,8 +553,11 @@ export async function svgToRaster(svgString) {
  */
 export function writeRasterPng(name, png) {
   const dir = join(tmpdir(), 'embedded-react-svg-raster');
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `${name}-${createHash('sha1').update(png).digest('hex').slice(0, 8)}.png`);
+  mkdirSync(dir, {recursive: true});
+  const file = join(
+    dir,
+    `${name}-${createHash('sha1').update(png).digest('hex').slice(0, 8)}.png`,
+  );
   writeFileSync(file, png);
   return file;
 }

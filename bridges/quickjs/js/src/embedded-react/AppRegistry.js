@@ -21,8 +21,8 @@
 // "running the bundle IS starting the app", so registerComponent mounts immediately into a root
 // sized from the host-injected `screen` global. (A host-driven runApplication can be split out
 // later when the C host owns app lifecycle.)
-import { createElement } from 'react';
-import { createRoot } from '../renderer.js';
+import {createElement} from 'react';
+import {createRoot} from '../renderer.js';
 
 let registered = null;
 
@@ -32,7 +32,7 @@ export const AppRegistry = {
    * the component (RN signature), so the component module isn't evaluated until registration.
    */
   registerComponent(appKey, componentProvider) {
-    registered = { appKey, Component: componentProvider() };
+    registered = {appKey, Component: componentProvider()};
     AppRegistry.runApplication(appKey);
     return appKey;
   },
@@ -43,7 +43,7 @@ export const AppRegistry = {
   runApplication(appKey) {
     if (!registered) return;
     if (appKey && appKey !== registered.appKey) return;
-    const root = createRoot({ width: screen.width, height: screen.height });
+    const root = createRoot({width: screen.width, height: screen.height});
     root.render(createElement(registered.Component));
   },
 };

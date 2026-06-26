@@ -22,9 +22,9 @@
 // `npx embedded-react dev` CLI uses — pointed at a repo demo + the locally built module in public/. Build the
 // module once first: `node tools/web-sim/build.mjs`. See tools/web-sim/README.md.
 
-import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import {existsSync} from 'node:fs';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {dirname, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
@@ -34,7 +34,12 @@ const PUBLIC = resolve(HERE, 'public');
 const args = process.argv.slice(2);
 const portIdx = args.indexOf('--port');
 const port = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 3333;
-const demo = args.find((a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1)) || process.env.DEMO || 'music-player';
+const demo =
+  args.find(
+    (a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1),
+  ) ||
+  process.env.DEMO ||
+  'music-player';
 
 const demoDir = resolve(REPO, 'demos', demo);
 const entry = resolve(demoDir, 'index.jsx');
@@ -47,7 +52,9 @@ if (!existsSync(resolve(PUBLIC, 'embedded-react.wasm'))) {
   process.exit(1);
 }
 
-const { runDevServer } = await import(pathToFileURL(resolve(JS, 'sim-server.mjs')).href);
+const {runDevServer} = await import(
+  pathToFileURL(resolve(JS, 'sim-server.mjs')).href
+);
 
 await runDevServer({
   entry,

@@ -18,7 +18,7 @@
 // references by pointer (er_image_load). Pure JS (pngjs) — no native deps, no Python. The engine
 // scales at render time, so bake at whatever source resolution you want to ship.
 import fs from 'node:fs';
-import { PNG } from 'pngjs';
+import {PNG} from 'pngjs';
 
 /**
  * Decodes an image and returns its premultiplied ARGB8888 pixels (row-major, 0xAARRGGBB).
@@ -28,12 +28,14 @@ import { PNG } from 'pngjs';
  * @param {string} opts.name  Asset name an <Image source>/imageName looks up.
  * @returns {{name:string, width:number, height:number, pixels:Uint32Array}}
  */
-export function bakeImage({ path, name }) {
+export function bakeImage({path, name}) {
   if (!/\.png$/i.test(path)) {
-    throw new Error(`image "${path}": only PNG is supported by the baker (convert to PNG, or extend bake-image.mjs)`);
+    throw new Error(
+      `image "${path}": only PNG is supported by the baker (convert to PNG, or extend bake-image.mjs)`,
+    );
   }
   const png = PNG.sync.read(fs.readFileSync(path));
-  const { width, height, data } = png; // data = RGBA, 8-bit, row-major
+  const {width, height, data} = png; // data = RGBA, 8-bit, row-major
   const pixels = new Uint32Array(width * height);
   for (let i = 0; i < width * height; i++) {
     const r = data[i * 4];
@@ -46,5 +48,5 @@ export function bakeImage({ path, name }) {
     const bp = Math.floor((b * a + 127) / 255);
     pixels[i] = ((a << 24) | (rp << 16) | (gp << 8) | bp) >>> 0;
   }
-  return { name, width, height, pixels };
+  return {name, width, height, pixels};
 }

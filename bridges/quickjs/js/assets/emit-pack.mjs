@@ -87,7 +87,7 @@ function writeGlyph(w, g) {
  * @param {Array<object>} [opts.fonts]   Results of bakeFont().
  * @returns {Buffer} The pack bytes.
  */
-export function emitAssetPack({ images = [], fonts = [] }) {
+export function emitAssetPack({images = [], fonts = []}) {
   const w = new Writer();
   w.bytes(Buffer.from('ERPK', 'ascii'));
   w.u32(VERSION);
@@ -100,7 +100,13 @@ export function emitAssetPack({ images = [], fonts = [] }) {
     w.u32(img.width);
     w.u32(img.height);
     // pixels is a Uint32Array (premultiplied ARGB words); copy its LE bytes verbatim.
-    w.bytes(Buffer.from(img.pixels.buffer, img.pixels.byteOffset, img.pixels.byteLength));
+    w.bytes(
+      Buffer.from(
+        img.pixels.buffer,
+        img.pixels.byteOffset,
+        img.pixels.byteLength,
+      ),
+    );
   }
 
   for (const font of fonts) {

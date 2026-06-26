@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 
 // Stub the C bridge so animations complete SYNCHRONOUSLY — i.e., NativeUI.animValueAnimate calls its
 // completion callback before returning. This is what the engine effectively does on a large catch-up
@@ -48,12 +48,13 @@ describe('Animated.loop with synchronous completion', () => {
   });
 
   it('does not overflow the stack on loop(sequence([...])) when completions fire synchronously', async () => {
-    const { loop, sequence, timing, AnimatedValue } = await import('../Animated.js');
+    const {loop, sequence, timing, AnimatedValue} =
+      await import('../Animated.js');
     const v = new AnimatedValue(1);
     const anim = loop(
       sequence([
-        timing(v, { toValue: 1.12, duration: 800 }),
-        timing(v, { toValue: 1.0, duration: 800 }),
+        timing(v, {toValue: 1.12, duration: 800}),
+        timing(v, {toValue: 1.0, duration: 800}),
       ]),
     ); // infinite loop — the scaffolder's pulsing-logo pattern
     // start() must return (scheduling the next iteration asynchronously); a recursive loop throws

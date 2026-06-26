@@ -42,11 +42,11 @@ export {
   G,
   Arc,
 } from './components.js';
-export { updateVector, updateText, setKeyboardConfig } from './imperative.js';
-export { StyleSheet } from './StyleSheet.js';
-export { Platform } from './Platform.js';
-export { AppRegistry } from './AppRegistry.js';
-export { Animated, useAnimatedValue } from './Animated.js';
-export { usePersistentState } from './usePersistentState.js';
-export { Easing } from './Easing.js';
-export { LayoutAnimation } from './LayoutAnimation.js';
+export {updateVector, updateText, setKeyboardConfig} from './imperative.js';
+export {StyleSheet} from './StyleSheet.js';
+export {Platform} from './Platform.js';
+export {AppRegistry} from './AppRegistry.js';
+export {Animated, useAnimatedValue} from './Animated.js';
+export {usePersistentState} from './usePersistentState.js';
+export {Easing} from './Easing.js';
+export {LayoutAnimation} from './LayoutAnimation.js';

@@ -23,10 +23,10 @@
 // er_web_load_source (Flow A). W2 targets asset-free demos (the built-in font renders text); imported
 // images/fonts + an asset pack + esbuild --watch hot reload land in W3.
 
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import {dirname, resolve} from 'node:path';
+import {existsSync, mkdirSync} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
@@ -34,7 +34,7 @@ const JS = resolve(REPO, 'bridges/quickjs/js'); // where esbuild + react + the l
 
 // esbuild + react + the reconciler are installed in the JS package, not here — resolve from there.
 const require = createRequire(resolve(JS, 'package.json'));
-const { build } = require('esbuild');
+const {build} = require('esbuild');
 const demo = process.argv[2] || process.env.DEMO || 'music-player';
 const entry = resolve(REPO, 'demos', demo, 'index.jsx');
 const outfile = resolve(HERE, 'public', 'app.js');
@@ -43,7 +43,7 @@ if (!existsSync(entry)) {
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   process.exit(1);
 }
-mkdirSync(resolve(HERE, 'public'), { recursive: true });
+mkdirSync(resolve(HERE, 'public'), {recursive: true});
 
 try {
   await build({
@@ -54,9 +54,9 @@ try {
     platform: 'neutral',
     target: 'es2020',
     jsx: 'automatic',
-    alias: { 'embedded-react': resolve(JS, 'src/embedded-react/index.js') },
+    alias: {'embedded-react': resolve(JS, 'src/embedded-react/index.js')},
     nodePaths: [resolve(JS, 'node_modules')],
-    define: { 'process.env.NODE_ENV': '"production"' },
+    define: {'process.env.NODE_ENV': '"production"'},
     legalComments: 'none',
     logLevel: 'info',
   });

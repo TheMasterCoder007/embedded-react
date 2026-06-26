@@ -23,13 +23,23 @@
 // Copies template/ into <my-app>, substituting the project name and pinning the embedded-react dependency
 // to this scaffolder's version (lockstep). Then: cd my-app && npm install && npm run dev.
 
-import { readdirSync, statSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve, join, relative, basename } from 'node:path';
+import {
+  readdirSync,
+  statSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  existsSync,
+} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {dirname, resolve, join, relative, basename} from 'node:path';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = resolve(PKG_ROOT, 'template');
-const erVersion = JSON.parse(readFileSync(resolve(PKG_ROOT, 'package.json'), 'utf8')).version;
+const erVersion = JSON.parse(
+  readFileSync(resolve(PKG_ROOT, 'package.json'), 'utf8'),
+).version;
 
 const arg = process.argv[2];
 if (!arg || arg.startsWith('-')) {
@@ -41,7 +51,11 @@ if (!arg || arg.startsWith('-')) {
 
 const destDir = resolve(process.cwd(), arg);
 const appName = basename(destDir);
-const pkgName = appName.toLowerCase().replace(/[^a-z0-9-~.]/g, '-').replace(/^[-.]+/, '') || 'embedded-react-app';
+const pkgName =
+  appName
+    .toLowerCase()
+    .replace(/[^a-z0-9-~.]/g, '-')
+    .replace(/^[-.]+/, '') || 'embedded-react-app';
 
 if (existsSync(destDir) && readdirSync(destDir).length) {
   console.error(`Target directory "${arg}" already exists and is not empty.`);
@@ -49,17 +63,21 @@ if (existsSync(destDir) && readdirSync(destDir).length) {
 }
 
 const TEXT = /\.(jsx?|tsx?|json|md)$/;
-const subst = (s) => s.replaceAll('__APP_NAME__', pkgName).replaceAll('__ER_VERSION__', `^${erVersion}`);
+const subst = s =>
+  s
+    .replaceAll('__APP_NAME__', pkgName)
+    .replaceAll('__ER_VERSION__', `^${erVersion}`);
 
 /** Copy template → dest, substituting placeholders in text files and restoring the dotfile name. */
 function copyDir(src, dst) {
-  mkdirSync(dst, { recursive: true });
+  mkdirSync(dst, {recursive: true});
   for (const name of readdirSync(src)) {
     const sp = join(src, name);
     // npm strips a published .gitignore, so the template ships it as `gitignore`; restore the dot here.
     const dp = join(dst, name === 'gitignore' ? '.gitignore' : name);
     if (statSync(sp).isDirectory()) copyDir(sp, dp);
-    else if (TEXT.test(name) || name === 'gitignore') writeFileSync(dp, subst(readFileSync(sp, 'utf8')));
+    else if (TEXT.test(name) || name === 'gitignore')
+      writeFileSync(dp, subst(readFileSync(sp, 'utf8')));
     else copyFileSync(sp, dp); // binary asset (png, ttf, …)
   }
 }
@@ -71,4 +89,6 @@ console.log(`\n✓ Created "${appName}" at ${where}\n`);
 console.log('Next steps:');
 if (where !== '.') console.log(`  cd ${where}`);
 console.log('  npm install');
-console.log('  npm run dev        # WASM simulator with hot reload → http://localhost:3333\n');
+console.log(
+  '  npm run dev        # WASM simulator with hot reload → http://localhost:3333\n',
+);

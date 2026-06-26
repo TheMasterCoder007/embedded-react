@@ -17,8 +17,13 @@
 // Unit tests for the ERCF config-container emitter (emit-container.mjs). These lock down the on-disk
 // format and — crucially — that the JS CRC-32 matches the C loader's crc32_bytes() (er_runtime.c), so
 // a container packed here verifies on a device instead of being rejected as corrupt.
-import { describe, it, expect } from 'vitest';
-import { emitContainer, crc32, SECTION_BYTECODE, SECTION_ASSET_PACK } from '../emit-container.mjs';
+import {describe, it, expect} from 'vitest';
+import {
+  emitContainer,
+  crc32,
+  SECTION_BYTECODE,
+  SECTION_ASSET_PACK,
+} from '../emit-container.mjs';
 
 /** Re-reads a little-endian ERCF container into a structured object (mirrors the C loader's walk). */
 function parseContainer(buf) {
@@ -47,9 +52,9 @@ function parseContainer(buf) {
     const len = u32();
     const data = buf.subarray(off, off + len);
     off += len;
-    sections.push({ type, data });
+    sections.push({type, data});
   }
-  return { magic, formatVersion, storedCrc, qjsTag, sections, end: off };
+  return {magic, formatVersion, storedCrc, qjsTag, sections, end: off};
 }
 
 describe('crc32', () => {
@@ -69,25 +74,28 @@ describe('emitContainer', () => {
   const assetPack = Buffer.from('ERPK fake pack bytes', 'ascii');
 
   it('emits a well-formed container with assets (pack first, bytecode last)', () => {
-    const c = emitContainer({ bytecode, assetPack, qjsTag: 'v0.15.0' });
+    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
     const p = parseContainer(c);
     expect(p.magic).toBe('ERCF');
     expect(p.formatVersion).toBe(1);
     expect(p.qjsTag).toBe('v0.15.0');
     expect(p.end).toBe(c.length); // consumed every byte — no trailing slop
-    expect(p.sections.map((s) => s.type)).toEqual([SECTION_ASSET_PACK, SECTION_BYTECODE]);
+    expect(p.sections.map(s => s.type)).toEqual([
+      SECTION_ASSET_PACK,
+      SECTION_BYTECODE,
+    ]);
     expect(Buffer.compare(p.sections[0].data, assetPack)).toBe(0);
     expect(Buffer.compare(p.sections[1].data, bytecode)).toBe(0);
   });
 
   it('stores a CRC over the bytes after the crc field, and it verifies', () => {
-    const c = emitContainer({ bytecode, assetPack, qjsTag: 'v0.15.0' });
+    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
     const p = parseContainer(c);
     expect(p.storedCrc).toBe(crc32(c.subarray(12)));
   });
 
   it('flipping any body byte breaks the CRC (integrity check)', () => {
-    const c = emitContainer({ bytecode, assetPack, qjsTag: 'v0.15.0' });
+    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
     const tampered = Buffer.from(c);
     tampered[tampered.length - 1] ^= 0xff;
     const p = parseContainer(tampered);
@@ -95,13 +103,13 @@ describe('emitContainer', () => {
   });
 
   it('omits the asset section when there are no assets', () => {
-    const c = emitContainer({ bytecode, qjsTag: 'v0.15.0' });
+    const c = emitContainer({bytecode, qjsTag: 'v0.15.0'});
     const p = parseContainer(c);
-    expect(p.sections.map((s) => s.type)).toEqual([SECTION_BYTECODE]);
+    expect(p.sections.map(s => s.type)).toEqual([SECTION_BYTECODE]);
   });
 
   it('rejects missing bytecode or tag', () => {
-    expect(() => emitContainer({ qjsTag: 'v0.15.0' })).toThrow();
-    expect(() => emitContainer({ bytecode })).toThrow();
+    expect(() => emitContainer({qjsTag: 'v0.15.0'})).toThrow();
+    expect(() => emitContainer({bytecode})).toThrow();
   });
 });

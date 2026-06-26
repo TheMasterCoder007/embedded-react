@@ -18,7 +18,7 @@
 // bindings (Animated.Value / interpolation, bound to the node's prop so the engine drives them).
 // Pure (no NativeUI), so it's unit-testable. An animated entry is anything with an `__animated`
 // marker — `transform: [{ translateX: value }]` entries are handled too (scale binds both axes).
-import { flattenStyle } from '../props.js';
+import {flattenStyle} from '../props.js';
 
 export function splitAnimatedStyle(style) {
   const staticStyle = {};
@@ -37,10 +37,10 @@ export function splitAnimatedStyle(style) {
         const v = entry[axis];
         if (v && v.__animated) {
           if (axis === 'scale') {
-            bindings.push({ prop: 'scaleX', value: v });
-            bindings.push({ prop: 'scaleY', value: v });
+            bindings.push({prop: 'scaleX', value: v});
+            bindings.push({prop: 'scaleY', value: v});
           } else {
-            bindings.push({ prop: axis, value: v });
+            bindings.push({prop: axis, value: v});
           }
         } else {
           staticTransform.push(entry);
@@ -48,11 +48,11 @@ export function splitAnimatedStyle(style) {
       }
       if (staticTransform.length > 0) staticStyle.transform = staticTransform;
     } else if (val && val.__animated) {
-      bindings.push({ prop: key, value: val });
+      bindings.push({prop: key, value: val});
     } else {
       staticStyle[key] = val;
     }
   }
 
-  return { staticStyle, bindings };
+  return {staticStyle, bindings};
 }

@@ -20,8 +20,8 @@
 // We use LegacyRoot (synchronous) mode so the initial render flushes without depending on the
 // async scheduler/timers — the host's frame loop then paints whatever the tree became.
 import Reconciler from 'react-reconciler';
-import { hostConfig } from './host-config.js';
-import { NativeUI } from './native-ui.js';
+import {hostConfig} from './host-config.js';
+import {NativeUI} from './native-ui.js';
 
 const reconciler = Reconciler(hostConfig);
 
@@ -45,7 +45,7 @@ export function createRoot(containerProps) {
     false, // isStrictMode
     null, // concurrentUpdatesByDefaultOverride
     '', // identifierPrefix
-    (error) => console.error('react recoverable error:', error),
+    error => console.error('react recoverable error:', error),
     null, // transitionCallbacks
   );
 
