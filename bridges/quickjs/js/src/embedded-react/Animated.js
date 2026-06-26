@@ -17,9 +17,9 @@
 // Animated — the React Native analog, backed by the engine's native-driver value system
 // (er_anim_value_*). An Animated.Value is a handle to an engine-side float; binding it to a node
 // prop (via Animated.View) lets the engine advance the animation each frame with NO per-frame JS.
-import { createElement, useRef, useEffect } from 'react';
-import { NativeUI } from '../native-ui.js';
-import { splitAnimatedStyle } from './split-style.js';
+import {createElement, useRef, useEffect} from 'react';
+import {NativeUI} from '../native-ui.js';
+import {splitAnimatedStyle} from './split-style.js';
 
 /** A standalone animatable value bound to an engine-side float. */
 export class AnimatedValue {
@@ -74,7 +74,12 @@ export class AnimatedInterpolation {
   }
 
   __bind(node, prop) {
-    NativeUI.animValueBindInterpolated(this._parent._handle, node, prop, this._config);
+    NativeUI.animValueBindInterpolated(
+      this._parent._handle,
+      node,
+      prop,
+      this._config,
+    );
   }
 
   interpolate(config) {
@@ -86,7 +91,7 @@ export class AnimatedInterpolation {
 /** Wraps fn so it runs at most once, regardless of how many times it is invoked. */
 function once(fn) {
   let called = false;
-  return (arg) => {
+  return arg => {
     if (called) return;
     called = true;
     if (fn) fn(arg);
@@ -107,9 +112,9 @@ function makeAnimation(value, toValue, config) {
     _value: value,
     start(onComplete) {
       // Always pass a wrapper so we can null out the (possibly recycled) handle on completion.
-      const cb = (finished) => {
+      const cb = finished => {
         handle = 0;
-        if (onComplete) onComplete({ finished: !!finished });
+        if (onComplete) onComplete({finished: !!finished});
       };
       handle = NativeUI.animValueAnimate(value._handle, toValue, config, cb);
     },
@@ -120,19 +125,19 @@ function makeAnimation(value, toValue, config) {
 }
 
 export function timing(value, config = {}) {
-  const { toValue = 0, useNativeDriver, ...rest } = config;
-  return makeAnimation(value, toValue, { type: 'timing', ...rest });
+  const {toValue = 0, useNativeDriver, ...rest} = config;
+  return makeAnimation(value, toValue, {type: 'timing', ...rest});
 }
 
 export function spring(value, config = {}) {
-  const { toValue = 0, useNativeDriver, ...rest } = config;
-  return makeAnimation(value, toValue, { type: 'spring', ...rest });
+  const {toValue = 0, useNativeDriver, ...rest} = config;
+  return makeAnimation(value, toValue, {type: 'spring', ...rest});
 }
 
 export function decay(value, config = {}) {
-  const { useNativeDriver, ...rest } = config;
+  const {useNativeDriver, ...rest} = config;
   // Decay coasts from its velocity; the engine ignores the target, so pass the current value.
-  return makeAnimation(value, value.__getValue(), { type: 'decay', ...rest });
+  return makeAnimation(value, value.__getValue(), {type: 'decay', ...rest});
 }
 
 // --- Composition -------------------------------------------------------------------------------
@@ -152,22 +157,23 @@ export function sequence(animations) {
       current = 0;
       stopped = false;
       const done = once(onComplete);
-      const next = (result) => {
+      const next = result => {
         if (stopped || !result || result.finished === false) {
-          done({ finished: false });
+          done({finished: false});
           return;
         }
         if (current >= animations.length) {
-          done({ finished: true });
+          done({finished: true});
           return;
         }
         animations[current++].start(next);
       };
-      next({ finished: true }); // kick off the first entry
+      next({finished: true}); // kick off the first entry
     },
     stop() {
       stopped = true;
-      if (current > 0 && current <= animations.length) animations[current - 1].stop();
+      if (current > 0 && current <= animations.length)
+        animations[current - 1].stop();
     },
   };
 }
@@ -181,12 +187,12 @@ export function parallel(animations, config) {
       const done = once(onComplete);
       const total = animations.length;
       if (total === 0) {
-        done({ finished: true });
+        done({finished: true});
         return;
       }
       let doneCount = 0;
       let anyUnfinished = false;
-      const onChild = (result) => {
+      const onChild = result => {
         doneCount++;
         if (!result || result.finished === false) {
           anyUnfinished = true;
@@ -195,7 +201,7 @@ export function parallel(animations, config) {
             for (const a of animations) a.stop();
           }
         }
-        if (doneCount >= total) done({ finished: !anyUnfinished });
+        if (doneCount >= total) done({finished: !anyUnfinished});
       };
       for (const a of animations) a.start(onChild);
     },
@@ -215,15 +221,15 @@ export function stagger(delay, animations) {
       const done = once(onComplete);
       const total = animations.length;
       if (total === 0) {
-        done({ finished: true });
+        done({finished: true});
         return;
       }
       let doneCount = 0;
       let anyUnfinished = false;
-      const onChild = (result) => {
+      const onChild = result => {
         doneCount++;
         if (!result || result.finished === false) anyUnfinished = true;
-        if (doneCount >= total) done({ finished: !anyUnfinished });
+        if (doneCount >= total) done({finished: !anyUnfinished});
       };
       animations.forEach((a, i) => {
         if (i === 0) {
@@ -253,7 +259,7 @@ export function delay(time) {
       const done = once(onComplete);
       timer = setTimeout(() => {
         timer = 0;
-        done({ finished: true });
+        done({finished: true});
       }, time);
     },
     stop() {
@@ -271,33 +277,42 @@ export function delay(time) {
  * (resetBeforeIteration), matching RN — so a timing 0→1 repeats 0→1 rather than ping-ponging.
  */
 export function loop(animation, config) {
-  const iterations = config && Number.isInteger(config.iterations) ? config.iterations : -1;
+  const iterations =
+    config && Number.isInteger(config.iterations) ? config.iterations : -1;
   const resetBeforeIteration = !config || config.resetBeforeIteration !== false;
   let stopped = false;
   return {
     _value: animation._value,
     start(onComplete) {
       const done = once(onComplete);
-      const startValue = resetBeforeIteration && animation._value ? animation._value.__getValue() : null;
+      const startValue =
+        resetBeforeIteration && animation._value
+          ? animation._value.__getValue()
+          : null;
       let count = 0;
       const startIteration = () => {
         if (stopped) {
-          done({ finished: false });
+          done({finished: false});
           return;
         }
         if (iterations >= 0 && count >= iterations) {
-          done({ finished: true });
+          done({finished: true});
           return;
         }
         count++;
-        if (resetBeforeIteration && animation._value && startValue != null && count > 1) {
+        if (
+          resetBeforeIteration &&
+          animation._value &&
+          startValue != null &&
+          count > 1
+        ) {
           animation._value.setValue(startValue);
         }
         animation.start(onIterationDone);
       };
-      const onIterationDone = (result) => {
+      const onIterationDone = result => {
         if (stopped || !result || result.finished === false) {
-          done({ finished: false });
+          done({finished: false});
           return;
         }
         // Defer the next iteration to a fresh task instead of starting it inline. A child animation can
@@ -343,13 +358,13 @@ export function useAnimatedValue(initial = 0) {
  */
 export function createAnimatedComponent(Component) {
   return function AnimatedComponent(props) {
-    const { style, ...rest } = props;
-    const { staticStyle, bindings } = splitAnimatedStyle(style);
-    const ref = (node) => {
+    const {style, ...rest} = props;
+    const {staticStyle, bindings} = splitAnimatedStyle(style);
+    const ref = node => {
       if (node == null) return; // unmount
       for (const b of bindings) b.value.__bind(node, b.prop);
     };
-    return createElement(Component, { ...rest, style: staticStyle, ref });
+    return createElement(Component, {...rest, style: staticStyle, ref});
   };
 }
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { defineConfig } from 'vitest/config';
+import {defineConfig} from 'vitest/config';
 
 export default defineConfig({
   test: {
@@ -31,5 +31,5 @@ export default defineConfig({
   },
   // Let .jsx unit tests use the automatic JSX runtime (same as the bundle build). vitest 3 transforms
   // with esbuild, which defaults to the classic runtime, so this must be set explicitly.
-  esbuild: { jsx: 'automatic' },
+  esbuild: {jsx: 'automatic'},
 });

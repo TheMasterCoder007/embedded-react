@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { describe, it, expect } from 'vitest';
-import { compileSource } from '../compile.mjs';
+import {describe, it, expect} from 'vitest';
+import {compileSource} from '../compile.mjs';
 
 // The Flow B AOT compiler turns an App.jsx source string into C. These tests assert on the generated C
 // (compileSource is pure — no file I/O), so each fixture is a complete minimal app. `gen` returns the
@@ -24,7 +24,7 @@ import { compileSource } from '../compile.mjs';
 const PRE = `import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, useAnimatedValue } from 'embedded-react';
 `;
-const gen = (src) => compileSource(src, 'test').c;
+const gen = src => compileSource(src, 'test').c;
 
 describe('AOT baseline (regression)', () => {
   it('compiles a static View/Text tree', () => {
@@ -91,7 +91,9 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('s_state.b = (s_state.b - 1);');
     // exactly one app_update per handler body
     const handler = c.slice(c.indexOf('er_handler_0'));
-    expect(handler.slice(0, handler.indexOf('}')).match(/app_update\(\);/g)).toHaveLength(1);
+    expect(
+      handler.slice(0, handler.indexOf('}')).match(/app_update\(\);/g),
+    ).toHaveLength(1);
   });
 
   it('compiles a handler local const used by a later setter', () => {
@@ -138,7 +140,9 @@ describe('AOT baseline (regression)', () => {
       }`);
     expect(c).toContain('s_ref_acc++;');
     const handler = c.slice(c.indexOf('er_handler_0('));
-    expect(handler.slice(0, handler.indexOf('\n}')).includes('app_update();')).toBe(false);
+    expect(
+      handler.slice(0, handler.indexOf('\n}')).includes('app_update();'),
+    ).toBe(false);
   });
 
   it('lowers a string useState to a char buffer + snprintf setter + %s text', () => {
@@ -149,9 +153,13 @@ describe('AOT baseline (regression)', () => {
       }`);
     expect(c).toMatch(/char label\[\d+\];/);
     expect(c).toContain('.label = "Idle"');
-    expect(c).toContain('snprintf(s_state.label, sizeof(s_state.label), "%s", "Active");');
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "%s", "Active");',
+    );
     // the Text node renders the string with %s
-    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", s_state.label);');
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%s", s_state.label);',
+    );
   });
 
   it('wires a useCallback identifier to a single shared handler', () => {
@@ -165,7 +173,9 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('static void er_cb_onTap(');
     // emitted once, referenced twice
     expect(c.match(/static void er_cb_onTap\(/g)).toHaveLength(1);
-    expect(c.match(/er_event_set\([^,]+, ER_EVENT_PRESS, er_cb_onTap, NULL\);/g)).toHaveLength(2);
+    expect(
+      c.match(/er_event_set\([^,]+, ER_EVENT_PRESS, er_cb_onTap, NULL\);/g),
+    ).toHaveLength(2);
   });
 
   it('inlines a state-dependent useMemo at its use site', () => {
@@ -203,9 +213,11 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('er_node_create(ER_NODE_VECTOR)');
     expect(c).toContain('static const float s_svg0_ops[]');
     expect(c).toContain('static const ERVectorPaint s_svg0_paints[]');
-    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/);
-    expect(c).toContain('.stroke_w = 3.0f');           // circle stroke width baked
-    expect(c).toContain('p.width = (int16_t)100;');     // node box from Svg width
+    expect(c).toMatch(
+      /er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/,
+    );
+    expect(c).toContain('.stroke_w = 3.0f'); // circle stroke width baked
+    expect(c).toContain('p.width = (int16_t)100;'); // node box from Svg width
   });
 
   it('compiles a state-driven <Svg> (arc sweep) to a build_svg fn recomputed on update', () => {
@@ -223,12 +235,14 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect(c).toContain('#include <math.h>');
-    expect(c).toMatch(/static float s_svg0_ops\[\d+\];/);   // mutable, not const
+    expect(c).toMatch(/static float s_svg0_ops\[\d+\];/); // mutable, not const
     expect(c).toContain('static void build_svg0(void)');
-    expect(c).toContain('cosf(');                            // arc trig in C
-    expect(c).toContain('(s_state.temp * 2)');               // dynamic endAngle expression
+    expect(c).toContain('cosf('); // arc trig in C
+    expect(c).toContain('(s_state.temp * 2)'); // dynamic endAngle expression
     expect(c).toContain('build_svg0();');
-    expect(c).toMatch(/er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/); // re-upload in app_update
+    expect(c).toMatch(
+      /er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/,
+    ); // re-upload in app_update
   });
 
   it('lowers a state-driven <Svg> paint (stroke color/width) to a mutable paint table rebuilt from state', () => {
@@ -245,12 +259,16 @@ describe('AOT baseline (regression)', () => {
           </Pressable>
         );
       }`);
-    expect(c).toMatch(/static ERVectorPaint s_svg0_paints\[1\];/);      // MUTABLE table (not const)
-    expect(c).not.toMatch(/static const ERVectorPaint s_svg0_paints/);  // ...specifically not const
+    expect(c).toMatch(/static ERVectorPaint s_svg0_paints\[1\];/); // MUTABLE table (not const)
+    expect(c).not.toMatch(/static const ERVectorPaint s_svg0_paints/); // ...specifically not const
     // dynamic stroke color → an ARGB ternary, assigned in build_svg0
-    expect(c).toContain('s_svg0_paints[0].stroke = (((strcmp(s_state.mode, "cool") == 0)) ? 0xFF4CC9F0u : 0xFFF4A261u);');
+    expect(c).toContain(
+      's_svg0_paints[0].stroke = (((strcmp(s_state.mode, "cool") == 0)) ? 0xFF4CC9F0u : 0xFFF4A261u);',
+    );
     // dynamic stroke width → a numeric ternary cast to float
-    expect(c).toContain('s_svg0_paints[0].stroke_w = (float)(((strcmp(s_state.mode, "off") == 0) ? 2 : 8));');
+    expect(c).toContain(
+      's_svg0_paints[0].stroke_w = (float)(((strcmp(s_state.mode, "off") == 0) ? 2 : 8));',
+    );
   });
 
   it('keeps a state-driven <Svg> with STATIC paint on a const paint table (no per-update paint work)', () => {
@@ -267,7 +285,7 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect(c).toMatch(/static const ERVectorPaint s_svg0_paints\[\] = \{/); // const fast path retained
-    expect(c).not.toContain('s_svg0_paints[0].stroke =');                   // paint NOT reassigned per update
+    expect(c).not.toContain('s_svg0_paints[0].stroke ='); // paint NOT reassigned per update
   });
 
   it('emits a baked <Svg source> with its gradient table (Flow B gradients via opts.svgArtifacts)', () => {
@@ -275,7 +293,18 @@ describe('AOT baseline (regression)', () => {
       ops: [0, 0, 1, 0, 0, 2, 10, 0, 2, 10, 10, 6], // SHAPE 0, MOVE 0,0, LINE 10,0, LINE 10,10, CLOSE
       paints: [0, 0, 4, 4, 0, 0, 0, 0, 1], // one 9-wide paint: solid fill 0, stroke_grad = 1 (a conic-stroked path)
       gradients: [
-        { type: 3, stops: [{ color: 0xff39bdf8, offset: 0 }, { color: 0xfff04741, offset: 0.75 }], ax: 5, ay: 5, bx: 0, by: 0, r: -2.356 },
+        {
+          type: 3,
+          stops: [
+            {color: 0xff39bdf8, offset: 0},
+            {color: 0xfff04741, offset: 0.75},
+          ],
+          ax: 5,
+          ay: 5,
+          bx: 0,
+          by: 0,
+          r: -2.356,
+        },
       ],
       width: 20,
       height: 20,
@@ -283,34 +312,61 @@ describe('AOT baseline (regression)', () => {
     const c = compileSource(
       `import { View, Svg } from 'embedded-react';\nimport dial from './climate.svg';\nexport function App() { return <View><Svg source={dial} width={20} height={20} /></View>; }`,
       'test',
-      { svgArtifacts: { climate: artifact } },
+      {svgArtifacts: {climate: artifact}},
     ).c;
     expect(c).toContain('static const ERVectorGradient s_svg0_grads[] = {'); // gradient table emitted
     expect(c).toContain('.type = 3, .stop_count = 2'); // conic, 2 stops
     expect(c).toContain('.stroke_grad = 1'); // the stroked path references the gradient (1-based)
-    expect(c).toMatch(/er_node_set_vector_ops\(n\d+, s_svg0_ops, 12, s_svg0_paints, 1, s_svg0_grads, 1\);/);
+    expect(c).toMatch(
+      /er_node_set_vector_ops\(n\d+, s_svg0_ops, 12, s_svg0_paints, 1, s_svg0_grads, 1\);/,
+    );
   });
 
   it('emits a raster-fallback <Svg source> as an Image node + registers its PNG (Flow B)', () => {
     // bakeSvgArtifacts produces this for an SVG that used unsupported features (e.g. <text>): rasterized to
     // a PNG. emitSvgSource must render it as an Image node, NOT a vector op-tape, and bake the PNG.
-    const artifact = { kind: 'raster', name: 'badge', width: 20, height: 20, png: 'C:/tmp/badge-abcd1234.png' };
+    const artifact = {
+      kind: 'raster',
+      name: 'badge',
+      width: 20,
+      height: 20,
+      png: 'C:/tmp/badge-abcd1234.png',
+    };
     const res = compileSource(
       `import { View, Svg } from 'embedded-react';\nimport badge from './badge.svg';\nexport function App() { return <View><Svg source={badge} width={20} height={20} /></View>; }`,
       'test',
-      { svgArtifacts: { badge: artifact } },
+      {svgArtifacts: {badge: artifact}},
     );
     expect(res.c).toContain('er_node_create(ER_NODE_IMAGE)'); // raster → image node
-    expect(res.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "badge")');
+    expect(res.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "badge")',
+    );
     expect(res.c).not.toContain('s_svg0_ops'); // no vector op-tape emitted for the rastered svg
-    expect(res.images.some((im) => im.name === 'badge' && /badge-abcd1234\.png$/.test(im.importPath))).toBe(true);
+    expect(
+      res.images.some(
+        im => im.name === 'badge' && /badge-abcd1234\.png$/.test(im.importPath),
+      ),
+    ).toBe(true);
   });
 
   it('scales a <Svg source> at compile time but leaves a conic gradient start ANGLE unscaled', () => {
     const artifact = {
       ops: [0, 0, 1, 0, 0, 2, 10, 10, 6],
       paints: [0, 0, 2, 4, 0, 0, 0, 0, 1],
-      gradients: [{ type: 3, stops: [{ color: 0xff000000, offset: 0 }, { color: 0xffffffff, offset: 1 }], ax: 5, ay: 5, bx: 0, by: 0, r: 1.5 }],
+      gradients: [
+        {
+          type: 3,
+          stops: [
+            {color: 0xff000000, offset: 0},
+            {color: 0xffffffff, offset: 1},
+          ],
+          ax: 5,
+          ay: 5,
+          bx: 0,
+          by: 0,
+          r: 1.5,
+        },
+      ],
       width: 10,
       height: 10,
     };
@@ -318,7 +374,7 @@ describe('AOT baseline (regression)', () => {
     const c = compileSource(
       `import { View, Svg } from 'embedded-react';\nimport d from './d.svg';\nexport function App() { return <View><Svg source={d} width={20} height={20} /></View>; }`,
       'test',
-      { svgArtifacts: { d: artifact } },
+      {svgArtifacts: {d: artifact}},
     ).c;
     expect(c).toMatch(/\.ax = 10(\.0+)?f, \.ay = 10(\.0+)?f/); // centre scaled x2
     expect(c).toContain('.r = 1.5f'); // angle NOT scaled
@@ -348,14 +404,18 @@ describe('AOT baseline (regression)', () => {
           </Pressable>
         );
       }`);
-    expect(c).toContain('static ERNode* s_ref_dial = NULL;');     // node ref slot
-    expect(c).toMatch(/s_ref_dial = n\d+;/);                       // captured at build
-    expect(c).toContain('#include <math.h>');                     // arc trig
-    expect(c).toMatch(/static float s_uv0_ops\[\d+\];/);          // imperative op buffer
+    expect(c).toContain('static ERNode* s_ref_dial = NULL;'); // node ref slot
+    expect(c).toMatch(/s_ref_dial = n\d+;/); // captured at build
+    expect(c).toContain('#include <math.h>'); // arc trig
+    expect(c).toMatch(/static float s_uv0_ops\[\d+\];/); // imperative op buffer
     expect(c).toContain('s_uv0_ops[0] = ER_VOP_SHAPE;');
-    expect(c).toContain('data->x');                                // event coord in arc endAngle
-    expect(c).toMatch(/er_node_set_vector_ops\(s_ref_dial, s_uv0_ops, \d+, s_uv0_paints, 1, NULL, 0\);/);
-    expect(c).toContain('er_node_set_vector_dirty_rect(s_ref_dial, 0, 0, 200, 200);');
+    expect(c).toContain('data->x'); // event coord in arc endAngle
+    expect(c).toMatch(
+      /er_node_set_vector_ops\(s_ref_dial, s_uv0_ops, \d+, s_uv0_paints, 1, NULL, 0\);/,
+    );
+    expect(c).toContain(
+      'er_node_set_vector_dirty_rect(s_ref_dial, 0, 0, 200, 200);',
+    );
   });
 
   it('recognizes a memo()-wrapped component', () => {
@@ -363,7 +423,7 @@ describe('AOT baseline (regression)', () => {
       import { memo } from 'react';
       const Badge = memo(function Badge({ label }) { return (<Text>{label}</Text>); });
       export function App() { return (<View><Badge label="hi" /></View>); }`);
-    expect(c).toContain('"hi"');                    // inlined, prop substituted
+    expect(c).toContain('"hi"'); // inlined, prop substituted
     expect(c).toContain('er_node_create(ER_NODE_TEXT)');
   });
 
@@ -371,7 +431,7 @@ describe('AOT baseline (regression)', () => {
     const c = gen(`${PRE}
       function Card({ children }) { return (<View style={{ padding: 8 }}>{children}</View>); }
       export function App() { return (<Card><Text>inside</Text></Card>); }`);
-    expect(c).toContain('"inside"');                // the child Text is emitted
+    expect(c).toContain('"inside"'); // the child Text is emitted
     expect(c).toContain('er_node_create(ER_NODE_VIEW)');
   });
 
@@ -382,7 +442,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('"P"');
   });
 
-  it('merges a static spread {...obj} into a component\'s props', () => {
+  it("merges a static spread {...obj} into a component's props", () => {
     const c = gen(`${PRE}
       const cfg = { label: 'spread!' };
       function Badge({ label }) { return (<Text>{label}</Text>); }
@@ -408,9 +468,9 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect(c).toContain('#include <math.h>');
-    expect(c).toContain('(int)roundf(');                         // Math.round → int cast
-    expect(c).toContain('strcmp(s_state.sel, "a")');             // string equality + it.key folded to "a"
-    expect(c).toContain('strcmp(s_state.sel, "b")');             // second unrolled .map iteration
+    expect(c).toContain('(int)roundf('); // Math.round → int cast
+    expect(c).toContain('strcmp(s_state.sel, "a")'); // string equality + it.key folded to "a"
+    expect(c).toContain('strcmp(s_state.sel, "b")'); // second unrolled .map iteration
   });
 
   it('lowers Math.sin/cos/PI to libm for dynamic Svg coordinates', () => {
@@ -505,13 +565,17 @@ describe('AOT animation completeness', () => {
   });
 
   it('Animated.loop around a single timing sets cfg.loop', () => {
-    const c = app(`Animated.loop(Animated.timing(a, { toValue: 360, duration: 1000, easing: Easing.linear })).start();`);
+    const c = app(
+      `Animated.loop(Animated.timing(a, { toValue: 360, duration: 1000, easing: Easing.linear })).start();`,
+    );
     expect(c).toContain('cfg0.loop = true;');
     expect(c).toContain('ER_EASE_LINEAR');
   });
 
   it('Animated.decay lowers to ER_ANIM_DECAY with velocity + deceleration', () => {
-    const c = app(`Animated.decay(b, { velocity: 0.5, deceleration: 0.997 }).start();`);
+    const c = app(
+      `Animated.decay(b, { velocity: 0.5, deceleration: 0.997 }).start();`,
+    );
     expect(c).toContain('ER_ANIM_DECAY');
     expect(c).toContain('cfg0.velocity = 0.5f;');
     expect(c).toContain('cfg0.deceleration = 0.997f;');
@@ -552,17 +616,21 @@ describe('AOT animation completeness', () => {
   });
 
   it('rejects the same value driven twice in a parallel (they would cancel)', () => {
-    expect(() => app(`Animated.parallel([
+    expect(() =>
+      app(`Animated.parallel([
       Animated.timing(a, { toValue: 1, duration: 100 }),
       Animated.timing(a, { toValue: 0, duration: 100 }),
-    ]).start();`)).toThrow(/same animated value/);
+    ]).start();`),
+    ).toThrow(/same animated value/);
   });
 
   it('rejects Animated.loop around a multi-step sequence', () => {
-    expect(() => app(`Animated.loop(Animated.sequence([
+    expect(() =>
+      app(`Animated.loop(Animated.sequence([
       Animated.timing(a, { toValue: 1, duration: 100 }),
       Animated.timing(b, { toValue: 1, duration: 100 }),
-    ])).start();`)).toThrow(/loop currently wraps a single/);
+    ])).start();`),
+    ).toThrow(/loop currently wraps a single/);
   });
 
   it('rejects mismatched interpolate ranges', () => {
@@ -616,7 +684,7 @@ describe('AOT responsive layout', () => {
         if (compact) return (<View><Text>small</Text></View>);
         return (<View><Text>wide</Text></View>);
       }`;
-    const c = compileSource(src, 'test', { screen: { width: 240, height: 320 } }).c;
+    const c = compileSource(src, 'test', {screen: {width: 240, height: 320}}).c;
     expect(c).toContain('"small"');
     expect(c).not.toContain('"wide"');
   });
@@ -628,7 +696,9 @@ describe('AOT responsive layout', () => {
         if (n > 5) return (<View><Text>a</Text></View>);
         return (<View><Text>b</Text></View>);
       }`;
-    expect(() => compileSource(src, 'test')).toThrow(/compile-time-constant test/);
+    expect(() => compileSource(src, 'test')).toThrow(
+      /compile-time-constant test/,
+    );
   });
 });
 
@@ -652,12 +722,18 @@ describe('AOT touch drag', () => {
     expect(c).toContain('ER_EVENT_TOUCH_START');
     expect(c).toContain('ER_EVENT_TOUCH_MOVE');
     // onLayout rect: x/y stay, width/height map to ERRect w/h
-    expect(c).toContain('s_ref_cx = (data->layout_rect.x + (data->layout_rect.w / 2));');
+    expect(c).toContain(
+      's_ref_cx = (data->layout_rect.x + (data->layout_rect.w / 2));',
+    );
     // touch coord + ref read in the shared drag handler
     expect(c).toContain('static void er_cb_onDrag(');
     expect(c).toContain('s_state.v = (data->x - s_ref_cx);');
     // onTouchStart + onTouchMove reuse the one useCallback handler
-    expect(c.match(/er_event_set\([^,]+, ER_EVENT_TOUCH_(START|MOVE), er_cb_onDrag, NULL\);/g)).toHaveLength(2);
+    expect(
+      c.match(
+        /er_event_set\([^,]+, ER_EVENT_TOUCH_(START|MOVE), er_cb_onDrag, NULL\);/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it('treats useState(70.0) as a FLOAT slot (decimal literal forces float, value stays sub-integer)', () => {
@@ -666,8 +742,8 @@ describe('AOT touch drag', () => {
         const [v, setV] = useState(70.0);
         return (<Pressable onPress={() => setV(v + 0.5)}><Text>{Math.round(v)}</Text></Pressable>);
       }`);
-    expect(c).toContain('float v;');             // float struct field, not int
-    expect(c).toContain('.v = 70.0f');           // valid C float literal (not 70f)
+    expect(c).toContain('float v;'); // float struct field, not int
+    expect(c).toContain('.v = 70.0f'); // valid C float literal (not 70f)
     expect(c).toContain('s_state.v = (s_state.v + 0.5f);');
     expect(c).toContain('(int)roundf((float)(s_state.v))'); // displayed rounded
   });
@@ -704,7 +780,7 @@ describe('AOT diagnostics', () => {
       }`;
     let err;
     try {
-      compileSource(src, 'demo', { filename: 'demos/demo/App.jsx' });
+      compileSource(src, 'demo', {filename: 'demos/demo/App.jsx'});
     } catch (e) {
       err = e;
     }
@@ -717,7 +793,10 @@ describe('AOT diagnostics', () => {
   it('attaches a rewrite hint to a known error', () => {
     let err;
     try {
-      compileSource(`${PRE}\nexport function App() { return (<View><Gauge /></View>); }`, 'demo');
+      compileSource(
+        `${PRE}\nexport function App() { return (<View><Gauge /></View>); }`,
+        'demo',
+      );
     } catch (e) {
       err = e;
     }
@@ -728,7 +807,10 @@ describe('AOT diagnostics', () => {
   it('points at the default demo path when no filename is given', () => {
     let err;
     try {
-      compileSource(`${PRE}\nexport function App() { return (<Nope />); }`, 'mydemo');
+      compileSource(
+        `${PRE}\nexport function App() { return (<Nope />); }`,
+        'mydemo',
+      );
     } catch (e) {
       err = e;
     }
@@ -738,17 +820,23 @@ describe('AOT diagnostics', () => {
   // A spread on a HOST element used to be silently dropped (the style/event loops only read named
   // attributes) — it must now error clearly, like the typed components already do.
   it('rejects a spread on a host element instead of silently dropping it', () => {
-    expect(() => gen(`${PRE}\nexport function App() { const o = window.x; return (<View {...o} />); }`)).toThrow(
-      /spread \{\.\.\.\} on <View> is not supported/,
-    );
+    expect(() =>
+      gen(
+        `${PRE}\nexport function App() { const o = window.x; return (<View {...o} />); }`,
+      ),
+    ).toThrow(/spread \{\.\.\.\} on <View> is not supported/);
   });
 
   it('locates + hints a non-constant useState initial (was a bare evalStatic leak)', () => {
     let err;
     try {
-      compileSource(`${PRE}\nexport function App() { const [s] = useState(window.y); return (<Text>{s}</Text>); }`, 'demo', {
-        filename: 'demos/demo/App.jsx',
-      });
+      compileSource(
+        `${PRE}\nexport function App() { const [s] = useState(window.y); return (<Text>{s}</Text>); }`,
+        'demo',
+        {
+          filename: 'demos/demo/App.jsx',
+        },
+      );
     } catch (e) {
       err = e;
     }
@@ -760,9 +848,13 @@ describe('AOT diagnostics', () => {
   it('locates a malformed list-state item shape at the initial', () => {
     let err;
     try {
-      compileSource(`${PRE}\nexport function App() { const [a] = useState([1, 2]); return (<View>{a.map((x) => (<Text key={x}>{x}</Text>))}</View>); }`, 'demo', {
-        filename: 'demos/demo/App.jsx',
-      });
+      compileSource(
+        `${PRE}\nexport function App() { const [a] = useState([1, 2]); return (<View>{a.map((x) => (<Text key={x}>{x}</Text>))}</View>); }`,
+        'demo',
+        {
+          filename: 'demos/demo/App.jsx',
+        },
+      );
     } catch (e) {
       err = e;
     }
@@ -799,7 +891,9 @@ describe('AOT effects & timers', () => {
   });
 
   it('emits a no-op er_app_tick when the app uses no timers', () => {
-    const c = gen(`${PRE}\nexport function App() { return (<Text>hi</Text>); }`);
+    const c = gen(
+      `${PRE}\nexport function App() { return (<Text>hi</Text>); }`,
+    );
     expect(c).toContain('void er_app_tick(int dt_ms)');
     expect(c).toContain('(void)dt_ms;');
     expect(c).not.toContain('er_timer_add');
@@ -943,7 +1037,9 @@ describe('AOT dynamic enum styles', () => {
         const [row, setRow] = useState(false);
         return (<View style={{ flexDirection: row ? 'row' : 'column' }}><Pressable onPress={() => setRow(!row)}><Text>x</Text></Pressable></View>);
       }`);
-    expect(c).toContain('p.flex_direction = ((s_state.row) ? ER_FLEX_ROW : ER_FLEX_COL);');
+    expect(c).toContain(
+      'p.flex_direction = ((s_state.row) ? ER_FLEX_ROW : ER_FLEX_COL);',
+    );
   });
 
   it('lowers state-driven alignItems and justifyContent', () => {
@@ -952,8 +1048,12 @@ describe('AOT dynamic enum styles', () => {
         const [c2, setC2] = useState(true);
         return (<View style={{ alignItems: c2 ? 'center' : 'flex-start', justifyContent: c2 ? 'center' : 'flex-end' }}><Text>x</Text></View>);
       }`);
-    expect(c).toContain('p.align_items = ((s_state.c2) ? ER_ALIGN_CENTER : ER_ALIGN_FLEX_START);');
-    expect(c).toContain('p.justify_content = ((s_state.c2) ? ER_JUSTIFY_CENTER : ER_JUSTIFY_FLEX_END);');
+    expect(c).toContain(
+      'p.align_items = ((s_state.c2) ? ER_ALIGN_CENTER : ER_ALIGN_FLEX_START);',
+    );
+    expect(c).toContain(
+      'p.justify_content = ((s_state.c2) ? ER_JUSTIFY_CENTER : ER_JUSTIFY_FLEX_END);',
+    );
   });
 
   it('throws on an unknown enum value in a dynamic enum style', () => {
@@ -975,7 +1075,9 @@ describe('AOT nested Text spans', () => {
       }`);
     expect(c).toContain('static const ERTextSpan spans_n');
     expect(c).toContain('{ "Hi ", 0u, 0, 0xFF, 0xFF, 0xFF, ER_LAYOUT_AUTO }'); // inherit segment
-    expect(c).toContain('{ "there", 0xFFF4A261u, 0, 1, 0xFF, 0xFF, ER_LAYOUT_AUTO }'); // bold + amber span
+    expect(c).toContain(
+      '{ "there", 0xFFF4A261u, 0, 1, 0xFF, 0xFF, ER_LAYOUT_AUTO }',
+    ); // bold + amber span
     expect(c).toMatch(/er_node_set_text_spans\(n\d+, spans_n\d+, 2\);/);
   });
 
@@ -1051,7 +1153,9 @@ import { View, Text, Pressable } from 'embedded-react';
     expect(c).toContain('s_state.n = (s_state.n + 1);');
     // two distinct handlers, one per instance, each wired via er_event_set
     expect((c.match(/static void er_handler_\d+\(/g) || []).length).toBe(2);
-    expect((c.match(/er_event_set\(\w+, ER_EVENT_PRESS,/g) || []).length).toBe(2);
+    expect((c.match(/er_event_set\(\w+, ER_EVENT_PRESS,/g) || []).length).toBe(
+      2,
+    );
   });
 
   it('accepts a useCallback identifier passed as a callback prop', () => {
@@ -1094,10 +1198,16 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('er_node_create(ER_NODE_TEXT_INPUT)');
     expect(c).toContain('ER_EVENT_CHANGE_TEXT');
     // onChangeText param binds to the new text; setName(t) → snprintf from data->changed_text
-    expect(c).toContain('snprintf(s_state.name, sizeof(s_state.name), "%s", data->changed_text);');
+    expect(c).toContain(
+      'snprintf(s_state.name, sizeof(s_state.name), "%s", data->changed_text);',
+    );
     // value drives the buffer (synced in app_update), placeholder + color applied
-    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", s_state.name);');
-    expect(c).toContain('snprintf(p.placeholder, sizeof(p.placeholder), "%s", "Name");');
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%s", s_state.name);',
+    );
+    expect(c).toContain(
+      'snprintf(p.placeholder, sizeof(p.placeholder), "%s", "Name");',
+    );
     expect(c).toContain('p.placeholder_color = 0xFF888888u;');
   });
 
@@ -1133,24 +1243,40 @@ describe('AOT images', () => {
 import logo from './assets/logo.png';
 `;
   it('resolves an imported image to image_name + returns it for baking', () => {
-    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} style={{ width: 40, height: 40 }} />); }`, 'demo');
-    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "logo");');
-    expect(r.images).toEqual([{ name: 'logo', importPath: './assets/logo.png' }]);
+    const r = compileSource(
+      `${IMG}\nexport function App() { return (<Image source={logo} style={{ width: 40, height: 40 }} />); }`,
+      'demo',
+    );
+    expect(r.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "logo");',
+    );
+    expect(r.images).toEqual([{name: 'logo', importPath: './assets/logo.png'}]);
   });
 
   it('lowers resizeMode to the ERResizeMode enum', () => {
-    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} resizeMode="contain" />); }`, 'demo');
+    const r = compileSource(
+      `${IMG}\nexport function App() { return (<Image source={logo} resizeMode="contain" />); }`,
+      'demo',
+    );
     expect(r.c).toContain('p.resize_mode = ER_RESIZE_CONTAIN;');
   });
 
   it('lowers tintColor to an ARGB literal', () => {
-    const r = compileSource(`${IMG}\nexport function App() { return (<Image source={logo} tintColor="#ff0000" />); }`, 'demo');
+    const r = compileSource(
+      `${IMG}\nexport function App() { return (<Image source={logo} tintColor="#ff0000" />); }`,
+      'demo',
+    );
     expect(r.c).toContain('p.tint_color = 0xFFFF0000u;');
   });
 
   it('accepts source={{ uri }} as a bare asset name (no import to bake)', () => {
-    const r = compileSource(`import { Image } from 'embedded-react';\nexport function App() { return (<Image source={{ uri: 'wx_sun' }} />); }`, 'demo');
-    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");');
+    const r = compileSource(
+      `import { Image } from 'embedded-react';\nexport function App() { return (<Image source={{ uri: 'wx_sun' }} />); }`,
+      'demo',
+    );
+    expect(r.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");',
+    );
     expect(r.images).toEqual([]);
   });
 
@@ -1159,9 +1285,13 @@ import logo from './assets/logo.png';
       `import { View, Image } from 'embedded-react';\nimport wxSun from './a/wx_sun.png';\nimport wxRain from './a/wx_rain.png';\nconst DAYS = [{ icon: wxSun }, { icon: wxRain }];\nexport function App() { return (<View>{DAYS.map((f, i) => (<Image key={i} source={f.icon} />))}</View>); }`,
       'demo',
     );
-    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");');
-    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_rain");');
-    expect(r.images.map((i) => i.name).sort()).toEqual(['wx_rain', 'wx_sun']);
+    expect(r.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_sun");',
+    );
+    expect(r.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "wx_rain");',
+    );
+    expect(r.images.map(i => i.name).sort()).toEqual(['wx_rain', 'wx_sun']);
   });
 
   it('emits a dynamic <Image source> from a list-state field (set in app_update)', () => {
@@ -1169,7 +1299,9 @@ import logo from './assets/logo.png';
       `import { View, Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [items] = useState([{ icon: 'wx_sun' }]); return (<View>{items.map((d, i) => (<Image key={i} source={d.icon} />))}</View>); }`,
       'demo',
     ).c;
-    expect(c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", s_items[0].icon);');
+    expect(c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", s_items[0].icon);',
+    );
   });
 
   it('emits a dynamic <Image source> from a state ternary + bakes both branches', () => {
@@ -1177,18 +1309,28 @@ import logo from './assets/logo.png';
       `import { Image, Pressable } from 'embedded-react';\nimport sun from './a/sun.png';\nimport moon from './a/moon.png';\nimport { useState } from 'react';\nexport function App() { const [day, setDay] = useState(true); return (<Pressable onPress={() => setDay(!day)}><Image source={day ? sun : moon} /></Pressable>); }`,
       'demo',
     );
-    expect(r.c).toContain('snprintf(p.image_name, sizeof(p.image_name), "%s", (s_state.day ? "sun" : "moon"));');
-    expect(r.images.map((i) => i.name).sort()).toEqual(['moon', 'sun']);
+    expect(r.c).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", (s_state.day ? "sun" : "moon"));',
+    );
+    expect(r.images.map(i => i.name).sort()).toEqual(['moon', 'sun']);
   });
 
   it('rejects an <Image source> that is not a string (e.g. a number)', () => {
     expect(() =>
-      compileSource(`import { Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [n] = useState(5); return (<Image source={n} />); }`, 'demo'),
+      compileSource(
+        `import { Image } from 'embedded-react';\nimport { useState } from 'react';\nexport function App() { const [n] = useState(5); return (<Image source={n} />); }`,
+        'demo',
+      ),
     ).toThrow(/must resolve to an asset NAME/);
   });
 
   it('rejects an unsupported resizeMode', () => {
-    expect(() => compileSource(`${IMG}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`, 'demo')).toThrow(/unsupported <Image resizeMode>/);
+    expect(() =>
+      compileSource(
+        `${IMG}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`,
+        'demo',
+      ),
+    ).toThrow(/unsupported <Image resizeMode>/);
   });
 });
 
@@ -1201,13 +1343,19 @@ function Counter({ label }) {
 }
 `;
   it('gives a stateful child its own namespaced field in ErAppState', () => {
-    const c = compileSource(`${C}\nexport function App() { return (<View><Counter label="A" /></View>); }`, 'demo').c;
+    const c = compileSource(
+      `${C}\nexport function App() { return (<View><Counter label="A" /></View>); }`,
+      'demo',
+    ).c;
     expect(c).toContain('int c0_n;');
     expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // the child's setter mutates its own field
   });
 
   it('keeps two instances of the same component independent', () => {
-    const c = compileSource(`${C}\nexport function App() { return (<View><Counter label="A" /><Counter label="B" /></View>); }`, 'demo').c;
+    const c = compileSource(
+      `${C}\nexport function App() { return (<View><Counter label="A" /><Counter label="B" /></View>); }`,
+      'demo',
+    ).c;
     expect(c).toContain('int c0_n;');
     expect(c).toContain('int c1_n;'); // distinct storage per instance
     expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);');
@@ -1269,7 +1417,8 @@ export function App() { return (<View><Btn /><Btn /></View>); }`;
 
 describe('AOT handler follow-ons', () => {
   it('inlines a helper call in a handler (component-local arrow), binding its args', () => {
-    const c = compileSource(`import { View, Text, Pressable } from 'embedded-react';
+    const c = compileSource(
+      `import { View, Text, Pressable } from 'embedded-react';
 import { useState } from 'react';
 function App() {
   const [a, setA] = useState(0);
@@ -1278,7 +1427,9 @@ function App() {
   const bump = (k) => setA(a + k);
   return (<Pressable onPress={() => { reset(); bump(5); }}><Text>{a}</Text></Pressable>);
 }
-export { App };`, 'demo').c;
+export { App };`,
+      'demo',
+    ).c;
     expect(c).toContain('s_state.a = 0;');
     expect(c).toContain('s_state.b = 0;');
     expect(c).toContain('s_state.a = (s_state.a + 5);'); // bump(5): arg bound
@@ -1286,34 +1437,45 @@ export { App };`, 'demo').c;
 
   it('detects a recursive helper and errors instead of looping forever', () => {
     expect(() =>
-      compileSource(`import { Text, Pressable } from 'embedded-react';
+      compileSource(
+        `import { Text, Pressable } from 'embedded-react';
 function App() { const loop = () => { loop(); }; return (<Pressable onPress={() => { loop(); }}><Text>x</Text></Pressable>); }
-export { App };`, 'demo'),
+export { App };`,
+        'demo',
+      ),
     ).toThrow(/recursive/);
   });
 
   it('wires a .start(onComplete) callback to the animation on_complete', () => {
-    const c = compileSource(`import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
+    const c = compileSource(
+      `import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
 import { useState } from 'react';
 function App() {
   const [done, setDone] = useState(false);
   const x = useAnimatedValue(0);
   return (<Pressable onPress={() => Animated.timing(x, { toValue: 1, duration: 100 }).start(() => setDone(true))}><Text>x</Text></Pressable>);
 }
-export { App };`, 'demo').c;
+export { App };`,
+      'demo',
+    ).c;
     expect(c).toContain('.on_complete = er_donecb_0;');
-    expect(c).toContain('static void er_donecb_0(bool finished, void* user_data)');
+    expect(c).toContain(
+      'static void er_donecb_0(bool finished, void* user_data)',
+    );
     expect(c).toContain('s_state.done = 1;'); // completion sets state
   });
 
   it('rejects a completion callback on a parallel animation (not yet supported)', () => {
     expect(() =>
-      compileSource(`import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
+      compileSource(
+        `import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
 function App() {
   const a = useAnimatedValue(0); const b = useAnimatedValue(0);
   return (<Pressable onPress={() => Animated.parallel([Animated.timing(a, { toValue: 1 }), Animated.timing(b, { toValue: 1 })]).start(() => {})}><Text>x</Text></Pressable>);
 }
-export { App };`, 'demo'),
+export { App };`,
+        'demo',
+      ),
     ).toThrow(/parallel\/stagger animation is not yet supported/);
   });
 });
@@ -1328,34 +1490,42 @@ export function App() {
   if (wide) { return (<View><Image source={wxSun} /></View>); }
   return (<View><Text>compact</Text></View>);
 }`;
-    const r = compileSource(src, 'demo', { screen: { width: 320, height: 480 } });
+    const r = compileSource(src, 'demo', {screen: {width: 320, height: 480}});
     expect(r.images).toEqual([]); // wxSun is imported but unreached → not baked
     expect(r.c).not.toContain('wx_sun');
   });
 
-  it('bakes ALL imports when a reached source is dynamic (can\'t be enumerated)', () => {
+  it("bakes ALL imports when a reached source is dynamic (can't be enumerated)", () => {
     const r = compileSource(
       `import { Image, Pressable } from 'embedded-react';\nimport a from './a/a.png';\nimport b from './a/b.png';\nimport { useState } from 'react';\nexport function App() { const [f, setF] = useState(true); return (<Pressable onPress={() => setF(!f)}><Image source={f ? a : b} /></Pressable>); }`,
       'demo',
     );
-    expect(r.images.map((i) => i.name).sort()).toEqual(['a', 'b']);
+    expect(r.images.map(i => i.name).sort()).toEqual(['a', 'b']);
   });
 });
 
 describe('AOT version-pin', () => {
   it('stamps a compile-time engine-version assert into the generated C', () => {
-    const c = compileSource(`${PRE}\nexport function App() { return (<Text>hi</Text>); }`, 'demo');
+    const c = compileSource(
+      `${PRE}\nexport function App() { return (<Text>hi</Text>); }`,
+      'demo',
+    );
     expect(c.c).toContain('#include "er_version.h"');
-    expect(c.c).toMatch(/_Static_assert\(ER_VERSION_MAJOR == \d+ && ER_VERSION_MINOR == \d+,/);
+    expect(c.c).toMatch(
+      /_Static_assert\(ER_VERSION_MAJOR == \d+ && ER_VERSION_MINOR == \d+,/,
+    );
     expect(c.c).toContain('version mismatch');
   });
 });
 
 describe('AOT generated-C portability', () => {
   it('emits a guarded M_PI fallback when the app uses math (M_PI is not in ISO C99 <math.h>)', () => {
-    const c = compileSource(`import { Text } from 'embedded-react';
+    const c = compileSource(
+      `import { Text } from 'embedded-react';
 import { useState } from 'react';
-export function App() { const [n] = useState(0); return (<Text>{Math.round(n * Math.PI)}</Text>); }`, 'demo').c;
+export function App() { const [n] = useState(0); return (<Text>{Math.round(n * Math.PI)}</Text>); }`,
+      'demo',
+    ).c;
     expect(c).toContain('#include <math.h>');
     expect(c).toContain('#ifndef M_PI');
     expect(c).toContain('#define M_PI 3.14159');

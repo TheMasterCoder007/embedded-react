@@ -17,17 +17,22 @@
 // Unit tests for the build-time asset bakers (images + fonts) and the C emitter. These lock the
 // output format the engine consumes (premultiplied ARGB8888 images, BitmapFont glyph data) and the
 // er_register_assets() entry point. The font fixture is the repo's Inter-Regular.ttf.
-import { describe, it, expect } from 'vitest';
-import { PNG } from 'pngjs';
+import {describe, it, expect} from 'vitest';
+import {PNG} from 'pngjs';
 import os from 'node:os';
 import fs from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { rasterize } from '../rasterize.mjs';
-import { bakeImage } from '../bake-image.mjs';
-import { bakeFont, resolveExtras, ASCII_FIRST, ASCII_LAST } from '../bake-font.mjs';
-import { emitAssetsC } from '../emit-c.mjs';
-import { emitAssetPack } from '../emit-pack.mjs';
+import {resolve, dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {rasterize} from '../rasterize.mjs';
+import {bakeImage} from '../bake-image.mjs';
+import {
+  bakeFont,
+  resolveExtras,
+  ASCII_FIRST,
+  ASCII_LAST,
+} from '../bake-font.mjs';
+import {emitAssetsC} from '../emit-c.mjs';
+import {emitAssetPack} from '../emit-pack.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INTER = resolve(here, '../../../../../assets/fonts/Inter-Regular.ttf');
@@ -37,23 +42,23 @@ describe('rasterize', () => {
   it('fills an axis-aligned square to full coverage with the right bbox', () => {
     const square = {
       commands: [
-        { type: 'M', x: 0, y: 0 },
-        { type: 'L', x: 10, y: 0 },
-        { type: 'L', x: 10, y: 10 },
-        { type: 'L', x: 0, y: 10 },
-        { type: 'Z' },
+        {type: 'M', x: 0, y: 0},
+        {type: 'L', x: 10, y: 0},
+        {type: 'L', x: 10, y: 10},
+        {type: 'L', x: 0, y: 10},
+        {type: 'Z'},
       ],
     };
-    const r = rasterize(square, { ss: 4, steps: 4 });
+    const r = rasterize(square, {ss: 4, steps: 4});
     expect(r.width).toBe(10);
     expect(r.height).toBe(10);
     expect(r.xOffset).toBe(0);
     expect(r.yOffset).toBe(0);
-    expect([...r.coverage].every((c) => c === 255)).toBe(true);
+    expect([...r.coverage].every(c => c === 255)).toBe(true);
   });
 
   it('returns an empty result for a path with no contours', () => {
-    const r = rasterize({ commands: [] });
+    const r = rasterize({commands: []});
     expect(r.width).toBe(0);
     expect(r.height).toBe(0);
     expect(r.coverage.length).toBe(0);
@@ -62,19 +67,21 @@ describe('rasterize', () => {
 
 describe('bakeImage', () => {
   it('decodes PNG to premultiplied ARGB8888', () => {
-    const png = new PNG({ width: 2, height: 1 });
-    png.data = Buffer.from([255, 0, 0, 255, /* opaque red */ 0, 0, 255, 128 /* half-alpha blue */]);
+    const png = new PNG({width: 2, height: 1});
+    png.data = Buffer.from([
+      255, 0, 0, 255, /* opaque red */ 0, 0, 255, 128 /* half-alpha blue */,
+    ]);
     const tmp = join(os.tmpdir(), `er-baketest-${process.pid}.png`);
     fs.writeFileSync(tmp, PNG.sync.write(png));
     try {
-      const out = bakeImage({ path: tmp, name: 'tmp' });
+      const out = bakeImage({path: tmp, name: 'tmp'});
       expect(out.width).toBe(2);
       expect(out.height).toBe(1);
       expect(out.pixels[0] >>> 0).toBe(0xffff0000); // opaque red, unchanged by premultiply
       // half-alpha blue: a=128, b = round(255*128/255) = 128
       expect(out.pixels[1] >>> 0).toBe(0x80000080);
     } finally {
-      fs.rmSync(tmp, { force: true });
+      fs.rmSync(tmp, {force: true});
     }
   });
 });
@@ -86,19 +93,23 @@ describe('resolveExtras', () => {
   });
 
   it('drops codepoints already in the dense ASCII range and sorts the rest', () => {
-    expect(resolveExtras([0x2022, 0x41 /* 'A', in ASCII */, 0x20ac, 0x2022 /* dup */])).toEqual([0x2022, 0x20ac]);
+    expect(
+      resolveExtras([
+        0x2022, 0x41 /* 'A', in ASCII */, 0x20ac, 0x2022 /* dup */,
+      ]),
+    ).toEqual([0x2022, 0x20ac]);
   });
 
   it('resolves a named symbol set', () => {
     const common = resolveExtras('common');
     expect(common.length).toBeGreaterThan(0);
-    expect(common.every((c) => c < ASCII_FIRST || c > ASCII_LAST)).toBe(true);
+    expect(common.every(c => c < ASCII_FIRST || c > ASCII_LAST)).toBe(true);
   });
 });
 
 describe('bakeFont', () => {
   it('bakes the dense ASCII range with self-consistent metrics', () => {
-    const f = bakeFont({ path: INTER, family: 'Inter', sizes: [20], bpp: 4 });
+    const f = bakeFont({path: INTER, family: 'Inter', sizes: [20], bpp: 4});
     expect(f.family).toBe('Inter');
     expect(f.sizes).toHaveLength(1);
     const s = f.sizes[0];
@@ -127,12 +138,20 @@ describe('bakeFont', () => {
   });
 
   it('includes extra glyphs when a symbol set is requested', () => {
-    const f = bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 4, glyphs: 'common' });
+    const f = bakeFont({
+      path: INTER,
+      family: 'Inter',
+      sizes: [16],
+      bpp: 4,
+      glyphs: 'common',
+    });
     expect(f.sizes[0].extras.length).toBeGreaterThan(0);
   });
 
   it('rejects an unsupported bpp', () => {
-    expect(() => bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 3 })).toThrow();
+    expect(() =>
+      bakeFont({path: INTER, family: 'Inter', sizes: [16], bpp: 3}),
+    ).toThrow();
   });
 });
 
@@ -169,12 +188,18 @@ function readPack(buf) {
     const h = u32();
     const pixels = [];
     for (let p = 0; p < w * h; p++) pixels.push(u32());
-    images.push({ name, w, h, pixels });
+    images.push({name, w, h, pixels});
   }
   const fonts = [];
   for (let i = 0; i < nFonts; i++) {
     const family = str();
-    const f = { family, pixel_size: u8(), line_height: u8(), baseline: u8(), format: u8() };
+    const f = {
+      family,
+      pixel_size: u8(),
+      line_height: u8(),
+      baseline: u8(),
+      format: u8(),
+    };
     f.first = u16();
     f.last = u16();
     f.gc = u16();
@@ -200,21 +225,35 @@ function readPack(buf) {
     o += f.blen; // bitmap
     fonts.push(f);
   }
-  return { magic, version, nImages, nFonts, images, fonts, consumed: o, total: buf.length };
+  return {
+    magic,
+    version,
+    nImages,
+    nFonts,
+    images,
+    fonts,
+    consumed: o,
+    total: buf.length,
+  };
 }
 
 describe('emitAssetPack', () => {
   it('serializes images + fonts into a self-consistent ERPK pack', () => {
-    const image = { name: 'logo', width: 2, height: 1, pixels: new Uint32Array([0xffff0000, 0x80000080]) };
-    const font = bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 4 });
-    const p = readPack(emitAssetPack({ images: [image], fonts: [font] }));
+    const image = {
+      name: 'logo',
+      width: 2,
+      height: 1,
+      pixels: new Uint32Array([0xffff0000, 0x80000080]),
+    };
+    const font = bakeFont({path: INTER, family: 'Inter', sizes: [16], bpp: 4});
+    const p = readPack(emitAssetPack({images: [image], fonts: [font]}));
 
     expect(p.magic).toBe('ERPK');
     expect(p.version).toBe(1);
     expect(p.nImages).toBe(1);
     expect(p.nFonts).toBe(1); // one font *size*
 
-    expect(p.images[0]).toMatchObject({ name: 'logo', w: 2, h: 1 });
+    expect(p.images[0]).toMatchObject({name: 'logo', w: 2, h: 1});
     expect(p.images[0].pixels[0] >>> 0).toBe(0xffff0000);
     expect(p.images[0].pixels[1] >>> 0).toBe(0x80000080);
 
@@ -230,9 +269,18 @@ describe('emitAssetPack', () => {
 
 describe('emitAssetsC', () => {
   it('emits images, fonts, and the register entry point', () => {
-    const font = bakeFont({ path: INTER, family: 'Inter', sizes: [16], bpp: 4 });
-    const image = { name: 'logo', width: 1, height: 1, pixels: new Uint32Array([0xffffffff]) };
-    const { c, h } = emitAssetsC({ headerName: 'assets.generated.h', images: [image], fonts: [font] });
+    const font = bakeFont({path: INTER, family: 'Inter', sizes: [16], bpp: 4});
+    const image = {
+      name: 'logo',
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([0xffffffff]),
+    };
+    const {c, h} = emitAssetsC({
+      headerName: 'assets.generated.h',
+      images: [image],
+      fonts: [font],
+    });
 
     expect(h).toContain('void er_register_assets(void);');
     expect(c).toContain('#include "er_scene.h"');

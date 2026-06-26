@@ -26,12 +26,12 @@
 //   npm run build -- marine-dash  # a specific demo by folder name
 // Outputs are always dist/app.bundle.js + dist/assets.generated.{c,h} — the single "active" app the
 // example hosts pick up.
-import { build } from 'esbuild';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, resolve, basename } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { bakeAssets } from './assets/index.mjs';
-import { registerSvgVectorLoader } from './assets/svg-loader.mjs';
+import {build} from 'esbuild';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {dirname, resolve, basename} from 'node:path';
+import {existsSync, readdirSync, readFileSync} from 'node:fs';
+import {bakeAssets} from './assets/index.mjs';
+import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
@@ -47,9 +47,9 @@ const entry = resolve(demoDir, 'index.jsx');
 
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
-    ? readdirSync(demosDir, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name)
+    ? readdirSync(demosDir, {withFileTypes: true})
+        .filter(d => d.isDirectory())
+        .map(d => d.name)
     : [];
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   console.error(`Available demos: ${available.join(', ') || '(none)'}`);
@@ -65,15 +65,21 @@ const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(build) {
-    build.onLoad({ filter: /\.(png|jpe?g|webp|gif|bmp)$/i }, (args) => {
+    build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
       images.set(name, args.path);
-      return { contents: `module.exports = ${JSON.stringify(name)};`, loader: 'js' };
+      return {
+        contents: `module.exports = ${JSON.stringify(name)};`,
+        loader: 'js',
+      };
     });
-    build.onLoad({ filter: /\.(ttf|otf)$/i }, (args) => {
+    build.onLoad({filter: /\.(ttf|otf)$/i}, args => {
       const family = basename(args.path).replace(/\.[^.]+$/, '');
       fonts.set(family, args.path);
-      return { contents: `module.exports = ${JSON.stringify(family)};`, loader: 'js' };
+      return {
+        contents: `module.exports = ${JSON.stringify(family)};`,
+        loader: 'js',
+      };
     });
     registerSvgVectorLoader(build, (name, p) => images.set(name, p));
   },
@@ -92,11 +98,11 @@ await build({
   // them: map the bare `embedded-react` import to the library source and let the demo's bare deps
   // (react, react-reconciler) resolve from this package's node_modules. (The library's own internal
   // imports still resolve relatively / from node_modules as before.)
-  alias: { 'embedded-react': libEntry },
+  alias: {'embedded-react': libEntry},
   nodePaths: [nodeModules],
   plugins: [assetPlugin],
   // Production React: smaller and avoids dev-only warning machinery that needs more shims.
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: {'process.env.NODE_ENV': '"production"'},
   legalComments: 'none',
   logLevel: 'info',
 });
@@ -109,7 +115,11 @@ console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 // and will snap to the nearest baked size at runtime; pin them via assets.config.js if needed.
 const bundleSrc = readFileSync(bundlePath, 'utf8');
 const discoveredSizes = [
-  ...new Set([...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map((m) => Math.round(Number(m[1])))),
+  ...new Set(
+    [...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
+      Math.round(Number(m[1])),
+    ),
+  ),
 ].sort((a, b) => a - b);
 
 // Optional per-demo overrides: demos/<demo>/assets.config.js
@@ -123,14 +133,25 @@ const fontConfig = config.fonts || {};
 
 const fontJobs = [...fonts.entries()].map(([family, path]) => {
   const fc = fontConfig[family] || {};
-  const sizes = fc.sizes && fc.sizes.length ? fc.sizes : discoveredSizes.length ? discoveredSizes : [16];
-  return { path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii' };
+  const sizes =
+    fc.sizes && fc.sizes.length
+      ? fc.sizes
+      : discoveredSizes.length
+        ? discoveredSizes
+        : [16];
+  return {path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii'};
 });
-const imageJobs = [...images.entries()].map(([name, path]) => ({ path, name }));
+const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
 
-const summary = bakeAssets({ images: imageJobs, fonts: fontJobs, outDir: distDir });
+const summary = bakeAssets({
+  images: imageJobs,
+  fonts: fontJobs,
+  outDir: distDir,
+});
 const fontDesc = fontJobs.length
-  ? fontJobs.map((f) => `${f.family}@[${f.sizes.join(',')}]x${f.bpp}bpp`).join(', ')
+  ? fontJobs
+      .map(f => `${f.family}@[${f.sizes.join(',')}]x${f.bpp}bpp`)
+      .join(', ')
   : 'none';
 console.log(
   `Baked ${summary.images} image(s), ${summary.fonts} font size(s) -> dist/assets.generated.c\n` +

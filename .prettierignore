@@ -1,0 +1,25 @@
+# Prettier only reads .prettierignore by default (it does NOT consult .gitignore), so the
+# generated / vendored trees that .gitignore hides must be repeated here. Keep in sync with
+# .gitignore. Everything NOT matched here is fair game for `npm run format`.
+
+# Dependencies & tool caches
+node_modules/
+
+# CMake / build output (matches at any depth, gitignore-style)
+build/
+build-*/
+cmake-build-*/
+out/
+
+# Generated app output — Flow A .erpkg, Flow B generated C, app bundles
+dist/
+
+# Third-party sources pulled in by CMake FetchContent (e.g. quickjs)
+_deps/
+
+# Prebuilt WASM simulator (built locally / by CI, never committed)
+tools/web-sim/public/
+bridges/quickjs/js/sim/
+
+# Lockfile
+package-lock.json

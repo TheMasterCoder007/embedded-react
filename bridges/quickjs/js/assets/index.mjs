@@ -19,10 +19,10 @@
 // after bundling; the example firmware compiles the .c and calls er_register_assets() at boot.
 import fs from 'node:fs';
 import path from 'node:path';
-import { bakeImage } from './bake-image.mjs';
-import { bakeFont } from './bake-font.mjs';
-import { emitAssetsC } from './emit-c.mjs';
-import { emitAssetPack } from './emit-pack.mjs';
+import {bakeImage} from './bake-image.mjs';
+import {bakeFont} from './bake-font.mjs';
+import {emitAssetsC} from './emit-c.mjs';
+import {emitAssetPack} from './emit-pack.mjs';
 
 /**
  * Bakes the given assets and writes assets.generated.{c,h} into outDir.
@@ -34,21 +34,25 @@ import { emitAssetPack } from './emit-pack.mjs';
  * @param {string} opts.outDir   Directory to write the generated files into.
  * @returns {{cPath:string, hPath:string, images:number, fonts:number}}
  */
-export function bakeAssets({ images = [], fonts = [], outDir }) {
-  const bakedImages = images.map((i) => bakeImage(i));
-  const bakedFonts = fonts.map((f) => bakeFont(f));
+export function bakeAssets({images = [], fonts = [], outDir}) {
+  const bakedImages = images.map(i => bakeImage(i));
+  const bakedFonts = fonts.map(f => bakeFont(f));
 
   const headerName = 'assets.generated.h';
-  const { c, h } = emitAssetsC({ headerName, images: bakedImages, fonts: bakedFonts });
+  const {c, h} = emitAssetsC({
+    headerName,
+    images: bakedImages,
+    fonts: bakedFonts,
+  });
 
-  fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(outDir, {recursive: true});
   const cPath = path.join(outDir, 'assets.generated.c');
   const hPath = path.join(outDir, headerName);
   fs.writeFileSync(cPath, c);
   fs.writeFileSync(hPath, h);
 
   const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
-  return { cPath, hPath, images: bakedImages.length, fonts: fontSizes };
+  return {cPath, hPath, images: bakedImages.length, fonts: fontSizes};
 }
 
 /**
@@ -61,12 +65,17 @@ export function bakeAssets({ images = [], fonts = [], outDir }) {
  * @param {string} opts.outPath  Path to write the .pack file.
  * @returns {{path:string, bytes:number, images:number, fonts:number}}
  */
-export function bakeAssetPack({ images = [], fonts = [], outPath }) {
-  const bakedImages = images.map((i) => bakeImage(i));
-  const bakedFonts = fonts.map((f) => bakeFont(f));
-  const pack = emitAssetPack({ images: bakedImages, fonts: bakedFonts });
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+export function bakeAssetPack({images = [], fonts = [], outPath}) {
+  const bakedImages = images.map(i => bakeImage(i));
+  const bakedFonts = fonts.map(f => bakeFont(f));
+  const pack = emitAssetPack({images: bakedImages, fonts: bakedFonts});
+  fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, pack);
   const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
-  return { path: outPath, bytes: pack.length, images: bakedImages.length, fonts: fontSizes };
+  return {
+    path: outPath,
+    bytes: pack.length,
+    images: bakedImages.length,
+    fonts: fontSizes,
+  };
 }

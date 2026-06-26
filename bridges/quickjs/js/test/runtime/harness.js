@@ -35,5 +35,9 @@ export function check(cond, message) {
  * Prints a final PASS/FAIL line for a named test (handy when scanning runner output).
  */
 export function report(name) {
-  console.log(globalThis.__runtime_failed === 0 ? `RUNTIME PASS: ${name}` : `RUNTIME FAIL: ${name}`);
+  console.log(
+    globalThis.__runtime_failed === 0
+      ? `RUNTIME PASS: ${name}`
+      : `RUNTIME FAIL: ${name}`,
+  );
 }

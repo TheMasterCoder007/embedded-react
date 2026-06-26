@@ -19,10 +19,10 @@
 // bytecode container with NO native toolchain. The module is built with `-sENVIRONMENT=web,node`, so the
 // same artifact that powers `dev` loads under Node here.
 
-import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import {createRequire} from 'node:module';
+import {dirname, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {existsSync} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -33,12 +33,17 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * @param {string} [simDir]  Dir holding embedded-react.{js,wasm} (defaults to the package's sim/).
  * @returns {Promise<Buffer>} The bytecode bytes.
  */
-export async function compileToBytecode(jsSource, simDir = resolve(HERE, 'sim')) {
+export async function compileToBytecode(
+  jsSource,
+  simDir = resolve(HERE, 'sim'),
+) {
   // The .cjs (not .js): this package is "type": "module", so Node would load the emscripten .js as ESM and
   // its CommonJS factory export would never run. The .cjs is the same module forced to CommonJS for Node.
   const loader = resolve(simDir, 'embedded-react.cjs');
   if (!existsSync(loader)) {
-    throw new Error(`prebuilt simulator module not found at ${loader} (a published package ships it; from source run tools/web-sim/build.mjs)`);
+    throw new Error(
+      `prebuilt simulator module not found at ${loader} (a published package ships it; from source run tools/web-sim/build.mjs)`,
+    );
   }
   const require = createRequire(import.meta.url);
   const factory = require(loader); // forced CommonJS → MODULARIZE factory
@@ -53,7 +58,11 @@ export async function compileToBytecode(jsSource, simDir = resolve(HERE, 'sim'))
   Module.HEAPU8[srcPtr + bytes.length] = 0;
   const outLenPtr = Module._malloc(4);
 
-  const compile = Module.cwrap('er_web_compile_bytecode', 'number', ['number', 'number', 'number']);
+  const compile = Module.cwrap('er_web_compile_bytecode', 'number', [
+    'number',
+    'number',
+    'number',
+  ]);
   const bcPtr = compile(srcPtr, bytes.length, outLenPtr);
 
   // ALLOW_MEMORY_GROWTH=1 can detach views across the malloc/compile calls — read through a FRESH buffer.
@@ -64,7 +73,9 @@ export async function compileToBytecode(jsSource, simDir = resolve(HERE, 'sim'))
   Module._free(outLenPtr);
   if (!bcPtr || !bcLen) {
     if (bcPtr) Module._free(bcPtr);
-    throw new Error('bytecode compile failed — check the bundle for a syntax error (see stderr above)');
+    throw new Error(
+      'bytecode compile failed — check the bundle for a syntax error (see stderr above)',
+    );
   }
   const out = Buffer.from(heap().subarray(bcPtr, bcPtr + bcLen)); // copy out before freeing
   Module._free(bcPtr);

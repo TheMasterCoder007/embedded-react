@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { describe, it, expect } from 'vitest';
-import { svgToVector } from '../bake-svg.mjs';
+import {describe, it, expect} from 'vitest';
+import {svgToVector} from '../bake-svg.mjs';
 
 const SHAPE = 0;
 const MOVE = 1;
@@ -30,7 +30,15 @@ const GREEN = 0xff008000;
 // Extract just the opcodes from the flat op-tape (opcodes + coords are interleaved, so a raw
 // `toContain` can't tell an opcode from a coordinate value that happens to equal it).
 function opcodes(ops) {
-  const args = { [SHAPE]: 1, [MOVE]: 2, [LINE]: 2, [QUAD]: 4, [CUBIC]: 6, [ARC]: 6, [CLOSE]: 0 };
+  const args = {
+    [SHAPE]: 1,
+    [MOVE]: 2,
+    [LINE]: 2,
+    [QUAD]: 4,
+    [CUBIC]: 6,
+    [ARC]: 6,
+    [CLOSE]: 0,
+  };
   const codes = [];
   let i = 0;
   while (i < ops.length) {
@@ -43,8 +51,8 @@ function opcodes(ops) {
 
 describe('bake-svg: svgToVector', () => {
   it('compiles a path to the op-tape with its solid fill', async () => {
-    const { ops, paints, width, height } = await svgToVector(
-      '<svg viewBox="0 0 10 10"><path d="M0 0 L10 0" fill="red"/></svg>'
+    const {ops, paints, width, height} = await svgToVector(
+      '<svg viewBox="0 0 10 10"><path d="M0 0 L10 0" fill="red"/></svg>',
     );
     // [SHAPE, paintIdx, MOVE, 0,0, LINE, 10,0]
     expect(ops.slice(0, 8)).toEqual([SHAPE, 0, MOVE, 0, 0, LINE, 10, 0]);
@@ -55,22 +63,26 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('bakes a transform into absolute coordinates', async () => {
-    const { ops } = await svgToVector(
-      '<svg viewBox="0 0 100 100"><path d="M0 0" transform="translate(10,20)"/></svg>'
+    const {ops} = await svgToVector(
+      '<svg viewBox="0 0 100 100"><path d="M0 0" transform="translate(10,20)"/></svg>',
     );
     // MOVE point shifted by (10,20)
     expect(ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 10, 20]);
   });
 
   it('bakes the viewBox -> width/height scale', async () => {
-    const { ops, width } = await svgToVector('<svg width="20" height="20" viewBox="0 0 10 10"><path d="M5 5"/></svg>');
+    const {ops, width} = await svgToVector(
+      '<svg width="20" height="20" viewBox="0 0 10 10"><path d="M5 5"/></svg>',
+    );
     // sx = 20/10 = 2 -> (5,5) becomes (10,10)
     expect(ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 10, 10]);
     expect(width).toBe(20);
   });
 
   it('emits primitives as cubic paths (no native arc op) so transforms bake cleanly', async () => {
-    const { ops, paints } = await svgToVector('<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="3" fill="green"/></svg>');
+    const {ops, paints} = await svgToVector(
+      '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="3" fill="green"/></svg>',
+    );
     const codes = opcodes(ops);
     expect(codes).toContain(CUBIC);
     expect(codes).not.toContain(ARC); // a baked arc would not survive an arbitrary matrix
@@ -78,13 +90,15 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('inherits paint from a parent <g>', async () => {
-    const { paints } = await svgToVector('<svg viewBox="0 0 10 10"><g fill="red"><path d="M0 0 L1 1"/></g></svg>');
+    const {paints} = await svgToVector(
+      '<svg viewBox="0 0 10 10"><g fill="red"><path d="M0 0 L1 1"/></g></svg>',
+    );
     expect(paints[0]).toBe(RED);
   });
 
   it('rotation actually rotates the geometry (full transform fidelity, no engine support)', async () => {
-    const { ops } = await svgToVector(
-      '<svg viewBox="0 0 100 100"><path d="M10 0" transform="rotate(90)"/></svg>'
+    const {ops} = await svgToVector(
+      '<svg viewBox="0 0 100 100"><path d="M10 0" transform="rotate(90)"/></svg>',
     );
     // rotate(90) maps (10,0) -> (0,10)
     const x = ops[3];
@@ -94,8 +108,8 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('an undefined url() fill (no matching gradient) bakes to nothing', async () => {
-    const { paints, gradients } = await svgToVector(
-      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="url(#missing)"/></svg>'
+    const {paints, gradients} = await svgToVector(
+      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="url(#missing)"/></svg>',
     );
     expect(paints[0]).toBe(0); // no solid fill
     expect(paints[7]).toBe(0); // no gradient assigned (fill_grad = 0)
@@ -107,14 +121,19 @@ describe('bake-svg: svgToVector', () => {
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="g"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
-        '</svg>'
+        '</svg>',
     );
     expect(a.gradients).toHaveLength(1);
     const g = a.gradients[0];
     expect(g.type).toBe(1); // GRAD_LINEAR
-    expect(g.stops.map((s) => s.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
+    expect(g.stops.map(s => s.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
     // objectBoundingBox default: axis (0,0)->(1,0) maps onto the rect's bbox (0,0,10,10).
-    expect([Math.round(g.ax), Math.round(g.ay), Math.round(g.bx), Math.round(g.by)]).toEqual([0, 0, 10, 0]);
+    expect([
+      Math.round(g.ax),
+      Math.round(g.ay),
+      Math.round(g.bx),
+      Math.round(g.by),
+    ]).toEqual([0, 0, 10, 0]);
     // The rect's paint: solid fill 0, fill_grad = 1 (1-based; the 8th paint field).
     expect(a.paints[0]).toBe(0);
     expect(a.paints[7]).toBe(1);
@@ -125,11 +144,14 @@ describe('bake-svg: svgToVector', () => {
       '<svg viewBox="0 0 100 100">' +
         '<defs><radialGradient id="r"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/></radialGradient></defs>' +
         '<rect x="0" y="0" width="100" height="100" fill="url(#r)"/>' +
-        '</svg>'
+        '</svg>',
     );
     expect(a.gradients).toHaveLength(1);
     expect(a.gradients[0].type).toBe(2); // GRAD_RADIAL
-    expect([Math.round(a.gradients[0].ax), Math.round(a.gradients[0].ay)]).toEqual([50, 50]); // bbox centre
+    expect([
+      Math.round(a.gradients[0].ax),
+      Math.round(a.gradients[0].ay),
+    ]).toEqual([50, 50]); // bbox centre
     expect(a.gradients[0].r).toBeGreaterThan(0);
     expect(a.paints[7]).toBe(1);
   });
@@ -139,11 +161,14 @@ describe('bake-svg: svgToVector', () => {
       '<svg viewBox="0 0 100 100">' +
         '<defs><conicGradient id="c" from="90"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></conicGradient></defs>' +
         '<rect x="0" y="0" width="100" height="100" fill="url(#c)"/>' +
-        '</svg>'
+        '</svg>',
     );
     expect(a.gradients).toHaveLength(1);
     expect(a.gradients[0].type).toBe(3); // GRAD_CONIC
-    expect([Math.round(a.gradients[0].ax), Math.round(a.gradients[0].ay)]).toEqual([50, 50]); // bbox centre
+    expect([
+      Math.round(a.gradients[0].ax),
+      Math.round(a.gradients[0].ay),
+    ]).toEqual([50, 50]); // bbox centre
     expect(a.gradients[0].r).toBeCloseTo(Math.PI / 2, 3); // from="90deg" -> π/2 rad start angle
     expect(a.paints[7]).toBe(1);
   });
@@ -153,7 +178,7 @@ describe('bake-svg: svgToVector', () => {
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="s"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="#101010" stroke="url(#s)" stroke-width="2"/>' +
-        '</svg>'
+        '</svg>',
     );
     expect(a.gradients).toHaveLength(1);
     expect(a.gradients[0].type).toBe(1); // GRAD_LINEAR
@@ -163,49 +188,67 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
-    const a = await svgToVector('<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>');
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>',
+    );
     expect(a.paints[0] >>> 24).toBe(0x80); // 0xff * 0.5 -> 128
     expect(a.paints[0] & 0xffffff).toBe(0xff0000); // color preserved
 
-    const b = await svgToVector('<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" stroke="#00ff00" stroke-opacity="0.25"/></svg>');
+    const b = await svgToVector(
+      '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" stroke="#00ff00" stroke-opacity="0.25"/></svg>',
+    );
     expect(b.paints[1] >>> 24).toBe(0x40); // 0xff * 0.25 -> 64, stroke only
   });
 });
 
 describe('svgToVector — dropped-feature detection (raster-fallback trigger)', () => {
   it('reports no dropped features for a fully vector SVG', async () => {
-    const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10"/><circle cx="5" cy="5" r="3"/></svg>');
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10"/><circle cx="5" cy="5" r="3"/></svg>',
+    );
     expect(a.dropped).toEqual([]);
   });
 
   it('flags unsupported visual elements (text/image/use) but not metadata/defs/gradients', async () => {
     const a = await svgToVector(
-      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><text x="0" y="9">hi</text></svg>'
+      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><text x="0" y="9">hi</text></svg>',
     );
     expect(a.dropped).toEqual(['text']); // title/defs ignored; rect baked; text recorded
   });
 
   it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {
-    const a = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>');
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>',
+    );
     expect(a.dropped).toContain('filter');
   });
 
   it('flags a dashed stroke (op-tape bakes solid → raster fallback renders the dashes)', async () => {
-    const a = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="2 1"/></svg>');
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="2 1"/></svg>',
+    );
     expect(a.dropped).toContain('stroke-dasharray');
     // inherited from a <g> too
-    const g = await svgToVector('<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>');
+    const g = await svgToVector(
+      '<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>',
+    );
     expect(g.dropped).toContain('stroke-dasharray');
   });
 
   it('does NOT flag stroke-dasharray when there is no visible/positive dash', async () => {
     // no stroke → dash is inert
-    const noStroke = await svgToVector('<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="blue" stroke-dasharray="2 1"/></svg>');
+    const noStroke = await svgToVector(
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="blue" stroke-dasharray="2 1"/></svg>',
+    );
     expect(noStroke.dropped).toEqual([]);
     // dasharray="none" and an all-zero pattern are both solid
-    const none = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="none"/></svg>');
+    const none = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="none"/></svg>',
+    );
     expect(none.dropped).toEqual([]);
-    const zero = await svgToVector('<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="0 0"/></svg>');
+    const zero = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="0 0"/></svg>',
+    );
     expect(zero.dropped).toEqual([]);
   });
 });

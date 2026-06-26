@@ -17,8 +17,8 @@
 // Unit tests for the simulator's persist transform (../../persist-transform.mjs): it rewrites the
 // app's `useState` into the persisting helper, keyed stably by component + hook order, and only
 // touches the real (imported) useState.
-import { describe, it, expect } from 'vitest';
-import { transformPersist } from '../../persist-transform.mjs';
+import {describe, it, expect} from 'vitest';
+import {transformPersist} from '../../persist-transform.mjs';
 
 describe('transformPersist', () => {
   it('rewrites imported useState to the persisting helper, keyed by component + order', () => {
@@ -39,18 +39,27 @@ describe('transformPersist', () => {
   });
 
   it('also rewrites useState imported from embedded-react', () => {
-    const out = transformPersist(`import { useState } from 'embedded-react'; function A(){ const [x]=useState(1); return null; }`, 'a.jsx');
+    const out = transformPersist(
+      `import { useState } from 'embedded-react'; function A(){ const [x]=useState(1); return null; }`,
+      'a.jsx',
+    );
     expect(out).toContain('App'.replace('App', '')); // noop guard to keep formatting
     expect(out).toContain('a.jsx::A#0');
   });
 
   it('leaves a non-imported (local) useState untouched', () => {
-    const out = transformPersist(`function useState(){return [0]} const x = useState();`, 'm.js');
+    const out = transformPersist(
+      `function useState(){return [0]} const x = useState();`,
+      'm.js',
+    );
     expect(out).not.toContain('__erPersistState');
   });
 
   it('keys stay stable when unrelated lines change (component + order are what matter)', () => {
-    const before = transformPersist(`import {useState} from 'react'; function C(){ const [x]=useState(1); return null; }`, 'C.jsx');
+    const before = transformPersist(
+      `import {useState} from 'react'; function C(){ const [x]=useState(1); return null; }`,
+      'C.jsx',
+    );
     const after = transformPersist(
       `import {useState} from 'react'; function C(){ const y = 99; const [x]=useState(1); return null; }`,
       'C.jsx',

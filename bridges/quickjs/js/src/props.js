@@ -53,7 +53,14 @@ export function flattenStyleObj(style) {
 }
 
 // Style fields the engine honors per inline text span (everything else inherits from the node).
-const SPAN_STYLE_KEYS = ['color', 'fontSize', 'fontWeight', 'fontStyle', 'textDecorationLine', 'letterSpacing'];
+const SPAN_STYLE_KEYS = [
+  'color',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'textDecorationLine',
+  'letterSpacing',
+];
 
 /**
  * True when a <Text>'s children can be flattened inline — i.e. every leaf is a string/number or a
@@ -81,7 +88,7 @@ export function flattenTextChildren(children, baseStyle) {
     if (text === '') return;
     const last = segments[segments.length - 1];
     if (last && last.style === style) last.text += text;
-    else segments.push({ text, style });
+    else segments.push({text, style});
   };
   const walk = (node, style) => {
     if (node == null || node === false || node === true) return;
@@ -96,7 +103,9 @@ export function flattenTextChildren(children, baseStyle) {
     if (node && node.props !== undefined) {
       // Nested <Text>: merge its style over the inherited one (new object only when it has style,
       // so an unstyled nested <Text> keeps the same reference and still coalesces with siblings).
-      const merged = node.props.style ? Object.assign({}, style, flattenStyleObj(node.props.style)) : style;
+      const merged = node.props.style
+        ? Object.assign({}, style, flattenStyleObj(node.props.style))
+        : style;
       walk(node.props.children, merged);
     }
   };
@@ -113,9 +122,9 @@ export function buildTextSpans(props) {
   if (!isTextContent(props.children)) return [];
   const baseStyle = flattenStyleObj(props.style);
   const segments = flattenTextChildren(props.children, baseStyle);
-  if (!segments.some((s) => s.style !== baseStyle)) return [];
-  return segments.map((s) => {
-    const span = { text: s.text };
+  if (!segments.some(s => s.style !== baseStyle)) return [];
+  return segments.map(s => {
+    const span = {text: s.text};
     for (const k of SPAN_STYLE_KEYS) {
       if (s.style && s.style[k] !== undefined) span[k] = s.style[k];
     }
@@ -134,7 +143,8 @@ export function buildTextSpans(props) {
  */
 export function resolveImageSource(source) {
   if (typeof source === 'string') return source;
-  if (source && typeof source === 'object' && typeof source.uri === 'string') return source.uri;
+  if (source && typeof source === 'object' && typeof source.uri === 'string')
+    return source.uri;
   return null;
 }
 
@@ -148,8 +158,10 @@ export function buildProps(type, props) {
   // vector node from them. Fold them into the resolved style (an explicit style width/height still wins)
   // so Flow A matches the Flow B AOT, which reads svg.props.width/height directly (compile.mjs emitSvgBox).
   if (type === 'Svg') {
-    if (flat.width === undefined && props.width !== undefined) flat.width = props.width;
-    if (flat.height === undefined && props.height !== undefined) flat.height = props.height;
+    if (flat.width === undefined && props.width !== undefined)
+      flat.width = props.width;
+    if (flat.height === undefined && props.height !== undefined)
+      flat.height = props.height;
   }
   // <Image source={...}> resolves to the engine asset name unless imageName was set explicitly.
   if (flat.imageName === undefined && props.source != null) {
@@ -162,7 +174,7 @@ export function buildProps(type, props) {
   if (type === 'Text' && isTextContent(props.children)) {
     const base = flattenStyleObj(props.style);
     flat.text = flattenTextChildren(props.children, base)
-      .map((s) => s.text)
+      .map(s => s.text)
       .join('');
   }
   return flat;

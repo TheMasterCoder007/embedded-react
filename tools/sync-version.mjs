@@ -24,9 +24,9 @@
 // stage precisely those — one source of truth, so the writer and the release commit can never disagree.
 // To release: edit VERSION, run this, commit, tag vX.Y.Z.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import {readFileSync, writeFileSync, existsSync} from 'node:fs';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {dirname, resolve} from 'node:path';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION_FILE = resolve(ROOT, 'VERSION');
@@ -37,7 +37,7 @@ const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 // JSON manifests — the "version" field (preserve 2-space formatting + trailing newline).
-const jsonRead = (text) => JSON.parse(text).version;
+const jsonRead = text => JSON.parse(text).version;
 const jsonWrite = (text, version) => {
   const obj = JSON.parse(text);
   obj.version = version;
@@ -46,35 +46,51 @@ const jsonWrite = (text, version) => {
 
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
 const YAML_VER = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
-const yamlRead = (text) => YAML_VER.exec(text)?.[1]?.trim();
-const yamlWrite = (text, version) => text.replace(YAML_VER, `version: "${version}"`);
+const yamlRead = text => YAML_VER.exec(text)?.[1]?.trim();
+const yamlWrite = (text, version) =>
+  text.replace(YAML_VER, `version: "${version}"`);
 
 // er_version.h — the C single-source-of-truth header; regenerate the macro block.
 const H_VER = /#define ER_VERSION_STRING "([^"]+)"/;
-const headerRead = (text) => H_VER.exec(text)?.[1];
+const headerRead = text => H_VER.exec(text)?.[1];
 const headerWrite = (text, version) => {
   const [, major, minor, patch] = SEMVER.exec(version);
   return text
-    .replace(/#define ER_VERSION_MAJOR \d+/, `#define ER_VERSION_MAJOR ${major}`)
-    .replace(/#define ER_VERSION_MINOR \d+/, `#define ER_VERSION_MINOR ${minor}`)
-    .replace(/#define ER_VERSION_PATCH \d+/, `#define ER_VERSION_PATCH ${patch}`)
-    .replace(/#define ER_VERSION_STRING "[^"]*"/, `#define ER_VERSION_STRING "${version}"`);
+    .replace(
+      /#define ER_VERSION_MAJOR \d+/,
+      `#define ER_VERSION_MAJOR ${major}`,
+    )
+    .replace(
+      /#define ER_VERSION_MINOR \d+/,
+      `#define ER_VERSION_MINOR ${minor}`,
+    )
+    .replace(
+      /#define ER_VERSION_PATCH \d+/,
+      `#define ER_VERSION_PATCH ${patch}`,
+    )
+    .replace(
+      /#define ER_VERSION_STRING "[^"]*"/,
+      `#define ER_VERSION_STRING "${version}"`,
+    );
 };
 
 // README.md — the install snippets pin the version (so copy-paste installs match the release):
 // CMake FetchContent GIT_TAG, ESP-IDF `^x`, PlatformIO `#vx`. Each regex captures the prefix (group 1)
 // and the MAJOR.MINOR.PATCH (group 2). Drift here ships a README that tells users to pin the wrong tag.
 const README_PINS = [
-  /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/,        // CMake FetchContent
-  /(embedded-react\^)(\d+\.\d+\.\d+)/,   // ESP-IDF add-dependency
+  /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/, // CMake FetchContent
+  /(embedded-react\^)(\d+\.\d+\.\d+)/, // ESP-IDF add-dependency
   /(embedded-react\.git#v)(\d+\.\d+\.\d+)/, // PlatformIO lib_deps
 ];
-const readmeRead = (text) => {
-  const found = README_PINS.map((re) => re.exec(text)?.[2]).filter(Boolean);
+const readmeRead = text => {
+  const found = README_PINS.map(re => re.exec(text)?.[2]).filter(Boolean);
   if (!found.length) return undefined;
-  return found.every((v) => v === found[0]) ? found[0] : `${found[0]} (install pins disagree)`;
+  return found.every(v => v === found[0])
+    ? found[0]
+    : `${found[0]} (install pins disagree)`;
 };
-const readmeWrite = (text, version) => README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
+const readmeWrite = (text, version) =>
+  README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
 
 // ESP32 example CMakeLists — the Flow A / Flow B fetch templates pin the embedded-react release they pull
 // when copied OUT of the monorepo (`FetchContent ... GIT_TAG vX.Y.Z`). The pin must track the release, or a
@@ -82,20 +98,33 @@ const readmeWrite = (text, version) => README_PINS.reduce((t, re) => t.replace(r
 // `GIT_TAG <space> vX.Y.Z` form (the embedded_react declare) — NOT QuickJS's `GIT_TAG ${QUICKJS_GIT_TAG}`
 // (no literal version) — so the QuickJS pin is left untouched.
 const GIT_TAG_PIN = /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/;
-const gitTagRead = (text) => GIT_TAG_PIN.exec(text)?.[2];
-const gitTagWrite = (text, version) => text.replace(GIT_TAG_PIN, `$1${version}`);
+const gitTagRead = text => GIT_TAG_PIN.exec(text)?.[2];
+const gitTagWrite = (text, version) =>
+  text.replace(GIT_TAG_PIN, `$1${version}`);
 
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
 // install pins, and the ESP32 example fetch-template tags.
 const MANIFESTS = [
-  { path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite },
-  { path: 'create-embedded-react/package.json', read: jsonRead, write: jsonWrite },
-  { path: 'library.json', read: jsonRead, write: jsonWrite },
-  { path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite },
-  { path: 'engine/include/er_version.h', read: headerRead, write: headerWrite },
-  { path: 'README.md', read: readmeRead, write: readmeWrite },
-  { path: 'examples/esp32/esp32-s3/CMakeLists.txt', read: gitTagRead, write: gitTagWrite },
-  { path: 'examples/esp32/esp32-2432s028r/CMakeLists.txt', read: gitTagRead, write: gitTagWrite },
+  {path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite},
+  {
+    path: 'create-embedded-react/package.json',
+    read: jsonRead,
+    write: jsonWrite,
+  },
+  {path: 'library.json', read: jsonRead, write: jsonWrite},
+  {path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite},
+  {path: 'engine/include/er_version.h', read: headerRead, write: headerWrite},
+  {path: 'README.md', read: readmeRead, write: readmeWrite},
+  {
+    path: 'examples/esp32/esp32-s3/CMakeLists.txt',
+    read: gitTagRead,
+    write: gitTagWrite,
+  },
+  {
+    path: 'examples/esp32/esp32-2432s028r/CMakeLists.txt',
+    read: gitTagRead,
+    write: gitTagWrite,
+  },
 ];
 
 // LICENSE + NOTICE: each independently published artifact (the npm packages; the engine as a CMake /
@@ -104,7 +133,8 @@ const MANIFESTS = [
 // `npm pack` / `compote upload` / `pio publish` include them (and never drift — --check verifies).
 const LEGAL_FILES = ['LICENSE', 'NOTICE'];
 const PACKAGE_DIRS = ['bridges/quickjs/js', 'create-embedded-react', 'engine'];
-const legalMirrors = () => PACKAGE_DIRS.flatMap((dir) => LEGAL_FILES.map((f) => `${dir}/${f}`));
+const legalMirrors = () =>
+  PACKAGE_DIRS.flatMap(dir => LEGAL_FILES.map(f => `${dir}/${f}`));
 
 /**
  * @brief The complete set of repo-relative files a version bump touches: the VERSION file, every
@@ -114,7 +144,7 @@ const legalMirrors = () => PACKAGE_DIRS.flatMap((dir) => LEGAL_FILES.map((f) => 
  * @return Array of repo-root-relative paths.
  */
 export function versionedFiles() {
-  return ['VERSION', ...MANIFESTS.map((t) => t.path), ...legalMirrors()];
+  return ['VERSION', ...MANIFESTS.map(t => t.path), ...legalMirrors()];
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -139,14 +169,19 @@ function main() {
   const versionArg = args.find((a, i) => SEMVER.test(a) && i !== setIdx + 1); // bare X.Y.Z (not the --set value)
 
   if (setVersion && !SEMVER.test(setVersion)) {
-    console.error(`--set needs a MAJOR.MINOR.PATCH version (got "${setVersion ?? ''}")`);
+    console.error(
+      `--set needs a MAJOR.MINOR.PATCH version (got "${setVersion ?? ''}")`,
+    );
     process.exit(2);
   }
   // In --set mode, the new version IS the source of truth — write it into VERSION up front.
   if (setVersion && !check) writeFileSync(VERSION_FILE, setVersion + '\n');
 
   // The version everything is expected to be: --check <tag> uses the tag; otherwise the VERSION file.
-  const version = check && versionArg ? versionArg : readFileSync(VERSION_FILE, 'utf8').trim();
+  const version =
+    check && versionArg
+      ? versionArg
+      : readFileSync(VERSION_FILE, 'utf8').trim();
   if (!SEMVER.test(version)) {
     console.error(`VERSION must be "MAJOR.MINOR.PATCH" (got "${version}")`);
     process.exit(2);
@@ -158,7 +193,8 @@ function main() {
   // In `--check <tag>` mode the VERSION file itself must equal the tag (catches the "forgot to bump" case).
   if (check && versionArg) {
     const fileVersion = readFileSync(VERSION_FILE, 'utf8').trim();
-    if (fileVersion !== versionArg) drift.push({ file: 'VERSION', found: fileVersion });
+    if (fileVersion !== versionArg)
+      drift.push({file: 'VERSION', found: fileVersion});
   }
 
   // Version-bearing manifests.
@@ -168,7 +204,7 @@ function main() {
     const text = readFileSync(path, 'utf8');
     if (check) {
       const found = t.read(text);
-      if (found !== version) drift.push({ file: t.path, found });
+      if (found !== version) drift.push({file: t.path, found});
       continue;
     }
     const next = t.write(text, version);
@@ -185,7 +221,11 @@ function main() {
       const dst = resolve(ROOT, dir, f);
       const have = existsSync(dst) ? readFileSync(dst, 'utf8') : null;
       if (check) {
-        if (have !== want) drift.push({ file: `${dir}/${f}`, found: have == null ? '(missing)' : 'differs from root' });
+        if (have !== want)
+          drift.push({
+            file: `${dir}/${f}`,
+            found: have == null ? '(missing)' : 'differs from root',
+          });
       } else if (have !== want) {
         writeFileSync(dst, want);
         wrote.push(`${dir}/${f}`);
@@ -195,16 +235,21 @@ function main() {
 
   if (check) {
     if (drift.length) {
-      console.error(`Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`);
+      console.error(
+        `Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`,
+      );
       for (const d of drift) console.error(`  ${d.file}: ${d.found}`);
       console.error('Run `node tools/sync-version.mjs` and commit.');
       process.exit(1);
     }
     console.log(`✓ all artifacts at ${version}; LICENSE + NOTICE in sync`);
   } else {
-    console.log(`Synced to ${version}${wrote.length ? ' → ' + wrote.join(', ') : ' (all already current)'}`);
+    console.log(
+      `Synced to ${version}${wrote.length ? ' → ' + wrote.join(', ') : ' (all already current)'}`,
+    );
   }
 }
 
 // Run only when executed directly (`node tools/sync-version.mjs ...`), not when imported (release.mjs).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main();

@@ -35,16 +35,22 @@
 // This is a DEV-MACHINE harness: it opens real SDL windows (the desktop backend has no headless renderer),
 // so it needs a display. Run with `npm run parity` from bridges/quickjs/js.
 
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve, join } from 'node:path';
-import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {dirname, resolve, join} from 'node:path';
+import {readFileSync, mkdirSync, existsSync} from 'node:fs';
 
 const JS_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(JS_DIR, '../../..');
 
-const FLOW_A_EXE = join(ROOT, 'examples/linux/build/embedded-react-desktop.exe');
-const FLOW_B_EXE = join(ROOT, 'examples/linux-aot/build/embedded-react-desktop-aot.exe');
+const FLOW_A_EXE = join(
+  ROOT,
+  'examples/linux/build/embedded-react-desktop.exe',
+);
+const FLOW_B_EXE = join(
+  ROOT,
+  'examples/linux-aot/build/embedded-react-desktop-aot.exe',
+);
 const FLOW_A_BUILD = join(ROOT, 'examples/linux/build');
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
 const BUNDLE = join(JS_DIR, 'dist/app.bundle.js');
@@ -61,19 +67,30 @@ const MAX_DIFF_FRACTION = 0.0005; // 0.05%
 // Scenarios. `screen` is the board size both paths render at; `taps` (optional) is the shared interaction
 // in physical pixels, "x,y x,y …" (same string handed to ER_TAPS and ER_AOT_TAPS).
 const SCENARIOS = [
-  { demo: 'music-player', name: 'music-player', screen: { w: 800, h: 600 } },
+  {demo: 'music-player', name: 'music-player', screen: {w: 800, h: 600}},
   // Tap the Play button → toggles to Pause + reveals the "Playing now" badge (dynamic state parity).
-  { demo: 'music-player', name: 'music-player-playing', screen: { w: 800, h: 600 }, taps: '400,149' },
+  {
+    demo: 'music-player',
+    name: 'music-player-playing',
+    screen: {w: 800, h: 600},
+    taps: '400,149',
+  },
   // Thermostat is responsive: at a compact (<400px) width both paths compile/render the AOT-supported
   // compact branch — the only branch with Flow A↔B parity (the wide branch is Flow-A-only by design).
-  { demo: 'thermostat', name: 'thermostat-compact', screen: { w: 320, h: 480 } },
+  {demo: 'thermostat', name: 'thermostat-compact', screen: {w: 320, h: 480}},
 ];
 
-const ANSI = { red: '\x1b[31m', green: '\x1b[32m', dim: '\x1b[2m', reset: '\x1b[0m', bold: '\x1b[1m' };
+const ANSI = {
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  dim: '\x1b[2m',
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+};
 
 /** Runs a command, inheriting stdio for build/compile steps; throws on failure. */
 function run(cmd, args, env) {
-  execFileSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } });
+  execFileSync(cmd, args, {stdio: 'inherit', env: {...process.env, ...env}});
 }
 
 /** Reads a 24/32-bpp BMP into { w, h, px } with px as tightly-packed RGB (3 bytes/pixel), top-row first. */
@@ -98,13 +115,13 @@ function readBMP(path) {
       px[o + 2] = b[i];
     }
   }
-  return { w, h, px };
+  return {w, h, px};
 }
 
 /** Pixel-diffs two RGB images. Returns { ok, diff, total, fraction, maxDelta, bbox|null, reason? }. */
 function diffImages(a, b) {
   if (a.w !== b.w || a.h !== b.h) {
-    return { ok: false, reason: `size mismatch: ${a.w}x${a.h} vs ${b.w}x${b.h}` };
+    return {ok: false, reason: `size mismatch: ${a.w}x${a.h} vs ${b.w}x${b.h}`};
   }
   let diff = 0;
   let maxDelta = 0;
@@ -138,7 +155,7 @@ function diffImages(a, b) {
     total,
     fraction,
     maxDelta,
-    bbox: diff ? { minx, miny, maxx, maxy } : null,
+    bbox: diff ? {minx, miny, maxx, maxy} : null,
   };
 }
 
@@ -146,7 +163,10 @@ function diffImages(a, b) {
 function runScenario(s) {
   const outA = join(OUT_DIR, `${s.name}.flowA.bmp`);
   const outB = join(OUT_DIR, `${s.name}.flowB.bmp`);
-  const screenEnv = { ER_AOT_SCREEN_W: String(s.screen.w), ER_AOT_SCREEN_H: String(s.screen.h) };
+  const screenEnv = {
+    ER_AOT_SCREEN_W: String(s.screen.w),
+    ER_AOT_SCREEN_H: String(s.screen.h),
+  };
 
   // --- Flow A: bundle (interpreted) → render via the QuickJS host ---
   run(process.execPath, [BUILD_MJS, s.demo]);
@@ -154,7 +174,7 @@ function runScenario(s) {
     ER_SHOT: outA,
     ER_W: String(s.screen.w),
     ER_H: String(s.screen.h),
-    ...(s.taps ? { ER_TAPS: s.taps } : {}),
+    ...(s.taps ? {ER_TAPS: s.taps} : {}),
   });
 
   // --- Flow B: compile (AOT) → rebuild the baked host → render ---
@@ -163,7 +183,7 @@ function runScenario(s) {
   run(FLOW_B_EXE, [], {
     ER_AOT_SHOT: outB,
     ...screenEnv,
-    ...(s.taps ? { ER_AOT_TAPS: s.taps } : {}),
+    ...(s.taps ? {ER_AOT_TAPS: s.taps} : {}),
   });
 
   return diffImages(readBMP(outA), readBMP(outB));
@@ -171,34 +191,48 @@ function runScenario(s) {
 
 function main() {
   const filter = process.argv[2];
-  const scenarios = filter ? SCENARIOS.filter((s) => s.name.includes(filter) || s.demo === filter) : SCENARIOS;
+  const scenarios = filter
+    ? SCENARIOS.filter(s => s.name.includes(filter) || s.demo === filter)
+    : SCENARIOS;
   if (scenarios.length === 0) {
-    console.error(`No scenarios match "${filter}". Known: ${SCENARIOS.map((s) => s.name).join(', ')}`);
+    console.error(
+      `No scenarios match "${filter}". Known: ${SCENARIOS.map(s => s.name).join(', ')}`,
+    );
     process.exit(2);
   }
   for (const exe of [FLOW_A_EXE, FLOW_B_EXE]) {
     if (!existsSync(exe)) {
-      console.error(`Missing host exe: ${exe}\nBuild the desktop hosts first (cmake --build their build dirs).`);
+      console.error(
+        `Missing host exe: ${exe}\nBuild the desktop hosts first (cmake --build their build dirs).`,
+      );
       process.exit(2);
     }
   }
-  mkdirSync(OUT_DIR, { recursive: true });
+  mkdirSync(OUT_DIR, {recursive: true});
 
-  console.log(`${ANSI.bold}Flow A ↔ Flow B parity${ANSI.reset}  (${scenarios.length} scenario(s))\n`);
+  console.log(
+    `${ANSI.bold}Flow A ↔ Flow B parity${ANSI.reset}  (${scenarios.length} scenario(s))\n`,
+  );
   let failures = 0;
   for (const s of scenarios) {
-    console.log(`${ANSI.dim}── ${s.name} @ ${s.screen.w}×${s.screen.h}${s.taps ? ` taps[${s.taps}]` : ''} ──${ANSI.reset}`);
+    console.log(
+      `${ANSI.dim}── ${s.name} @ ${s.screen.w}×${s.screen.h}${s.taps ? ` taps[${s.taps}]` : ''} ──${ANSI.reset}`,
+    );
     let r;
     try {
       r = runScenario(s);
     } catch (e) {
-      console.log(`${ANSI.red}✗ ${s.name}: harness error — ${e.message}${ANSI.reset}\n`);
+      console.log(
+        `${ANSI.red}✗ ${s.name}: harness error — ${e.message}${ANSI.reset}\n`,
+      );
       failures++;
       continue;
     }
     if (r.ok && !r.reason) {
       const pct = (r.fraction * 100).toFixed(4);
-      console.log(`${ANSI.green}✓ ${s.name}${ANSI.reset}  ${r.diff}/${r.total} px differ (${pct}%), maxΔ=${r.maxDelta}\n`);
+      console.log(
+        `${ANSI.green}✓ ${s.name}${ANSI.reset}  ${r.diff}/${r.total} px differ (${pct}%), maxΔ=${r.maxDelta}\n`,
+      );
     } else {
       failures++;
       if (r.reason) {
@@ -216,10 +250,14 @@ function main() {
   }
 
   if (failures) {
-    console.log(`${ANSI.red}${ANSI.bold}${failures} scenario(s) diverged.${ANSI.reset}`);
+    console.log(
+      `${ANSI.red}${ANSI.bold}${failures} scenario(s) diverged.${ANSI.reset}`,
+    );
     process.exit(1);
   }
-  console.log(`${ANSI.green}${ANSI.bold}All scenarios render identically across Flow A and Flow B.${ANSI.reset}`);
+  console.log(
+    `${ANSI.green}${ANSI.bold}All scenarios render identically across Flow A and Flow B.${ANSI.reset}`,
+  );
 }
 
 main();

@@ -27,10 +27,16 @@
 // We pass the Emscripten CMake toolchain file directly (derived from `emcc` on PATH) rather than going through
 // `emcmake`, which on some setups doesn't inject the toolchain and falls back to the native compiler.
 
-import { execSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { mkdirSync, copyFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import {execSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {dirname, resolve} from 'node:path';
+import {
+  mkdirSync,
+  copyFileSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILD_DIR = resolve(HERE, 'build');
@@ -39,10 +45,12 @@ const debug = process.argv.includes('--debug');
 const clean = process.argv.includes('--clean');
 const buildType = debug ? 'Debug' : 'Release';
 
-const run = (cmd) => execSync(cmd, { stdio: 'inherit', cwd: HERE });
-const has = (c) => {
+const run = cmd => execSync(cmd, {stdio: 'inherit', cwd: HERE});
+const has = c => {
   try {
-    execSync(process.platform === 'win32' ? `where ${c}` : `command -v ${c}`, { stdio: 'ignore' });
+    execSync(process.platform === 'win32' ? `where ${c}` : `command -v ${c}`, {
+      stdio: 'ignore',
+    });
     return true;
   } catch {
     return false;
@@ -63,8 +71,11 @@ function emscriptenDir() {
     if (existsSync(p)) return p;
   }
   try {
-    const which = process.platform === 'win32' ? 'where emcc' : 'command -v emcc';
-    const first = execSync(which, { encoding: 'utf8' }).split(/\r?\n/).find(Boolean);
+    const which =
+      process.platform === 'win32' ? 'where emcc' : 'command -v emcc';
+    const first = execSync(which, {encoding: 'utf8'})
+      .split(/\r?\n/)
+      .find(Boolean);
     if (first) return dirname(first.trim());
   } catch {
     /* fall through */
@@ -73,10 +84,15 @@ function emscriptenDir() {
 }
 
 const emDir = emscriptenDir();
-const toolchain = emDir && resolve(emDir, 'cmake/Modules/Platform/Emscripten.cmake');
+const toolchain =
+  emDir && resolve(emDir, 'cmake/Modules/Platform/Emscripten.cmake');
 if (!toolchain || !existsSync(toolchain)) {
-  console.error('Could not find the Emscripten SDK (emcc / the CMake toolchain) on PATH.');
-  console.error('Install + activate emsdk: https://emscripten.org/docs/getting_started/downloads.html');
+  console.error(
+    'Could not find the Emscripten SDK (emcc / the CMake toolchain) on PATH.',
+  );
+  console.error(
+    'Install + activate emsdk: https://emscripten.org/docs/getting_started/downloads.html',
+  );
   process.exit(1);
 }
 
@@ -90,20 +106,25 @@ let needWipe = clean;
 if (!needWipe && existsSync(cachePath)) {
   const cache = readFileSync(cachePath, 'utf8');
   const cachedGen = (cache.match(/^CMAKE_GENERATOR:INTERNAL=(.*)$/m) || [])[1];
-  const cachedCC = (cache.match(/^CMAKE_C_COMPILER:[^=]*=(.*)$/m) || [])[1] || '';
+  const cachedCC =
+    (cache.match(/^CMAKE_C_COMPILER:[^=]*=(.*)$/m) || [])[1] || '';
   const genOk = !gen || cachedGen === gen;
   const ccOk = /emcc/i.test(cachedCC);
   needWipe = !genOk || !ccOk;
 }
 if (needWipe) {
-  rmSync(BUILD_DIR, { recursive: true, force: true });
+  rmSync(BUILD_DIR, {recursive: true, force: true});
 }
-mkdirSync(OUT_DIR, { recursive: true });
-console.log(`cmake (Emscripten, ${buildType}${gen ? `, ${gen}` : ''}) → ${OUT_DIR}`);
+mkdirSync(OUT_DIR, {recursive: true});
+console.log(
+  `cmake (Emscripten, ${buildType}${gen ? `, ${gen}` : ''}) → ${OUT_DIR}`,
+);
 try {
   // Configure once; re-runs are cheap and pick up CMakeLists edits. First configure clones + builds
   // QuickJS-ng (FetchContent) — a few minutes; subsequent builds are incremental.
-  run(`cmake -S "${HERE}" -B "${BUILD_DIR}" ${genArg}-DCMAKE_TOOLCHAIN_FILE="${toolchain}" -DCMAKE_BUILD_TYPE=${buildType}`);
+  run(
+    `cmake -S "${HERE}" -B "${BUILD_DIR}" ${genArg}-DCMAKE_TOOLCHAIN_FILE="${toolchain}" -DCMAKE_BUILD_TYPE=${buildType}`,
+  );
   run(`cmake --build "${BUILD_DIR}" -j`);
 } catch (e) {
   console.error('\nbuild failed (see output above).');
@@ -113,19 +134,32 @@ try {
 // Stage a .cjs copy alongside the .js: the host page loads the .js as a classic <script>, but the npm
 // package is "type": "module", so Node would treat the .js as ESM and the emscripten CommonJS export
 // would never run. `embedded-react build` requires the .cjs (forced CommonJS) to compile bytecode in Node.
-const stage = (dir) => {
-  copyFileSync(resolve(BUILD_DIR, 'embedded-react.js'), resolve(dir, 'embedded-react.js'));
-  copyFileSync(resolve(BUILD_DIR, 'embedded-react.js'), resolve(dir, 'embedded-react.cjs'));
-  copyFileSync(resolve(BUILD_DIR, 'embedded-react.wasm'), resolve(dir, 'embedded-react.wasm'));
+const stage = dir => {
+  copyFileSync(
+    resolve(BUILD_DIR, 'embedded-react.js'),
+    resolve(dir, 'embedded-react.js'),
+  );
+  copyFileSync(
+    resolve(BUILD_DIR, 'embedded-react.js'),
+    resolve(dir, 'embedded-react.cjs'),
+  );
+  copyFileSync(
+    resolve(BUILD_DIR, 'embedded-react.wasm'),
+    resolve(dir, 'embedded-react.wasm'),
+  );
 };
 stage(OUT_DIR);
 
 // Stage the prebuilt module + host page into the npm package's sim/ dir so `npx embedded-react dev` ships
 // with it (the `files` whitelist includes sim/). This is what CI builds + publishes; not committed.
 const PKG_SIM = resolve(HERE, '../../bridges/quickjs/js/sim');
-mkdirSync(PKG_SIM, { recursive: true });
+mkdirSync(PKG_SIM, {recursive: true});
 stage(PKG_SIM);
 copyFileSync(resolve(HERE, 'index.html'), resolve(PKG_SIM, 'index.html'));
 
-console.log('✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + bridges/quickjs/js/sim/');
-console.log('  repo preview: node tools/web-sim/dev.mjs [demo]   ·   consumer CLI: npx embedded-react dev');
+console.log(
+  '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + bridges/quickjs/js/sim/',
+);
+console.log(
+  '  repo preview: node tools/web-sim/dev.mjs [demo]   ·   consumer CLI: npx embedded-react dev',
+);

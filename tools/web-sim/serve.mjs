@@ -22,10 +22,10 @@
 // module. W3 grows this into the dev server (esbuild watch + websocket hot-reload). For now it is just a
 // file server so `index.html` + `public/embedded-react.{js,wasm}` load over http (file:// blocks fetch).
 
-import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, extname, normalize, resolve } from 'node:path';
+import {createServer} from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {dirname, extname, normalize, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const portIdx = process.argv.indexOf('--port');
@@ -44,7 +44,9 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
   try {
-    const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    const urlPath = decodeURIComponent(
+      new URL(req.url, 'http://localhost').pathname,
+    );
     const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
     // Confine to HERE — reject any path that escapes the served directory.
     const file = normalize(resolve(HERE, rel));
@@ -53,7 +55,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     const body = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream' }).end(body);
+    res
+      .writeHead(200, {
+        'content-type': MIME[extname(file)] || 'application/octet-stream',
+      })
+      .end(body);
   } catch {
     res.writeHead(404).end('not found');
   }

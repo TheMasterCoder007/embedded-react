@@ -1,5 +1,13 @@
-import { useState, useEffect } from 'react';
-import { View, Text, Pressable, Image, StyleSheet, Animated, useAnimatedValue } from 'embedded-react';
+import {useState, useEffect} from 'react';
+import {
+  View,
+  Text,
+  Pressable,
+  Image,
+  StyleSheet,
+  Animated,
+  useAnimatedValue,
+} from 'embedded-react';
 import logo from './assets/icons/embedded-react.png';
 
 export function App() {
@@ -10,8 +18,8 @@ export function App() {
   useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.12, duration: 800 }),
-        Animated.timing(pulse, { toValue: 1.0, duration: 800 }),
+        Animated.timing(pulse, {toValue: 1.12, duration: 800}),
+        Animated.timing(pulse, {toValue: 1.0, duration: 800}),
       ]),
     );
     anim.start();
@@ -22,9 +30,12 @@ export function App() {
     <View style={styles.root}>
       {/* The card is width:100% but capped by maxWidth, so it fills small panels and centers on big ones. */}
       <View style={styles.card}>
-        <Animated.Image source={logo} style={[styles.logo, { transform: [{ scale: pulse }] }]} />
+        <Animated.Image
+          source={logo}
+          style={[styles.logo, {transform: [{scale: pulse}]}]}
+        />
         <Text style={styles.title}>embedded-react</Text>
-        <Pressable style={styles.button} onPress={() => setCount((c) => c + 1)}>
+        <Pressable style={styles.button} onPress={() => setCount(c => c + 1)}>
           <Text style={styles.buttonText}>count is {count}</Text>
         </Pressable>
         <View style={styles.hintBox}>
@@ -37,7 +48,13 @@ export function App() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0b0d10', alignItems: 'center', justifyContent: 'center', padding: 14 },
+  root: {
+    flex: 1,
+    backgroundColor: '#0b0d10',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+  },
   card: {
     width: '100%',
     maxWidth: 360,
@@ -49,8 +66,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     alignItems: 'center',
   },
-  logo: { width: 60, height: 60, marginBottom: 10 },
-  title: { color: '#e8edf4', fontSize: 17, marginBottom: 14 },
+  logo: {width: 60, height: 60, marginBottom: 10},
+  title: {color: '#e8edf4', fontSize: 17, marginBottom: 14},
   button: {
     backgroundColor: '#1e2a44',
     borderColor: '#4f86f7',
@@ -59,7 +76,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 20,
   },
-  buttonText: { color: '#cfe0ff', fontSize: 15 },
-  hintBox: { alignItems: 'center', marginTop: 16, gap: 2 },
-  hint: { color: '#5f6b7a', fontSize: 12 },
+  buttonText: {color: '#cfe0ff', fontSize: 15},
+  hintBox: {alignItems: 'center', marginTop: 16, gap: 2},
+  hint: {color: '#5f6b7a', fontSize: 12},
 });

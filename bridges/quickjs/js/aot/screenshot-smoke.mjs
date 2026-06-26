@@ -25,24 +25,29 @@
 // Prereq: the linux-aot CMake build must be configurable (SDL2 found). It reuses examples/linux-aot/build;
 // if that isn't configured yet, set CMAKE_TOOLCHAIN_FILE (e.g. a vcpkg toolchain) and it will configure it.
 // Needs a display (SDL video); on a headless box run under a virtual framebuffer.
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {execFileSync} from 'node:child_process';
+import {existsSync, mkdirSync, readFileSync, rmSync} from 'node:fs';
+import {resolve, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const jsDir = resolve(here, '..'); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../../..');
 const exampleDir = resolve(repoRoot, 'examples/linux-aot');
 const buildDir = resolve(exampleDir, 'build');
-const exe = resolve(buildDir, process.platform === 'win32' ? 'embedded-react-desktop-aot.exe' : 'embedded-react-desktop-aot');
+const exe = resolve(
+  buildDir,
+  process.platform === 'win32'
+    ? 'embedded-react-desktop-aot.exe'
+    : 'embedded-react-desktop-aot',
+);
 const tmpDir = resolve(jsDir, 'dist', '.smoke');
 
 // Demos to smoke-test. `screen` (optional) sets ER_AOT_SCREEN_W/H so the responsive thermostat folds to its
 // compact (AOT-compilable) branch. `minColors` is the floor of distinct sampled colours for "rendered".
 const DEMOS = [
-  { name: 'music-player', minColors: 40 },
-  { name: 'thermostat', screen: { w: 240, h: 320 }, minColors: 40 },
+  {name: 'music-player', minColors: 40},
+  {name: 'thermostat', screen: {w: 240, h: 320}, minColors: 40},
 ];
 
 /** Counts distinct colours in an uncompressed 24/32-bpp BMP (sampled) — a quick "is anything drawn?" signal. */
@@ -67,38 +72,46 @@ function bmpDistinctColors(path, step = 4) {
 }
 
 function run(cmd, args, opts = {}) {
-  execFileSync(cmd, args, { stdio: 'pipe', ...opts });
+  execFileSync(cmd, args, {stdio: 'pipe', ...opts});
 }
 
 function ensureConfigured() {
   if (existsSync(resolve(buildDir, 'CMakeCache.txt'))) return;
   console.log('• configuring linux-aot build (first run)…');
   const args = ['-S', exampleDir, '-B', buildDir];
-  if (process.env.CMAKE_TOOLCHAIN_FILE) args.push(`-DCMAKE_TOOLCHAIN_FILE=${process.env.CMAKE_TOOLCHAIN_FILE}`);
+  if (process.env.CMAKE_TOOLCHAIN_FILE)
+    args.push(`-DCMAKE_TOOLCHAIN_FILE=${process.env.CMAKE_TOOLCHAIN_FILE}`);
   if (process.platform === 'win32') args.push('-G', 'MinGW Makefiles');
   run('cmake', args);
 }
 
 let failures = 0;
-mkdirSync(tmpDir, { recursive: true });
+mkdirSync(tmpDir, {recursive: true});
 ensureConfigured();
 
 for (const demo of DEMOS) {
   const shot = resolve(tmpDir, `${demo.name}.bmp`);
   try {
-    rmSync(shot, { force: true });
-    const genEnv = { ...process.env };
+    rmSync(shot, {force: true});
+    const genEnv = {...process.env};
     if (demo.screen) {
       genEnv.ER_AOT_SCREEN_W = String(demo.screen.w);
       genEnv.ER_AOT_SCREEN_H = String(demo.screen.h);
     }
-    run('node', [resolve(here, 'compile.mjs'), demo.name], { cwd: jsDir, env: genEnv }); // → dist/app.gen.{c,h}
+    run('node', [resolve(here, 'compile.mjs'), demo.name], {
+      cwd: jsDir,
+      env: genEnv,
+    }); // → dist/app.gen.{c,h}
     run('cmake', ['--build', buildDir]); // relink the generated C
-    run(exe, [], { cwd: buildDir, env: { ...process.env, ER_AOT_SHOT: shot } }); // render one frame → BMP
+    run(exe, [], {cwd: buildDir, env: {...process.env, ER_AOT_SHOT: shot}}); // render one frame → BMP
 
-    if (!existsSync(shot)) throw new Error('no screenshot written (host crashed before present?)');
+    if (!existsSync(shot))
+      throw new Error('no screenshot written (host crashed before present?)');
     const colors = bmpDistinctColors(shot);
-    if (colors < demo.minColors) throw new Error(`screenshot looks blank (${colors} distinct colours < ${demo.minColors})`);
+    if (colors < demo.minColors)
+      throw new Error(
+        `screenshot looks blank (${colors} distinct colours < ${demo.minColors})`,
+      );
     console.log(`✓ ${demo.name}: rendered (${colors} distinct colours)`);
   } catch (e) {
     failures++;
@@ -106,5 +119,9 @@ for (const demo of DEMOS) {
   }
 }
 
-console.log(failures ? `\n${failures} demo(s) failed the smoke test.` : `\nAll ${DEMOS.length} demos compiled, built, and rendered.`);
+console.log(
+  failures
+    ? `\n${failures} demo(s) failed the smoke test.`
+    : `\nAll ${DEMOS.length} demos compiled, built, and rendered.`,
+);
 process.exit(failures ? 1 : 0);

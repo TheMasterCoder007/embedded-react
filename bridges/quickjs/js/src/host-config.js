@@ -18,11 +18,21 @@
 //
 // Instances ARE the integer node handles returned by NativeUI.createNode(). We keep no JS-side
 // wrapper objects — the engine owns the scene graph, the handle is the identity.
-import { DefaultEventPriority } from 'react-reconciler/constants';
-import { NativeUI } from './native-ui.js';
-import { buildProps, buildTextSpans, isEventProp, isTextContent } from './props.js';
-import { flattenSvg, warnVectorCaps, scaleVectorArtifact, encodeVectorGradients } from './embedded-react/svg-ops.js';
-import { splitAnimatedStyle } from './embedded-react/split-style.js';
+import {DefaultEventPriority} from 'react-reconciler/constants';
+import {NativeUI} from './native-ui.js';
+import {
+  buildProps,
+  buildTextSpans,
+  isEventProp,
+  isTextContent,
+} from './props.js';
+import {
+  flattenSvg,
+  warnVectorCaps,
+  scaleVectorArtifact,
+  encodeVectorGradients,
+} from './embedded-react/svg-ops.js';
+import {splitAnimatedStyle} from './embedded-react/split-style.js';
 
 /**
  * Applies a node's resolved props, binding any Animated.Value found in its `style` to the matching
@@ -32,8 +42,11 @@ import { splitAnimatedStyle } from './embedded-react/split-style.js';
  * already stripped its bindings into a ref, so splitAnimatedStyle finds none here (no double bind).
  */
 function applyProps(type, handle, props) {
-  const { staticStyle, bindings } = splitAnimatedStyle(props.style);
-  NativeUI.setProps(handle, buildProps(type, bindings.length ? { ...props, style: staticStyle } : props));
+  const {staticStyle, bindings} = splitAnimatedStyle(props.style);
+  NativeUI.setProps(
+    handle,
+    buildProps(type, bindings.length ? {...props, style: staticStyle} : props),
+  );
   for (const b of bindings) b.value.__bind(handle, b.prop);
 }
 
@@ -48,7 +61,10 @@ function applyTextSpans(type, handle, props) {
 
 /** Resolves an <Svg>'s render-box dimension from style/props, falling back to the source's intrinsic size. */
 function svgBoxSize(props, dim, intrinsic) {
-  const s = props.style && typeof props.style[dim] === 'number' ? props.style[dim] : undefined;
+  const s =
+    props.style && typeof props.style[dim] === 'number'
+      ? props.style[dim]
+      : undefined;
   const p = typeof props[dim] === 'number' ? props[dim] : undefined;
   return s ?? p ?? intrinsic;
 }
@@ -68,7 +84,11 @@ function rasterSvgArtifact(type, props) {
 function rasterImageProps(props, art) {
   const width = svgBoxSize(props, 'width', art.width);
   const height = svgBoxSize(props, 'height', art.height);
-  return { ...props, source: art.name, style: { ...(props.style || {}), width, height } };
+  return {
+    ...props,
+    source: art.name,
+    style: {...(props.style || {}), width, height},
+  };
 }
 
 /**
@@ -85,12 +105,30 @@ function applyVectorOps(type, handle, props) {
   let gradients;
   const src = props.source;
   if (src && src.kind === 'vector' && Array.isArray(src.ops)) {
-    ({ ops, paints, gradients } = scaleVectorArtifact(src, svgBoxSize(props, 'width', src.width), svgBoxSize(props, 'height', src.height)));
+    ({ops, paints, gradients} = scaleVectorArtifact(
+      src,
+      svgBoxSize(props, 'width', src.width),
+      svgBoxSize(props, 'height', src.height),
+    ));
   } else {
-    ({ ops, paints } = flattenSvg(props));
+    ({ops, paints} = flattenSvg(props));
   }
-  warnVectorCaps(ops.length, paints.length, NativeUI.maxVectorOps, NativeUI.maxVectorPaints, gradients ? gradients.length : 0, NativeUI.maxVectorGrads);
-  NativeUI.setVectorOps(handle, ops, paints, gradients && gradients.length ? encodeVectorGradients(gradients) : undefined);
+  warnVectorCaps(
+    ops.length,
+    paints.length,
+    NativeUI.maxVectorOps,
+    NativeUI.maxVectorPaints,
+    gradients ? gradients.length : 0,
+    NativeUI.maxVectorGrads,
+  );
+  NativeUI.setVectorOps(
+    handle,
+    ops,
+    paints,
+    gradients && gradients.length
+      ? encodeVectorGradients(gradients)
+      : undefined,
+  );
 }
 
 /**
@@ -123,7 +161,10 @@ function vectorNeedsUpload(type, prevProps, nextProps) {
 function applyEvents(handle, prevProps, nextProps) {
   if (prevProps) {
     for (const key in prevProps) {
-      if (isEventProp(key, prevProps[key]) && !(nextProps && isEventProp(key, nextProps[key]))) {
+      if (
+        isEventProp(key, prevProps[key]) &&
+        !(nextProps && isEventProp(key, nextProps[key]))
+      ) {
         NativeUI.setEvent(handle, key, null);
       }
     }
@@ -183,7 +224,7 @@ export const hostConfig = {
     // Raw text is only legal inside <Text> (handled via shouldSetTextContent). This fallback
     // wraps stray text in a Text node so it still renders rather than crashing.
     const handle = NativeUI.createNode('Text');
-    NativeUI.setProps(handle, { text: String(text) });
+    NativeUI.setProps(handle, {text: String(text)});
     return handle;
   },
   appendInitialChild(parent, child) {
@@ -239,11 +280,12 @@ export const hostConfig = {
     }
     applyProps(type, instance, nextProps);
     applyTextSpans(type, instance, nextProps);
-    if (vectorNeedsUpload(type, prevProps, nextProps)) applyVectorOps(type, instance, nextProps);
+    if (vectorNeedsUpload(type, prevProps, nextProps))
+      applyVectorOps(type, instance, nextProps);
     applyEvents(instance, prevProps, nextProps);
   },
   commitTextUpdate(textInstance, _oldText, newText) {
-    NativeUI.setProps(textInstance, { text: String(newText) });
+    NativeUI.setProps(textInstance, {text: String(newText)});
   },
 
   // --- Misc required hooks (no-ops for our renderer) ---
@@ -263,9 +305,11 @@ export const hostConfig = {
 
   // --- Scheduling ---
   scheduleTimeout: (fn, delay) => setTimeout(fn, delay),
-  cancelTimeout: (id) => clearTimeout(id),
+  cancelTimeout: id => clearTimeout(id),
   supportsMicrotasks: true,
   scheduleMicrotask:
-    typeof queueMicrotask === 'function' ? queueMicrotask : (fn) => Promise.resolve().then(fn),
+    typeof queueMicrotask === 'function'
+      ? queueMicrotask
+      : fn => Promise.resolve().then(fn),
   now: () => NativeUI.now(),
 };

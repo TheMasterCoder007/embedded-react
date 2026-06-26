@@ -24,7 +24,7 @@
 // stable across the edits you make most often (JSX/logic). Adding/removing a useState in a component,
 // or renaming it, shifts that component's keys and resets its state — press R in the sim for a clean
 // reset any time.
-import { transformSync } from '@babel/core';
+import {transformSync} from '@babel/core';
 import syntaxJsx from '@babel/plugin-syntax-jsx';
 
 /** Best-effort name of the function/component enclosing a path (for a stable, readable key). */
@@ -34,15 +34,21 @@ function enclosingName(path) {
   if (fn.node.id && fn.node.id.name) return fn.node.id.name; // function Foo() {}
   const parent = fn.parentPath && fn.parentPath.node;
   if (parent) {
-    if (parent.type === 'VariableDeclarator' && parent.id && parent.id.name) return parent.id.name; // const Foo = () =>
+    if (parent.type === 'VariableDeclarator' && parent.id && parent.id.name)
+      return parent.id.name; // const Foo = () =>
     if (parent.key && parent.key.name) return parent.key.name; // method / property
-    if (parent.type === 'AssignmentExpression' && parent.left && parent.left.name) return parent.left.name;
+    if (
+      parent.type === 'AssignmentExpression' &&
+      parent.left &&
+      parent.left.name
+    )
+      return parent.left.name;
   }
   return '_';
 }
 
 /** Babel plugin: useState(init) → __erPersistState("key", init), importing the helper when used. */
-function persistPlugin({ types: t }) {
+function persistPlugin({types: t}) {
   return {
     name: 'er-persist-usestate',
     visitor: {
@@ -56,14 +62,19 @@ function persistPlugin({ types: t }) {
           path.unshiftContainer(
             'body',
             t.importDeclaration(
-              [t.importSpecifier(t.identifier('__erPersistState'), t.identifier('usePersistentState'))],
+              [
+                t.importSpecifier(
+                  t.identifier('__erPersistState'),
+                  t.identifier('usePersistentState'),
+                ),
+              ],
               t.stringLiteral('embedded-react'),
             ),
           );
         },
       },
       CallExpression(path, state) {
-        if (!t.isIdentifier(path.node.callee, { name: 'useState' })) return;
+        if (!t.isIdentifier(path.node.callee, {name: 'useState'})) return;
         // Only rewrite the real useState (an imported binding from react / embedded-react).
         const binding = path.scope.getBinding('useState');
         if (!binding || binding.kind !== 'module') return;
@@ -77,7 +88,10 @@ function persistPlugin({ types: t }) {
         const key = `${state.opts.moduleId}::${fnName}#${idx}`;
 
         path.replaceWith(
-          t.callExpression(t.identifier('__erPersistState'), [t.stringLiteral(key), ...path.node.arguments]),
+          t.callExpression(t.identifier('__erPersistState'), [
+            t.stringLiteral(key),
+            ...path.node.arguments,
+          ]),
         );
         state.erUsed = true;
         path.skip();
@@ -116,8 +130,8 @@ export function transformPersist(code, moduleId) {
     babelrc: false,
     configFile: false,
     sourceType: 'module',
-    parserOpts: { plugins: ['jsx'] },
-    plugins: [syntaxJsx, [persistPlugin, { moduleId }]],
+    parserOpts: {plugins: ['jsx']},
+    plugins: [syntaxJsx, [persistPlugin, {moduleId}]],
   });
   return out.code;
 }

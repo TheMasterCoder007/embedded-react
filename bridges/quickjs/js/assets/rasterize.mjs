@@ -40,11 +40,11 @@ function flattenCommands(commands, steps) {
   for (const c of commands) {
     if (c.type === 'M') {
       if (cur && cur.length > 1) contours.push(cur);
-      cur = [{ x: c.x, y: c.y }];
+      cur = [{x: c.x, y: c.y}];
       cx = sx = c.x;
       cy = sy = c.y;
     } else if (c.type === 'L') {
-      cur.push({ x: c.x, y: c.y });
+      cur.push({x: c.x, y: c.y});
       cx = c.x;
       cy = c.y;
     } else if (c.type === 'Q') {
@@ -63,15 +63,23 @@ function flattenCommands(commands, steps) {
         const t = i / steps;
         const mt = 1 - t;
         cur.push({
-          x: mt * mt * mt * cx + 3 * mt * mt * t * c.x1 + 3 * mt * t * t * c.x2 + t * t * t * c.x,
-          y: mt * mt * mt * cy + 3 * mt * mt * t * c.y1 + 3 * mt * t * t * c.y2 + t * t * t * c.y,
+          x:
+            mt * mt * mt * cx +
+            3 * mt * mt * t * c.x1 +
+            3 * mt * t * t * c.x2 +
+            t * t * t * c.x,
+          y:
+            mt * mt * mt * cy +
+            3 * mt * mt * t * c.y1 +
+            3 * mt * t * t * c.y2 +
+            t * t * t * c.y,
         });
       }
       cx = c.x;
       cy = c.y;
     } else if (c.type === 'Z') {
       if (cur) {
-        cur.push({ x: sx, y: sy }); // close the contour
+        cur.push({x: sx, y: sy}); // close the contour
         if (cur.length > 1) contours.push(cur);
         cur = null;
       }
@@ -109,7 +117,13 @@ export function rasterize(path, opts = {}) {
     }
   }
   if (!Number.isFinite(minX)) {
-    return { width: 0, height: 0, xOffset: 0, yOffset: 0, coverage: new Uint8Array(0) };
+    return {
+      width: 0,
+      height: 0,
+      xOffset: 0,
+      yOffset: 0,
+      coverage: new Uint8Array(0),
+    };
   }
 
   const x0 = Math.floor(minX);
@@ -117,7 +131,13 @@ export function rasterize(path, opts = {}) {
   const width = Math.ceil(maxX) - x0;
   const height = Math.ceil(maxY) - y0;
   if (width <= 0 || height <= 0) {
-    return { width: 0, height: 0, xOffset: 0, yOffset: 0, coverage: new Uint8Array(0) };
+    return {
+      width: 0,
+      height: 0,
+      xOffset: 0,
+      yOffset: 0,
+      coverage: new Uint8Array(0),
+    };
   }
 
   // Non-horizontal edges, normalized so ylo < yhi; dir is the winding contribution.
@@ -127,8 +147,22 @@ export function rasterize(path, opts = {}) {
       const a = ct[i];
       const b = ct[i + 1];
       if (a.y === b.y) continue;
-      if (a.y < b.y) edges.push({ ylo: a.y, yhi: b.y, x: a.x, dxdy: (b.x - a.x) / (b.y - a.y), dir: 1 });
-      else edges.push({ ylo: b.y, yhi: a.y, x: b.x, dxdy: (a.x - b.x) / (a.y - b.y), dir: -1 });
+      if (a.y < b.y)
+        edges.push({
+          ylo: a.y,
+          yhi: b.y,
+          x: a.x,
+          dxdy: (b.x - a.x) / (b.y - a.y),
+          dir: 1,
+        });
+      else
+        edges.push({
+          ylo: b.y,
+          yhi: a.y,
+          x: b.x,
+          dxdy: (a.x - b.x) / (a.y - b.y),
+          dir: -1,
+        });
     }
   }
 
@@ -139,7 +173,7 @@ export function rasterize(path, opts = {}) {
     const xs = [];
     for (const e of edges) {
       if (sampleY >= e.ylo && sampleY < e.yhi) {
-        xs.push({ x: e.x + (sampleY - e.ylo) * e.dxdy, dir: e.dir });
+        xs.push({x: e.x + (sampleY - e.ylo) * e.dxdy, dir: e.dir});
       }
     }
     if (xs.length < 2) continue;
@@ -165,5 +199,5 @@ export function rasterize(path, opts = {}) {
   for (let i = 0; i < coverage.length; i++) {
     coverage[i] = Math.round((counts[i] * 255) / maxCov);
   }
-  return { width, height, xOffset: x0, yOffset: y0, coverage };
+  return {width, height, xOffset: x0, yOffset: y0, coverage};
 }

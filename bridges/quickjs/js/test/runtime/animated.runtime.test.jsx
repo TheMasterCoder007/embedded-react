@@ -16,8 +16,8 @@
 
 // Runtime e2e: an Animated.Value driven by Animated.timing must advance in the engine as the host
 // ticks — no per-frame JS. We start a linear 0→100 over 100ms and step the clock via NativeUI.tick.
-import { Animated, Easing } from 'embedded-react';
-import { check, report } from './harness.js';
+import {Animated, Easing} from 'embedded-react';
+import {check, report} from './harness.js';
 
 const v = new Animated.Value(0);
 check(v.__getValue() === 0, 'value starts at its initial (0)');
@@ -26,7 +26,11 @@ v.setValue(25);
 check(v.__getValue() === 25, 'setValue updates the engine value');
 v.setValue(0);
 
-Animated.timing(v, { toValue: 100, duration: 100, easing: Easing.linear }).start();
+Animated.timing(v, {
+  toValue: 100,
+  duration: 100,
+  easing: Easing.linear,
+}).start();
 
 NativeUI.tick(50); // halfway
 const mid = v.__getValue();

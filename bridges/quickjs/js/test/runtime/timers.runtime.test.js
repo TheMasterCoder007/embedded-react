@@ -17,7 +17,7 @@
 // Runtime e2e for §2: the host pump must drain Promise microtasks and fire setTimeout/setInterval
 // callbacks off the engine clock. NativeUI.tick(ms) advances the clock and pumps, so this test is
 // fully deterministic — each tick fires exactly the timers whose deadline has passed.
-import { check, report } from './harness.js';
+import {check, report} from './harness.js';
 
 // --- Promises: a .then resolves only after a pump, not synchronously ---------------------------
 let promiseFlag = false;
@@ -78,7 +78,10 @@ const iid = setInterval(() => {
 NativeUI.tick(25); // fire 1
 NativeUI.tick(25); // fire 2
 NativeUI.tick(25); // fire 3
-check(intervalTicks === 3, `setInterval fires each period (ticks=${intervalTicks})`);
+check(
+  intervalTicks === 3,
+  `setInterval fires each period (ticks=${intervalTicks})`,
+);
 clearInterval(iid);
 NativeUI.tick(100);
 check(intervalTicks === 3, 'clearInterval stops further firing');

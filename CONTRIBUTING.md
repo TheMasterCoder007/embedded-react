@@ -68,6 +68,8 @@ void function_name(int param1, int param2) {}
 
 ## Code style
 
+### C — clang-format
+
 The repo ships a `.clang-format`. The root `CMakeLists.txt` exposes a `format` target —
 **run it before you commit**:
 
@@ -76,3 +78,17 @@ cmake -S . -B build
 cmake --build build --target format        # rewrite in place
 cmake --build build --target format-check  # CI-style dry-run (--Werror), no edits
 ```
+
+### JavaScript — Prettier
+
+The repo ships a root `.prettierrc.cjs` / `.prettierignore` (JS style is intentionally distinct from
+the C `.clang-format`). Prettier is a dev-only tool that
+lives in the npm package (`bridges/quickjs/js`); it is **not** a dependency of the package or of
+the scaffolded template. Run it from there over the whole repo before you commit:
+
+```
+cd bridges/quickjs/js
+npm run format         # rewrite in place
+npm run format:check   # dry-run, no edits
+```
+

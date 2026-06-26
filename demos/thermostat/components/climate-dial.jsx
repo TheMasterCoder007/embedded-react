@@ -14,8 +14,15 @@
  * limitations under the License.
  */
 
-import { useState, useRef } from 'react';
-import { View, Text, Svg, Circle, updateVector, updateText } from 'embedded-react';
+import {useState, useRef} from 'react';
+import {
+  View,
+  Text,
+  Svg,
+  Circle,
+  updateVector,
+  updateText,
+} from 'embedded-react';
 import climateFace from '../assets/climate-face.svg';
 
 // A self-contained dial: it takes its data (value/range), dimensions (size/font sizes), and colors (theme)
@@ -31,11 +38,12 @@ const SVG_BOX = 410;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // value → angle (deg, clockwise from top): min → A_START, max → -A_START.
-const angleForValue = (v, min, max) => A_START + ((v - min) / (max - min)) * SWEEP;
+const angleForValue = (v, min, max) =>
+  A_START + ((v - min) / (max - min)) * SWEEP;
 // A point on the arc. The minus on cos puts 0° at the top and grows y downward (SVG convention).
 const pointOnArc = (deg, cx, cy, r) => {
   const t = (deg * Math.PI) / 180;
-  return { x: cx + r * Math.sin(t), y: cy - r * Math.cos(t) };
+  return {x: cx + r * Math.sin(t), y: cy - r * Math.cos(t)};
 };
 // Center status word from target vs. current. The deadband stops flicker near equality.
 const statusFor = (mode, value, current) => {
@@ -46,8 +54,8 @@ const statusFor = (mode, value, current) => {
 };
 
 const KNOB = [
-  { r: 20, fill: '#ffffff' }, // white knob body
-  { r: 13, fill: 'none', stroke: '#121212', sw: 3 }, // inner black ring
+  {r: 20, fill: '#ffffff'}, // white knob body
+  {r: 13, fill: 'none', stroke: '#121212', sw: 3}, // inner black ring
 ];
 const KNOB_R_MAX = 20; // largest circle radius (authoring units) — sizes the imperative repaint box
 
@@ -65,7 +73,17 @@ const KNOB_R_MAX = 20; // largest circle radius (authoring units) — sizes the 
 //   theme color tokens { subtext, text }
 //   onValue  committed on release with the final continuous value
 // ----------------------------------------------------------------------------------------------------
-export function Dial({ value, min, max, current, mode, size, sz, theme, onValue }) {
+export function Dial({
+  value,
+  min,
+  max,
+  current,
+  mode,
+  size,
+  sz,
+  theme,
+  onValue,
+}) {
   // `size` is either a pixel number or a percent string ('80%', relative to the parent's width). A percent
   // is only known in pixels after layout, so we measure the resolved edge in onLayout, then feed it back as
   // an explicit square height (and drive the pixel-scaled SVG geometry from it). aspectRatio can't do this
@@ -75,7 +93,9 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   const isPct = typeof size === 'string';
   const [measured, setMeasured] = useState(isPct ? 0 : size);
   const box = isPct ? measured : size; // the dial's edge in screen px (0 until a percent is first measured)
-  const boxStyle = isPct ? { width: size, height: measured } : { width: size, height: size };
+  const boxStyle = isPct
+    ? {width: size, height: measured}
+    : {width: size, height: size};
 
   // SVG authoring space → screen, from the pixel box.
   const DIAL_C = box / 2;
@@ -85,7 +105,7 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   const KNOB_C = DIAL_C + pad;
 
   // Dial center in absolute screen coords, captured from onLayout (a ref, so it never re-renders).
-  const centerRef = useRef({ x: 0, y: 0 });
+  const centerRef = useRef({x: 0, y: 0});
   // The value shown on screen. It drives the DECLARATIVE render (mount, ± steppers, post-drag re-sync). During
   // a drag we DON'T setShown — the knob + readout is pushed imperatively (below) so React never reconciles —
   // and commit the final value back to React state only on release.
@@ -110,9 +130,13 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
     setShown(value);
   }
 
-  const onLayout = (e) => {
-    centerRef.current = { x: e.layout.x + e.layout.width / 2, y: e.layout.y + e.layout.height / 2 };
-    if (isPct && Math.abs(e.layout.width - measured) > 0.5) setMeasured(e.layout.width); // resolved px edge
+  const onLayout = e => {
+    centerRef.current = {
+      x: e.layout.x + e.layout.width / 2,
+      y: e.layout.y + e.layout.height / 2,
+    };
+    if (isPct && Math.abs(e.layout.width - measured) > 0.5)
+      setMeasured(e.layout.width); // resolved px edge
   };
 
   // Knob geometry at value `k`: the five circles as imperative shape descriptors. The radii/colors are fixed
@@ -121,10 +145,15 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
   // hot-path cost here.) updateVector serializes the array synchronously, so reusing it across moves is safe.
   const shapesRef = useRef(null);
   const shapesSRef = useRef(-1);
-  const knobShapes = (k) => {
+  const knobShapes = k => {
     let arr = shapesRef.current;
     if (!arr || shapesSRef.current !== S) {
-      arr = KNOB.map((c) => ({ circle: [0, 0, c.r * S], fill: c.fill, stroke: c.stroke, strokeWidth: c.sw * S }));
+      arr = KNOB.map(c => ({
+        circle: [0, 0, c.r * S],
+        fill: c.fill,
+        stroke: c.stroke,
+        strokeWidth: c.sw * S,
+      }));
       shapesRef.current = arr;
       shapesSRef.current = S;
     }
@@ -137,11 +166,16 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
 
   // pointer → continuous value: angle from the rendered center, clamp the bottom 90° gap. A drag pushes the
   // knob + readout straight to the engine (no React) and commits to React state only on release.
-  const onTouch = (e) => {
+  const onTouch = e => {
     const starting = !draggingRef.current;
     draggingRef.current = true;
     if (starting) {
-      prevKRef.current = pointOnArc(angleForValue(lastRef.current, min, max), KNOB_C, KNOB_C, DIAL_R);
+      prevKRef.current = pointOnArc(
+        angleForValue(lastRef.current, min, max),
+        KNOB_C,
+        KNOB_C,
+        DIAL_R,
+      );
       shownIntRef.current = Math.round(lastRef.current);
       statusWordRef.current = statusFor(mode, lastRef.current, current);
     }
@@ -195,18 +229,36 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
       onTouchStart={onTouch}
       onTouchMove={onTouch}
       onTouchEnd={onTouchEnd}
-      style={{ ...boxStyle }}
-    >
+      style={{...boxStyle}}>
       {/* Dial face: the imported conic SVG (dark track + cool→warm ghost arc) — a static op-tape, never
           re-uploaded during a drag. */}
-      <Svg source={climateFace} style={{ position: 'absolute', left: 0, top: 0, width: box, height: box }} />
+      <Svg
+        source={climateFace}
+        style={{position: 'absolute', left: 0, top: 0, width: box, height: box}}
+      />
       {/* Knob: its own <Svg>, drawn from primitive circles so a drag can move it imperatively (updateVector
           on knobRef) without a React render. The node is oversized by `pad` (and offset by -pad) so the knob
           isn't clipped where the arc nears the dial edge; the same circles render declaratively here for
           mounts / steppers / the post-release re-sync. */}
-      <Svg ref={knobRef} style={{ position: 'absolute', left: -pad, top: -pad, width: box + 2 * pad, height: box + 2 * pad }}>
+      <Svg
+        ref={knobRef}
+        style={{
+          position: 'absolute',
+          left: -pad,
+          top: -pad,
+          width: box + 2 * pad,
+          height: box + 2 * pad,
+        }}>
         {KNOB.map((cc, i) => (
-          <Circle key={i} cx={k.x} cy={k.y} r={cc.r * S} fill={cc.fill} stroke={cc.stroke} strokeWidth={cc.sw * S} />
+          <Circle
+            key={i}
+            cx={k.x}
+            cy={k.y}
+            r={cc.r * S}
+            fill={cc.fill}
+            stroke={cc.stroke}
+            strokeWidth={cc.sw * S}
+          />
         ))}
       </Svg>
 
@@ -221,11 +273,18 @@ export function Dial({ value, min, max, current, mode, size, sz, theme, onValue 
           height: box,
           alignItems: 'center',
           justifyContent: 'center',
-        }}
-      >
-        <Text ref={statusRef} style={{ color: theme.subtext, fontSize: sz.sub }}>{statusFor(mode, shown, current)}</Text>
-        <Text ref={numRef} style={{ color: theme.text, fontSize: sz.big, fontWeight: '500' }}>{Math.round(shown)}°</Text>
-        <Text style={{ color: theme.subtext, fontSize: sz.sub }}>now {current}°</Text>
+        }}>
+        <Text ref={statusRef} style={{color: theme.subtext, fontSize: sz.sub}}>
+          {statusFor(mode, shown, current)}
+        </Text>
+        <Text
+          ref={numRef}
+          style={{color: theme.text, fontSize: sz.big, fontWeight: '500'}}>
+          {Math.round(shown)}°
+        </Text>
+        <Text style={{color: theme.subtext, fontSize: sz.sub}}>
+          now {current}°
+        </Text>
       </View>
     </View>
   );

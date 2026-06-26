@@ -22,7 +22,7 @@
 //
 // Values must be JSON-serializable (numbers, strings, booleans, plain objects/arrays). The simulator
 // resets the persisted state when you press R (manual reload) or restart it.
-import { useState, useCallback } from 'react';
+import {useState, useCallback} from 'react';
 
 /**
  * Drop-in useState that persists across simulator reloads, keyed by a stable string.
@@ -48,8 +48,8 @@ export function usePersistentState(key, initial) {
   });
 
   const set = useCallback(
-    (next) => {
-      setValue((prev) => {
+    next => {
+      setValue(prev => {
         const v = typeof next === 'function' ? next(prev) : next;
         const store = globalThis.__erPersist;
         if (store) {

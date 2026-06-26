@@ -26,34 +26,63 @@
 // Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
 // tools/web-sim/build.mjs); the AOT path (app.gen.c) always runs. Exits non-zero on any failure.
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, cpSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {execFileSync} from 'node:child_process';
+import {
+  mkdtempSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  cpSync,
+  rmSync,
+} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {resolve, dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const JS = resolve(ROOT, 'bridges/quickjs/js');
 const TEMPLATE = resolve(ROOT, 'create-embedded-react/template');
 
-const run = (cmd, args, cwd) => execFileSync(cmd, args, { stdio: 'inherit', cwd, shell: process.platform === 'win32' });
-const capture = (cmd, args, cwd) => execFileSync(cmd, args, { encoding: 'utf8', cwd, shell: process.platform === 'win32' });
+const run = (cmd, args, cwd) =>
+  execFileSync(cmd, args, {
+    stdio: 'inherit',
+    cwd,
+    shell: process.platform === 'win32',
+  });
+const capture = (cmd, args, cwd) =>
+  execFileSync(cmd, args, {
+    encoding: 'utf8',
+    cwd,
+    shell: process.platform === 'win32',
+  });
 const ok = (cond, msg) => {
   console.log(`${cond ? '✓' : '✗'} ${msg}`);
   if (!cond) process.exitCode = 1;
 };
 
 // 1. Pack exactly what would publish (includes the staged sim/ wasm, if built).
-const tgz = resolve(JS, JSON.parse(capture('npm', ['pack', '--json'], JS))[0].filename);
+const tgz = resolve(
+  JS,
+  JSON.parse(capture('npm', ['pack', '--json'], JS))[0].filename,
+);
 const hasWasm = existsSync(resolve(JS, 'sim/embedded-react.wasm'));
 console.log(`packed ${tgz}\nprebuilt wasm present: ${hasWasm}\n`);
 
 // 2. A throwaway consumer project from the scaffolder template (the pulsing-logo starter = a Flow A app).
 const proj = mkdtempSync(join(tmpdir(), 'er-smoke-'));
-cpSync(TEMPLATE, proj, { recursive: true });
+cpSync(TEMPLATE, proj, {recursive: true});
 writeFileSync(
   resolve(proj, 'package.json'),
-  JSON.stringify({ name: 'smoke', private: true, type: 'module', dependencies: { 'embedded-react': `file:${tgz}`, react: '18.3.1' } }, null, 2),
+  JSON.stringify(
+    {
+      name: 'smoke',
+      private: true,
+      type: 'module',
+      dependencies: {'embedded-react': `file:${tgz}`, react: '18.3.1'},
+    },
+    null,
+    2,
+  ),
 );
 run('npm', ['install', '--no-audit', '--no-fund'], proj);
 
@@ -63,9 +92,15 @@ if (hasWasm) {
   run('npx', ['embedded-react', 'build'], proj);
   const erpkg = resolve(proj, 'dist/app.erpkg');
   ok(existsSync(erpkg), 'embedded-react build → dist/app.erpkg');
-  ok(existsSync(erpkg) && readFileSync(erpkg).subarray(0, 4).toString('latin1') === 'ERCF', 'app.erpkg has the ERCF magic');
+  ok(
+    existsSync(erpkg) &&
+      readFileSync(erpkg).subarray(0, 4).toString('latin1') === 'ERCF',
+    'app.erpkg has the ERCF magic',
+  );
 } else {
-  console.log('• skipping Flow A — no prebuilt wasm (run node tools/web-sim/build.mjs to include it)');
+  console.log(
+    '• skipping Flow A — no prebuilt wasm (run node tools/web-sim/build.mjs to include it)',
+  );
 }
 
 // 4. Flow B (AOT) → app.gen.c. Pure JS (no wasm). The template app uses Animated.loop, which AOT doesn't
@@ -86,11 +121,20 @@ export function App() {
 const s = StyleSheet.create({ r: { flex: 1 }, t: { color: '#fff', fontSize: 20 } });
 `,
 );
-run('npx', ['embedded-react', 'build', '--aot', 'aot-app.jsx', '--out', 'dist-aot'], proj);
-ok(existsSync(resolve(proj, 'dist-aot/app.gen.c')), 'embedded-react build --aot → dist-aot/app.gen.c');
+run(
+  'npx',
+  ['embedded-react', 'build', '--aot', 'aot-app.jsx', '--out', 'dist-aot'],
+  proj,
+);
+ok(
+  existsSync(resolve(proj, 'dist-aot/app.gen.c')),
+  'embedded-react build --aot → dist-aot/app.gen.c',
+);
 
 // Clean up the packed tarball + throwaway project (best-effort).
-rmSync(tgz, { force: true });
-rmSync(proj, { recursive: true, force: true });
+rmSync(tgz, {force: true});
+rmSync(proj, {recursive: true, force: true});
 
-console.log(process.exitCode ? '\n✗ consumer smoke FAILED' : '\n✓ consumer smoke passed');
+console.log(
+  process.exitCode ? '\n✗ consumer smoke FAILED' : '\n✓ consumer smoke passed',
+);
