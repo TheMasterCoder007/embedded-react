@@ -42,9 +42,11 @@ idf_component_register(
     LDFRAGMENTS "linker_psram.lf"
 )
 
-# Feature flags — mirror engine/CMakeLists.txt defaults. PUBLIC so dependents (bridge, main) agree
-# on struct layout. SCRATCH_W/H cap the size of an offscreen-composited node (opacity/transform);
-# 240 matches the desktop default and covers the demo (the animated box is 84x84).
+# Feature flags — PUBLIC so dependents (bridge, main) agree on struct layout. SCRATCH_W/H cap the size
+# of an offscreen-composited node (opacity/transform); 240 matches the desktop default and covers the
+# starter app's pulsing logo. ERUI_TRANSFORMS=FULL enables the 2D affine path (scale/rotate) the
+# starter's Animated.timing(scale) logo pulse needs; under TRANSLATE_ONLY that pulse silently does
+# nothing. FULL adds ~460 KB of affine scratch buffers, which land in PSRAM via linker_psram.lf.
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_SHADOWS=0
     ERUI_BORDER_AA=1
@@ -53,7 +55,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_GRADIENT=1
     ERUI_GRADIENT_RADIAL=0
     ERUI_GRADIENT_CONIC=1
-    ERUI_TRANSFORMS_TRANSLATE_ONLY=1
+    ERUI_TRANSFORMS_FULL=1
     ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=512
     ERUI_MAX_OPACITY_DEPTH=4
