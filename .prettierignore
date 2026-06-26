@@ -4,16 +4,17 @@
 
 # Dependencies & tool caches
 node_modules/
+.vite/
 
 # CMake / build output (matches at any depth, gitignore-style)
 build/
 build-*/
 cmake-build-*/
 out/
+Testing/
 
 # Generated app output — Flow A .erpkg, Flow B generated C, app bundles
 dist/
-
 # Third-party sources pulled in by CMake FetchContent (e.g. quickjs)
 _deps/
 
