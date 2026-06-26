@@ -1,4 +1,4 @@
-version: "0.3.0"
+version: "0.4.0"
 description: "embedded-react engine — a tiny C99 UI engine for MCUs you drive with JSX (Flow B AOT, or Flow A via the QuickJS bridge). Backend-agnostic: you provide the framebuffer flush."
 url: "https://github.com/TheMasterCoder007/embedded-react"
 repository: "https://github.com/TheMasterCoder007/embedded-react.git"
