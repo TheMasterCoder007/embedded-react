@@ -249,6 +249,69 @@ static int check_reflow_moved_no_trail(int screen)
     return EXIT_SUCCESS;
 }
 
+#if ERUI_3D_TRANSFORMS
+/* Scenario 3: an animated 3D transform (rotateY) damages only its projected box, not the whole screen.
+ * Before the damage pre-pass projected the 3D AABB, a source_dirty 3D/perspective node fell through to
+ * the full-repaint fallback on every animated frame. */
+static int check_3d_rotate_bounded(int screen)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = screen;
+    rp.height = screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    ERNode* card = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.width = 40;
+    cp.height = 40;
+    cp.margin_left = 80;
+    cp.margin_top = 80;
+    cp.background_color = 0xFF22CC88U;
+    cp.transform_rotate_y = 1.0f; /* non-zero → exercises the 3D/perspective path from the first commit */
+    er_node_set_props(card, &cp);
+
+    er_tree_append_child(root, card);
+    er_tree_set_root(root);
+    er_commit(); /* full first frame */
+
+    ERAnimValueHandle spin = er_anim_value_create(1.0f);
+    er_anim_value_bind(spin, card, ER_PROP_ROTATE_Y);
+
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = 800U;
+    er_anim_value_animate(spin, 40.0f, &cfg);
+
+    embedded_renderer_tick(100U); /* rotateY advances → card source-dirty, still 3D */
+
+    ext_reset();
+    er_commit();
+
+    const int pw = g_ext.x1 - g_ext.x0;
+    const int ph = g_ext.y1 - g_ext.y0;
+    const long screen_area = (long)screen * screen;
+    const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
+
+    printf("mid-spin (3D) paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
+           g_ext.ops, g_ext.x0, g_ext.y0, pw, ph, 100.0 * (double)paint_area / (double)screen_area);
+
+    er_anim_value_destroy(spin);
+    er_node_destroy(root);
+
+    if (g_ext.ops == 0)
+        return fail("animated 3D transform produced no repaint at all");
+    if (pw >= screen && ph >= screen)
+        return fail("animated 3D transform forced a full-screen repaint (3D damage not bounded)");
+    if (paint_area > screen_area / 4)
+        return fail("animated 3D transform repaint region far larger than the node's box");
+
+    printf("PASS: animated 3D transform damages only its projected box\n");
+    return EXIT_SUCCESS;
+}
+#endif /* ERUI_3D_TRANSFORMS */
+
 int main(void)
 {
     EmbeddedRenderBackend be = {0};
@@ -266,6 +329,12 @@ int main(void)
     rc = check_reflow_moved_no_trail(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
+
+#if ERUI_3D_TRANSFORMS
+    rc = check_3d_rotate_bounded(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+#endif
 
     return EXIT_SUCCESS;
 }
