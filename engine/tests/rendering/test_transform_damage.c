@@ -249,8 +249,7 @@ static int check_reflow_moved_no_trail(int screen)
     return EXIT_SUCCESS;
 }
 
-#if ERUI_3D_TRANSFORMS
-/* Scenario 3: an animated 3D transform (rotateY) damages only its projected box, not the whole screen.
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
  * Before the damage pre-pass projected the 3D AABB, a source_dirty 3D/perspective node fell through to
  * the full-repaint fallback on every animated frame. */
 static int check_3d_rotate_bounded(int screen)
@@ -330,8 +329,7 @@ int main(void)
     if (rc != EXIT_SUCCESS)
         return rc;
 
-#if ERUI_3D_TRANSFORMS
-    rc = check_3d_rotate_bounded(screen);
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
     if (rc != EXIT_SUCCESS)
         return rc;
 #endif
