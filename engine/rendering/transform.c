@@ -485,19 +485,19 @@ void er_transform_source_end_blit(int src_x,
         return;
 
     /* Scale-only fast path: with no rotation/shear (ib == ic == 0) the inverse map is separable —
-     * flx depends only on the screen column, fly only on the screen row — so the per-pixel float
-     * inverse-map, floorf, fractional weight, and bounds all hoist out of the inner loop (precomputed
-     * once per column and once per row). The inner loop is then just four reads + the shared bilinear
-     * blend, so the output is bit-identical to the general path. Rotation falls through below. */
+     * flx depends only on the screen column, fly only on the screen row — so we can precompute flx,
+     * floorf(flx) and wx per column, and fly/floorf(fly)/wy plus row pointers per row.
+     * The inner loop is then just four reads + the shared bilinear blend, so the output is bit-identical
+     * to the general path. Rotation/shear falls through below. */
     if (ib == 0.0f && ic == 0.0f)
     {
-        int16_t cx0[ERUI_SCRATCH_W];
+        int cx0[ERUI_SCRATCH_W];
         uint16_t cwx[ERUI_SCRATCH_W];
         for (int ox = 0; ox < dst_w; ox++)
         {
             const float flx = ia * (float)(dst_x + ox) + itx - (float)src_x;
             const int x0 = (int)floorf(flx);
-            cx0[ox] = (int16_t)x0;
+            cx0[ox] = x0;
             cwx[ox] = (uint16_t)((flx - (float)x0) * 256.0f);
         }
         for (int oy = 0; oy < dst_h; oy++)
