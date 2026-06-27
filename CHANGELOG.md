@@ -22,6 +22,9 @@ artifact. See [README](README.md#releasing) for the release process.
 - Animated 2D transforms (scale/rotate) no longer force a full-screen repaint every frame — the damage
   pre-pass bounds the repaint to the transformed node's region (and its previous footprint, so a node moved
   by reflow or scroll leaves no trail).
+- Animated 3D/perspective transforms (rotateX/rotateY/perspective) no longer force a full-screen repaint
+  every frame — the damage pre-pass projects the node's 3D AABB (the same homography render_tree paints
+  with) and bounds the repaint to it, mirroring the 2D fix. Only affects `ERUI_3D_TRANSFORMS` builds.
 
 ## [0.4.0] - 2026-06-26
 ### Added

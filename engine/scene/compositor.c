@@ -516,18 +516,19 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
 }
 
 /**
- * @brief Computes the screen-space AABB of a node under a full 2D affine transform (scale/rotate).
+ * @brief Computes the screen-space AABB of a node under a full transform (2D affine or 3D/perspective).
  *
  * Mirrors render_tree's transform math — same pre-transform origin (layout position minus accumulated
- * ancestor scroll, minus the keyboard-avoidance shift), then er_transform_compute_matrix +
- * er_transform_aabb — so the damage pre-pass can bound an animated scale/rotate to its own box instead
- * of falling back to a full-screen repaint. tp_translate_x/y is folded into the matrix by
- * er_transform_compute_matrix, so it is NOT added to the origin here.
+ * ancestor scroll, minus the keyboard-avoidance shift), then the matching projection: 2D scale/rotate via
+ * er_transform_compute_matrix + er_transform_aabb, or 3D/perspective via er_transform_compute_homography_3d
+ * + er_transform_aabb_3d — so the damage pre-pass can bound an animated transform to its own box instead of
+ * falling back to a full-screen repaint. tp_translate_x/y is folded into the matrix/homography, so it is
+ * NOT added to the origin here.
  *
- * Returns false (leaving the caller on its full-repaint fallback) for the cases this can't safely
- * bound: builds without the affine path, translate-only nodes (handled by node_screen_rect), 3D /
- * perspective transforms, the ActivityIndicator (whose rotate_z is an internal spin, not an affine
- * render), or a degenerate zero-area result.
+ * Returns false (leaving the caller on its full-repaint fallback) for the cases this can't bound: builds
+ * without the affine path, translate-only nodes (handled by node_screen_rect), the ActivityIndicator
+ * (whose rotate_z is an internal spin, not an affine render), or a degenerate / off-screen-projected
+ * (zero-area) result — including a 3D node whose corners all fall behind the perspective plane.
  *
  * @param[in]  n             Node to measure.
  * @param[out] rx,ry,rw,rh   Receive the node's transformed screen AABB.
@@ -539,10 +540,6 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
 #if ERUI_TRANSFORMS_FULL
     if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
         return false;
-#if ERUI_3D_TRANSFORMS
-    if (er_transform_is_3d(n))
-        return false;
-#endif
     int sx = 0;
     int sy = 0;
     const ERNode* a = er_get_node(n->parent_tag);
@@ -559,6 +556,18 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
     const int py = (int)n->animated.y - sy - s_kbd_avoid_y;
     const int w = (int)n->animated.w;
     const int h = (int)n->animated.h;
+#if ERUI_3D_TRANSFORMS
+    if (er_transform_is_3d(n))
+    {
+        /* 3D/perspective: project the node's box through the same homography render_tree paints with,
+         * so the damage bounds exactly match the painted dst rect. A node whose corners all fall behind
+         * the perspective plane yields a zero-area AABB → false → full-repaint fallback. */
+        float H[9];
+        er_transform_compute_homography_3d(n, px, py, w, h, H);
+        er_transform_aabb_3d(px, py, w, h, H, rx, ry, rw, rh);
+        return (*rw > 0 && *rh > 0);
+    }
+#endif
     float ma, mb, mc, md, mtx, mty;
     er_transform_compute_matrix(n, px, py, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
     er_transform_aabb(px, py, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
