@@ -16,6 +16,10 @@ add_executable(test_transform test_transform.c)
 target_link_libraries(test_transform PRIVATE embedded-react)
 add_test(NAME rendering_transform COMMAND test_transform)
 
+add_executable(test_transform_damage test_transform_damage.c)
+target_link_libraries(test_transform_damage PRIVATE embedded-react)
+add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
+
 add_executable(test_shadow test_shadow.c)
 target_link_libraries(test_shadow PRIVATE embedded-react)
 add_test(NAME rendering_shadow COMMAND test_shadow)

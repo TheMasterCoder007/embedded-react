@@ -516,6 +516,64 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
 }
 
 /**
+ * @brief Computes the screen-space AABB of a node under a full 2D affine transform (scale/rotate).
+ *
+ * Mirrors render_tree's transform math — same pre-transform origin (layout position minus accumulated
+ * ancestor scroll, minus the keyboard-avoidance shift), then er_transform_compute_matrix +
+ * er_transform_aabb — so the damage pre-pass can bound an animated scale/rotate to its own box instead
+ * of falling back to a full-screen repaint. tp_translate_x/y is folded into the matrix by
+ * er_transform_compute_matrix, so it is NOT added to the origin here.
+ *
+ * Returns false (leaving the caller on its full-repaint fallback) for the cases this can't safely
+ * bound: builds without the affine path, translate-only nodes (handled by node_screen_rect), 3D /
+ * perspective transforms, the ActivityIndicator (whose rotate_z is an internal spin, not an affine
+ * render), or a degenerate zero-area result.
+ *
+ * @param[in]  n             Node to measure.
+ * @param[out] rx,ry,rw,rh   Receive the node's transformed screen AABB.
+ *
+ * @return true if a finite AABB was produced; false to fall back to a full repaint.
+ */
+static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
+{
+#if ERUI_TRANSFORMS_FULL
+    if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
+        return false;
+#if ERUI_3D_TRANSFORMS
+    if (er_transform_is_3d(n))
+        return false;
+#endif
+    int sx = 0;
+    int sy = 0;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
+        {
+            sx += (int)a->scroll_offset_x;
+            sy += (int)a->scroll_offset_y;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+    const int px = (int)n->animated.x - sx;
+    const int py = (int)n->animated.y - sy - s_kbd_avoid_y;
+    const int w = (int)n->animated.w;
+    const int h = (int)n->animated.h;
+    float ma, mb, mc, md, mtx, mty;
+    er_transform_compute_matrix(n, px, py, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
+    er_transform_aabb(px, py, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
+    return (*rw > 0 && *rh > 0);
+#else
+    (void)n;
+    (void)rx;
+    (void)ry;
+    (void)rw;
+    (void)rh;
+    return false;
+#endif
+}
+
+/**
  * @brief Intersects a node's screen rect with every clipping ancestor's box (ScrollView / overflow:hidden).
  *
  * A scrolled child's screen rect (node_screen_rect) is the UN-clipped position, so a row scrolled near a
@@ -2667,7 +2725,37 @@ void er_commit(void)
             int rx, ry, rw, rh;
             if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
             {
-                /* Complex transform: only forces a full repaint if this node is actually changing. */
+                /* Complex transform (scale/rotate). Bound the damage to the node's transformed AABB —
+                 * current box plus where it was painted last commit, so a shrinking pulse erases its
+                 * trail — instead of forcing a full-screen repaint.
+                 */
+                int tx, ty, tw, th;
+                if (node_transformed_screen_rect(n, &tx, &ty, &tw, &th))
+                {
+                    const bool moved = n->has_last_paint
+                                       && (tx != (int)n->last_paint_rect.x || ty != (int)n->last_paint_rect.y
+                                           || tw != (int)n->last_paint_rect.w || th != (int)n->last_paint_rect.h);
+                    if (n->source_dirty || moved)
+                    {
+                        int nx = tx, ny = ty, nw = tw, nh = th;
+                        clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
+                        if (nw > 0 && nh > 0)
+                            damage_union(&clip, &have, nx, ny, nw, nh); /* new transformed footprint */
+                        if (n->has_last_paint)
+                        {
+                            int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
+                                ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+                            clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+                            if (ow > 0 && oh > 0)
+                                damage_union(&clip, &have, ox, oy, ow, oh); /* old footprint (erase trail) */
+                        }
+                    }
+                    continue;
+                }
+                /*
+                 * Could not bound it (3D / oversized): only forces a full repaint if actually changing.
+                 * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still missed — that needs the 3D AABB path ().
+                 */
                 if (n->source_dirty)
                 {
                     trackable = false;
