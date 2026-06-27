@@ -18,8 +18,6 @@ add_test(NAME rendering_transform COMMAND test_transform)
 
 add_executable(test_transform_damage test_transform_damage.c)
 target_link_libraries(test_transform_damage PRIVATE embedded-react)
-# test_transform_damage needs engine/scene for er_node_internal.h (a private engine header).
-target_include_directories(test_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
 
 add_executable(test_shadow test_shadow.c)

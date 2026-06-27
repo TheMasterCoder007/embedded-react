@@ -31,7 +31,6 @@
  * scale is ignored and the node is a plain translate, so the test trivially holds.
  */
 
-#include "er_node_internal.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 #include <stdio.h>
