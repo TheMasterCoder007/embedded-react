@@ -11,6 +11,17 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Changed
+
+- Animated 2D transforms (scale/rotate) now clear only the touched region of the offscreen scratch buffer
+  each frame instead of the whole `ERUI_SCRATCH_W × ERUI_SCRATCH_H` buffer.
+
+### Fixed
+
+- Animated 2D transforms (scale/rotate) no longer force a full-screen repaint every frame — the damage
+  pre-pass bounds the repaint to the transformed node's region (and its previous footprint, so a node moved
+  by reflow or scroll leaves no trail).
+
 ## [0.4.0] - 2026-06-26
 ### Added
 
