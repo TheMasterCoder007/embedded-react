@@ -2730,22 +2730,32 @@ void er_commit(void)
                  * trail — instead of forcing a full-screen repaint.
                  */
                 int tx, ty, tw, th;
-                if (n->source_dirty && node_transformed_screen_rect(n, &tx, &ty, &tw, &th))
+                if (node_transformed_screen_rect(n, &tx, &ty, &tw, &th))
                 {
-                    clip_rect_to_clippers(n, &tx, &ty, &tw, &th);
-                    if (tw > 0 && th > 0)
-                        damage_union(&clip, &have, tx, ty, tw, th); /* new transformed footprint */
-                    if (n->has_last_paint)
+                    const bool moved = n->has_last_paint
+                                       && (tx != (int)n->last_paint_rect.x || ty != (int)n->last_paint_rect.y
+                                           || tw != (int)n->last_paint_rect.w || th != (int)n->last_paint_rect.h);
+                    if (n->source_dirty || moved)
                     {
-                        int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
-                            ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
-                        clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
-                        if (ow > 0 && oh > 0)
-                            damage_union(&clip, &have, ox, oy, ow, oh); /* old footprint (erase trail) */
+                        int nx = tx, ny = ty, nw = tw, nh = th;
+                        clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
+                        if (nw > 0 && nh > 0)
+                            damage_union(&clip, &have, nx, ny, nw, nh); /* new transformed footprint */
+                        if (n->has_last_paint)
+                        {
+                            int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
+                                ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+                            clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+                            if (ow > 0 && oh > 0)
+                                damage_union(&clip, &have, ox, oy, ow, oh); /* old footprint (erase trail) */
+                        }
                     }
                     continue;
                 }
-                /* Could not bound it: only forces a full repaint if this node is actually changing. */
+                /*
+                 * Could not bound it (3D / oversized): only forces a full repaint if actually changing.
+                 * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still missed — that needs the 3D AABB path ().
+                 */
                 if (n->source_dirty)
                 {
                     trackable = false;

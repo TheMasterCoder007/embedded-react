@@ -126,16 +126,9 @@ static int fail(const char* msg)
  - Test
  ---------------------------------------------------------------------------------------------------------------------*/
 
-int main(void)
+/* Scenario 1: an animated scale damages only its own box, not the whole screen. */
+static int check_pulse_bounded(int screen)
 {
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
-
-    const int screen = 200;
-
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;
@@ -179,6 +172,9 @@ int main(void)
     printf("mid-pulse paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
            g_ext.ops, g_ext.x0, g_ext.y0, pw, ph, 100.0 * (double)paint_area / (double)screen_area);
 
+    er_anim_value_destroy(pulse);
+    er_node_destroy(root); /* tears down the subtree */
+
     if (g_ext.ops == 0)
         return fail("animated scale produced no repaint at all");
     if (pw >= screen && ph >= screen)
@@ -187,5 +183,90 @@ int main(void)
         return fail("animated scale repaint region far larger than the node's box");
 
     printf("PASS: animated scale damages only its transformed box\n");
+    return EXIT_SUCCESS;
+}
+
+/* Scenario 2: a STATIC scale-transformed node that a sibling reflow pushes down — without ever being
+ * source_dirty itself — must still be repainted at its new position (old footprint erased). Before the
+ * damage pre-pass tracked "moved" for transformed nodes, the node was skipped and its repaint clipped
+ * out, leaving a stale trail. The reflowed node sits in a gap well below the resizing sibling, so its
+ * damage is spatially separable from the sibling's: if the bottom of the painted region reaches the
+ * node, it was repainted; if it stops at the sibling, the node was dropped. */
+static int check_reflow_moved_no_trail(int screen)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW); /* default flex column */
+    ERProps rp = props_default();
+    rp.width = screen;
+    rp.height = screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    /* Sibling A: top bar whose height we grow to force the reflow. */
+    ERNode* bar = er_node_create(ER_NODE_VIEW);
+    ERProps ap = props_default();
+    ap.width = screen;
+    ap.height = 20;
+    ap.background_color = 0xFF333333U;
+    er_node_set_props(bar, &ap);
+
+    /* Node B: static scale-transformed box, pushed into a gap 100px below the bar. */
+    ERNode* badge = er_node_create(ER_NODE_VIEW);
+    ERProps bp = props_default();
+    bp.width = 60;
+    bp.height = 60;
+    bp.margin_top = 100; /* gap → starts at y = bar.height(20) + 100 = 120 */
+    bp.background_color = 0xFFEE5522U;
+    bp.transform_scale_x = 1.2f; /* non-identity → exercises the complex-transform path */
+    bp.transform_scale_y = 1.2f;
+    er_node_set_props(badge, &bp);
+
+    er_tree_append_child(root, bar);
+    er_tree_append_child(root, badge);
+    er_tree_set_root(root);
+    er_commit(); /* full first frame; records badge's painted footprint at y≈120 */
+
+    /* Grow the bar: bar is source_dirty + a reflow shifts the badge down to y≈140. The badge itself is
+     * NOT source_dirty — it only moved. */
+    ap.height = 40;
+    er_node_set_props(bar, &ap);
+
+    ext_reset();
+    er_commit();
+
+    const int bottom = g_ext.y1; /* lowest painted row + 1 */
+    printf("post-reflow paint: ops=%d extent=%d,%d..%d,%d (bottom=%d, badge ~y120→140)\n",
+           g_ext.ops, g_ext.x0, g_ext.y0, g_ext.x1, g_ext.y1, bottom);
+
+    er_node_destroy(root);
+
+    if (g_ext.ops == 0)
+        return fail("reflow produced no repaint at all");
+    /* The bar alone only reaches y≈40. If the badge was repainted, the region extends past the gap to
+     * its position near y≈120–200. A bottom that stops short of the badge means it was left as a trail. */
+    if (bottom < 110)
+        return fail("reflowed transformed node was not repainted (stale trail) — moved damage missing");
+
+    printf("PASS: reflow-moved transformed node is repainted (no trail)\n");
+    return EXIT_SUCCESS;
+}
+
+int main(void)
+{
+    EmbeddedRenderBackend be = {0};
+    be.fill_rect = fill_cb;
+    be.copy_rect = copy_cb;
+    be.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&be);
+
+    const int screen = 200;
+
+    int rc = check_pulse_bounded(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_reflow_moved_no_trail(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
     return EXIT_SUCCESS;
 }
