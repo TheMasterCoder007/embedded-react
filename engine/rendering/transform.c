@@ -43,6 +43,25 @@ static bool s_xform_active = false;
 #define ER_LERP_CH(a, b, t) (((uint32_t)(a) * (256u - (t)) + (uint32_t)(b) * (t)) >> 8u)
 
 /**
+ * @brief Bilinearly blends four premultiplied ARGB8888 corners. wx/wy in [0,256].
+ *
+ * Shared by er_bilerp (general path) and the scale-only fast path so both produce identical output.
+ */
+static inline uint32_t er_blend4(uint32_t c00, uint32_t c10, uint32_t c01, uint32_t c11, uint32_t wx, uint32_t wy)
+{
+    const uint32_t out_a = ER_LERP_CH(ER_LERP_CH(c00 >> 24, c10 >> 24, wx), ER_LERP_CH(c01 >> 24, c11 >> 24, wx), wy);
+    const uint32_t out_r = ER_LERP_CH(ER_LERP_CH((c00 >> 16) & 0xFFu, (c10 >> 16) & 0xFFu, wx),
+                                      ER_LERP_CH((c01 >> 16) & 0xFFu, (c11 >> 16) & 0xFFu, wx),
+                                      wy);
+    const uint32_t out_g = ER_LERP_CH(ER_LERP_CH((c00 >> 8) & 0xFFu, (c10 >> 8) & 0xFFu, wx),
+                                      ER_LERP_CH((c01 >> 8) & 0xFFu, (c11 >> 8) & 0xFFu, wx),
+                                      wy);
+    const uint32_t out_b =
+        ER_LERP_CH(ER_LERP_CH(c00 & 0xFFu, c10 & 0xFFu, wx), ER_LERP_CH(c01 & 0xFFu, c11 & 0xFFu, wx), wy);
+    return (out_a << 24u) | (out_r << 16u) | (out_g << 8u) | out_b;
+}
+
+/**
  * @brief Samples the source scratch with bilinear filtering.
  *
  * Premultiplied ARGB8888 channels are interpolated independently, so no
@@ -72,17 +91,7 @@ static uint32_t er_bilerp(const uint32_t* src, int src_w, int src_h, float flx, 
     const uint32_t c01 = (x0 >= 0 && x0 < src_w && y1 >= 0 && y1 < src_h) ? src[y1 * ERUI_SCRATCH_W + x0] : 0u;
     const uint32_t c11 = (x1 >= 0 && x1 < src_w && y1 >= 0 && y1 < src_h) ? src[y1 * ERUI_SCRATCH_W + x1] : 0u;
 
-    const uint32_t out_a = ER_LERP_CH(ER_LERP_CH(c00 >> 24, c10 >> 24, wx), ER_LERP_CH(c01 >> 24, c11 >> 24, wx), wy);
-    const uint32_t out_r = ER_LERP_CH(ER_LERP_CH((c00 >> 16) & 0xFFu, (c10 >> 16) & 0xFFu, wx),
-                                      ER_LERP_CH((c01 >> 16) & 0xFFu, (c11 >> 16) & 0xFFu, wx),
-                                      wy);
-    const uint32_t out_g = ER_LERP_CH(ER_LERP_CH((c00 >> 8) & 0xFFu, (c10 >> 8) & 0xFFu, wx),
-                                      ER_LERP_CH((c01 >> 8) & 0xFFu, (c11 >> 8) & 0xFFu, wx),
-                                      wy);
-    const uint32_t out_b =
-        ER_LERP_CH(ER_LERP_CH(c00 & 0xFFu, c10 & 0xFFu, wx), ER_LERP_CH(c01 & 0xFFu, c11 & 0xFFu, wx), wy);
-
-    return (out_a << 24u) | (out_r << 16u) | (out_g << 8u) | out_b;
+    return er_blend4(c00, c10, c01, c11, wx, wy);
 }
 #endif
 
@@ -474,6 +483,49 @@ void er_transform_source_end_blit(int src_x,
 
     if (dst_w <= 0 || dst_h <= 0 || dst_w > ERUI_SCRATCH_W || dst_h > ERUI_SCRATCH_H)
         return;
+
+    /* Scale-only fast path: with no rotation/shear (ib == ic == 0) the inverse map is separable —
+     * flx depends only on the screen column, fly only on the screen row — so we can precompute flx,
+     * floorf(flx) and wx per column, and fly/floorf(fly)/wy plus row pointers per row.
+     * The inner loop is then just four reads + the shared bilinear blend, so the output is bit-identical
+     * to the general path. Rotation/shear falls through below. */
+    if (ib == 0.0f && ic == 0.0f)
+    {
+        int cx0[ERUI_SCRATCH_W];
+        uint16_t cwx[ERUI_SCRATCH_W];
+        for (int ox = 0; ox < dst_w; ox++)
+        {
+            const float flx = ia * (float)(dst_x + ox) + itx - (float)src_x;
+            const int x0 = (int)floorf(flx);
+            cx0[ox] = x0;
+            cwx[ox] = (uint16_t)((flx - (float)x0) * 256.0f);
+        }
+        for (int oy = 0; oy < dst_h; oy++)
+        {
+            const float fly = id * (float)(dst_y + oy) + ity - (float)src_y;
+            const int y0 = (int)floorf(fly);
+            const int y1 = y0 + 1;
+            const uint32_t wy = (uint32_t)((fly - (float)y0) * 256.0f);
+            const uint32_t* r0 = (y0 >= 0 && y0 < src_h) ? s_xform_src + (size_t)y0 * ERUI_SCRATCH_W : NULL;
+            const uint32_t* r1 = (y1 >= 0 && y1 < src_h) ? s_xform_src + (size_t)y1 * ERUI_SCRATCH_W : NULL;
+            uint32_t* dst_row = s_xform_dst + (size_t)oy * dst_w;
+            for (int ox = 0; ox < dst_w; ox++)
+            {
+                const int x0 = cx0[ox];
+                const int x1 = x0 + 1;
+                const uint32_t wx = cwx[ox];
+                const bool x0in = (x0 >= 0 && x0 < src_w);
+                const bool x1in = (x1 >= 0 && x1 < src_w);
+                const uint32_t c00 = (r0 && x0in) ? r0[x0] : 0u;
+                const uint32_t c10 = (r0 && x1in) ? r0[x1] : 0u;
+                const uint32_t c01 = (r1 && x0in) ? r1[x0] : 0u;
+                const uint32_t c11 = (r1 && x1in) ? r1[x1] : 0u;
+                dst_row[ox] = er_blend4(c00, c10, c01, c11, wx, wy);
+            }
+        }
+        er_blit_blend(s_xform_dst, dst_w * (int)sizeof(uint32_t), 255U, dst_x, dst_y, dst_w, dst_h);
+        return;
+    }
 
     /* Build output buffer: for each screen-space pixel in the destination bounding box,
      * inverse-map to the source scratch and sample nearest-neighbor. */

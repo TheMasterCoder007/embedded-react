@@ -15,6 +15,7 @@ artifact. See [README](README.md#releasing) for the release process.
 
 - Animated 2D transforms (scale/rotate) now clear only the touched region of the offscreen scratch buffer
   each frame instead of the whole `ERUI_SCRATCH_W × ERUI_SCRATCH_H` buffer.
+- Animated 2D scale transforms sample through a separable fast path that hoists the per-pixel inverse-map and `floorf` out of the inner loop (constant per row/column under a pure axis-aligned scale), at full bilinear quality (output unchanged). Rotation/shear keep the general affine path.
 
 ### Fixed
 
