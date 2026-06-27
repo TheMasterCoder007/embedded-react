@@ -431,7 +431,13 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h)
     if (w <= 0 || h <= 0 || w > ERUI_SCRATCH_W || h > ERUI_SCRATCH_H)
         return false;
 
-    memset(s_xform_src, 0, (size_t)ERUI_SCRATCH_W * (size_t)ERUI_SCRATCH_H * sizeof(uint32_t));
+    /* Clear only the used w×h sub-rect (node-local origin 0,0), not the whole scratch.
+     * The subtree renders into rows [0,h) cols [0,w) and the inverse-map sampler only ever reads
+     * that region (out-of-range neighbours are treated as transparent), so clearing it is sufficient and
+     * the output is identical.
+     */
+    for (int row = 0; row < h; row++)
+        memset(s_xform_src + (size_t)row * ERUI_SCRATCH_W, 0, (size_t)w * sizeof(uint32_t));
     er_scratch_push_base(s_xform_src, ERUI_SCRATCH_W, ERUI_SCRATCH_H, src_x, src_y);
     s_xform_active = true;
     return true;
