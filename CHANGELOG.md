@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single root `VERSION` drives every
 artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
+
+## [0.5.2] - 2026-06-28
 ### Fixed
 
 - **Simulators now enable every engine feature at full capacity** — the web (`tools/web-sim`) and desktop
@@ -245,7 +247,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.0...v0.4.1

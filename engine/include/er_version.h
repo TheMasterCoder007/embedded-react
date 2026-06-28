@@ -31,8 +31,8 @@
 
 #define ER_VERSION_MAJOR 0
 #define ER_VERSION_MINOR 5
-#define ER_VERSION_PATCH 1
-#define ER_VERSION_STRING "0.5.1"
+#define ER_VERSION_PATCH 2
+#define ER_VERSION_STRING "0.5.2"
 
 /** @brief Packed integer version for easy comparisons: major*10000 + minor*100 + patch. */
 #define ER_VERSION_NUMBER (ER_VERSION_MAJOR * 10000 + ER_VERSION_MINOR * 100 + ER_VERSION_PATCH)
