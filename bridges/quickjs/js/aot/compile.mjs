@@ -4296,10 +4296,9 @@ function compileKeyboardConfig(program, out) {
 // type strip — the generated C for an App.tsx is identical to its untyped App.jsx twin.
 
 /** Is this app a TypeScript entry? Driven by the filename extension, or an explicit opts.ts (for tests). */
-const isTsEntry = opts => opts.ts ?? /\.[cm]?tsx?$/.test(opts.filename || '');
+const isTsEntry = opts => opts.ts ?? /\.[cm]?tsx$/.test(opts.filename || '');
 
 const parserPlugins = ts => (ts ? ['jsx', 'typescript'] : ['jsx']);
-
 // Type-only expression wrappers: `x as T`, `x satisfies T`, `x!`, `<T>x`, `f<T>` — unwrap to the inner expr.
 const TS_EXPR_WRAPPERS = new Set([
   'TSAsExpression',
