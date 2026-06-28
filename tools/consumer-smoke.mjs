@@ -133,6 +133,36 @@ ok(
   'embedded-react build --aot → dist-aot/app.gen.c',
 );
 
+// 4b. Flow B from a TypeScript entry (App.tsx). The compiler strips the types and must emit C — proving the
+//     published AOT path handles .tsx, not just .jsx.
+writeFileSync(
+  resolve(proj, 'aot-app.tsx'),
+  `import { useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'embedded-react';
+import type { ViewStyle } from 'embedded-react';
+interface Props { title?: string }
+export function App({ title }: Props): JSX.Element {
+  const [c, setC] = useState<number>(0);
+  return (
+    <View style={s.r}>
+      <Text style={s.t}>count is {c}</Text>
+      <Pressable onPress={() => setC((n: number) => n + 1)}><Text style={s.t}>tap</Text></Pressable>
+    </View>
+  );
+}
+const s = StyleSheet.create({ r: { flex: 1 } as ViewStyle, t: { color: '#fff', fontSize: 20 } });
+`,
+);
+run(
+  'npx',
+  ['embedded-react', 'build', '--aot', 'aot-app.tsx', '--out', 'dist-aot-ts'],
+  proj,
+);
+ok(
+  existsSync(resolve(proj, 'dist-aot-ts/app.gen.c')),
+  'embedded-react build --aot (TypeScript entry) → dist-aot-ts/app.gen.c',
+);
+
 // 5. The TypeScript template (create-embedded-react --ts). The same .tsx app must (a) typecheck against
 //    the bundled ambient declarations and (b) bundle through the real pipeline — the .tsx entry exercises
 //    esbuild's ts loader and (in dev) the persist transform's TypeScript path.
