@@ -24,7 +24,8 @@
 //   node tools/consumer-smoke.mjs
 //
 // Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
-// tools/web-sim/build.mjs); the AOT path (app.gen.c) always runs. Exits non-zero on any failure.
+// tools/web-sim/build.mjs); the AOT path (app.gen.c) and the TypeScript-template typecheck always run.
+// Exits non-zero on any failure.
 
 import {execFileSync} from 'node:child_process';
 import {
@@ -42,6 +43,7 @@ import {fileURLToPath} from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const JS = resolve(ROOT, 'bridges/quickjs/js');
 const TEMPLATE = resolve(ROOT, 'create-embedded-react/template');
+const TEMPLATE_TS = resolve(ROOT, 'create-embedded-react/template-typescript');
 
 const run = (cmd, args, cwd) =>
   execFileSync(cmd, args, {
@@ -131,9 +133,41 @@ ok(
   'embedded-react build --aot → dist-aot/app.gen.c',
 );
 
-// Clean up the packed tarball + throwaway project (best-effort).
+// 5. The TypeScript template (create-embedded-react --ts). The same .tsx app must (a) typecheck against
+//    the bundled ambient declarations and (b) bundle through the real pipeline — the .tsx entry exercises
+//    esbuild's ts loader and (in dev) the persist transform's TypeScript path.
+const tsProj = mkdtempSync(join(tmpdir(), 'er-smoke-ts-'));
+cpSync(TEMPLATE_TS, tsProj, {recursive: true});
+writeFileSync(
+  resolve(tsProj, 'package.json'),
+  JSON.stringify(
+    {
+      name: 'smoke-ts',
+      private: true,
+      type: 'module',
+      scripts: {typecheck: 'tsc --noEmit'},
+      dependencies: {'embedded-react': `file:${tgz}`, react: '18.3.1'},
+      devDependencies: {'@types/react': '18.3.1', typescript: '^5.5.0'},
+    },
+    null,
+    2,
+  ),
+);
+run('npm', ['install', '--no-audit', '--no-fund'], tsProj);
+run('npx', ['tsc', '--noEmit'], tsProj);
+ok(true, 'TypeScript template typechecks (tsc --noEmit)');
+if (hasWasm) {
+  run('npx', ['embedded-react', 'build'], tsProj);
+  ok(
+    existsSync(resolve(tsProj, 'dist/app.erpkg')),
+    'embedded-react build (TypeScript template) → dist/app.erpkg',
+  );
+}
+
+// Clean up the packed tarball + throwaway projects (best-effort).
 rmSync(tgz, {force: true});
 rmSync(proj, {recursive: true, force: true});
+rmSync(tsProj, {recursive: true, force: true});
 
 console.log(
   process.exitCode ? '\n✗ consumer smoke FAILED' : '\n✓ consumer smoke passed',

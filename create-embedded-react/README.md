@@ -12,8 +12,17 @@ npm install
 npm run dev          # WASM simulator with hot reload → http://localhost:3333
 ```
 
+For a TypeScript starter, add `--ts` (or `--typescript`):
+
+```bash
+npm create embedded-react@latest my-app -- --ts
+# or: npx create-embedded-react my-app --ts
+```
+
 The generated project is a minimal starter — a styled card with a pulsing logo and a `count is N` button —
 wired for the browser simulator (`npm run dev`) and a shareable static export (`npm run export`). Edit
-`App.jsx` and save; it hot-reloads. The same code runs on real hardware through the embedded-react C engine.
+`App.jsx` (or `App.tsx`) and save; it hot-reloads. The same code runs on real hardware through the
+embedded-react C engine. The TypeScript template adds a `tsconfig.json`, ambient type declarations for the
+`embedded-react` package and asset imports, and a `npm run typecheck` script.
 
 Part of the [embedded-react monorepo](https://github.com/TheMasterCoder007/embedded-react).

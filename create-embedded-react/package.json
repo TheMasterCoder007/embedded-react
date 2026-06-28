@@ -33,6 +33,7 @@
   "files": [
     "index.mjs",
     "template/",
+    "template-typescript/",
     "README.md",
     "LICENSE",
     "NOTICE"

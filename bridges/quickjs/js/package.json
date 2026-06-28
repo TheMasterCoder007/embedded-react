@@ -31,8 +31,12 @@
   "engines": {
     "node": ">=18"
   },
+  "types": "./src/embedded-react/index.d.ts",
   "exports": {
-    ".": "./src/embedded-react/index.js"
+    ".": {
+      "types": "./src/embedded-react/index.d.ts",
+      "default": "./src/embedded-react/index.js"
+    }
   },
   "bin": {
     "embedded-react": "cli.mjs"
@@ -71,6 +75,7 @@
     "test:watch": "vitest",
     "test:runtime": "node test/runtime/run.mjs",
     "test:bytecode": "node test/runtime/run.mjs --bytecode",
+    "typecheck": "tsc -p tsconfig.types.json",
     "format": "cd ../../.. && prettier --write \"**/*.{js,jsx,mjs,cjs}\"",
     "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs}\""
   },
@@ -86,7 +91,9 @@
     "svgson": "^5.3.1"
   },
   "devDependencies": {
+    "@types/react": "18.3.1",
     "prettier": "^3.4.2",
+    "typescript": "^5.5.0",
     "vitest": "^3.2.4"
   },
   "overrides": {

@@ -44,6 +44,18 @@ const jsonWrite = (text, version) => {
   return JSON.stringify(obj, null, 2) + '\n';
 };
 
+// npm lockfiles (lockfileVersion 3) carry the package version in TWO places — the top-level `version`
+// and `packages[""].version` — and drift if only `npm install` ever touches them. Sync both. (A
+// JSON.parse → re-stringify roundtrip of an npm-written lockfile is byte-identical, so the only change
+// is the version lines.)
+const lockRead = text => JSON.parse(text).version;
+const lockWrite = (text, version) => {
+  const obj = JSON.parse(text);
+  obj.version = version;
+  if (obj.packages && obj.packages['']) obj.packages[''].version = version;
+  return JSON.stringify(obj, null, 2) + '\n';
+};
+
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
 const YAML_VER = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
 const yamlRead = text => YAML_VER.exec(text)?.[1]?.trim();
@@ -106,6 +118,11 @@ const gitTagWrite = (text, version) =>
 // install pins, and the ESP32 example fetch-template tags.
 const MANIFESTS = [
   {path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite},
+  {
+    path: 'bridges/quickjs/js/package-lock.json',
+    read: lockRead,
+    write: lockWrite,
+  },
   {
     path: 'create-embedded-react/package.json',
     read: jsonRead,
