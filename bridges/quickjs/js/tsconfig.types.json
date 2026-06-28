@@ -1,0 +1,14 @@
+{
+  "//": "Typecheck the shipped public type declarations (src/embedded-react/index.d.ts) so they don't rot. Run with `npm run typecheck`. The runtime is JavaScript; this checks the .d.ts only.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "files": ["src/embedded-react/index.d.ts"]
+}

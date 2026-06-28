@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {shouldPersist} from '../persist-transform.mjs';
+import {shouldPersist, transformPersist} from '../persist-transform.mjs';
 
 // Regression guard for the "works in the repo, crashes after publish" stack overflow: the persist
 // transform must rewrite ONLY the consumer's own app files, never anything in node_modules. In a
@@ -57,5 +57,33 @@ describe('shouldPersist', () => {
         winRoot,
       ),
     ).toBe(false);
+  });
+});
+
+// The dev hot-reload transform runs on TypeScript app files too (the create-embedded-react --ts
+// template). It must parse TS syntax and leave the type annotations in place for esbuild's ts/tsx
+// loader to strip downstream — not choke on them (the jsx-only parser did).
+describe('transformPersist with TypeScript', () => {
+  it('rewrites useState in a .tsx file and preserves JSX + type syntax', () => {
+    const out = transformPersist(
+      `import {useState} from 'react';
+       type Props = {label: string};
+       export function App({label}: Props) {
+         const [count, setCount] = useState<number>(0);
+         return <text>{label} {count}</text>;
+       }`,
+      'App.tsx',
+    );
+    expect(out).toContain('__erPersistState'); // useState was rewritten
+    expect(out).toContain('Props'); // TS type kept for esbuild to strip
+    expect(out).toContain('<text>'); // JSX preserved
+  });
+
+  it('parses a plain .ts file (no JSX) with type assertions', () => {
+    const out = transformPersist(
+      `export const n: number = <number>1; export type T = string;`,
+      'util.ts',
+    );
+    expect(out).toContain('export type T'); // parsed and re-emitted, not a throw
   });
 });

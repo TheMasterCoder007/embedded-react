@@ -879,7 +879,11 @@ function collectSvgImports(program) {
  *  @param {string} baseDir   Directory the import paths are resolved against (the app's dir).
  *  @returns {Promise<Object>} name → { ops, paints, gradients, width, height }. */
 export async function bakeSvgArtifacts(src, baseDir) {
-  const program = parse(src, {sourceType: 'module', plugins: ['jsx']}).program;
+  // Parse with the TS plugin too (harmless for plain JSX) so a .tsx app's <Svg source> imports are found.
+  const program = parse(src, {
+    sourceType: 'module',
+    plugins: ['jsx', 'typescript'],
+  }).program;
   const imports = collectSvgImports(program);
   if (imports.size === 0) return {};
   const {svgToVector, svgToRaster, writeRasterPng} =
@@ -4285,14 +4289,126 @@ function compileKeyboardConfig(program, out) {
 // directly; the CLI entry at the bottom of the file wraps it with the file read/write.
 // ---------------------------------------------------------------------------------------------------
 
+// --- TypeScript support (Flow B) ---------------------------------------------------------------------
+// The compiler walks a plain JS+JSX AST. TypeScript apps (App.tsx) parse with the `typescript` plugin and
+// are then scrubbed of all type-only syntax IN PLACE before the walker runs: the runtime nodes keep their
+// original source locations, so code-frame errors still point at the user's real source. This is a faithful
+// type strip — the generated C for an App.tsx is identical to its untyped App.jsx twin.
+
+/** Is this app a TypeScript entry? Driven by the filename extension, or an explicit opts.ts (for tests). */
+const isTsEntry = opts => opts.ts ?? /\.[cm]?tsx$/.test(opts.filename || '');
+
+const parserPlugins = ts => (ts ? ['jsx', 'typescript'] : ['jsx']);
+// Type-only expression wrappers: `x as T`, `x satisfies T`, `x!`, `<T>x`, `f<T>` — unwrap to the inner expr.
+const TS_EXPR_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSSatisfiesExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSInstantiationExpression',
+]);
+// Type-only declarations (no runtime presence) — dropped from any statement/body list.
+const TS_TYPE_DECLS = new Set([
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+  'TSDeclareFunction',
+]);
+// Type-only fields hung off otherwise-runtime nodes — deleted so nothing downstream traverses into them.
+const TS_TYPE_FIELDS = [
+  'typeAnnotation',
+  'returnType',
+  'typeParameters',
+  'typeArguments',
+  'accessibility',
+  'definite',
+  'declare',
+  'readonly',
+  'override',
+  'abstract',
+];
+// Keys that never hold child AST nodes — skip them so the scrub stays cheap and never mangles metadata.
+const TS_SKIP_KEYS = new Set([
+  'loc',
+  'start',
+  'end',
+  'range',
+  'leadingComments',
+  'trailingComments',
+  'innerComments',
+  'comments',
+  'extra',
+  'tokens',
+]);
+
+/** True for nodes that carry no runtime meaning and must be removed from a statement/specifier list. */
+const isTypeOnly = node =>
+  !!node &&
+  (TS_TYPE_DECLS.has(node.type) ||
+    // `import type ... ` / `export type ...`, and per-specifier `import { type X }`.
+    ((node.type === 'ImportDeclaration' || node.type === 'ImportSpecifier') &&
+      node.importKind === 'type') ||
+    ((node.type === 'ExportNamedDeclaration' ||
+      node.type === 'ExportSpecifier') &&
+      node.exportKind === 'type'));
+
+/** Follow a chain of type-only expression wrappers to the runtime expression underneath. */
+const unwrapTs = node => {
+  while (node && TS_EXPR_WRAPPERS.has(node.type)) node = node.expression;
+  return node;
+};
+
 /**
- * Compiles a Flow B app's JSX source to C.
- * @param {string} src   The App.jsx source text.
+ * Strip every TypeScript-only construct from a parsed AST, in place: drop type declarations and type
+ * imports, unwrap `as`/`!`/`<T>` expression wrappers, and delete type-annotation fields. Remaining nodes
+ * keep their .loc, so the compiler's error code-frames stay accurate.
+ */
+function stripTypeScript(root) {
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    for (const f of TS_TYPE_FIELDS) if (f in node) delete node[f];
+    for (const key of Object.keys(node)) {
+      if (TS_SKIP_KEYS.has(key)) continue;
+      let val = node[key];
+      if (Array.isArray(val)) {
+        const kept = [];
+        for (let el of val) {
+          if (isTypeOnly(el)) continue;
+          if (el && TS_EXPR_WRAPPERS.has(el.type)) el = unwrapTs(el);
+          kept.push(el);
+          visit(el);
+        }
+        node[key] = kept;
+      } else if (val && typeof val.type === 'string') {
+        if (TS_EXPR_WRAPPERS.has(val.type)) {
+          val = unwrapTs(val);
+          node[key] = val;
+        }
+        visit(val);
+      } else if (val && typeof val === 'object') {
+        visit(val);
+      }
+    }
+  };
+  visit(root);
+  return root;
+}
+
+/** Parse an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .ts/.tsx. */
+function parseApp(src, opts = {}) {
+  const ts = isTsEntry(opts);
+  const ast = parse(src, {sourceType: 'module', plugins: parserPlugins(ts)});
+  if (ts) stripTypeScript(ast);
+  return ast;
+}
+
+/**
+ * Compiles a Flow B app's JSX (or TSX) source to C.
+ * @param {string} src   The App.jsx/App.tsx source text.
  * @param {string} demo  Demo name (only used in the generated-by header comment).
  * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
  */
 function compileSourceImpl(src, demo = 'app', opts = {}) {
-  const ast = parse(src, {sourceType: 'module', plugins: ['jsx']});
+  const ast = parseApp(src, opts);
 
   const screen = opts.screen ?? {width: SCREEN_W, height: SCREEN_H};
   // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const

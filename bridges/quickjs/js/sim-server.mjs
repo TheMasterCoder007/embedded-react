@@ -177,12 +177,19 @@ function createBundle({
             // node_modules is what stops the library's usePersistentState being rewritten to call itself).
             if (!persist || !shouldPersist(a.path, projNorm)) return undefined;
             try {
+              // Match the esbuild loader to the source extension so TS type syntax (preserved by the
+              // persist transform) is stripped: .tsx → tsx, .ts → ts, .jsx/.js → jsx.
+              const loader = a.path.endsWith('.tsx')
+                ? 'tsx'
+                : a.path.endsWith('.ts')
+                  ? 'ts'
+                  : 'jsx';
               return {
                 contents: transformPersist(
                   readFileSync(a.path, 'utf8'),
                   relative(projectRoot, a.path).replace(/\\/g, '/'),
                 ),
-                loader: 'jsx',
+                loader,
               };
             } catch (e) {
               return {errors: [{text: `persist transform: ${e.message}`}]};

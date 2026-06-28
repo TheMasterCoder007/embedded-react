@@ -214,7 +214,7 @@ Getting the built artifact onto the board is firmware-specific — the example p
 **Start a new app** (scaffolds a project and opens the browser simulator with hot reload):
 
 ```
-npm create embedded-react@latest my-app
+npm create embedded-react@latest my-app          # add -- --ts for a TypeScript starter
 cd my-app && npm install && npm run dev
 ```
 

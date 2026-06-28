@@ -36,18 +36,44 @@ import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join, relative, basename} from 'node:path';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
-const TEMPLATE = resolve(PKG_ROOT, 'template');
 const erVersion = JSON.parse(
   readFileSync(resolve(PKG_ROOT, 'package.json'), 'utf8'),
 ).version;
 
-const arg = process.argv[2];
-if (!arg || arg.startsWith('-')) {
+// Separate the project name from flags. --ts/--typescript selects the TypeScript template.
+const argv = process.argv.slice(2);
+const flags = argv.filter(a => a.startsWith('-'));
+const positional = argv.filter(a => !a.startsWith('-'));
+const wantsTs = flags.some(a => a === '--ts' || a === '--typescript');
+const wantsHelp = flags.some(a => a === '-h' || a === '--help');
+
+if (!wantsHelp) {
+  const KNOWN_FLAGS = new Set(['--ts', '--typescript']);
+  const unknown = flags.filter(f => f !== '-h' && f !== '--help' && !KNOWN_FLAGS.has(f));
+  if (unknown.length) {
+    console.error(`Unknown option(s): ${unknown.join(', ')}`);
+    process.exit(1);
+  }
+  if (positional.length > 1) {
+    console.error(`Expected a single <project-name>, got: ${positional.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+const arg = positional[0];
+if (!arg || wantsHelp) {
   console.log('Create a new embedded-react app:\n');
   console.log('  npm create embedded-react@latest <project-name>');
   console.log('  npx create-embedded-react <project-name>\n');
+  console.log('Options:');
+  console.log('  --ts, --typescript   scaffold a TypeScript app\n');
   process.exit(arg ? 0 : 1);
 }
+
+const TEMPLATE = resolve(
+  PKG_ROOT,
+  wantsTs ? 'template-typescript' : 'template',
+);
 
 const destDir = resolve(process.cwd(), arg);
 const appName = basename(destDir);

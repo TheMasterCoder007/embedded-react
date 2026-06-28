@@ -11,6 +11,21 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Added
+
+- **TypeScript apps, end to end** — author embedded-react apps in TypeScript. `npm create
+  embedded-react@latest my-app -- --ts` (or `npx create-embedded-react my-app --ts`) scaffolds a TS starter
+  with a `tsconfig.json`, ambient declarations for asset imports, and a `npm run typecheck` script. Every
+  flow accepts `.ts`/`.tsx`: the dev simulator (with hot-reload state preservation), the static export, the
+  Flow A device build, and the Flow B AOT compiler. Types are erased by esbuild on the dev/export/Flow A
+  paths and by an in-place AST scrub on the AOT path that preserves source locations — so compiler
+  code-frames still point at your real `.tsx`, and the generated C for a `.tsx` app is identical to its
+  untyped `.jsx` twin.
+- **Bundled type declarations** — the `embedded-react` npm package now ships `.d.ts` types for its public
+  API (the components, `StyleSheet`, `Animated`, `useAnimatedValue`/`usePersistentState`, `AppRegistry`, …),
+  wired through `package.json` `exports`/`types`. `import { View } from 'embedded-react'` is typed out of the
+  box — no separate `@types/embedded-react` needed.
+
 ## [0.4.1] - 2026-06-27
 ### Changed
 

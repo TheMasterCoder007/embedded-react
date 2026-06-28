@@ -120,18 +120,31 @@ export function shouldPersist(absPath, projectRootNorm) {
 /**
  * Applies the persist transform to a module's source.
  *
- * @param {string} code      Module source (JSX allowed).
+ * TypeScript entries (.ts/.tsx) are parsed with the `typescript` plugin enabled; the type syntax is
+ * preserved in the output and stripped downstream by esbuild's ts/tsx loader (see sim-server.mjs).
+ *
+ * @param {string} code      Module source (JSX and/or TypeScript allowed).
  * @param {string} moduleId  Stable module identifier (used in keys; e.g. a path relative to the app).
- * @returns {string} Transformed source (JSX preserved for esbuild to handle).
+ * @returns {string} Transformed source (JSX/TS preserved for esbuild to handle).
  */
 export function transformPersist(code, moduleId) {
+  // Enable the babel parser plugins this module's extension needs. `.tsx` is jsx+typescript; `.ts` is
+  // typescript-only (the jsx plugin would misparse `<T>` type assertions); everything else is jsx.
+  const isTs = /\.tsx?$/.test(moduleId);
+  const isTsx = /\.tsx$/.test(moduleId);
+  const parserPlugins = isTsx
+    ? ['jsx', 'typescript']
+    : isTs
+      ? ['typescript']
+      : ['jsx'];
   const out = transformSync(code, {
     filename: moduleId,
     babelrc: false,
     configFile: false,
     sourceType: 'module',
-    parserOpts: {plugins: ['jsx']},
-    plugins: [syntaxJsx, [persistPlugin, {moduleId}]],
+    parserOpts: {plugins: parserPlugins},
+    // syntaxJsx only enables jsx parsing; for ts/tsx we drive the parser via parserOpts above instead.
+    plugins: [...(isTs ? [] : [syntaxJsx]), [persistPlugin, {moduleId}]],
   });
   return out.code;
 }

@@ -1,0 +1,20 @@
+{
+  "name": "__APP_NAME__",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "embedded-react dev",
+    "export": "embedded-react export --out sim-export",
+    "build": "embedded-react build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "embedded-react": "__ER_VERSION__",
+    "react": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.1",
+    "typescript": "^5.5.0"
+  }
+}
