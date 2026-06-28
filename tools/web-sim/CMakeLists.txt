@@ -18,6 +18,10 @@ if (NOT EMSCRIPTEN)
 endif ()
 
 # Capable, desktop-class engine feature set so the browser preview is faithful (matches tools/simulator).
+# Every optional feature is enabled and every static cap is raised well above any single-screen UI, so the
+# preview never silently disables or truncates a feature the app actually uses (e.g. conic gradients used to
+# vanish when the per-node gradient pool fell back to the MCU default of 8). The per-board/device builds keep
+# the lean engine defaults and tune these knobs down for their RAM/flash budget — see engine/CMakeLists.txt.
 set(ERUI_SHADOWS         ON     CACHE BOOL   "" FORCE)
 set(ERUI_BORDER_AA       ON     CACHE BOOL   "" FORCE)
 set(ERUI_3D_TRANSFORMS   ON     CACHE BOOL   "" FORCE)
@@ -27,14 +31,28 @@ set(ERUI_GRADIENT_RADIAL ON     CACHE BOOL   "" FORCE)
 set(ERUI_GRADIENT_CONIC  ON     CACHE BOOL   "" FORCE)
 set(ERUI_ONSCREEN_KEYBOARD ON   CACHE BOOL   "" FORCE)
 set(ERUI_TRANSFORMS      "FULL" CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_W       "512"  CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_H       "512"  CACHE STRING "" FORCE)
+
+# Scene / compositor / animation pools — generous so large screens and busy UIs render fully.
+set(ERUI_MAX_NODES          "4096"    CACHE STRING "" FORCE)
+set(ERUI_MAX_OPACITY_DEPTH  "16"      CACHE STRING "" FORCE)
+set(ERUI_MAX_ANIM_VALUES    "256"     CACHE STRING "" FORCE)
+set(ERUI_MAX_VALUE_BINDINGS "16"      CACHE STRING "" FORCE)
+set(ERUI_FONT_POOL_BYTES    "1048576" CACHE STRING "" FORCE)  # enable runtime er_font_load (0 disables it)
+set(ERUI_MAX_IMG_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_W          "1024"    CACHE STRING "" FORCE)  # max compositable / transformed node size
+set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)
+
 # Roomy vector pools so imported SVGs (which can have many shapes / a long op-tape) render in the browser
 # preview without truncating — the desktop-class faithful preview. Tune the per-board caps separately.
-set(ERUI_VECTOR_TAPE_MAX   "8192" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_PAINTS_MAX "1024" CACHE STRING "" FORCE)  # a designer dial face is ~100 shapes = ~700 paints
-set(ERUI_VECTOR_MAX_PTS    "4096" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_MAX_EDGES  "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_TAPE_MAX     "8192" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_PAINTS_MAX   "1024" CACHE STRING "" FORCE)  # a designer dial face is ~100 shapes = ~700 paints
+set(ERUI_VECTOR_GRADS_MAX    "256"  CACHE STRING "" FORCE)  # gradient entries per node (linear/radial/conic)
+set(ERUI_VECTOR_GRAD_LUT     "1024" CACHE STRING "" FORCE)  # gradient colour-LUT entries (smoother ramps)
+set(ERUI_VECTOR_MAX_PTS      "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_SUBPATHS "1024" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_EDGES    "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_ROW      "4096" CACHE STRING "" FORCE)  # max vector-node width in px
+set(ERUI_MAX_VECTOR_NODES    "64"   CACHE STRING "" FORCE)  # concurrent vector nodes holding geometry
 
 set(ER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
