@@ -64,9 +64,18 @@ add_subdirectory(${ER_ROOT}/backends/sdl ${CMAKE_CURRENT_BINARY_DIR}/backends/sd
 set(ER_BRIDGE_QUICKJS_SMOKE OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/quickjs)
 
-# Match the engine's raised vector caps on the bridge side (it copies the JS op-tape into a fixed buffer
-# before the engine, so its caps must be >= the engine's or it truncates large SVGs first).
-target_compile_definitions(er-bridge-quickjs PRIVATE VEC_BRIDGE_MAX_OPS=8192 VEC_BRIDGE_MAX_PAINTS=1024 VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
+# Match the engine's raised caps on the bridge side. The bridge keeps its OWN fixed-size pools (node-handle
+# table, animation-completion slots, timers, and a copy of the JS vector op-tape) that gate JS-side creation
+# independently of the engine, so each must be >= its engine counterpart or the simulator silently caps below
+# the engine limit (e.g. handles < ERUI_MAX_NODES truncates node creation; completions < ERUI_MAX_ANIM_VALUES
+# drops callbacks; a small op-tape buffer truncates large SVGs first).
+target_compile_definitions(er-bridge-quickjs PRIVATE
+        ER_BRIDGE_MAX_HANDLES=8192            # >= ERUI_MAX_NODES (4096)
+        ER_BRIDGE_MAX_ANIM_COMPLETIONS=256    # >= ERUI_MAX_ANIM_VALUES (256)
+        ER_BRIDGE_MAX_TIMERS=256
+        VEC_BRIDGE_MAX_OPS=8192               # >= ERUI_VECTOR_TAPE_MAX
+        VEC_BRIDGE_MAX_PAINTS=1024            # >= ERUI_VECTOR_PAINTS_MAX
+        VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
 # The shared desktop host core lives with the demo; the simulator reuses it (sim_main.c is just the
 # watch + reload loop over it). Unlike the demo/device, the simulator does NOT compile assets in: it
 # loads them at runtime from a binary pack (asset_pack.c) so images/fonts hot-reload (Phase 2b).

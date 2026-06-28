@@ -12,15 +12,11 @@ artifact. See [README](README.md#releasing) for the release process.
 ## [Unreleased]
 ### Fixed
 
-- **Simulators now enable every engine feature at full capacity** — the web simulator (`tools/web-sim`) and
-  desktop simulator (`tools/simulator`) previously enabled the gradient/transform feature flags but left
-  several numeric caps falling back to the lean MCU defaults, so features could silently disappear. Most
-  visibly, conic gradients vanished when a node's gradient pool overflowed the default of eight entries
-  (`ERUI_VECTOR_GRADS_MAX`). Both simulators now force every optional feature ON (including the on-screen
-  keyboard, which the desktop simulator was missing) and raise every static cap — scene/compositor/animation
-  pools, runtime font loading, scratch buffer, and the full set of vector pools (including the gradient pool
-  and color-LUT) — well above any single-screen UI. The matching `VEC_BRIDGE_MAX_GRADS` on the QuickJS
-  bridge now tracks the raised gradient pool too. Per-board/device builds keep the lean engine defaults.
+- **Simulators now enable every engine feature at full capacity** — the web (`tools/web-sim`) and desktop
+  (`tools/simulator`) simulators left several caps at the lean MCU defaults, so features could silently
+  disappear (e.g., conic gradients vanished once a node had more than eight gradients). Both now turn on every
+  optional feature and raise every static cap — engine pools and the QuickJS bridge's own pools alike. 
+  Per-board/device builds keep the lean engine defaults.
 
 ## [0.5.1] - 2026-06-28
 ### Changed
