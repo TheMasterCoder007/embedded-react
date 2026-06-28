@@ -11,6 +11,7 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-28
 ### Added
 
 - **TypeScript apps, end to end** — author embedded-react apps in TypeScript. `npm create
@@ -231,7 +232,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.2.3...v0.3.0
