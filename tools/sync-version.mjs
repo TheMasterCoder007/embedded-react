@@ -48,7 +48,13 @@ const jsonWrite = (text, version) => {
 // and `packages[""].version` — and drift if only `npm install` ever touches them. Sync both. (A
 // JSON.parse → re-stringify roundtrip of an npm-written lockfile is byte-identical, so the only change
 // is the version lines.)
-const lockRead = text => JSON.parse(text).version;
+const lockRead = text => {
+  const obj = JSON.parse(text);
+  const top = obj.version;
+  const pkg = obj.packages?.['']?.version;
+  if (top && pkg && top !== pkg) return `${top} (lockfile versions disagree)`;
+  return pkg || top;
+};
 const lockWrite = (text, version) => {
   const obj = JSON.parse(text);
   obj.version = version;

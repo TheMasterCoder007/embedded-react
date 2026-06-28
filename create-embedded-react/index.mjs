@@ -42,10 +42,25 @@ const erVersion = JSON.parse(
 
 // Separate the project name from flags. --ts/--typescript selects the TypeScript template.
 const argv = process.argv.slice(2);
-const wantsTs = argv.some(a => a === '--ts' || a === '--typescript');
-const arg = argv.find(a => !a.startsWith('-'));
-const wantsHelp = argv.some(a => a === '-h' || a === '--help');
+const flags = argv.filter(a => a.startsWith('-'));
+const positional = argv.filter(a => !a.startsWith('-'));
+const wantsTs = flags.some(a => a === '--ts' || a === '--typescript');
+const wantsHelp = flags.some(a => a === '-h' || a === '--help');
 
+if (!wantsHelp) {
+  const KNOWN_FLAGS = new Set(['--ts', '--typescript']);
+  const unknown = flags.filter(f => f !== '-h' && f !== '--help' && !KNOWN_FLAGS.has(f));
+  if (unknown.length) {
+    console.error(`Unknown option(s): ${unknown.join(', ')}`);
+    process.exit(1);
+  }
+  if (positional.length > 1) {
+    console.error(`Expected a single <project-name>, got: ${positional.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+const arg = positional[0];
 if (!arg || wantsHelp) {
   console.log('Create a new embedded-react app:\n');
   console.log('  npm create embedded-react@latest <project-name>');
