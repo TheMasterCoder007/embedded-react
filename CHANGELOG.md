@@ -11,6 +11,11 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+### Changed
+
+- **Updated template icon** — both the JavaScript and TypeScript starter templates now ship the new v2
+  embedded-react icon (`assets/icons/embedded-react.png`).
+
 ## [0.5.0] - 2026-06-28
 ### Added
 
