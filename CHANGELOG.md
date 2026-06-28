@@ -11,6 +11,7 @@ artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-28
 ### Changed
 
 - **Updated template icon** — both the JavaScript and TypeScript starter templates now ship the new v2
@@ -237,7 +238,8 @@ Initial public release.
   (`_Static_assert`) that fails a build against a mismatched engine.
 - First publish to npm as `embedded-react`.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.3.0...v0.4.0
