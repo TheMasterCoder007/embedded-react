@@ -1,6 +1,6 @@
 {
   "name": "create-embedded-react",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Scaffold a new embedded-react app — `npm create embedded-react@latest`.",
   "type": "module",
   "license": "Apache-2.0",

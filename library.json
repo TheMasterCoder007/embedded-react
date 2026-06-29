@@ -1,6 +1,6 @@
 {
   "name": "embedded-react",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "React Native for embedded MCUs — a tiny C99 UI engine you drive with JSX. Backend-agnostic (you provide the framebuffer flush); authored with the embedded-react npm toolchain (Flow A interpreted via QuickJS, or Flow B compiled ahead-of-time to C).",
   "keywords": "gui, ui, react, react-native, embedded, display, lcd, tft, graphics, jsx",
   "license": "Apache-2.0",
