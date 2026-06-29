@@ -495,6 +495,11 @@ const char* er_runtime_container_status_str(ErContainerStatus status)
 
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
 {
+    return er_runtime_load_container_ex(vbuf, len, false);
+}
+
+ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+{
     const uint8_t* buf = (const uint8_t*)vbuf;
     if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
     {
@@ -575,7 +580,7 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
     {
         if (secs[i].type == 2u)
         {
-            er_assets_load_pack(secs[i].data, secs[i].len);
+            er_assets_load_pack_ex(secs[i].data, secs[i].len, copy_assets);
         }
         else if (secs[i].type == 1u)
         {

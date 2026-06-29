@@ -34,12 +34,17 @@
  */
 
 #include "board.h"
+#include "er_hotreload.h" /* er_hotreload_apply (on-device hot reload) */
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
 #include "native_renderer.h"
 #include "perf_overlay.h"
 #include "quickjs.h" /* JSMallocFunctions (PSRAM JS heap) */
+
+#if ER_HOTRELOAD
+#include "hotreload_usb.h" /* USB-Serial-JTAG receiver shim (this example's transport) */
+#endif
 
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
@@ -105,6 +110,20 @@ static void remap_touch(int* x, int* y)
 
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
+
+/* On-device hot reload over USB-Serial-JTAG (Phase 4). Default on; set ER_HOTRELOAD=0 (CMakeLists) to
+ * compile it out. ER_HOTRELOAD_MAX_BYTES sizes the two PSRAM "ping-pong" staging buffers — the largest
+ * .erpkg the device will accept in one upload. A real app is mostly QuickJS bytecode: the thermostat
+ * container is ~1.2 MB. Two buffers of this size live in PSRAM, so the budget is bounded: this board's
+ * ~5.8 MB PSRAM pool also holds the framebuffer (~750 KB) and the JS heap (which must fit the loaded
+ * app), so don't size this so large that 2x it starves the heap (2 MB x2 = 4 MB does, and is rejected
+ * at startup → hot reload disabled). 1.3 MB fits the thermostat with margin and leaves the heap room. */
+#ifndef ER_HOTRELOAD
+#define ER_HOTRELOAD 1
+#endif
+#ifndef ER_HOTRELOAD_MAX_BYTES
+#define ER_HOTRELOAD_MAX_BYTES (1300 * 1024)
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - QuickJS heap → PSRAM
@@ -354,7 +373,9 @@ static void run_app(void)
         .screen_width = SCREEN_W,
         .screen_height = SCREEN_H,
         .screen_scale = 1.0f,
-        .install_persist = false, /* on-device reload isn't wired yet (Phase 4); no persist store */
+        /* With hot reload wired (Phase 4), install the persist store so usePersistentState survives a
+           live reload — the same behavior as the desktop simulator. Off when hot reload is compiled out. */
+        .install_persist = (ER_HOTRELOAD != 0),
         .log = uart_log,
         .malloc_functions = &er_js_mf, /* JS heap → PSRAM */
         .max_stack_size = ER_JS_MAX_STACK,
@@ -364,6 +385,17 @@ static void run_app(void)
         ESP_LOGE(TAG, "er_runtime_init failed (PSRAM exhausted?)");
         return;
     }
+
+#if ER_HOTRELOAD
+    /* Bring up the hot-reload receiver: `embedded-react dev --device <port>` streams a fresh app.erpkg
+       over USB-Serial-JTAG on every save and the frame loop swaps it in live (see below). Non-fatal if
+       it can't start — the flashed config still runs. */
+    const bool hot_reload = er_hotreload_usb_start(ER_HOTRELOAD_MAX_BYTES);
+    if (!hot_reload)
+    {
+        ESP_LOGW(TAG, "hot reload unavailable — running the flashed config only");
+    }
+#endif
 
     /* Load the UI + logic from the config partition. On any failure, paint the on-screen panel and
        keep going — the loop below presents it and feeds the watchdog (firmware doesn't halt because a
@@ -431,6 +463,13 @@ static void run_app(void)
                 }
             }
         }
+
+#if ER_HOTRELOAD
+        /* Load a freshly received container, if one is ready, on THIS task (the runtime owner) so the
+           reset/load never races the RX task. The old app keeps running until this swaps it in — no
+           teardown beforehand. No-op on frames with nothing pending. */
+        er_hotreload_usb_pump();
+#endif
 
         const int64_t frame_start_us = esp_timer_get_time();
         er_runtime_pump(); /* drain JS promises + fire due timers */

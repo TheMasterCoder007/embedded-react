@@ -10,6 +10,18 @@ ESP-IDF Component Registry, PlatformIO) — a single root `VERSION` drives every
 artifact. See [README](README.md#releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- **On-device hot reload over USB (Flow A)** — `embedded-react dev --device <port>` re-packs your app on
+  every save and pushes it to a running board, which swaps in the new UI and logic live (no reflash, no
+  reboot) — the same edit-and-see-it loop as the WASM simulator, now on real hardware. The running UI
+  stays on screen through the swap (no flicker), and state written with `usePersistentState` (and plain
+  `useState` in this dev mode) survives the reload. The dev loop streams the device's own logs back too.
+  - Validated on the **Waveshare ESP32-S3-Touch-LCD-7** (thermostat demo) over the board's native USB
+    port at ~3 s per reload, with flashing on the separate UART port.
+  - **Production is unaffected and backwards-compatible** — a flashed release config boots exactly as
+    before; the live-swap path is dev-only and opt-in.
+  - `serialport` is an optional dependency, pulled in only when uploading to a device.
 
 ## [0.5.3] - 2026-06-29
 ### Fixed

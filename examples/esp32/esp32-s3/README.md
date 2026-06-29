@@ -132,6 +132,57 @@ The container stamps the QuickJS version `npm run pack` built it against; it **m
 top-level `CMakeLists.txt` fetches (`v0.15.0`). Both come from this repo, so it's automatic — and if it
 ever mismatches, the loader rejects it with a panel rather than running garbage.
 
+## Hot reload over USB (live, no reflash)
+
+Once the firmware is flashed, you don't have to re-pack + `parttool.py` for every JS change. Point the
+dev loop at the board's **native USB-C port** and it streams a fresh config on every save; the firmware
+swaps it in **live** — the same edit-and-see-it experience as the WASM simulator, on the real panel.
+
+This board has **two USB-C ports**: the **"UART" port** (a CH343 USB-UART bridge → UART0; use it for
+`idf.py flash`) and the **"USB" port** (the chip's native USB-Serial-JTAG on GPIO19/20; hot reload rides
+this one — it's fast). Plug in **both**:
+
+```bash
+# from your app project (or `cd bridges/quickjs/js` in-tree)
+npm i serialport                       # one-time: optional native dep, only needed for device upload
+ls /dev/cu.usbmodem*                   # two entries; the native USB one is the "USB JTAG/serial debug unit"
+npx embedded-react dev --device /dev/cu.usbmodemXXXX    # the native-USB port (COMx on Windows)
+```
+
+Edit a `.jsx`/`.tsx`, save, and the **running UI stays on screen** while the new container streams, then
+swaps to the updated app — **~3 s** for the ~1.2 MB thermostat (smaller apps are quicker), no reboot, no
+blank "Reloading…" flicker. Component state written with `usePersistentState` (and plain `useState`, which
+this dev mode rewrites to persist) survives the reload. The dev loop also prints the device's own logs
+(prefixed `▸`) over the same native-USB port.
+
+How it works: the host wraps each `.erpkg` in a tiny `ERHR` transport frame (magic + length + CRC) and
+writes it to the native USB-Serial-JTAG. A background task (`main/hotreload_usb.c`) reads the bytes into
+the portable parser (`er_hotreload.c`) — into one staging buffer, while the old app keeps running. On a
+complete, CRC-valid frame the frame loop applies it (`er_hotreload_apply` → `er_runtime_reset` +
+`er_runtime_load_container_ex(copy=true)`). The `copy=true` is the trick: the new app's assets are copied
+into their own block (and bytecode into the JS heap), so nothing references the staging buffer afterward —
+which is what lets the receiver reuse it for the next upload *without* tearing the old app down first. A
+corrupt upload is simply rejected and never disturbs the running app. Compile the whole feature out with
+`ER_HOTRELOAD=0` (in `main/CMakeLists.txt`).
+
+Two board-specific bits make the native USB work (both already wired up here):
+- **Console on USB-Serial-JTAG** (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, sdkconfig.defaults). The native
+  USB enumerates from ROM at boot, but the app drops it unless the console is bound to it; binding also
+  installs the `usb_serial_jtag` driver the receiver reads from. (Flashing still works on the UART port.)
+- **CH422G `USB_SEL` (EXIO5) driven low** (`main/board.c`). The native USB D−/D+ are muxed with a CAN
+  transceiver via the CH422G IO-expander; the latch powers up all-high = CAN, so the port stays dark until
+  the firmware selects USB. Without this the "USB" port never enumerates on the host — the gotcha that
+  makes it look like native USB "isn't wired."
+
+Notes / limits:
+- **Single staging buffer, assets copied on load.** One ~1.3 MB buffer (not double-buffered) keeps the JS
+  heap room on this board. Because the load copies the asset pack (~the app's image/font bytes — small) 
+  into its own block, the running app never references the buffer, so there's no teardown
+  and no flicker. This copy is **opt-in and hot-reload-only**: production boot (`er_runtime_load_container`)
+  still references assets in place from mmap'd flash at zero RAM cost — unchanged.
+- **Dev loop only.** Hot reload is for development; ship a release by packing once and flashing the
+  `config` partition (above).
+
 ## Known tuning points / gotchas
 
 - **Host must be present.** The engine never auto-presents — `er_commit()` only paints into the backend
@@ -190,8 +241,9 @@ as fast as the work allows. It always blocks at least one tick so the idle task 
 1. Multitouch / gestures (the engine has `er_responder_query_set`),
 2. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
 
-3. On-device config upload over USB/network (write the `config` partition from the app itself) +
-   reload — the desktop already does live reload; the device reload core (`er_runtime_reset`) exists.
+3. ~~On-device config upload over USB + reload~~ — **done** (see [Hot reload over USB](#hot-reload-over-usb-live-no-reflash)).
+   Possible follow-ups: also persist a hot-reloaded config to the `config` partition so it survives a
+   reboot, and a dedicated USB-CDC channel (TinyUSB composite) so uploads don't share the log console.
 
 (Images and custom fonts ride inside the config container — `npm run pack` bakes the demo's imported
 assets into the `.erpkg`. See the

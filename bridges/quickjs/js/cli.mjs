@@ -30,14 +30,14 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import {createRequire} from 'node:module';
-import {fileURLToPath, pathToFileURL} from 'node:url';
-import {basename, dirname, relative, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildApp, runDevServer} from './sim-server.mjs';
+import {packAppContainer} from './hotreload/pack-app.mjs';
+import {runDeviceDevServer} from './hotreload/dev-device.mjs';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
 
 // QuickJS release the bytecode container targets — MUST match bridges/quickjs/CMakeLists.txt and
 // ER_QUICKJS_TAG in er_runtime.c (the device loader rejects a mismatch). The wasm that compiles the
@@ -49,6 +49,8 @@ function usage() {
 
 Usage:
   embedded-react dev [entry] [--port <n>]      Run the WASM simulator with hot reload
+  embedded-react dev [entry] --device <port>   Hot-reload on a real board over USB (Flow A): re-pack
+                                                 the app and stream it on every save
   embedded-react export [entry] [--out <dir>]  Build a self-contained static playground (no server)
   embedded-react build [entry] [--out <dir>]   Build the device artifact:
                                                  default → app.erpkg (Flow A: QuickJS bytecode + assets,
@@ -126,16 +128,41 @@ function resolveEntry(cwd, explicit) {
   process.exit(1);
 }
 
+/** Read `--flag value` from an arg list, returning the value (or a default) and the consumed indices. */
+function optValue(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx >= 0 ? {value: args[idx + 1], idx, valueIdx: idx + 1} : null;
+}
+
 async function dev(args) {
   const cwd = process.cwd();
-  const portIdx = args.indexOf('--port');
-  const port = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 3333;
-  const explicit = args.find(
-    (a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1),
+  const portOpt = optValue(args, '--port');
+  const deviceOpt = optValue(args, '--device');
+  // The first non-flag arg that isn't a flag's value is the entry override.
+  const consumed = new Set(
+    [portOpt, deviceOpt].filter(Boolean).flatMap(o => [o.idx, o.valueIdx]),
   );
+  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
+
+  // --device <port> → stream the app to a real board over USB on every save (on-device hot reload).
+  // Otherwise → the WASM simulator in the browser.
+  if (deviceOpt) {
+    await runDeviceDevServer({
+      entry,
+      projectRoot: cwd,
+      libSrc: libSrc(),
+      nodePaths: nodePaths(cwd),
+      simDir,
+      device: deviceOpt.value,
+      label: entry,
+    });
+    return;
+  }
+
+  const port = portOpt ? parseInt(portOpt.value, 10) : 3333;
   const outDir = resolve(tmpdir(), 'embedded-react-sim');
   mkdirSync(outDir, {recursive: true});
 
@@ -245,113 +272,30 @@ async function buildAot(cwd, explicit, outDir) {
 
 /** Flow A (default): bundle → QuickJS bytecode (via the prebuilt wasm) + baked assets → app.erpkg. */
 async function buildContainer(cwd, explicit, outDir) {
-  const esbuild = require('esbuild');
-  const {bakeImage} = await import('./assets/bake-image.mjs');
-  const {bakeFont} = await import('./assets/bake-font.mjs');
-  const {emitAssetPack} = await import('./assets/emit-pack.mjs');
-  const {emitContainer} = await import('./assets/emit-container.mjs');
-  const {registerSvgVectorLoader} = await import('./assets/svg-loader.mjs');
-  const {compileToBytecode} = await import('./qjsc-wasm.mjs');
-
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
 
-  // Bundle the app (IIFE) with import-driven asset discovery (same as the dev/pack paths).
-  const images = new Map();
-  const fonts = new Map();
-  const assetPlugin = {
-    name: 'embedded-react-assets',
-    setup(b) {
-      b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, a => {
-        const n = basename(a.path).replace(/\.[^.]+$/, '');
-        images.set(n, a.path);
-        return {
-          contents: `module.exports = ${JSON.stringify(n)};`,
-          loader: 'js',
-        };
-      });
-      b.onLoad({filter: /\.(ttf|otf)$/i}, a => {
-        const f = basename(a.path).replace(/\.[^.]+$/, '');
-        fonts.set(f, a.path);
-        return {
-          contents: `module.exports = ${JSON.stringify(f)};`,
-          loader: 'js',
-        };
-      });
-      registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
-    },
-  };
-  // The bundle is an intermediate (it becomes bytecode in the .erpkg) — keep it out of the user's outDir
-  // so `dist/` ends up holding only app.erpkg.
-  const tmp = resolve(tmpdir(), 'embedded-react-build');
-  mkdirSync(tmp, {recursive: true});
-  const bundlePath = resolve(tmp, 'app.bundle.js');
-  await esbuild.build({
-    entryPoints: [entry],
-    bundle: true,
-    format: 'iife',
-    outfile: bundlePath,
-    platform: 'neutral',
-    target: 'es2020',
-    jsx: 'automatic',
-    alias: {'embedded-react': libSrc()},
+  const {container, bytecodeLen, assetsLen} = await packAppContainer({
+    entry,
+    projectRoot: cwd,
+    libSrc: libSrc(),
     nodePaths: nodePaths(cwd),
-    plugins: [assetPlugin],
-    define: {'process.env.NODE_ENV': '"production"'},
-    legalComments: 'none',
-    logLevel: 'silent',
+    simDir,
   });
-  const bundleSrc = readFileSync(bundlePath, 'utf8');
 
-  // Precompile to QuickJS bytecode through the prebuilt sim wasm — no native toolchain.
-  const bytecode = await compileToBytecode(bundleSrc, simDir);
-
-  // Bake imported images/fonts into an ERPK pack (font sizes discovered from the bundle).
-  const discoveredSizes = [
-    ...new Set(
-      [...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-        Math.round(Number(m[1])),
-      ),
-    ),
-  ].sort((a, b) => a - b);
-  let cfg = {};
-  const cp = resolve(cwd, 'assets.config.js');
-  if (existsSync(cp))
-    cfg = (await import(pathToFileURL(cp).href)).default || {};
-  const fontConfig = cfg.fonts || {};
-  const fontJobs = [...fonts.entries()].map(([family, path]) => {
-    const fc = fontConfig[family] || {};
-    return {
-      path,
-      family,
-      sizes: fc.sizes?.length
-        ? fc.sizes
-        : discoveredSizes.length
-          ? discoveredSizes
-          : [16],
-      bpp: fc.bpp ?? 4,
-      glyphs: fc.glyphs ?? 'ascii',
-    };
-  });
-  const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
-  const bakedImages = imageJobs.map(bakeImage);
-  const bakedFonts = fontJobs.map(bakeFont);
-  const assetPack =
-    bakedImages.length || bakedFonts.length
-      ? emitAssetPack({images: bakedImages, fonts: bakedFonts})
-      : null;
-
-  const container = emitContainer({bytecode, assetPack, qjsTag: QJS_TAG});
   const outPath = resolve(outDir, 'app.erpkg');
   writeFileSync(outPath, container);
   const kb = n => `${(n / 1024).toFixed(1)} KB`;
   console.log(
-    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QJS_TAG}, bytecode ${kb(bytecode.length)}` +
-      (assetPack ? `, assets ${kb(assetPack.length)}` : '') +
+    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QJS_TAG}, bytecode ${kb(bytecodeLen)}` +
+      (assetsLen ? `, assets ${kb(assetsLen)}` : '') +
       ')',
   );
   console.log(
     "  Upload app.erpkg to your device's config region (er_runtime_load_container), or run it on the desktop host.",
+  );
+  console.log(
+    '  Tip: `embedded-react dev --device <port>` hot-reloads this app live over USB on every save.',
   );
 }
 

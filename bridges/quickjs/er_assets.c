@@ -129,16 +129,53 @@ static void rd_glyph(Cur* c, GlyphInfo* g)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Optional own-the-bytes copy (for volatile sources — see er_assets_load_pack_ex)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* A persistent copy of the pack, used only when a caller asks for it (copy=true). It is reused (grown as
+ * needed) across loads, so repeated hot reloads don't leak a block each time. NULL/unused in the default
+ * zero-copy path, so production (mmap'd flash) and the desktop sim spend nothing on it. */
+static uint8_t* s_pack_copy = NULL;
+static size_t s_pack_copy_cap = 0;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
 bool er_assets_load_pack(const void* buf, size_t len)
 {
+    return er_assets_load_pack_ex(buf, len, false);
+}
+
+bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
+{
     if (!buf || len < 16)
     {
         return false;
     }
-    Cur c = {(const uint8_t*)buf, (const uint8_t*)buf + len, true};
+
+    /* When the source is volatile (a hot-reload staging buffer about to be reused for the next upload),
+     * take our own copy and register the engine against it, so the caller's buffer is free after load.
+     * The default (copy=false) references @p buf in place — zero RAM cost from mmap'd flash — and the
+     * caller keeps it live (production boot, desktop sim). */
+    const uint8_t* src = (const uint8_t*)buf;
+    if (copy)
+    {
+        if (s_pack_copy_cap < len)
+        {
+            uint8_t* grown = (uint8_t*)realloc(s_pack_copy, len);
+            if (!grown)
+            {
+                return false; /* OOM: prior copy left intact; the load fails cleanly */
+            }
+            s_pack_copy = grown;
+            s_pack_copy_cap = len;
+        }
+        memcpy(s_pack_copy, buf, len);
+        src = s_pack_copy;
+    }
+
+    Cur c = {src, src + len, true};
 
     const uint8_t* magic = rd_bytes(&c, 4);
     if (!magic || memcmp(magic, "ERPK", 4) != 0 || rd_u32(&c) != 1u)
