@@ -56,10 +56,22 @@ export async function runDeviceDevServer({
   device,
   label,
 }) {
-  const uploader = new SerialUploader({
-    device,
-    onLog: line => console.log(`  ▸ ${line}`),
-  });
+  // Each push ends with exactly one terminal line in the device's log stream:
+  //   "hot reload: ok (...)"     → loaded and running
+  //   "hot reload: <reason>"     → loaded but the container was rejected (an app/runtime error)
+  //   "dropped frame: <reason>"  → the upload was corrupt / overran the device's RX buffer (transport)
+  // We watch for it to gate the next send (so a second push can't land while the device is still
+  // applying — which would overrun its RX buffer and corrupt that frame) and to resend after a drop.
+  let settleOutcome = null;
+  const onDeviceLog = line => {
+    console.log(`  ▸ ${line}`);
+    if (!settleOutcome) return;
+    if (/dropped frame/i.test(line)) settleOutcome('dropped');
+    else if (/hot reload:\s*ok\b/i.test(line)) settleOutcome('ok');
+    else if (/hot reload:/i.test(line)) settleOutcome('rejected');
+  };
+
+  const uploader = new SerialUploader({device, onLog: onDeviceLog});
 
   try {
     await uploader.open();
@@ -81,45 +93,88 @@ export async function runDeviceDevServer({
     `watching ${relative(projectRoot, entry) || label} — edit & save to push. Ctrl-C to quit.`,
   );
 
-  let building = false;
-  let pending = false;
-  const buildAndSend = async () => {
-    if (building) {
-      pending = true; // a save landed mid-build; rebuild once this one finishes
+  const APPLY_TIMEOUT_MS = 15000; // a normal reload settles in ~3-4 s; this only catches a stuck device
+  const MAX_RESENDS = 2;
+
+  /** Resolves with the device's terminal status ('ok' | 'rejected' | 'dropped' | 'timeout') for the
+   * push currently in flight. */
+  const nextOutcome = () =>
+    new Promise(resolve => {
+      let done = false;
+      const finish = r => {
+        if (done) return;
+        done = true;
+        settleOutcome = null;
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const timer = setTimeout(() => finish('timeout'), APPLY_TIMEOUT_MS);
+      settleOutcome = finish; // armed before the send so the terminal log can't be missed
+    });
+
+  /** Send a container and wait for the device to apply it, resending on a transport drop/timeout. */
+  const sendAndConfirm = async container => {
+    for (let attempt = 0; ; attempt++) {
+      const outcome = nextOutcome();
+      await uploader.send(container);
+      const result = await outcome;
+      if (result === 'ok' || result === 'rejected') return result;
+      if (attempt >= MAX_RESENDS) {
+        console.error(
+          `✗ reload ${result} after ${attempt + 1} attempts — save again to retry`,
+        );
+        return result;
+      }
+      console.log(`↻ ${result}; resending (${attempt + 1}/${MAX_RESENDS})…`);
+    }
+  };
+
+  // Single-flight: one build→send→apply cycle at a time. A save that lands mid-cycle just re-arms it, so
+  // we rebuild and resend the latest source once the current reload settles — pushes never overlap.
+  let inFlight = false;
+  let queued = false;
+  const reloadCycle = async () => {
+    if (inFlight) {
+      queued = true;
       return;
     }
-    building = true;
-    const started = Date.now();
+    inFlight = true;
     try {
-      const {container, bytecodeLen, assetsLen} = await packAppContainer({
-        entry,
-        projectRoot,
-        libSrc,
-        nodePaths,
-        simDir,
-        persist: true,
-      });
-      await uploader.send(container);
-      console.log(
-        `↻ pushed ${kb(container.length)} (bytecode ${kb(bytecodeLen)}` +
-          (assetsLen ? `, assets ${kb(assetsLen)}` : '') +
-          `) in ${Date.now() - started} ms`,
-      );
-    } catch (e) {
-      console.error(`✗ build failed: ${e.message}`);
+      do {
+        queued = false;
+        const started = Date.now();
+        let built;
+        try {
+          built = await packAppContainer({
+            entry,
+            projectRoot,
+            libSrc,
+            nodePaths,
+            simDir,
+            persist: true,
+          });
+        } catch (e) {
+          console.error(`✗ build failed: ${e.message}`);
+          continue;
+        }
+        const result = await sendAndConfirm(built.container);
+        if (result === 'ok') {
+          console.log(
+            `↻ reloaded ${kb(built.container.length)} (bytecode ${kb(built.bytecodeLen)}` +
+              (built.assetsLen ? `, assets ${kb(built.assetsLen)}` : '') +
+              `) in ${Date.now() - started} ms`,
+          );
+        }
+      } while (queued);
     } finally {
-      building = false;
-      if (pending) {
-        pending = false;
-        buildAndSend();
-      }
+      inFlight = false;
     }
   };
 
   // Initial push so the device shows the current app immediately.
-  await buildAndSend();
+  await reloadCycle();
 
-  const onChange = debounce(buildAndSend, 120);
+  const onChange = debounce(reloadCycle, 120);
   const watcher = watch(projectRoot, {recursive: true}, (_event, file) => {
     if (!file) return;
     // Ignore churn that can't affect the bundle (build output, deps, VCS, editor temp files).
