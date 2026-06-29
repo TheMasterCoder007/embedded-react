@@ -220,8 +220,12 @@ static void reset(TestCtx* t)
  * because C99 (the engine's standard, with compiler extensions off) has no nested functions; defining
  * them inside main() compiled only under GCC's extension and broke the build under Clang. */
 static int s_hit_count;
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
 static int s_3d_hits;
+#endif
+#if ERUI_TRANSFORMS_FULL
 static int s_scale_hits;
+#endif
 
 static void press_cb(ERNode* n, const EREventData* d, void* u)
 {
@@ -231,6 +235,7 @@ static void press_cb(ERNode* n, const EREventData* d, void* u)
     s_hit_count++;
 }
 
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
 static void press_3d(ERNode* n, const EREventData* d, void* u)
 {
     (void)n;
@@ -238,7 +243,9 @@ static void press_3d(ERNode* n, const EREventData* d, void* u)
     (void)u;
     s_3d_hits++;
 }
+#endif
 
+#if ERUI_TRANSFORMS_FULL
 static void scale_press_cb(ERNode* n, const EREventData* d, void* u)
 {
     (void)n;
@@ -246,6 +253,7 @@ static void scale_press_cb(ERNode* n, const EREventData* d, void* u)
     (void)u;
     s_scale_hits++;
 }
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public

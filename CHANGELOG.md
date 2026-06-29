@@ -13,11 +13,10 @@ artifact. See [README](README.md#releasing) for the release process.
 ### Fixed
 
 - **Vector gradients render again** — every `<Svg>` gradient paint (`fill`/`stroke="url(#id)"` with a linear,
-  radial, or conic gradient) was drawing as transparent. A stray `return NULL;` in `resolve_grad`
-  (`engine/rendering/vector.c`) bailed out of every gradient lookup, so the renderer fell back to the shape's
-  solid color — which is transparent for `url()` paints. The bug only surfaced in the simulators (gradients
-  enabled); the engine's gradient tests are compiled out of the default build, where the feature is off. The
-  rendering ctests now also run in a gradients-enabled CI pass so this path is covered going forward.
+  radial, or conic gradient) was drawing as transparent. A regression in `resolve_grad` (`engine/rendering/vector.c`)
+  could cause gradient paints to fail to resolve, leaving `url()` paints transparent. The bug only surfaced in the
+  simulators (gradients enabled); the engine's gradient tests are compiled out of the default build, where the feature
+  is off. The rendering ctests now also run in a gradients-enabled CI pass so this path is covered going forward.
 - **Dev server no longer crashes on a missing file** — the WASM simulator dev server (`npx embedded-react
   dev`, `sim-server.mjs`) wrote the `200` response headers before reading the requested file, so any miss
   (a stray `/favicon.ico`, a not-yet-built `/public/` asset) threw `ERR_HTTP_HEADERS_SENT` from the 404
