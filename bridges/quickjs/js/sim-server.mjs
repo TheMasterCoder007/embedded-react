@@ -293,12 +293,13 @@ export async function runDevServer({
   // outDir. The page references ./public/<name>. window.__erHot is injected so the page connects to /reload.
   const send = async (res, file) => {
     try {
+      const body = await readFile(file);
       res
         .writeHead(200, {
           'content-type': MIME[extname(file)] || 'application/octet-stream',
           'cache-control': 'no-store',
         })
-        .end(await readFile(file));
+        .end(body);
     } catch {
       res.writeHead(404).end('not found');
     }

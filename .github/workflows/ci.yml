@@ -44,6 +44,18 @@ jobs:
         run: cmake --build engine/build-ci
       - name: Test
         run: ctest --test-dir engine/build-ci --output-on-failure
+      # Second pass with the gradient features enabled (as the simulators ship them). The gradient
+      # assertions in tests/rendering/test_vector.c are wrapped in #if ERUI_GRADIENT* and compile out of
+      # the lean default build above, so the gradient render path is ONLY exercised here. Guards against
+      # regressions like the resolve_grad early-return that made every vector gradient transparent.
+      - name: Configure (gradients enabled)
+        run: >
+          cmake -S engine -B engine/build-ci-grad
+          -DERUI_GRADIENT=ON -DERUI_GRADIENT_RADIAL=ON -DERUI_GRADIENT_CONIC=ON
+      - name: Build (gradients enabled)
+        run: cmake --build engine/build-ci-grad
+      - name: Test (gradients enabled)
+        run: ctest --test-dir engine/build-ci-grad --output-on-failure
 
   aot:
     name: AOT compile smoke

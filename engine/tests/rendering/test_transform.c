@@ -216,6 +216,45 @@ static void reset(TestCtx* t)
     memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
 }
 
+/* Press-hit counters and their callbacks for the hit-test cases in main(). These live at file scope
+ * because C99 (the engine's standard, with compiler extensions off) has no nested functions; defining
+ * them inside main() compiled only under GCC's extension and broke the build under Clang. */
+static int s_hit_count;
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+static int s_3d_hits;
+#endif
+#if ERUI_TRANSFORMS_FULL
+static int s_scale_hits;
+#endif
+
+static void press_cb(ERNode* n, const EREventData* d, void* u)
+{
+    (void)n;
+    (void)d;
+    (void)u;
+    s_hit_count++;
+}
+
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+static void press_3d(ERNode* n, const EREventData* d, void* u)
+{
+    (void)n;
+    (void)d;
+    (void)u;
+    s_3d_hits++;
+}
+#endif
+
+#if ERUI_TRANSFORMS_FULL
+static void scale_press_cb(ERNode* n, const EREventData* d, void* u)
+{
+    (void)n;
+    (void)d;
+    (void)u;
+    s_scale_hits++;
+}
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -307,16 +346,8 @@ int main(void)
         er_tree_set_root(root);
         er_commit();
 
-        /* Register a simple hit counter */
-        static int s_hit_count;
+        /* Register a simple hit counter (press_cb is at file scope) */
         s_hit_count = 0;
-
-        void press_cb(ERNode * n, const EREventData* d, void* u)
-        {
-            (void)n;
-            (void)d;
-            s_hit_count++;
-        }
         er_event_set(child, ER_EVENT_PRESS, press_cb, NULL);
 
         /* Touch inside transformed position */
@@ -430,15 +461,7 @@ int main(void)
         cp.transform_origin_y = -1.0f;
         er_node_set_props(child, &cp);
 
-        static int s_3d_hits;
         s_3d_hits = 0;
-        void press_3d(ERNode * n, const EREventData* d, void* u)
-        {
-            (void)n;
-            (void)d;
-            (void)u;
-            s_3d_hits++;
-        }
         er_event_set(child, ER_EVENT_PRESS, press_3d, NULL);
 
         er_tree_append_child(root, child);
@@ -536,14 +559,7 @@ int main(void)
         cp.transform_scale_y = 2.0f;
         er_node_set_props(child, &cp);
 
-        static int s_scale_hits;
         s_scale_hits = 0;
-        void scale_press_cb(ERNode * n, const EREventData* d, void* u)
-        {
-            (void)n;
-            (void)d;
-            s_scale_hits++;
-        }
         er_event_set(child, ER_EVENT_PRESS, scale_press_cb, NULL);
 
         er_tree_append_child(root, child);
