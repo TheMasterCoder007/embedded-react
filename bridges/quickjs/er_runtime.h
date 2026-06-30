@@ -138,6 +138,22 @@ ErContainerStatus er_runtime_load_container(const void* buf, size_t len);
  */
 ErContainerStatus er_runtime_load_container_ex(const void* buf, size_t len, bool copy_assets);
 
+/**
+ * @brief Reports whether a container carries a vendor bytecode section (the framework half of the
+ *        incremental-hot-reload split).
+ *
+ * A structural-only scan (no CRC/version check) used to choose a reload strategy: a container WITH a
+ * vendor section is a full boot/reload (reset first, then load); one WITHOUT is an app-only frame that
+ * reloads incrementally against the resident vendor (load with no reset — see er_hotreload_apply). Safe on
+ * malformed input (returns false); the real validation happens in er_runtime_load_container.
+ *
+ * @param[in] buf  Container bytes (ERCF).
+ * @param[in] len  Buffer length, or an upper bound.
+ *
+ * @return true if a vendor section is present, false otherwise (including not-a-container).
+ */
+bool er_runtime_container_has_vendor(const void* buf, size_t len);
+
 /** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
 const char* er_runtime_container_status_str(ErContainerStatus status);
 

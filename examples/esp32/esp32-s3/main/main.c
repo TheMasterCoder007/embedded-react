@@ -111,18 +111,16 @@ static void remap_touch(int* x, int* y)
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
 
-/* On-device hot reload over USB-Serial-JTAG (Phase 4). Default on; set ER_HOTRELOAD=0 (CMakeLists) to
- * compile it out. ER_HOTRELOAD_MAX_BYTES sizes the two PSRAM "ping-pong" staging buffers — the largest
- * .erpkg the device will accept in one upload. A real app is mostly QuickJS bytecode: the thermostat
- * container is ~1.2 MB. Two buffers of this size live in PSRAM, so the budget is bounded: this board's
- * ~5.8 MB PSRAM pool also holds the framebuffer (~750 KB) and the JS heap (which must fit the loaded
- * app), so don't size this so large that 2x it starves the heap (2 MB x2 = 4 MB does, and is rejected
- * at startup → hot reload disabled). 1.3 MB fits the thermostat with margin and leaves the heap room. */
+/* On-device hot reload over USB-Serial-JTAG. Default on; set ER_HOTRELOAD=0 (CMakeLists) to compile it
+ * out. ER_HOTRELOAD_MAX_BYTES sizes the single PSRAM staging buffer — the largest hot-reload frame the
+ * device accepts in one upload. With the vendor/app split, an edit ships only the APP frame (app bytecode
+ * + its assets). A vendor change (rare — a new dependency) is delivered by re-flashing the config partition,
+ * not over hot reload. Raise this only if an app's bytecode + assets outgrow it. */
 #ifndef ER_HOTRELOAD
 #define ER_HOTRELOAD 1
 #endif
 #ifndef ER_HOTRELOAD_MAX_BYTES
-#define ER_HOTRELOAD_MAX_BYTES (1300 * 1024)
+#define ER_HOTRELOAD_MAX_BYTES (512 * 1024)
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------

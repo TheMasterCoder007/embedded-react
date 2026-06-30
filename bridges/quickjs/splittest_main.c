@@ -28,6 +28,7 @@
  * Usage: er-bridge-quickjs-splittest <boot.erpkg> <reloaded.erpkg>  (containers built by split-roundtrip.mjs)
  */
 
+#include "er_hotreload.h"
 #include "er_runtime.h"
 #include "native_renderer.h"
 #include "quickjs.h"
@@ -188,9 +189,10 @@ int main(int argc, char** argv)
         failed = 1;
     }
 
-    /* 2) Soft reload: app-only frame, NO reset. The resident vendor must be reused (require() still
-     *    resolves) and the persisted 'n' must survive. */
-    ErContainerStatus s2 = er_runtime_load_container(frame, frame_len);
+    /* 2) Soft reload through the REAL firmware apply path: er_hotreload_apply sees no vendor section and
+     *    takes the soft path (no reset). The resident vendor must be reused (require() still resolves) and
+     *    the persisted 'n' must survive. */
+    ErContainerStatus s2 = er_hotreload_apply(frame, frame_len);
     if (s2 != ER_CONTAINER_OK)
     {
         printf("FAIL: app-only soft reload -> %s\n", er_runtime_container_status_str(s2));

@@ -133,13 +133,15 @@ ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t
 const char* er_hotreload_status_str(ErHotReloadStatus status);
 
 /**
- * @brief Convenience: reset the runtime and load a freshly received container, painting the on-screen
- *        error panel on failure (so a bad hot reload is visible, like a bad boot config).
+ * @brief Convenience: load a freshly received container, painting the on-screen error panel on failure
+ *        (so a bad hot reload is visible, like a bad boot config).
  *
- * Shared by every board's shim so they stay thin. MUST be called from the task that owns the runtime and
- * frame loop (it calls er_runtime_reset + er_runtime_load_container_ex). It loads with copy_assets=true,
- * so @p erpkg does NOT need to stay live afterward — the receiver may immediately reuse the staging
- * buffer for the next upload (which is what lets the old UI stay on screen during a reload, no teardown).
+ * Picks the reload mode from the container: one carrying a vendor section is a full reload (resets the
+ * runtime first); an app-only frame reloads incrementally against the resident vendor with no reset (see
+ * er_runtime_container_has_vendor). Shared by every board's shim so they stay thin. MUST be called from the
+ * task that owns the runtime and frame loop. It loads with copy_assets=true, so @p erpkg does NOT need to
+ * stay live afterward — the receiver may immediately reuse the staging buffer for the next upload (which is
+ * what lets the old UI stay on screen during a reload, no teardown).
  *
  * @param[in] erpkg  Container bytes received in a frame (the parser's staging buffer).
  * @param[in] len    Payload length from er_hotreload_feed.

@@ -179,11 +179,19 @@ ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t
 
 ErContainerStatus er_hotreload_apply(const void* erpkg, size_t len)
 {
-    /* Tear the previous app down to a clean slate, then load the new container — copying its assets
-     * (copy_assets=true) since @p erpkg is a staging buffer the receiver will reuse for the next upload.
-     * The copy is what lets the receiver refill the buffer without first tearing the running app down, so
-     * the old UI stays on screen until the new one mounts. On failure, paint the on-screen panel. */
-    er_runtime_reset();
+    /* Two reload modes, chosen by what the container carries:
+     *   - With a vendor section (a full boot/reload): tear the context down to a clean slate first, then
+     *     load — the vendor runs, then the app.
+     *   - App-only frame (the incremental case): DON'T reset. Keep the resident vendor + context, so
+     *     react/reconciler stay parsed and __erPersist survives; loading just re-evaluates the app, which
+     *     re-renders into the resident root (a "soft" reload).
+     * Either way assets are copied (copy_assets=true) since @p erpkg is a staging buffer the receiver
+     * reuses for the next upload — that copy lets the old UI stay on screen until the new one mounts. On
+     * failure, paint the on-screen panel. */
+    if (er_runtime_container_has_vendor(erpkg, len))
+    {
+        er_runtime_reset();
+    }
     const ErContainerStatus status = er_runtime_load_container_ex(erpkg, len, true);
     if (status != ER_CONTAINER_OK)
     {

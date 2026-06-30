@@ -12,16 +12,11 @@ artifact. See [README](README.md#releasing) for the release process.
 ## [Unreleased]
 ### Added
 
-- **On-device hot reload over USB (Flow A)** — `embedded-react dev --device <port>` re-packs your app on
-  every save and pushes it to a running board, which swaps in the new UI and logic live (no reflash, no
-  reboot) — the same edit-and-see-it loop as the WASM simulator, now on real hardware. The running UI
-  stays on screen through the swap (no flicker), and state written with `usePersistentState` (and plain
-  `useState` in this dev mode) survives the reload. The dev loop streams the device's own logs back too.
-  - Validated on the **Waveshare ESP32-S3-Touch-LCD-7** (thermostat demo) over the board's native USB
-    port at ~3 s per reload, with flashing on the separate UART port.
-  - **Production is unaffected and backwards-compatible** — a flashed release config boots exactly as
-    before; the live-swap path is dev-only and opt-in.
-  - `serialport` is an optional dependency, pulled in only when uploading to a device.
+- **On-device hot reload over USB (Flow A)** — `embedded-react dev --device <port>` pushes your saved
+  edits to a running board, which swaps in the new UI and logic live: no reflash, no reboot, no flicker.
+  It's the simulator's edit-and-see-it loop on real hardware, and only your changed app code is sent, so
+  reloads are quick and stay quick as your app grows. State written with `usePersistentState` survives the
+  reload. Production is unaffected — a release config boots the same way, from the same firmware.
 
 ## [0.5.3] - 2026-06-29
 ### Fixed

@@ -23,7 +23,7 @@
 
 import {watch} from 'node:fs';
 import {relative} from 'node:path';
-import {packAppContainer} from './pack-app.mjs';
+import {packApp, emitAppFrame} from './pack-split.mjs';
 import {SerialUploader, listSerialPorts} from './uploader.mjs';
 
 const kb = n => `${(n / 1024).toFixed(1)} KB`;
@@ -92,6 +92,9 @@ export async function runDeviceDevServer({
   console.log(
     `watching ${relative(projectRoot, entry) || label} — edit & save to push. Ctrl-C to quit.`,
   );
+  console.log(
+    '  sending app-only frames; the device must be running a split build (embedded-react build) so the vendor is resident.',
+  );
 
   const APPLY_TIMEOUT_MS = 15000; // a normal reload settles in ~3-4 s; this only catches a stuck device
   const MAX_RESENDS = 2;
@@ -143,9 +146,9 @@ export async function runDeviceDevServer({
       do {
         queued = false;
         const started = Date.now();
-        let built;
+        let container, bytecodeLen, assetsLen;
         try {
-          built = await packAppContainer({
+          const app = await packApp({
             entry,
             projectRoot,
             libSrc,
@@ -153,15 +156,21 @@ export async function runDeviceDevServer({
             simDir,
             persist: true,
           });
+          container = await emitAppFrame({
+            appBytecode: app.bytecode,
+            assetPack: app.assetPack,
+          });
+          bytecodeLen = app.bytecodeLen;
+          assetsLen = app.assetsLen;
         } catch (e) {
           console.error(`✗ build failed: ${e.message}`);
           continue;
         }
-        const result = await sendAndConfirm(built.container);
+        const result = await sendAndConfirm(container);
         if (result === 'ok') {
           console.log(
-            `↻ reloaded ${kb(built.container.length)} (bytecode ${kb(built.bytecodeLen)}` +
-              (built.assetsLen ? `, assets ${kb(built.assetsLen)}` : '') +
+            `↻ reloaded app ${kb(container.length)} (bytecode ${kb(bytecodeLen)}` +
+              (assetsLen ? `, assets ${kb(assetsLen)}` : '') +
               `) in ${Date.now() - started} ms`,
           );
         }
