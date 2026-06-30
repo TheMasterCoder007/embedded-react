@@ -32,13 +32,17 @@
 //   qjs_tag        u16 len + bytes   — QuickJS release the bytecode targets (loader rejects mismatch)
 //   section_count  u32
 //   sections[section_count]: type u32, len u32, bytes
-//     type 1 = QuickJS bytecode (run last)
+//     type 1 = QuickJS bytecode (the app — run last)
 //     type 2 = ERPK asset pack (registered before the app mounts)
+//     type 3 = QuickJS vendor bytecode (react + reconciler + lib — run FIRST, before the app). Optional;
+//              present only for the vendor/app split used by incremental hot reload. A container with no
+//              type-3 section is a plain monolithic app, loaded exactly as before (backwards-compatible).
 
 const FORMAT_VERSION = 1;
 
 export const SECTION_BYTECODE = 1;
 export const SECTION_ASSET_PACK = 2;
+export const SECTION_VENDOR_BYTECODE = 3;
 
 /**
  * CRC-32/IEEE (zlib polynomial 0xEDB88320), computed without a lookup table to match the C loader's
@@ -90,12 +94,16 @@ class Writer {
  * Serializes a compiled app + assets into an ERCF container.
  *
  * @param {object} opts
- * @param {Buffer|Uint8Array} opts.bytecode    QuickJS bytecode blob (.qbc) — required.
- * @param {Buffer|Uint8Array} [opts.assetPack] ERPK asset pack bytes; omitted/empty → no asset section.
- * @param {string} opts.qjsTag                 QuickJS release tag the bytecode targets (e.g. "v0.15.0").
+ * @param {Buffer|Uint8Array} opts.bytecode        QuickJS bytecode blob (.qbc) for the app — required.
+ * @param {Buffer|Uint8Array} [opts.vendorBytecode] QuickJS bytecode for the vendor chunk (react + reconciler
+ *                                                  + lib). When present, the loader runs it BEFORE the app
+ *                                                  (it installs the module registry the app require()s). Omit
+ *                                                  for a monolithic app — output is then byte-identical to before.
+ * @param {Buffer|Uint8Array} [opts.assetPack]     ERPK asset pack bytes; omitted/empty → no asset section.
+ * @param {string} opts.qjsTag                     QuickJS release tag the bytecode targets (e.g. "v0.15.0").
  * @returns {Buffer} The container bytes.
  */
-export function emitContainer({bytecode, assetPack, qjsTag}) {
+export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   if (!bytecode || !bytecode.length)
     throw new Error('emitContainer: bytecode is required');
   if (!qjsTag) throw new Error('emitContainer: qjsTag is required');
@@ -104,6 +112,9 @@ export function emitContainer({bytecode, assetPack, qjsTag}) {
   const body = new Writer();
   body.str(qjsTag);
   const sections = [];
+  // Order matters: vendor runs first (registers modules), assets register, then the app runs last.
+  if (vendorBytecode && vendorBytecode.length)
+    sections.push([SECTION_VENDOR_BYTECODE, vendorBytecode]);
   if (assetPack && assetPack.length)
     sections.push([SECTION_ASSET_PACK, assetPack]);
   sections.push([SECTION_BYTECODE, bytecode]);
