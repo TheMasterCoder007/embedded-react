@@ -104,6 +104,18 @@ if (ER_BRIDGE_QUICKJS_RUNTEST)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Split round-trip harness — loads a vendor/app SPLIT boot container then an app-only frame (no reset),
+# verifying the resident vendor is reused and usePersistentState survives. The desktop proof of the device
+# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mjs` in js/.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_SPLITTEST "Build the vendor/app split round-trip harness" ON)
+
+if (ER_BRIDGE_QUICKJS_SPLITTEST)
+    add_executable(er-bridge-quickjs-splittest splittest_main.c)
+    target_link_libraries(er-bridge-quickjs-splittest PRIVATE er-bridge-quickjs)
+endif ()
+
+# ---------------------------------------------------------------------------
 # Bytecode precompiler — turns the esbuild bundle into a QuickJS bytecode blob (or a C array for
 # embedding in MCU flash). Links only `qjs` (no engine/bridge needed to compile). Hosts load the
 # blob with JS_ReadObject instead of parsing source — the §4 boot/RAM lever for ESP32-S3 / STM32H7.

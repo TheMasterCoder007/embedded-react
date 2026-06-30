@@ -34,7 +34,11 @@ import {fileURLToPath} from 'node:url';
 import {dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildApp, runDevServer} from './sim-server.mjs';
-import {packAppContainer} from './hotreload/pack-app.mjs';
+import {
+  packVendor,
+  packApp,
+  emitBootContainer,
+} from './hotreload/pack-split.mjs';
 import {runDeviceDevServer} from './hotreload/dev-device.mjs';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
@@ -270,25 +274,42 @@ async function buildAot(cwd, explicit, outDir) {
   );
 }
 
-/** Flow A (default): bundle → QuickJS bytecode (via the prebuilt wasm) + baked assets → app.erpkg. */
+/**
+ * Flow A (default): bundle → QuickJS bytecode (via the prebuilt wasm) + baked assets → app.erpkg.
+ *
+ * The artifact is the vendor/app SPLIT: a vendor section (react + reconciler + the embedded-react lib,
+ * ~94% of the bytecode) plus an app section. The device runs the vendor first, then the app — and on a
+ * hot reload it keeps the resident vendor and swaps just the ~6% app section. The same firmware boots
+ * this for production and hot-reloads it. The loader still accepts a plain monolithic container, so older
+ * artifacts keep booting unchanged.
+ */
 async function buildContainer(cwd, explicit, outDir) {
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
+  const lib = libSrc();
+  const paths = nodePaths(cwd);
 
-  const {container, bytecodeLen, assetsLen} = await packAppContainer({
+  const vendor = await packVendor({libSrc: lib, nodePaths: paths, simDir});
+  const app = await packApp({
     entry,
     projectRoot: cwd,
-    libSrc: libSrc(),
-    nodePaths: nodePaths(cwd),
+    libSrc: lib,
+    nodePaths: paths,
     simDir,
+  });
+  const container = await emitBootContainer({
+    vendorBytecode: vendor.bytecode,
+    appBytecode: app.bytecode,
+    assetPack: app.assetPack,
   });
 
   const outPath = resolve(outDir, 'app.erpkg');
   writeFileSync(outPath, container);
   const kb = n => `${(n / 1024).toFixed(1)} KB`;
   console.log(
-    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QJS_TAG}, bytecode ${kb(bytecodeLen)}` +
-      (assetsLen ? `, assets ${kb(assetsLen)}` : '') +
+    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QJS_TAG}, ` +
+      `vendor ${kb(vendor.bytecodeLen)} + app ${kb(app.bytecodeLen)}` +
+      (app.assetsLen ? `, assets ${kb(app.assetsLen)}` : '') +
       ')',
   );
   console.log(

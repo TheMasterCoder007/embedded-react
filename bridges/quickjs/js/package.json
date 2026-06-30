@@ -76,6 +76,7 @@
     "test:watch": "vitest",
     "test:runtime": "node test/runtime/run.mjs",
     "test:bytecode": "node test/runtime/run.mjs --bytecode",
+    "test:split": "node test/runtime/split-roundtrip.mjs",
     "typecheck": "tsc -p tsconfig.types.json",
     "format": "cd ../../.. && prettier --write \"**/*.{js,jsx,mjs,cjs}\"",
     "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs}\""
