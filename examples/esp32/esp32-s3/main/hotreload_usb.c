@@ -18,6 +18,7 @@
 
 #include "er_hotreload.h"
 #include "er_runtime.h"
+#include "er_scene.h"
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_heap_caps.h"
@@ -199,9 +200,10 @@ void er_hotreload_usb_pump(void)
      * replaces it — no "Reloading…" panel. */
     const ErContainerStatus st = er_hotreload_apply(s_buf, len);
     ESP_LOGI(TAG,
-             "hot reload: %s (%u bytes; %u KB PSRAM free)",
+             "hot reload: %s (%u bytes; %u KB PSRAM free; %d nodes)",
              er_runtime_container_status_str(st),
              (unsigned)len,
-             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+             er_node_in_use_count());
     xSemaphoreGive(s_done_sem);
 }

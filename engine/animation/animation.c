@@ -868,6 +868,28 @@ void er_anim_reapply_bound(ERNode* node)
     }
 }
 
+void er_anim_unbind_node(uint16_t node_tag)
+{
+    /*
+     * Drop every animated-value binding that targets this node. Called from er_node_destroy so a destroyed
+     * node leaves nothing behind: its tag is pushed to the free list and handed to a future node, and a
+     * lingering binding would otherwise make the value push its float to that unrelated node — a
+     * native-driver animation writing to the wrong element.Mirrors er_anim_reapply_bound's walk; deactivating
+     * a binding is just a flag, no callback.
+     */
+    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    {
+        ERAnimValue* val = &s_anim_values[s];
+        if (!val->in_use)
+            continue;
+        for (int b = 0; b < val->binding_count; b++)
+        {
+            if (val->bindings[b].active && val->bindings[b].node_tag == node_tag)
+                val->bindings[b].active = false;
+        }
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — spring / decay tick helpers
  ---------------------------------------------------------------------------------------------------------------------*/

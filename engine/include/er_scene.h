@@ -811,6 +811,35 @@ extern "C"
     void er_node_destroy(ERNode* node);
 
     /**
+     * @brief Returns a node's first child, or NULL if it has none.
+     *
+     * For walking a subtree — e.g. the bridge recursively tears down a deleted subtree, since React
+     * passes only the subtree's top node to removeChild and the renderer owns destroying the rest.
+     *
+     * @param[in] node  Node to query (NULL → NULL).
+     * @return The first child, or NULL.
+     */
+    ERNode* er_node_first_child(const ERNode* node);
+
+    /**
+     * @brief Returns a node's next sibling, or NULL if it is the last child.
+     *
+     * @param[in] node  Node to query (NULL → NULL).
+     * @return The next sibling, or NULL.
+     */
+    ERNode* er_node_next_sibling(const ERNode* node);
+
+    /**
+     * @brief Returns the number of nodes currently in use (live scene nodes).
+     *
+     * A diagnostic for scene size and for spotting a node leak — e.g. it should return to a stable value
+     * after a hot reload tears down and rebuilds the tree, not climb each time.
+     *
+     * @return Count of in-use nodes in the pool.
+     */
+    int er_node_in_use_count(void);
+
+    /**
      * @brief Initialises an ERProps to its defaults, ready for the caller to set specific fields.
      *
      * ERProps is mostly zero-defaulted, but several fields have non-zero defaults that must be seeded

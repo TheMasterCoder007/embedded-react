@@ -1217,6 +1217,26 @@ ERNode* er_get_root_node(void)
     return er_get_node(s_root_tag);
 }
 
+int er_node_in_use_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
+        if (s_nodes[i].in_use)
+            n++;
+    return n;
+}
+
+ERNode* er_node_first_child(const ERNode* node)
+{
+    /* er_get_node returns NULL for ER_INVALID_TAG, so no-children resolves to NULL. */
+    return node ? er_get_node(node->first_child_tag) : NULL;
+}
+
+ERNode* er_node_next_sibling(const ERNode* node)
+{
+    return node ? er_get_node(node->next_sibling_tag) : NULL;
+}
+
 ERNode* er_node_create(ERNodeType type)
 {
     uint16_t tag;
@@ -1291,6 +1311,9 @@ void er_node_destroy(ERNode* node)
         er_vector_free(node->vector_slot);
         node->vector_slot = -1;
     }
+    /* Drop any animated-value bindings to this node — its tag is about to be recycled onto the free list,
+     * and a stale binding would drive whatever node next reuses it (see er_anim_unbind_node). */
+    er_anim_unbind_node(node->tag);
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */
