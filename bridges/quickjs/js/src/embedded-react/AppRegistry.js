@@ -25,6 +25,13 @@ import {createElement} from 'react';
 import {createRoot} from '../renderer.js';
 
 let registered = null;
+// The mounted root is created ONCE and reused on every subsequent registration. On a full reload, the
+// whole context is torn down and recreated, so this is recreated too (a fresh boot). But on an
+// incremental "soft" reload, only the app chunk is re-evaluated into the SAME context — this lib (and
+// therefore `root`) stays resident, so re-registering renders the new app into the existing root and
+// React reconciles old→new in place. Creating a new root each time would instead leak a fiber root per
+// reload and orphan the previous tree's effects.
+let root = null;
 
 export const AppRegistry = {
   /**
@@ -38,12 +45,13 @@ export const AppRegistry = {
   },
 
   /**
-   * Mounts the registered root component into a fresh screen-sized container.
+   * Mounts the registered root component into the screen-sized container, creating it on first use and
+   * reusing it thereafter (see `root` above).
    */
   runApplication(appKey) {
     if (!registered) return;
     if (appKey && appKey !== registered.appKey) return;
-    const root = createRoot({width: screen.width, height: screen.height});
+    if (!root) root = createRoot({width: screen.width, height: screen.height});
     root.render(createElement(registered.Component));
   },
 };

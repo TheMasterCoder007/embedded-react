@@ -490,7 +490,8 @@ const char* er_runtime_container_status_str(ErContainerStatus status)
     }
 }
 
-/** @brief Most sections a single container may hold (we use 2: bytecode + asset pack). */
+/** @brief Most sections a single container may hold (we use up to 3: app bytecode + asset pack + an
+ * optional vendor bytecode chunk for the incremental-hot-reload split). */
 #define ER_CONTAINER_MAX_SECTIONS 8u
 
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
@@ -572,23 +573,36 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
         return ER_CONTAINER_BAD_QJS;
     }
 
-    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts), then run
-     * the bytecode last regardless of section order. */
+    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts). Then run the
+     * vendor chunk (type 3) if present — it installs the module registry + require() shim the app resolves
+     * its imports through — and finally the app (type 1) last, regardless of section order. A container
+     * with no vendor section is a plain monolithic app and loads exactly as before. */
+    const uint8_t* vendor = NULL;
+    uint32_t vendor_len = 0;
     const uint8_t* bytecode = NULL;
     uint32_t bytecode_len = 0;
     for (uint32_t i = 0; i < nsec; i++)
     {
-        if (secs[i].type == 2u)
+        if (secs[i].type == 2u) /* SECTION_ASSET_PACK */
         {
             er_assets_load_pack_ex(secs[i].data, secs[i].len, copy_assets);
         }
-        else if (secs[i].type == 1u)
+        else if (secs[i].type == 1u) /* SECTION_BYTECODE (app) */
         {
             bytecode = secs[i].data;
             bytecode_len = secs[i].len;
         }
+        else if (secs[i].type == 3u) /* SECTION_VENDOR_BYTECODE */
+        {
+            vendor = secs[i].data;
+            vendor_len = secs[i].len;
+        }
     }
     if (!bytecode)
+    {
+        return ER_CONTAINER_LOAD_FAILED;
+    }
+    if (vendor && !er_runtime_load_bytecode(vendor, vendor_len))
     {
         return ER_CONTAINER_LOAD_FAILED;
     }
