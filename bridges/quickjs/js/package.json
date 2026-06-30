@@ -95,7 +95,6 @@
   "devDependencies": {
     "@types/react": "18.3.1",
     "prettier": "^3.4.2",
-    "react-refresh": "^0.14.2",
     "typescript": "^5.5.0",
     "vitest": "^3.2.4"
   },

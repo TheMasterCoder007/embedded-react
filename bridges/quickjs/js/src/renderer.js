@@ -25,19 +25,6 @@ import {NativeUI} from './native-ui.js';
 
 const reconciler = Reconciler(hostConfig);
 
-// Fast Refresh (dev only): when the app was built with the react-refresh transform, the dev vendor sets up
-// $RefreshReg$ + react-refresh/runtime's global hook before this module loads. Registering the reconciler
-// with that hook lets performReactRefresh find our roots and swap changed components in place. Gated on
-// $RefreshReg$ so production (no refresh transform) is untouched — injectIntoDevTools is never called there.
-if (typeof globalThis.$RefreshReg$ === 'function') {
-  reconciler.injectIntoDevTools({
-    bundleType: 1,
-    version: '18.3.1',
-    rendererPackageName: 'embedded-react',
-    findFiberByHostInstance: () => null,
-  });
-}
-
 const LegacyRoot = 0;
 
 /**

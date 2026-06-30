@@ -51,19 +51,7 @@ export const AppRegistry = {
   runApplication(appKey) {
     if (!registered) return;
     if (appKey && appKey !== registered.appKey) return;
-    if (!root) {
-      // First mount.
-      root = createRoot({width: screen.width, height: screen.height});
-      root.render(createElement(registered.Component));
-      return;
-    }
-    // Already mounted — this is a reload (the app chunk re-evaluated). With Fast Refresh, the changed
-    // component families have just re-registered; performReactRefresh (applied by the dev runtime once the
-    // app frame finishes evaluating) swaps them IN PLACE with state preserved. Re-rendering the root here
-    // would instead cold-remount the new function and throw that state away, so we don't. Without Fast
-    // Refresh, re-render into the reused root — the Phase 1 cold reload (state survives via usePersistentState).
-    if (typeof globalThis.$RefreshReg$ !== 'function') {
-      root.render(createElement(registered.Component));
-    }
+    if (!root) root = createRoot({width: screen.width, height: screen.height});
+    root.render(createElement(registered.Component));
   },
 };
