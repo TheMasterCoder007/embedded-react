@@ -16,7 +16,10 @@ artifact. See [README](README.md#releasing) for the release process.
   edits to a running board, which swaps in the new UI and logic live: no reflash, no reboot, no flicker.
   It's the simulator's edit-and-see-it loop on real hardware, and only your changed app code is sent, so
   reloads are quick and stay quick as your app grows. State written with `usePersistentState` survives the
-  reload. Production is unaffected — a release config boots the same way, from the same firmware.
+  reload. **Opt-in and dev-only — disabled by default**: the standard dev workflow is the web simulator
+  (`npx embedded-react dev`), and a board enables on-device reload by building its firmware with
+  `ER_HOTRELOAD=1` (e.g. `idf.py -DER_HOTRELOAD=1 build`). A default/release firmware carries none of the
+  receiver code, and boots the same way from the same partition layout.
 
 ## [0.5.3] - 2026-06-29
 ### Fixed

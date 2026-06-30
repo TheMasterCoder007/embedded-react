@@ -134,9 +134,17 @@ ever mismatches, the loader rejects it with a panel rather than running garbage.
 
 ## Hot reload over USB (live, no reflash)
 
-Once the firmware is flashed, you don't have to re-pack + `parttool.py` for every JS change. Point the
-dev loop at the board's **native USB-C port** and it streams a fresh config on every save; the firmware
-swaps it in **live** — the same edit-and-see-it experience as the WASM simulator, on the real panel.
+> **Opt-in, dev only — off by default.** The standard dev workflow is the **web simulator**
+> (`npx embedded-react dev`); on-device hot reload is for when you specifically want to iterate on the
+> real panel. The firmware does not carry the receiver unless you build it in: enable it with
+> `idf.py -DER_HOTRELOAD=1 build flash` (or flip the default in `main/CMakeLists.txt`). A release
+> firmware should be built **without** it. The rest of this section assumes a board flashed with
+> `ER_HOTRELOAD=1`.
+
+Once a hot-reload-enabled firmware is flashed, you don't have to re-pack + `parttool.py` for every JS
+change. Point the dev loop at the board's **native USB-C port** and it streams a fresh config on every
+save; the firmware swaps it in **live** — the same edit-and-see-it experience as the WASM simulator, on
+the real panel.
 
 This board has **two USB-C ports**: the **"UART" port** (a CH343 USB-UART bridge → UART0; use it for
 `idf.py flash`) and the **"USB" port** (the chip's native USB-Serial-JTAG on GPIO19/20; hot reload rides
@@ -149,21 +157,29 @@ ls /dev/cu.usbmodem*                   # two entries; the native USB one is the 
 npx embedded-react dev --device /dev/cu.usbmodemXXXX    # the native-USB port (COMx on Windows)
 ```
 
-Edit a `.jsx`/`.tsx`, save, and the **running UI stays on screen** while the new container streams, then
-swaps to the updated app — **~3 s** for the ~1.2 MB thermostat (smaller apps are quicker), no reboot, no
-blank "Reloading…" flicker. Component state written with `usePersistentState` (and plain `useState`, which
-this dev mode rewrites to persist) survives the reload. The dev loop also prints the device's own logs
-(prefixed `▸`) over the same native-USB port.
+Edit a `.jsx`/`.tsx`, save, and the **running UI stays on screen** while the new app streams in, then
+swaps to the updated version. No reboot, no blank "Reloading…" flicker.
+Only your **changed app code** rides the wire: the framework half (react + reconciler + the lib, ~1 MB)
+stays resident on the board, so each frame is just the app slice and reloads
+stay quick as your app grows. Component state written with `usePersistentState` (and plain `useState`,
+which this dev mode rewrites to persist) survives the reload. The dev loop also prints the device's own
+logs (prefixed `▸`) over the same native-USB port.
 
-How it works: the host wraps each `.erpkg` in a tiny `ERHR` transport frame (magic + length + CRC) and
-writes it to the native USB-Serial-JTAG. A background task (`main/hotreload_usb.c`) reads the bytes into
-the portable parser (`er_hotreload.c`) — into one staging buffer, while the old app keeps running. On a
-complete, CRC-valid frame the frame loop applies it (`er_hotreload_apply` → `er_runtime_reset` +
-`er_runtime_load_container_ex(copy=true)`). The `copy=true` is the trick: the new app's assets are copied
-into their own block (and bytecode into the JS heap), so nothing references the staging buffer afterward —
-which is what lets the receiver reuse it for the next upload *without* tearing the old app down first. A
-corrupt upload is simply rejected and never disturbs the running app. Compile the whole feature out with
-`ER_HOTRELOAD=0` (in `main/CMakeLists.txt`).
+How it works: the boot container is split into a **vendor** section (react + reconciler + lib bytecode,
+run first) and a tiny **app** section (your bytecode + assets, run last) — see the `embedded-react build`
+output (`vendor … + app …`). The vendor half is stable across edits, so the dev loop only ships the app:
+the host wraps each app-only `.erpkg` in a tiny `ERHR` transport frame (magic + length + CRC) and writes
+it to the native USB-Serial-JTAG. A background task (`main/hotreload_usb.c`) reads the bytes into the
+portable parser (`er_hotreload.c`) — into one staging buffer, while the old app keeps running. On a
+complete, CRC-valid frame the frame loop applies it (`er_hotreload_apply`). Because the frame carries **no
+vendor section**, the runtime takes the **soft path**: it skips the full context teardown
+(`er_runtime_reset`) and re-evaluates only the app into the resident context, where `AppRegistry` re-renders
+into its persistent root and React reconciles old→new in place (a frame *with* a vendor section still does
+the full reset — that's how a release boot loads). Assets are copied on load (`copy=true`), so nothing
+references the staging buffer afterward — which is what lets the receiver reuse it for the next upload
+*without* tearing the old app down first. A corrupt upload is simply rejected and never disturbs the
+running app. The whole feature is compiled out unless you opt in with `ER_HOTRELOAD=1` (see the note at
+the top of this section); a default build carries none of it.
 
 Two board-specific bits make the native USB work (both already wired up here):
 - **Console on USB-Serial-JTAG** (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, sdkconfig.defaults). The native
@@ -175,11 +191,12 @@ Two board-specific bits make the native USB work (both already wired up here):
   makes it look like native USB "isn't wired."
 
 Notes / limits:
-- **Single staging buffer, assets copied on load.** One ~1.3 MB buffer (not double-buffered) keeps the JS
-  heap room on this board. Because the load copies the asset pack (~the app's image/font bytes — small) 
-  into its own block, the running app never references the buffer, so there's no teardown
-  and no flicker. This copy is **opt-in and hot-reload-only**: production boot (`er_runtime_load_container`)
-  still references assets in place from mmap'd flash at zero RAM cost — unchanged.
+- **Single staging buffer, assets copied on load.** One staging buffer (not double-buffered) holds the
+  incoming frame — sized for the boot container, though hot-reload frames are far smaller.
+  Because the load copies the asset pack (~the app's image/font bytes — small) into its own block, the
+  running app never references the buffer, so there's no teardown and no flicker. This copy is **opt-in and
+  hot-reload-only**: production boot (`er_runtime_load_container`) still references assets in place from
+  mmap'd flash at zero RAM cost — unchanged.
 - **Dev loop only.** Hot reload is for development; ship a release by packing once and flashing the
   `config` partition (above).
 
@@ -242,8 +259,6 @@ as fast as the work allows. It always blocks at least one tick so the idle task 
 2. Factoring `board.c` into a reusable BSP so other ESP32 boards can drop in.
 
 3. ~~On-device config upload over USB + reload~~ — **done** (see [Hot reload over USB](#hot-reload-over-usb-live-no-reflash)).
-   Possible follow-ups: also persist a hot-reloaded config to the `config` partition so it survives a
-   reboot, and a dedicated USB-CDC channel (TinyUSB composite) so uploads don't share the log console.
 
 (Images and custom fonts ride inside the config container — `npm run pack` bakes the demo's imported
 assets into the `.erpkg`. See the

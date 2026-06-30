@@ -23,10 +23,13 @@ idf_component_register(
 # the panel. Set here too so the host wiring is enabled regardless of requirement propagation order.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=1)
 
-# On-device hot reload over USB-Serial-JTAG: `embedded-react dev --device <port>` streams a
-# fresh app.erpkg on every save and the frame loop swaps it in live. Set ER_HOTRELOAD=0 to compile it
-# out (the firmware then only runs the config flashed to the 'config' partition).
-target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=1)
+# On-device hot reload over USB-Serial-JTAG (DEV ONLY) — `embedded-react dev --device <port>` streams a
+# fresh app.erpkg on every save and the frame loop swaps it in live. OFF by default: the standard dev
+# workflow is the web simulator (`npx embedded-react dev`), and a release firmware should not carry the
+# receiver. Opt a board in at build time with `idf.py -DER_HOTRELOAD=1 build` (or flip the default below).
+# When off, the firmware only runs the config flashed to the 'config' partition.
+option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOTRELOAD}>)
 
 # Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. Change this for a differently-mounted panel;
 # 0 (the default) is the fast path (a plain framebuffer copy at present). 90/270 give a portrait UI on

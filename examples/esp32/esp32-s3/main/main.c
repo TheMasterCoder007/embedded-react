@@ -111,13 +111,14 @@ static void remap_touch(int* x, int* y)
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
 
-/* On-device hot reload over USB-Serial-JTAG. Default on; set ER_HOTRELOAD=0 (CMakeLists) to compile it
- * out. ER_HOTRELOAD_MAX_BYTES sizes the single PSRAM staging buffer — the largest hot-reload frame the
- * device accepts in one upload. With the vendor/app split, an edit ships only the APP frame (app bytecode
- * + its assets). A vendor change (rare — a new dependency) is delivered by re-flashing the config partition,
- * not over hot reload. Raise this only if an app's bytecode + assets outgrow it. */
+/* On-device hot reload over USB-Serial-JTAG. DEV-ONLY and OFF by default — the standard dev workflow is
+ * the web simulator (`npx embedded-react dev`); a project opts a board in by building with ER_HOTRELOAD=1
+ * (see CMakeLists). ER_HOTRELOAD_MAX_BYTES sizes the single PSRAM staging buffer — the largest hot-reload
+ * frame the device accepts in one upload. With the vendor/app split, an edit ships only the APP frame (app
+ * bytecode + its assets). A vendor change (rare — a new dependency) is delivered by re-flashing the config
+ * partition, not over hot reload. Raise this only if an app's bytecode + assets outgrow it. */
 #ifndef ER_HOTRELOAD
-#define ER_HOTRELOAD 1
+#define ER_HOTRELOAD 0
 #endif
 #ifndef ER_HOTRELOAD_MAX_BYTES
 #define ER_HOTRELOAD_MAX_BYTES (512 * 1024)
