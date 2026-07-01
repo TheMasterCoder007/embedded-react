@@ -21,10 +21,10 @@
 // come back. The firmware swaps the new config in live — no reflash, no reboot. State written with
 // usePersistentState (or plain useState in this dev mode) survives the reload, like the simulator.
 
-import {watch} from 'node:fs';
 import {relative} from 'node:path';
 import {packApp, emitAppFrame} from './pack-split.mjs';
 import {SerialUploader, listSerialPorts} from './uploader.mjs';
+import {watchTree} from './watch-tree.mjs';
 
 const kb = n => `${(n / 1024).toFixed(1)} KB`;
 
@@ -245,15 +245,9 @@ export async function runDeviceDevServer({
     onChange();
   };
 
-  let watcher;
-  try {
-    watcher = watch(projectRoot, {recursive: true}, onWatchEvent);
-  } catch {
-    console.warn(
-      'note: recursive fs.watch is not supported on this platform; watching only the project root',
-    );
-    watcher = watch(projectRoot, {}, onWatchEvent);
-  }
+  // Recursively watch the project so edits under src/** push too — on every platform, including ones
+  // where fs.watch's native {recursive:true} isn't available (older Linux/Node).
+  const watcher = watchTree(projectRoot, onWatchEvent);
 
   const shutdown = async () => {
     closing = true;
