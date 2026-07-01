@@ -57,7 +57,7 @@ if(EXISTS "${_er_local}/engine/include/er_scene.h")
 else()
     FetchContent_Declare(embedded_react
         GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-        GIT_TAG        v0.5.3
+        GIT_TAG        v0.6.0
         GIT_SHALLOW    TRUE
         SOURCE_SUBDIR  _skip_cmake_
     )
