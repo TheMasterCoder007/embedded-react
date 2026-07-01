@@ -148,3 +148,53 @@ export async function listSerialPorts() {
     return [];
   }
 }
+
+// The ESP32-S3/C3 built-in USB-Serial-JTAG enumerates with this fixed USB VID:PID, baked into the chip's
+// ROM independently of the board vendor — so it's a stable signal for auto-detecting the hot-reload port.
+// (The CH34x/CP210x/FTDI UART bridge used for *flashing* has a different id, e.g. 1a86:xxxx for WCH.)
+export const ESP_USB_JTAG_VID = '303a';
+export const ESP_USB_JTAG_PID = '1001';
+
+const hex = v => (v == null ? '' : String(v).toLowerCase());
+
+/** True if a `SerialPort.list()` entry is an ESP32-S3/C3 native USB-Serial-JTAG port. */
+export function isEspJtagPort(p) {
+  return (
+    hex(p?.vendorId) === ESP_USB_JTAG_VID &&
+    hex(p?.productId) === ESP_USB_JTAG_PID
+  );
+}
+
+/**
+ * On macOS a USB serial device appears as both `/dev/tty.*` (dial-in, blocks until carrier-detect) and
+ * `/dev/cu.*` (call-out, the one to use for an outgoing link). `SerialPort.list()` reports the tty.* side;
+ * map it to cu.* on darwin so an auto-detected port opens without hanging. No-op elsewhere.
+ */
+export function preferCalloutPath(path) {
+  if (process.platform === 'darwin' && path && path.startsWith('/dev/tty.')) {
+    return `/dev/cu.${path.slice('/dev/tty.'.length)}`;
+  }
+  return path;
+}
+
+/**
+ * Enumerate serial ports and pick out the ESP32 USB-Serial-JTAG candidates for auto-detecting `--device`.
+ * Distinguishes "serialport not installed" from "installed but nothing matched" so the CLI can advise.
+ *
+ * @returns {Promise<{matches: object[], all: object[], serialportMissing: boolean}>}
+ */
+export async function detectDevicePorts() {
+  let SerialPort;
+  try {
+    ({SerialPort} = await import('serialport'));
+  } catch {
+    return {matches: [], all: [], serialportMissing: true};
+  }
+  let all = [];
+  try {
+    all = await SerialPort.list();
+  } catch {
+    all = [];
+  }
+  return {matches: all.filter(isEspJtagPort), all, serialportMissing: false};
+}

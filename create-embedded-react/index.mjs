@@ -49,13 +49,17 @@ const wantsHelp = flags.some(a => a === '-h' || a === '--help');
 
 if (!wantsHelp) {
   const KNOWN_FLAGS = new Set(['--ts', '--typescript']);
-  const unknown = flags.filter(f => f !== '-h' && f !== '--help' && !KNOWN_FLAGS.has(f));
+  const unknown = flags.filter(
+    f => f !== '-h' && f !== '--help' && !KNOWN_FLAGS.has(f),
+  );
   if (unknown.length) {
     console.error(`Unknown option(s): ${unknown.join(', ')}`);
     process.exit(1);
   }
   if (positional.length > 1) {
-    console.error(`Expected a single <project-name>, got: ${positional.join(', ')}`);
+    console.error(
+      `Expected a single <project-name>, got: ${positional.join(', ')}`,
+    );
     process.exit(1);
   }
 }
@@ -116,5 +120,9 @@ console.log('Next steps:');
 if (where !== '.') console.log(`  cd ${where}`);
 console.log('  npm install');
 console.log(
-  '  npm run dev        # WASM simulator with hot reload → http://localhost:3333\n',
+  '  npm run dev         # WASM simulator with hot reload → http://localhost:3333',
+);
+console.log('  npm run dev:device  # or hot reload on a real board over USB');
+console.log(
+  '                      #   port auto-detected on ESP32-S3/C3; other boards: npm run dev:device -- <port>\n',
 );

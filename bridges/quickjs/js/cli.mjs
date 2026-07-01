@@ -40,6 +40,7 @@ import {
   emitBootContainer,
 } from './hotreload/pack-split.mjs';
 import {runDeviceDevServer} from './hotreload/dev-device.mjs';
+import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mjs';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -53,8 +54,9 @@ function usage() {
 
 Usage:
   embedded-react dev [entry] [--port <n>]      Run the WASM simulator with hot reload
-  embedded-react dev [entry] --device <port>   Hot-reload on a real board over USB (Flow A): re-pack
-                                                 the app and stream it on every save
+  embedded-react dev [entry] --device [port]   Hot-reload on a real board over USB (Flow A): re-pack
+                                                 the app and stream it on every save. Omit <port> (or
+                                                 pass 'auto') to auto-detect the ESP32 USB-Serial-JTAG.
   embedded-react export [entry] [--out <dir>]  Build a self-contained static playground (no server)
   embedded-react build [entry] [--out <dir>]   Build the device artifact:
                                                  default → app.erpkg (Flow A: QuickJS bytecode + assets,
@@ -144,33 +146,144 @@ function optValue(args, flag) {
   return {value, idx, valueIdx: idx + 1};
 }
 
+/** Like optValue, but the value is OPTIONAL: `--flag` alone → {value: null}; `--flag x` → {value: 'x'}. */
+function optFlagMaybeValue(args, flag) {
+  const idx = args.indexOf(flag);
+  if (idx < 0) return null;
+  const next = args[idx + 1];
+  const hasValue = next != null && !next.startsWith('--');
+  return {
+    value: hasValue ? next : null,
+    idx,
+    valueIdx: hasValue ? idx + 1 : -1,
+  };
+}
+
+/** A token that names a serial port rather than an app entry file (so `--device App.jsx` isn't a port). */
+const looksLikeDevicePath = s =>
+  /^(\/dev\/|com\d|\\\\\.\\)/i.test(s) ||
+  /(tty|usbmodem|usbserial|cu\.)/i.test(s);
+
+/**
+ * Resolve the `--device` port. An explicit path is the universal, board-agnostic mechanism (any serial
+ * port, any board). With no path we auto-detect — but only the ESP32-S3/C3 built-in USB-Serial-JTAG has a
+ * fixed USB id to match on, so auto-detect is ESP32-only (at least for now); other boards fall through to the
+ * explicit path. Prints an actionable message and exits when the serialport is missing, nothing matches, or
+ * it's ambiguous.
+ */
+async function resolveDevicePortOrExit(explicit) {
+  if (explicit && explicit !== 'auto') return preferCalloutPath(explicit);
+
+  const {matches, all, serialportMissing} = await detectDevicePorts();
+  if (serialportMissing) {
+    console.error(
+      "✗ on-device hot reload needs the 'serialport' package.\n" +
+        '  Install it in your project:  npm i serialport',
+    );
+    process.exit(1);
+  }
+  if (matches.length === 1) {
+    const p = matches[0];
+    const path = preferCalloutPath(p.path);
+    console.log(
+      `✓ auto-detected ESP32 USB-Serial-JTAG at ${path}` +
+        (p.serialNumber ? `  (SN ${p.serialNumber})` : ''),
+    );
+    return path;
+  }
+  if (matches.length === 0) {
+    console.error("✗ couldn't auto-detect a board to hot-reload.");
+    console.error(
+      '  Auto-detect only covers the ESP32-S3/C3 built-in USB-Serial-JTAG (USB 303a:1001) — the one',
+    );
+    console.error(
+      '  board with a fixed USB id. For any other board (STM32, RP2040, …) pass the port explicitly:',
+    );
+    console.error('      embedded-react dev --device <port>');
+    if (all.length) {
+      console.error('\n  Serial ports seen (pick yours):');
+      for (const p of all)
+        console.error(
+          `   ${p.path}` +
+            (p.vendorId && p.productId
+              ? `  [${p.vendorId}:${p.productId}]`
+              : '') +
+            (p.manufacturer ? `  ${p.manufacturer}` : ''),
+        );
+    } else {
+      console.error(
+        '\n  (no serial ports detected at all — is anything connected? is the cable data-capable?)',
+      );
+    }
+    console.error(
+      '\n  On an ESP32, if auto-detect should have worked: use its NATIVE USB port (not the flashing UART),',
+    );
+    console.error(
+      '  and make sure the firmware has on-device hot reload enabled.',
+    );
+    process.exit(1);
+  }
+  console.error(
+    `✗ found ${matches.length} ESP32 USB-Serial-JTAG ports; pass one explicitly with --device <port>:`,
+  );
+  for (const p of matches)
+    console.error(
+      `   ${preferCalloutPath(p.path)}${p.serialNumber ? `  (SN ${p.serialNumber})` : ''}`,
+    );
+  process.exit(1);
+}
+
 async function dev(args) {
   const cwd = process.cwd();
-  const portOpt = optValue(args, '--port');
-  const deviceOpt = optValue(args, '--device');
-  // The first non-flag arg that isn't a flag's value is the entry override.
-  const consumed = new Set(
-    [portOpt, deviceOpt].filter(Boolean).flatMap(o => [o.idx, o.valueIdx]),
-  );
-  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
+  const deviceOpt = optFlagMaybeValue(args, '--device');
 
-  const simDir = simDirOrExit();
-  const entry = resolveEntry(cwd, explicit);
-
-  // --device <port> → stream the app to a real board over USB on every save (on-device hot reload).
-  // Otherwise → the WASM simulator in the browser.
+  // --device [port] → stream the app to a real board over USB on every save (on-device hot reload).
+  // With no port (or `auto`), the ESP32 USB-Serial-JTAG is auto-detected. Otherwise → the WASM simulator.
   if (deviceOpt) {
+    // The token-after --device is normally the port. But `--device App.jsx` means "auto-detect + this
+    // entry": if the value names an existing file (and isn't a device path), treat it as the entry.
+    let deviceValue = deviceOpt.value;
+    let entryFromDeviceSlot = null;
+    if (
+      deviceValue &&
+      deviceValue !== 'auto' &&
+      !looksLikeDevicePath(deviceValue) &&
+      existsSync(resolve(cwd, deviceValue))
+    ) {
+      entryFromDeviceSlot = deviceValue;
+      deviceValue = null; // fall through to auto-detect
+    }
+    const explicit =
+      entryFromDeviceSlot ??
+      args.find(
+        (a, i) =>
+          !a.startsWith('--') &&
+          i !== deviceOpt.idx &&
+          i !== deviceOpt.valueIdx,
+      );
+
+    const simDir = simDirOrExit();
+    const entry = resolveEntry(cwd, explicit);
+    const device = await resolveDevicePortOrExit(deviceValue);
+
     await runDeviceDevServer({
       entry,
       projectRoot: cwd,
       libSrc: libSrc(),
       nodePaths: nodePaths(cwd),
       simDir,
-      device: deviceOpt.value,
+      device,
       label: entry,
     });
     return;
   }
+
+  const portOpt = optValue(args, '--port');
+  const consumed = new Set(portOpt ? [portOpt.idx, portOpt.valueIdx] : []);
+  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
+
+  const simDir = simDirOrExit();
+  const entry = resolveEntry(cwd, explicit);
 
   const port = portOpt ? parseInt(portOpt.value, 10) : 3333;
   const outDir = resolve(tmpdir(), 'embedded-react-sim');

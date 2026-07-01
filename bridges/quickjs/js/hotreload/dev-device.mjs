@@ -63,8 +63,18 @@ export async function runDeviceDevServer({
   // We watch for it to gate the next send (so a second push can't land while the device is still
   // applying — which would overrun its RX buffer and corrupt that frame) and to resend after a drop.
   let settleOutcome = null;
+  // Track whether the board is alive at all (any log line) and whether a hot-reload RECEIVER is actually
+  // running (it prints a "hot reload: …" or "dropped frame: …" line per frame). Firmware built WITHOUT
+  // ER_HOTRELOAD still prints normal logs but never those — that's how we flag a disabled build below.
+  let sawAnyLog = false;
+  let sawReceiverAck = false;
+  let closing = false; // set on Ctrl-C so we don't surface errors from a write canceled by the shutdown
   const onDeviceLog = line => {
+    if (closing) return;
+    sawAnyLog = true;
     console.log(`  ▸ ${line}`);
+    if (/dropped frame/i.test(line) || /hot reload:/i.test(line))
+      sawReceiverAck = true;
     if (!settleOutcome) return;
     if (/dropped frame/i.test(line)) settleOutcome('dropped');
     else if (/hot reload:\s*ok\b/i.test(line)) settleOutcome('ok');
@@ -97,11 +107,12 @@ export async function runDeviceDevServer({
   );
 
   const APPLY_TIMEOUT_MS = 15000; // a normal reload settles in ~3-4 s; this only catches a stuck device
+  const PROBE_TIMEOUT_MS = 8000; // initial push: shorter, so a hot-reload-disabled board is flagged fast
   const MAX_RESENDS = 2;
 
   /** Resolves with the device's terminal status ('ok' | 'rejected' | 'dropped' | 'timeout') for the
    * push currently in flight. */
-  const nextOutcome = () =>
+  const nextOutcome = (timeoutMs = APPLY_TIMEOUT_MS) =>
     new Promise(resolve => {
       let done = false;
       const finish = r => {
@@ -111,24 +122,38 @@ export async function runDeviceDevServer({
         clearTimeout(timer);
         resolve(r);
       };
-      const timer = setTimeout(() => finish('timeout'), APPLY_TIMEOUT_MS);
+      const timer = setTimeout(() => finish('timeout'), timeoutMs);
       settleOutcome = finish; // armed before the send so the terminal log can't be missed
     });
 
   /** Send a container and wait for the device to apply it, resending on a transport drop/timeout. */
-  const sendAndConfirm = async container => {
+  const sendAndConfirm = async (
+    container,
+    {
+      timeoutMs = APPLY_TIMEOUT_MS,
+      maxResends = MAX_RESENDS,
+      probe = false,
+    } = {},
+  ) => {
     for (let attempt = 0; ; attempt++) {
-      const outcome = nextOutcome();
-      await uploader.send(container);
+      const outcome = nextOutcome(timeoutMs);
+      uploader.send(container).catch(err => {
+        if (closing) return;
+        if (settleOutcome) settleOutcome('senderr');
+        else console.error(`✗ send failed: ${err.message}`);
+      });
       const result = await outcome;
       if (result === 'ok' || result === 'rejected') return result;
-      if (attempt >= MAX_RESENDS) {
+      // On the initial probe, a timeout / write stall means nothing is consuming frames — don't spin.
+      if (probe && (result === 'timeout' || result === 'senderr'))
+        return result;
+      if (attempt >= maxResends) {
         console.error(
           `✗ reload ${result} after ${attempt + 1} attempts — save again to retry`,
         );
         return result;
       }
-      console.log(`↻ ${result}; resending (${attempt + 1}/${MAX_RESENDS})…`);
+      console.log(`↻ ${result}; resending (${attempt + 1}/${maxResends})…`);
     }
   };
 
@@ -136,13 +161,14 @@ export async function runDeviceDevServer({
   // we rebuild and resend the latest source once the current reload settles — pushes never overlap.
   let inFlight = false;
   let queued = false;
-  const reloadCycle = async () => {
+  const reloadCycle = async ({probe = false} = {}) => {
     if (inFlight) {
       queued = true;
       return;
     }
     inFlight = true;
     try {
+      let firstSend = probe; // the probe timeout applies to the initial push only
       do {
         queued = false;
         const started = Date.now();
@@ -166,7 +192,11 @@ export async function runDeviceDevServer({
           console.error(`✗ build failed: ${e.message}`);
           continue;
         }
-        const result = await sendAndConfirm(container);
+        const result = await sendAndConfirm(
+          container,
+          firstSend ? {timeoutMs: PROBE_TIMEOUT_MS, probe: true} : {},
+        );
+        firstSend = false;
         if (result === 'ok') {
           console.log(
             `↻ reloaded app ${kb(container.length)} (bytecode ${kb(bytecodeLen)}` +
@@ -180,8 +210,31 @@ export async function runDeviceDevServer({
     }
   };
 
-  // Initial push so the device shows the current app immediately.
-  await reloadCycle();
+  // Before flooding the port with a frame, give the board a moment to prove it's alive (one log line is
+  // enough). Flooding a firmware that never drains its RX can congest the link, so we sample liveness
+  // first — this is also what tells "hot reload disabled" apart from "dead/wrong port" if no ack comes.
+  for (let i = 0; i < 30 && !sawAnyLog; i++)
+    await new Promise(r => setTimeout(r, 100));
+
+  await reloadCycle({probe: true});
+  if (!sawReceiverAck) {
+    console.warn('');
+    console.warn('⚠ the board never acknowledged the hot-reload frame.');
+    if (sawAnyLog) {
+      console.warn(
+        '  It IS sending logs, so the port is right — but nothing is consuming reload frames.',
+      );
+      console.warn(
+        "  Its firmware likely doesn't have the on-device hot-reload receiver enabled.",
+      );
+    } else {
+      console.warn(
+        '  No logs are coming back either — check the USB cable/port, and that the app is running.',
+      );
+    }
+    console.warn('  (still watching — fix it and save again to retry)');
+    console.warn('');
+  }
 
   const onChange = debounce(reloadCycle, 120);
   const onWatchEvent = (_event, file) => {
@@ -203,6 +256,7 @@ export async function runDeviceDevServer({
   }
 
   const shutdown = async () => {
+    closing = true;
     watcher.close();
     await uploader.close();
     process.exit(0);

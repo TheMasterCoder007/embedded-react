@@ -7,11 +7,17 @@ A new [embedded-react](https://github.com/TheMasterCoder007/embedded-react) app 
 ```bash
 npm install
 npm run dev          # WASM simulator with hot reload → http://localhost:3333
+npm run dev:device   # hot reload on a real board over USB (pass in -- <port> for non ESP32 devices) 
 npm run typecheck    # tsc --noEmit
 ```
 
 Edit `App.tsx` and save — the simulator hot-reloads and your `useState` is preserved. The canvas fills the
 viewport, so the browser's device toolbar drives the board size (e.g., 240×320), pixel-accurate to a panel.
+
+`npm run dev:device` streams the same edits to a connected board instead of the browser. The port is
+**auto-detected for ESP32-S3/C3 boards** (they have a fixed USB id); for any other board — STM32, RP2040,
+etc. — pass it explicitly: `npm run dev:device -- <port>`. Either way the board's firmware must have
+on-device hot reload enabled.
 
 ## Share
 

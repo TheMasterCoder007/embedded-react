@@ -12,14 +12,14 @@ artifact. See [README](README.md#releasing) for the release process.
 ## [Unreleased]
 ### Added
 
-- **On-device hot reload over USB (Flow A)** — `embedded-react dev --device <port>` pushes your saved
-  edits to a running board, which swaps in the new UI and logic live: no reflash, no reboot, no flicker.
-  It's the simulator's edit-and-see-it loop on real hardware, and only your changed app code is sent, so
-  reloads are quick and stay quick as your app grows. State written with `usePersistentState` survives the
-  reload. **Opt-in and dev-only — disabled by default**: the standard dev workflow is the web simulator
-  (`npx embedded-react dev`), and a board enables on-device reload by building its firmware with
-  `ER_HOTRELOAD=1` (e.g. `idf.py -DER_HOTRELOAD=1 build`). A default/release firmware carries none of the
-  receiver code, and boots the same way from the same partition layout.
+- **On-device hot reload over USB** — `embedded-react dev --device` streams your saved edits to a running
+  board and swaps them in live (no reflash, no reboot, no flicker), with `usePersistentState` preserved
+  across reloads. Dev-only and opt-in: it's off by default, the web simulator stays the standard dev
+  workflow, and release firmware is unaffected.
+- **Automatic device detection** — `--device` works with no port given: ESP32-S3/C3 boards (which have a
+  fixed USB id) are found automatically, while any other board takes an explicit `--device <port>`. New apps
+  from `create-embedded-react` include an `npm run dev:device` script. When it can't connect — no board, a
+  missing dependency, or firmware without hot reload enabled — the dev loop explains why instead of hanging.
 
 ## [0.5.3] - 2026-06-29
 ### Fixed

@@ -153,9 +153,15 @@ this one — it's fast). Plug in **both**:
 ```bash
 # from your app project (or `cd bridges/quickjs/js` in-tree)
 npm i serialport                       # one-time: optional native dep, only needed for device upload
-ls /dev/cu.usbmodem*                   # two entries; the native USB one is the "USB JTAG/serial debug unit"
-npx embedded-react dev --device /dev/cu.usbmodemXXXX    # the native-USB port (COMx on Windows)
+npx embedded-react dev --device        # auto-detects the ESP32 USB-Serial-JTAG (USB 303a:1001)
+# …or pin it explicitly:  npx embedded-react dev --device /dev/cu.usbmodemXXXX   (COMx on Windows)
 ```
+
+`--device` with no port auto-detects the board by its fixed USB VID:PID, so you don't have to hunt for the
+right `usbmodem` (the CH343 flashing port and the native-USB port look alike). A `create-embedded-react`
+app ships an `npm run dev:device` script that wraps this. If the board isn't found, or you point it at 
+firmware built **without** hot reload, the dev loop says so (no device connected → check the cable/native
+port; connected but no reload ack → rebuild with `-DER_HOTRELOAD=1`) instead of hanging.
 
 Edit a `.jsx`/`.tsx`, save, and the **running UI stays on screen** while the new app streams in, then
 swaps to the updated version. No reboot, no blank "Reloading…" flicker.

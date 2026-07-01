@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "embedded-react dev",
+    "dev:device": "embedded-react dev --device",
     "export": "embedded-react export --out sim-export",
     "build": "embedded-react build",
     "typecheck": "tsc --noEmit"
