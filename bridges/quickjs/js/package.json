@@ -45,6 +45,7 @@
     "src/",
     "aot/",
     "assets/",
+    "hotreload/",
     "build.mjs",
     "pack-container.mjs",
     "persist-transform.mjs",
@@ -75,6 +76,7 @@
     "test:watch": "vitest",
     "test:runtime": "node test/runtime/run.mjs",
     "test:bytecode": "node test/runtime/run.mjs --bytecode",
+    "test:split": "node test/runtime/split-roundtrip.mjs",
     "typecheck": "tsc -p tsconfig.types.json",
     "format": "cd ../../.. && prettier --write \"**/*.{js,jsx,mjs,cjs}\"",
     "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs}\""
@@ -95,6 +97,9 @@
     "prettier": "^3.4.2",
     "typescript": "^5.5.0",
     "vitest": "^3.2.4"
+  },
+  "optionalDependencies": {
+    "serialport": "^12.0.0"
   },
   "overrides": {
     "esbuild": "^0.28.1"

@@ -120,6 +120,40 @@ typedef enum
  */
 ErContainerStatus er_runtime_load_container(const void* buf, size_t len);
 
+/**
+ * @brief Like er_runtime_load_container, but optionally copies the asset pack so @p buf need not stay live.
+ *
+ * Same as er_runtime_load_container when @p copy_assets is false (the bytes are referenced in place — use
+ * that for a config mmap'd from flash or a kept file buffer; it costs no RAM for the asset pixels). Pass
+ * true when @p buf is VOLATILE — a hot-reload staging buffer you want to reuse for the next upload: the
+ * asset pack is copied into a persistent (reused) block and the engine is pointed at the copy, so @p buf
+ * is free the moment this returns. The bytecode is always consumed in place during the call, so it never
+ * needs to outlive it either way.
+ *
+ * @param[in] buf          Container bytes (ERCF).
+ * @param[in] len          Buffer length, or an upper bound.
+ * @param[in] copy_assets  true → own the asset bytes (volatile source); false → reference in place.
+ *
+ * @return ER_CONTAINER_OK, or a specific failure the caller can log/show.
+ */
+ErContainerStatus er_runtime_load_container_ex(const void* buf, size_t len, bool copy_assets);
+
+/**
+ * @brief Reports whether a container carries a vendor bytecode section (the framework half of the
+ *        incremental-hot-reload split).
+ *
+ * A structural-only scan (no CRC/version check) used to choose a reload strategy: a container WITH a
+ * vendor section is a full boot/reload (reset first, then load); one WITHOUT is an app-only frame that
+ * reloads incrementally against the resident vendor (load with no reset — see er_hotreload_apply). Safe on
+ * malformed input (returns false); the real validation happens in er_runtime_load_container.
+ *
+ * @param[in] buf  Container bytes (ERCF).
+ * @param[in] len  Buffer length, or an upper bound.
+ *
+ * @return true if a vendor section is present, false otherwise (including not-a-container).
+ */
+bool er_runtime_container_has_vendor(const void* buf, size_t len);
+
 /** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
 const char* er_runtime_container_status_str(ErContainerStatus status);
 

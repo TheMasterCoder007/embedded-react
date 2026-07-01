@@ -768,6 +768,47 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * STALE BINDING ON DESTROY: a binding to a destroyed node must not survive
+     * to drive a DIFFERENT node that later reuses the freed tag. The node pool
+     * recycles tags via a free list, so without clearing bindings in
+     * er_node_destroy a value would push its float onto whatever new node lands
+     * on the old tag — the corruption a hot-reload soft swap (tear down + rebuild
+     * the tree in a live context) would otherwise hit. (Regression.)
+     * ---------------------------------------------------------------------- */
+    {
+        ERAnimValueHandle bh = er_anim_value_create(0.0f);
+        if (bh == ER_ANIM_VALUE_INVALID)
+            return fail("stale_bind: er_anim_value_create returned INVALID");
+
+        ERNode* gone = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 10;
+        gp.height = 10;
+        er_node_set_props(gone, &gp);
+        const uint16_t recycled_tag = gone->tag;
+
+        er_anim_value_bind(bh, gone, ER_PROP_TRANSLATE_X);
+        er_node_destroy(gone); /* must drop the binding to `gone` */
+
+        /* The pool hands the freed tag back to the next node (LIFO free list). */
+        ERNode* fresh = er_node_create(ER_NODE_VIEW);
+        if (fresh->tag != recycled_tag)
+            return fail("stale_bind: precondition — freed tag was not recycled");
+        ERProps fp = props_default();
+        fp.width = 10;
+        fp.height = 10;
+        er_node_set_props(fresh, &fp);
+
+        /* Drive the value. A surviving binding would push 99 onto `fresh`. */
+        er_anim_value_set(bh, 99.0f);
+        if (fresh->tp_translate_x > 0.1f || fresh->tp_translate_x < -0.1f)
+            return fail("stale_bind: binding to a destroyed node drove the node that reused its tag");
+
+        er_anim_value_destroy(bh);
+        er_node_destroy(fresh);
+    }
+
+    /* -----------------------------------------------------------------------
      * CLOBBER GUARD: a declarative er_node_set_props() must not reset a prop
      * that is currently owned by an ERAnimValue binding.
      *

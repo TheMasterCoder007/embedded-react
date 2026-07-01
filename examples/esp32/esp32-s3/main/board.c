@@ -53,6 +53,7 @@ static const char* TAG = "board";
 #define EXIO_TP_RST_BIT (1U << 1)  /* touch reset (GT911) */
 #define EXIO_DISP_BL_BIT (1U << 2) /* DISP / backlight enable */
 #define EXIO_LCD_RST_BIT (1U << 3) /* LCD reset (active low) */
+#define EXIO_USB_SEL_BIT (1U << 5) /* USB_SEL: LOW = native USB (GPIO19/20 → main USB-C); HIGH = CAN */
 
 /* --- GT911 capacitive touch (shares the I2C bus; INT=GPIO4, RST=CH422G EXIO1) --- */
 #define BOARD_TOUCH_INT_GPIO 4 /* TP_IRQ — driven during reset to latch the I2C address, then input */
@@ -119,6 +120,11 @@ static esp_err_t board_io_init(void)
     ESP_RETURN_ON_ERROR(ch422g_set(EXIO_LCD_RST_BIT, true), TAG, "lcd rst high");
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_RETURN_ON_ERROR(ch422g_set(EXIO_DISP_BL_BIT | EXIO_TP_RST_BIT, true), TAG, "backlight");
+
+    /* Route GPIO19/20 to the chip's native USB on the main USB-C port (the latch defaults all-high, which
+       selects CAN via the on-board FSUSB42UMX mux and leaves the native USB disconnected). Driving
+       USB_SEL low connects the native USB — required for on-device hot reload over it. */
+    ESP_RETURN_ON_ERROR(ch422g_set(EXIO_USB_SEL_BIT, false), TAG, "usb sel");
     return ESP_OK;
 }
 

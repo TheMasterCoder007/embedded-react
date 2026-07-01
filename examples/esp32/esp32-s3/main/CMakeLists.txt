@@ -10,18 +10,36 @@
 #       --input ../../bridges/quickjs/js/dist/app.erpkg
 # Until a config is flashed, the device shows a "No config loaded" panel.
 
+# On-device hot reload over USB-Serial-JTAG (DEV ONLY) — `embedded-react dev --device <port>` streams a
+# fresh app.erpkg on every save and the frame loop swaps it in live. OFF by default: the standard dev
+# workflow is the web simulator (`npx embedded-react dev`), and a release firmware should not carry the
+# receiver. Opt a board in at build time with `idf.py -DER_HOTRELOAD=1 build` (or flip the default below).
+# When off, the firmware only runs the config flashed to the 'config' partition.
+option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
+
+# The receiver source (hotreload_usb.c) compiles ONLY when hot reload is enabled — a default/release
+# firmware carries none of the receiver code. It gates on the normal CMake pass, which sees this option.
+
+set(host_srcs "main.c" "board.c")
+if(ER_HOTRELOAD)
+    list(APPEND host_srcs "hotreload_usb.c")
+endif()
+
 idf_component_register(
-    SRCS "main.c" "board.c"
+    SRCS ${host_srcs}
     INCLUDE_DIRS "."
     REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
-             esp_partition spi_flash
+             esp_partition spi_flash esp_driver_usb_serial_jtag
 )
 
 # Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side
 # metric gathering on ER_PERF_OVERLAY; the engine component sets the same flag so the renderer draws
 # the panel. Set here too so the host wiring is enabled regardless of requirement propagation order.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=1)
+
+# Pass the hot-reload switch through to the C (main.c gates the receiver start + persist install on it).
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOTRELOAD}>)
 
 # Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. Change this for a differently-mounted panel;
 # 0 (the default) is the fast path (a plain framebuffer copy at present). 90/270 give a portrait UI on

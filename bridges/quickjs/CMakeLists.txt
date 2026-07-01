@@ -63,10 +63,12 @@ endforeach ()
 
 # ---------------------------------------------------------------------------
 # Bridge library — thin adapter over er_scene.h (native_ui_bridge.c), plus the portable QuickJS host
-# core (er_runtime.c: context lifecycle, console/screen/persist globals, load/pump/reset/error). Hosts
-# (desktop, MCU firmware) build on er_runtime with a few lines of glue — see er_runtime.h.
+# core (er_runtime.c: context lifecycle, console/screen/persist globals, load/pump/reset/error) and the
+# portable hot-reload receiver (er_hotreload.c: the ERHR transport-frame parser firmware feeds bytes
+# into to swap the running config over USB/serial). Hosts (desktop, MCU firmware) build on er_runtime
+# with a few lines of glue — see er_runtime.h.
 # ---------------------------------------------------------------------------
-add_library(er-bridge-quickjs STATIC native_ui_bridge.c er_runtime.c er_assets.c)
+add_library(er-bridge-quickjs STATIC native_ui_bridge.c er_runtime.c er_assets.c er_hotreload.c)
 
 target_link_libraries(er-bridge-quickjs
         PUBLIC
@@ -99,6 +101,18 @@ option(ER_BRIDGE_QUICKJS_RUNTEST "Build the headless runtime-test harness" ON)
 if (ER_BRIDGE_QUICKJS_RUNTEST)
     add_executable(er-bridge-quickjs-runtest runtest_main.c)
     target_link_libraries(er-bridge-quickjs-runtest PRIVATE er-bridge-quickjs)
+endif ()
+
+# ---------------------------------------------------------------------------
+# Split round-trip harness — loads a vendor/app SPLIT boot container then an app-only frame (no reset),
+# verifying the resident vendor is reused and usePersistentState survives. The desktop proof of the device
+# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mjs` in js/.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_SPLITTEST "Build the vendor/app split round-trip harness" ON)
+
+if (ER_BRIDGE_QUICKJS_SPLITTEST)
+    add_executable(er-bridge-quickjs-splittest splittest_main.c)
+    target_link_libraries(er-bridge-quickjs-splittest PRIVATE er-bridge-quickjs)
 endif ()
 
 # ---------------------------------------------------------------------------

@@ -1961,6 +1961,71 @@ static JSValue js_create_node(JSContext* ctx, JSValueConst this_val, int argc, J
 }
 
 /**
+ * @brief Finds the bridge handle currently mapped to a node, or ER_BRIDGE_HANDLE_INVALID.
+ *
+ * Scans only the live high-water range of the (small) handle table. Used to reclaim the handle of a node
+ * reached by walking the scene tree — a deleted subtree's descendants never pass through js_destroy_node.
+ */
+static int32_t handle_of_node(const ERNode* node)
+{
+    if (!node)
+    {
+        return ER_BRIDGE_HANDLE_INVALID;
+    }
+    for (int32_t h = 1; h < s_high_water; h++)
+    {
+        if (s_node_by_handle[h] == node)
+        {
+            return h;
+        }
+    }
+    return ER_BRIDGE_HANDLE_INVALID;
+}
+
+/** @brief Releases a node's JS event-handler refs and frees its bridge handle slot. */
+static void free_node_handle(JSContext* ctx, int32_t h)
+{
+    if (h == ER_BRIDGE_HANDLE_INVALID)
+    {
+        return;
+    }
+    if (s_bridge_ctx)
+    {
+        for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
+        {
+            JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)h * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
+        }
+    }
+    handle_free(h);
+}
+
+/**
+ * @brief Destroys a node and its ENTIRE subtree — engine node, bridge handle, and event-handler refs each.
+ *
+ * React calls removeChild only for the TOP node of a deleted subtree, never its descendants, so freeing
+ * just that node leaks every descendant in the engine's node pool (plus their handles + handler refs). The
+ * leak is invisible — the node pool is a fixed array, not heap — until the pool exhausts and er_node_create
+ * starts returning NULL (a frozen UI). We walk the children here, capturing each next-sibling BEFORE its
+ * slot is freed, and reclaim the whole tree.
+ */
+static void destroy_node_and_subtree(JSContext* ctx, ERNode* node)
+{
+    if (!node)
+    {
+        return;
+    }
+    ERNode* child = er_node_first_child(node);
+    while (child)
+    {
+        ERNode* next = er_node_next_sibling(child);
+        destroy_node_and_subtree(ctx, child);
+        child = next;
+    }
+    free_node_handle(ctx, handle_of_node(node));
+    er_node_destroy(node);
+}
+
+/**
  * @brief NativeUI.destroyNode(handle) — destroys a node and frees its handle.
  *
  * @param[in] ctx   QuickJS context.
@@ -1983,16 +2048,9 @@ static JSValue js_destroy_node(JSContext* ctx, JSValueConst this_val, int argc, 
         ERNode* node = handle_node(h);
         if (node)
         {
-            er_node_destroy(node);
-            /* Release any JS handlers registered for this node so their refs don't leak. */
-            if (s_bridge_ctx)
-            {
-                for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
-                {
-                    JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)h * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
-                }
-            }
-            handle_free(h);
+            /* Destroy the WHOLE subtree (engine nodes + handles + handler refs). React hands us only the
+             * subtree's top in removeChild, so this reclaims the descendants it never mentions. */
+            destroy_node_and_subtree(ctx, node);
         }
     }
     return JS_UNDEFINED;

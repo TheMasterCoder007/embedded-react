@@ -28,20 +28,41 @@
  * referenced by pointer into it. Per-font GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
  * heap-allocated and kept for the process (a reload leaks the previous set rather than risk a dangling
  * reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
+ *
+ * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
+ * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
+ * engine at that, so the caller's buffer is free the moment the load returns. The plain
+ * er_assets_load_pack() is the zero-copy path (copy=false): assets are referenced in @p buf in place, so
+ * a config mmap'd from flash costs no RAM for its pixels — keep it for production boot + desktop.
  */
 
 #include <stdbool.h>
 #include <stddef.h>
 
 /**
- * @brief Parses an ERPK asset pack from memory and registers its images and fonts with the engine.
+ * @brief Parses an ERPK asset pack from memory and registers its images and fonts with the engine
+ *        (zero-copy: references @p buf in place — see header note). Equivalent to er_assets_load_pack_ex
+ *        with copy=false; preserved as the original, unchanged entry point.
  *
- * @param[in] buf  Pack bytes (caller-owned; must outlive use — see header note).
+ * @param[in] buf  Pack bytes (caller-owned; must outlive use).
  * @param[in] len  Byte length.
  *
  * @return true if parsed and registered; false on a malformed/truncated pack (a wrong magic or an
  *         over-read leaves whatever was registered before untouched).
  */
 bool er_assets_load_pack(const void* buf, size_t len);
+
+/**
+ * @brief Like er_assets_load_pack, but optionally takes its own copy of the pack first.
+ *
+ * @param[in] buf   Pack bytes.
+ * @param[in] len   Byte length.
+ * @param[in] copy  true → copy the pack into a persistent (reused) block and register the engine against
+ *                  the copy, so @p buf may be reused/freed immediately (hot reload from a staging buffer).
+ *                  false → reference @p buf in place (identical to er_assets_load_pack).
+ *
+ * @return true if parsed and registered; false on a malformed pack or (copy=true) an allocation failure.
+ */
+bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
 
 #endif

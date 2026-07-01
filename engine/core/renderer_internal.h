@@ -191,6 +191,17 @@ void er_anim_reset(void);
 void er_anim_reapply_bound(struct ERNode* node);
 
 /**
+ * @brief Removes every ERAnimValue binding that targets the given node tag.
+ *
+ * Call from er_node_destroy: the destroyed node's tag is recycled by the node pool, so any binding left
+ * pointing at it would drive whatever node next reuses the tag (a value pushing its float to the wrong
+ * element). No-op when nothing is bound to the tag.
+ *
+ * @param[in] node_tag  Tag of the node being destroyed.
+ */
+void er_anim_unbind_node(uint16_t node_tag);
+
+/**
  * @brief Advances all active layout animations by delta_ms milliseconds.
  *
  * Updates node->animated for every node with a running layout animation and marks

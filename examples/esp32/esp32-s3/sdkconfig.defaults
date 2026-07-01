@@ -40,3 +40,14 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 
 # Larger UART log buffer so long JS stack traces aren't truncated.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- Console on the native USB-Serial-JTAG (keeps the native USB-C port alive for hot reload) ---
+# The S3's native USB (GPIO19/20) is a hardwired USB-Serial-JTAG controller: it enumerates from ROM at
+# boot, but the app DROPS it once it takes the pins over — UNLESS the console is bound to it. Routing the
+# console here (a) keeps the native USB-C port enumerated as a CDC after boot and (b) installs the
+# usb_serial_jtag driver, which the hot-reload RX task reads host→device bytes from. So uploads + logs
+# share the native USB port at full-speed USB rates — not baud-limited (~10x the UART path) and with USB
+# flow control (no dropped bytes, no host-side pacing needed). Flashing still works over the separate
+# CH343/UART0 port. See main/hotreload_usb.c. (Board: docs.waveshare.com/ESP32-S3-Touch-LCD-7.)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+

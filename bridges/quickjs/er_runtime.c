@@ -490,10 +490,67 @@ const char* er_runtime_container_status_str(ErContainerStatus status)
     }
 }
 
-/** @brief Most sections a single container may hold (we use 2: bytecode + asset pack). */
+/** @brief Most sections a single container may hold (we use up to 3: app bytecode + asset pack + an
+ * optional vendor bytecode chunk for the incremental-hot-reload split). */
 #define ER_CONTAINER_MAX_SECTIONS 8u
 
+bool er_runtime_container_has_vendor(const void* vbuf, size_t len)
+{
+    /* A structural-only scan (no CRC) for a SECTION_VENDOR_BYTECODE (type 3): present → the container is a
+     * full boot/reload that carries the framework; absent → an app-only frame for an incremental soft
+     * reload. The caller uses this to decide whether to reset before loading. Every field is bounds-checked
+     * against @p len, so a malformed blob simply returns false (the loader rejects it for real afterward). */
+    const uint8_t* buf = (const uint8_t*)vbuf;
+    if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
+    {
+        return false;
+    }
+    size_t off = 12u;
+    if (off + 2u > len)
+    {
+        return false;
+    }
+    const uint16_t tlen = rd_le16(buf + off);
+    off += 2u;
+    if (off + (size_t)tlen + 4u > len)
+    {
+        return false;
+    }
+    off += tlen;
+    const uint32_t nsec = rd_le32(buf + off);
+    off += 4u;
+    if (nsec > ER_CONTAINER_MAX_SECTIONS)
+    {
+        return false;
+    }
+    for (uint32_t i = 0; i < nsec; i++)
+    {
+        if (off + 8u > len)
+        {
+            return false;
+        }
+        const uint32_t type = rd_le32(buf + off);
+        const uint32_t slen = rd_le32(buf + off + 4u);
+        off += 8u;
+        if (off + slen > len)
+        {
+            return false;
+        }
+        if (type == 3u) /* SECTION_VENDOR_BYTECODE */
+        {
+            return true;
+        }
+        off += slen;
+    }
+    return false;
+}
+
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
+{
+    return er_runtime_load_container_ex(vbuf, len, false);
+}
+
+ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
 {
     const uint8_t* buf = (const uint8_t*)vbuf;
     if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
@@ -567,23 +624,36 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
         return ER_CONTAINER_BAD_QJS;
     }
 
-    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts), then run
-     * the bytecode last regardless of section order. */
+    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts). Then run the
+     * vendor chunk (type 3) if present — it installs the module registry + require() shim the app resolves
+     * its imports through — and finally the app (type 1) last, regardless of section order. A container
+     * with no vendor section is a plain monolithic app and loads exactly as before. */
+    const uint8_t* vendor = NULL;
+    uint32_t vendor_len = 0;
     const uint8_t* bytecode = NULL;
     uint32_t bytecode_len = 0;
     for (uint32_t i = 0; i < nsec; i++)
     {
-        if (secs[i].type == 2u)
+        if (secs[i].type == 2u) /* SECTION_ASSET_PACK */
         {
-            er_assets_load_pack(secs[i].data, secs[i].len);
+            er_assets_load_pack_ex(secs[i].data, secs[i].len, copy_assets);
         }
-        else if (secs[i].type == 1u)
+        else if (secs[i].type == 1u) /* SECTION_BYTECODE (app) */
         {
             bytecode = secs[i].data;
             bytecode_len = secs[i].len;
         }
+        else if (secs[i].type == 3u) /* SECTION_VENDOR_BYTECODE */
+        {
+            vendor = secs[i].data;
+            vendor_len = secs[i].len;
+        }
     }
     if (!bytecode)
+    {
+        return ER_CONTAINER_LOAD_FAILED;
+    }
+    if (vendor && !er_runtime_load_bytecode(vendor, vendor_len))
     {
         return ER_CONTAINER_LOAD_FAILED;
     }
