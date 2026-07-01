@@ -13,25 +13,24 @@
 # On-device hot reload over USB-Serial-JTAG (DEV ONLY) — `embedded-react dev --device <port>` streams a
 # fresh app.erpkg on every save and the frame loop swaps it in live. OFF by default: the standard dev
 # workflow is the web simulator (`npx embedded-react dev`), and a release firmware should not carry the
-# receiver. Opt a board in at build tieqs eme with `idf.py -DER_HOTRELOAD=1 build` (or flip the default below).
+# receiver. Opt a board in at build time with `idf.py -DER_HOTRELOAD=1 build` (or flip the default below).
 # When off, the firmware only runs the config flashed to the 'config' partition.
 option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
 
-# The receiver source (hotreload_usb.c) and its USB-Serial-JTAG driver are pulled in ONLY when hot reload
-# is enabled, so a default/release firmware compiles neither in — no dead code, no extra driver.
+# The receiver source (hotreload_usb.c) compiles ONLY when hot reload is enabled — a default/release
+# firmware carries none of the receiver code. It gates on the normal CMake pass, which sees this option.
+
 set(host_srcs "main.c" "board.c")
-set(host_rngine er-bridge-quickjs quickjs esp32-lcd-backend
-              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
-              esp_partition spi_flash)
 if(ER_HOTRELOAD)
     list(APPEND host_srcs "hotreload_usb.c")
-    list(APPEND host_reqs esp_driver_usb_serial_jtag)
 endif()
 
 idf_component_register(
     SRCS ${host_srcs}
     INCLUDE_DIRS "."
-    REQUIRES ${host_reqs}
+    REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
+             esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
+             esp_partition spi_flash esp_driver_usb_serial_jtag
 )
 
 # Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side
