@@ -132,10 +132,16 @@ function resolveEntry(cwd, explicit) {
   process.exit(1);
 }
 
-/** Read `--flag value` from an arg list, returning the value (or a default) and the consumed indices. */
 function optValue(args, flag) {
   const idx = args.indexOf(flag);
-  return idx >= 0 ? {value: args[idx + 1], idx, valueIdx: idx + 1} : null;
+  if (idx < 0) return null;
+  const value = args[idx + 1];
+  if (!value || value.startsWith('--')) {
+    console.error(`Missing value for ${flag}\n`);
+    usage();
+    process.exit(1);
+  }
+  return {value, idx, valueIdx: idx + 1};
 }
 
 async function dev(args) {

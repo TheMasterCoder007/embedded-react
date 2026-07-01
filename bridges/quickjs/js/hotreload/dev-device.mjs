@@ -184,13 +184,23 @@ export async function runDeviceDevServer({
   await reloadCycle();
 
   const onChange = debounce(reloadCycle, 120);
-  const watcher = watch(projectRoot, {recursive: true}, (_event, file) => {
+  const onWatchEvent = (_event, file) => {
     if (!file) return;
     // Ignore churn that can't affect the bundle (build output, deps, VCS, editor temp files).
     if (/(^|\/)(node_modules|dist|\.git)(\/|$)/.test(file)) return;
     if (/\.(erpkg|map)$|~$|\.swp$/.test(file)) return;
     onChange();
-  });
+  };
+
+  let watcher;
+  try {
+    watcher = watch(projectRoot, {recursive: true}, onWatchEvent);
+  } catch {
+    console.warn(
+      'note: recursive fs.watch is not supported on this platform; watching only the project root',
+    );
+    watcher = watch(projectRoot, {}, onWatchEvent);
+  }
 
   const shutdown = async () => {
     watcher.close();

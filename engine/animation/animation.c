@@ -874,7 +874,7 @@ void er_anim_unbind_node(uint16_t node_tag)
      * Drop every animated-value binding that targets this node. Called from er_node_destroy so a destroyed
      * node leaves nothing behind: its tag is pushed to the free list and handed to a future node, and a
      * lingering binding would otherwise make the value push its float to that unrelated node — a
-     * native-driver animation writing to the wrong element.Mirrors er_anim_reapply_bound's walk; deactivating
+     * native-driver animation writing to the wrong element. Mirrors er_anim_reapply_bound's walk; deactivating
      * a binding is just a flag, no callback.
      */
     for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
