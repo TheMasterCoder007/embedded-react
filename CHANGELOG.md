@@ -10,6 +10,14 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Support for page-flipped / multi-buffer displays. Some panels rotate two or more framebuffers and flip
+  between them in hardware, so the buffer being drawn into is a frame or two stale — with the standard
+  single-buffer assumption, moved elements ghosted and some changes never appeared. Tell the engine how many
+  buffers rotate (`er_set_display_buffer_count`) and signal each hardware flip (`er_display_present`), and it
+  repaints enough per buffer to keep every one correct, with no extra full-screen buffer or host-side
+  copying. The default is unchanged for single-buffer displays.
 
 ## [0.6.0] - 2026-07-01
 ### Added

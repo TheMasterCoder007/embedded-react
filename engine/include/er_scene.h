@@ -56,6 +56,16 @@ extern "C"
 /** @brief Maximum length of ERProps::placeholder, excluding the null terminator. */
 #define ER_PLACEHOLDER_MAX 63
 
+/**
+ * @brief Upper bound on the display buffer count accepted by er_set_display_buffer_count().
+ *
+ * The engine keeps a damage ring of (count - 1) entries, so this caps that ring at a small fixed size.
+ * Real page-flip hardware uses 2 (double buffer) or 3 (triple buffer); the default remains 1.
+ */
+#ifndef ER_DISPLAY_BUFFERS_MAX
+#define ER_DISPLAY_BUFFERS_MAX 4
+#endif
+
     /*----------------------------------------------------------------------------------------------------------------------
      - Types
      ---------------------------------------------------------------------------------------------------------------------*/
@@ -923,6 +933,55 @@ extern "C"
      * NativeUI bridge's handle table / registries start clean) — this resets only the C engine.
      */
     void er_reset(void);
+
+    /**
+     * @brief Declares how many display buffers the host rotates (page-flip / multi-buffer), so er_commit()
+     *        repaints enough each frame to keep every buffer correct.
+     *
+     * The default is 1: er_commit() is purely incremental and assumes a single persistent framebuffer whose
+     * untouched pixels survive to the next frame (the standard retained-framebuffer / GRAM model).
+     *
+     * Some displays instead rotate N framebuffers and hardware page-flip between them (e.g. an LTDC that
+     * reloads its scan-out address at vblank from two SDRAM buffers). There the buffer the host is about to
+     * render into was last displayed N presents ago — it is (N-1) frames stale — so painting only the current
+     * frame's damage leaves everything else stale (moved elements ghost; a change disjoint from other damage
+     * lands in one buffer but not the other and never appears).
+     *
+     * With @p n > 1 the engine gives each rotating buffer a damage "debt": every commit's damage is unioned
+     * into all buffers, and the buffer being rendered is repainted over its accumulated debt (bringing it
+     * fully current) and cleared. Because commits are driven by React (a burst at mount, none when idle) and
+     * NOT by the display's present loop, the host must mark each page-flip with er_display_present() so the
+     * engine advances to the next buffer; the debt model then converges regardless of how many commits fall
+     * between presents. After init, er_reset(), a backend swap, or any event that forces a full repaint, every
+     * buffer owes a full frame, so each repaints the whole screen the next time it is rendered.
+     *
+     * The host renders through the normal render backend, pointing get-framebuffer at the off-screen buffer,
+     * then flips (and calls er_display_present()) — no third "canonical" buffer and no host-side convergence
+     * copy are needed. The engine needs no knowledge of the framebuffer addresses or vblank — only the buffer
+     * count and a present tick per flip.
+     *
+     * @param[in] n  Number of rotating display buffers (>= 1). Clamped to [1, ER_DISPLAY_BUFFERS_MAX];
+     *               1 restores the default single-buffer (pure incremental) behaviour.
+     */
+    void er_set_display_buffer_count(int n);
+
+    /**
+     * @brief Returns the current display buffer count set by er_set_display_buffer_count() (default 1).
+     *
+     * @return The (clamped) number of rotating display buffers the engine is repainting for.
+     */
+    int er_get_display_buffer_count(void);
+
+    /**
+     * @brief Signals that one page-flip / present has occurred, so the next er_commit() renders the next
+     *        rotating buffer.
+     *
+     * Call once per hardware buffer flip, AFTER the er_commit() that painted the buffer being presented.
+     * Required only when er_set_display_buffer_count(n) has n > 1; a no-op for the default single buffer.
+     * Decoupling this from er_commit() is what lets the engine track presents independently of React-driven
+     * commits (which can fire several times, or not at all, between two presents).
+     */
+    void er_display_present(void);
 
     /**
      * @brief Returns how many times er_commit() has actually run the layout pass.

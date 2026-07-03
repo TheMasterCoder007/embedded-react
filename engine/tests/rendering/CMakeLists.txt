@@ -20,6 +20,10 @@ add_executable(test_transform_damage test_transform_damage.c)
 target_link_libraries(test_transform_damage PRIVATE embedded-react)
 add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
 
+add_executable(test_multibuffer test_multibuffer.c)
+target_link_libraries(test_multibuffer PRIVATE embedded-react)
+add_test(NAME rendering_multibuffer COMMAND test_multibuffer)
+
 add_executable(test_shadow test_shadow.c)
 target_link_libraries(test_shadow PRIVATE embedded-react)
 add_test(NAME rendering_shadow COMMAND test_shadow)
