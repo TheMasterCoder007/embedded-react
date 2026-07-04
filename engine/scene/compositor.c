@@ -78,6 +78,29 @@ static bool s_layout_dirty = true;
  * er_layout_pass_count() so callers (and tests) can confirm static frames skip layout. */
 static uint32_t s_layout_pass_count = 0;
 
+/* Multi-buffer (page-flip) damage tracking. A buffer's outstanding "debt": the pixels it has not yet
+ * absorbed — either a single bounding rect (has), the whole screen (full), or nothing (already current). */
+typedef struct
+{
+    ERRect rect;
+    bool has;
+    bool full;
+} ERDamageSlot;
+
+/* Number of rotating display buffers the host page-flips (1 = single persistent framebuffer). */
+static int s_display_buffer_count = 1;
+
+/* Per-buffer damage debt. Every commit's own damage is unioned into ALL buffers' debt; the buffer being
+ * rendered this commit is repainted with its debt (bringing it current) and its debt is then cleared.
+ * er_display_present() advances s_cur_buf, so a buffer accumulates every commit that lands while some
+ * OTHER buffer is being shown — exactly what it must replay when it next comes around. This is robust to
+ * any commit:present cadence (React drives commits in bursts; the host drives presents), unlike a
+ * commit-counting ring. Index [0] is the sole slot used when count == 1 (pure incremental). */
+static ERDamageSlot s_buf_debt[ER_DISPLAY_BUFFERS_MAX];
+
+/* Index of the buffer currently being rendered; advanced by er_display_present() at each page-flip. */
+static int s_cur_buf = 0;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -301,6 +324,42 @@ static void union_dirty_rect(int x, int y, int w, int h)
 void er_force_full_repaint(void)
 {
     s_force_full_repaint = true;
+}
+
+/* Mark every rotating buffer as owing a full-screen repaint (first frame, reset, or a full-repaint
+ * request): each buffer repaints fully the next time it is rendered, then reverts to incremental. */
+static void debt_reset_all_full(void)
+{
+    for (int i = 0; i < ER_DISPLAY_BUFFERS_MAX; i++)
+    {
+        s_buf_debt[i].has = false;
+        s_buf_debt[i].full = true;
+        s_buf_debt[i].rect.x = s_buf_debt[i].rect.y = s_buf_debt[i].rect.w = s_buf_debt[i].rect.h = 0;
+    }
+}
+
+void er_set_display_buffer_count(int n)
+{
+    if (n < 1)
+        n = 1;
+    if (n > ER_DISPLAY_BUFFERS_MAX)
+        n = ER_DISPLAY_BUFFERS_MAX;
+    s_display_buffer_count = n;
+    s_cur_buf = 0;
+    debt_reset_all_full(); /* every rotating buffer must start from a full frame */
+}
+
+int er_get_display_buffer_count(void)
+{
+    return s_display_buffer_count;
+}
+
+void er_display_present(void)
+{
+    /* One page-flip has occurred: the next commit renders the next rotating buffer. Wrapping by the
+     * buffer count keeps s_cur_buf a valid debt index; for count == 1 this is a no-op. */
+    if (s_display_buffer_count > 1)
+        s_cur_buf = (s_cur_buf + 1) % s_display_buffer_count;
 }
 
 void er_mark_dirty_upward(ERNode* node)
@@ -2612,6 +2671,10 @@ void er_reset(void)
     s_force_full_repaint = true;
     s_layout_dirty = true;
 
+    /* Reset the multi-buffer debt: every rotating buffer owes a full frame again (new scene). */
+    s_cur_buf = 0;
+    debt_reset_all_full();
+
     /* Reset the per-scene subsystems. The render backend, registered images, and registered/built-in
      * fonts are kept; the monotonic clock (s_now_ms) is preserved so time never runs backwards across
      * a reload. */
@@ -2730,7 +2793,10 @@ void er_commit(void)
     bool nothing_dirty = false; /* tracked, but nothing changed (or changes clamped off-screen) */
     if (s_force_full_repaint)
     {
-        root->dirty = true; /* force the whole tree to repaint into the fresh/invalidated framebuffer */
+        /* Full repaint requested: this commit's OWN damage is the whole screen. For multi-buffer that is
+         * folded into every buffer's debt below (so each rotating buffer repaints fully when next
+         * rendered); for single-buffer it simply repaints the one framebuffer. */
+        root->dirty = true;
     }
     else
     {
@@ -2865,6 +2931,74 @@ void er_commit(void)
         /* !trackable: render_full stays true (repaint the whole root rect). */
     }
 
+    /* --- Multi-buffer (page-flip) damage debt --------------------------------------------------------------
+     * At this point render_full / nothing_dirty / rb_* describe THIS commit's OWN damage. With >1 rotating
+     * display buffers, the buffer we render into was last painted (count-1) PRESENTS ago — and, crucially,
+     * commits are driven by React (a burst at mount, none when idle), NOT by the host's present loop. So we
+     * cannot count commits. Instead each buffer carries a "debt": the union of every commit's damage since
+     * that buffer was last rendered. We (1) fold this commit's own damage into every buffer's debt, then
+     * (2) render the CURRENT buffer over its full debt (bringing it current) and clear it. er_display_present()
+     * advances s_cur_buf at each flip, so a buffer's debt accumulates exactly the commits it missed while a
+     * different buffer was on screen — converging regardless of how many commits fall between presents. */
+    if (s_display_buffer_count > 1)
+    {
+        /* (1) Fold this commit's own damage into every buffer's debt. nothing_dirty is checked first because
+         * render_full defaults to true and is left true in the nothing-changed case (there it means "nothing",
+         * not "full"). */
+        if (nothing_dirty)
+        {
+            /* no new damage to record */
+        }
+        else if (render_full)
+        {
+            for (int b = 0; b < s_display_buffer_count; b++)
+            {
+                s_buf_debt[b].full = true;
+                s_buf_debt[b].has = false;
+            }
+        }
+        else
+        {
+            for (int b = 0; b < s_display_buffer_count; b++)
+                if (!s_buf_debt[b].full)
+                    damage_union(&s_buf_debt[b].rect, &s_buf_debt[b].has, rb_x0, rb_y0, rb_x1 - rb_x0,
+                                 rb_y1 - rb_y0);
+        }
+
+        /* (2) Derive this commit's render region from the CURRENT buffer's debt (what it still owes). */
+        ERDamageSlot* d = &s_buf_debt[s_cur_buf];
+        if (d->full)
+        {
+            rb_x0 = root->computed.x;
+            rb_y0 = root->computed.y;
+            rb_x1 = rb_x0 + root->computed.w;
+            rb_y1 = rb_y0 + root->computed.h;
+            render_full = true;
+            nothing_dirty = false;
+            root->dirty = true; /* full recomposite of the whole screen into the stale buffer */
+        }
+        else if (d->has)
+        {
+            rb_x0 = d->rect.x;
+            rb_y0 = d->rect.y;
+            rb_x1 = d->rect.x + d->rect.w;
+            rb_y1 = d->rect.y + d->rect.h;
+            render_full = false;
+            nothing_dirty = false;
+        }
+        else
+        {
+            render_full = false;
+            nothing_dirty = true;
+        }
+
+        /* The current buffer is being brought fully current this commit, so it owes nothing afterward.
+         * (Cleared here, before render, is fine: the region to paint is captured in rb_* above.) */
+        d->full = false;
+        d->has = false;
+        d->rect.x = d->rect.y = d->rect.w = d->rect.h = 0;
+    }
+
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
      * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
      * pruning self-disables there regardless. */
@@ -2918,10 +3052,42 @@ void er_commit(void)
             er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
             clipped = true;
         }
-        render_tree(root, false, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+        /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
+         * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
+         * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
+         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
+        const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
+        render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
         er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
         if (clipped)
             er_pop_clip_rect();
+    }
+
+    /* Multi-buffer: er_get_dirty_rect() must report the region actually painted (the replayed union), not
+     * just this frame's source-dirty nodes, so a host using it for a secondary transfer sees the truth.
+     * (Single buffer keeps the tight source_dirty union accumulated by render_tree.) */
+    if (s_display_buffer_count > 1)
+    {
+        if (render_full)
+        {
+            s_dirty_rect.x = root->computed.x;
+            s_dirty_rect.y = root->computed.y;
+            s_dirty_rect.w = root->computed.w;
+            s_dirty_rect.h = root->computed.h;
+            s_has_dirty = (root->computed.w > 0 && root->computed.h > 0);
+        }
+        else if (!nothing_dirty)
+        {
+            s_dirty_rect.x = rb_x0;
+            s_dirty_rect.y = rb_y0;
+            s_dirty_rect.w = rb_x1 - rb_x0;
+            s_dirty_rect.h = rb_y1 - rb_y0;
+            s_has_dirty = true;
+        }
+        else
+        {
+            s_has_dirty = false;
+        }
     }
 
     s_force_full_repaint = false;
