@@ -1,6 +1,6 @@
 {
   "name": "embedded-react",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "React Native-style component package + reconciler that drives the embedded-react C engine through the QuickJS NativeUI bridge (Flow A).",
   "license": "Apache-2.0",
