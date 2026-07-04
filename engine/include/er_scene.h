@@ -59,7 +59,7 @@ extern "C"
 /**
  * @brief Upper bound on the display buffer count accepted by er_set_display_buffer_count().
  *
- * The engine keeps a damage ring of (count - 1) entries, so this caps that ring at a small fixed size.
+ * The engine stores per-buffer damage “debt” slots in a fixed-size array, so this caps the maximum supported buffer count.
  * Real page-flip hardware uses 2 (double buffer) or 3 (triple buffer); the default remains 1.
  */
 #ifndef ER_DISPLAY_BUFFERS_MAX

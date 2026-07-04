@@ -22,13 +22,14 @@ er_set_display_buffer_count(2);   // 2 = double buffer, 3 = triple
 
 // each frame:
 //   backend get_framebuffer() -> the OFF-screen buffer (ActiveFrameBuffer ^ 1)
-er_commit();                      // repaints current ∪ previous (n-1) frames' damage into it
+er_commit();                      // repaints this buffer's outstanding damage debt into it
 Firmware.Data->ActiveFrameBuffer ^= 1;   // firmware page-flips at vblank
+er_display_present();             // inform the engine that one flip occurred (advance to next buffer)
 ```
 
 The engine repaints enough each commit that whichever buffer is the target ends up fully
 correct — no third "canonical" framebuffer and no host-side convergence copy. It needs no
-knowledge of the framebuffer addresses, the flip mechanism, or vblank; only the count.
+knowledge of the framebuffer addresses, the flip mechanism, or vblank; only the buffer count and one er_display_present() call per flip.
 
 > **Cache coherency (host side, independent of the count above):** when SDRAM is mapped
 > cacheable and DMA2D writes bypass the D-cache, a CPU read after a DMA2D write can read
