@@ -10,6 +10,15 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Start a new project from a demo. `npm create embedded-react@latest my-app -- --template <name>` scaffolds
+  a full example app (e.g. `thermostat`, `music-player`) instead of the minimal starter, so you can build on
+  a real UI or try one on your hardware right away; `--list` shows what's available. The demo apps are now
+  self-contained projects wired to the `embedded-react` CLI.
+- `embedded-react build --aot --screen <WxH>` bakes a target panel size into the ahead-of-time build, so a
+  responsive app compiles to the layout that board actually renders (e.g. `--screen 240x320` for a small
+  no-PSRAM display).
 
 ## [0.7.0] - 2026-07-04
 ### Added

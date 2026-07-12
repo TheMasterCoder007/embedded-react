@@ -1,12 +1,18 @@
 {
   "name": "thermostat-demo",
   "private": true,
-  "description": "embedded-react thermostat demo — run the simulator (hot reload) or build the bundle from here.",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "embedded-react thermostat demo — a thermostat app with climate control and weather widget (Only when screen is large enough to fit weather)",
   "scripts": {
-    "sim": "node ../../bridges/quickjs/js/sim.mjs thermostat",
-    "dev:device": "node ../../bridges/quickjs/js/cli.mjs dev --device",
-    "build": "node ../../bridges/quickjs/js/build.mjs thermostat",
-    "pack": "node ../../bridges/quickjs/js/pack-container.mjs thermostat",
-    "aot": "node ../../bridges/quickjs/js/aot/compile.mjs thermostat"
+    "dev": "embedded-react dev",
+    "dev:device": "embedded-react dev --device",
+    "export": "embedded-react export --out sim-export",
+    "build": "embedded-react build",
+    "build:aot": "embedded-react build --aot --screen 240x320"
+  },
+  "dependencies": {
+    "embedded-react": "^0.7.0",
+    "react": "18.3.1"
   }
 }

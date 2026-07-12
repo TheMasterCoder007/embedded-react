@@ -63,6 +63,9 @@ Usage:
                                                            upload to the device's config region)
                                                  --aot   → app.gen.c/.h + assets.generated.c (Flow B:
                                                            no QuickJS, compiled into firmware)
+                                                 --aot --screen <WxH>  bake the target panel size so a
+                                                           responsive app folds to that board's layout
+                                                           (e.g. --screen 240x320)
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
@@ -356,7 +359,13 @@ function resolveAppComponent(cwd, explicit) {
 }
 
 /** Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. */
-async function buildAot(cwd, explicit, outDir) {
+async function buildAot(cwd, explicit, outDir, screen) {
+  // Bake the target panel size (--screen <WxH>) BEFORE importing the compiler: it reads ER_AOT_SCREEN_W/H at
+  // module load to fold a responsive app's `screen.width` branch to the one that board renders.
+  if (screen) {
+    process.env.ER_AOT_SCREEN_W = screen.w;
+    process.env.ER_AOT_SCREEN_H = screen.h;
+  }
   const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mjs');
   const {bakeAssets} = await import('./assets/index.mjs');
   const appPath = resolveAppComponent(cwd, explicit);
@@ -439,17 +448,45 @@ async function buildContainer(cwd, explicit, outDir) {
   );
 }
 
-/** `embedded-react build [--aot] [entry] [--out dir]` — produce the device artifact. */
+/** `embedded-react build [--aot] [entry] [--out dir] [--screen WxH]` — produce the device artifact. */
 async function build(args) {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
-  const explicit = args.find(
-    (a, i) => !a.startsWith('--') && (outIdx < 0 || i !== outIdx + 1),
-  );
+
+  // --screen <WxH> (AOT only): the target panel size, baked so a responsive app folds to the branch that
+  // board renders (e.g., 240x320 → the compact layout). Flow A reads the screen from the host at runtime.
+  const screenIdx = args.indexOf('--screen');
+  let screen = null;
+  if (screenIdx >= 0) {
+    if (!aot) {
+      console.error(
+        '--screen only applies to --aot (Flow A reads the panel size from the host at runtime).\n',
+      );
+      usage();
+      process.exit(1);
+    }
+    const raw = args[screenIdx + 1];
+    const m = raw && /^(\d+)x(\d+)$/i.exec(raw);
+    if (!m) {
+      console.error(
+        `--screen expects <width>x<height> (e.g. --screen 240x320), got: ${raw ?? '(nothing)'}\n`,
+      );
+      usage();
+      process.exit(1);
+    }
+    screen = {w: m[1], h: m[2]};
+  }
+
+  // Consume the flag VALUES so they aren't mistaken for the entry (which is a bare, non-`--` token).
+  const consumed = new Set();
+  if (outIdx >= 0) consumed.add(outIdx + 1);
+  if (screenIdx >= 0) consumed.add(screenIdx + 1);
+  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
+
   mkdirSync(outDir, {recursive: true});
-  if (aot) await buildAot(cwd, explicit, outDir);
+  if (aot) await buildAot(cwd, explicit, outDir, screen);
   else await buildContainer(cwd, explicit, outDir);
 }
 

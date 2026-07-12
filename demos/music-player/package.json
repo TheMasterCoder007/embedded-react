@@ -1,11 +1,18 @@
 {
   "name": "music-player-demo",
   "private": true,
-  "description": "embedded-react music-player demo — the Flow B AOT target (still the counter slice for now; also runs under Flow A).",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "embedded-react music-player demo",
   "scripts": {
-    "aot": "node ../../bridges/quickjs/js/aot/compile.mjs music-player",
-    "sim": "node ../../bridges/quickjs/js/sim.mjs music-player",
-    "build": "node ../../bridges/quickjs/js/build.mjs music-player",
-    "pack": "node ../../bridges/quickjs/js/pack-container.mjs music-player"
+    "dev": "embedded-react dev",
+    "dev:device": "embedded-react dev --device",
+    "export": "embedded-react export --out sim-export",
+    "build": "embedded-react build",
+    "build:aot": "embedded-react build --aot"
+  },
+  "dependencies": {
+    "embedded-react": "^0.7.0",
+    "react": "18.3.1"
   }
 }

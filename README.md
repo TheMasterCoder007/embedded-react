@@ -218,6 +218,12 @@ npm create embedded-react@latest my-app          # add -- --ts for a TypeScript 
 cd my-app && npm install && npm run dev
 ```
 
+Or **start from a demo** — the same apps in [`demos/`](demos/), ready to run and flash:
+
+```
+npm create embedded-react@latest my-app -- --template thermostat   # or music-player; --list to see all
+```
+
 The whole project ships at **one lockstep version** across the channels below (all the same `vX.Y.Z`):
 
 **npm** — the JSX component API + reconciler (Flow A authoring), the Flow B AOT compiler, and the WASM

@@ -110,6 +110,20 @@ const readmeRead = text => {
 const readmeWrite = (text, version) =>
   README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
 
+// Demo apps (demos/<name>/package.json) — self-contained consumer projects, and the source the
+// `create-embedded-react --template <name>` starters ship. Each pins `embedded-react` in dependencies;
+// keep it in lockstep so a checked-out demo installs the matching release. (The scaffolder re-pins to its
+// own version at scaffold time, but the source pin must not drift, or --check fails.)
+const depPinRead = dep => text => {
+  const v = JSON.parse(text).dependencies?.[dep];
+  return v ? v.replace(/^[\^~]/, '') : undefined;
+};
+const depPinWrite = dep => (text, version) => {
+  const obj = JSON.parse(text);
+  if (obj.dependencies?.[dep]) obj.dependencies[dep] = `^${version}`;
+  return JSON.stringify(obj, null, 2) + '\n';
+};
+
 // ESP32 example CMakeLists — the Flow A / Flow B fetch templates pin the embedded-react release they pull
 // when copied OUT of the monorepo (`FetchContent ... GIT_TAG vX.Y.Z`). The pin must track the release, or a
 // copied-out template re-drifts every bump and fetches the wrong tag. The regex matches only the
@@ -135,6 +149,16 @@ const MANIFESTS = [
     write: jsonWrite,
   },
   {path: 'library.json', read: jsonRead, write: jsonWrite},
+  {
+    path: 'demos/thermostat/package.json',
+    read: depPinRead('embedded-react'),
+    write: depPinWrite('embedded-react'),
+  },
+  {
+    path: 'demos/music-player/package.json',
+    read: depPinRead('embedded-react'),
+    write: depPinWrite('embedded-react'),
+  },
   {path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite},
   {path: 'engine/include/er_version.h', read: headerRead, write: headerWrite},
   {path: 'README.md', read: readmeRead, write: readmeWrite},

@@ -204,10 +204,69 @@ if (hasWasm) {
   );
 }
 
+// 6. Demo templates (`create-embedded-react --template <name>`). A demo scaffolds into a complete,
+//    buildable app — this guards the prepack staging (sync-templates.mjs), the templates/ publish
+//    whitelist, and the demo building through the real CLI, none of which the in-repo tests exercise.
+//
+// 6a. The publish whitelist must ship the STAGED demo templates. The CER `npm pack --dry-run` above runs
+//     prepack (sync-templates), so the staged files appear in cerFiles; forgetting `templates/` in the CER
+//     "files" ships a scaffolder whose --template demos are missing.
+ok(
+  cerFiles.some(p => p.startsWith('templates/thermostat/')),
+  'create-embedded-react publishes the thermostat demo template (files whitelist)',
+);
+
+// 6b. Scaffold from the demo and verify it's a complete project (entry + App + component + baked asset).
+const demoParent = mkdtempSync(join(tmpdir(), 'er-smoke-demo-'));
+run(
+  'node',
+  [resolve(CER, 'index.mjs'), 'smoke-therm', '--template', 'thermostat'],
+  demoParent,
+);
+const demoProj = resolve(demoParent, 'smoke-therm');
+for (const f of [
+  'package.json',
+  'index.jsx',
+  'App.jsx',
+  'components/climate-dial.jsx',
+  'assets/wx_sun.png',
+]) {
+  ok(
+    existsSync(resolve(demoProj, f)),
+    `scaffolded --template thermostat generated ${f}`,
+  );
+}
+
+// 6c. Pin the freshly packed tarball, install, and build the demo through its own scripts.
+const demoPkg = JSON.parse(
+  readFileSync(resolve(demoProj, 'package.json'), 'utf8'),
+);
+demoPkg.dependencies['embedded-react'] = `file:${tgz}`;
+writeFileSync(
+  resolve(demoProj, 'package.json'),
+  JSON.stringify(demoPkg, null, 2),
+);
+run('npm', ['install', '--no-audit', '--no-fund'], demoProj);
+// Flow B (AOT) via the demo's own `build:aot` — exercises `embedded-react build --aot --screen 240x320`
+// (the responsive thermostat folds to its compact branch). Pure JS, so it runs without the wasm.
+run('npm', ['run', 'build:aot'], demoProj);
+ok(
+  existsSync(resolve(demoProj, 'dist/app.gen.c')),
+  'npm run build:aot (thermostat demo) → dist/app.gen.c',
+);
+if (hasWasm) {
+  run('npm', ['run', 'build'], demoProj);
+  ok(
+    existsSync(resolve(demoProj, 'dist/app.erpkg')),
+    'npm run build (thermostat demo) → dist/app.erpkg',
+  );
+}
+
 // Clean up the packed tarball + throwaway projects (best-effort).
 rmSync(tgz, {force: true});
 rmSync(jsParent, {recursive: true, force: true});
 rmSync(tsParent, {recursive: true, force: true});
+rmSync(demoParent, {recursive: true, force: true});
 
 console.log(
   process.exitCode ? '\n✗ consumer smoke FAILED' : '\n✓ consumer smoke passed',

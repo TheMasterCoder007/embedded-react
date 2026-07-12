@@ -7,30 +7,49 @@ conditions plus a 4-day forecast, each day a baked `<Image>` weather icon.
 
 It exercises three engine features: the **vector** dial (one `<Svg>` arc, updated imperatively during
 the drag), **baked images** (the weather icons — imported PNGs, baked at build time), and the
-responsive layout.
+**responsive layout**. Every dimension derives from the host-injected `screen` global, so one source
+flexes between the 800×480 panel (ESP32-S3 / Flow A) and the 240×320 panel (no-PSRAM ESP32 / Flow B).
+A `width < 400` breakpoint selects the compact layout (thermostat only).
 
-It's the default demo and is **responsive**: every dimension derives from the host-injected `screen`
-global, so one source flexes between the 800×480 panel (ESP32-S3 / Flow A) and the 240×320 panel
-(no-PSRAM ESP32 / Flow B). A `width < 400` breakpoint selects the compact layout (thermostat only).
+This is a complete `embedded-react` app — the same JSX you'd write as a downstream user. It imports from
+`react` (hooks) and `'embedded-react'` (everything else), exactly like a React Native screen.
+
+## Start from this demo
+
+Scaffold your own copy with the toolchain — no repo checkout required:
+
+```bash
+npm create embedded-react@latest my-thermostat -- --template thermostat
+cd my-thermostat
+npm install
+npm run dev          # WASM simulator with hot reload → http://localhost:3333
+```
+
+## Develop
+
+```bash
+npm install
+npm run dev          # WASM simulator with hot reload → http://localhost:3333
+npm run dev:device   # hot-reload on a real board over USB (pass -- <port> for non-ESP32 boards)
+```
+
+Edit `App.jsx` and save — the simulator hot-reloads and your `useState` is preserved. The browser's
+device toolbar drives the panel size (e.g. 800×480 or 240×320), pixel-accurate to a real display.
+
+## Build for a device
+
+```bash
+npm run build        # Flow A → dist/app.erpkg   (QuickJS bytecode + baked assets; PSRAM-class chips)
+npm run build:aot    # Flow B → app.gen.c        (compiled to C; no-PSRAM boards)
+```
+
+Flow A uploads `app.erpkg` to the device's config region (no reflash); Flow B compiles into firmware.
+See the [embedded-react repo](https://github.com/TheMasterCoder007/embedded-react) for board wiring and
+the on-device examples.
 
 ## Assets
 
-`assets/` holds the weather-icon PNGs. `App.jsx` imports them (`import wxSun from './assets/wx_sun.png'`)
-and `npm run build` bakes each into `dist/assets.generated.c` (premultiplied ARGB8888, flash-resident,
-registered at boot via `er_register_assets()`) — no separate step, no committed generated files. Drop
-a new PNG in `assets/`, import it, and rebuild. See [the JS package README](../../bridges/quickjs/js/README.md#assets-images--fonts)
-for the full asset workflow (including fonts and `assets.config.js`).
-
-## Build & run
-
-From this folder:
-
-```
-npm run sim      # live-reload simulator (hot reload on save) — see tools/simulator/README.md for one-time setup
-npm run build    # just bundle + bake assets -> bridges/quickjs/js/dist/app.bundle.js
-```
-
-The `sim`/`build` scripts delegate to the `embedded-react` package (`bridges/quickjs/js`); output always
-lands in that package's `dist/`. After `npm run build` you can also run the desktop host
-(`examples/linux`) or flash a device (`examples/esp32/esp32-s3`) — see their READMEs. The host injects
-the globals the bundle expects (`NativeUI`, `screen`, `console`, timers).
+`assets/` holds the weather-icon PNGs and the dial's baked `.svg` face. `App.jsx` imports them
+(`import wxSun from './assets/wx_sun.png'`) and the build bakes each into the app artifact
+(premultiplied ARGB8888, flash-resident, registered at boot) — no separate step, no committed generated
+files. Drop a new PNG in `assets/`, import it, and rebuild.

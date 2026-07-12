@@ -1,49 +1,78 @@
 # Demos
 
-Example apps written against the public `embedded-react` API — the same JSX a downstream user
-would write. Each subfolder is one self-contained demo; the build picks one and bundles it.
+Full example apps written against the public `embedded-react` API — the same JSX a downstream user
+would write. Each subfolder is a **self-contained consumer project**: its own `package.json` depending
+on `embedded-react`, wired to the `embedded-react` CLI exactly like a scaffolded app.
 
 ```
 demos/
-  thermostat/     the default demo (starter features tour, growing into a climate-control UI)
+  thermostat/     thermostat with weather widget
+  music-player/   music player app
   <your-demo>/    add a sibling folder with its own index.jsx + App.jsx
 ```
 
-A demo is just a `index.jsx` (the entry — registers the app via `AppRegistry`) plus its components.
-It imports from `react` (hooks) and `'embedded-react'` (everything else), exactly like a React Native
-screen.
+A demo is an `index.jsx` (the entry — registers the app via `AppRegistry`) plus its components. It
+imports from `react` (hooks) and `'embedded-react'` (everything else), like a React Native screen.
 
-## Building a demo
+These folders are also the **source for the `create-embedded-react` starter templates**: `npm run
+sync-templates` in `create-embedded-react/` stages each one into that package (it also runs automatically
+on `prepack`), so a consumer can start from any demo with one command.
 
-The bundler lives in the JS package (`bridges/quickjs/js`), where the toolchain + `node_modules`
-already are. From there:
+## Start from a demo (consumers)
 
+No repo checkout required — scaffold your own copy with the toolchain:
+
+```bash
+npm create embedded-react@latest my-app -- --template thermostat   # or --template music-player
+cd my-app
+npm install
+npm run dev          # WASM simulator with hot reload → http://localhost:3333
 ```
+
+`npm create embedded-react@latest -- --list` shows every available template.
+
+## Run a demo from a repo checkout
+
+Two ways, depending on which simulator you want:
+
+```bash
+# Browser (WASM) simulator, from the demo folder — the consumer path:
+cd demos/thermostat && npm install && npm run dev
+
+# SDL (native) simulator + the lower-level build tools, driven by demo name from the JS package:
 cd bridges/quickjs/js
-npm install                 # once
-npm run build               # bundles the default demo (thermostat) -> dist/app.bundle.js
-npm run build -- marine-dash  # bundle a specific demo by folder name
+npm run sim   -- thermostat     # native hot-reload simulator (see tools/simulator/README.md for setup)
+npm run build -- thermostat     # bundle + bake assets → dist/app.bundle.js
+npm run pack  -- thermostat     # deployable config container → dist/app.erpkg
 ```
 
-The output is always `bridges/quickjs/js/dist/app.bundle.js` — the single "active" bundle the
-example hosts (`examples/linux`, `examples/esp32`) pick up. Selecting a demo at build time decides
-which one gets flashed/run; see each example's README for the run/flash step.
+The name-based scripts in `bridges/quickjs/js` read `demos/<name>/index.jsx` directly (via an esbuild
+alias to the in-repo library), so they build a demo against the local source without installing anything.
 
-## Adding a demo
+## Build a demo for a device
 
-Scaffold one with the generator (the in-repo precursor to `npx create-embedded-react`):
+From a demo folder (or a scaffolded copy):
 
+```bash
+npm run build        # Flow A → dist/app.erpkg  (QuickJS bytecode + baked assets; PSRAM-class chips)
+npm run build:aot    # Flow B → app.gen.c       (compiled to C; no-PSRAM boards)
 ```
+
+Flow B bakes a target panel size (`embedded-react build --aot --screen <WxH>`) so a responsive app folds
+to the layout that board renders — the thermostat's `build:aot` targets `240x320`; change it for your
+panel. Run/flash via the relevant `examples/*` host.
+
+## Add a demo
+
+Scaffold one in-repo with the generator (creates `demos/<name>/` wired to the in-repo build tools):
+
+```bash
 cd bridges/quickjs/js
-npm run create -- my-app        # creates demos/my-app/ (App.jsx, index.jsx, package.json, README, assets/)
-cd ../../../demos/my-app
-npm run sim                      # hot-reload simulator   (or `npm run build`)
+npm run create -- my-app
+cd ../../demos/my-app
+npm run sim
 ```
 
-Each scaffolded app gets its own `package.json` so `npm run sim` / `npm run build` work from the app
-folder (React Native style). Or do it by hand: create `demos/<name>/index.jsx` + `App.jsx` (copy
-`thermostat/`), then `npm run build -- <name>`. Run/flash via the relevant `examples/*` host.
-
-> Note: demos resolve `'embedded-react'` through an esbuild alias in `build.mjs` (they live outside
-> the package directory). Once `embedded-react` is published / set up as an npm workspace, demos will
-> import it as a normal dependency with no alias — see the repo roadmap.
+Or by hand: create `demos/<name>/index.jsx` + `App.jsx` (copy `thermostat/`), then build it by name with
+the `bridges/quickjs/js` scripts. To ship it as a `create-embedded-react` template too, give it the
+consumer-form `package.json` the other demos have and re-run `npm run sync-templates`.
