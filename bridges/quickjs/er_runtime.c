@@ -776,10 +776,28 @@ void er_runtime_show_message(const char* title, const char* body, const char* hi
     JSValue r = er_bridge_run_bytecode(s_ctx, er_overlay_qbc, er_overlay_qbc_len);
     if (JS_IsException(r))
     {
-        /* The overlay itself failed (e.g. a bytecode/engine version mismatch) — swallow the exception
-         * so the caller's frame loop keeps running; the log still carries the original error. */
-        JS_FreeValue(s_ctx, JS_GetException(s_ctx));
-        emit_line("er_runtime_show_message: overlay bytecode failed to run (stale message_overlay.qbc.c?)");
+        /* The overlay itself failed (e.g. a bytecode/engine version mismatch) — keep the frame loop
+         * running, but log the overlay exception to aid diagnosis. */
+        JSValue exc = JS_GetException(s_ctx);
+        const char* msg = JS_ToCString(s_ctx, exc);
+        emit_line("er_runtime_show_message: overlay bytecode failed to run");
+        if (msg)
+        {
+            emit_line(msg);
+            JS_FreeCString(s_ctx, msg);
+        }
+        JSValue stack = JS_GetPropertyStr(s_ctx, exc, "stack");
+        if (!JS_IsUndefined(stack))
+        {
+            const char* st = JS_ToCString(s_ctx, stack);
+            if (st)
+            {
+                emit_line(st);
+                JS_FreeCString(s_ctx, st);
+            }
+        }
+        JS_FreeValue(s_ctx, stack);
+        JS_FreeValue(s_ctx, exc);
     }
     JS_FreeValue(s_ctx, r);
     er_bridge_pump(s_ctx);
