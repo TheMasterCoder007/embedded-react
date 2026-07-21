@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-07-21
 ### Added
 
 - Lite QuickJS profile for Flow A. The runtime now creates its JS context with only the intrinsics the
@@ -206,7 +208,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.2...v0.5.3
