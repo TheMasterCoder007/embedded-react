@@ -89,10 +89,12 @@ extern "C"
      * @param[in]  src      App bundle source (UTF-8).
      * @param[in]  len      Byte length of @p src.
      * @param[out] out_len  Receives the bytecode byte length (0 on a compile error → returns NULL).
+     * @param[in]  strip    Non-zero drops the embedded source text + debug tables (release/device:
+     *                      ~8x smaller blob); 0 keeps them so dev stack traces have line numbers.
      *
      * @return Pointer to the bytecode in wasm memory (caller frees), or NULL on error.
      */
-    const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len);
+    const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len, int strip);
 
     /**
      * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).

@@ -52,6 +52,7 @@ export async function packAppContainer({
   nodePaths,
   simDir,
   persist = false,
+  strip = false,
 }) {
   const esbuild = require('esbuild');
   const {bakeImage} = await import('../assets/bake-image.mjs');
@@ -142,7 +143,7 @@ export async function packAppContainer({
   });
   const bundleSrc = readFileSync(bundlePath, 'utf8');
 
-  const bytecode = await compileToBytecode(bundleSrc, simDir);
+  const bytecode = await compileToBytecode(bundleSrc, simDir, {strip});
 
   const discoveredSizes = [
     ...new Set(

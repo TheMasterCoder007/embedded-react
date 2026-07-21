@@ -14,6 +14,7 @@ idf_component_register(
          "${BRIDGE_DIR}/er_runtime.c"
          "${BRIDGE_DIR}/er_assets.c"
          "${BRIDGE_DIR}/er_hotreload.c"
+         "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)
     INCLUDE_DIRS "${BRIDGE_DIR}"
     REQUIRES engine quickjs
 )

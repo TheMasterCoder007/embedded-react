@@ -108,6 +108,11 @@ static void remap_touch(int* x, int* y)
    FreeRTOS task stack. Tune together with the task stack size if you hit "stack overflow" from JS. */
 #define ER_JS_MAX_STACK (48 * 1024)
 
+/* Hard cap on the JS heap (all of it lives in PSRAM via er_js_mf). A runaway app fails with a JS
+   out-of-memory error — caught and shown by the error overlay — instead of exhausting the PSRAM the
+   framebuffers and engine pools share. */
+#define ER_JS_MEMORY_LIMIT (4u * 1024u * 1024u)
+
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
 
@@ -378,6 +383,7 @@ static void run_app(void)
         .log = uart_log,
         .malloc_functions = &er_js_mf, /* JS heap → PSRAM */
         .max_stack_size = ER_JS_MAX_STACK,
+        .memory_limit = ER_JS_MEMORY_LIMIT,
     };
     if (!er_runtime_init(&rt_cfg))
     {

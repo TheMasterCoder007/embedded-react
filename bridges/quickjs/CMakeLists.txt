@@ -30,6 +30,18 @@ if (NOT TARGET embedded-react)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Lite (device/release) profile — drops the JS source parser from QuickJS
+# (upstream QJS_DISABLE_PARSER): the firmware runs precompiled bytecode only,
+# saving ~60 KB of flash. eval()/Function and the source-eval helpers
+# (er_runtime_load_source / er_runtime_compile_bytecode) fail gracefully at
+# runtime. The intrinsic set is NOT affected by this switch — the runtime
+# always uses the lite profile (see er_js_new_context in er_runtime.h), so dev
+# and device run the same JS surface; this only removes on-device compilation.
+# Host/dev builds keep the parser so the runtest harness can eval .js bundles.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_LITE "Parser-less device build: run precompiled bytecode only" OFF)
+
+# ---------------------------------------------------------------------------
 # QuickJS-ng — pinned release. Keep the upstream build lean: we only need the
 # library, not its CLI, examples, or test262 harness.
 # ---------------------------------------------------------------------------
@@ -39,6 +51,9 @@ set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
 set(QJS_BUILD_EXAMPLES   OFF CACHE BOOL "" FORCE)
 set(QJS_BUILD_CLI_STATIC OFF CACHE BOOL "" FORCE)
 set(QJS_ENABLE_INSTALL   OFF CACHE BOOL "" FORCE)
+if (ER_BRIDGE_QUICKJS_LITE)
+    set(QJS_DISABLE_PARSER ON CACHE BOOL "" FORCE)
+endif ()
 
 FetchContent_Declare(
         quickjs
@@ -68,7 +83,13 @@ endforeach ()
 # into to swap the running config over USB/serial). Hosts (desktop, MCU firmware) build on er_runtime
 # with a few lines of glue — see er_runtime.h.
 # ---------------------------------------------------------------------------
-add_library(er-bridge-quickjs STATIC native_ui_bridge.c er_runtime.c er_assets.c er_hotreload.c)
+add_library(er-bridge-quickjs STATIC
+        native_ui_bridge.c
+        er_runtime.c
+        er_assets.c
+        er_hotreload.c
+        overlay/message_overlay.qbc.c # precompiled error-overlay app (regen: see overlay/message_overlay.js)
+)
 
 target_link_libraries(er-bridge-quickjs
         PUBLIC
@@ -123,6 +144,12 @@ endif ()
 # NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see js/aot/.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_COMPILE "Build the QuickJS bytecode precompiler tool" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_COMPILE)
+    # A parser-less QuickJS cannot compile source; the tool would build but always fail.
+    message(STATUS "er-bridge-quickjs-compile skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_COMPILE OFF)
+endif ()
 
 if (ER_BRIDGE_QUICKJS_COMPILE)
     add_executable(er-bridge-quickjs-compile compile_main.c)
