@@ -25,9 +25,10 @@
 
 #include "er_runtime.h"
 
-#include "er_assets.h"        /* er_assets_load_pack (ERPK asset section of the container) */
-#include "er_scene.h"         /* er_reset */
-#include "native_ui_bridge.h" /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
+#include "er_assets.h"                 /* er_assets_load_pack (ERPK asset section of the container) */
+#include "er_scene.h"                  /* er_reset, er_now_ms */
+#include "native_ui_bridge.h"          /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
+#include "overlay/message_overlay.qbc.h" /* precompiled error-overlay app (works on parser-less builds) */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -52,32 +53,8 @@ static ErRuntimeConfig s_cfg;
 /** @brief Last uncaught JS error (message + stack), for er_runtime_show_error / _last_error. */
 static char s_last_error[512] = "";
 
-/**
- * @brief Message-overlay app: builds a full-screen red panel from the `__title` / `__error` / `__hint`
- *        globals (RN redbox). Used for both JS errors and config-load failures, so a device shows the
- *        same screen the desktop does. `__hint` is optional (empty → no hint line).
- */
-static const char* k_message_app =
-    "const W = screen.width, H = screen.height;\n"
-    "const title = (typeof __title === 'string' && __title) ? __title : 'Error';\n"
-    "const msg = (typeof __error === 'string' && __error) ? __error : 'Unknown error';\n"
-    "const hint = (typeof __hint === 'string') ? __hint : '';\n"
-    "const root = NativeUI.createNode('View');\n"
-    "NativeUI.setProps(root, { width: W, height: H, backgroundColor: '#7a0b0b',\n"
-    "                          flexDirection: 'column', padding: 24, gap: 12 });\n"
-    "const t = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(t, { text: title, color: '#ffffff', fontSize: 24, fontWeight: 'bold' });\n"
-    "NativeUI.appendChild(root, t);\n"
-    "const body = NativeUI.createNode('Text');\n"
-    "NativeUI.setProps(body, { text: msg, color: '#ffd9d9', fontSize: 14, width: W - 48, numberOfLines: 20 });\n"
-    "NativeUI.appendChild(root, body);\n"
-    "if (hint) {\n"
-    "  const h = NativeUI.createNode('Text');\n"
-    "  NativeUI.setProps(h, { text: hint, color: '#ff9b9b', fontSize: 12 });\n"
-    "  NativeUI.appendChild(root, h);\n"
-    "}\n"
-    "NativeUI.setRoot(root);\n"
-    "NativeUI.commit();\n";
+/* The message-overlay app (RN redbox) ships as precompiled bytecode — see overlay/message_overlay.js
+ * for the source, what it renders, and how to regenerate message_overlay.qbc.c. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Console / logging
@@ -280,10 +257,83 @@ static void install_persist(JSContext* ctx)
  - Context lifecycle + eval
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief performance.now() — the engine's monotonic millisecond clock (React's scheduler clock). */
+static JSValue rt_perf_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewFloat64(ctx, (double)er_now_ms());
+}
+
+/**
+ * @brief Installs a `performance` global with `now()` on the engine clock.
+ *
+ * Required by the lite profile: without a `performance` global, React's scheduler falls back to
+ * `Date.now` at module load and would throw on a context without the Date intrinsic.
+ */
+static void install_performance(JSContext* ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue perf = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, rt_perf_now, "now", 0));
+    JS_SetPropertyStr(ctx, global, "performance", perf);
+    JS_FreeValue(ctx, global);
+}
+
+JSContext* er_js_new_context(JSRuntime* rt, uint32_t extra_intrinsics)
+{
+    JSContext* ctx = JS_NewContextRaw(rt);
+    if (!ctx)
+    {
+        return NULL;
+    }
+    /* The lite profile: exactly what the React runtime bundle needs (verified against the shipped
+     * bundle — RegExp for color/path parsing, Promise for the scheduler's microtask channel, Map/Set
+     * for fibers, JSON for usePersistentState). Everything else is opt-in via extra_intrinsics so an
+     * unused feature never costs device flash (the linker drops what is never referenced). */
+    JS_AddIntrinsicBaseObjects(ctx);
+    JS_AddIntrinsicRegExp(ctx);
+    JS_AddIntrinsicJSON(ctx);
+    JS_AddIntrinsicMapSet(ctx);
+    JS_AddIntrinsicPromise(ctx);
+    if (extra_intrinsics & ER_JS_INTRINSIC_DATE)
+    {
+        JS_AddIntrinsicDate(ctx);
+    }
+    if (extra_intrinsics & ER_JS_INTRINSIC_PROXY)
+    {
+        JS_AddIntrinsicProxy(ctx);
+    }
+    if (extra_intrinsics & ER_JS_INTRINSIC_TYPED_ARRAYS)
+    {
+        JS_AddIntrinsicTypedArrays(ctx);
+    }
+    if (extra_intrinsics & ER_JS_INTRINSIC_WEAK_REF)
+    {
+        JS_AddIntrinsicWeakRef(ctx);
+    }
+    if (extra_intrinsics & ER_JS_INTRINSIC_BIGINT)
+    {
+        JS_AddIntrinsicBigInt(ctx);
+    }
+    if (extra_intrinsics & ER_JS_INTRINSIC_EVAL)
+    {
+        /* On a QJS_DISABLE_PARSER build this installs an eval() that throws "not supported". */
+        JS_AddIntrinsicEval(ctx);
+    }
+    install_performance(ctx);
+    return ctx;
+}
+
 /** @brief Creates a fresh context and installs the bridge + host globals (used at init and reset). */
 static void install_globals(void)
 {
-    s_ctx = JS_NewContext(s_rt);
+    /* ER_JS_INTRINSIC_EVAL is always requested: the C-level JS_Eval that backs
+     * er_runtime_load_source (desktop demo, web sim) only works once the Eval intrinsic has installed
+     * the context's eval hook. On a QJS_DISABLE_PARSER device build the hook doesn't exist and both
+     * JS-level eval() and er_runtime_load_source fail gracefully — bytecode is the only load path. */
+    s_ctx = er_js_new_context(s_rt, s_cfg.extra_intrinsics | ER_JS_INTRINSIC_EVAL);
     if (!s_ctx)
     {
         return;
@@ -356,6 +406,10 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     {
         JS_SetMaxStackSize(s_rt, s_cfg.max_stack_size);
     }
+    if (s_cfg.memory_limit)
+    {
+        JS_SetMemoryLimit(s_rt, s_cfg.memory_limit);
+    }
     install_globals();
     return s_ctx != NULL;
 }
@@ -376,6 +430,13 @@ bool er_runtime_load_bytecode(const void* buf, size_t len)
 }
 
 uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len)
+{
+    /* Debug info kept: this entry point serves the dev loop (hot reload / sim), where stack-trace
+     * line numbers matter more than blob size. Release packaging passes strip = true. */
+    return er_runtime_compile_bytecode_ex(src, len, out_len, false);
+}
+
+uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out_len, bool strip)
 {
     if (out_len)
     {
@@ -413,7 +474,9 @@ uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_le
     else
     {
         size_t bc_len = 0;
-        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, JS_WRITE_OBJ_BYTECODE);
+        const int wr_flags =
+            JS_WRITE_OBJ_BYTECODE | (strip ? (JS_WRITE_OBJ_STRIP_SOURCE | JS_WRITE_OBJ_STRIP_DEBUG) : 0);
+        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, wr_flags);
         if (bc)
         {
             out = (uint8_t*)malloc(bc_len);
@@ -701,15 +764,24 @@ void er_runtime_show_message(const char* title, const char* body, const char* hi
     {
         return;
     }
-    /* Clear the (possibly half-built) scene, publish the strings, and run the overlay app in the
-     * current context. The caller's next commit paints it. */
+    /* Clear the (possibly half-built) scene, publish the strings, and run the overlay app (precompiled
+     * bytecode, so this works on parser-less builds) in the current context. The caller's next commit
+     * paints it. */
     er_reset();
     JSValue global = JS_GetGlobalObject(s_ctx);
     JS_SetPropertyStr(s_ctx, global, "__title", JS_NewString(s_ctx, title ? title : "Error"));
     JS_SetPropertyStr(s_ctx, global, "__error", JS_NewString(s_ctx, body ? body : ""));
     JS_SetPropertyStr(s_ctx, global, "__hint", JS_NewString(s_ctx, hint ? hint : ""));
     JS_FreeValue(s_ctx, global);
-    JS_FreeValue(s_ctx, JS_Eval(s_ctx, k_message_app, strlen(k_message_app), "<message-overlay>", JS_EVAL_TYPE_GLOBAL));
+    JSValue r = er_bridge_run_bytecode(s_ctx, er_overlay_qbc, er_overlay_qbc_len);
+    if (JS_IsException(r))
+    {
+        /* The overlay itself failed (e.g. a bytecode/engine version mismatch) — swallow the exception
+         * so the caller's frame loop keeps running; the log still carries the original error. */
+        JS_FreeValue(s_ctx, JS_GetException(s_ctx));
+        emit_line("er_runtime_show_message: overlay bytecode failed to run (stale message_overlay.qbc.c?)");
+    }
+    JS_FreeValue(s_ctx, r);
     er_bridge_pump(s_ctx);
 }
 

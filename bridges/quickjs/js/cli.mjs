@@ -408,13 +408,16 @@ async function buildContainer(cwd, explicit, outDir) {
   const lib = libSrc();
   const paths = nodePaths(cwd);
 
-  const vendor = await packVendor({libSrc: lib, nodePaths: paths, simDir});
+  // Release artifact: strip the embedded source text + debug tables from the bytecode (~8x smaller
+  // erpkg; stack traces lose line numbers). The dev loop (`embedded-react dev`) keeps them.
+  const vendor = await packVendor({libSrc: lib, nodePaths: paths, simDir, strip: true});
   const app = await packApp({
     entry,
     projectRoot: cwd,
     libSrc: lib,
     nodePaths: paths,
     simDir,
+    strip: true,
   });
   const container = await emitBootContainer({
     vendorBytecode: vendor.bytecode,

@@ -12,7 +12,11 @@ idf_component_register(
     INCLUDE_DIRS "${QUICKJS_SRC_DIR}"
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE _GNU_SOURCE)
+# Lite (parser-less) build: the device only ever runs precompiled bytecode (the erpkg from the
+# config partition / hot reload), so the JS source parser is compiled out (~60 KB of flash).
+# eval()/Function and er_runtime_load_source throw at runtime; the error overlay is precompiled
+# bytecode, so it still renders. Remove QJS_DISABLE_PARSER to restore on-device source eval.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE _GNU_SOURCE QJS_DISABLE_PARSER)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error

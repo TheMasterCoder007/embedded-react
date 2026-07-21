@@ -10,6 +10,33 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Lite QuickJS profile for Flow A. The runtime now creates its JS context with only the intrinsics the
+  React runtime actually needs (base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now`
+  clock) instead of the full standard library, and the same set runs everywhere — device, desktop,
+  simulator, and test harnesses — so an app that works in development works on hardware. Features an app
+  legitimately needs beyond that (Date, Proxy, typed arrays, WeakRef, BigInt) can be opted back in per
+  host via `ErRuntimeConfig.extra_intrinsics`.
+- Parser-less device builds (`-DER_BRIDGE_QUICKJS_LITE=ON`). Firmware that only runs precompiled bytecode
+  can drop the JS source parser from QuickJS entirely, cutting roughly 60 KB of flash. The error overlay
+  now ships as precompiled bytecode so it renders on such builds too.
+- Release bytecode is stripped. `embedded-react build`, the demo packer, and the bytecode precompiler now
+  omit the embedded source text and debug tables from `.qbc`/`.erpkg` artifacts — the thermostat demo's
+  container shrinks from 1.14 MB to 260 KB (~8x smaller bytecode). The dev loop (hot reload) keeps debug
+  info so stack traces retain line numbers; pass `--debug` to `er-bridge-quickjs-compile` to keep it
+  elsewhere.
+- Optional hard cap on the JS heap (`ErRuntimeConfig.memory_limit`): a runaway app fails with a JS
+  out-of-memory error caught by the error overlay instead of exhausting the shared system heap.
+- The ESP32-S3 example now builds the lite profile: parser-less QuickJS, the precompiled error
+  overlay, and a 4 MB JS heap cap in PSRAM.
+
+### Fixed
+
+- Demo bundles no longer break when a demo folder carries its own `node_modules`. The bundler could
+  resolve a second copy of React from the demo's dependencies (installed for device-dev tooling),
+  which made every component throw at mount; `react`, `react-reconciler`, and `scheduler` are now
+  pinned to the package's own copies.
 
 ## [0.7.0] - 2026-07-04
 ### Added
