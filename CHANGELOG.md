@@ -12,6 +12,13 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- The ESP32 LCD backend can now draw directly into the panel's own framebuffers (`ER_LCD_DIRECT`,
+  on by default for unrotated RGB565 panels with 2–3 framebuffers when `on_frame_buf_complete` callbacks are available). The intermediate framebuffer
+  and the per-frame copy to the panel are gone — pushing a large update dropped from 20–35 ms to
+  ~2 ms on the ESP32-S3 example. With three panel framebuffers (the example's new default) there
+  is always a free buffer to draw into, so frames never wait on the display. Rotated and
+  single-framebuffer panels keep the previous path.
+
 - Fades now work at any size. A translucent group bigger than the scratch buffer used to silently
   render fully opaque; the engine now composites large groups in horizontal strips, so even
   full-screen fades render correctly — using far less reserved RAM than before.
