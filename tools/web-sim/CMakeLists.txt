@@ -44,7 +44,7 @@ set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)  # transform-source
 set(ERUI_SCRATCH_BAND_H     "32"      CACHE STRING "" FORCE)  # strip height: exercises the same banded compositing path
                                                               # boards use (banding is pixel-exact, so the preview stays faithful)
 set(ERUI_FADE_CACHE_W       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
-set(ERUI_FADE_CACHE_H       "1024"    CACHE STRING "" FORCE)
+set(ERUI_FADE_CACHE_H       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
 
 # Roomy vector pools so imported SVGs (which can have many shapes / a long op-tape) render in the browser
 # preview without truncating — the desktop-class faithful preview. Tune the per-board caps separately.

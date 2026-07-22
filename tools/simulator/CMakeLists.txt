@@ -42,7 +42,7 @@ set(ERUI_MAX_IMG_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_W          "1024"    CACHE STRING "" FORCE)  # max compositable / transformed node size
 set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)
 set(ERUI_FADE_CACHE_W       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
-set(ERUI_FADE_CACHE_H       "1024"    CACHE STRING "" FORCE)
+set(ERUI_FADE_CACHE_H       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
 
 # Roomy vector pools so imported SVGs (many shapes / a long op-tape) render in the preview without
 # truncating — matches tools/web-sim. Per-board caps are tuned separately.
