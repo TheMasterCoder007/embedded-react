@@ -4,7 +4,7 @@
 set(BK "${EMBEDDED_REACT_SRC_DIR}/backends/esp32-lcd")
 
 idf_component_register(
-    SRCS "${BK}/renderer_backend.c"
+    SRCS "${BK}/renderer_backend.c" "${BK}/pie_blend.c"
     INCLUDE_DIRS "${BK}"
     REQUIRES engine esp_lcd
 )

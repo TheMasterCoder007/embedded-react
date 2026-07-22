@@ -75,6 +75,19 @@
 #define ER_LCD_DIRECT 1
 #endif
 
+/** @brief 1 = use the ESP32-S3 PIE 128-bit SIMD blend routines (8 px/iteration) for the hot
+ *         source-over paths, verified against the scalar reference by a self-test at init.
+ *         Requires the RGB565 canonical format; 0 = always use the scalar C loops. */
+#ifndef ER_LCD_PIE
+#define ER_LCD_PIE 1
+#endif
+#if ER_LCD_PIE && ER_LCD_FB_RGB565 && defined(CONFIG_IDF_TARGET_ESP32S3)
+#define ER_LCD_PIE_ACTIVE 1
+#include "pie_blend.h"
+#else
+#define ER_LCD_PIE_ACTIVE 0
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Pixel-format abstraction (canonical framebuffer)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -225,6 +238,7 @@ static inline void flip_gate(void)
             s_be.pending_flips = 0; /* a frame boundary passed: earlier flips are live */
         }
     }
+}
 
 /** @brief Clamps a rect to the framebuffer and returns false if fully off-screen. */
 static bool clip_rect(int* x, int* y, int* w, int* h)
@@ -432,9 +446,15 @@ static void blit_overlay(uint16_t* dst)
 
 /* Row staging buffer (internal DRAM): the canonical framebuffer lives in PSRAM, where per-pixel
  * read-modify-write stalls ~90 cycles/px. Blends copy the destination row in with a burst memcpy,
- * blend against internal memory, and burst the result back — several times faster than in-place. */
+ * blend against internal memory, and burst the result back — several times faster than in-place.
+ * 16-byte aligned so the PIE SIMD routines can run on it directly. */
 #define ER_ROW_STAGE_MAX 1024
-static fbpx_t s_row_stage[ER_ROW_STAGE_MAX];
+__attribute__((aligned(16))) static fbpx_t s_row_stage[ER_ROW_STAGE_MAX];
+#if ER_LCD_PIE_ACTIVE
+/* Aligned source staging for the SIMD path when a source row is not 16-byte aligned. */
+__attribute__((aligned(16))) static uint32_t s_pie_src[ER_ROW_STAGE_MAX];
+static bool s_pie = false; /* PIE routines enabled (self-test passed at init) */
+#endif
 
 /** @brief Fills a rect with a straight-alpha ARGB8888 color, composited over the framebuffer. */
 static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
@@ -469,7 +489,16 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
             fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
             if (stage != d)
                 memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
-            for (int col = 0; col < w; col++)
+            int col0 = 0;
+#if ER_LCD_PIE_ACTIVE
+            if (s_pie && stage == s_row_stage && w >= 8)
+            {
+                const int n8 = w / 8;
+                er_pie_fill_row_565(stage, sp, n8);
+                col0 = n8 * 8;
+            }
+#endif
+            for (int col = col0; col < w; col++)
             {
                 stage[col] = over_premul_fast(stage[col], sp);
             }
@@ -539,11 +568,28 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
         fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
         if (stage != d)
             memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
+        int col0 = 0;
+#if ER_LCD_PIE_ACTIVE
+        /* SIMD path: 8 px per iteration on the aligned stage row; the scalar loops below mop up
+         * the tail. A misaligned source row is burst-copied to the aligned staging first. */
+        if (s_pie && stage == s_row_stage && w >= 8)
+        {
+            const uint32_t* s2 = s;
+            if (((uintptr_t)s & 15U) != 0U)
+            {
+                memcpy(s_pie_src, s, (size_t)w * sizeof(uint32_t));
+                s2 = s_pie_src;
+            }
+            const int n8 = w / 8;
+            er_pie_blend_row_565(stage, s2, n8, (uint8_t)ga);
+            col0 = n8 * 8;
+        }
+#endif
         if (ga == 255U)
         {
             /* Full-alpha path — the common case for composited strips, where most pixels are
              * fully opaque: no global-alpha scaling, opaque pixels skip the dst load. */
-            for (int col = 0; col < w; col++)
+            for (int col = col0; col < w; col++)
             {
                 const uint32_t p = s[col];
                 const uint32_t sa = p >> 24;
@@ -559,7 +605,7 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
         }
         else
         {
-            for (int col = 0; col < w; col++)
+            for (int col = col0; col < w; col++)
             {
                 /* Scale the premultiplied source by the global alpha (paired lanes), then over. */
                 const uint32_t p = s[col];
@@ -572,6 +618,15 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
             memcpy(d, stage, (size_t)w * sizeof(fbpx_t));
     }
     mark_dirty(x, y, w, h);
+}
+
+bool er_esp32_lcd_pie_enabled(void)
+{
+#if ER_LCD_PIE_ACTIVE
+    return s_pie;
+#else
+    return false;
+#endif
 }
 
 /** @brief Pushes the painted (dirty) region to the panel, re-compositing the overlay. */
@@ -996,6 +1051,12 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     /* Direct mode rotates the panel framebuffers; tell the engine so each commit repaints the
      * target buffer's accumulated damage debt (see er_set_display_buffer_count in er_scene.h). */
     er_set_display_buffer_count(s_be.direct ? s_be.nfb : 1);
+
+#if ER_LCD_PIE_ACTIVE
+    /* Verify the SIMD blends against the scalar reference before trusting them. */
+    s_pie = er_pie_blend_selftest();
+    ESP_LOGI(TAG, "PIE SIMD blend: %s", s_pie ? "self-test passed, enabled" : "SELF-TEST FAILED, using C loops");
+#endif
 
     ESP_LOGI(TAG,
              "LCD backend ready: logical %dx%d, panel %dx%d, rotation %d°, %s %s",

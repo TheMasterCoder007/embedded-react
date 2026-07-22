@@ -17,3 +17,9 @@ Two operating modes, chosen automatically at init:
 - **Canonical mode** — rotated panels, ARGB8888 canonical builds (`ER_LCD_FB_RGB565=0`), and
   single-framebuffer panels composite into a separate canonical framebuffer; present copies
   the dirty region to the panel (rotating it if configured).
+
+On the ESP32-S3 the source-over blend and translucent-fill inner loops run on the PIE 128-bit
+SIMD unit, eight pixels per iteration (`ER_LCD_PIE`, default 1; see `pie_blend.c`). An init-time
+self-test verifies the SIMD routines against the scalar reference and disables them on any
+mismatch. Output matches the scalar path within one RGB565 LSB (exact for fully opaque or fully
+transparent pixels).

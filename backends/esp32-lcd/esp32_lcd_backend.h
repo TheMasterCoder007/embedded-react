@@ -64,6 +64,12 @@ extern "C"
     void er_esp32_lcd_present(void);
 
     /**
+     * @brief Returns true when the PIE SIMD blend routines are active (ESP32-S3, RGB565
+     *        canonical format, and the init-time self-test passed).
+     */
+    bool er_esp32_lcd_pie_enabled(void);
+
+    /**
      * @brief Snapshots a rectangle of the framebuffer as the persistent "overlay" region.
      *
      * Captures the given rect (already composited in the framebuffer, e.g. the perf overlay) into an
