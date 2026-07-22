@@ -900,7 +900,31 @@ static bool composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int
             const int bw = (rx1 - bx) < sw ? (rx1 - bx) : sw;
             ER_PROF_MARK(t_push);
             if (!er_scratch_push(bx, by, bw, bh))
-                continue; /* unreachable: size fits a strip and depth was pre-checked */
+            {
+                /* Defensive fallback: avoid leaving holes if the scratch pool is unexpectedly exhausted. */
+                const uint8_t saved_alpha = er_get_draw_alpha();
+                er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * alpha / 255U));
+
+                s_tile_active = true;
+                s_tile_x = bx;
+                s_tile_y = by;
+                s_tile_w = bw;
+                s_tile_h = bh;
+                s_tile_first = first;
+                er_push_clip_rect(bx, by, bw, bh);
+                render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+                er_pop_clip_rect();
+
+                s_tile_active = outer_active;
+                s_tile_x = ox;
+                s_tile_y = oy;
+                s_tile_w = ow;
+                s_tile_h = oh;
+                er_set_draw_alpha(saved_alpha);
+
+                first = false;
+                continue;
+            }
             ER_PROF_ACC(s_prof_push_us, t_push);
             s_tile_active = true;
             s_tile_x = bx;
