@@ -94,7 +94,10 @@ set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
 set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
-set(ERUI_SCRATCH_H "240" CACHE STRING "Scratch buffer height in pixels (max compositable node height)")
+set(ERUI_SCRATCH_H "240" CACHE STRING "Transform-source scratch height in pixels (max transformable node height)")
+set(ERUI_SCRATCH_BAND_H "${ERUI_SCRATCH_H}" CACHE STRING "Opacity-composite strip height; smaller = less RAM, taller fades render in multiple band passes")
+set(ERUI_XFORM_W "${ERUI_SCRATCH_W}" CACHE STRING "Transform-source width (max rotatable/scalable node width); decouple from ERUI_SCRATCH_W when strips are screen-wide")
+set(ERUI_XFORM_H "${ERUI_SCRATCH_H}" CACHE STRING "Transform-source height (max rotatable/scalable node height)")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
 set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
 set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
@@ -146,6 +149,9 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_MAX_OPACITY_DEPTH=${ERUI_MAX_OPACITY_DEPTH}
         ERUI_SCRATCH_W=${ERUI_SCRATCH_W}
         ERUI_SCRATCH_H=${ERUI_SCRATCH_H}
+        ERUI_SCRATCH_BAND_H=${ERUI_SCRATCH_BAND_H}
+        ERUI_XFORM_W=${ERUI_XFORM_W}
+        ERUI_XFORM_H=${ERUI_XFORM_H}
 )
 
 target_compile_definitions(embedded-react PRIVATE

@@ -42,11 +42,14 @@ idf_component_register(
     LDFRAGMENTS "linker_psram.lf"
 )
 
-# Feature flags — PUBLIC so dependents (bridge, main) agree on struct layout. SCRATCH_W/H cap the size
-# of an offscreen-composited node (opacity/transform); 240 matches the desktop default and covers the
-# starter app's pulsing logo. ERUI_TRANSFORMS=FULL enables the 2D affine path (scale/rotate) the
-# starter's Animated.timing(scale) logo pulse needs; under TRANSLATE_ONLY that pulse silently does
-# nothing. FULL adds ~460 KB of affine scratch buffers, which land in PSRAM via linker_psram.lf.
+# Feature flags — PUBLIC so dependents (bridge, main) agree on struct layout.
+#
+# ERUI_SCRATCH_W/BAND_H size the opacity-compositing strip pool (kept in internal DRAM, see
+# linker_psram.lf); ERUI_XFORM_W/H cap the largest node that can be rotated or scaled. See
+# engine/README.md "Scratch buffers" for what each controls.
+# ERUI_TRANSFORMS=FULL enables the 2D affine path (scale/rotate) the starter's
+# Animated.timing(scale) logo pulse needs; under TRANSLATE_ONLY that pulse silently does
+# nothing.
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_SHADOWS=0
     ERUI_BORDER_AA=1
@@ -58,9 +61,12 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_TRANSFORMS_FULL=1
     ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=512
-    ERUI_MAX_OPACITY_DEPTH=4
-    ERUI_SCRATCH_W=240
+    ERUI_MAX_OPACITY_DEPTH=2
+    ERUI_SCRATCH_W=800
     ERUI_SCRATCH_H=240
+    ERUI_SCRATCH_BAND_H=10
+    ERUI_XFORM_W=240
+    ERUI_XFORM_H=240
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=800
 )
@@ -72,6 +78,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 # (MAX_PTS / MAX_EDGES / MAX_ROW) keep the engine defaults.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ERUI_MAX_VECTOR_NODES=32   # storage lives in PSRAM (see linker_psram.lf); raise as needed for many <Svg> nodes
+    # ER_PROF=1                # uncomment for on-device compositor phase profiling (prints ERPROF lines)
 )
 
 # Performance overlay (FPS/CPU/memory, bottom-right). The actual drawing lives in this component's

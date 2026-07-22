@@ -24,6 +24,9 @@
 #ifndef ERUI_SCRATCH_H
 #define ERUI_SCRATCH_H 240
 #endif
+#ifndef ERUI_SCRATCH_BAND_H
+#define ERUI_SCRATCH_BAND_H ERUI_SCRATCH_H
+#endif
 #ifndef ERUI_MAX_OPACITY_DEPTH
 #define ERUI_MAX_OPACITY_DEPTH 4
 #endif
@@ -33,20 +36,22 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Metadata for one active scratch slot: its world-space origin.
+ * @brief Metadata for one active scratch slot: its world-space origin and the draw alpha
+ *        that was inherited when the capture started.
  */
 typedef struct
 {
-    int ox; /**< World-space X of scratch[0]. */
-    int oy; /**< World-space Y of scratch[0]. */
+    int ox;              /**< World-space X of scratch[0]. */
+    int oy;              /**< World-space Y of scratch[0]. */
+    uint8_t saved_alpha; /**< Inherited draw alpha to re-apply when the slot is blended out. */
 } ScratchMeta;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/* Each slot is ERUI_SCRATCH_W × ERUI_SCRATCH_H premultiplied ARGB8888 pixels. */
-static uint32_t s_pool[ERUI_MAX_OPACITY_DEPTH][ERUI_SCRATCH_H * ERUI_SCRATCH_W];
+/* Each slot is one strip of ERUI_SCRATCH_W × ERUI_SCRATCH_BAND_H premultiplied ARGB8888 pixels. */
+static uint32_t s_pool[ERUI_MAX_OPACITY_DEPTH][ERUI_SCRATCH_BAND_H * ERUI_SCRATCH_W];
 static ScratchMeta s_meta[ERUI_MAX_OPACITY_DEPTH];
 static int s_depth = 0;
 
@@ -78,16 +83,31 @@ void er_scratch_pop_base(void)
     /* Restore routing to the active opacity slot, or clear if none. */
     if (s_depth > 0)
         er_scratch_begin(
-            s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
+            s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
     else
         er_scratch_end();
+}
+
+int er_scratch_strip_w(void)
+{
+    return ERUI_SCRATCH_W;
+}
+
+int er_scratch_strip_h(void)
+{
+    return ERUI_SCRATCH_BAND_H;
+}
+
+bool er_scratch_avail(void)
+{
+    return s_depth < ERUI_MAX_OPACITY_DEPTH;
 }
 
 bool er_scratch_push(int x, int y, int w, int h)
 {
     if (s_depth >= ERUI_MAX_OPACITY_DEPTH)
         return false;
-    if (w <= 0 || h <= 0 || w > ERUI_SCRATCH_W || h > ERUI_SCRATCH_H)
+    if (w <= 0 || h <= 0 || w > ERUI_SCRATCH_W || h > ERUI_SCRATCH_BAND_H)
         return false;
 
     uint32_t* slot = s_pool[s_depth];
@@ -99,9 +119,11 @@ bool er_scratch_push(int x, int y, int w, int h)
         memset(slot + (size_t)row * (size_t)ERUI_SCRATCH_W, 0, (size_t)w * sizeof(uint32_t));
     s_meta[s_depth].ox = x;
     s_meta[s_depth].oy = y;
+    s_meta[s_depth].saved_alpha = er_get_draw_alpha();
+    er_set_draw_alpha(255U);
     s_depth++;
 
-    er_scratch_begin(slot, ERUI_SCRATCH_W, ERUI_SCRATCH_H, x, y);
+    er_scratch_begin(slot, ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, x, y);
     return true;
 }
 
@@ -117,12 +139,16 @@ void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
     if (s_depth > 0)
     {
         er_scratch_begin(
-            s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
+            s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
     }
     else if (s_base_buf)
     {
         er_scratch_begin(s_base_buf, s_base_w, s_base_h, s_base_ox, s_base_oy);
     }
+
+    /* Re-apply the inherited draw alpha before blending the captured strip out, so a group
+     * composited inside a degraded (multiplied-alpha) ancestor is dimmed exactly once. */
+    er_set_draw_alpha(s_meta[s_depth].saved_alpha);
 
     const uint32_t* slot = s_pool[s_depth];
     const int stride = (int)(ERUI_SCRATCH_W * sizeof(uint32_t));

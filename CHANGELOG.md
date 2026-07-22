@@ -10,35 +10,51 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Fades now work at any size. A translucent group bigger than the scratch buffer used to silently
+  render fully opaque; the engine now composites large groups in horizontal strips, so even
+  full-screen fades render correctly — using far less reserved RAM than before.
+- When a group truly can't be composited (very deep nesting, or a board with compositing turned
+  off), each element is now dimmed individually instead of the transparency being dropped entirely.
+- New board-tuning flags: `ERUI_SCRATCH_BAND_H` (strip height — smaller means less RAM) and
+  `ERUI_XFORM_W`/`ERUI_XFORM_H` (the largest element that can be rotated or scaled). Defaults leave
+  existing configurations unchanged.
+
+### Changed
+
+- Compositing needs much less memory. One of the two full-size transform buffers is gone, and the
+  strip pool replaces four full-size opacity buffers — on the ESP32-S3 example the compositing
+  buffers shrink from ~1.35 MB to under 300 KB.
+- Rendering is faster on microcontrollers: the hottest pixel loops were reworked, and the ESP32-S3
+  example keeps its compositing strips in fast internal RAM.
+
+### Fixed
+
+- A rotating or growing element could vanish mid-animation once its on-screen footprint outgrew the
+  scratch buffer. Any on-screen size now renders; only the element's own size is limited.
 
 ## [0.8.0] - 2026-07-21
 ### Added
 
-- Lite QuickJS profile for Flow A. The runtime now creates its JS context with only the intrinsics the
-  React runtime actually needs (base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now`
-  clock) instead of the full standard library, and the same set runs everywhere — device, desktop,
-  simulator, and test harnesses — so an app that works in development works on hardware. Features an app
-  legitimately needs beyond that (Date, Proxy, typed arrays, WeakRef, BigInt) can be opted back in per
-  host via `ErRuntimeConfig.extra_intrinsics`.
-- Parser-less device builds (`-DER_BRIDGE_QUICKJS_LITE=ON`). Firmware that only runs precompiled bytecode
-  can drop the JS source parser from QuickJS entirely, cutting roughly 60 KB of flash. The error overlay
-  now ships as precompiled bytecode so it renders on such builds too.
-- Release bytecode is stripped. `embedded-react build`, the demo packer, and the bytecode precompiler now
-  omit the embedded source text and debug tables from `.qbc`/`.erpkg` artifacts — the thermostat demo's
-  container shrinks from 1.14 MB to 260 KB (~8x smaller bytecode). The dev loop (hot reload) keeps debug
-  info so stack traces retain line numbers; pass `--debug` to `er-bridge-quickjs-compile` to keep it
-  elsewhere.
-- Optional hard cap on the JS heap (`ErRuntimeConfig.memory_limit`): a runaway app fails with a JS
-  out-of-memory error caught by the error overlay instead of exhausting the shared system heap.
-- The ESP32-S3 example now builds the lite profile: parser-less QuickJS, the precompiled error
-  overlay, and a 4 MB JS heap cap in PSRAM.
+- A lite JavaScript profile. The runtime starts with only the built-ins the React runtime actually
+  needs, and the same set runs everywhere — device, desktop, and simulator — so an app that works in
+  development works on hardware. Anything extra an app needs (Date, Proxy, typed arrays, …) can be
+  opted back in per host.
+- Parser-less device builds. Firmware that only runs precompiled bytecode can drop the JavaScript
+  parser entirely, saving about 60 KB of flash. The error overlay still works on such builds.
+- Smaller release bundles. Built apps no longer embed their source text and debug tables — the
+  thermostat demo shrinks from 1.14 MB to 260 KB. Development builds keep debug info so stack traces
+  keep their line numbers.
+- An optional hard cap on the JS heap: a runaway app fails with a catchable out-of-memory error
+  instead of exhausting the shared system heap.
+- The ESP32-S3 example uses all of the above: lite profile, no parser, and a 4 MB heap cap.
 
 ### Fixed
 
-- Demo bundles no longer break when a demo folder carries its own `node_modules`. The bundler could
-  resolve a second copy of React from the demo's dependencies (installed for device-dev tooling),
-  which made every component throw at mount; `react`, `react-reconciler`, and `scheduler` are now
-  pinned to the package's own copies.
+- Demo bundles no longer break when a demo folder carries its own `node_modules`. A second copy of
+  React could sneak into the bundle and make every component throw at mount; the bundler now always
+  uses the package's own copy.
 
 ## [0.7.0] - 2026-07-04
 ### Added

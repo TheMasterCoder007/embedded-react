@@ -231,10 +231,18 @@ void er_transform_aabb_3d(
  * @param[in] inv_H   9-element row-major inverse homography (from er_transform_homography_invert).
  * @param[in] dst_x   Screen-space AABB left edge.
  * @param[in] dst_y   Screen-space AABB top edge.
- * @param[in] dst_w   Screen-space AABB width (must be ≤ ERUI_SCRATCH_W).
- * @param[in] dst_h   Screen-space AABB height (must be ≤ ERUI_SCRATCH_H).
+ * @param[in] dst_w   Screen-space AABB width (any size — output is streamed per row segment).
+ * @param[in] dst_h   Screen-space AABB height (any size).
  */
 void er_transform_source_end_blit_3d(
+    int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h);
+
+/**
+ * @brief Re-emits the cached transform source through the homography (no capture).
+ *
+ * 3D counterpart of er_transform_source_replay_blit().
+ */
+void er_transform_source_replay_blit_3d(
     int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h);
 
 #endif /* ERUI_3D_TRANSFORMS */
@@ -251,12 +259,51 @@ void er_transform_source_end_blit_3d(
  *
  * @param[in] src_x  World-space X origin of the content being captured (= render px).
  * @param[in] src_y  World-space Y origin of the content being captured (= render py).
- * @param[in] w      Content width in pixels (must be ≤ ERUI_SCRATCH_W).
- * @param[in] h      Content height in pixels (must be ≤ ERUI_SCRATCH_H).
+ * @param[in] w      Content width in pixels (must be ≤ ERUI_XFORM_W).
+ * @param[in] h      Content height in pixels (must be ≤ ERUI_XFORM_H).
  *
  * @return true when capture was started successfully.
  */
 bool er_transform_source_begin(int src_x, int src_y, int w, int h);
+
+/**
+ * @brief Records which node's subtree the transform source buffer currently holds.
+ *
+ * Called by the compositor after a successful er_transform_source_begin() during a banded
+ * composite pass, so later tiles of the same pass can replay the blit without re-capturing.
+ *
+ * @param[in] tag  Node tag whose subtree is captured (0xFFFF = invalid).
+ * @param[in] gen  Banded composite pass generation the capture belongs to.
+ */
+void er_transform_source_note(uint16_t tag, uint32_t gen);
+
+/**
+ * @brief Returns true when the source buffer still holds the given node's subtree for the
+ *        given banded composite pass generation (and no capture is currently active).
+ */
+bool er_transform_source_is_cached(uint16_t tag, uint32_t gen);
+
+/**
+ * @brief Re-emits the cached transform source through the affine transform (no capture).
+ *
+ * Identical parameters and output to er_transform_source_end_blit(); the emit is bounded to
+ * the active scissor, so during a banded composite pass only the current tile's rows are
+ * back-projected.
+ */
+void er_transform_source_replay_blit(int src_x,
+                                     int src_y,
+                                     int src_w,
+                                     int src_h,
+                                     float ia,
+                                     float ib,
+                                     float ic,
+                                     float id,
+                                     float itx,
+                                     float ity,
+                                     int dst_x,
+                                     int dst_y,
+                                     int dst_w,
+                                     int dst_h);
 
 /**
  * @brief Ends the transform source capture and blits the result through the affine transform.
@@ -277,8 +324,8 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h);
  * @param[in] ity    Inverse translation Y.
  * @param[in] dst_x  Screen-space AABB left edge.
  * @param[in] dst_y  Screen-space AABB top edge.
- * @param[in] dst_w  Screen-space AABB width (must be ≤ ERUI_SCRATCH_W).
- * @param[in] dst_h  Screen-space AABB height (must be ≤ ERUI_SCRATCH_H).
+ * @param[in] dst_w  Screen-space AABB width (any size — output is streamed per row segment).
+ * @param[in] dst_h  Screen-space AABB height (any size).
  */
 void er_transform_source_end_blit(int src_x,
                                   int src_y,

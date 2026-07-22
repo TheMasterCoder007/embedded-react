@@ -30,6 +30,24 @@ extern "C"
      ---------------------------------------------------------------------------------------------------------------------*/
 
     /**
+     * @brief Width in pixels of one opacity-composite strip (ERUI_SCRATCH_W).
+     */
+    int er_scratch_strip_w(void);
+
+    /**
+     * @brief Height in pixels of one opacity-composite strip (ERUI_SCRATCH_BAND_H).
+     *
+     * Defaults to ERUI_SCRATCH_H; boards shrink it to trade repeated banded subtree
+     * walks for static RAM.
+     */
+    int er_scratch_strip_h(void);
+
+    /**
+     * @brief Returns true when at least one scratch slot is free (nesting depth not exhausted).
+     */
+    bool er_scratch_avail(void);
+
+    /**
      * @brief Allocates a scratch slot and begins routing blit calls into it.
      *
      * All er_blit_fill / er_blit_copy / er_blit_blend calls made after this return write into
@@ -38,14 +56,15 @@ extern "C"
      * er_scratch_pop_blend().
      *
      * Up to ERUI_MAX_OPACITY_DEPTH nested slots may be active simultaneously.  A push fails
-     * (returning false) when the pool is exhausted or the node is wider than ERUI_SCRATCH_W
-     * or taller than ERUI_SCRATCH_H.  On failure blit routing is unchanged and no matching
-     * er_scratch_pop_blend() is required.
+     * (returning false) when the pool is exhausted or the region is wider than ERUI_SCRATCH_W
+     * or taller than ERUI_SCRATCH_BAND_H.  On failure blit routing is unchanged and no matching
+     * er_scratch_pop_blend() is required.  Regions larger than one strip are composited by the
+     * compositor in multiple band passes, one push per band.
      *
-     * @param[in] x  World-space left edge of the node being composited.
-     * @param[in] y  World-space top edge of the node being composited.
-     * @param[in] w  Node width in pixels.
-     * @param[in] h  Node height in pixels.
+     * @param[in] x  World-space left edge of the region being composited.
+     * @param[in] y  World-space top edge of the region being composited.
+     * @param[in] w  Region width in pixels.
+     * @param[in] h  Region height in pixels.
      *
      * @return true if a slot was allocated and blit redirection is now active.
      */

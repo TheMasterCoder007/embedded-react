@@ -250,7 +250,7 @@ static int check_reflow_moved_no_trail(int screen)
 }
 
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
- * Before the damage pre-pass projected the 3D AABB, a source_dirty 3D/perspective node fell through to
+/* Before the damage pre-pass projected the 3D AABB, a source_dirty 3D/perspective node fell through to
  * the full-repaint fallback on every animated frame. */
 static int check_3d_rotate_bounded(int screen)
 {

@@ -39,8 +39,10 @@ set(ERUI_MAX_ANIM_VALUES    "256"     CACHE STRING "" FORCE)
 set(ERUI_MAX_VALUE_BINDINGS "16"      CACHE STRING "" FORCE)
 set(ERUI_FONT_POOL_BYTES    "1048576" CACHE STRING "" FORCE)  # enable runtime er_font_load (0 disables it)
 set(ERUI_MAX_IMG_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_W          "1024"    CACHE STRING "" FORCE)  # max compositable / transformed node size
-set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_W          "1024"    CACHE STRING "" FORCE)  # opacity strip width / max transformed node width
+set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)  # transform-source height (ERUI_XFORM_W/H default to these)
+set(ERUI_SCRATCH_BAND_H     "32"      CACHE STRING "" FORCE)  # strip height: exercises the same banded compositing path
+                                                              # boards use (banding is pixel-exact, so the preview stays faithful)
 
 # Roomy vector pools so imported SVGs (which can have many shapes / a long op-tape) render in the browser
 # preview without truncating — the desktop-class faithful preview. Tune the per-board caps separately.
