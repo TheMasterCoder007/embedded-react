@@ -55,13 +55,20 @@ static uint32_t s_pool[ERUI_MAX_OPACITY_DEPTH][ERUI_SCRATCH_BAND_H * ERUI_SCRATC
 static ScratchMeta s_meta[ERUI_MAX_OPACITY_DEPTH];
 static int s_depth = 0;
 
-/* Base scratch: a bottom-of-stack redirect installed by the transform subsystem.
- * When the opacity depth drops to zero, blit calls route here instead of to the framebuffer. */
-static uint32_t* s_base_buf = NULL;
-static int s_base_w = 0;
-static int s_base_h = 0;
-static int s_base_ox = 0;
-static int s_base_oy = 0;
+/* Base scratch: bottom-of-stack redirects installed by offscreen captures (the transform
+ * subsystem's source capture, the compositor's fade cache). When the opacity depth drops to
+ * zero, blit calls route to the top base instead of the framebuffer. Two levels: a transform
+ * source capture can occur inside a fade-cache capture. */
+typedef struct
+{
+    uint32_t* buf;
+    int w;
+    int h;
+    int ox;
+    int oy;
+} BaseEntry;
+static BaseEntry s_base[2];
+static int s_base_count = 0;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -69,23 +76,38 @@ static int s_base_oy = 0;
 
 void er_scratch_push_base(uint32_t* buf, int w, int h, int ox, int oy)
 {
-    s_base_buf = buf;
-    s_base_w = w;
-    s_base_h = h;
-    s_base_ox = ox;
-    s_base_oy = oy;
+    if (s_base_count >= (int)(sizeof(s_base) / sizeof(s_base[0])))
+        return; /* callers guard nesting; defensive */
+    s_base[s_base_count].buf = buf;
+    s_base[s_base_count].w = w;
+    s_base[s_base_count].h = h;
+    s_base[s_base_count].ox = ox;
+    s_base[s_base_count].oy = oy;
+    s_base_count++;
     er_scratch_begin(buf, w, h, ox, oy);
 }
 
 void er_scratch_pop_base(void)
 {
-    s_base_buf = NULL;
-    /* Restore routing to the active opacity slot, or clear if none. */
+    if (s_base_count > 0)
+        s_base_count--;
+    /* Restore routing: the active opacity slot, then the next outer base, then clear. */
     if (s_depth > 0)
         er_scratch_begin(
             s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
+    else if (s_base_count > 0)
+        er_scratch_begin(s_base[s_base_count - 1].buf,
+                         s_base[s_base_count - 1].w,
+                         s_base[s_base_count - 1].h,
+                         s_base[s_base_count - 1].ox,
+                         s_base[s_base_count - 1].oy);
     else
         er_scratch_end();
+}
+
+bool er_scratch_idle(void)
+{
+    return s_depth == 0 && s_base_count == 0;
 }
 
 int er_scratch_strip_w(void)
@@ -141,9 +163,13 @@ void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
         er_scratch_begin(
             s_pool[s_depth - 1], ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, s_meta[s_depth - 1].ox, s_meta[s_depth - 1].oy);
     }
-    else if (s_base_buf)
+    else if (s_base_count > 0)
     {
-        er_scratch_begin(s_base_buf, s_base_w, s_base_h, s_base_ox, s_base_oy);
+        er_scratch_begin(s_base[s_base_count - 1].buf,
+                         s_base[s_base_count - 1].w,
+                         s_base[s_base_count - 1].h,
+                         s_base[s_base_count - 1].ox,
+                         s_base[s_base_count - 1].oy);
     }
 
     /* Re-apply the inherited draw alpha before blending the captured strip out, so a group

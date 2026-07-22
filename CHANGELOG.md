@@ -20,6 +20,11 @@ See the README for the release process.
 - New board-tuning flags: `ERUI_SCRATCH_BAND_H` (strip height — smaller means less RAM) and
   `ERUI_XFORM_W`/`ERUI_XFORM_H` (the largest element that can be rotated or scaled). Defaults leave
   existing configurations unchanged.
+- A fade cache (`ERUI_FADE_CACHE_W/H`, off by default). During an opacity animation the faded
+  content doesn't change — only how transparent it is — so the engine now keeps the composited
+  result and re-blends it each frame instead of redrawing everything. Measured 1.3–2.8× fade
+  frame rate on device (nested fades gain the most); any change to the content invalidates the
+  cache automatically.
 
 ### Changed
 

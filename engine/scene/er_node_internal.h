@@ -306,10 +306,24 @@ ERNode* er_get_node(uint16_t tag);
 ERNode* er_get_root_node(void);
 
 /**
- * @brief Marks a node and all ancestors dirty.
+ * @brief Marks a node and all ancestors dirty, recording a content change.
+ *
+ * Also advances the global content generation, which invalidates the compositor's fade cache
+ * (the cache of a composited subtree reused across frames of a pure opacity animation).
  *
  * @param[in,out] node  Node whose ancestor chain should be invalidated.
  */
 void er_mark_dirty_upward(ERNode* node);
+
+/**
+ * @brief Marks a node and all ancestors dirty WITHOUT recording a content change.
+ *
+ * For repaints where the subtree's rendered content is unchanged and only its blend changes —
+ * today that is exactly an animated opacity value being applied. Keeping the content generation
+ * stable lets the fade cache reuse the composited subtree and only re-blend at the new alpha.
+ *
+ * @param[in,out] node  Node whose ancestor chain should be invalidated.
+ */
+void er_mark_dirty_upward_visual(ERNode* node);
 
 #endif

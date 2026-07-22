@@ -619,6 +619,76 @@ int main(void)
         er_node_destroy(root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Fade cache: repeated alpha-only commits and content invalidation.
+     *
+     * A translucent group re-rendered because its bound opacity VALUE changed
+     * (a visual-only mark) may be served from the fade cache in builds with
+     * ERUI_FADE_CACHE_W/H set; a content change (child recolored via props)
+     * must invalidate it. The pixel expectations are identical with the cache
+     * compiled out, so this test runs in every configuration — with the cache
+     * on, it verifies the cached blend is bit-exact and invalidation works.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 16;
+        gp.height = 16;
+        gp.background_color = 0x00000000U; /* transparent container */
+        gp.opacity = 128U;
+        er_node_set_props(group, &gp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 16;
+        cp.height = 16;
+        cp.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(group, child);
+        er_tree_append_child(root, group);
+        er_tree_set_root(root);
+        er_commit(); /* first composite (capture in cache-enabled builds) */
+
+        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+            return fail("fade cache: initial composite should be red at alpha 128");
+
+        /* Drive opacity through an animated value: er_anim_value_set marks the group
+         * visual-only, so cache-enabled builds serve the next commits from the cache. */
+        ERAnimValueHandle val = er_anim_value_create(0.25f);
+        er_anim_value_bind(val, group, ER_PROP_OPACITY); /* bind-time apply → opacity 64 */
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFFBFBFU)
+            return fail("fade cache: red at alpha 64 after value bind");
+
+        er_anim_value_set(val, 0.5f); /* alpha-only change → cache hit when enabled */
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+            return fail("fade cache: red at alpha 128 after alpha-only value change");
+
+        /* Content change mid-fade: recolor the child. Must invalidate the cache. */
+        cp.background_color = 0xFF0000FFU; /* blue */
+        er_node_set_props(child, &cp);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFF7F7FFFU)
+            return fail("fade cache: child recolor mid-fade must show blue (stale cache?)");
+
+        er_anim_value_destroy(val);
+        er_tree_remove_child(group, child);
+        er_tree_remove_child(root, group);
+        er_node_destroy(child);
+        er_node_destroy(group);
+        er_node_destroy(root);
+    }
+
 #if ERUI_TRANSFORMS_FULL
     /* -----------------------------------------------------------------------
      * Transform inside a banded opacity group.
