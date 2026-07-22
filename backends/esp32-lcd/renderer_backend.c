@@ -220,10 +220,11 @@ static inline void flip_gate(void)
     }
     if (s_be.flip_done)
     {
-        (void)xSemaphoreTake(s_be.flip_done, pdMS_TO_TICKS(100));
+        if (xSemaphoreTake(s_be.flip_done, portMAX_DELAY) == pdTRUE)
+        {
+            s_be.pending_flips = 0; /* a frame boundary passed: earlier flips are live */
+        }
     }
-    s_be.pending_flips = 0; /* a frame boundary passed (or timed out): earlier flips are live */
-}
 
 /** @brief Clamps a rect to the framebuffer and returns false if fully off-screen. */
 static bool clip_rect(int* x, int* y, int* w, int* h)
@@ -896,7 +897,8 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     void* fb1 = NULL;
     void* fb2 = NULL;
     s_be.nfb = 0;
-    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fb0, &fb1, &fb2) == ESP_OK && fb0 && fb1 && fb2)
+    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fb0, &fb1, &fb2) == ESP_OK && fb0 && fb1 && fb2 &&
+        fb0 != fb1 && fb0 != fb2 && fb1 != fb2)
     {
         s_be.nfb = 3;
     }
