@@ -743,6 +743,198 @@ static void compute_subtree_bounds(ERNode* n)
     n->subtree_prunable = prunable;
 }
 
+/* Banded opacity compositing: when a composite region exceeds one scratch strip, the subtree
+ * is re-rendered once per strip-sized tile. The tile currently being composited is recorded
+ * here (screen space) so the subtree-bounds prune can skip untransformed subtrees that miss
+ * it, and so nested composites can bound their own region to the tile. It is deliberately
+ * NOT a clip-stack entry — clipping the walk would truncate nested transform-source captures
+ * at the seam (same rule as the ER_LCD_BANDED backend band). */
+static bool s_tile_active = false;
+static int s_tile_x = 0;
+static int s_tile_y = 0;
+static int s_tile_w = 0;
+static int s_tile_h = 0;
+
+/* Banded-pass bookkeeping for the transform source cache: each band loop gets a generation,
+ * and only its FIRST tile captures a transform subtree — later tiles replay the emit from the
+ * cached source (see er_transform_source_is_cached), skipping the subtree re-render. */
+static uint32_t s_band_gen_counter = 0;
+static uint32_t s_cur_loop_gen = 0;
+static bool s_tile_first = false;
+
+#if ER_PROF
+/* TEMP on-device profiling: phase accumulators printed every 30 commits (host provides the clock). */
+#include <stdio.h>
+extern uint32_t er_prof_now_us(void);
+static uint32_t s_prof_content_us = 0;  /* subtree render time inside composites */
+static uint32_t s_prof_blend_us = 0;    /* strip pop_blend time */
+static uint32_t s_prof_push_us = 0;     /* strip push (clear) time */
+static uint32_t s_prof_passes = 0;      /* band passes */
+static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that composited */
+#define ER_PROF_MARK(var) const uint32_t var = er_prof_now_us()
+#define ER_PROF_ACC(acc, from) (acc += er_prof_now_us() - (from))
+#else
+#define ER_PROF_MARK(var)
+#define ER_PROF_ACC(acc, from)
+#endif
+
+static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
+
+/**
+ * @brief Renders a node's own content and recurses into its children.
+ *
+ * This is the repeatable "body" of render_tree: the per-type draw switch, the overflow
+ * scissor push, and the z-sorted child recursion. It has no side effects on n's dirty
+ * flags (except one-shot consumption of vec_has_dirty by the vector rasterizer), so the
+ * banded opacity compositor can invoke it once per strip tile.
+ *
+ * @param[in] n              Node to render.
+ * @param[in] should_render  true when the node itself (not only descendants) must repaint.
+ * @param[in] px             Screen-space left edge (scroll translation applied).
+ * @param[in] py             Screen-space top edge.
+ * @param[in] w              Node width in pixels.
+ * @param[in] h              Node height in pixels.
+ * @param[in] translate_x    Accumulated horizontal scroll offset for children.
+ * @param[in] translate_y    Accumulated vertical scroll offset for children.
+ */
+static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
+                                int translate_y);
+
+/**
+ * @brief Composites a node subtree at a group alpha through the scratch strip pool.
+ *
+ * The composite region is the node rect intersected with the active scissor and any
+ * enclosing composite tile — group opacity is a per-pixel-local operation, so bounding
+ * the composite to the visible region is exact, and a small damage clip on a large faded
+ * node composites in a single pass. When the region fits one strip this is the classic
+ * single push/blend; otherwise the region is walked in strip-sized tiles, re-rendering
+ * the subtree once per tile (any node size composites correctly, bounded RAM).
+ *
+ * @param[in] n            Node whose subtree is composited.
+ * @param[in] alpha        Group opacity 0–255.
+ * @param[in] px           Screen-space left edge of the node.
+ * @param[in] py           Screen-space top edge.
+ * @param[in] w            Node width in pixels.
+ * @param[in] h            Node height in pixels.
+ * @param[in] translate_x  Accumulated scroll offset for children.
+ * @param[in] translate_y  Accumulated scroll offset for children.
+ *
+ * @return true when the subtree was composited; false when no slot was available or the
+ *         region is empty (caller falls back to a direct render).
+ */
+static bool composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
+                                   int translate_y)
+{
+    if (!er_scratch_avail())
+        return false;
+
+    int rx = px, ry = py, rx1 = px + w, ry1 = py + h;
+    int gx, gy, gw, gh;
+    if (er_get_clip_rect(&gx, &gy, &gw, &gh))
+    {
+        if (gx > rx)
+            rx = gx;
+        if (gy > ry)
+            ry = gy;
+        if (gx + gw < rx1)
+            rx1 = gx + gw;
+        if (gy + gh < ry1)
+            ry1 = gy + gh;
+    }
+    if (s_tile_active)
+    {
+        if (s_tile_x > rx)
+            rx = s_tile_x;
+        if (s_tile_y > ry)
+            ry = s_tile_y;
+        if (s_tile_x + s_tile_w < rx1)
+            rx1 = s_tile_x + s_tile_w;
+        if (s_tile_y + s_tile_h < ry1)
+            ry1 = s_tile_y + s_tile_h;
+    }
+    const int rw = rx1 - rx;
+    const int rh = ry1 - ry;
+    if (rw <= 0 || rh <= 0)
+        return false;
+
+    const int sw = er_scratch_strip_w();
+    const int sh = er_scratch_strip_h();
+
+    if (rw <= sw && rh <= sh)
+    {
+        ER_PROF_MARK(t_push);
+        if (!er_scratch_push(rx, ry, rw, rh))
+            return false;
+        ER_PROF_ACC(s_prof_push_us, t_push);
+        /* Scissor to the composite region so rasterisers do region-sized work, not node-sized. */
+        er_push_clip_rect(rx, ry, rw, rh);
+        ER_PROF_MARK(t_content);
+        render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+        ER_PROF_ACC(s_prof_content_us, t_content);
+        er_pop_clip_rect();
+        ER_PROF_MARK(t_blend);
+        er_scratch_pop_blend(alpha, rx, ry, rw, rh);
+        ER_PROF_ACC(s_prof_blend_us, t_blend);
+#if ER_PROF
+        s_prof_passes++;
+        s_prof_composites++;
+#endif
+        return true;
+    }
+
+    /* Banded pass: walk the region in strip-sized tiles. Each tile is pushed as a REAL clip
+     * rect so rasterisers (rrect AA, text, gradients, vector) do strip-sized work per pass —
+     * transform source captures are unaffected because er_transform_source_begin pushes a
+     * clip reset for the duration of the capture. */
+    const bool outer_active = s_tile_active;
+    const int ox = s_tile_x, oy = s_tile_y, ow = s_tile_w, oh = s_tile_h;
+    const uint32_t outer_gen = s_cur_loop_gen;
+    const bool outer_first = s_tile_first;
+    s_cur_loop_gen = ++s_band_gen_counter;
+    bool first = true;
+    for (int by = ry; by < ry1; by += sh)
+    {
+        const int bh = (ry1 - by) < sh ? (ry1 - by) : sh;
+        for (int bx = rx; bx < rx1; bx += sw)
+        {
+            const int bw = (rx1 - bx) < sw ? (rx1 - bx) : sw;
+            ER_PROF_MARK(t_push);
+            if (!er_scratch_push(bx, by, bw, bh))
+                continue; /* unreachable: size fits a strip and depth was pre-checked */
+            ER_PROF_ACC(s_prof_push_us, t_push);
+            s_tile_active = true;
+            s_tile_x = bx;
+            s_tile_y = by;
+            s_tile_w = bw;
+            s_tile_h = bh;
+            s_tile_first = first;
+            er_push_clip_rect(bx, by, bw, bh);
+            ER_PROF_MARK(t_content);
+            render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+            ER_PROF_ACC(s_prof_content_us, t_content);
+            er_pop_clip_rect();
+            s_tile_active = outer_active;
+            s_tile_x = ox;
+            s_tile_y = oy;
+            s_tile_w = ow;
+            s_tile_h = oh;
+            ER_PROF_MARK(t_blend);
+            er_scratch_pop_blend(alpha, bx, by, bw, bh);
+            ER_PROF_ACC(s_prof_blend_us, t_blend);
+#if ER_PROF
+            s_prof_passes++;
+#endif
+            first = false;
+        }
+    }
+    s_cur_loop_gen = outer_gen;
+    s_tile_first = outer_first;
+#if ER_PROF
+    s_prof_composites++;
+#endif
+    return true;
+}
+
 /**
  * @brief Recursively renders a node and its children depth-first.
  *
@@ -788,6 +980,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         int band_oy, band_h;
         if (er_band_active(&band_oy, &band_h) && (by1 <= band_oy || by0 >= band_oy + band_h))
             return;
+        /* Banded opacity compositing: skip subtrees entirely outside the strip tile currently being
+         * composited (same never-prune-transformed rule as above). */
+        if (s_tile_active
+            && (bx1 <= s_tile_x || by1 <= s_tile_y || bx0 >= s_tile_x + s_tile_w || by0 >= s_tile_y + s_tile_h))
+            return;
     }
 
     const bool should_render = n->dirty || parent_dirty;
@@ -802,6 +999,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     /* --- 2D/3D transform application --- */
     bool doing_affine = false;
+    bool doing_replay = false;
     bool doing_3d = false;
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
@@ -821,10 +1019,19 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             er_transform_compute_homography_3d(n, px, py, w, h, H);
             er_transform_aabb_3d(px, py, w, h, H, &dst_x, &dst_y, &dst_w, &dst_h);
 
-            if (er_transform_homography_invert(H, xf_inv_H) && er_transform_source_begin(px, py, w, h))
+            if (er_transform_homography_invert(H, xf_inv_H))
             {
-                doing_affine = true;
-                doing_3d = true;
+                if (s_tile_active && !s_tile_first && er_transform_source_is_cached(n->tag, s_cur_loop_gen))
+                {
+                    doing_replay = true;
+                    doing_3d = true;
+                }
+                else if (er_transform_source_begin(px, py, w, h))
+                {
+                    doing_affine = true;
+                    doing_3d = true;
+                    er_transform_source_note(n->tag, s_tile_active ? s_cur_loop_gen : 0U);
+                }
             }
         }
         else
@@ -837,10 +1044,17 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             er_transform_compute_matrix(n, px, py, w, h, &a, &b, &c, &d, &ftx, &fty);
             er_transform_aabb(px, py, w, h, a, b, c, d, ftx, fty, &dst_x, &dst_y, &dst_w, &dst_h);
 
-            if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity)
-                && er_transform_source_begin(px, py, w, h))
+            if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity))
             {
-                doing_affine = true;
+                if (s_tile_active && !s_tile_first && er_transform_source_is_cached(n->tag, s_cur_loop_gen))
+                {
+                    doing_replay = true;
+                }
+                else if (er_transform_source_begin(px, py, w, h))
+                {
+                    doing_affine = true;
+                    er_transform_source_note(n->tag, s_tile_active ? s_cur_loop_gen : 0U);
+                }
             }
             /* On failure (too large or singular matrix) fall through to normal render at
              * the untransformed position as a graceful degradation. */
@@ -853,6 +1067,33 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             py += (int)n->tp_translate_y;
         }
     }
+
+    /* Banded-composite replay: later tiles of the same band pass reuse the transform source
+     * captured in the first tile — emit only, bounded to the tile scissor. The subtree
+     * re-render, damage recording, and dirty bookkeeping all happened in the first pass. */
+    if (doing_replay)
+    {
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+        if (doing_3d)
+        {
+            er_transform_source_replay_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
+            return;
+        }
+#endif
+#if ERUI_TRANSFORMS_FULL
+        er_transform_source_replay_blit(
+            px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+#endif
+        return;
+    }
+
+    /* A transform capture renders in SOURCE space: suspend the composite tile for its
+     * duration (the tile bounds the transformed OUTPUT via the clip stack at emit time), so
+     * pruning and nested composite regions inside the capture aren't bounded by a
+     * post-transform rectangle. er_transform_source_begin pushed the matching clip reset. */
+    const bool xf_saved_tile_active = s_tile_active;
+    if (doing_affine)
+        s_tile_active = false;
 
     /* Record where this node is painted so the next commit can damage-clip a move: the old rect
      * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint. */
@@ -931,17 +1172,50 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
          * function), not here — clearing it now would hide the sub-region from the rasterize clip. */
     }
 
-    /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
-     * scratch slot which is then blended at the node's alpha.  er_scratch_push returns
-     * false when the pool is exhausted or the node is too large; in that case the subtree
-     * renders at full opacity (graceful degradation). */
+    /* Opacity compositing: View-family nodes with opacity < 255 render into off-screen
+     * scratch strips which are then blended at the node's alpha. Regions larger than one
+     * strip are composited in multiple band passes (see composite_with_opacity); when no
+     * slot is available at all the subtree falls back to a direct render. */
     const uint8_t node_opacity =
         (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
          || (n->type == ER_NODE_MODAL && n->modal_visible) || n->type == ER_NODE_TEXT_INPUT)
             ? n->props.view.opacity
             : 255U;
-    const bool use_scratch = (node_opacity < 255U) && should_render && er_scratch_push(px, py, w, h);
 
+    bool composited = false;
+    if (node_opacity < 255U && should_render)
+        composited = composite_with_opacity(n, node_opacity, px, py, w, h, translate_x, translate_y);
+    if (!composited)
+    {
+        /* Graceful degradation: when the group cannot be composited (scratch pool exhausted),
+         * multiply its opacity into every primitive draw instead of dropping it. Exact wherever
+         * siblings don't overlap; far closer to correct than rendering fully opaque. */
+        const uint8_t saved_alpha = er_get_draw_alpha();
+        if (node_opacity < 255U && should_render)
+            er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / 255U));
+        render_node_content(n, should_render, px, py, w, h, translate_x, translate_y);
+        er_set_draw_alpha(saved_alpha);
+    }
+
+    n->dirty = false;
+
+    /* Affine/perspective transform: end source capture and blit the transformed result. */
+    if (doing_affine)
+    {
+#if ERUI_3D_TRANSFORMS
+        if (doing_3d)
+            er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
+        else
+#endif
+            er_transform_source_end_blit(
+                px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+        s_tile_active = xf_saved_tile_active;
+    }
+}
+
+static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
+                                int translate_y)
+{
     if (should_render)
     {
         switch (n->type)
@@ -1113,8 +1387,6 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         }
     }
 
-    n->dirty = false;
-
     /* Overflow clipping: push a scissor rect so children cannot draw outside this node. A scroller
      * (ScrollView / FlatList) ALWAYS clips to its viewport — that is its defining behaviour — regardless
      * of an explicit overflow style, so scrolled children can't escape past the top or bottom edge. */
@@ -1142,22 +1414,6 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     if (clips)
         er_pop_clip_rect();
-
-    /* Blend the scratch slot back at this node's opacity. */
-    if (use_scratch)
-        er_scratch_pop_blend(node_opacity, px, py, w, h);
-
-    /* Affine/perspective transform: end source capture and blit the transformed result. */
-    if (doing_affine)
-    {
-#if ERUI_3D_TRANSFORMS
-        if (doing_3d)
-            er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
-        else
-#endif
-            er_transform_source_end_blit(
-                px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
-    }
 }
 
 /**
@@ -3093,6 +3349,24 @@ void er_commit(void)
     s_force_full_repaint = false;
     s_kbd_dirty = false;           /* the keyboard strip (if any) was repainted this commit */
     s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
+
+#if ER_PROF
+    {
+        static uint32_t s_prof_commits = 0;
+        if (++s_prof_commits >= 30U)
+        {
+            printf("ERPROF: passes=%u composites=%u push_us=%u content_us=%u blend_us=%u (per 30 commits)\n",
+                   (unsigned)s_prof_passes,
+                   (unsigned)s_prof_composites,
+                   (unsigned)s_prof_push_us,
+                   (unsigned)s_prof_content_us,
+                   (unsigned)s_prof_blend_us);
+            s_prof_commits = 0;
+            s_prof_passes = s_prof_composites = 0;
+            s_prof_push_us = s_prof_content_us = s_prof_blend_us = 0;
+        }
+    }
+#endif
 }
 
 uint32_t er_layout_pass_count(void)

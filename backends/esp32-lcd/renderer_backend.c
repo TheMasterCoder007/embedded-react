@@ -295,6 +295,42 @@ static void present_region(uint16_t* dst, int dst_stride, int dst_ox, int dst_oy
  *
  * @return The composited opaque pixel (0xFFRRGGBB), ready to pack via fb_store.
  */
+/**
+ * @brief Fast source-over of a premultiplied ARGB8888 pixel onto an opaque canonical pixel.
+ *
+ * Paired-channel arithmetic: R+B blend in one 32-bit multiply, G in another — 2 multiplies
+ * per pixel instead of ~6, at the cost of ≤1 LSB darkening (inv = 255-sa with >>8), which is
+ * below the RGB565 quantization step. This is the per-pixel core of the composited-strip →
+ * framebuffer emit, the hottest loop on PSRAM-framebuffer boards.
+ */
+static inline fbpx_t over_premul_fast(fbpx_t dst, uint32_t sp)
+{
+    const uint32_t sa = sp >> 24;
+    if (sa == 255U)
+    {
+        return fb_store(sp);
+    }
+    if (sa == 0U)
+    {
+        return dst;
+    }
+    const uint32_t inv = 255U - sa;
+    const uint32_t d = fb_load(dst);
+    const uint32_t orb = ((sp & 0x00FF00FFU) + (((d & 0x00FF00FFU) * inv >> 8) & 0x00FF00FFU)) & 0x00FF00FFU;
+    const uint32_t og = ((sp & 0x0000FF00U) + (((d & 0x0000FF00U) * inv >> 8) & 0x0000FF00U)) & 0x0000FF00U;
+    return fb_store(0xFF000000U | orb | og);
+}
+
+/** @brief Scales a premultiplied ARGB8888 pixel (all four channels) by alpha/255, paired. */
+static inline uint32_t scale_premul_fast(uint32_t sp, uint32_t alpha)
+{
+    /* a1 in [0,256]: 255→256 keeps full-opacity lossless. */
+    const uint32_t a1 = alpha + (alpha >> 7);
+    const uint32_t ag = ((sp >> 8) & 0x00FF00FFU) * a1;      /* A and G lanes */
+    const uint32_t rb = (sp & 0x00FF00FFU) * a1;             /* R and B lanes */
+    return ((ag & 0xFF00FF00U)) | ((rb >> 8) & 0x00FF00FFU);
+}
+
 static inline uint32_t over_premul(uint32_t dst, uint32_t sp)
 {
     const uint32_t sa = sp >> 24;
@@ -349,6 +385,12 @@ static void blit_overlay(uint16_t* dst)
  - Backend callbacks
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/* Row staging buffer (internal DRAM): the canonical framebuffer lives in PSRAM, where per-pixel
+ * read-modify-write stalls ~90 cycles/px. Blends copy the destination row in with a burst memcpy,
+ * blend against internal memory, and burst the result back — several times faster than in-place. */
+#define ER_ROW_STAGE_MAX 1024
+static fbpx_t s_row_stage[ER_ROW_STAGE_MAX];
+
 /** @brief Fills a rect with a straight-alpha ARGB8888 color, composited over the framebuffer. */
 static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
@@ -377,10 +419,16 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
         }
         else
         {
+            /* Translucent fill: stage the row internally (see blend_cb). */
+            fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
+            if (stage != d)
+                memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
             for (int col = 0; col < w; col++)
             {
-                d[col] = fb_store(over_premul(fb_load(d[col]), sp));
+                stage[col] = over_premul_fast(stage[col], sp);
             }
+            if (stage != d)
+                memcpy(d, stage, (size_t)w * sizeof(fbpx_t));
         }
     }
     mark_dirty(x, y, w, h);
@@ -403,7 +451,16 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
         fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         for (int col = 0; col < w; col++)
         {
-            d[col] = fb_store(over_premul(fb_load(d[col]), s[col]));
+            const uint32_t p = s[col];
+            const uint32_t sa = p >> 24;
+            if (sa == 255U)
+            {
+                d[col] = fb_store(p);
+            }
+            else if (sa != 0U)
+            {
+                d[col] = over_premul_fast(d[col], p);
+            }
         }
     }
     mark_dirty(x, y, w, h);
@@ -429,16 +486,42 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     {
         const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
         fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
-        for (int col = 0; col < w; col++)
+        /* Stage the destination row in internal DRAM: one burst in, blend internally, one
+         * burst out — instead of a ~90-cycle PSRAM read-modify-write per pixel. */
+        fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
+        if (stage != d)
+            memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
+        if (ga == 255U)
         {
-            /* Scale the premultiplied source by the global alpha (both rgb and a), then over. */
-            const uint32_t p = s[col];
-            const uint32_t sa = ((p >> 24) * ga + 127U) / 255U;
-            const uint32_t sr = (((p >> 16) & 0xFFU) * ga + 127U) / 255U;
-            const uint32_t sg = (((p >> 8) & 0xFFU) * ga + 127U) / 255U;
-            const uint32_t sb = ((p & 0xFFU) * ga + 127U) / 255U;
-            d[col] = fb_store(over_premul(fb_load(d[col]), (sa << 24) | (sr << 16) | (sg << 8) | sb));
+            /* Full-alpha path — the common case for composited strips, where most pixels are
+             * fully opaque: no global-alpha scaling, opaque pixels skip the dst load. */
+            for (int col = 0; col < w; col++)
+            {
+                const uint32_t p = s[col];
+                const uint32_t sa = p >> 24;
+                if (sa == 255U)
+                {
+                    stage[col] = fb_store(p);
+                }
+                else if (sa != 0U)
+                {
+                    stage[col] = over_premul_fast(stage[col], p);
+                }
+            }
         }
+        else
+        {
+            for (int col = 0; col < w; col++)
+            {
+                /* Scale the premultiplied source by the global alpha (paired lanes), then over. */
+                const uint32_t p = s[col];
+                if (p == 0U)
+                    continue;
+                stage[col] = over_premul_fast(stage[col], scale_premul_fast(p, ga));
+            }
+        }
+        if (stage != d)
+            memcpy(d, stage, (size_t)w * sizeof(fbpx_t));
     }
     mark_dirty(x, y, w, h);
 }

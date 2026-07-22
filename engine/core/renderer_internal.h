@@ -57,6 +57,15 @@ void er_push_clip_rect(int x, int y, int w, int h);
 void er_pop_clip_rect(void);
 
 /**
+ * @brief Pushes a full-extent clip entry WITHOUT intersecting the current top of stack.
+ *
+ * Used by offscreen source captures (transform subtree render) that must rasterise the whole
+ * subtree regardless of outer scissors — the captured output is clipped by the restored stack
+ * when it is blended out.  Balance with er_pop_clip_rect().
+ */
+void er_push_clip_reset(void);
+
+/**
  * @brief Sets the current band strip (banded rendering): screen rows [oy, oy + h).
  *
  * Applied only at the backend-emit boundary — each backend blit is clamped to these rows and its Y
@@ -134,6 +143,23 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
  * @param[in] h       Height of the region in pixels.
  */
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h);
+
+/**
+ * @brief Sets the inherited draw alpha multiplied into every subsequent blit.
+ *
+ * Used by the compositor's graceful-degradation path: when a translucent group cannot be
+ * composited through a scratch slot, its opacity is instead multiplied into each primitive
+ * draw (exact wherever siblings don't overlap). Offscreen captures reset this to 255 for
+ * the duration of the capture and re-apply it when the captured buffer is blended out.
+ *
+ * @param[in] alpha  Draw alpha 0–255 (255 = no dimming, the default).
+ */
+void er_set_draw_alpha(uint8_t alpha);
+
+/**
+ * @brief Returns the current inherited draw alpha (255 when no dimming is active).
+ */
+uint8_t er_get_draw_alpha(void);
 
 /**
  * @brief Redirects all subsequent blit calls into an off-screen ARGB8888 scratch buffer.

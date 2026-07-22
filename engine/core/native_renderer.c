@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -69,6 +70,18 @@ static int s_scratch_w = 0;
 static int s_scratch_h = 0;
 static int s_scratch_ox = 0;
 static int s_scratch_oy = 0;
+
+/* Inherited draw alpha: multiplied into every blit while < 255. Set by the compositor when a
+ * translucent group cannot be composited through a scratch slot (pool exhausted) — each
+ * primitive is then dimmed individually, which is exact wherever siblings don't overlap.
+ * Offscreen captures (opacity strips, transform sources) reset it to 255 for the capture and
+ * re-apply it when the captured buffer is blended out, so it is never applied twice. */
+static uint8_t s_draw_alpha = 255U;
+
+/* Row chunk used to emit fills through the blend path while s_draw_alpha < 255: backend
+ * fill_rect semantics for translucent colors vary (some overwrite), blend_rect is uniform. */
+#define ER_FILL_ROW_CHUNK 256
+static uint32_t s_fill_row[ER_FILL_ROW_CHUNK];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -127,33 +140,42 @@ static void scratch_do_fill(uint32_t argb, int lx, int ly, int lw, int lh)
     if (sa == 0U)
         return;
 
+    /* Clamp once so the pixel loops below run without per-pixel bounds checks. */
+    const int x0 = lx < 0 ? 0 : lx;
+    const int y0 = ly < 0 ? 0 : ly;
+    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
     const uint8_t sr = (uint8_t)((uint32_t)((argb >> 16) & 0xFFU) * sa / 255U);
     const uint8_t sg = (uint8_t)((uint32_t)((argb >> 8) & 0xFFU) * sa / 255U);
     const uint8_t sb = (uint8_t)((uint32_t)(argb & 0xFFU) * sa / 255U);
     const uint8_t inv_sa = (uint8_t)(255U - sa);
 
-    for (int row = ly; row < ly + lh; row++)
+    if (sa == 255U)
     {
-        if (row < 0 || row >= s_scratch_h)
-            continue;
-        uint32_t* dst_row = s_scratch_buf + row * s_scratch_w;
-        for (int col = lx; col < lx + lw; col++)
+        const uint32_t px = (0xFFU << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
+        for (int row = y0; row < y1; row++)
         {
-            if (col < 0 || col >= s_scratch_w)
-                continue;
-            if (sa == 255U)
-            {
-                dst_row[col] = (0xFFU << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
-            }
-            else
-            {
-                const uint32_t d = dst_row[col];
-                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
-                const uint8_t or_ = (uint8_t)(sr + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
-                const uint8_t og = (uint8_t)(sg + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
-                const uint8_t ob = (uint8_t)(sb + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
-            }
+            uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+            for (int col = x0; col < x1; col++)
+                dst_row[col] = px;
+        }
+        return;
+    }
+
+    for (int row = y0; row < y1; row++)
+    {
+        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+        for (int col = x0; col < x1; col++)
+        {
+            const uint32_t d = dst_row[col];
+            const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
+            const uint8_t or_ = (uint8_t)(sr + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
+            const uint8_t og = (uint8_t)(sg + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
+            const uint8_t ob = (uint8_t)(sb + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
+            dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
         }
     }
 }
@@ -174,21 +196,24 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
     if (alpha == 0U)
         return;
 
-    for (int row = 0; row < lh; row++)
+    /* Clamp once (advancing the source pointer to match) so the pixel loops below run
+     * without per-pixel bounds checks. */
+    const int x0 = lx < 0 ? 0 : lx;
+    const int y0 = ly < 0 ? 0 : ly;
+    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    src = (const uint8_t*)src + (size_t)(y0 - ly) * (size_t)stride + (size_t)(x0 - lx) * 4U;
+
+    for (int row = y0; row < y1; row++)
     {
-        const int dy = ly + row;
-        if (dy < 0 || dy >= s_scratch_h)
-            continue;
-        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        uint32_t* dst_row = s_scratch_buf + dy * s_scratch_w;
+        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)(row - y0) * (size_t)stride);
+        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
 
-        for (int col = 0; col < lw; col++)
+        for (int col = x0; col < x1; col++)
         {
-            const int dx = lx + col;
-            if (dx < 0 || dx >= s_scratch_w)
-                continue;
-
-            uint32_t sp = src_row[col];
+            uint32_t sp = src_row[col - x0];
             if (alpha < 255U)
             {
                 /* Scale all premultiplied channels by the global alpha. */
@@ -203,17 +228,17 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
 
             if (sa == 255U)
             {
-                dst_row[dx] = sp;
+                dst_row[col] = sp;
             }
             else
             {
-                const uint32_t d = dst_row[dx];
+                const uint32_t d = dst_row[col];
                 const uint8_t inv_sa = (uint8_t)(255U - sa);
                 const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
                 const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
                 const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
                 const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                dst_row[dx] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
             }
         }
     }
@@ -231,20 +256,20 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
  */
 static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw, int lh)
 {
-    for (int row = 0; row < lh; row++)
+    /* Clamp once, then each row is a straight memcpy (opaque overwrite). */
+    const int x0 = lx < 0 ? 0 : lx;
+    const int y0 = ly < 0 ? 0 : ly;
+    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    src = (const uint8_t*)src + (size_t)(y0 - ly) * (size_t)stride + (size_t)(x0 - lx) * 4U;
+
+    const size_t bytes = (size_t)(x1 - x0) * sizeof(uint32_t);
+    for (int row = y0; row < y1; row++)
     {
-        const int dy = ly + row;
-        if (dy < 0 || dy >= s_scratch_h)
-            continue;
-        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        uint32_t* dst_row = s_scratch_buf + dy * s_scratch_w;
-        for (int col = 0; col < lw; col++)
-        {
-            const int dx = lx + col;
-            if (dx < 0 || dx >= s_scratch_w)
-                continue;
-            dst_row[dx] = src_row[col];
-        }
+        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)(row - y0) * (size_t)stride);
+        memcpy(s_scratch_buf + (size_t)row * s_scratch_w + x0, src_row, bytes);
     }
 }
 
@@ -308,6 +333,17 @@ void er_pop_clip_rect(void)
         s_clip_depth--;
 }
 
+void er_push_clip_reset(void)
+{
+    if (s_clip_depth >= ER_CLIP_STACK_DEPTH)
+        return;
+    /* Full-extent entry pushed WITHOUT intersecting the current top: used by offscreen source
+     * captures (transform subtree render) that must see the whole subtree regardless of outer
+     * scissors — the captured OUTPUT is clipped by the restored stack when it is blended out. */
+    ClipEntry entry = {-(1 << 20), -(1 << 20), (1 << 21), (1 << 21)};
+    s_clip_stack[s_clip_depth++] = entry;
+}
+
 void er_set_band(int oy, int h)
 {
     s_band_oy = oy;
@@ -339,8 +375,43 @@ bool er_get_clip_rect(int* x, int* y, int* w, int* h)
     return true;
 }
 
+void er_set_draw_alpha(uint8_t alpha)
+{
+    s_draw_alpha = alpha;
+}
+
+uint8_t er_get_draw_alpha(void)
+{
+    return s_draw_alpha;
+}
+
 void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
 {
+    if (s_draw_alpha < 255U)
+    {
+        /* Inherited-alpha fallback: emit the fill through the blend path so the color is
+         * composited over existing pixels on every backend. er_blit_blend applies
+         * s_draw_alpha itself, so the row holds the color at its ORIGINAL alpha. */
+        const uint8_t a = (uint8_t)((argb >> 24) & 0xFFU);
+        if (a == 0U)
+            return;
+        if (!apply_clip(&x, &y, &w, &h))
+            return;
+        const uint32_t pr = (uint32_t)((argb >> 16) & 0xFFU) * a / 255U;
+        const uint32_t pg = (uint32_t)((argb >> 8) & 0xFFU) * a / 255U;
+        const uint32_t pb = (uint32_t)(argb & 0xFFU) * a / 255U;
+        const uint32_t premul = ((uint32_t)a << 24) | (pr << 16) | (pg << 8) | pb;
+        const int chunk = w < ER_FILL_ROW_CHUNK ? w : ER_FILL_ROW_CHUNK;
+        for (int i = 0; i < chunk; i++)
+            s_fill_row[i] = premul;
+        for (int row = 0; row < h; row++)
+            for (int cx = 0; cx < w; cx += ER_FILL_ROW_CHUNK)
+            {
+                const int cw = (w - cx) < ER_FILL_ROW_CHUNK ? (w - cx) : ER_FILL_ROW_CHUNK;
+                er_blit_blend(s_fill_row, cw * (int)sizeof(uint32_t), 255U, x + cx, y + row, cw, 1);
+            }
+        return;
+    }
     if (!apply_clip(&x, &y, &w, &h))
         return;
     if (s_scratch_buf)
@@ -369,6 +440,13 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
 
 void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
 {
+    if (s_draw_alpha < 255U)
+    {
+        /* Inherited-alpha fallback: an opaque copy becomes a blend at the inherited alpha
+         * (er_blit_blend applies s_draw_alpha itself). */
+        er_blit_blend(src, stride, 255U, x, y, w, h);
+        return;
+    }
     const int orig_x = x;
     const int orig_y = y;
     if (!apply_clip(&x, &y, &w, &h))
@@ -405,6 +483,12 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
 
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h)
 {
+    if (s_draw_alpha < 255U)
+    {
+        alpha = (uint8_t)((uint32_t)alpha * s_draw_alpha / 255U);
+        if (alpha == 0U)
+            return;
+    }
     const int orig_x = x;
     const int orig_y = y;
     if (!apply_clip(&x, &y, &w, &h))

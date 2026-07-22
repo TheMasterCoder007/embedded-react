@@ -303,6 +303,12 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
 }
 #endif
 
+/** @brief Microsecond clock for the engine's temporary ER_PROF instrumentation. */
+uint32_t er_prof_now_us(void)
+{
+    return (uint32_t)esp_timer_get_time();
+}
+
 /* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).
  * Light frames sleep the remainder up to this; heavy frames yield the minimum and run as fast as the
  * work allows. The real win needs fine ticks — see CONFIG_FREERTOS_HZ=1000 in sdkconfig.defaults. */
@@ -478,7 +484,9 @@ static void run_app(void)
 
         const int64_t frame_start_us = esp_timer_get_time();
         er_runtime_pump(); /* drain JS promises + fire due timers */
+        const int64_t t_pump_us = esp_timer_get_time();
         er_commit();       /* lay out (if needed) + paint the changed region into the backend */
+        const int64_t t_commit_us = esp_timer_get_time();
 #if ER_PERF_OVERLAY
         /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
            expensive part) and snapshot that region. The backend then re-composites the snapshot on top
@@ -497,14 +505,32 @@ static void run_app(void)
         {
             er_esp32_lcd_present(); /* flush the app region + re-composite the overlay */
         }
+        const int64_t t_present_us = esp_timer_get_time();
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
         prev = now;
 
-        if ((++frame % 120U) == 0U)
+        /* Frame-phase trace: where the frame time goes, averaged over the log window. */
+        static uint32_t s_tr_pump = 0, s_tr_commit = 0, s_tr_present = 0, s_tr_n = 0;
+        s_tr_pump += (uint32_t)(t_pump_us - frame_start_us);
+        s_tr_commit += (uint32_t)(t_commit_us - t_pump_us);
+        s_tr_present += (uint32_t)(t_present_us - t_commit_us);
+        s_tr_n++;
+
+        if ((++frame % 30U) == 0U)
         {
-            ESP_LOGI(TAG, "alive: %u frames, %u ms uptime", (unsigned)frame, (unsigned)now);
+            ESP_LOGI(TAG,
+                     "alive: %u frames, %u ms uptime | avg us/frame: pump=%u commit=%u present=%u | display=%d "
+                     "int_free=%u",
+                     (unsigned)frame,
+                     (unsigned)now,
+                     (unsigned)(s_tr_pump / s_tr_n),
+                     (unsigned)(s_tr_commit / s_tr_n),
+                     (unsigned)(s_tr_present / s_tr_n),
+                     (int)display,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            s_tr_pump = s_tr_commit = s_tr_present = s_tr_n = 0;
         }
 
         /* Adaptive pacing: sleep only the remainder up to ER_TARGET_FRAME_MS so heavy frames are not

@@ -463,5 +463,233 @@ int main(void)
         er_node_destroy(root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Banded compositing across strip seams: a tall translucent group with two
+     * fully-overlapping opaque children.
+     *
+     * The 16×24 group is taller than a small ERUI_SCRATCH_BAND_H strip, so it is
+     * composited in multiple band passes. Group semantics require the composite
+     * (blue — the topmost opaque child) to be blended ONCE at alpha 128 over
+     * white: 0xFF7F7FFF on every row. Per-primitive alpha (red@128 then blue@128)
+     * or a double blend at a band seam would produce different values, and any
+     * seam artefact would break row-to-row equality.
+     *
+     * With the default full-height strip this degenerates to the single-pass
+     * path and must produce the identical result.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 16;
+        gp.height = 24;
+        gp.background_color = 0x00000000U; /* transparent container */
+        gp.opacity = 128U;
+        er_node_set_props(group, &gp);
+
+        ERNode* red = er_node_create(ER_NODE_VIEW);
+        ERProps rd = props_default();
+        rd.position = 1; /* ER_POS_ABSOLUTE */
+        rd.left = 0;
+        rd.top = 0;
+        rd.width = 16;
+        rd.height = 24;
+        rd.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(red, &rd);
+
+        ERNode* blue = er_node_create(ER_NODE_VIEW);
+        ERProps bl = props_default();
+        bl.position = 1; /* ER_POS_ABSOLUTE */
+        bl.left = 0;
+        bl.top = 0;
+        bl.width = 16;
+        bl.height = 24;
+        bl.background_color = 0xFF0000FFU; /* blue, fully opaque, on top of red */
+        er_node_set_props(blue, &bl);
+
+        er_tree_append_child(group, red);
+        er_tree_append_child(group, blue);
+        er_tree_append_child(root, group);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* Expected: blue premul at alpha 128 (0x80000080) over white →
+         * r = 0 + 255*127/255 = 127, g = 127, b = 128 + 255*127/255 = 255. */
+        const uint32_t top_px = px(&tc, 2, 2);
+        if ((uint8_t)((top_px >> 16) & 0xFFU) != 127U)
+            return fail("banded overlap: red channel should be 127 (group blend, not per-child)");
+        if ((uint8_t)((top_px >> 8) & 0xFFU) != 127U)
+            return fail("banded overlap: green channel should be 127");
+        if ((uint8_t)(top_px & 0xFFU) != 255U)
+            return fail("banded overlap: blue channel should be 255");
+
+        /* Every row of the group must be identical — any band-seam double blend,
+         * gap, or missed row shows up as a differing pixel. */
+        for (int row = 0; row < 24; row++)
+        {
+            if (px(&tc, 2, row) != top_px)
+                return fail("banded overlap: rows must be identical across band seams");
+        }
+        /* Just outside the group: untouched white. */
+        if (px(&tc, 2, 24) != 0xFFFFFFFFU)
+            return fail("banded overlap: pixel below the group should stay white");
+        if (px(&tc, 16, 2) != 0xFFFFFFFFU)
+            return fail("banded overlap: pixel right of the group should stay white");
+
+        er_tree_remove_child(group, red);
+        er_tree_remove_child(group, blue);
+        er_tree_remove_child(root, group);
+        er_node_destroy(red);
+        er_node_destroy(blue);
+        er_node_destroy(group);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Scratch-pool exhaustion falls back to multiplied alpha.
+     *
+     * Five nested translucent containers (opacity 128 each) exceed
+     * ERUI_MAX_OPACITY_DEPTH=4: the innermost group cannot get a scratch slot
+     * and must fall back to multiplying its opacity into the child's draw.
+     * The red leaf then carries alpha 128·(128/255)^4 = 8 when it reaches the
+     * framebuffer → over white: r=255, g=b=247.
+     *
+     * The old fallback rendered the leaf at FULL opacity inside level 4's
+     * composite → effective alpha 16 → g=b=239, so this check also guards
+     * against regressing to opacity-dropping.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* level[5];
+        for (int i = 0; i < 5; i++)
+        {
+            level[i] = er_node_create(ER_NODE_VIEW);
+            ERProps lp = props_default();
+            lp.width = 8;
+            lp.height = 8;
+            lp.background_color = 0x00000000U; /* transparent container */
+            lp.opacity = 128U;
+            er_node_set_props(level[i], &lp);
+            if (i > 0)
+                er_tree_append_child(level[i - 1], level[i]);
+        }
+
+        ERNode* leaf = er_node_create(ER_NODE_VIEW);
+        ERProps fp = props_default();
+        fp.width = 8;
+        fp.height = 8;
+        fp.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(leaf, &fp);
+        er_tree_append_child(level[4], leaf);
+
+        er_tree_append_child(root, level[0]);
+        er_tree_set_root(root);
+        er_commit();
+
+        const uint32_t pixel = px(&tc, 2, 2);
+        const int g = (int)((pixel >> 8) & 0xFFU);
+        if ((uint8_t)((pixel >> 16) & 0xFFU) != 255U)
+            return fail("depth fallback: red channel should be 255");
+        if (g < 245 || g > 249)
+            return fail("depth fallback: 5th nesting level must still dim (multiplied-alpha fallback)");
+
+        er_tree_remove_child(level[4], leaf);
+        er_node_destroy(leaf);
+        for (int i = 4; i > 0; i--)
+        {
+            er_tree_remove_child(level[i - 1], level[i]);
+            er_node_destroy(level[i]);
+        }
+        er_tree_remove_child(root, level[0]);
+        er_node_destroy(level[0]);
+        er_node_destroy(root);
+    }
+
+#if ERUI_TRANSFORMS_FULL
+    /* -----------------------------------------------------------------------
+     * Transform inside a banded opacity group.
+     *
+     * A rotated child inside a tall translucent group is the subtle banded case:
+     * its transform-source capture must stay COMPLETE during every band pass
+     * (band tiles are not clip rects), while the transformed output lands only
+     * in the strip being composited. A 90° rotation of an 8×8 red square about
+     * its centre reproduces the same square, so the result must match an
+     * unrotated red child blended at the group alpha: ~0xFFFF7F7F on every row,
+     * with no gaps at band seams.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 16;
+        gp.height = 24;
+        gp.background_color = 0x00000000U; /* transparent container */
+        gp.opacity = 128U;
+        er_node_set_props(group, &gp);
+
+        ERNode* card = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.position = 1; /* ER_POS_ABSOLUTE */
+        cp.left = 4;
+        cp.top = 8; /* spans band seams for any small ERUI_SCRATCH_BAND_H */
+        cp.width = 8;
+        cp.height = 8;
+        cp.background_color = 0xFFFF0000U; /* red, fully opaque */
+        cp.transform_rotate_z = 90.0f;
+        cp.transform_origin_x = -1.0f; /* centre pivot: square maps onto itself */
+        cp.transform_origin_y = -1.0f;
+        er_node_set_props(card, &cp);
+
+        er_tree_append_child(group, card);
+        er_tree_append_child(root, group);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* Interior of the rotated square, straddling seam rows: red at group alpha
+         * over white ≈ (255,127,127). Allow ±2 for bilinear float jitter at 90°. */
+        const int probe_x = 8;
+        const int probe_rows[3] = {10, 12, 13};
+        for (int i = 0; i < 3; i++)
+        {
+            const uint32_t p = px(&tc, probe_x, probe_rows[i]);
+            const int r = (int)((p >> 16) & 0xFFU);
+            const int g = (int)((p >> 8) & 0xFFU);
+            const int b = (int)(p & 0xFFU);
+            if (r < 253 || g < 125 || g > 129 || b < 125 || b > 129)
+                return fail("banded transform: interior of rotated child should be red at group alpha on all rows");
+        }
+        /* Outside the group: untouched white. */
+        if (px(&tc, 2, 25) != 0xFFFFFFFFU)
+            return fail("banded transform: pixel below the group should stay white");
+
+        er_tree_remove_child(group, card);
+        er_tree_remove_child(root, group);
+        er_node_destroy(card);
+        er_node_destroy(group);
+        er_node_destroy(root);
+    }
+#endif /* ERUI_TRANSFORMS_FULL */
+
     return EXIT_SUCCESS;
 }

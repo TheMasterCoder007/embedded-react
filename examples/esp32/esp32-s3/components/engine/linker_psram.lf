@@ -1,8 +1,9 @@
 # Place the engine's static pools (.bss) in external PSRAM instead of internal DRAM.
 #
 # The engine pre-allocates its scene-graph node pool (~640 KB) and compositor scratch buffers
-# (~900 KB) as static arrays sized by the ERUI_* limits. That's ~1.5 MB — far more than the S3's
-# ~320 KB internal DRAM. This board has 8 MB PSRAM, so map the whole engine archive's BSS there.
+# (~630 KB: 400 KB of full-width opacity strips + 225 KB transform source) as static arrays sized
+# by the ERUI_* limits. That's ~1.3 MB — far more than the S3's ~320 KB internal DRAM. This board
+# has 8 MB PSRAM, so map the whole engine archive's BSS there.
 # Requires CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (set in sdkconfig.defaults).
 #
 # Note: PSRAM is cache-fronted and slower than internal SRAM; if compositing perf needs it later,
@@ -17,9 +18,17 @@
 # re-rasterizes, NOT in the scanline loop — so it goes to PSRAM with everything else. That is what lets
 # ERUI_MAX_VECTOR_NODES be raised well past the internal-RAM-bound default: the per-node storage no longer
 # competes with the hot scratch for internal DRAM. Listed explicitly for clarity (the wildcard catches it too).
+# scratch_pool.o (the opacity-composite strips) is INTERNAL: strip pixels are read-modify-written
+# 3-4 times per composited pixel per nesting level, and PSRAM RMW measured ~90 cycles/px on this
+# board (commit time: 220x24 badge fade +3.5 ms) vs single-digit cycles from internal DRAM. The
+# strips are sized to fit (ERUI_MAX_OPACITY_DEPTH=2 x 800x10x4 = 64 KB, see the engine component
+# CMakeLists). native_renderer.o is also internal: it holds the clip stack and the small hot fill
+# row. The transform source (transform.o, 225 KB) stays in PSRAM — it does not fit alongside.
 [mapping:engine_psram_bss]
 archive: libengine.a
 entries:
     vector (default)
+    scratch_pool (default)
+    native_renderer (default)
     vector_store (extram_bss)
     * (extram_bss)
