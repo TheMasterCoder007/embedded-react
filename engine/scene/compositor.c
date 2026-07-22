@@ -362,7 +362,13 @@ void er_display_present(void)
         s_cur_buf = (s_cur_buf + 1) % s_display_buffer_count;
 }
 
-void er_mark_dirty_upward(ERNode* node)
+/* Global content generation: advanced by every mutation that changes rendered subtree content
+ * (er_mark_dirty_upward and friends). The fade cache stores the generation it captured at; any
+ * bump invalidates it. Deliberately coarse — a content change anywhere invalidates the one
+ * cached subtree — which keeps the check O(1) and always correct. */
+static uint32_t s_content_gen = 1U;
+
+void er_mark_dirty_upward_visual(ERNode* node)
 {
     /* Mark only the initiating node as source_dirty so the dirty-rect
      * accumulator can track which pixels actually changed, not which
@@ -375,6 +381,12 @@ void er_mark_dirty_upward(ERNode* node)
         node->dirty = true;
         node = er_get_node(node->parent_tag);
     }
+}
+
+void er_mark_dirty_upward(ERNode* node)
+{
+    s_content_gen++;
+    er_mark_dirty_upward_visual(node);
 }
 
 /**
@@ -762,6 +774,37 @@ static uint32_t s_band_gen_counter = 0;
 static uint32_t s_cur_loop_gen = 0;
 static bool s_tile_first = false;
 
+/* Fade cache: the composited subtree of ONE translucent group, kept across commits. During a
+ * pure opacity animation the subtree's content is identical every frame — only the blend alpha
+ * changes — so after a first full capture, each frame is a single blend of this buffer at the
+ * new alpha instead of a re-render + re-composite. Valid while the owning node, its size, and
+ * the global content generation are unchanged; ANY content mutation anywhere invalidates it
+ * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_W/H; 0 disables the feature. */
+#ifndef ERUI_FADE_CACHE_W
+#define ERUI_FADE_CACHE_W 0
+#endif
+#ifndef ERUI_FADE_CACHE_H
+#define ERUI_FADE_CACHE_H 0
+#endif
+#define ER_FADE_CACHE_ENABLED (ERUI_FADE_CACHE_W > 0 && ERUI_FADE_CACHE_H > 0)
+#if ER_FADE_CACHE_ENABLED
+static uint32_t s_fade_cache[(size_t)ERUI_FADE_CACHE_H * ERUI_FADE_CACHE_W];
+static uint16_t s_fade_cache_tag = 0xFFFFu; /* owning node; 0xFFFF = invalid */
+static uint32_t s_fade_cache_gen = 0;       /* s_content_gen at capture */
+static int s_fade_cache_w = 0;
+static int s_fade_cache_h = 0;
+static uint32_t s_fade_capture_commit = 0; /* anti-thrash: at most one capture per commit */
+#endif
+static uint32_t s_commit_seq = 0;
+
+/** @brief Drops the fade cache (owner destroyed, scene reset, or tag about to be recycled). */
+static void fade_cache_invalidate(void)
+{
+#if ER_FADE_CACHE_ENABLED
+    s_fade_cache_tag = 0xFFFFu;
+#endif
+}
+
 #if ER_PROF
 /* TEMP on-device profiling: phase accumulators printed every 30 commits (host provides the clock). */
 #include <stdio.h>
@@ -799,6 +842,68 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
  */
 static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
                                 int translate_y);
+
+/**
+ * @brief Composites a translucent subtree through the persistent fade cache when possible.
+ *
+ * Cache hit: one blend of the previously composited subtree at the current alpha — the whole
+ * subtree re-render is skipped. Cache miss (different node, content changed, first frame):
+ * captures the subtree once into the cache buffer (full size, unbanded), then blends it.
+ *
+ * Only engages for a top-level composite (no enclosing band tile, capture, or inherited
+ * alpha), when the node fits the cache buffer, and when the active scissor covers the whole
+ * node (a partial repaint would capture partial content). At most one capture per commit so
+ * two simultaneously-animating fades don't thrash the single cache slot.
+ *
+ * @return true when the subtree was composited via the cache; false → use the strip pool.
+ */
+static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
+                                 int translate_y)
+{
+#if ER_FADE_CACHE_ENABLED
+    if (s_tile_active || !er_scratch_idle() || er_get_draw_alpha() != 255U)
+        return false;
+    if (w <= 0 || h <= 0 || w > ERUI_FADE_CACHE_W || h > ERUI_FADE_CACHE_H)
+        return false;
+    int cx, cy, cw, ch;
+    if (er_get_clip_rect(&cx, &cy, &cw, &ch) && (cx > px || cy > py || cx + cw < px + w || cy + ch < py + h))
+        return false;
+
+    if (s_fade_cache_tag == n->tag && s_fade_cache_gen == s_content_gen && s_fade_cache_w == w
+        && s_fade_cache_h == h)
+    {
+        er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
+        return true;
+    }
+
+    if (s_fade_capture_commit == s_commit_seq)
+        return false;
+    s_fade_capture_commit = s_commit_seq;
+
+    for (int row = 0; row < h; row++)
+        memset(s_fade_cache + (size_t)row * ERUI_FADE_CACHE_W, 0, (size_t)w * sizeof(uint32_t));
+    er_scratch_push_base(s_fade_cache, ERUI_FADE_CACHE_W, ERUI_FADE_CACHE_H, px, py);
+    render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+    er_scratch_pop_base();
+
+    s_fade_cache_tag = n->tag;
+    s_fade_cache_gen = s_content_gen;
+    s_fade_cache_w = w;
+    s_fade_cache_h = h;
+    er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
+    return true;
+#else
+    (void)n;
+    (void)alpha;
+    (void)px;
+    (void)py;
+    (void)w;
+    (void)h;
+    (void)translate_x;
+    (void)translate_y;
+    return false;
+#endif
+}
 
 /**
  * @brief Composites a node subtree at a group alpha through the scratch strip pool.
@@ -1208,7 +1313,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     bool composited = false;
     if (node_opacity < 255U && should_render)
-        composited = composite_with_opacity(n, node_opacity, px, py, w, h, translate_x, translate_y);
+    {
+        composited = composite_from_cache(n, node_opacity, px, py, w, h, translate_x, translate_y);
+        if (!composited)
+            composited = composite_with_opacity(n, node_opacity, px, py, w, h, translate_x, translate_y);
+    }
     if (!composited)
     {
         /* Graceful degradation: when the group cannot be composited (scratch pool exhausted),
@@ -1633,6 +1742,8 @@ void er_node_destroy(ERNode* node)
 {
     if (!node || !node->in_use)
         return;
+    /* Tags are recycled: never let the fade cache survive its owner (or a subtree member). */
+    fade_cache_invalidate();
     /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
     if (node->has_last_paint)
         damage_union(&s_removed_damage,
@@ -2936,6 +3047,7 @@ void er_tree_set_root(ERNode* root)
 
 void er_reset(void)
 {
+    fade_cache_invalidate();
     /* Empty the node pool and clear the scene root. er_node_create pops the free list or bumps
      * s_next_tag and memsets each slot on allocation, so resetting the counters is a complete reset —
      * nothing scans s_nodes for stale in_use flags. */
@@ -2972,6 +3084,8 @@ void er_commit(void)
     ERNode* root = er_get_node(s_root_tag);
     if (!root)
         return;
+
+    s_commit_seq++; /* per-commit sequence for the fade cache's one-capture-per-commit gate */
 
     /* Reset dirty-rect accumulator for this commit. */
     s_has_dirty = false;

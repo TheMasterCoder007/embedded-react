@@ -89,6 +89,15 @@ When no opacity strip is available (nesting deeper than `ERUI_MAX_OPACITY_DEPTH`
 group's opacity is multiplied into each primitive draw instead of being dropped — exact
 wherever siblings don't overlap.
 
+- **Fade cache** (optional) — one `ERUI_FADE_CACHE_W × ERUI_FADE_CACHE_H × 4` buffer
+  holding the composited subtree of the most recent translucent group. During a pure
+  opacity animation the subtree's content is identical every frame, so after one capture
+  each frame is a single blend at the new alpha instead of a full re-render — roughly
+  double the frame rate on fades of static content. Any content mutation anywhere in the
+  scene invalidates it (coarse but O(1) and always safe). Off by default (`0`); size it to
+  the largest node you animate opacity on (device boards typically place it in external
+  RAM).
+
 ### Banded rendering (low-RAM panels)
 
 A backend can opt into banded RGB565 (`ER_LCD_BANDED`): it sets a band height and
@@ -119,6 +128,8 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_SCRATCH_BAND_H` | `ERUI_SCRATCH_H` | Opacity strip height; shrink to trade band passes for RAM |
 | `ERUI_XFORM_W` | `ERUI_SCRATCH_W` | Transform-source width (max rotatable/scalable node width) |
 | `ERUI_XFORM_H` | `ERUI_SCRATCH_H` | Transform-source height (max rotatable/scalable node height) |
+| `ERUI_FADE_CACHE_W` | 0 | Fade-cache width (composited-subtree reuse across fade frames); 0 disables |
+| `ERUI_FADE_CACHE_H` | 0 | Fade-cache height; 0 disables |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
 
 ### Vector pools (SVG / `<Svg>` rasteriser)

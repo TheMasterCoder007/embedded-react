@@ -833,7 +833,15 @@ static void push_to_value_bindings(ERAnimValue* val)
                                bind->interp.extrapolate_left,
                                bind->interp.extrapolate_right);
         if (apply_numeric_value(n, bind->prop, v))
-            er_mark_dirty_upward(n);
+        {
+            /* An animated opacity value changes only the blend, not the subtree's rendered
+             * content — mark visual-only so the compositor's fade cache stays valid. Every
+             * other prop (position, scale, rotation, color) changes content. */
+            if (bind->prop == ER_PROP_OPACITY)
+                er_mark_dirty_upward_visual(n);
+            else
+                er_mark_dirty_upward(n);
+        }
     }
 }
 
@@ -1759,7 +1767,11 @@ void er_anim_tick(uint32_t delta_ms)
                 finished = true;
         }
 
-        er_mark_dirty_upward(node);
+        /* Opacity-only animation frames keep the fade cache valid (see push_to_value_bindings). */
+        if (anim->prop == ER_PROP_OPACITY)
+            er_mark_dirty_upward_visual(node);
+        else
+            er_mark_dirty_upward(node);
 
         if (finished)
         {
