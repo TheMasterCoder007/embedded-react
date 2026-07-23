@@ -521,12 +521,16 @@ static void run_app(void)
         if ((++frame % 30U) == 0U)
         {
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
+            static int s_pie_diag_logged = 0;
+            if (!s_pie_diag_logged && !er_esp32_lcd_pie_enabled())
             {
-                if (!er_esp32_lcd_pie_enabled())
+                extern const char* er_pie_diag(void);
+                const char* diag = er_pie_diag();
+                if (diag[0] != '\0')
                 {
-                    extern const char* er_pie_diag(void);
-                    ESP_LOGW(TAG, "PIE self-test diag: %s", er_pie_diag());
+                    ESP_LOGW(TAG, "PIE self-test diag: %s", diag);
                 }
+                s_pie_diag_logged = 1;
             }
 #endif
             ESP_LOGI(TAG,

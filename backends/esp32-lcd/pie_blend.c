@@ -420,14 +420,19 @@ bool er_pie_blend_selftest(void)
     __attribute__((aligned(16))) static uint32_t src[64];
     __attribute__((aligned(16))) static uint16_t dst_pie[64];
     __attribute__((aligned(16))) static uint16_t dst_ref[64];
+    s_pie_diag[0] = '\0';
     uint32_t seed = 0x12345678U;
 
     const uint8_t gas[] = {255U, 128U, 37U};
+#if defined(ER_LCD_DITHER) && (ER_LCD_DITHER == 0)
+    for (int phase = 2; phase <= 2; phase++)
+#else
     for (int phase = 0; phase <= 2; phase++)
+#endif
     {
-    for (unsigned gi = 0; gi < sizeof(gas); gi++)
-    {
-        const uint8_t ga = gas[gi];
+        for (unsigned gi = 0; gi < sizeof(gas); gi++)
+        {
+            const uint8_t ga = gas[gi];
         for (int round = 0; round < 8; round++)
         {
             for (int i = 0; i < 64; i++)
