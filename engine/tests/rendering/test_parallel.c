@@ -123,11 +123,44 @@ static int fail(const char* msg)
 
 #define NW ERUI_RENDER_WORKERS
 
-static volatile int s_ran[NW];      /* how many times each worker id ran */
-static volatile int s_set_phase[NW]; /* rendezvous: worker w has finished its set phase */
-static volatile int s_alpha_ok[NW];
-static volatile int s_clip_ok[NW];
-static int s_active;                 /* workers participating in the current fork */
+/* A portable generation-counting barrier (pthread_barrier_t is absent on some platforms, e.g.
+ * macOS). Every access is under the mutex, so the rendezvous is well-defined under the C memory
+ * model — no volatile spin. The generation flip lets one instance be reused across forks. */
+typedef struct
+{
+    pthread_mutex_t mtx;
+    pthread_cond_t cond;
+    int arrived;
+    unsigned generation;
+} TestBarrier;
+
+static TestBarrier s_job_barrier = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 0};
+
+/** @brief Blocks until `n` threads have called it; then all proceed. */
+static void barrier_wait(TestBarrier* b, int n)
+{
+    pthread_mutex_lock(&b->mtx);
+    const unsigned gen = b->generation;
+    if (++b->arrived >= n)
+    {
+        b->arrived = 0;
+        b->generation++;
+        pthread_cond_broadcast(&b->cond);
+    }
+    else
+    {
+        while (gen == b->generation)
+            pthread_cond_wait(&b->cond, &b->mtx);
+    }
+    pthread_mutex_unlock(&b->mtx);
+}
+
+/* Each worker writes only its own index; the main thread reads these only AFTER er_parallel_for's
+ * sync()/join, which establishes happens-before — so plain ints, no volatile, no data race. */
+static int s_ran[NW]; /* how many times each worker id ran */
+static int s_alpha_ok[NW];
+static int s_clip_ok[NW];
+static int s_active;  /* workers participating in the current fork (barrier participant count) */
 
 /** @brief One worker's share: set distinct state, rendezvous, read it back. */
 static void job(int worker, void* arg)
@@ -140,11 +173,7 @@ static void job(int worker, void* arg)
 
     /* Rendezvous: every participating worker completes its SET phase before any reads back, so
      * a shared context would deterministically clobber someone's state. */
-    s_set_phase[worker] = 1;
-    for (int w = 0; w < s_active; w++)
-        while (!s_set_phase[w])
-        {
-        }
+    barrier_wait(&s_job_barrier, s_active);
 
     s_alpha_ok[worker] = (er_get_draw_alpha() == (uint8_t)(100 + worker));
     int cx, cy, cw, ch;
@@ -277,7 +306,6 @@ int main(void)
     for (int w = 0; w < NW; w++)
     {
         s_ran[w] = 0;
-        s_set_phase[w] = 0;
         s_alpha_ok[w] = 0;
         s_clip_ok[w] = 0;
     }
@@ -294,9 +322,7 @@ int main(void)
             return fail("parallel: clip-stack context bled between workers");
     }
 
-    /* ---- Fork again: the machinery must be reusable frame after frame. ---- */
-    for (int w = 0; w < NW; w++)
-        s_set_phase[w] = 0;
+    /* ---- Fork again: the machinery (and the barrier) must be reusable frame after frame. ---- */
     er_parallel_for(job, NULL);
     for (int w = 0; w < NW; w++)
         if (s_ran[w] != 2)
@@ -430,7 +456,6 @@ int main(void)
     if (er_render_workers_active() != 1)
         return fail("uninstall: active workers must return to 1");
     s_active = 1;
-    s_set_phase[0] = 0;
     er_parallel_for(job, NULL);
     if (s_ran[0] != 3)
         return fail("uninstall: job must run inline on worker 0 again");
