@@ -26,6 +26,33 @@
 struct ERNode;
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Render workers
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* Maximum number of render workers this build supports. Every module that keeps mutable state
+ * during a render pass holds it in a per-worker context array of this size, indexed by
+ * er_render_worker_id(), so N workers can render disjoint screen regions concurrently without
+ * sharing state. The default of 1 IS the single-core engine: the arrays have one element, the
+ * worker id is the constant 0, and the compiler folds every context access back to the same
+ * static addressing as before the contexts existed. */
+#ifndef ERUI_RENDER_WORKERS
+#define ERUI_RENDER_WORKERS 1
+#endif
+
+/**
+ * @brief Returns the id of the render worker executing the current code, in [0, ERUI_RENDER_WORKERS).
+ *
+ * Single-worker builds (the default) always return 0 — a compile-time constant, so per-worker
+ * context lookups cost nothing. A multi-worker build (a later phase of the multi-core plan)
+ * replaces this with a lookup supplied by the host's worker glue; the engine itself never
+ * creates threads.
+ */
+static inline int er_render_worker_id(void)
+{
+    return 0;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 

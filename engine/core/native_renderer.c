@@ -50,36 +50,61 @@ typedef struct
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static const EmbeddedRenderBackend* g_backend = NULL;
-static ClipEntry s_clip_stack[ER_CLIP_STACK_DEPTH];
-static int s_clip_depth = 0;
 
-/* Banded rendering. The strip currently being rendered occupies screen rows [s_band_oy, s_band_oy +
- * s_band_h). This is applied at the BACKEND-EMIT boundary only — NOT via the clip stack — so it bounds
- * what lands in the band buffer without truncating offscreen-scratch (transform / opacity) source
- * rendering, which must always be complete or a transformed node split across a strip seam shows an
- * anti-aliasing gap. Each backend blit is clamped to these rows and its Y translated to the 0-origin
- * band buffer. s_band_h == 0 disables both (the classic full-framebuffer path). */
-static int s_band_oy = 0;
-static int s_band_h = 0;
-
-/* Scratch redirect: when s_scratch_buf is non-NULL all blit calls write into it. */
-static uint32_t* s_scratch_buf = NULL;
-static int s_scratch_w = 0;
-static int s_scratch_h = 0;
-static int s_scratch_ox = 0;
-static int s_scratch_oy = 0;
-
-/* Inherited draw alpha: multiplied into every blit while < 255. Set by the compositor when a
- * translucent group cannot be composited through a scratch slot (pool exhausted) — each
- * primitive is then dimmed individually, which is exact wherever siblings don't overlap.
- * Offscreen captures (opacity strips, transform sources) reset it to 255 for the capture and
- * re-apply it when the captured buffer is blended out, so it is never applied twice. */
-static uint8_t s_draw_alpha = 255U;
-
-/* Row chunk used to emit fills through the blend path while s_draw_alpha < 255: backend
+/* Row chunk used to emit fills through the blend path while draw_alpha < 255: backend
  * fill_rect semantics for translucent colors vary (some overwrite), blend_rect is uniform. */
 #define ER_FILL_ROW_CHUNK 256
-static uint32_t s_fill_row[ER_FILL_ROW_CHUNK];
+
+/**
+ * @brief Per-worker render state for the blit layer (see er_render_worker_id).
+ *
+ * Everything here is scoped to one worker's render traversal — pushed/popped or saved/restored
+ * within a single render pass — so N workers rendering disjoint screen regions each get their own
+ * copy and never contend. With the default single worker this struct is exactly the former
+ * file-scope statics under one roof.
+ */
+typedef struct
+{
+    ClipEntry clip_stack[ER_CLIP_STACK_DEPTH]; /**< Scissor stack (intersected). */
+    int clip_depth;
+
+    /* Banded rendering. The strip currently being rendered occupies screen rows [band_oy, band_oy +
+     * band_h). This is applied at the BACKEND-EMIT boundary only — NOT via the clip stack — so it
+     * bounds what lands in the band buffer without truncating offscreen-scratch (transform /
+     * opacity) source rendering, which must always be complete or a transformed node split across a
+     * strip seam shows an anti-aliasing gap. Each backend blit is clamped to these rows and its Y
+     * translated to the 0-origin band buffer. band_h == 0 disables both (the classic
+     * full-framebuffer path). */
+    int band_oy;
+    int band_h;
+
+    /* Scratch redirect: when scratch_buf is non-NULL all blit calls write into it. */
+    uint32_t* scratch_buf;
+    int scratch_w;
+    int scratch_h;
+    int scratch_ox;
+    int scratch_oy;
+
+    /* Inherited draw alpha: multiplied into every blit while < 255. Set by the compositor when a
+     * translucent group cannot be composited through a scratch slot (pool exhausted) — each
+     * primitive is then dimmed individually, which is exact wherever siblings don't overlap.
+     * Offscreen captures (opacity strips, transform sources) reset it to 255 for the capture and
+     * re-apply it when the captured buffer is blended out, so it is never applied twice. */
+    uint8_t draw_alpha;
+
+    /* Assembled premultiplied row for the translucent-fill fallback (transient within one blit). */
+    uint32_t fill_row[ER_FILL_ROW_CHUNK];
+} NRCtx;
+
+/* Zero-initialized; draw_alpha is set to 255 for every worker in embedded_renderer_set_backend
+ * (always called before the first render). */
+static NRCtx s_ctx[ERUI_RENDER_WORKERS];
+
+/** @brief The calling worker's blit-layer context (constant &s_ctx[0] in single-worker builds). */
+static inline NRCtx* rc(void)
+{
+    return &s_ctx[er_render_worker_id()];
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -99,10 +124,10 @@ static uint32_t s_fill_row[ER_FILL_ROW_CHUNK];
  */
 static bool apply_clip(int* x, int* y, int* w, int* h)
 {
-    if (s_clip_depth == 0)
+    if (rc()->clip_depth == 0)
         return true;
 
-    const ClipEntry* c = &s_clip_stack[s_clip_depth - 1];
+    const ClipEntry* c = &rc()->clip_stack[rc()->clip_depth - 1];
     const int x2 = *x + *w;
     const int y2 = *y + *h;
     const int cx2 = c->x + c->w;
@@ -165,8 +190,8 @@ static void scratch_do_fill(uint32_t argb, int lx, int ly, int lw, int lh)
     /* Clamp once so the pixel loops below run without per-pixel bounds checks. */
     const int x0 = lx < 0 ? 0 : lx;
     const int y0 = ly < 0 ? 0 : ly;
-    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
-    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    const int x1 = (lx + lw) > rc()->scratch_w ? rc()->scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > rc()->scratch_h ? rc()->scratch_h : (ly + lh);
     if (x0 >= x1 || y0 >= y1)
         return;
 
@@ -180,7 +205,7 @@ static void scratch_do_fill(uint32_t argb, int lx, int ly, int lw, int lh)
         const uint32_t px = (0xFFU << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | sb;
         for (int row = y0; row < y1; row++)
         {
-            uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+            uint32_t* dst_row = rc()->scratch_buf + (size_t)row * rc()->scratch_w;
             for (int col = x0; col < x1; col++)
                 dst_row[col] = px;
         }
@@ -189,7 +214,7 @@ static void scratch_do_fill(uint32_t argb, int lx, int ly, int lw, int lh)
 
     for (int row = y0; row < y1; row++)
     {
-        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+        uint32_t* dst_row = rc()->scratch_buf + (size_t)row * rc()->scratch_w;
         for (int col = x0; col < x1; col++)
         {
             const uint32_t d = dst_row[col];
@@ -222,8 +247,8 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
      * without per-pixel bounds checks. */
     const int x0 = lx < 0 ? 0 : lx;
     const int y0 = ly < 0 ? 0 : ly;
-    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
-    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    const int x1 = (lx + lw) > rc()->scratch_w ? rc()->scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > rc()->scratch_h ? rc()->scratch_h : (ly + lh);
     if (x0 >= x1 || y0 >= y1)
         return;
     src = (const uint8_t*)src + (size_t)(y0 - ly) * (size_t)stride + (size_t)(x0 - lx) * 4U;
@@ -231,7 +256,7 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
     for (int row = y0; row < y1; row++)
     {
         const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)(row - y0) * (size_t)stride);
-        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+        uint32_t* dst_row = rc()->scratch_buf + (size_t)row * rc()->scratch_w;
 
         for (int col = x0; col < x1; col++)
         {
@@ -272,8 +297,8 @@ static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw,
     /* Clamp once (advancing the source pointer to match) so the pixel loop runs unchecked. */
     const int x0 = lx < 0 ? 0 : lx;
     const int y0 = ly < 0 ? 0 : ly;
-    const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
-    const int y1 = (ly + lh) > s_scratch_h ? s_scratch_h : (ly + lh);
+    const int x1 = (lx + lw) > rc()->scratch_w ? rc()->scratch_w : (lx + lw);
+    const int y1 = (ly + lh) > rc()->scratch_h ? rc()->scratch_h : (ly + lh);
     if (x0 >= x1 || y0 >= y1)
         return;
     src = (const uint8_t*)src + (size_t)(y0 - ly) * (size_t)stride + (size_t)(x0 - lx) * 4U;
@@ -281,7 +306,7 @@ static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw,
     for (int row = y0; row < y1; row++)
     {
         const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)(row - y0) * (size_t)stride);
-        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+        uint32_t* dst_row = rc()->scratch_buf + (size_t)row * rc()->scratch_w;
 
         for (int col = x0; col < x1; col++)
         {
@@ -299,16 +324,16 @@ const EmbeddedRenderBackend* er_backend(void)
 
 void er_scratch_begin(uint32_t* buf, int w, int h, int ox, int oy)
 {
-    s_scratch_buf = buf;
-    s_scratch_w = w;
-    s_scratch_h = h;
-    s_scratch_ox = ox;
-    s_scratch_oy = oy;
+    rc()->scratch_buf = buf;
+    rc()->scratch_w = w;
+    rc()->scratch_h = h;
+    rc()->scratch_ox = ox;
+    rc()->scratch_oy = oy;
 }
 
 void er_scratch_end(void)
 {
-    s_scratch_buf = NULL;
+    rc()->scratch_buf = NULL;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -317,15 +342,15 @@ void er_scratch_end(void)
 
 void er_push_clip_rect(int x, int y, int w, int h)
 {
-    if (s_clip_depth >= ER_CLIP_STACK_DEPTH)
+    if (rc()->clip_depth >= ER_CLIP_STACK_DEPTH)
         return;
 
     ClipEntry entry = {x, y, w, h};
 
-    if (s_clip_depth > 0)
+    if (rc()->clip_depth > 0)
     {
         /* Intersect the new rect with the current top-of-stack. */
-        const ClipEntry* top = &s_clip_stack[s_clip_depth - 1];
+        const ClipEntry* top = &rc()->clip_stack[rc()->clip_depth - 1];
         const int x2 = x + w;
         const int y2 = y + h;
         const int tx2 = top->x + top->w;
@@ -343,46 +368,46 @@ void er_push_clip_rect(int x, int y, int w, int h)
             entry.h = 0;
     }
 
-    s_clip_stack[s_clip_depth++] = entry;
+    rc()->clip_stack[rc()->clip_depth++] = entry;
 }
 
 void er_pop_clip_rect(void)
 {
-    if (s_clip_depth > 0)
-        s_clip_depth--;
+    if (rc()->clip_depth > 0)
+        rc()->clip_depth--;
 }
 
 void er_push_clip_reset(void)
 {
-    if (s_clip_depth >= ER_CLIP_STACK_DEPTH)
+    if (rc()->clip_depth >= ER_CLIP_STACK_DEPTH)
         return;
     /* Full-extent entry pushed WITHOUT intersecting the current top: used by offscreen source
      * captures (transform subtree render) that must see the whole subtree regardless of outer
      * scissors — the captured OUTPUT is clipped by the restored stack when it is blended out. */
     ClipEntry entry = {-(1 << 20), -(1 << 20), (1 << 21), (1 << 21)};
-    s_clip_stack[s_clip_depth++] = entry;
+    rc()->clip_stack[rc()->clip_depth++] = entry;
 }
 
 void er_set_band(int oy, int h)
 {
-    s_band_oy = oy;
-    s_band_h = h;
+    rc()->band_oy = oy;
+    rc()->band_h = h;
 }
 
 bool er_band_active(int* oy, int* h)
 {
     if (oy)
-        *oy = s_band_oy;
+        *oy = rc()->band_oy;
     if (h)
-        *h = s_band_h;
-    return s_band_h > 0;
+        *h = rc()->band_h;
+    return rc()->band_h > 0;
 }
 
 bool er_get_clip_rect(int* x, int* y, int* w, int* h)
 {
-    if (s_clip_depth == 0)
+    if (rc()->clip_depth == 0)
         return false;
-    const ClipEntry* c = &s_clip_stack[s_clip_depth - 1];
+    const ClipEntry* c = &rc()->clip_stack[rc()->clip_depth - 1];
     if (x)
         *x = c->x;
     if (y)
@@ -396,21 +421,21 @@ bool er_get_clip_rect(int* x, int* y, int* w, int* h)
 
 void er_set_draw_alpha(uint8_t alpha)
 {
-    s_draw_alpha = alpha;
+    rc()->draw_alpha = alpha;
 }
 
 uint8_t er_get_draw_alpha(void)
 {
-    return s_draw_alpha;
+    return rc()->draw_alpha;
 }
 
 void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
 {
-    if (s_draw_alpha < 255U)
+    if (rc()->draw_alpha < 255U)
     {
         /* Inherited-alpha fallback: emit the fill through the blend path so the color is
          * composited over existing pixels on every backend. er_blit_blend applies
-         * s_draw_alpha itself, so the row holds the color at its ORIGINAL alpha. */
+         * rc()->draw_alpha itself, so the row holds the color at its ORIGINAL alpha. */
         const uint8_t a = (uint8_t)((argb >> 24) & 0xFFU);
         if (a == 0U)
             return;
@@ -422,27 +447,27 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
         const uint32_t premul = ((uint32_t)a << 24) | (pr << 16) | (pg << 8) | pb;
         const int chunk = w < ER_FILL_ROW_CHUNK ? w : ER_FILL_ROW_CHUNK;
         for (int i = 0; i < chunk; i++)
-            s_fill_row[i] = premul;
+            rc()->fill_row[i] = premul;
         for (int row = 0; row < h; row++)
             for (int cx = 0; cx < w; cx += ER_FILL_ROW_CHUNK)
             {
                 const int cw = (w - cx) < ER_FILL_ROW_CHUNK ? (w - cx) : ER_FILL_ROW_CHUNK;
-                er_blit_blend(s_fill_row, cw * (int)sizeof(uint32_t), 255U, x + cx, y + row, cw, 1);
+                er_blit_blend(rc()->fill_row, cw * (int)sizeof(uint32_t), 255U, x + cx, y + row, cw, 1);
             }
         return;
     }
     if (!apply_clip(&x, &y, &w, &h))
         return;
-    if (s_scratch_buf)
+    if (rc()->scratch_buf)
     {
-        scratch_do_fill(argb, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        scratch_do_fill(argb, x - rc()->scratch_ox, y - rc()->scratch_oy, w, h);
         return;
     }
     if (g_backend && g_backend->fill_rect)
     {
-        if (s_band_h > 0)
+        if (rc()->band_h > 0)
         {
-            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            const int top = rc()->band_oy, bot = rc()->band_oy + rc()->band_h;
             if (y < top)
             {
                 h -= top - y;
@@ -453,16 +478,16 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
             if (h <= 0)
                 return;
         }
-        g_backend->fill_rect(argb, x, y - s_band_oy, w, h, g_backend->ctx);
+        g_backend->fill_rect(argb, x, y - rc()->band_oy, w, h, g_backend->ctx);
     }
 }
 
 void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
 {
-    if (s_draw_alpha < 255U)
+    if (rc()->draw_alpha < 255U)
     {
         /* Inherited-alpha fallback: an opaque copy becomes a blend at the inherited alpha
-         * (er_blit_blend applies s_draw_alpha itself). */
+         * (er_blit_blend applies rc()->draw_alpha itself). */
         er_blit_blend(src, stride, 255U, x, y, w, h);
         return;
     }
@@ -474,16 +499,16 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
     const int dx = x - orig_x;
     const int dy = y - orig_y;
     src = (const uint8_t*)src + (size_t)dy * (size_t)stride + (size_t)dx * 4U;
-    if (s_scratch_buf)
+    if (rc()->scratch_buf)
     {
-        scratch_do_copy(src, stride, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        scratch_do_copy(src, stride, x - rc()->scratch_ox, y - rc()->scratch_oy, w, h);
         return;
     }
     if (g_backend && g_backend->copy_rect)
     {
-        if (s_band_h > 0)
+        if (rc()->band_h > 0)
         {
-            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            const int top = rc()->band_oy, bot = rc()->band_oy + rc()->band_h;
             if (y < top)
             {
                 const int d = top - y;
@@ -496,15 +521,15 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
             if (h <= 0)
                 return;
         }
-        g_backend->copy_rect(src, stride, x, y - s_band_oy, w, h, g_backend->ctx);
+        g_backend->copy_rect(src, stride, x, y - rc()->band_oy, w, h, g_backend->ctx);
     }
 }
 
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h)
 {
-    if (s_draw_alpha < 255U)
+    if (rc()->draw_alpha < 255U)
     {
-        alpha = (uint8_t)((uint32_t)alpha * s_draw_alpha / 255U);
+        alpha = (uint8_t)((uint32_t)alpha * rc()->draw_alpha / 255U);
         if (alpha == 0U)
             return;
     }
@@ -515,16 +540,16 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
     const int dx = x - orig_x;
     const int dy = y - orig_y;
     src = (const uint8_t*)src + (size_t)dy * (size_t)stride + (size_t)dx * 4U;
-    if (s_scratch_buf)
+    if (rc()->scratch_buf)
     {
-        scratch_do_blend(src, stride, alpha, x - s_scratch_ox, y - s_scratch_oy, w, h);
+        scratch_do_blend(src, stride, alpha, x - rc()->scratch_ox, y - rc()->scratch_oy, w, h);
         return;
     }
     if (g_backend && g_backend->blend_rect)
     {
-        if (s_band_h > 0)
+        if (rc()->band_h > 0)
         {
-            const int top = s_band_oy, bot = s_band_oy + s_band_h;
+            const int top = rc()->band_oy, bot = rc()->band_oy + rc()->band_h;
             if (y < top)
             {
                 const int d = top - y;
@@ -537,7 +562,7 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
             if (h <= 0)
                 return;
         }
-        g_backend->blend_rect(src, stride, alpha, x, y - s_band_oy, w, h, g_backend->ctx);
+        g_backend->blend_rect(src, stride, alpha, x, y - rc()->band_oy, w, h, g_backend->ctx);
     }
 }
 
@@ -548,7 +573,17 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
 void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
 {
     g_backend = backend;
-    s_clip_depth = 0;
+    /* Reset every worker's blit-layer context to a fresh state (draw_alpha's non-zero default
+     * lives here rather than in an initializer so a re-set backend also re-arms it). */
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+    {
+        NRCtx* c = &s_ctx[i];
+        c->clip_depth = 0;
+        c->band_oy = 0;
+        c->band_h = 0;
+        c->scratch_buf = NULL;
+        c->draw_alpha = 255U;
+    }
     font_registry_init();
     font_blob_init(0);
     image_registry_init();

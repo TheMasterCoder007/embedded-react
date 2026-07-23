@@ -40,23 +40,53 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #if ERUI_TRANSFORMS_FULL
-/* Source buffer: the untransformed subtree is rendered into this scratch slot. */
-static uint32_t s_xform_src[ERUI_XFORM_H * ERUI_XFORM_W];
+/* Source buffer: the untransformed subtree is rendered into this scratch slot. One per render
+ * worker so concurrent transform captures on disjoint screen regions never collide (each extra
+ * worker costs a full buffer — document when raising ERUI_RENDER_WORKERS). */
+static uint32_t s_xform_src_pool[ERUI_RENDER_WORKERS][ERUI_XFORM_H * ERUI_XFORM_W];
 /* Row segment buffer: transformed output is streamed out one row segment at a time
  * (≤ ERUI_XFORM_W pixels), so the destination AABB is not size-limited — only the
  * SOURCE subtree must fit the scratch. */
-static uint32_t s_xform_row[ERUI_XFORM_W];
-/* True while a source capture is active. */
-static bool s_xform_active = false;
-/* Inherited draw alpha at capture start: the source is captured at full intensity and the
- * inherited alpha is re-applied once when the transformed rows are blended out. */
-static uint8_t s_xform_saved_alpha = 255U;
-/* Source-cache identity: which node's subtree currently sits in s_xform_src, and the banded
- * composite pass generation it was captured in. Lets the compositor replay the (expensive)
- * capture-free blit for every band tile after the first instead of re-rendering the subtree
- * once per tile. A new capture invalidates it until the compositor re-notes it. */
-static uint16_t s_xform_cache_tag = 0xFFFFu;
-static uint32_t s_xform_cache_gen = 0;
+static uint32_t s_xform_row_pool[ERUI_RENDER_WORKERS][ERUI_XFORM_W];
+
+/**
+ * @brief Per-worker transform-capture state (see er_render_worker_id).
+ *
+ * Zero-initialized: cache_tag 0 with cache_gen 0 can never false-match because generation tags
+ * handed to er_transform_source_is_cached come from a counter that starts at 1.
+ */
+typedef struct
+{
+    bool active;         /**< True while a source capture is active. */
+    uint8_t saved_alpha; /**< Inherited draw alpha at capture start: the source is captured at full
+                            intensity and the alpha is re-applied once at the output blend. */
+    /* Source-cache identity: which node's subtree currently sits in this worker's source buffer,
+     * and the banded composite pass generation it was captured in. Lets the compositor replay the
+     * (expensive) capture-free blit for every band tile after the first instead of re-rendering
+     * the subtree once per tile. A new capture invalidates it until the compositor re-notes it. */
+    uint16_t cache_tag;
+    uint32_t cache_gen;
+} XformCtx;
+
+static XformCtx s_ctx[ERUI_RENDER_WORKERS];
+
+/** @brief The calling worker's transform context (constant &s_ctx[0] in single-worker builds). */
+static inline XformCtx* xc(void)
+{
+    return &s_ctx[er_render_worker_id()];
+}
+
+/** @brief The calling worker's source capture buffer. */
+static inline uint32_t* xsrc(void)
+{
+    return s_xform_src_pool[er_render_worker_id()];
+}
+
+/** @brief The calling worker's output row segment buffer. */
+static inline uint32_t* xrowbuf(void)
+{
+    return s_xform_row_pool[er_render_worker_id()];
+}
 
 /* Bilinear channel lerp: a,b in [0,255]; t in [0,256]. Result in [0,255]. */
 #define ER_LERP_CH(a, b, t) (((uint32_t)(a) * (256u - (t)) + (uint32_t)(b) * (t)) >> 8u)
@@ -146,7 +176,7 @@ static bool xform_emit_bounds(int dst_x, int dst_y, int dst_w, int dst_h, int* e
  * @brief Inverse-maps the source scratch through a 2D affine transform and blends it out.
  *
  * Shared by the end-of-capture blit and the banded replay blit. Streams one row segment at a
- * time through s_xform_row; the emit region is bounded to the active scissor.
+ * time through xrowbuf(); the emit region is bounded to the active scissor.
  */
 static void xform_emit_2d(int src_x,
                           int src_y,
@@ -192,8 +222,8 @@ static void xform_emit_2d(int src_x,
                 const int y0 = (int)floorf(fly);
                 const int y1 = y0 + 1;
                 const uint32_t wy = (uint32_t)((fly - (float)y0) * 256.0f);
-                const uint32_t* r0 = (y0 >= 0 && y0 < src_h) ? s_xform_src + (size_t)y0 * ERUI_XFORM_W : NULL;
-                const uint32_t* r1 = (y1 >= 0 && y1 < src_h) ? s_xform_src + (size_t)y1 * ERUI_XFORM_W : NULL;
+                const uint32_t* r0 = (y0 >= 0 && y0 < src_h) ? xsrc() + (size_t)y0 * ERUI_XFORM_W : NULL;
+                const uint32_t* r1 = (y1 >= 0 && y1 < src_h) ? xsrc() + (size_t)y1 * ERUI_XFORM_W : NULL;
                 uint32_t any = 0u;
                 for (int ox = 0; ox < seg_w; ox++)
                 {
@@ -207,11 +237,11 @@ static void xform_emit_2d(int src_x,
                     const uint32_t c01 = (r1 && x0in) ? r1[x0] : 0u;
                     const uint32_t c11 = (r1 && x1in) ? r1[x1] : 0u;
                     const uint32_t out = er_blend4(c00, c10, c01, c11, wx, wy);
-                    s_xform_row[ox] = out;
+                    xrowbuf()[ox] = out;
                     any |= out;
                 }
                 if (any)
-                    er_blit_blend(s_xform_row, seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
+                    er_blit_blend(xrowbuf(), seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
             }
         }
         return;
@@ -238,16 +268,16 @@ static void xform_emit_2d(int src_x,
                 /* Coarse bounds reject: skip if all four bilinear neighbours are outside. */
                 if (flx < -1.0f || flx >= (float)src_w || fly < -1.0f || fly >= (float)src_h)
                 {
-                    s_xform_row[ox] = 0u;
+                    xrowbuf()[ox] = 0u;
                     continue;
                 }
 
-                const uint32_t out = er_bilerp(s_xform_src, src_w, src_h, flx, fly);
-                s_xform_row[ox] = out;
+                const uint32_t out = er_bilerp(xsrc(), src_w, src_h, flx, fly);
+                xrowbuf()[ox] = out;
                 any |= out;
             }
             if (any)
-                er_blit_blend(s_xform_row, seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
+                er_blit_blend(xrowbuf(), seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
         }
     }
 }
@@ -449,7 +479,7 @@ static void xform_emit_3d(
                 const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
                 if (Wp <= 0.0f)
                 {
-                    s_xform_row[ox] = 0u;
+                    xrowbuf()[ox] = 0u;
                     continue;
                 }
                 const float flx = (inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp - (float)src_x;
@@ -457,16 +487,16 @@ static void xform_emit_3d(
 
                 if (flx < -1.0f || flx >= (float)src_w || fly < -1.0f || fly >= (float)src_h)
                 {
-                    s_xform_row[ox] = 0u;
+                    xrowbuf()[ox] = 0u;
                     continue;
                 }
 
-                const uint32_t out = er_bilerp(s_xform_src, src_w, src_h, flx, fly);
-                s_xform_row[ox] = out;
+                const uint32_t out = er_bilerp(xsrc(), src_w, src_h, flx, fly);
+                xrowbuf()[ox] = out;
                 any |= out;
             }
             if (any)
-                er_blit_blend(s_xform_row, seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
+                er_blit_blend(xrowbuf(), seg_w * (int)sizeof(uint32_t), 255U, seg, oy, seg_w, 1);
         }
     }
 }
@@ -476,14 +506,14 @@ void er_transform_source_end_blit_3d(
     int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (!s_xform_active)
+    if (!xc()->active)
         return;
 
     er_pop_clip_rect(); /* remove the capture's clip reset — output goes through the outer stack */
     er_scratch_pop_base();
-    s_xform_active = false;
-    /* Re-apply the inherited draw alpha for the output blend (see s_xform_saved_alpha). */
-    er_set_draw_alpha(s_xform_saved_alpha);
+    xc()->active = false;
+    /* Re-apply the inherited draw alpha for the output blend (see xc()->saved_alpha). */
+    er_set_draw_alpha(xc()->saved_alpha);
 
     if (dst_w <= 0 || dst_h <= 0)
         return;
@@ -506,7 +536,7 @@ void er_transform_source_replay_blit_3d(
     int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (s_xform_active || dst_w <= 0 || dst_h <= 0)
+    if (xc()->active || dst_w <= 0 || dst_h <= 0)
         return;
     xform_emit_3d(src_x, src_y, src_w, src_h, inv_H, dst_x, dst_y, dst_w, dst_h);
 #else
@@ -644,7 +674,7 @@ void er_transform_map_point(float ia,
 bool er_transform_source_begin(int src_x, int src_y, int w, int h)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (s_xform_active)
+    if (xc()->active)
         return false;
     if (w <= 0 || h <= 0 || w > ERUI_XFORM_W || h > ERUI_XFORM_H)
         return false;
@@ -655,10 +685,10 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h)
      * the output is identical.
      */
     for (int row = 0; row < h; row++)
-        memset(s_xform_src + (size_t)row * ERUI_XFORM_W, 0, (size_t)w * sizeof(uint32_t));
-    er_scratch_push_base(s_xform_src, ERUI_XFORM_W, ERUI_XFORM_H, src_x, src_y);
-    s_xform_active = true;
-    s_xform_saved_alpha = er_get_draw_alpha();
+        memset(xsrc() + (size_t)row * ERUI_XFORM_W, 0, (size_t)w * sizeof(uint32_t));
+    er_scratch_push_base(xsrc(), ERUI_XFORM_W, ERUI_XFORM_H, src_x, src_y);
+    xc()->active = true;
+    xc()->saved_alpha = er_get_draw_alpha();
     er_set_draw_alpha(255U);
     /* The capture must see the whole subtree: outer scissors (including banded-composite tile
      * clips) apply to the transformed OUTPUT at emit time, not to the source. Without this a
@@ -666,7 +696,7 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h)
     er_push_clip_reset();
     /* A fresh capture owns the source buffer — invalidate any previous replay cache until the
      * compositor re-notes it. */
-    s_xform_cache_tag = 0xFFFFu;
+    xc()->cache_tag = 0xFFFFu;
     return true;
 #else
     (void)src_x;
@@ -680,8 +710,8 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h)
 void er_transform_source_note(uint16_t tag, uint32_t gen)
 {
 #if ERUI_TRANSFORMS_FULL
-    s_xform_cache_tag = tag;
-    s_xform_cache_gen = gen;
+    xc()->cache_tag = tag;
+    xc()->cache_gen = gen;
 #else
     (void)tag;
     (void)gen;
@@ -691,7 +721,7 @@ void er_transform_source_note(uint16_t tag, uint32_t gen)
 bool er_transform_source_is_cached(uint16_t tag, uint32_t gen)
 {
 #if ERUI_TRANSFORMS_FULL
-    return !s_xform_active && tag != 0xFFFFu && s_xform_cache_tag == tag && s_xform_cache_gen == gen;
+    return !xc()->active && tag != 0xFFFFu && xc()->cache_tag == tag && xc()->cache_gen == gen;
 #else
     (void)tag;
     (void)gen;
@@ -715,7 +745,7 @@ void er_transform_source_replay_blit(int src_x,
                                      int dst_h)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (s_xform_active || dst_w <= 0 || dst_h <= 0)
+    if (xc()->active || dst_w <= 0 || dst_h <= 0)
         return;
     xform_emit_2d(src_x, src_y, src_w, src_h, ia, ib, ic, id, itx, ity, dst_x, dst_y, dst_w, dst_h);
 #else
@@ -752,14 +782,14 @@ void er_transform_source_end_blit(int src_x,
                                   int dst_h)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (!s_xform_active)
+    if (!xc()->active)
         return;
 
     er_pop_clip_rect(); /* remove the capture's clip reset — output goes through the outer stack */
     er_scratch_pop_base();
-    s_xform_active = false;
-    /* Re-apply the inherited draw alpha for the output blend (see s_xform_saved_alpha). */
-    er_set_draw_alpha(s_xform_saved_alpha);
+    xc()->active = false;
+    /* Re-apply the inherited draw alpha for the output blend (see xc()->saved_alpha). */
+    er_set_draw_alpha(xc()->saved_alpha);
 
     if (dst_w <= 0 || dst_h <= 0)
         return;
