@@ -43,14 +43,41 @@ struct ERNode;
  * @brief Returns the id of the render worker executing the current code, in [0, ERUI_RENDER_WORKERS).
  *
  * Single-worker builds (the default) always return 0 — a compile-time constant, so per-worker
- * context lookups cost nothing. A multi-worker build (a later phase of the multi-core plan)
- * replaces this with a lookup supplied by the host's worker glue; the engine itself never
- * creates threads.
+ * context lookups cost nothing. Multi-worker builds resolve it through the host-installed
+ * worker_id hook (see EmbeddedRenderWorkers); with no workers installed it is still 0.
  */
+#if ERUI_RENDER_WORKERS > 1
+int er_render_worker_id(void);
+#else
 static inline int er_render_worker_id(void)
 {
     return 0;
 }
+#endif
+
+/**
+ * @brief Number of render workers a fork-join would use right now: the installed count clamped
+ *        to the ERUI_RENDER_WORKERS build cap, or 1 when no workers are installed.
+ */
+int er_render_workers_active(void);
+
+/**
+ * @brief One worker's share of a forked render job.
+ *
+ * @param[in] worker  This worker's id in [0, n) — also the index of its per-worker contexts.
+ * @param[in] arg     The job argument passed to er_parallel_for.
+ */
+typedef void (*ERParallelFn)(int worker, void* arg);
+
+/**
+ * @brief Runs fn once per active render worker and returns when every call has finished.
+ *
+ * Worker 0's share runs on the calling thread; remote workers are signalled FIRST (signalling
+ * the calling core's share first would let it preempt the dispatch loop and serialize the whole
+ * job — measured on hardware). With one active worker (the default build, no workers installed,
+ * or a call from inside a worker) this is exactly fn(0, arg) — no locks, no signalling.
+ */
+void er_parallel_for(ERParallelFn fn, void* arg);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private

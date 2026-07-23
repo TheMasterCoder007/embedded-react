@@ -8,6 +8,7 @@ set(E "${EMBEDDED_REACT_SRC_DIR}/engine")
 idf_component_register(
     SRCS
         "${E}/core/native_renderer.c"
+        "${E}/core/er_parallel.c"
         "${E}/scene/compositor.c"
         "${E}/scene/hit_test.c"
         "${E}/layout/layout_engine.c"
