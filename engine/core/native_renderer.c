@@ -121,6 +121,30 @@ static bool apply_clip(int* x, int* y, int* w, int* h)
 }
 
 /**
+ * @brief Source-over composites one premultiplied ARGB source pixel onto a destination pixel.
+ *
+ * out.C = src.C + dst.C * (255 - src.A) / 255, with src already premultiplied. Fully opaque
+ * sources overwrite and fully transparent sources return the destination unchanged (both exact,
+ * and skipping the per-channel divides). Shared by scratch_do_blend and scratch_do_copy so the
+ * one blend formula lives in a single place. (scratch_do_fill keeps its own loop: a constant fill
+ * color lets it hoist the premultiplied channels out of the per-pixel work.)
+ */
+static inline uint32_t over_premul_px(uint32_t d, uint32_t sp)
+{
+    const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
+    if (sa == 0U)
+        return d;
+    if (sa == 255U)
+        return sp;
+    const uint8_t inv = (uint8_t)(255U - sa);
+    const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv / 255U);
+    const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv / 255U);
+    const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv / 255U);
+    const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv / 255U);
+    return ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+}
+
+/**
  * @brief Source-over blends a straight-alpha ARGB fill into the active scratch buffer.
  *
  * Premultiplies the color components before blending so the scratch buffer stays in
@@ -220,24 +244,8 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
                      | ((uint32_t)((sp >> 8) & 0xFFU) * alpha / 255U << 8) | (uint32_t)(sp & 0xFFU) * alpha / 255U;
             }
 
-            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
-            if (sa == 0U)
-                continue;
-
-            if (sa == 255U)
-            {
-                dst_row[col] = sp;
-            }
-            else
-            {
-                const uint32_t d = dst_row[col];
-                const uint8_t inv_sa = (uint8_t)(255U - sa);
-                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
-                const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
-                const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
-                const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
-            }
+            if ((sp >> 24) != 0U) /* skip fully-transparent source pixels */
+                dst_row[col] = over_premul_px(dst_row[col], sp);
         }
     }
 }
@@ -278,24 +286,8 @@ static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw,
         for (int col = x0; col < x1; col++)
         {
             const uint32_t sp = src_row[col - x0];
-            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
-            if (sa == 0U)
-                continue;
-
-            if (sa == 255U)
-            {
-                dst_row[col] = sp;
-            }
-            else
-            {
-                const uint32_t d = dst_row[col];
-                const uint8_t inv_sa = (uint8_t)(255U - sa);
-                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
-                const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
-                const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
-                const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
-            }
+            if ((sp >> 24) != 0U) /* skip fully-transparent source pixels */
+                dst_row[col] = over_premul_px(dst_row[col], sp);
         }
     }
 }
