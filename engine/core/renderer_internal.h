@@ -79,6 +79,14 @@ typedef void (*ERParallelFn)(int worker, void* arg);
  */
 void er_parallel_for(ERParallelFn fn, void* arg);
 
+/**
+ * @brief Number of commits rendered via the sliced parallel fork since boot.
+ *
+ * Diagnostic: lets hosts and tests confirm multi-core rendering is actually engaging (the fork
+ * skips small damage regions and parallel-unsafe scenes).
+ */
+uint32_t er_parallel_frames(void);
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/

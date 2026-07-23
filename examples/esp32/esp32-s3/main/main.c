@@ -348,6 +348,72 @@ static bool load_config_partition(ErContainerStatus* out_status)
     return true;
 }
 
+#if ERUI_RENDER_WORKERS > 1
+/*----------------------------------------------------------------------------------------------------------------------
+ - Multi-core rendering: worker 1 on CPU core 1
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* The engine never creates threads — this example provides render worker 1 as a FreeRTOS task
+ * pinned to core 1 (the main/render task is pinned to core 0 by ESP-IDF's default main-task
+ * affinity, so xPortGetCoreID doubles as the worker id). The engine forks each commit's render
+ * into horizontal slices across both cores; see EmbeddedRenderWorkers in native_renderer.h. */
+static TaskHandle_t s_render_worker;
+static SemaphoreHandle_t s_render_worker_done;
+
+static void render_worker_main(void* arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        er_render_worker_exec(1);
+        xSemaphoreGive(s_render_worker_done);
+    }
+}
+
+static void render_worker_dispatch(int worker, void* ctx)
+{
+    (void)worker; /* only worker 1 exists */
+    (void)ctx;
+    xTaskNotifyGive(s_render_worker);
+}
+
+static void render_worker_sync(void* ctx)
+{
+    (void)ctx;
+    xSemaphoreTake(s_render_worker_done, portMAX_DELAY);
+}
+
+static int render_worker_id(void)
+{
+    return xPortGetCoreID(); /* workers are core-pinned: core id == worker id */
+}
+
+/** @brief Spawns the core-1 render worker and hands it to the engine. */
+static void install_render_workers(void)
+{
+    static const EmbeddedRenderWorkers workers = {
+        .count = 2,
+        .dispatch = render_worker_dispatch,
+        .sync = render_worker_sync,
+        .worker_id = render_worker_id,
+        .ctx = NULL,
+    };
+    /* 24 KB: the worker runs the full render recursion (nested composites + transform emits with
+     * their on-stack column arrays) but never QuickJS, so it needs render-depth headroom only —
+     * 12 KB measurably overflowed on the banded-fade pages. */
+    s_render_worker_done = xSemaphoreCreateBinary();
+    if (!s_render_worker_done
+        || xTaskCreatePinnedToCore(render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1) != pdPASS)
+    {
+        ESP_LOGW(TAG, "render worker creation failed — rendering stays single-core");
+        return;
+    }
+    embedded_renderer_set_workers(&workers);
+    ESP_LOGI(TAG, "multi-core rendering: worker 1 pinned to core 1");
+}
+#endif /* ERUI_RENDER_WORKERS > 1 */
+
 /**
  * @brief Boots the engine + er_runtime, loads the config from flash, then drives the frame loop.
  */
@@ -367,6 +433,11 @@ static void run_app(void)
         ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
         embedded_renderer_set_backend(&k_noop_backend);
     }
+
+#if ERUI_RENDER_WORKERS > 1
+    /* Fork render passes across both CPU cores (after display init so its heap needs come first). */
+    install_render_workers();
+#endif
 
     /* No baked assets are compiled in: the config container carries its own images + fonts and they
        are registered when it loads (er_runtime_load_container) — just like the desktop demo. */

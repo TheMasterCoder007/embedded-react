@@ -299,6 +299,31 @@ typedef struct
 
 static CompCtx s_comp_ctx[ERUI_RENDER_WORKERS];
 
+/* Multi-core render safety: vector rasterization and shadow blurs still run through large SHARED
+ * static scratch (engine/rendering/vector.c, shadow.c — too big to duplicate per worker), so a
+ * scene containing them renders single-core. Vector nodes and shadow-casting views are counted as
+ * they come and go; the sliced fork below only engages while the count is zero. Every other
+ * primitive (fills, borders, text, gradients, images, opacity strips, transforms) works from
+ * per-worker state and is safe to render concurrently. */
+static int s_parallel_unsafe = 0;
+
+/* True while er_commit is rendering slices on multiple workers. The fade cache sits out those
+ * frames (composite_from_cache checks this): its buffer is one shared global, and a capture from
+ * inside one worker's slice would race other workers reading or re-tagging it. Cache validity is
+ * generation-based, so it simply resumes on the next single-core frame. */
+static bool s_parallel_render = false;
+
+/* Commits rendered via the sliced fork since boot — a cheap engagement diagnostic (host frame
+ * traces, tests asserting the fork really ran). */
+static uint32_t s_parallel_frames = 0;
+
+/* A parallel frame wanted a fade-cache capture (see composite_from_cache): er_commit renders the
+ * next commit single-core so the capture can run — but only if the content generation is still
+ * the one recorded here, so ever-changing content doesn't thrash between modes. Workers may set
+ * this concurrently (same-value writes); er_commit consumes it sequentially. */
+static bool s_fade_capture_wanted = false;
+static uint32_t s_fade_capture_wanted_gen = 0;
+
 /** @brief The calling worker's composite context (constant &s_comp_ctx[0] in single-worker builds). */
 static inline CompCtx* cc(void)
 {
@@ -884,16 +909,33 @@ static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w
         return false;
     if (w <= 0 || h <= 0 || w > ERUI_FADE_CACHE_W || h > ERUI_FADE_CACHE_H)
         return false;
-    int cx, cy, cw, ch;
-    if (er_get_clip_rect(&cx, &cy, &cw, &ch) && (cx > px || cy > py || cx + cw < px + w || cy + ch < py + h))
-        return false;
 
+    /* Cache HIT: a read-only blend, clipped by the active scissor — safe under any scissor
+     * (a partial repaint blends just the damaged part) and from any render worker (slices blend
+     * disjoint rows of the same cached content). Checked before the full-coverage gate below,
+     * which only capture needs. */
     if (s_fade_cache_tag == n->tag && s_fade_cache_gen == s_content_gen && s_fade_cache_w == w
         && s_fade_cache_h == h)
     {
         er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
         return true;
     }
+
+    /* Capture writes the one shared cache buffer — never safe from inside a parallel slice.
+     * Signal er_commit instead: if the content generation is still the same next commit (a pure
+     * opacity animation), it renders that one frame single-core so the capture can happen, and
+     * every following parallel frame takes the hit path above. Content that mutates every frame
+     * (the generation moves) never requests the serial frame — those scenes gain more from
+     * staying parallel than from a cache that would be stale immediately. */
+    if (s_parallel_render)
+    {
+        s_fade_capture_wanted = true;
+        s_fade_capture_wanted_gen = s_content_gen;
+        return false;
+    }
+    int cx, cy, cw, ch;
+    if (er_get_clip_rect(&cx, &cy, &cw, &ch) && (cx > px || cy > py || cx + cw < px + w || cy + ch < py + h))
+        return false;
 
     if (s_fade_capture_commit == s_commit_seq)
         return false;
@@ -1731,6 +1773,9 @@ ERNode* er_node_create(ERNodeType type)
     n->dirty = true;
     n->vector_slot = -1; /* memset cleared it to 0, which is a valid slot; -1 = "no geometry". */
 
+    if (type == ER_NODE_VECTOR)
+        s_parallel_unsafe++; /* vector rasterizer uses shared scratch — see s_parallel_unsafe */
+
     init_layout_defaults(&n->layout);
 
     /* View-type nodes default to fully opaque. */
@@ -1775,6 +1820,15 @@ void er_node_destroy(ERNode* node)
 
     node->in_use = false;
     node->dirty = false;
+    if (node->type == ER_NODE_VECTOR)
+        s_parallel_unsafe--;
+#if ERUI_SHADOWS
+    if (node->casts_shadow)
+    {
+        node->casts_shadow = false;
+        s_parallel_unsafe--;
+    }
+#endif
     /* Release the vector storage slot so it can be reused (the binding lives on the node side). */
     if (node->vector_slot >= 0)
     {
@@ -1984,6 +2038,17 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_color = props->shadow_color;
             node->props.view.shadow_offset_x = props->shadow_offset_x;
             node->props.view.shadow_offset_y = props->shadow_offset_y;
+#if ERUI_SHADOWS
+            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
+            {
+                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
+                if (casts != node->casts_shadow)
+                {
+                    s_parallel_unsafe += casts ? 1 : -1;
+                    node->casts_shadow = casts;
+                }
+            }
+#endif
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
@@ -2106,6 +2171,17 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_color = props->shadow_color;
             node->props.view.shadow_offset_x = props->shadow_offset_x;
             node->props.view.shadow_offset_y = props->shadow_offset_y;
+#if ERUI_SHADOWS
+            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
+            {
+                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
+                if (casts != node->casts_shadow)
+                {
+                    s_parallel_unsafe += casts ? 1 : -1;
+                    node->casts_shadow = casts;
+                }
+            }
+#endif
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
@@ -3098,6 +3174,43 @@ void er_reset(void)
     er_input_reset();
 }
 
+/**
+ * @brief One worker's share of a sliced parallel render: a horizontal band of the repaint region.
+ */
+typedef struct
+{
+    ERNode* root;
+    bool full_recomposite; /**< Multi-buffer replay: repaint everything inside the clip. */
+    int x0;                /**< Repaint region bounds (screen space). */
+    int x1;
+    int ry0;
+    int ry1;
+    int nslices;
+    int kbd_y;
+} ParallelRenderJob;
+
+/**
+ * @brief er_parallel_for job: renders slice `worker` of the repaint region.
+ *
+ * Each worker pushes its slice as a clip on its OWN clip stack (per-worker context) and walks the
+ * whole tree; per-worker scratch (opacity slots, transform buffers, row buffers) keeps concurrent
+ * composites isolated, and Phase 0's painted_seq deferral means the walk only reads shared node
+ * flags. A transform subtree straddling a slice boundary is captured fully by both workers (the
+ * capture pushes a clip reset — the seam-safety rule), each emitting only its slice's rows.
+ */
+static void render_slice_job(int worker, void* arg)
+{
+    const ParallelRenderJob* j = (const ParallelRenderJob*)arg;
+    const int rows = j->ry1 - j->ry0;
+    const int sy0 = j->ry0 + rows * worker / j->nslices;
+    const int sy1 = j->ry0 + rows * (worker + 1) / j->nslices;
+    if (sy0 >= sy1)
+        return;
+    er_push_clip_rect(j->x0, sy0, j->x1 - j->x0, sy1 - sy0);
+    render_tree(j->root, j->full_recomposite, 0, j->kbd_y);
+    er_pop_clip_rect();
+}
+
 void er_commit(void)
 {
     if (s_root_tag == ER_INVALID_TAG)
@@ -3461,24 +3574,59 @@ void er_commit(void)
     }
     else
     {
-        /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
-         * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
-         * clip, the whole tree repaints; otherwise scissor to the damage region.) */
-        bool clipped = false;
-        if (!render_full && !nothing_dirty)
+        const int nworkers = er_render_workers_active();
+        /* One single-core frame when a parallel frame wanted a fade-cache capture and the content
+         * has not changed since — the capture happens below, and following frames hit the cache
+         * from inside the parallel fork. */
+        const bool serial_for_capture = s_fade_capture_wanted && (s_fade_capture_wanted_gen == s_content_gen);
+        s_fade_capture_wanted = false;
+        if (nworkers > 1 && !serial_for_capture && !nothing_dirty && s_parallel_unsafe == 0
+            && (rb_y1 - rb_y0) >= nworkers * 16)
         {
+            /* Sliced parallel render: the repaint region is split into one horizontal band per
+             * worker and rendered concurrently (see render_slice_job). Engages only when the
+             * scene is parallel-safe (no shared-scratch primitives) and the region is tall
+             * enough that the fork overhead pays for itself; the fade cache sits these frames
+             * out (see s_parallel_render). Slices behave exactly like the serial damage clip:
+             * multi-buffer replay fully recomposites, single-buffer relies on dirty flags. */
+            ParallelRenderJob job;
+            job.root = root;
+            job.full_recomposite = (s_display_buffer_count > 1);
+            job.x0 = rb_x0;
+            job.x1 = rb_x1;
+            job.ry0 = rb_y0;
+            job.ry1 = rb_y1;
+            job.nslices = nworkers;
+            job.kbd_y = s_kbd_avoid_y;
+            s_parallel_render = true;
+            er_parallel_for(render_slice_job, &job);
+            s_parallel_render = false;
+            s_parallel_frames++;
             er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
-            clipped = true;
-        }
-        /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
-         * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
-         * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
-         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
-        const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
-        render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
-        er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
-        if (clipped)
+            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, sequential */
             er_pop_clip_rect();
+        }
+        else
+        {
+            /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
+             * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
+             * clip, the whole tree repaints; otherwise scissor to the damage region.) */
+            bool clipped = false;
+            if (!render_full && !nothing_dirty)
+            {
+                er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+                clipped = true;
+            }
+            /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
+             * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
+             * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
+             * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
+            const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
+            render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
+            if (clipped)
+                er_pop_clip_rect();
+        }
     }
 
     /* Merge every worker's dirty-rect accumulator into the global (single worker: a copy). */
@@ -3643,4 +3791,9 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
         data.scroll_y = y;
         h->fn(node, &data, h->user_data);
     }
+}
+
+uint32_t er_parallel_frames(void)
+{
+    return s_parallel_frames;
 }

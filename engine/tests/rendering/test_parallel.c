@@ -36,6 +36,75 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Minimal thread-safe test backend (pure per-pixel writes; workers touch disjoint rows)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#define FB_W 64
+#define FB_H 64
+
+static uint32_t s_fb[FB_W * FB_H];
+
+static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+{
+    (void)ctx;
+    const uint8_t a = (uint8_t)((argb >> 24) & 0xFFU);
+    if (a == 0U)
+        return;
+    const uint8_t r = (uint8_t)((uint32_t)((argb >> 16) & 0xFFU) * a / 255U);
+    const uint8_t g = (uint8_t)((uint32_t)((argb >> 8) & 0xFFU) * a / 255U);
+    const uint8_t b = (uint8_t)((uint32_t)(argb & 0xFFU) * a / 255U);
+    const uint32_t premul = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+    for (int row = y; row < y + h; row++)
+        for (int col = x; col < x + w; col++)
+            if (col >= 0 && col < FB_W && row >= 0 && row < FB_H)
+                s_fb[row * FB_W + col] = premul;
+}
+
+static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+{
+    (void)ctx;
+    if (alpha == 0U)
+        return;
+    for (int row = 0; row < h; row++)
+    {
+        const uint32_t* sr = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
+        for (int col = 0; col < w; col++)
+        {
+            const int bx = x + col;
+            const int by = y + row;
+            if (bx < 0 || bx >= FB_W || by < 0 || by >= FB_H)
+                continue;
+            uint32_t sp = sr[col];
+            if (alpha < 255U)
+                sp = ((uint32_t)((sp >> 24) & 0xFFU) * alpha / 255U << 24)
+                     | ((uint32_t)((sp >> 16) & 0xFFU) * alpha / 255U << 16)
+                     | ((uint32_t)((sp >> 8) & 0xFFU) * alpha / 255U << 8) | (uint32_t)(sp & 0xFFU) * alpha / 255U;
+            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
+            if (sa == 0U)
+                continue;
+            if (sa == 255U)
+            {
+                s_fb[by * FB_W + bx] = sp;
+                continue;
+            }
+            const uint32_t d = s_fb[by * FB_W + bx];
+            const uint8_t inv = (uint8_t)(255U - sa);
+            const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv / 255U);
+            const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv / 255U);
+            const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv / 255U);
+            const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv / 255U);
+            s_fb[by * FB_W + bx] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+        }
+    }
+}
+
+static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+{
+    blend_cb(src, stride, 255U, x, y, w, h, ctx);
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -232,6 +301,129 @@ int main(void)
     for (int w = 0; w < NW; w++)
         if (s_ran[w] != 2)
             return fail("parallel: second fork must run every worker again");
+
+    /* ================================================================================
+     * Full-commit equivalence: a scene rendered by the sliced parallel fork must be
+     * byte-identical to the same scene rendered single-core. The scene straddles the
+     * slice boundary with an opacity group and a scaled transform so cross-slice
+     * composites and captures are exercised, not just plain fills.
+     * ================================================================================ */
+    {
+        static const EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
+        embedded_renderer_set_backend(&be); /* re-inits worker contexts; workers stay installed */
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = {0};
+        rp.left = rp.top = rp.right = rp.bottom = ER_LAYOUT_AUTO;
+        rp.min_width = rp.max_width = rp.min_height = rp.max_height = ER_LAYOUT_AUTO;
+        rp.padding = rp.padding_left = rp.padding_top = ER_LAYOUT_AUTO;
+        rp.padding_right = rp.padding_bottom = ER_LAYOUT_AUTO;
+        rp.padding_horizontal = rp.padding_vertical = ER_LAYOUT_AUTO;
+        rp.margin = rp.margin_left = rp.margin_top = ER_LAYOUT_AUTO;
+        rp.margin_right = rp.margin_bottom = ER_LAYOUT_AUTO;
+        rp.gap = rp.row_gap = rp.column_gap = ER_LAYOUT_AUTO;
+        rp.flex_basis = ER_LAYOUT_AUTO;
+        rp.opacity = 255U;
+        const ERProps base = rp; /* AUTO-initialised template for the children */
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFF101828U;
+        er_node_set_props(root, &rp);
+        er_tree_set_root(root);
+
+        /* A 40px-tall tile whose color changes drive the partial-damage round below. */
+        ERNode* tile = er_node_create(ER_NODE_VIEW);
+        ERProps tp = base;
+        tp.position = ER_POS_ABSOLUTE;
+        tp.left = 2;
+        tp.top = 2;
+        tp.width = 14;
+        tp.height = 40;
+        tp.background_color = 0xFFB91C1CU;
+        tp.border_radius = 4;
+        er_node_set_props(tile, &tp);
+        er_tree_append_child(root, tile);
+
+        /* Translucent group straddling the slice boundary (rows 20-59), with a nested
+         * translucent child: cross-slice strip composites at depth 2. */
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = base;
+        gp.position = ER_POS_ABSOLUTE;
+        gp.left = 20;
+        gp.top = 20;
+        gp.width = 30;
+        gp.height = 40;
+        gp.opacity = 128U;
+        gp.background_color = 0xFF0E7490U;
+        er_node_set_props(group, &gp);
+        ERNode* inner = er_node_create(ER_NODE_VIEW);
+        ERProps ip = base;
+        ip.position = ER_POS_ABSOLUTE;
+        ip.left = 6;
+        ip.top = 10;
+        ip.width = 18;
+        ip.height = 20;
+        ip.opacity = 200U;
+        ip.background_color = 0xFFF59E0BU;
+        ip.border_radius = 6;
+        er_node_set_props(inner, &ip);
+        er_tree_append_child(group, inner);
+        er_tree_append_child(root, group);
+
+        /* A scaled node straddling the boundary: cross-slice transform capture + emit
+         * (a no-op scale on TRANSLATE_ONLY builds — equivalence holds either way). */
+        ERNode* scaled = er_node_create(ER_NODE_VIEW);
+        ERProps sp2 = base;
+        sp2.position = ER_POS_ABSOLUTE;
+        sp2.left = 52;
+        sp2.top = 26;
+        sp2.width = 8;
+        sp2.height = 12;
+        sp2.background_color = 0xFF15803DU;
+        sp2.transform_scale_x = 1.5f;
+        sp2.transform_scale_y = 1.5f;
+        er_node_set_props(scaled, &sp2);
+        er_tree_append_child(root, scaled);
+
+        const uint32_t forks_before = er_parallel_frames();
+        er_commit(); /* full repaint, sliced across the workers */
+        if (er_parallel_frames() != forks_before + 1)
+            return fail("equivalence: first commit did not take the parallel fork");
+
+        static uint32_t fb_parallel[FB_W * FB_H];
+        memcpy(fb_parallel, s_fb, sizeof(s_fb));
+
+        /* Same scene, single-core. */
+        embedded_renderer_set_workers(NULL);
+        memset(s_fb, 0, sizeof(s_fb));
+        er_force_full_repaint();
+        er_commit();
+        if (er_parallel_frames() != forks_before + 1)
+            return fail("equivalence: serial commit must not fork");
+        if (memcmp(fb_parallel, s_fb, sizeof(s_fb)) != 0)
+            return fail("equivalence: parallel and serial framebuffers differ (full repaint)");
+
+        /* ---- Partial damage: a prop change rendered parallel vs serial. ---- */
+        embedded_renderer_set_workers(&hooks);
+        tp.background_color = 0xFF7E22CEU;
+        er_node_set_props(tile, &tp);
+        er_commit(); /* damage-clipped (~40 rows), still forks */
+        if (er_parallel_frames() != forks_before + 2)
+            return fail("equivalence: damage-clipped commit did not take the parallel fork");
+        memcpy(fb_parallel, s_fb, sizeof(s_fb));
+
+        embedded_renderer_set_workers(NULL);
+        tp.background_color = 0xFFB91C1CU; /* back... */
+        er_node_set_props(tile, &tp);
+        er_commit();
+        tp.background_color = 0xFF7E22CEU; /* ...and forward again, serial this time */
+        er_node_set_props(tile, &tp);
+        er_commit();
+        if (memcmp(fb_parallel, s_fb, sizeof(s_fb)) != 0)
+            return fail("equivalence: parallel and serial framebuffers differ (partial damage)");
+
+        embedded_renderer_set_workers(&hooks); /* restore for the uninstall test below */
+    }
 
     /* ---- Uninstall: back to the exact single-core path. ---- */
     embedded_renderer_set_workers(NULL);
