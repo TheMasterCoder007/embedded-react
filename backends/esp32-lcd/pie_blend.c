@@ -30,10 +30,11 @@
  *     and within s16 range (premultiplied invariant: src.C <= src.A).
  *   - Results repack with EE.VSL.32 + EE.ORQ and store with EE.VST.128.IP.
  *
- * Rounding matches over_premul_fast in renderer_backend.c to within one 565 LSB (the source
- * contribution truncates to 5/6 bits before the add instead of after); fully opaque and fully
- * transparent pixels are exact. er_pie_blend_selftest() verifies this against a scalar
- * reference at init — if it ever fails, the backend falls back to the C loops.
+ * Blend: dst.C = src.C>>shift + dst.C*(256-a)>>8 in the 5/6-bit domain. The 256-a inverse makes
+ * both alpha edges exact — a==0 leaves the destination bit-identical (dst*256>>8) and a==255
+ * replaces it (dst*1>>8 == 0 for 5/6-bit values); mid alphas stay within one 565 LSB of
+ * over_premul_fast in renderer_backend.c. er_pie_blend_selftest() verifies this against a
+ * scalar reference at init — if it ever fails, the backend falls back to the C loops.
  *
  * Alignment contract: dst and src rows are 16-byte aligned (the backend stages rows through
  * aligned internal buffers, so this holds for every call).
@@ -46,7 +47,7 @@
 #include <string.h>
 
 /* Broadcast constants for EE.VLDBC.16 (address-based broadcast load). */
-static const uint16_t s_k255 = 255U;
+static const uint16_t s_k256 = 256U;
 static const uint16_t s_m1f = 0x001FU;
 static const uint16_t s_m3f = 0x003FU;
 
@@ -63,8 +64,8 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
     if (ga == 255U)
     {
         __asm__ volatile(
-            /* q7 = 255 broadcast (persistent across the loop) */
-            "ee.vldbc.16    q7, %[k255]         \n"
+            /* q7 = 256 broadcast (persistent across the loop) */
+            "ee.vldbc.16    q7, %[k256]         \n"
             "loopnez        %[n8], .Lblend_end%= \n"
             /*  src pixels: q0 = px0-3, q1 = px4-7; dst: q2 = 8x565 */
             "ee.vld.128.ip  q0, %[src], 16      \n"
@@ -78,8 +79,9 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
             "ee.vzip.8      q0, q3              \n"
             "ee.zero.q      q4                  \n"
             "ee.vzip.8      q1, q4              \n"
-            /* inv = 255 - a  (a <= 255, so XOR with 255 is exact subtraction) */
-            "ee.xorq        q4, q4, q7          \n"
+            /* inv = 256 - a: a==0 leaves dst exactly unchanged (dst*256>>8), a==255 removes it
+             * exactly (dst*1>>8 == 0 for 5/6-bit values) — true source-over at both edges. */
+            "ee.vsubs.s16   q4, q7, q4          \n"
             /* ---- red ---- */
             "wsr.sar        %[s11]              \n"
             "ee.vsr.32      q5, q2              \n"
@@ -120,14 +122,14 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
             "ee.vst.128.ip  q1, %[dw], 16       \n"
             ".Lblend_end%=:                     \n"
             : [src] "+a"(src), [dr] "+a"(dr), [dw] "+a"(dw)
-            : [n8] "a"(n8), [k255] "a"(&s_k255), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f), [s2] "a"(2), [s3] "a"(3),
+            : [n8] "a"(n8), [k256] "a"(&s_k256), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f), [s2] "a"(2), [s3] "a"(3),
               [s5] "a"(5), [s8] "a"(8), [s11] "a"(11)
             : "memory");
         return;
     }
 
     __asm__ volatile(
-        "ee.vldbc.16    q7, %[k255]         \n"
+        "ee.vldbc.16    q7, %[k256]         \n"
         "loopnez        %[n8], .Lblendga_end%= \n"
         "ee.vld.128.ip  q0, %[src], 16      \n"
         "ee.vld.128.ip  q1, %[src], 16      \n"
@@ -145,7 +147,8 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
         "ee.vmul.s16    q1, q1, q6          \n"
         "ee.vmul.s16    q3, q3, q6          \n"
         "ee.vmul.s16    q4, q4, q6          \n"
-        "ee.xorq        q4, q4, q7          \n"
+        /* inv = 256 - a_scaled (see the ga==255 loop: exact at both alpha edges) */
+        "ee.vsubs.s16   q4, q7, q4          \n"
         /* ---- red ---- */
         "wsr.sar        %[s11]              \n"
         "ee.vsr.32      q5, q2              \n"
@@ -186,7 +189,7 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
         "ee.vst.128.ip  q1, %[dw], 16       \n"
         ".Lblendga_end%=:                   \n"
         : [src] "+a"(src), [dr] "+a"(dr), [dw] "+a"(dw)
-        : [n8] "a"(n8), [k255] "a"(&s_k255), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f), [ga] "a"(&ga16), [s2] "a"(2),
+        : [n8] "a"(n8), [k256] "a"(&s_k256), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f), [ga] "a"(&ga16), [s2] "a"(2),
           [s3] "a"(3), [s5] "a"(5), [s8] "a"(8), [s11] "a"(11)
         : "memory");
 }
@@ -203,7 +206,7 @@ void er_pie_fill_row_565(uint16_t* dst, uint32_t sp, int n8)
     const uint16_t srcR5 = (uint16_t)(((sp >> 16) & 0xFFU) >> 3);
     const uint16_t srcG6 = (uint16_t)(((sp >> 8) & 0xFFU) >> 2);
     const uint16_t srcB5 = (uint16_t)((sp & 0xFFU) >> 3);
-    const uint16_t inv = (uint16_t)(255U - (sp >> 24));
+    const uint16_t inv = (uint16_t)(256U - (sp >> 24)); /* 256-a: exact at both alpha edges */
 
     __asm__ volatile(
         /* persistent constants: q0=srcB5, q1=srcR5, q3=srcG6, q4=inv */
@@ -266,7 +269,7 @@ static uint16_t ref_blend_px(uint16_t d, uint32_t sp, uint8_t ga)
         g = (g * ga) >> 8;
         b = (b * ga) >> 8;
     }
-    const uint32_t inv = 255U - a;
+    const uint32_t inv = 256U - a; /* a==0 → dst unchanged; a==255 → dst removed (exact edges) */
     const uint32_t dr5 = (d >> 11) & 31U;
     const uint32_t dg6 = (d >> 5) & 63U;
     const uint32_t db5 = d & 31U;
@@ -319,8 +322,15 @@ bool er_pie_blend_selftest(void)
             er_pie_blend_row_565(dst_pie, src, 64 / 8, ga);
             for (int i = 0; i < 64; i++)
             {
+                const uint16_t before = dst_ref[i];
                 dst_ref[i] = ref_blend_px(dst_ref[i], src[i], ga);
                 if (dst_pie[i] != dst_ref[i])
+                {
+                    return false;
+                }
+                /* Source-over semantics at the edges: a fully transparent source pixel must be
+                 * a strict no-op (and via the reference, a==0 implies ref == before). */
+                if ((src[i] >> 24) == 0U && dst_pie[i] != before)
                 {
                     return false;
                 }
