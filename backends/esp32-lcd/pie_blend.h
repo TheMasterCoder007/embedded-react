@@ -30,15 +30,19 @@ extern "C"
      *        ESP32-S3 PIE 128-bit SIMD unit, 8 pixels per iteration.
      *
      * Per pixel: a = src.A (scaled by ga when ga < 255); dst.C = src.C>>shift + dst.C*(256-a)>>8
-     * in the 5/6-bit 565 domain — within one RGB565 LSB of the scalar reference
+     * in the 5/6-bit 565 domain, with per-pixel ordered-dither bias (or uniform round-to-nearest)
+     * before each quantization — within one RGB565 LSB of the scalar reference
      * (over_premul_fast). Fully opaque and fully transparent source pixels are exact.
      *
-     * @param[in,out] dst  RGB565 destination row. MUST be 16-byte aligned.
-     * @param[in] src      Premultiplied ARGB8888 source row. MUST be 16-byte aligned.
-     * @param[in] n8       Number of 8-pixel groups to process (pixels = n8 * 8).
-     * @param[in] ga       Global alpha 0-255 applied to the source (255 = none).
+     * @param[in,out] dst       RGB565 destination row. MUST be 16-byte aligned.
+     * @param[in] src           Premultiplied ARGB8888 source row. MUST be 16-byte aligned.
+     * @param[in] n8            Number of 8-pixel groups to process (pixels = n8 * 8).
+     * @param[in] ga            Global alpha 0-255 applied to the source (255 = none).
+     * @param[in] dither_phase  (x + y) parity of the row's first pixel (0/1) to keep the 2x2
+     *                          ordered-dither checkerboard spatially stable; any other value
+     *                          disables dithering (uniform round-to-nearest).
      */
-    void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga);
+    void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga, int dither_phase);
 
     /**
      * @brief Source-over fills an RGB565 row with one translucent premultiplied ARGB8888 color,
@@ -57,6 +61,11 @@ extern "C"
      *        alpha 0/255). Called once at backend init; a failure disables the PIE paths.
      */
     bool er_pie_blend_selftest(void);
+
+    /**
+     * @brief Returns a description of the last self-test failure ("" when it passed).
+     */
+    const char* er_pie_diag(void);
 
 #ifdef __cplusplus
 }
