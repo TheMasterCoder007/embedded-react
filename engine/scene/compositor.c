@@ -929,8 +929,12 @@ static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w
      * staying parallel than from a cache that would be stale immediately. */
     if (s_parallel_render)
     {
-        s_fade_capture_wanted = true;
-        s_fade_capture_wanted_gen = s_content_gen;
+        /* Avoid concurrent writes: any worker may notice the need, but only worker 0 records it. */
+        if (er_render_worker_id() == 0)
+        {
+            s_fade_capture_wanted = true;
+            s_fade_capture_wanted_gen = s_content_gen;
+        }
         return false;
     }
     int cx, cy, cw, ch;

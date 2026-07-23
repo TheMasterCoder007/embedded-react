@@ -406,6 +406,11 @@ static void install_render_workers(void)
     if (!s_render_worker_done
         || xTaskCreatePinnedToCore(render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1) != pdPASS)
     {
+        if (s_render_worker_done)
+        {
+            vSemaphoreDelete(s_render_worker_done);
+            s_render_worker_done = NULL;
+        }
         ESP_LOGW(TAG, "render worker creation failed — rendering stays single-core");
         return;
     }
