@@ -520,6 +520,15 @@ static void run_app(void)
 
         if ((++frame % 30U) == 0U)
         {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+            {
+                if (!er_esp32_lcd_pie_enabled())
+                {
+                    extern const char* er_pie_diag(void);
+                    ESP_LOGW(TAG, "PIE self-test diag: %s", er_pie_diag());
+                }
+            }
+#endif
             ESP_LOGI(TAG,
                      "alive: %u frames, %u ms uptime | avg us/frame: pump=%u commit=%u present=%u | display=%d "
                      "pie=%d int_free=%u",

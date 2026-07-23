@@ -88,6 +88,13 @@
 #define ER_LCD_PIE_ACTIVE 0
 #endif
 
+/** @brief 1 = 2x2 ordered dithering in the SIMD blend paths (default): the RGB565 quantization
+ *         error becomes a fine, spatially stable checkerboard instead of a frame-to-frame
+ *         shimmer on animated fades. 0 = uniform round-to-nearest. PIE paths only. */
+#ifndef ER_LCD_DITHER
+#define ER_LCD_DITHER 1
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Pixel-format abstraction (canonical framebuffer)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -581,7 +588,10 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
                 s2 = s_pie_src;
             }
             const int n8 = w / 8;
-            er_pie_blend_row_565(stage, s2, n8, (uint8_t)ga);
+            /* Dither phase = (x + y) parity of the row's first pixel, so the checkerboard is
+             * anchored to screen coordinates (spatially stable across frames and regions). */
+            const int ph = ER_LCD_DITHER ? ((x + y + row) & 1) : 2;
+            er_pie_blend_row_565(stage, s2, n8, (uint8_t)ga, ph);
             col0 = n8 * 8;
         }
 #endif

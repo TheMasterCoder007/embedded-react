@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Ordered dithering on RGB565 panels (`ER_LCD_DITHER`, on by default with SIMD blending). Fading
+  translucent or anti-aliased content used to shimmer as pixels flickered between color levels
+  frame to frame; the quantization now lands as a fine, stationary checkerboard instead, which
+  also softens gradient banding. The startup self-test covers the dithered math per pixel lane.
+
 - SIMD blending on the ESP32-S3 (`ER_LCD_PIE`, on by default). The hottest drawing operation —
   blending translucent content onto the screen — now uses the chip's 128-bit vector unit, eight
   pixels at a time, roughly halving the cost of fades on a device. A self-test at startup verifies

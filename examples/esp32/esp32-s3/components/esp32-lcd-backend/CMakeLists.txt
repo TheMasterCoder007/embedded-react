@@ -22,3 +22,10 @@ if(NOT DEFINED ER_LCD_PIE)
     set(ER_LCD_PIE 1)
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_LCD_PIE=${ER_LCD_PIE})
+
+# Ordered dithering in the SIMD blend paths: 1 = on (default), 0 = uniform rounding.
+# Override with -DER_LCD_DITHER=0 for an A/B comparison.
+if(NOT DEFINED ER_LCD_DITHER)
+    set(ER_LCD_DITHER 1)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_LCD_DITHER=${ER_LCD_DITHER})
