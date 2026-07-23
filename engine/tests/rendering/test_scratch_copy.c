@@ -97,7 +97,7 @@ int main(void)
     for (int i = 0; i < W * H; i++)
         scratch[i] = bg;
     er_scratch_begin(scratch, W, H, 0, 0);
-    er_blit_copy(&edge, W * (int)sizeof(uint32_t), 0, 0, 1, 1);
+    er_blit_copy(&edge, (int)sizeof(uint32_t), 0, 0, 1, 1);
     er_scratch_end();
 
     const uint32_t expect = over(bg, edge);
