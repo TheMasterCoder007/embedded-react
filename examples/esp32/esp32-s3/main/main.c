@@ -522,13 +522,14 @@ static void run_app(void)
         {
             ESP_LOGI(TAG,
                      "alive: %u frames, %u ms uptime | avg us/frame: pump=%u commit=%u present=%u | display=%d "
-                     "int_free=%u",
+                     "pie=%d int_free=%u",
                      (unsigned)frame,
                      (unsigned)now,
                      (unsigned)(s_tr_pump / s_tr_n),
                      (unsigned)(s_tr_commit / s_tr_n),
                      (unsigned)(s_tr_present / s_tr_n),
                      (int)display,
+                     (int)er_esp32_lcd_pie_enabled(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             s_tr_pump = s_tr_commit = s_tr_present = s_tr_n = 0;
         }

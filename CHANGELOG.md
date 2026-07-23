@@ -12,6 +12,10 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- SIMD blending on the ESP32-S3 (`ER_LCD_PIE`, on by default). The hottest drawing operation —
+  blending translucent content onto the screen — now uses the chip's 128-bit vector unit, eight
+  pixels at a time, roughly halving the cost of fades on a device. A self-test at startup verifies
+  the SIMD output against the plain C version and falls back automatically if it ever disagrees.
 - The ESP32 LCD backend can now draw directly into the panel's own framebuffers (`ER_LCD_DIRECT`,
   on by default for unrotated RGB565 panels with 2–3 framebuffers when `on_frame_buf_complete` callbacks are available). The intermediate framebuffer
   and the per-frame copy to the panel are gone — pushing a large update dropped from 20–35 ms to
