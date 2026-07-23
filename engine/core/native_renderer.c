@@ -22,7 +22,6 @@
 #include "renderer_internal.h"
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -119,6 +118,30 @@ static bool apply_clip(int* x, int* y, int* w, int* h)
     *w = nx2 - nx;
     *h = ny2 - ny;
     return *w > 0 && *h > 0;
+}
+
+/**
+ * @brief Source-over composites one premultiplied ARGB source pixel onto a destination pixel.
+ *
+ * out.C = src.C + dst.C * (255 - src.A) / 255, with src already premultiplied. Fully opaque
+ * sources overwrite and fully transparent sources return the destination unchanged (both exact,
+ * and skipping the per-channel divides). Shared by scratch_do_blend and scratch_do_copy so the
+ * one blend formula lives in a single place. (scratch_do_fill keeps its own loop: a constant fill
+ * color lets it hoist the premultiplied channels out of the per-pixel work.)
+ */
+static inline uint32_t over_premul_px(uint32_t d, uint32_t sp)
+{
+    const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
+    if (sa == 0U)
+        return d;
+    if (sa == 255U)
+        return sp;
+    const uint8_t inv = (uint8_t)(255U - sa);
+    const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv / 255U);
+    const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv / 255U);
+    const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv / 255U);
+    const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv / 255U);
+    return ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
 }
 
 /**
@@ -221,30 +244,21 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
                      | ((uint32_t)((sp >> 8) & 0xFFU) * alpha / 255U << 8) | (uint32_t)(sp & 0xFFU) * alpha / 255U;
             }
 
-            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
-            if (sa == 0U)
-                continue;
-
-            if (sa == 255U)
-            {
-                dst_row[col] = sp;
-            }
-            else
-            {
-                const uint32_t d = dst_row[col];
-                const uint8_t inv_sa = (uint8_t)(255U - sa);
-                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
-                const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
-                const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
-                const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                dst_row[col] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
-            }
+            if ((sp >> 24) != 0U) /* skip fully-transparent source pixels */
+                dst_row[col] = over_premul_px(dst_row[col], sp);
         }
     }
 }
 
 /**
- * @brief Copies premultiplied ARGB pixels directly into the scratch buffer (opaque overwrite).
+ * @brief Composites premultiplied ARGB pixels into the scratch buffer via source-over.
+ *
+ * Mirrors what every backend's copy_rect does to the framebuffer (fully opaque pixels
+ * overwrite, partially transparent ones blend, fully transparent ones are skipped) so a
+ * copy means the same thing whether it lands on the framebuffer or an offscreen scratch
+ * capture. A prior raw-memcpy overwrite here dropped the background already painted under
+ * anti-aliased glyph edges, so text composited through an opacity group or a transform
+ * source picked up a dark fringe once the scratch was blended out.
  *
  * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
@@ -255,7 +269,7 @@ static void scratch_do_blend(const void* src, int stride, uint8_t alpha, int lx,
  */
 static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw, int lh)
 {
-    /* Clamp once, then each row is a straight memcpy (opaque overwrite). */
+    /* Clamp once (advancing the source pointer to match) so the pixel loop runs unchecked. */
     const int x0 = lx < 0 ? 0 : lx;
     const int y0 = ly < 0 ? 0 : ly;
     const int x1 = (lx + lw) > s_scratch_w ? s_scratch_w : (lx + lw);
@@ -264,11 +278,17 @@ static void scratch_do_copy(const void* src, int stride, int lx, int ly, int lw,
         return;
     src = (const uint8_t*)src + (size_t)(y0 - ly) * (size_t)stride + (size_t)(x0 - lx) * 4U;
 
-    const size_t bytes = (size_t)(x1 - x0) * sizeof(uint32_t);
     for (int row = y0; row < y1; row++)
     {
         const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + (size_t)(row - y0) * (size_t)stride);
-        memcpy(s_scratch_buf + (size_t)row * s_scratch_w + x0, src_row, bytes);
+        uint32_t* dst_row = s_scratch_buf + (size_t)row * s_scratch_w;
+
+        for (int col = x0; col < x1; col++)
+        {
+            const uint32_t sp = src_row[col - x0];
+            if ((sp >> 24) != 0U) /* skip fully-transparent source pixels */
+                dst_row[col] = over_premul_px(dst_row[col], sp);
+        }
     }
 }
 

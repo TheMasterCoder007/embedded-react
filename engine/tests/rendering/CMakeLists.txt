@@ -12,6 +12,12 @@ add_executable(test_opacity test_opacity.c)
 target_link_libraries(test_opacity PRIVATE embedded-react)
 add_test(NAME rendering_opacity COMMAND test_opacity)
 
+add_executable(test_scratch_copy test_scratch_copy.c)
+target_link_libraries(test_scratch_copy PRIVATE embedded-react)
+# test_scratch_copy needs engine/core for renderer_internal.h (er_scratch_begin / er_blit_copy).
+target_include_directories(test_scratch_copy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_scratch_copy COMMAND test_scratch_copy)
+
 add_executable(test_transform test_transform.c)
 target_link_libraries(test_transform PRIVATE embedded-react)
 add_test(NAME rendering_transform COMMAND test_transform)
