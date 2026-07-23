@@ -1,132 +1,139 @@
-# examples/esp32/esp32-2432s028r — Cheap Yellow Display (Flow B / AOT)
+# Cheap Yellow Display (ESP32-2432S028R) — no-PSRAM example
 
-Runs embedded-react on the **DIYmall ESP32-2432S028R "Cheap Yellow Display" (CYD)** via **Flow B**: the
-JSX app is compiled **ahead-of-time to C** (`npm run aot`) and linked into the firmware — **no QuickJS,
-no JS at runtime**. This is the path for a board with **no PSRAM**: the original ESP32-WROOM-32 can't
-host the QuickJS heap, but the AOT-compiled C app needs no JS engine at all.
+Runs an embedded-react app on the **DIYmall ESP32-2432S028R "Cheap Yellow Display" (CYD)** — a cheap,
+widely available ESP32 board with a 2.4" touchscreen and **no PSRAM**.
 
-**Target board:** ESP32-2432S028R **v3** (two USB ports: micro + USB-C) — ESP32-WROOM-32, 240×320
-**ST7789** SPI panel, **XPT2046** resistive touch, 4 MB flash, no PSRAM. (The v1/v2 single-micro-USB
-boards use an **ILI9341** panel instead — see *Display quirks* below.)
+Because there's no PSRAM to hold a JavaScript engine, this example uses **Flow B (AOT)**: your JSX is
+compiled **ahead-of-time to C** on your computer and linked straight into the firmware. There's **no
+QuickJS and no JavaScript on the device** — the compiled C app *is* the firmware.
 
 ```
-App.jsx → AOT → app.gen.c → C engine (er_scene.h) → SPI backend → ST7789 panel
-                                    ↑ XPT2046 touch
+App.jsx ──(npm run aot)──▶ app.gen.c ──▶ C engine ──▶ SPI backend ──▶ ST7789 screen
+                                                                          ▲
+                                                                   XPT2046 touch
 ```
 
-## How it fits in internal RAM
+**Board:** ESP32-2432S028R **v3** (two USB ports: micro + USB-C). ESP32-WROOM-32, 240×320 **ST7789**
+panel, **XPT2046** resistive touch, 4 MB flash, no PSRAM. *Have the older v1/v2 (single micro-USB)? It
+uses an **ILI9341** panel — see [Tuning for your board](#tuning-for-your-board).*
 
-Flow B's whole point is fitting a no-PSRAM MCU. A full 240×320 **RGB565** framebuffer is 150 KB, which
-does **not** fit the ESP32's fragmented internal DRAM (largest contiguous block ~110 KB). So the backend
-renders in **horizontal strips through a small RGB565 band buffer** (`ER_LCD_BANDED`): the engine repaints
-only the dirty rows, one ~40-row strip at a time, into a **~19 KB DMA-capable band buffer**, and the
-ST7789's own GRAM retains the rest of the frame. The result is **full 16-bit color at less RAM than the
-old RGB332 framebuffer** (75 KB) — crisp anti-aliased text, no 256-color banding. The engine's static
-pools are also tuned down in `components/engine/CMakeLists.txt` (`ERUI_MAX_NODES`, tiny opacity scratch,
-shadows/gradients off). `app_main` logs free internal RAM at boot — watch it.
+## Quick start
 
-> Tune the strip height with `ER_LCD_BANDED_ROWS` (default 40) in the backend component's CMakeLists: a
-> taller strip costs more RAM (`240 × rows × 2` bytes) but flushes the screen in fewer DMA transfers.
-> If RAM is still tight, lower `ERUI_MAX_NODES` and/or rebuild the app with a smaller `ER_AOT_LIST_CAP`.
+You need **ESP-IDF v5.3 or newer** installed and active in your shell (tested on v6.1). Activate it with
+`. $IDF_PATH/export.sh` (macOS/Linux) or `%IDF_PATH%\export.bat` (Windows).
 
-## Build
-
-Prerequisites: **ESP-IDF v5.3+** installed and exported (`. $IDF_PATH/export.sh`).
-
-**1. Generate the AOT app.** The `ER_AOT_SCREEN_W/H` you pass selects the demo's responsive layout at
-compile time — `240×320` folds the thermostat's **compact** branch (dial + steppers + modes, no weather),
-which is exactly what fits this board. From the repo root:
+**1. Compile the app to C.** Run this from the repo root. The `240×320` size tells the demo to use its
+**compact** layout (dial + steppers + mode buttons), which is what fits this screen:
 
 ```bash
 cd bridges/quickjs/js
-ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat    # → dist/app.gen.{c,h}
+ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # writes dist/app.gen.c
 cd ../../..
 ```
 
-> From **your own app project** (outside this monorepo), the consumer equivalent is
-> `npx embedded-react build --aot`, which emits `app.gen.c` / `app.gen.h` (+ `assets.generated.c`) for the
-> app in your project. `npm run aot` shown above is the in-repo form that compiles a demo from `demos/`.
-
-**2. Build + flash:**
+**2. Build and flash.** Plug the board into your computer via the **USB-C** port, then:
 
 ```bash
 cd examples/esp32/esp32-2432s028r
-idf.py set-target esp32                 # first time only
-idf.py -p <PORT> flash monitor          # e.g. -p COM5 ; the CYD's USB-C is a CH340 serial port
+idf.py set-target esp32            # first time only
+idf.py -p <PORT> flash monitor    # e.g. -p /dev/ttyUSB0  or  -p COM5
 ```
 
-> If `ESPPORT` is already set in your environment, `idf.py -p` errors ("port already defined") — set
-> the env var instead: `ESPPORT=COM5` (Windows cmd: `set "ESPPORT=COM5"` — quote it, or a trailing
-> space sneaks into the value and esptool can't open the port). `monitor` is the live serial console
-> (`Ctrl-]` to exit). If the port wedges after many flashes/resets, unplug/replug the USB-C.
+Replace `<PORT>` with your board's serial port (the CYD's USB-C shows up as a CH340 serial device).
+`monitor` opens the live log — press `Ctrl-]` to exit.
 
-Expected monitor output:
+**That's it.** The thermostat appears on the screen: tap **−** / **+** to change the temperature, and
+**Heat / Cool / Auto / Off** to switch mode (the dial recolors to match). Whenever you edit the JSX,
+re-run **step 1** and `idf.py flash` again.
+
+You should see this in the log:
 
 ```
 I (xxx) embedded-react: embedded-react ESP32-2432S028R (CYD) host — Flow B (AOT, no QuickJS)
-I (xxx) embedded-react: free internal RAM: 2xxxxx bytes
+I (xxx) embedded-react: free internal RAM: ~223000 bytes
 I (xxx) board: ST7789 panel up: 240x320 (invert=0, bgr=0)
-I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB565 BANDED (40-row band buffer, 18 KB DMA RAM) — panel GRAM retains the frame
+I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB565 BANDED (2 x 40-row ping-pong buffers, 37 KB DMA RAM)
 I (xxx) board: XPT2046 touch ready
 I (xxx) embedded-react: AOT app built at 240x320 (no QuickJS)
-I (xxx) embedded-react: free internal RAM after boot: 1xxxxx bytes
+I (xxx) embedded-react: free internal RAM after boot: ~181000 bytes
 ```
 
-The music player appears; tapping **Play**, **+ Add**, **- Remove** updates the screen — all from
-compiled C. Re-run **step 1** whenever you change the JSX, then `idf.py flash`.
+> **Troubleshooting the port.** If `idf.py -p` complains the port is "already defined", you have `ESPPORT`
+> set in your environment — use that instead of `-p` (`export ESPPORT=/dev/ttyUSB0`; on Windows,
+> `set "ESPPORT=COM5"` — keep the quotes so no trailing space sneaks in). If flashing wedges after many
+> resets, unplug and replug the USB-C cable.
 
-## Display / touch notes (verified on a v3 unit; tweak in `main/board.c`)
+## How it works: fitting a screen with no PSRAM
 
-The defaults below are dialed in for the **v3 (dual-USB) CYD this was developed on**. A different unit
-may need a tweak — they're all `#define`s at the top of `board.c`:
+A full-screen 240×320 framebuffer in 16-bit color is **150 KB** — too big for this ESP32's fragmented
+internal memory (the largest free block is only ~110 KB). Instead of one big buffer, the backend draws
+the screen in **horizontal strips of ~40 rows** and lets the display's own memory hold the rest of the
+picture. Only the strips being drawn ever live in RAM.
 
-- **Banded RGB565 framebuffer.** A full 240×320 RGB565 fb (150 KB) does NOT fit the fragmented internal
-  DRAM (largest block ~110 KB), so the backend renders in **horizontal strips through a ~19 KB RGB565
-  band buffer** (`ER_LCD_BANDED=1`, `ER_LCD_BANDED_ROWS=40`) and lets the ST7789's GRAM retain the rest of
-  the frame. Full 16-bit color (crisp text) at less RAM than the old RGB332 path. The engine repaints only
-  the dirty rows, so a small change flushes one or two strips. (An earlier revision used a full RGB332 fb,
-  `ER_SPI_LCD_FB8=1` — 256 colors, coarse anti-aliased text; banded RGB565 supersedes it.)
-- **Pixel order — byte-swap + BGR (`ER_SPI_LCD_SWAP_BGR=1`).** This CYD's ST7789 displays a stored RGB565
-  word as `BGR(byteswap(word))`: it wants the two color bytes swapped **and** red/blue in BGR order. The
-  backend pre-compensates in `fb_store` when this flag is set (in the backend component's CMakeLists).
-  Symptoms if it's wrong: gray renders pastel-green, blue renders pink, navy renders brown. Pure red/white
-  still look right, which is why it hid in the old RGB332 build (mostly gray/white). A standard RGB565
-  panel should leave this unset.
-- **Display:** `BOARD_LCD_INVERT` (this unit = `false`; set `true` if the screen looks like a photo
-  negative), `BOARD_LCD_BGR` (red/blue swapped), `BOARD_LCD_MIRROR_X` (this unit = `true`; flip if text
-  is mirrored), `LCD_PCLK_HZ` (20 MHz — raising it can cause lines/glitches on CYD wiring). A **v1/v2
-  (ILI9341)** board: swap `esp_lcd_new_panel_st7789` → `esp_lcd_new_panel_ili9341` (the SPI pins are
-  identical).
-- **Touch:** calibrated via `TOUCH_X_MIN/MAX`, `TOUCH_Y_MIN/MAX` and the `TOUCH_FLIP_X/Y` flags
-  (`FLIP_X=true` here, to match the mirrored display). To recalibrate a different unit, re-enable the
-  raw-value `ESP_LOGI` in `board_touch_read`, tap the four corners (TL→TR→BR→BL), and set the min/max +
-  flips so taps land where you touch.
+There are **two strip buffers** (~19 KB each, ~37 KB total). While the display is busy receiving one
+strip over SPI, the CPU is already drawing the next one into the other buffer — so drawing and
+transferring overlap instead of waiting on each other. The payoff: **full 16-bit color** (smooth,
+anti-aliased text) using far less RAM than a whole framebuffer.
 
-## Pinout (CYD, community-documented)
+The engine's memory pools are also trimmed for this board in `components/engine/CMakeLists.txt`
+(`ERUI_MAX_NODES`, a small opacity scratch buffer, shadows off). The firmware logs free RAM at boot and
+after startup so you can keep an eye on headroom.
 
-| | GPIO |
+> **Running low on RAM?** Options, in order: shrink the strip height with `ER_LCD_BANDED_ROWS` (in the
+> backend component's `CMakeLists.txt`; smaller = less RAM, more DMA transfers), lower `ERUI_MAX_NODES`,
+> or rebuild the app with a smaller `ER_AOT_LIST_CAP`.
+
+## Tuning for your board
+
+The settings below are dialed in for the **v3 (dual-USB) CYD** this example was developed on. Other units
+vary slightly — everything here is a `#define` at the top of [`main/board.c`](main/board.c) (or the
+backend's `CMakeLists.txt`). Change one, rebuild, reflash.
+
+| Symptom on screen | Fix |
 |---|---|
-| **Display (ST7789, HSPI)** | SCLK 14, MOSI 13, CS 15, DC 2, RST sw, **Backlight 21** |
-| **Touch (XPT2046, VSPI)** | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36 |
+| Colors look like a photo negative | Toggle `BOARD_LCD_INVERT` |
+| Red and blue are swapped | Toggle `BOARD_LCD_BGR` |
+| Text/image is mirrored | Toggle `BOARD_LCD_MIRROR_X` (or `_Y`) |
+| Faint lines or glitches | Lower `LCD_PCLK_HZ` (default 40 MHz → try 30 or 26) |
+| Colors subtly wrong (gray→green, blue→pink) | See *color byte order* below |
+| Taps land in the wrong place | Recalibrate touch — see below |
 
-I couldn't find a manufacturer datasheet (generic Sunton/DIYmall board) but I was able to find several sources online
-that helped me find what I needed; Pin map from the community CYD references (randomnerdtutorials / mischianti / 
-witnessmenow's ESP32-Cheap-Yellow-Display)
+- **Older v1/v2 board (ILI9341 panel).** In `board.c`, swap `esp_lcd_new_panel_st7789` for
+  `esp_lcd_new_panel_ili9341`. The pins are identical.
 
-## Self-contained via fetch
+- **Color byte order (`ER_SPI_LCD_SWAP_BGR`).** This particular CYD's panel wants its two color bytes
+  swapped *and* red/blue in BGR order, so the backend enables `ER_SPI_LCD_SWAP_BGR=1`. If your panel
+  shows gray as pastel-green or blue as pink (while red and white look fine), it needs this flag; a
+  standard RGB565 panel does not. It lives in the backend component's `CMakeLists.txt`.
 
-Like the esp32-s3 example, dependencies are the **local monorepo when building in-tree**, else
-**fetched from GitHub** — but Flow B pulls in only the engine and SPI backend (no QuickJS). Copy this
-folder out and `idf.py build` pulls what it needs. The AOT `app.gen.c` is generated separately (step 1).
+- **Touch calibration.** Touch is mapped with `TOUCH_X_MIN/MAX`, `TOUCH_Y_MIN/MAX`, and the
+  `TOUCH_FLIP_X/Y` flags. To calibrate a new unit: uncomment the raw-value `ESP_LOGI` in
+  `board_touch_read`, tap the four corners in order (top-left → top-right → bottom-right → bottom-left),
+  read the raw numbers from the log, and set the min/max (and flips) so taps land where you touch.
 
-**Alternative: the engine from the Component Registry.** Because Flow B needs only the engine (the app is
-compiled C), you can pull it as a managed component instead of `FetchContent`:
+## Pinout
+
+| Bus | Pins (GPIO) |
+|---|---|
+| **Display** — ST7789 on HSPI | SCLK 14, MOSI 13, CS 15, DC 2, RST (software), Backlight 21 |
+| **Touch** — XPT2046 on VSPI | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36 |
+
+There's no official datasheet for these generic Sunton/DIYmall boards; this pin map comes from the
+community CYD references (randomnerdtutorials, mischianti, and witnessmenow's *ESP32-Cheap-Yellow-Display*).
+
+## Using this outside the monorepo
+
+When you build in-tree, this example uses the engine and backend from the local checkout. Copy the folder
+out on its own and `idf.py build` instead **fetches them from GitHub** — Flow B only needs the engine and
+the SPI backend (no QuickJS). Generate `app.gen.c` separately with step 1 above.
+
+You can also pull the engine as a managed component from the ESP-IDF Component Registry:
 
 ```bash
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.3.0"
 ```
 
-Then drop `app.gen.c` / `app.gen.h` into `main/` and provide a backend. Note the SPI backend
-(`backends/esp32-spi-lcd`) is **not** on the registry — this example compiles it from the fetched/local
-source via its component shim; with the registry route you'd vendor or fetch the backend yourself. This is
-why the example defaults to `FetchContent` (one mechanism for both engine and backend).
+Then drop `app.gen.c` / `app.gen.h` into `main/` and supply a backend. Note the SPI backend
+(`backends/esp32-spi-lcd`) is **not** on the registry — this example compiles it from source, so with the
+registry route you'd vendor or fetch the backend yourself. That's why the example defaults to
+`FetchContent`: one mechanism covers both the engine and the backend.

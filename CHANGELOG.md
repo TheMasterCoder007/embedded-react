@@ -10,6 +10,21 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Rewrote the ESP32-2432S028R (Cheap Yellow Display, no-PSRAM) example README for clarity: a short
+  intro and a **Quick start** now come first, followed by a plain-language "how it works" section,
+  a symptom→fix tuning table, and the pinout — deep detail moved below the get-it-running path, and
+  the duplicated banding explanation consolidated.
+
+### Fixed
+
+- ESP32-2432S028R example docs: corrected the SPI backend description to the current **two
+  ping-pong band buffers** (~37 KB total, overlapping CPU compositing with the SPI DMA), fixed the
+  documented `LCD_PCLK_HZ` default (**40 MHz**, was 20), fixed the expected boot-log line, and
+  replaced the stale "music player" run description with the thermostat compact dial (± setpoint +
+  Heat/Cool/Auto/Off) it actually builds. Verified the example builds, flashes, and boots clean on
+  a real CYD against the v0.9.0 engine.
 
 ## [0.9.0] - 2026-07-23
 ### Added
