@@ -12,6 +12,21 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Multi-core rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
+  hand the engine extra render workers (`embedded_renderer_set_workers`) — the engine never
+  creates threads itself — and each frame's repaint is then split into horizontal slices
+  rendered concurrently, one worker per core. Scenes using vector graphics or shadows fall back
+  to single-core automatically, the fade cache keeps working (reads happen in parallel; a
+  refresh borrows one single-core frame), and everything else — nested fades, transforms,
+  text, gradients, images — renders in parallel. The default build is unchanged and stays
+  exactly single-core.
+
+- The ESP32-S3 example renders on both cores, and its memory system now runs PSRAM and flash at
+  120 MHz (up from 80). The faster bus matters beyond speed: with both cores drawing, the RGB
+  panel's continuous refresh from PSRAM was starved of bandwidth and the picture visibly
+  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental" 
+  feature; the example also enables vsync-based panel-sync recovery.
+
 - Ordered dithering on RGB565 panels (`ER_LCD_DITHER`, on by default with SIMD blending). Fading
   translucent or anti-aliased content used to shimmer as pixels flickered between color levels
   frame to frame; the quantization now lands as a fine, stationary checkerboard instead, which

@@ -232,9 +232,21 @@ static ERLcdBackend s_be;
  * effectively never blocks; with double buffering it waits up to one refresh — overlapped with
  * the frame's non-drawing work, since it runs lazily at the first write after a flip.
  */
+/* Multi-core rendering: render workers on both cores call the blit callbacks concurrently, so
+ * the tiny shared read-modify-writes (the flip gate, the dirty bounding box) sit inside this
+ * spinlock. Uncontended cost is a few cycles per blit — noise next to the pixel work. */
+static portMUX_TYPE s_blit_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static inline void flip_gate(void)
 {
-    if (!s_be.direct || s_be.pending_flips < s_be.nfb - 1)
+    if (!s_be.direct)
+    {
+        return;
+    }
+    taskENTER_CRITICAL(&s_blit_mux);
+    const bool must_wait = (s_be.pending_flips >= s_be.nfb - 1);
+    taskEXIT_CRITICAL(&s_blit_mux);
+    if (!must_wait)
     {
         return;
     }
@@ -242,7 +254,9 @@ static inline void flip_gate(void)
     {
         if (xSemaphoreTake(s_be.flip_done, portMAX_DELAY) == pdTRUE)
         {
+            taskENTER_CRITICAL(&s_blit_mux);
             s_be.pending_flips = 0; /* a frame boundary passed: earlier flips are live */
+            taskEXIT_CRITICAL(&s_blit_mux);
         }
     }
 }
@@ -271,9 +285,12 @@ static bool clip_rect(int* x, int* y, int* w, int* h)
     return (*w > 0 && *h > 0);
 }
 
-/** @brief Grows the dirty bounding box to include the given (already-clipped) rect. */
+/** @brief Grows the dirty bounding box to include the given (already-clipped) rect.
+ *
+ * Serialized: concurrent render workers would otherwise lose min/max updates and under-flush. */
 static void mark_dirty(int x, int y, int w, int h)
 {
+    taskENTER_CRITICAL(&s_blit_mux);
     if (x < s_be.dx0)
         s_be.dx0 = x;
     if (y < s_be.dy0)
@@ -282,6 +299,7 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dx1 = x + w - 1;
     if (y + h - 1 > s_be.dy1)
         s_be.dy1 = y + h - 1;
+    taskEXIT_CRITICAL(&s_blit_mux);
 }
 
 /** @brief Maps a logical (canonical-fb) pixel to its physical (panel) position under the rotation. */
@@ -456,10 +474,24 @@ static void blit_overlay(uint16_t* dst)
  * blend against internal memory, and burst the result back — several times faster than in-place.
  * 16-byte aligned so the PIE SIMD routines can run on it directly. */
 #define ER_ROW_STAGE_MAX 1024
-__attribute__((aligned(16))) static fbpx_t s_row_stage[ER_ROW_STAGE_MAX];
+/* One staging slot per CPU core: render workers are core-pinned, so indexing by the core id gives
+ * every concurrent blit its own buffers with no locking (slot 0 doubles as the single-core slot). */
+__attribute__((aligned(16))) static fbpx_t s_row_stage_pool[2][ER_ROW_STAGE_MAX];
+
+/** @brief This core's row staging buffer. */
+static inline fbpx_t* row_stage(void)
+{
+    return s_row_stage_pool[xPortGetCoreID()];
+}
 #if ER_LCD_PIE_ACTIVE
 /* Aligned source staging for the SIMD path when a source row is not 16-byte aligned. */
-__attribute__((aligned(16))) static uint32_t s_pie_src[ER_ROW_STAGE_MAX];
+__attribute__((aligned(16))) static uint32_t s_pie_src_pool[2][ER_ROW_STAGE_MAX];
+
+/** @brief This core's SIMD source staging buffer. */
+static inline uint32_t* pie_src_stage(void)
+{
+    return s_pie_src_pool[xPortGetCoreID()];
+}
 static bool s_pie = false; /* PIE routines enabled (self-test passed at init) */
 #endif
 
@@ -493,12 +525,12 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
         else
         {
             /* Translucent fill: stage the row internally (see blend_cb). */
-            fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
+            fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? row_stage() : d;
             if (stage != d)
                 memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
             int col0 = 0;
 #if ER_LCD_PIE_ACTIVE
-            if (a != 0U && s_pie && stage == s_row_stage && w >= 8)
+            if (a != 0U && s_pie && stage == row_stage() && w >= 8)
             {
                 const int n8 = w / 8;
                 er_pie_fill_row_565(stage, sp, n8);
@@ -572,20 +604,20 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
         fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         /* Stage the destination row in internal DRAM: one burst in, blend internally, one
          * burst out — instead of a ~90-cycle PSRAM read-modify-write per pixel. */
-        fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? s_row_stage : d;
+        fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? row_stage() : d;
         if (stage != d)
             memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
         int col0 = 0;
 #if ER_LCD_PIE_ACTIVE
         /* SIMD path: 8 px per iteration on the aligned stage row; the scalar loops below mop up
          * the tail. A misaligned source row is burst-copied to the aligned staging first. */
-        if (s_pie && stage == s_row_stage && w >= 8)
+        if (s_pie && stage == row_stage() && w >= 8)
         {
             const uint32_t* s2 = s;
             if (((uintptr_t)s & 15U) != 0U)
             {
-                memcpy(s_pie_src, s, (size_t)w * sizeof(uint32_t));
-                s2 = s_pie_src;
+                memcpy(pie_src_stage(), s, (size_t)w * sizeof(uint32_t));
+                s2 = pie_src_stage();
             }
             const int n8 = w / 8;
             /* Dither phase = (x + y) parity of the row's first pixel, so the checkerboard is

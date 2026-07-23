@@ -131,6 +131,7 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_FADE_CACHE_W` | 0 | Fade-cache width (composited-subtree reuse across fade frames); 0 disables |
 | `ERUI_FADE_CACHE_H` | 0 | Fade-cache height; 0 disables |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
+| `ERUI_RENDER_WORKERS` | 1 | Max render workers for multi-core rendering. Above 1, per-worker context/scratch arrays are sized for N workers and a host may install threads via `embedded_renderer_set_workers` (see `native_renderer.h`); the repaint region is then rendered as horizontal slices, one per core. The opacity strip pool is split between workers (`ERUI_MAX_OPACITY_DEPTH / workers` slots each — raise the depth alongside), and each extra worker costs a full transform-source buffer. Scenes with vector or shadow nodes automatically render single-core. 1 (the default) is the plain single-core engine |
 
 ### Vector pools (SVG / `<Svg>` rasteriser)
 

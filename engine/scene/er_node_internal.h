@@ -220,6 +220,14 @@ struct ERNode
     bool dirty;
     bool source_dirty; /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
                           dirty-rect accumulation. */
+    uint32_t painted_seq; /**< er_commit sequence that last painted this node. Render workers record it during the
+                             paint traversal (an idempotent same-value write, safe when a node straddles two
+                             workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
+                             sequential post-pass, so the paint recursion itself never mutates shared flags. */
+#if ERUI_SHADOWS
+    bool casts_shadow; /**< Shadow props currently active — feeds the multi-core parallel-unsafe count
+                          (the shadow blur runs through shared static scratch). */
+#endif
     int16_t z_index;
     uint8_t pointer_events;  /**< ERPointerEvents — controls which parts of the node receive touch events. */
     int16_t hit_slop_left;   /**< Pixels by which the left hit edge extends beyond the computed rect. */

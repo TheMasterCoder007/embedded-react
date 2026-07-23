@@ -8,6 +8,7 @@ set(E "${EMBEDDED_REACT_SRC_DIR}/engine")
 idf_component_register(
     SRCS
         "${E}/core/native_renderer.c"
+        "${E}/core/er_parallel.c"
         "${E}/scene/compositor.c"
         "${E}/scene/hit_test.c"
         "${E}/layout/layout_engine.c"
@@ -62,6 +63,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=512
     ERUI_MAX_OPACITY_DEPTH=2
+    ERUI_RENDER_WORKERS=2
     ERUI_SCRATCH_W=800
     ERUI_SCRATCH_H=240
     ERUI_SCRATCH_BAND_H=10

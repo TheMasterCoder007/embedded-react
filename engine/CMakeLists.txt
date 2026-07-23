@@ -5,6 +5,7 @@
 set(EMBEDDED_REACT_SOURCES
         # core: backend glue, frame tick
         core/native_renderer.c
+        core/er_parallel.c
 
         # scene: node pool, tree, render pass, hit-testing
         scene/compositor.c
@@ -93,6 +94,7 @@ set(ERUI_TRANSFORMS "TRANSLATE_ONLY" CACHE STRING "FULL or TRANSLATE_ONLY")
 set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
+set(ERUI_RENDER_WORKERS "1" CACHE STRING "Max render workers (multi-core scaffolding; >1 sizes per-worker contexts, no effect until the parallel commit lands)")
 set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
 set(ERUI_SCRATCH_H "240" CACHE STRING "Transform-source scratch height in pixels (max transformable node height)")
 set(ERUI_SCRATCH_BAND_H "${ERUI_SCRATCH_H}" CACHE STRING "Opacity-composite strip height; smaller = less RAM, taller fades render in multiple band passes")
@@ -149,6 +151,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
         ERUI_MAX_NODES=${ERUI_MAX_NODES}
         ERUI_MAX_OPACITY_DEPTH=${ERUI_MAX_OPACITY_DEPTH}
+        ERUI_RENDER_WORKERS=${ERUI_RENDER_WORKERS}
         ERUI_SCRATCH_W=${ERUI_SCRATCH_W}
         ERUI_SCRATCH_H=${ERUI_SCRATCH_H}
         ERUI_SCRATCH_BAND_H=${ERUI_SCRATCH_BAND_H}
