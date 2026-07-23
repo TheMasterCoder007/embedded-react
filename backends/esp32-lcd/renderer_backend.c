@@ -491,7 +491,7 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
                 memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
             int col0 = 0;
 #if ER_LCD_PIE_ACTIVE
-            if (s_pie && stage == s_row_stage && w >= 8)
+            if (a != 0U && s_pie && stage == s_row_stage && w >= 8)
             {
                 const int n8 = w / 8;
                 er_pie_fill_row_565(stage, sp, n8);

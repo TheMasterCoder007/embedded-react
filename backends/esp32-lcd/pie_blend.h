@@ -30,8 +30,8 @@ extern "C"
      *        ESP32-S3 PIE 128-bit SIMD unit, 8 pixels per iteration.
      *
      * Per pixel: a = src.A (scaled by ga when ga < 255); dst.C = src.C>>shift + dst.C*(255-a)>>8
-     * in the 5/6-bit 565 domain — within one 565 LSB of the scalar reference (over_premul_fast).
-     * Fully opaque and fully transparent source pixels produce exact results.
+     * in the 5/6-bit 565 domain — intended to stay within one RGB565 LSB of the scalar reference (over_premul_fast).
+     * Fully opaque source pixels are exact.
      *
      * @param[in,out] dst  RGB565 destination row. MUST be 16-byte aligned.
      * @param[in] src      Premultiplied ARGB8888 source row. MUST be 16-byte aligned.
