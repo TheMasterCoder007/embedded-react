@@ -668,6 +668,14 @@ function collectState(fnBody, scope, prefix = '') {
               'useState(x) initial must be a literal or a constant expression (number, string, bool, or arithmetic over consts) — not a runtime value or function call.',
             )
           : 0;
+        // Host values (useHostValue) are numeric only — the public API is useHostValue(initial: number).
+        // cTypeOfValue funnels booleans/null/objects to 'int', so validate the evaluated value itself
+        // (Number.isFinite also rejects NaN/Infinity, and does not coerce booleans/strings).
+        if (isHost && !Number.isFinite(initVal))
+          throw aotError(
+            `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ${JSON.stringify(initVal)}`,
+            'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, strings, and objects are not supported.',
+          );
         let cType = cTypeOfValue(initVal);
         // A numeric literal written with a decimal point or exponent (e.g. useState(70.0)) forces a FLOAT
         // slot even though the value is integral — lets the state hold sub-integer values (a smooth drag)
@@ -698,10 +706,6 @@ function collectState(fnBody, scope, prefix = '') {
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
         };
       }
-      if (isHost && rec.cType === 'string')
-        throw aotError(
-          `AOT: useHostValue("${name}") must be a number (int/float) — string host values aren't supported yet`,
-        );
       byName.set(name, rec);
       if (setter) bySetter.set(setter, rec);
     }

@@ -1557,6 +1557,31 @@ describe('AOT useHostValue (host-fed input)', () => {
       export function App() { const name = useHostValue("hi"); return (<Text>{name}</Text>); }`),
     ).toThrow(/useHostValue.*must be a number/);
   });
+
+  it('rejects a boolean host value (cTypeOfValue would otherwise map it to int)', () => {
+    expect(() =>
+      gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const on = useHostValue(true); return (<Text>{on}</Text>); }`),
+    ).toThrow(/useHostValue.*must be a number/);
+  });
+
+  it('rejects a non-finite host value (NaN)', () => {
+    expect(() =>
+      gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const x = useHostValue(0 / 0); return (<Text>{x}</Text>); }`),
+    ).toThrow(/useHostValue.*must be a number/);
+  });
+
+  it('accepts an integer and a float initial', () => {
+    const ci = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const n = useHostValue(5); return (<Text>{n}</Text>); }`);
+    expect(ci).toContain('int n;');
+    expect(ci).toContain('void er_app_set_n(int v)');
+    const cf = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const f = useHostValue(1.5); return (<Text>{f}</Text>); }`);
+    expect(cf).toContain('float f;');
+    expect(cf).toContain('void er_app_set_f(float v)');
+  });
 });
 
 describe('AOT generated-C portability', () => {
