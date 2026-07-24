@@ -10,21 +10,42 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- New example for the Waveshare RP2040-Touch-LCD-1.69, a small round-corner touch board. This is the
+  smallest board supported so far: an RP2040 with 264 KB of memory and no PSRAM. It drives the 240 by
+  280 screen and the capacitive touch panel, and runs the new watch-face demo. Tested building,
+  flashing, and running on real hardware.
+- New display backend for small microcontrollers that drive an SPI screen. It keeps one screen-sized
+  image in memory and sends only the part that changed to the screen each frame. It is plain, portable
+  C, so any board with an SPI display can reuse it by supplying two small functions.
+- New watch-face demo with two pages you swipe between: a digital watch face (clock, day and date,
+  battery, heart rate, and a live step counter) and a bubble level (a dot that rolls as you tilt the
+  board, turning green when the board is level). It compiles ahead of time to C, so it runs on boards
+  that have no JavaScript runtime.
+- A new way to feed live device data into an app that is compiled ahead of time. You mark a value in
+  the app with useHostValue, and the build generates a small setter function your device code calls to
+  update it, for example, a step count or a sensor reading. This needs no engine changes and no
+  JavaScript runtime.
+- Real motion sensing on the RP2040-Touch-LCD-1.69 example. The board's accelerometer now drives a real
+  step counter (using a simple step-detection algorithm) and the bubble level (using the direction of
+  gravity). Both values reach the screen through useHostValue.
+
 ### Changed
 
-- Rewrote the ESP32-2432S028R (Cheap Yellow Display, no-PSRAM) example README for clarity: a short
-  intro and a **Quick start** now come first, followed by a plain-language "how it works" section,
-  a symptom→fix tuning table, and the pinout — deep detail moved below the get-it-running path, and
-  the duplicated banding explanation consolidated.
+- Updated the examples and backends README tables to list what is actually implemented, and added rows
+  for the new RP2040 example and its display backend.
+- Rewrote the ESP32-2432S028R (Cheap Yellow Display) example README for clarity. A short intro and a
+  quick start come first, followed by a plain-language how-it-works section, a tuning table that maps
+  symptoms to fixes, and the pin list. The deeper detail moved below the get-it-running steps, and a
+  duplicated explanation was merged.
 
 ### Fixed
 
-- ESP32-2432S028R example docs: corrected the SPI backend description to the current **two
-  ping-pong band buffers** (~37 KB total, overlapping CPU compositing with the SPI DMA), fixed the
-  documented `LCD_PCLK_HZ` default (**40 MHz**, was 20), fixed the expected boot-log line, and
-  replaced the stale "music player" run description with the thermostat compact dial (± setpoint +
-  Heat/Cool/Auto/Off) it actually builds. Verified the example builds, flashes, and boots clean on
-  a real CYD against the v0.9.0 engine.
+- Corrected the ESP32-2432S028R example docs: fixed the display backend description to match the
+  current design, fixed the documented pixel-clock speed (40 MHz, was 20), fixed the expected startup
+  log line, and replaced the stale music-player description with the thermostat dial the example
+  actually builds. Verified the example builds, flashes, and starts cleanly on a real board.
 
 ## [0.9.0] - 2026-07-23
 ### Added

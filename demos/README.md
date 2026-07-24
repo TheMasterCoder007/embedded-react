@@ -6,6 +6,8 @@ would write. Each subfolder is one self-contained demo; the build picks one and 
 ```
 demos/
   thermostat/     the default demo (starter features tour, growing into a climate-control UI)
+  music-player/   dynamic lists + Animated springs
+  watch-face/     digital watch face (clock + day/date/battery + heart/steps cards) for the RP2040 1.69"
   <your-demo>/    add a sibling folder with its own index.jsx + App.jsx
 ```
 

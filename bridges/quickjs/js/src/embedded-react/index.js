@@ -48,5 +48,6 @@ export {Platform} from './Platform.js';
 export {AppRegistry} from './AppRegistry.js';
 export {Animated, useAnimatedValue} from './Animated.js';
 export {usePersistentState} from './usePersistentState.js';
+export {useHostValue} from './useHostValue.js';
 export {Easing} from './Easing.js';
 export {LayoutAnimation} from './LayoutAnimation.js';
