@@ -584,6 +584,91 @@ int main(void)
         er_node_destroy(child);
         er_node_destroy(root);
     }
+
+    /* -------------------------------------------------------------------
+     * Oversized destination AABB — scale (fast path).
+     * A 40×40 red square scaled 8× has a 320×320 destination box, larger than
+     * the 240×240 scratch. The source (40×40) fits, so the transform must still
+     * render (streamed out per row segment); only the on-screen part is visible.
+     * Regression: the old full-dst buffer bailed out when dst exceeded the
+     * scratch, making the node vanish entirely.
+     * ------------------------------------------------------------------ */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 40;
+        cp.height = 40;
+        cp.background_color = 0xFFFF0000U; /* red */
+        cp.transform_scale_x = 8.0f;
+        cp.transform_scale_y = 8.0f;
+        cp.transform_origin_x = 0.0f; /* scale around the top-left corner */
+        cp.transform_origin_y = 0.0f;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(root, child);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* The scaled quad covers 0..319 in both axes; the whole framebuffer lies inside it. */
+        if (px(&tc, FB_W / 2, FB_H / 2) != 0xFFFF0000U)
+            return fail("oversized-dst scale: centre pixel should be red (node must not vanish)");
+        if (px(&tc, 2, 2) != 0xFFFF0000U)
+            return fail("oversized-dst scale: near-origin pixel should be red");
+
+        er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_node_destroy(root);
+    }
+
+    /* -------------------------------------------------------------------
+     * Oversized destination AABB — rotation (general path).
+     * A 200×200 red square centred on the framebuffer, rotated 45° about its
+     * centre. The source (200×200) fits the 240×240 scratch but the rotated
+     * AABB is ~285×285 — larger than the scratch. The centre must stay red.
+     * Regression: previously the node vanished (dst-size early return).
+     * ------------------------------------------------------------------ */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 200;
+        cp.height = 200;
+        cp.position = ER_POS_ABSOLUTE;
+        cp.left = (int16_t)(FB_W / 2 - 100); /* centre the 200×200 node on the framebuffer */
+        cp.top = (int16_t)(FB_H / 2 - 100);
+        cp.background_color = 0xFFFF0000U; /* red */
+        cp.transform_rotate_z = 45.0f;
+        cp.transform_origin_x = -1.0f; /* centre pivot — node stays centred while rotated */
+        cp.transform_origin_y = -1.0f;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(root, child);
+        er_tree_set_root(root);
+        er_commit();
+
+        /* The rotated square still covers the framebuffer centre. */
+        if (px(&tc, FB_W / 2, FB_H / 2) != 0xFFFF0000U)
+            return fail("oversized-dst rotate: centre pixel should be red (node must not vanish)");
+
+        er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_node_destroy(root);
+    }
 #endif /* ERUI_TRANSFORMS_FULL */
 
     return EXIT_SUCCESS;

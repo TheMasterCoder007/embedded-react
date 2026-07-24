@@ -6,8 +6,9 @@ on `embedded-react`, wired to the `embedded-react` CLI exactly like a scaffolded
 
 ```
 demos/
-  thermostat/     thermostat with weather widget
-  music-player/   music player app
+  thermostat/     the default demo (starter features tour, growing into a climate-control UI)
+  music-player/   dynamic lists + Animated springs
+  watch-face/     digital watch face (clock + day/date/battery + heart/steps cards) for the RP2040 1.69"
   <your-demo>/    add a sibling folder with its own index.jsx + App.jsx
 ```
 

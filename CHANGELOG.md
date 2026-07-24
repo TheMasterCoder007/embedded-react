@@ -12,13 +12,130 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- New example for the Waveshare RP2040-Touch-LCD-1.69, a small round-corner touch board. This is the
+  smallest board supported so far: an RP2040 with 264 KB of memory and no PSRAM. It drives the 240 by
+  280 screen and the capacitive touch panel, and runs the new watch-face demo. Tested building,
+  flashing, and running on real hardware.
+- New display backend for small microcontrollers that drive an SPI screen. It keeps one screen-sized
+  image in memory and sends only the part that changed to the screen each frame. It is plain, portable
+  C, so any board with an SPI display can reuse it by supplying two small functions.
+- New watch-face demo with two pages you swipe between: a digital watch face (clock, day and date,
+  battery, heart rate, and a live step counter) and a bubble level (a dot that rolls as you tilt the
+  board, turning green when the board is level). It compiles ahead of time to C, so it runs on boards
+  that have no JavaScript runtime.
+- A new way to feed live device data into an app that is compiled ahead of time. You mark a value in
+  the app with useHostValue, and the build generates a small setter function your device code calls to
+  update it, for example, a step count or a sensor reading. This needs no engine changes and no
+  JavaScript runtime.
+- Real motion sensing on the RP2040-Touch-LCD-1.69 example. The board's accelerometer now drives a real
+  step counter (using a simple step-detection algorithm) and the bubble level (using the direction of
+  gravity). Both values reach the screen through useHostValue.
 - Start a new project from a demo. `npm create embedded-react@latest my-app -- --template <name>` scaffolds
-  a full example app (e.g. `thermostat`, `music-player`) instead of the minimal starter, so you can build on
+  a full example app (e.g. `thermostat`, `watch-face`) instead of the minimal starter, so you can build on
   a real UI or try one on your hardware right away; `--list` shows what's available. The demo apps are now
   self-contained projects wired to the `embedded-react` CLI.
 - `embedded-react build --aot --screen <WxH>` bakes a target panel size into the ahead-of-time build, so a
   responsive app compiles to the layout that board actually renders (e.g. `--screen 240x320` for a small
   no-PSRAM display).
+
+### Changed
+
+- Updated the examples and backends README tables to list what is actually implemented, and added rows
+  for the new RP2040 example and its display backend.
+- Rewrote the ESP32-2432S028R (Cheap Yellow Display) example README for clarity. A short intro and a
+  quick start come first, followed by a plain-language how-it-works section, a tuning table that maps
+  symptoms to fixes, and the pin list. The deeper detail moved below the get-it-running steps, and a
+  duplicated explanation was merged.
+
+### Fixed
+
+- Corrected the ESP32-2432S028R example docs: fixed the display backend description to match the
+  current design, fixed the documented pixel-clock speed (40 MHz, was 20), fixed the expected startup
+  log line, and replaced the stale music-player description with the thermostat dial the example
+  actually builds. Verified the example builds, flashes, and starts cleanly on a real board.
+
+## [0.9.0] - 2026-07-23
+### Added
+
+- Multi-core rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
+  hand the engine extra render workers (`embedded_renderer_set_workers`) — the engine never
+  creates threads itself — and each frame's repaint is then split into horizontal slices
+  rendered concurrently, one worker per core. Scenes using vector graphics or shadows fall back
+  to single-core automatically, the fade cache keeps working (reads happen in parallel; a
+  refresh borrows one single-core frame), and everything else — nested fades, transforms,
+  text, gradients, images — renders in parallel. The default build is unchanged and stays
+  exactly single-core.
+
+- The ESP32-S3 example renders on both cores, and its memory system now runs PSRAM and flash at
+  120 MHz (up from 80). The faster bus matters beyond speed: with both cores drawing, the RGB
+  panel's continuous refresh from PSRAM was starved of bandwidth and the picture visibly
+  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental" 
+  feature; the example also enables vsync-based panel-sync recovery.
+
+- Ordered dithering on RGB565 panels (`ER_LCD_DITHER`, on by default with SIMD blending). Fading
+  translucent or anti-aliased content used to shimmer as pixels flickered between color levels
+  frame to frame; the quantization now lands as a fine, stationary checkerboard instead, which
+  also softens gradient banding. The startup self-test covers the dithered math per pixel lane.
+
+- SIMD blending on the ESP32-S3 (`ER_LCD_PIE`, on by default). The hottest drawing operation —
+  blending translucent content onto the screen — now uses the chip's 128-bit vector unit, eight
+  pixels at a time, roughly halving the cost of fades on a device. A self-test at startup verifies
+  the SIMD output against the plain C version and falls back automatically if it ever disagrees.
+- The ESP32 LCD backend can now draw directly into the panel's own framebuffers (`ER_LCD_DIRECT`,
+  on by default for unrotated RGB565 panels with 2–3 framebuffers when `on_frame_buf_complete` callbacks are available). The intermediate framebuffer
+  and the per-frame copy to the panel are gone — pushing a large update dropped from 20–35 ms to
+  ~2 ms on the ESP32-S3 example. With three panel framebuffers (the example's new default) there
+  is always a free buffer to draw into, so frames never wait on the display. Rotated and
+  single-framebuffer panels keep the previous path.
+
+- Fades now work at any size. A translucent group bigger than the scratch buffer used to silently
+  render fully opaque; the engine now composites large groups in horizontal strips, so even
+  full-screen fades render correctly — using far less reserved RAM than before.
+- When a group truly can't be composited (very deep nesting, or a board with compositing turned
+  off), each element is now dimmed individually instead of the transparency being dropped entirely.
+- New board-tuning flags: `ERUI_SCRATCH_BAND_H` (strip height — smaller means less RAM) and
+  `ERUI_XFORM_W`/`ERUI_XFORM_H` (the largest element that can be rotated or scaled). Defaults leave
+  existing configurations unchanged.
+- A fade cache (`ERUI_FADE_CACHE_W/H`, off by default). During an opacity animation the faded
+  content doesn't change — only how transparent it is — so the engine now keeps the composited
+  result and re-blends it each frame instead of redrawing everything. Measured 1.3–2.8× fade
+  frame rate on device (nested fades gain the most); any change to the content invalidates the
+  cache automatically.
+
+### Changed
+
+- Compositing needs much less memory. One of the two full-size transform buffers is gone, and the
+  strip pool replaces four full-size opacity buffers — on the ESP32-S3 example the compositing
+  buffers shrink from ~1.35 MB to under 300 KB.
+- Rendering is faster on microcontrollers: the hottest pixel loops were reworked, and the ESP32-S3
+  example keeps its compositing strips in fast internal RAM.
+
+### Fixed
+
+- A rotating or growing element could vanish mid-animation once its on-screen footprint outgrew the
+  scratch buffer. Any on-screen size now renders; only the element's own size is limited.
+
+## [0.8.0] - 2026-07-21
+### Added
+
+- A lite JavaScript profile. The runtime starts with only the built-ins the React runtime actually
+  needs, and the same set runs everywhere — device, desktop, and simulator — so an app that works in
+  development works on hardware. Anything extra an app needs (Date, Proxy, typed arrays, …) can be
+  opted back in per host.
+- Parser-less device builds. Firmware that only runs precompiled bytecode can drop the JavaScript
+  parser entirely, saving about 60 KB of flash. The error overlay still works on such builds.
+- Smaller release bundles. Built apps no longer embed their source text and debug tables — the
+  thermostat demo shrinks from 1.14 MB to 260 KB. Development builds keep debug info so stack traces
+  keep their line numbers.
+- An optional hard cap on the JS heap: a runaway app fails with a catchable out-of-memory error
+  instead of exhausting the shared system heap.
+- The ESP32-S3 example uses all of the above: lite profile, no parser, and a 4 MB heap cap.
+
+### Fixed
+
+- Demo bundles no longer break when a demo folder carries its own `node_modules`. A second copy of
+  React could sneak into the bundle and make every component throw at mount; the bundler now always
+  uses the package's own copy.
 
 ## [0.7.0] - 2026-07-04
 ### Added
@@ -188,7 +305,9 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.5.2...v0.5.3

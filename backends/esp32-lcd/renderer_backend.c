@@ -34,23 +34,28 @@
  *     Full-precision intermediate (no per-blend banding); useful as an A/B reference or on hosts
  *     that are not PSRAM-bandwidth-bound.
  *
- * Note on "zero-copy": the canonical fb stays the always-complete source the double-buffered,
- * incremental, read-modify-write blend model needs (each panel fb is two presents stale, so present
- * replays current ∪ previous damage to converge it). Compositing straight into the alternating panel
- * fbs — eliminating even the present copy — would require the engine to repaint the union damage into
- * the target every frame (an engine change) or accept tearing; the 565 canonical here removes the
- * conversion and halves the bandwidth/footprint, which is the bulk of the win.
+ * DIRECT MODE (ER_LCD_DIRECT, default 1): when the canonical format is RGB565, rotation is 0, and
+ * the panel exposes 2–3 rotating framebuffers, the engine composites STRAIGHT into the panel
+ * framebuffers — no canonical framebuffer and no present copy. The engine's multi-buffer damage
+ * replay (er_set_display_buffer_count / er_display_present) repaints whatever each buffer missed
+ * while the others were displayed. Present is then just a cache writeback of the dirty window plus
+ * a buffer flip; with three framebuffers (num_fbs=3) there is always a swapped-out buffer ready to
+ * draw into, so the flip never blocks. The canonical-fb path below remains for rotated configs,
+ * ARGB8888 canonical builds, and single-framebuffer (copy mode) panels.
  *
  * Board specifics (RGB timings, pins, the CH422G expander for reset/backlight) live in the host that
  * creates the panel — this file only needs the panel handle.
  */
 
 #include "esp32_lcd_backend.h"
+#include "er_scene.h" /* er_set_display_buffer_count / er_display_present (direct mode) */
 #include "native_renderer.h"
 
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +63,36 @@
 /** @brief 1 = canonical framebuffer is RGB565 (no convert pass); 0 = ARGB8888 (convert at present). */
 #ifndef ER_LCD_FB_RGB565
 #define ER_LCD_FB_RGB565 1
+#endif
+
+/**
+ * @brief 1 = composite directly into the panel's rotating framebuffers when possible (RGB565
+ *         canonical format, rotation 0, 2-3 panel framebuffers): no canonical framebuffer and no
+ *         present copy — the engine's multi-buffer damage replay keeps every panel buffer current.
+ *         0 = always use the canonical-framebuffer path.
+ */
+#ifndef ER_LCD_DIRECT
+#define ER_LCD_DIRECT 1
+#endif
+
+/** @brief 1 = use the ESP32-S3 PIE 128-bit SIMD blend routines (8 px/iteration) for the hot
+ *         source-over paths, verified against the scalar reference by a self-test at init.
+ *         Requires the RGB565 canonical format; 0 = always use the scalar C loops. */
+#ifndef ER_LCD_PIE
+#define ER_LCD_PIE 1
+#endif
+#if ER_LCD_PIE && ER_LCD_FB_RGB565 && defined(CONFIG_IDF_TARGET_ESP32S3)
+#define ER_LCD_PIE_ACTIVE 1
+#include "pie_blend.h"
+#else
+#define ER_LCD_PIE_ACTIVE 0
+#endif
+
+/** @brief 1 = 2x2 ordered dithering in the SIMD blend paths (default): the RGB565 quantization
+ *         error becomes a fine, spatially stable checkerboard instead of a frame-to-frame
+ *         shimmer on animated fades. 0 = uniform round-to-nearest. PIE paths only. */
+#ifndef ER_LCD_DITHER
+#define ER_LCD_DITHER 1
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -153,10 +188,16 @@ typedef struct
     int pw;           /**< Physical panel width (= w/h swapped for 90/270). */
     int ph;           /**< Physical panel height. */
     int rot;          /**< Clockwise display rotation: 0, 90, 180, or 270. */
-    fbpx_t* fb;       /**< Canonical framebuffer (PSRAM), w*h. Authoritative full frame. */
-    uint16_t* fbp[2]; /**< The panel's two RGB565 framebuffers (double-buffer mode); NULL = copy mode. */
-    int back;         /**< Index of the off-screen framebuffer to draw next (double-buffer mode). */
+    fbpx_t* fb;       /**< Composite target: the canonical fb, or (direct mode) the back panel fb. */
+    uint16_t* fbp[3]; /**< The panel's rotating RGB565 framebuffers; fbp[0] == NULL = copy mode. */
+    int nfb;          /**< Number of panel framebuffers in fbp (2 or 3; 0 in copy mode). */
+    int back;         /**< Index of the off-screen framebuffer to draw next. */
     uint16_t* line;   /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
+    bool direct;      /**< Direct mode: the engine composites straight into the panel framebuffers and the
+                           engine's multi-buffer damage replay keeps them all current — no canonical fb,
+                           no present copy. Requires RGB565 canonical format, rotation 0, and 2+ panel fbs. */
+    SemaphoreHandle_t flip_done;  /**< Given at each frame boundary: all earlier flips have taken effect. */
+    int pending_flips;            /**< Flips requested since the last confirmed frame boundary. */
     /* Current dirty bounding box (inclusive); x1 < x0 means "empty". */
     int dx0, dy0, dx1, dy1;
     /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
@@ -180,6 +221,45 @@ static ERLcdBackend s_be;
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Blocks until the current back framebuffer is safe to draw into (direct mode).
+ *
+ * A flip requested by draw_bitmap only takes effect at the next frame boundary; until then the
+ * swapped-out buffer is still being scanned. The on_frame_buf_complete callback fires at every
+ * frame boundary and confirms ALL flips requested before it, so with N framebuffers the back
+ * buffer is unsafe only while (N-1) flips are still unconfirmed. With triple buffering this
+ * effectively never blocks; with double buffering it waits up to one refresh — overlapped with
+ * the frame's non-drawing work, since it runs lazily at the first write after a flip.
+ */
+/* Multi-core rendering: render workers on both cores call the blit callbacks concurrently, so
+ * the tiny shared read-modify-writes (the flip gate, the dirty bounding box) sit inside this
+ * spinlock. Uncontended cost is a few cycles per blit — noise next to the pixel work. */
+static portMUX_TYPE s_blit_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static inline void flip_gate(void)
+{
+    if (!s_be.direct)
+    {
+        return;
+    }
+    taskENTER_CRITICAL(&s_blit_mux);
+    const bool must_wait = (s_be.pending_flips >= s_be.nfb - 1);
+    taskEXIT_CRITICAL(&s_blit_mux);
+    if (!must_wait)
+    {
+        return;
+    }
+    if (s_be.flip_done)
+    {
+        if (xSemaphoreTake(s_be.flip_done, portMAX_DELAY) == pdTRUE)
+        {
+            taskENTER_CRITICAL(&s_blit_mux);
+            s_be.pending_flips = 0; /* a frame boundary passed: earlier flips are live */
+            taskEXIT_CRITICAL(&s_blit_mux);
+        }
+    }
+}
 
 /** @brief Clamps a rect to the framebuffer and returns false if fully off-screen. */
 static bool clip_rect(int* x, int* y, int* w, int* h)
@@ -205,9 +285,12 @@ static bool clip_rect(int* x, int* y, int* w, int* h)
     return (*w > 0 && *h > 0);
 }
 
-/** @brief Grows the dirty bounding box to include the given (already-clipped) rect. */
+/** @brief Grows the dirty bounding box to include the given (already-clipped) rect.
+ *
+ * Serialized: concurrent render workers would otherwise lose min/max updates and under-flush. */
 static void mark_dirty(int x, int y, int w, int h)
 {
+    taskENTER_CRITICAL(&s_blit_mux);
     if (x < s_be.dx0)
         s_be.dx0 = x;
     if (y < s_be.dy0)
@@ -216,6 +299,7 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dx1 = x + w - 1;
     if (y + h - 1 > s_be.dy1)
         s_be.dy1 = y + h - 1;
+    taskEXIT_CRITICAL(&s_blit_mux);
 }
 
 /** @brief Maps a logical (canonical-fb) pixel to its physical (panel) position under the rotation. */
@@ -295,6 +379,42 @@ static void present_region(uint16_t* dst, int dst_stride, int dst_ox, int dst_oy
  *
  * @return The composited opaque pixel (0xFFRRGGBB), ready to pack via fb_store.
  */
+/**
+ * @brief Fast source-over of a premultiplied ARGB8888 pixel onto an opaque canonical pixel.
+ *
+ * Paired-channel arithmetic: R+B blend in one 32-bit multiply, G in another — 2 multiplies
+ * per pixel instead of ~6, at the cost of ≤1 LSB darkening (inv = 255-sa with >>8), which is
+ * below the RGB565 quantization step. This is the per-pixel core of the composited-strip →
+ * framebuffer emit, the hottest loop on PSRAM-framebuffer boards.
+ */
+static inline fbpx_t over_premul_fast(fbpx_t dst, uint32_t sp)
+{
+    const uint32_t sa = sp >> 24;
+    if (sa == 255U)
+    {
+        return fb_store(sp);
+    }
+    if (sa == 0U)
+    {
+        return dst;
+    }
+    const uint32_t inv = 255U - sa;
+    const uint32_t d = fb_load(dst);
+    const uint32_t orb = ((sp & 0x00FF00FFU) + (((d & 0x00FF00FFU) * inv >> 8) & 0x00FF00FFU)) & 0x00FF00FFU;
+    const uint32_t og = ((sp & 0x0000FF00U) + (((d & 0x0000FF00U) * inv >> 8) & 0x0000FF00U)) & 0x0000FF00U;
+    return fb_store(0xFF000000U | orb | og);
+}
+
+/** @brief Scales a premultiplied ARGB8888 pixel (all four channels) by alpha/255, paired. */
+static inline uint32_t scale_premul_fast(uint32_t sp, uint32_t alpha)
+{
+    /* a1 in [0,256]: 255→256 keeps full-opacity lossless. */
+    const uint32_t a1 = alpha + (alpha >> 7);
+    const uint32_t ag = ((sp >> 8) & 0x00FF00FFU) * a1;      /* A and G lanes */
+    const uint32_t rb = (sp & 0x00FF00FFU) * a1;             /* R and B lanes */
+    return ((ag & 0xFF00FF00U)) | ((rb >> 8) & 0x00FF00FFU);
+}
+
 static inline uint32_t over_premul(uint32_t dst, uint32_t sp)
 {
     const uint32_t sa = sp >> 24;
@@ -349,10 +469,37 @@ static void blit_overlay(uint16_t* dst)
  - Backend callbacks
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/* Row staging buffer (internal DRAM): the canonical framebuffer lives in PSRAM, where per-pixel
+ * read-modify-write stalls ~90 cycles/px. Blends copy the destination row in with a burst memcpy,
+ * blend against internal memory, and burst the result back — several times faster than in-place.
+ * 16-byte aligned so the PIE SIMD routines can run on it directly. */
+#define ER_ROW_STAGE_MAX 1024
+/* One staging slot per CPU core: render workers are core-pinned, so indexing by the core id gives
+ * every concurrent blit its own buffers with no locking (slot 0 doubles as the single-core slot). */
+__attribute__((aligned(16))) static fbpx_t s_row_stage_pool[2][ER_ROW_STAGE_MAX];
+
+/** @brief This core's row staging buffer. */
+static inline fbpx_t* row_stage(void)
+{
+    return s_row_stage_pool[xPortGetCoreID()];
+}
+#if ER_LCD_PIE_ACTIVE
+/* Aligned source staging for the SIMD path when a source row is not 16-byte aligned. */
+__attribute__((aligned(16))) static uint32_t s_pie_src_pool[2][ER_ROW_STAGE_MAX];
+
+/** @brief This core's SIMD source staging buffer. */
+static inline uint32_t* pie_src_stage(void)
+{
+    return s_pie_src_pool[xPortGetCoreID()];
+}
+static bool s_pie = false; /* PIE routines enabled (self-test passed at init) */
+#endif
+
 /** @brief Fills a rect with a straight-alpha ARGB8888 color, composited over the framebuffer. */
 static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    flip_gate();
     if (!clip_rect(&x, &y, &w, &h))
     {
         return;
@@ -377,10 +524,25 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
         }
         else
         {
-            for (int col = 0; col < w; col++)
+            /* Translucent fill: stage the row internally (see blend_cb). */
+            fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? row_stage() : d;
+            if (stage != d)
+                memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
+            int col0 = 0;
+#if ER_LCD_PIE_ACTIVE
+            if (a != 0U && s_pie && stage == row_stage() && w >= 8)
             {
-                d[col] = fb_store(over_premul(fb_load(d[col]), sp));
+                const int n8 = w / 8;
+                er_pie_fill_row_565(stage, sp, n8);
+                col0 = n8 * 8;
             }
+#endif
+            for (int col = col0; col < w; col++)
+            {
+                stage[col] = over_premul_fast(stage[col], sp);
+            }
+            if (stage != d)
+                memcpy(d, stage, (size_t)w * sizeof(fbpx_t));
         }
     }
     mark_dirty(x, y, w, h);
@@ -390,6 +552,7 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    flip_gate();
     const int ox = x, oy = y;
     if (!clip_rect(&x, &y, &w, &h))
     {
@@ -403,7 +566,16 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
         fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
         for (int col = 0; col < w; col++)
         {
-            d[col] = fb_store(over_premul(fb_load(d[col]), s[col]));
+            const uint32_t p = s[col];
+            const uint32_t sa = p >> 24;
+            if (sa == 255U)
+            {
+                d[col] = fb_store(p);
+            }
+            else if (sa != 0U)
+            {
+                d[col] = over_premul_fast(d[col], p);
+            }
         }
     }
     mark_dirty(x, y, w, h);
@@ -413,6 +585,7 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
 static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    flip_gate();
     if (alpha == 0U)
     {
         return;
@@ -429,23 +602,140 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     {
         const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
         fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
-        for (int col = 0; col < w; col++)
+        /* Stage the destination row in internal DRAM: one burst in, blend internally, one
+         * burst out — instead of a ~90-cycle PSRAM read-modify-write per pixel. */
+        fbpx_t* stage = (w <= ER_ROW_STAGE_MAX) ? row_stage() : d;
+        if (stage != d)
+            memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
+        int col0 = 0;
+#if ER_LCD_PIE_ACTIVE
+        /* SIMD path: 8 px per iteration on the aligned stage row; the scalar loops below mop up
+         * the tail. A misaligned source row is burst-copied to the aligned staging first. */
+        if (s_pie && stage == row_stage() && w >= 8)
         {
-            /* Scale the premultiplied source by the global alpha (both rgb and a), then over. */
-            const uint32_t p = s[col];
-            const uint32_t sa = ((p >> 24) * ga + 127U) / 255U;
-            const uint32_t sr = (((p >> 16) & 0xFFU) * ga + 127U) / 255U;
-            const uint32_t sg = (((p >> 8) & 0xFFU) * ga + 127U) / 255U;
-            const uint32_t sb = ((p & 0xFFU) * ga + 127U) / 255U;
-            d[col] = fb_store(over_premul(fb_load(d[col]), (sa << 24) | (sr << 16) | (sg << 8) | sb));
+            const uint32_t* s2 = s;
+            if (((uintptr_t)s & 15U) != 0U)
+            {
+                memcpy(pie_src_stage(), s, (size_t)w * sizeof(uint32_t));
+                s2 = pie_src_stage();
+            }
+            const int n8 = w / 8;
+            /* Dither phase = (x + y) parity of the row's first pixel, so the checkerboard is
+             * anchored to screen coordinates (spatially stable across frames and regions). */
+            const int ph = ER_LCD_DITHER ? ((x + y + row) & 1) : 2;
+            er_pie_blend_row_565(stage, s2, n8, (uint8_t)ga, ph);
+            col0 = n8 * 8;
         }
+#endif
+        if (ga == 255U)
+        {
+            /* Full-alpha path — the common case for composited strips, where most pixels are
+             * fully opaque: no global-alpha scaling, opaque pixels skip the dst load. */
+            for (int col = col0; col < w; col++)
+            {
+                const uint32_t p = s[col];
+                const uint32_t sa = p >> 24;
+                if (sa == 255U)
+                {
+                    stage[col] = fb_store(p);
+                }
+                else if (sa != 0U)
+                {
+                    stage[col] = over_premul_fast(stage[col], p);
+                }
+            }
+        }
+        else
+        {
+            for (int col = col0; col < w; col++)
+            {
+                /* Scale the premultiplied source by the global alpha (paired lanes), then over. */
+                const uint32_t p = s[col];
+                if (p == 0U)
+                    continue;
+                stage[col] = over_premul_fast(stage[col], scale_premul_fast(p, ga));
+            }
+        }
+        if (stage != d)
+            memcpy(d, stage, (size_t)w * sizeof(fbpx_t));
     }
     mark_dirty(x, y, w, h);
+}
+
+bool er_esp32_lcd_pie_enabled(void)
+{
+#if ER_LCD_PIE_ACTIVE
+    return s_pie;
+#else
+    return false;
+#endif
 }
 
 /** @brief Pushes the painted (dirty) region to the panel, re-compositing the overlay. */
 void er_esp32_lcd_present(void)
 {
+    if (s_be.direct)
+    {
+        /* Direct mode: the engine composited straight into the back panel framebuffer, and its
+         * multi-buffer damage replay already repainted everything this buffer missed while it was
+         * off-screen — the dirty box therefore covers every pixel written since this buffer was
+         * last flipped, and is exactly the cache-writeback window draw_bitmap needs. */
+        bool have = (s_be.dx1 >= s_be.dx0 && s_be.dy1 >= s_be.dy0);
+        int x0 = s_be.dx0, y0 = s_be.dy0, x1 = s_be.dx1, y1 = s_be.dy1;
+        s_be.dx0 = s_be.w;
+        s_be.dy0 = s_be.h;
+        s_be.dx1 = -1;
+        s_be.dy1 = -1;
+        if (!have && !s_be.ov_active)
+        {
+            return; /* nothing changed: no flip, and the engine's buffer ring must not advance */
+        }
+
+        uint16_t* dst_fb = (uint16_t*)s_be.fb;
+        /* Re-stamp the persistent overlay onto this buffer (its own tight region). */
+        if (s_be.ov_active)
+        {
+            flip_gate(); /* the stamp writes the back buffer too */
+            blit_overlay(dst_fb);
+            if (!have)
+            {
+                x0 = s_be.ovx;
+                y0 = s_be.ovy;
+                x1 = s_be.ovx + s_be.ovw - 1;
+                y1 = s_be.ovy + s_be.ovh - 1;
+            }
+            else
+            {
+                if (s_be.ovx < x0)
+                    x0 = s_be.ovx;
+                if (s_be.ovy < y0)
+                    y0 = s_be.ovy;
+                if (s_be.ovx + s_be.ovw - 1 > x1)
+                    x1 = s_be.ovx + s_be.ovw - 1;
+                if (s_be.ovy + s_be.ovh - 1 > y1)
+                    y1 = s_be.ovy + s_be.ovh - 1;
+            }
+        }
+
+        /* A frame boundary confirms every earlier flip: drain the grant (if any) BEFORE queuing
+         * this flip so the pending count only tracks flips the panel hasn't absorbed yet. */
+        if (s_be.flip_done && xSemaphoreTake(s_be.flip_done, 0) == pdTRUE)
+        {
+            s_be.pending_flips = 0;
+        }
+
+        /* Flip: draw_bitmap with a panel-owned buffer writes back the cache over the given window
+         * and switches the scan-out buffer at the next frame boundary. The next frame's first
+         * write into the new back buffer gates on flip_gate() — with three framebuffers that
+         * effectively never blocks; with two it waits up to one refresh. */
+        esp_lcd_panel_draw_bitmap(s_be.panel, x0, y0, x1 + 1, y1 + 1, dst_fb);
+        s_be.pending_flips++;
+        s_be.back = (s_be.back + 1) % s_be.nfb;
+        s_be.fb = (fbpx_t*)s_be.fbp[s_be.back];
+        er_display_present(); /* the next commit targets the new back buffer's damage debt */
+        return;
+    }
+
     const bool dbl = (s_be.fbp[0] != NULL);
     /* First two presents in double-buffer mode draw the whole frame so both framebuffers start valid. */
     const bool full = dbl && s_be.present_count < 2;
@@ -657,6 +947,21 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
  - Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief ISR callback: the previously displayed framebuffer is now safe to draw into. */
+static bool frame_buf_complete_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t* edata,
+                                  void* user_ctx)
+{
+    (void)panel;
+    (void)edata;
+    (void)user_ctx;
+    BaseType_t hp_woken = pdFALSE;
+    if (s_be.flip_done)
+    {
+        xSemaphoreGiveFromISR(s_be.flip_done, &hp_woken);
+    }
+    return hp_woken == pdTRUE;
+}
+
 bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height, int rotation)
 {
     if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270)
@@ -682,23 +987,28 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     s_be.present_count = 0;
     s_be.ov_active = false;
 
-    s_be.fb = (fbpx_t*)heap_caps_malloc((size_t)width * height * sizeof(fbpx_t), MALLOC_CAP_SPIRAM);
-    if (!s_be.fb)
-    {
-        ESP_LOGE(
-            TAG, "framebuffer alloc failed (need %d KB PSRAM)", (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
-        return false;
-    }
-
-    /* Tear-free path: if the panel exposes two framebuffers (num_fbs=2), draw straight into the
-     * off-screen one and let draw_bitmap swap it in at vsync. Otherwise fall back to a staging buffer
-     * that draw_bitmap copies into the live framebuffer (single-buffered; can tear). */
+    /* Tear-free path: if the panel exposes rotating framebuffers (num_fbs 2 or 3), draw the
+     * off-screen one and let draw_bitmap swap it in at vsync. Otherwise fall back to a staging
+     * buffer that draw_bitmap copies into the live framebuffer (single-buffered; can tear). */
     void* fb0 = NULL;
     void* fb1 = NULL;
-    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK && fb0 && fb1 && fb0 != fb1)
+    void* fb2 = NULL;
+    s_be.nfb = 0;
+    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fb0, &fb1, &fb2) == ESP_OK && fb0 && fb1 && fb2 &&
+        fb0 != fb1 && fb0 != fb2 && fb1 != fb2)
+    {
+        s_be.nfb = 3;
+    }
+    else if (esp_lcd_rgb_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK && fb0 && fb1 && fb0 != fb1)
+    {
+        s_be.nfb = 2;
+        fb2 = NULL;
+    }
+    if (s_be.nfb > 0)
     {
         s_be.fbp[0] = (uint16_t*)fb0;
         s_be.fbp[1] = (uint16_t*)fb1;
+        s_be.fbp[2] = (uint16_t*)fb2;
         s_be.back = 1; /* fb0 is displayed first; draw into fb1 */
         s_be.line = NULL;
     }
@@ -706,6 +1016,7 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     {
         s_be.fbp[0] = NULL;
         s_be.fbp[1] = NULL;
+        s_be.fbp[2] = NULL;
         s_be.line = (uint16_t*)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
         if (!s_be.line)
         {
@@ -713,10 +1024,62 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
             return false;
         }
     }
-    /* Clear the framebuffer to opaque black so the first frame composites over a known background. */
-    for (size_t i = 0; i < (size_t)width * height; i++)
+
+    /* Direct mode: composite straight into the panel framebuffers. Needs the canonical format to BE
+     * the panel format (RGB565), an identity rotation (blits land at panel coordinates), and both
+     * panel framebuffers. The engine's multi-buffer damage replay repaints whatever each buffer
+     * missed while the other was displayed, so no canonical framebuffer is required at all. */
+    s_be.direct = (ER_LCD_DIRECT != 0) && (ER_LCD_FB_RGB565 != 0) && rotation == 0 && s_be.fbp[0] != NULL;
+
+    if (s_be.direct)
     {
-        s_be.fb[i] = FB_CLEAR_PX;
+        /* The flip must be sequenced: after draw_bitmap queues a buffer switch, the swapped-out
+         * buffer only becomes safe to draw into at the next frame boundary. Without that signal,
+         * direct mode would tear — fall back to the canonical path instead. */
+        s_be.flip_done = xSemaphoreCreateBinary();
+        const esp_lcd_rgb_panel_event_callbacks_t cbs = {
+            .on_frame_buf_complete = frame_buf_complete_cb,
+        };
+        if (!s_be.flip_done || esp_lcd_rgb_panel_register_event_callbacks(panel, &cbs, NULL) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "frame_buf_complete callback unavailable; using the canonical-fb path");
+            if (s_be.flip_done)
+            {
+                vSemaphoreDelete(s_be.flip_done);
+                s_be.flip_done = NULL;
+            }
+            s_be.direct = false;
+        }
+    }
+
+    if (s_be.direct)
+    {
+        /* All panel framebuffers start as the composite target; clear them to opaque black. */
+        for (int i = 0; i < s_be.nfb; i++)
+        {
+            memset(s_be.fbp[i], 0, (size_t)width * height * sizeof(uint16_t));
+        }
+        /* Push fb0 full-screen once: writes the cleared pixels back through the cache and makes
+         * fb0 the displayed buffer, so the panel shows black instead of allocation garbage. */
+        esp_lcd_panel_draw_bitmap(panel, 0, 0, width, height, s_be.fbp[0]);
+        s_be.fb = (fbpx_t*)s_be.fbp[s_be.back];
+        s_be.pending_flips = 0;
+    }
+    else
+    {
+        s_be.fb = (fbpx_t*)heap_caps_malloc((size_t)width * height * sizeof(fbpx_t), MALLOC_CAP_SPIRAM);
+        if (!s_be.fb)
+        {
+            ESP_LOGE(TAG,
+                     "framebuffer alloc failed (need %d KB PSRAM)",
+                     (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
+            return false;
+        }
+        /* Clear the framebuffer to opaque black so the first frame composites over a known background. */
+        for (size_t i = 0; i < (size_t)width * height; i++)
+        {
+            s_be.fb[i] = FB_CLEAR_PX;
+        }
     }
 
     static EmbeddedRenderBackend backend;
@@ -727,15 +1090,26 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     backend.frame_ready = NULL; /* engine doesn't auto-present; the host calls er_esp32_lcd_present() */
     backend.ctx = NULL;
     embedded_renderer_set_backend(&backend);
+    /* Direct mode rotates the panel framebuffers; tell the engine so each commit repaints the
+     * target buffer's accumulated damage debt (see er_set_display_buffer_count in er_scene.h). */
+    er_set_display_buffer_count(s_be.direct ? s_be.nfb : 1);
+
+#if ER_LCD_PIE_ACTIVE
+    /* Verify the SIMD blends against the scalar reference before trusting them. */
+    s_pie = er_pie_blend_selftest();
+    ESP_LOGI(TAG, "PIE SIMD blend: %s", s_pie ? "self-test passed, enabled" : "SELF-TEST FAILED, using C loops");
+#endif
 
     ESP_LOGI(TAG,
-             "LCD backend ready: logical %dx%d, panel %dx%d, rotation %d°, canonical fb %s (%d KB PSRAM)",
+             "LCD backend ready: logical %dx%d, panel %dx%d, rotation %d°, %s %s",
              width,
              height,
              s_be.pw,
              s_be.ph,
              rotation,
-             ER_LCD_FB_RGB565 ? "RGB565" : "ARGB8888",
-             (int)((size_t)width * height * sizeof(fbpx_t) / 1024));
+             s_be.direct ? "DIRECT to panel fbs," : "canonical fb",
+             s_be.direct        ? "no canonical fb"
+             : ER_LCD_FB_RGB565 ? "RGB565"
+                                : "ARGB8888");
     return true;
 }

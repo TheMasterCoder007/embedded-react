@@ -33,7 +33,15 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Single-row scratch buffer used when nearest-neighbor scaling is required. */
-static uint32_t s_row_buf[ERUI_MAX_IMG_ROW_PIXELS];
+/* One assembled row per render worker: cheap enough to duplicate, and it keeps image
+ * blits parallel-safe (see the multi-core render fork in compositor.c). */
+static uint32_t s_row_buf_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+
+/** @brief The calling worker's image row buffer. */
+static inline uint32_t* irow(void)
+{
+    return s_row_buf_pool[er_render_worker_id()];
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -197,9 +205,9 @@ static void render_region(const uint32_t* buf,
 #endif
             if (has_tint)
                 p = apply_tint(p, tr, tg, tb);
-            s_row_buf[dx] = p;
+            irow()[dx] = p;
         }
-        er_blit_blend(s_row_buf, capped_w * (int)sizeof(uint32_t), 255, dst_x, dst_y + dy, capped_w, 1);
+        er_blit_blend(irow(), capped_w * (int)sizeof(uint32_t), 255, dst_x, dst_y + dy, capped_w, 1);
     }
 }
 

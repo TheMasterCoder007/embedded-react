@@ -63,13 +63,40 @@ native format (RGB565, BGR888, …) inside the callback. Blend, per channel:
 out.C = src.C * a + dst.C * (1 - sA * a)      // src.C already premultiplied
 ```
 
-### Scratch buffer pool (no heap during rendering)
+### Scratch buffers (no heap during rendering)
 
 A subtree with `opacity < 1`, a transform, or a shadow blur is composited into an
-offscreen premultiplied-ARGB8888 buffer first. The pool is a single static array sliced
-into equal slots at init — `ERUI_SCRATCH_W × ERUI_SCRATCH_H × ERUI_SCRATCH_POOL_DEPTH × 4`
-bytes — so no allocation happens in a render pass. At desktop defaults these slots are
-framebuffer-sized and dominate static RAM; size them down per board.
+offscreen premultiplied-ARGB8888 buffer first. Everything is statically allocated — no
+allocation happens in a render pass. Three pools exist, each sized by its own constraint:
+
+- **Opacity strips** — `ERUI_MAX_OPACITY_DEPTH` strips of
+  `ERUI_SCRATCH_W × ERUI_SCRATCH_BAND_H × 4` bytes. A translucent group is composited
+  through one strip; a group **larger than one strip is composited in multiple band
+  passes** (the subtree is re-walked once per strip-sized tile, with off-tile subtrees
+  pruned), so any node up to `ERUI_SCRATCH_W` wide fades correctly regardless of height.
+  Small `ERUI_SCRATCH_BAND_H` = big RAM saving, more passes for tall fades.
+- **Transform source** — one `ERUI_XFORM_W × ERUI_XFORM_H × 4` buffer (defaults to the
+  `ERUI_SCRATCH_W/H` dims) holding the untransformed subtree while it is resampled. This
+  is the one buffer that cannot be banded (rotation reads across the whole source), so
+  `ERUI_XFORM_W/H` cap the largest rotatable/scalable node — decouple them when strips
+  are screen-wide but transforms only ever hit small widgets. The transformed **output**
+  is streamed out per row segment, so the destination AABB (which grows under
+  rotation/scale-up) is unlimited.
+- **Shadow plane** — `ERUI_SCRATCH_W × ERUI_SCRATCH_H` bytes of A8 coverage
+  (`ERUI_SHADOWS` only).
+
+When no opacity strip is available (nesting deeper than `ERUI_MAX_OPACITY_DEPTH`), the
+group's opacity is multiplied into each primitive draw instead of being dropped — exact
+wherever siblings don't overlap.
+
+- **Fade cache** (optional) — one `ERUI_FADE_CACHE_W × ERUI_FADE_CACHE_H × 4` buffer
+  holding the composited subtree of the most recent translucent group. During a pure
+  opacity animation the subtree's content is identical every frame, so after one capture
+  each frame is a single blend at the new alpha instead of a full re-render — roughly
+  double the frame rate on fades of static content. Any content mutation anywhere in the
+  scene invalidates it (coarse but O(1) and always safe). Off by default (`0`); size it to
+  the largest node you animate opacity on (device boards typically place it in external
+  RAM).
 
 ### Banded rendering (low-RAM panels)
 
@@ -95,16 +122,21 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_TRANSFORMS` | FULL | `TRANSLATE_ONLY` strips rasterisation paths |
 | `ERUI_FONT_SIZES` | 7 | Number of pre-rasterised font sizes |
 | `ERUI_MAX_NODES` | 512 | Scene-graph node pool size |
-| `ERUI_MAX_OPACITY_DEPTH` | 4 | Max nested offscreen-composite layers |
-| `ERUI_SCRATCH_W` | *(fb width)* | Width of one scratch slot |
-| `ERUI_SCRATCH_H` | *(fb height)* | Height of one scratch slot |
-| `ERUI_SCRATCH_POOL_DEPTH` | `ERUI_MAX_OPACITY_DEPTH + 2` | Number of live scratch slots |
+| `ERUI_MAX_OPACITY_DEPTH` | 4 | Max nested offscreen-composite layers (opacity strips) |
+| `ERUI_SCRATCH_W` | 240 | Strip width / max transformable node width |
+| `ERUI_SCRATCH_H` | 240 | Transform-source height (max transformable node height) |
+| `ERUI_SCRATCH_BAND_H` | `ERUI_SCRATCH_H` | Opacity strip height; shrink to trade band passes for RAM |
+| `ERUI_XFORM_W` | `ERUI_SCRATCH_W` | Transform-source width (max rotatable/scalable node width) |
+| `ERUI_XFORM_H` | `ERUI_SCRATCH_H` | Transform-source height (max rotatable/scalable node height) |
+| `ERUI_FADE_CACHE_W` | 0 | Fade-cache width (composited-subtree reuse across fade frames); 0 disables |
+| `ERUI_FADE_CACHE_H` | 0 | Fade-cache height; 0 disables |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
+| `ERUI_RENDER_WORKERS` | 1 | Max render workers for multi-core rendering. Above 1, per-worker context/scratch arrays are sized for N workers and a host may install threads via `embedded_renderer_set_workers` (see `native_renderer.h`); the repaint region is then rendered as horizontal slices, one per core. The opacity strip pool is split between workers (`ERUI_MAX_OPACITY_DEPTH / workers` slots each — raise the depth alongside), and each extra worker costs a full transform-source buffer. Scenes with vector or shadow nodes automatically render single-core. 1 (the default) is the plain single-core engine |
 
 ### Vector pools (SVG / `<Svg>` rasteriser)
 
 The vector rasteriser (`rendering/vector.c`) pre-allocates static buffers sized by the
-macros below. Unlike the framebuffer-sized scratch pool, these stay in **internal RAM** on
+macros below. Unlike the pixel scratch buffers above, these stay in **internal RAM** on
 a PSRAM board (the scanline loops touch them per pixel), so they're sized to fit there —
 raise them for bigger / more complex SVGs and watch the internal-RAM budget. They split
 into transient rasterize scratch (reused per shape) and persistent per-node storage.

@@ -47,6 +47,27 @@
  - Types
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/**
+ * @brief Optional intrinsics beyond the lite profile (OR into ErRuntimeConfig.extra_intrinsics).
+ *
+ * The runtime creates its context with JS_NewContextRaw and installs only what the React runtime
+ * needs: base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now` global (React's
+ * scheduler clock). Date, Proxy, typed arrays, WeakRef/FinalizationRegistry, BigInt and JS-level
+ * eval() are NOT available unless requested here — each one linked back in costs flash, which is
+ * the point of the lite profile. The same set runs everywhere (device, desktop, simulator,
+ * runtest), so an app that works in dev works on hardware.
+ */
+enum
+{
+    ER_JS_INTRINSIC_DATE = 1u << 0,         /**< Date (the runtime itself uses performance.now, not Date). */
+    ER_JS_INTRINSIC_PROXY = 1u << 1,        /**< Proxy. */
+    ER_JS_INTRINSIC_TYPED_ARRAYS = 1u << 2, /**< TypedArrays / ArrayBuffer / DataView. */
+    ER_JS_INTRINSIC_WEAK_REF = 1u << 3,     /**< WeakRef / FinalizationRegistry. */
+    ER_JS_INTRINSIC_BIGINT = 1u << 4,       /**< BigInt. */
+    ER_JS_INTRINSIC_EVAL = 1u << 5,         /**< JS-level eval()/Function — requires a parser build
+                                                 (unavailable when QuickJS is built with QJS_DISABLE_PARSER). */
+};
+
 /** @brief Configuration for er_runtime_init (and re-applied on er_runtime_reset). */
 typedef struct
 {
@@ -62,6 +83,12 @@ typedef struct
                                         (JS_NewRuntime2). Must outlive the runtime. */
     size_t max_stack_size;                     /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
                                                 QuickJS default. Set below the host/task stack on an MCU. */
+    size_t memory_limit;                       /**< JS_SetMemoryLimit value: hard cap on the JS heap so a runaway
+                                                app fails with a JS out-of-memory error (caught by the error
+                                                overlay) instead of exhausting the shared system heap. 0 = no cap.
+                                                On an MCU, set to your JS arena size. */
+    uint32_t extra_intrinsics;                 /**< ER_JS_INTRINSIC_* flags for features beyond the lite profile;
+                                                0 = the lite set only (what the React runtime needs). */
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -78,6 +105,21 @@ typedef struct
  * @return true on success; false if the runtime/context could not be created.
  */
 bool er_runtime_init(const ErRuntimeConfig* cfg);
+
+/**
+ * @brief Creates a context with the lite intrinsic profile (JS_NewContextRaw + base objects, RegExp,
+ *        JSON, Map/Set, Promise, `performance.now`) plus any requested extras.
+ *
+ * The building block er_runtime uses internally, exposed so standalone hosts/harnesses (e.g. the
+ * runtest tool) run the SAME intrinsic surface as a device — a bundle that works there works on
+ * hardware. Most callers want er_runtime_init instead.
+ *
+ * @param[in] rt               Runtime to create the context in.
+ * @param[in] extra_intrinsics ER_JS_INTRINSIC_* flags beyond the lite set (0 = lite only).
+ *
+ * @return The new context, or NULL on failure.
+ */
+JSContext* er_js_new_context(JSRuntime* rt, uint32_t extra_intrinsics);
 
 /**
  * @brief Returns the live QuickJS context, for installing custom globals (e.g. device-API bindings).
@@ -173,6 +215,9 @@ bool er_runtime_load_bytecode(const void* buf, size_t len);
  *        same QuickJS version `er_runtime_load_bytecode` expects. COMPILE_ONLY — the bundle's references
  *        to NativeUI/screen/console are resolved only at load time, not here.
  *
+ * Unavailable (always returns NULL) when QuickJS is built with QJS_DISABLE_PARSER — precompile on
+ * the host instead.
+ *
  * @param[in]  src      Source text (UTF-8; need not be NUL-terminated).
  * @param[in]  len      Byte length of @p src.
  * @param[out] out_len  Receives the bytecode byte length (0 on failure).
@@ -182,11 +227,28 @@ bool er_runtime_load_bytecode(const void* buf, size_t len);
  */
 uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len);
 
+/**
+ * @brief Like er_runtime_compile_bytecode, with control over debug info.
+ *
+ * @param[in]  src      Source text (UTF-8; need not be NUL-terminated).
+ * @param[in]  len      Byte length of @p src.
+ * @param[out] out_len  Receives the bytecode byte length (0 on failure).
+ * @param[in]  strip    true → omit the embedded source text + debug tables (device/release: ~8x
+ *                      smaller blob, but stack traces lose line numbers). false → keep them (dev
+ *                      hot-reload, where the error overlay wants line numbers).
+ *
+ * @return malloc'd bytecode buffer (er_runtime_free), or NULL on a compile error.
+ */
+uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out_len, bool strip);
+
 /** @brief Frees a buffer returned by er_runtime_compile_bytecode (plain free; safe on NULL). */
 void er_runtime_free(void* p);
 
 /**
  * @brief Evaluates an app from JS source text, then pumps once.
+ *
+ * Unavailable (always returns false) when QuickJS is built with QJS_DISABLE_PARSER — load bytecode
+ * or a container instead.
  *
  * @param[in] src   Source text.
  * @param[in] len   Byte length.

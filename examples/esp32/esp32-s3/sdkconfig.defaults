@@ -6,7 +6,17 @@ CONFIG_IDF_TARGET="esp32s3"
 # --- Octal PSRAM (the JS heap + engine pools + framebuffers live here) ---
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
+# 120 MHz octal PSRAM (experimental IDF feature): +50% bus bandwidth. Needed headroom for
+# dual-core rendering — with both cores blitting, the RGB panel's bounce-buffer refill was
+# starved at 80 MHz and the picture drifted/jumped (classic PSRAM-fb underrun).
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_SPIRAM_SPEED_120M=y
+# 120 MHz PSRAM requires the flash on the same MSPI core clock. Flash >80 MHz (High
+# Performance Mode) is flash-model dependent — this board's chip handles it (Waveshare's own
+# demo configs run 120/120); the DC-aware-bootloader warning is suppressed below.
+CONFIG_ESPTOOLPY_FLASHFREQ_120M=y
+CONFIG_SPI_FLASH_HPM_ENA=y
+CONFIG_SPI_FLASH_HPM_DC_DISABLE=y
 CONFIG_SPIRAM_USE_MALLOC=y
 # Small allocations stay in fast internal RAM; large ones (the JS heap via heap_caps_malloc) use PSRAM.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
@@ -51,3 +61,6 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # CH343/UART0 port. See main/hotreload_usb.c. (Board: docs.waveshare.com/ESP32-S3-Touch-LCD-7.)
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+
+# Recover panel sync drift at the next vsync instead of showing a persistent shifted frame.
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y

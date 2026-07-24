@@ -9,7 +9,9 @@ falls back to `software/`).
 | Backend | Description | Status |
 |---|---|---|
 | `dma2d/` | STM32 DMA2D hardware blitter | Stub (planned reference backend) |
-| `esp32-lcd/` | ESP32-S3 LCD peripheral + PSRAM framebuffer, CPU blit | Stub |
+| `esp32-lcd/` | ESP32-S3 LCD peripheral + PSRAM framebuffer, CPU blit | **Implemented** |
+| `esp32-spi-lcd/` | Lean SPI-LCD for no-PSRAM ESP32 (single internal-RAM fb, banded flush) | **Implemented** |
+| `pico-spi-lcd/` | Portable SPI-LCD for small MCUs (RP2040 — single RGB565 fb, dirty-rect flush) | **Implemented** |
 | `framebuffer/` | Generic Linux `/dev/fb0` blitter | Planned (README only) |
 | `opengl/` | OpenGL ES 2.0 — RPi, Android, anything with a GL context | Planned (README only) |
 | `sdl/` | SDL2 — desktop dev and host-side test target | **Implemented** |

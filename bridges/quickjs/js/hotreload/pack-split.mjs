@@ -247,10 +247,10 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
  *
  * @returns {Promise<{bytecode: Buffer, bytecodeLen: number}>}
  */
-export async function packVendor({libSrc, nodePaths, simDir}) {
+export async function packVendor({libSrc, nodePaths, simDir, strip = false}) {
   const {compileToBytecode} = await import('../qjsc-wasm.mjs');
   const source = await bundleVendorSource({libSrc, nodePaths});
-  const bytecode = await compileToBytecode(source, simDir);
+  const bytecode = await compileToBytecode(source, simDir, {strip});
   return {bytecode, bytecodeLen: bytecode.length};
 }
 
@@ -267,6 +267,7 @@ export async function packApp({
   nodePaths,
   simDir,
   persist = false,
+  strip = false,
 }) {
   const {compileToBytecode} = await import('../qjsc-wasm.mjs');
   const {source, images, fonts} = await bundleAppSource({
@@ -275,7 +276,7 @@ export async function packApp({
     nodePaths,
     persist,
   });
-  const bytecode = await compileToBytecode(source, simDir);
+  const bytecode = await compileToBytecode(source, simDir, {strip});
   const assetPack = await bakeAssets({images, fonts, source, projectRoot});
   return {
     bytecode,

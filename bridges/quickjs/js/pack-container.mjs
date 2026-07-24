@@ -141,7 +141,16 @@ await build({
   platform: 'neutral',
   target: 'es2020',
   jsx: 'automatic',
-  alias: {'embedded-react': libEntry},
+  // Pin React to THIS package's copy: a demo/consumer project may carry its own node_modules
+  // (e.g., after `npm install` for device-dev deps), and esbuild resolving `react` from there while
+  // the library resolves its copy from here yields two React instances — the hook dispatcher is
+  // null and every component throws. One copy, always.
+  alias: {
+    'embedded-react': libEntry,
+    react: resolve(nodeModules, 'react'),
+    'react-reconciler': resolve(nodeModules, 'react-reconciler'),
+    scheduler: resolve(nodeModules, 'scheduler'),
+  },
   nodePaths: [nodeModules],
   plugins: [assetPlugin],
   define: {'process.env.NODE_ENV': '"production"'},

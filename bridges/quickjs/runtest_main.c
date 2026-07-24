@@ -25,6 +25,7 @@
  * Usage: er-bridge-quickjs-runtest <bundle.js>
  */
 
+#include "er_runtime.h" /* er_js_new_context — the device's lite intrinsic profile */
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
@@ -216,7 +217,10 @@ int main(int argc, char** argv)
     embedded_renderer_set_backend(&backend);
 
     JSRuntime* rt = JS_NewRuntime();
-    JSContext* ctx = JS_NewContext(rt);
+    /* The device's lite intrinsic profile (not a full JS_NewContext): a bundle that only works with
+     * intrinsics a device build strips would pass here and then fail on hardware. EVAL is required so
+     * JS_Eval can run .js test bundles (bytecode-only device builds don't have it). */
+    JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL);
     rt_install_globals(ctx);
     er_bridge_install(ctx);
 

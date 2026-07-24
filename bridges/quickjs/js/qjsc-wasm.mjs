@@ -31,11 +31,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  *
  * @param {string} jsSource  The bundled app (esbuild IIFE output).
  * @param {string} [simDir]  Dir holding embedded-react.{js,wasm} (defaults to the package's sim/).
+ * @param {{strip?: boolean}} [opts]  strip: true drops the embedded source text + debug tables
+ *   (release/device — ~8x smaller blob); default false keeps them so dev-loop stack traces have
+ *   line numbers. (A sim .wasm built before the strip parameter existed ignores it and always
+ *   keeps debug info.)
  * @returns {Promise<Buffer>} The bytecode bytes.
  */
 export async function compileToBytecode(
   jsSource,
   simDir = resolve(HERE, 'sim'),
+  {strip = false} = {},
 ) {
   // The .cjs (not .js): this package is "type": "module", so Node would load the emscripten .js as ESM and
   // its CommonJS factory export would never run. The .cjs is the same module forced to CommonJS for Node.
@@ -62,8 +67,9 @@ export async function compileToBytecode(
     'number',
     'number',
     'number',
+    'number',
   ]);
-  const bcPtr = compile(srcPtr, bytes.length, outLenPtr);
+  const bcPtr = compile(srcPtr, bytes.length, outLenPtr, strip ? 1 : 0);
 
   // ALLOW_MEMORY_GROWTH=1 can detach views across the malloc/compile calls — read through a FRESH buffer.
   const heap = () => new Uint8Array(Module.HEAPU8.buffer);

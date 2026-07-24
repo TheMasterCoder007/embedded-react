@@ -12,6 +12,15 @@ events, Animated, timers/job-queue, text spans, LayoutAnimation) into QuickJS-ng
 FetchContent), and the React reconciler in `js/` drives it. See [`js/README.md`](js/README.md)
 for the JS layer and its per-feature status.
 
+**Lite JS profile:** the runtime creates its context with only the intrinsics the React runtime
+needs — base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now` clock — and the same
+set runs on device, desktop, simulator, and the test harnesses, so dev and hardware expose one JS
+surface. Extras (Date, Proxy, typed arrays, WeakRef, BigInt) are opt-in per host via
+`ErRuntimeConfig.extra_intrinsics`. Device firmware that only runs precompiled bytecode can also
+drop the JS parser entirely with `-DER_BRIDGE_QUICKJS_LITE=ON` (~60 KB flash); the error overlay is
+precompiled bytecode (`overlay/`) so it works there too. Release bytecode is stripped of source
+text + debug tables (~8x smaller); the dev hot-reload loop keeps them for line numbers.
+
 **`er_runtime` — the portable host core** (`er_runtime.{c,h}`): the few-function QuickJS host every
 integration shares — create the runtime + context, install the bridge + host globals (console,
 screen, and optional persist), load an app (bytecode or source), pump, reset for reload, report/overlay

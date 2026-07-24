@@ -101,6 +101,55 @@ extern "C"
     void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend);
 
     /**
+     * @brief Host-provided render workers for multi-core rendering (opt-in, experimental).
+     *
+     * The engine never creates threads. A host that wants the renderer to use extra cores
+     * provides them here: worker 0 is always the thread that calls er_commit(), and workers
+     * 1..count-1 are host-owned threads (e.g. pinned FreeRTOS tasks, pthreads) that sit idle
+     * until dispatched. When the engine forks a render job it calls dispatch(k) for each extra
+     * worker, runs its own share on the calling thread, then calls sync() to join.
+     *
+     * Contract:
+     *  - dispatch(k): cause er_render_worker_exec(k) to be called as soon as possible on
+     *    worker k's thread, then return without waiting for it.
+     *  - sync(): return only after every er_render_worker_exec() call triggered since the
+     *    previous sync() has returned. dispatch()/sync() must order memory like a semaphore
+     *    (any real OS primitive does), so job state written before dispatch is visible to the
+     *    worker and the worker's writes are visible after sync.
+     *  - worker_id(): the calling thread's worker index — 0 for the render thread, k for the
+     *    thread that services dispatch(k). Called from render code only (never from other
+     *    threads). On core-pinned workers this can be as cheap as reading the core id.
+     *
+     * Ignored (single-core rendering) unless the engine was built with ERUI_RENDER_WORKERS
+     * greater than 1; count is clamped to that build cap. Install before the first commit and
+     * leave installed; pass NULL to return to single-core rendering.
+     */
+    typedef struct EmbeddedRenderWorkers
+    {
+        int count;                                /**< Total workers including worker 0 (the render thread). */
+        void (*dispatch)(int worker, void* ctx);  /**< Signal worker k to run er_render_worker_exec(k). */
+        void (*sync)(void* ctx);                  /**< Wait for all dispatched workers to finish. */
+        int (*worker_id)(void);                   /**< Calling thread's worker index. */
+        void* ctx;                                /**< Opaque host context passed to dispatch/sync. */
+    } EmbeddedRenderWorkers;
+
+    /**
+     * @brief Installs (or removes, with NULL) the host's render workers.
+     *
+     * A no-op in builds with ERUI_RENDER_WORKERS == 1 (the default): the renderer then always
+     * runs single-core, exactly as if this function were never called.
+     */
+    void embedded_renderer_set_workers(const EmbeddedRenderWorkers* workers);
+
+    /**
+     * @brief Runs the engine's pending render job share for worker k.
+     *
+     * Called by the HOST from worker k's thread in response to a dispatch(k) — never by
+     * application code directly, and never for worker 0.
+     */
+    void er_render_worker_exec(int worker);
+
+    /**
      * @brief Advances the renderer by one time step.
      *
      * Call this once per display refresh from the application main loop.

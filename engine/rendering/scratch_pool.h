@@ -30,6 +30,24 @@ extern "C"
      ---------------------------------------------------------------------------------------------------------------------*/
 
     /**
+     * @brief Width in pixels of one opacity-composite strip (ERUI_SCRATCH_W).
+     */
+    int er_scratch_strip_w(void);
+
+    /**
+     * @brief Height in pixels of one opacity-composite strip (ERUI_SCRATCH_BAND_H).
+     *
+     * Defaults to ERUI_SCRATCH_H; boards shrink it to trade repeated banded subtree
+     * walks for static RAM.
+     */
+    int er_scratch_strip_h(void);
+
+    /**
+     * @brief Returns true when at least one scratch slot is free (nesting depth not exhausted).
+     */
+    bool er_scratch_avail(void);
+
+    /**
      * @brief Allocates a scratch slot and begins routing blit calls into it.
      *
      * All er_blit_fill / er_blit_copy / er_blit_blend calls made after this return write into
@@ -38,33 +56,41 @@ extern "C"
      * er_scratch_pop_blend().
      *
      * Up to ERUI_MAX_OPACITY_DEPTH nested slots may be active simultaneously.  A push fails
-     * (returning false) when the pool is exhausted or the node is wider than ERUI_SCRATCH_W
-     * or taller than ERUI_SCRATCH_H.  On failure blit routing is unchanged and no matching
-     * er_scratch_pop_blend() is required.
+     * (returning false) when the pool is exhausted or the region is wider than ERUI_SCRATCH_W
+     * or taller than ERUI_SCRATCH_BAND_H.  On failure blit routing is unchanged and no matching
+     * er_scratch_pop_blend() is required.  Regions larger than one strip are composited by the
+     * compositor in multiple band passes, one push per band.
      *
-     * @param[in] x  World-space left edge of the node being composited.
-     * @param[in] y  World-space top edge of the node being composited.
-     * @param[in] w  Node width in pixels.
-     * @param[in] h  Node height in pixels.
+     * @param[in] x  World-space left edge of the region being composited.
+     * @param[in] y  World-space top edge of the region being composited.
+     * @param[in] w  Region width in pixels.
+     * @param[in] h  Region height in pixels.
      *
      * @return true if a slot was allocated and blit redirection is now active.
      */
     bool er_scratch_push(int x, int y, int w, int h);
 
     /**
-     * @brief Sets a "base" scratch target that blit calls fall back to when the opacity stack is empty.
+     * @brief Pushes a "base" scratch target that blit calls fall back to when the opacity stack is empty.
      *
-     * Used by the transform subsystem to capture a subtree render into an off-screen buffer while
-     * allowing nested opacity compositing to still work correctly inside the transform.  Must be
-     * paired with er_scratch_pop_base().  Only one base target may be active at a time.
+     * Used by offscreen captures — the transform subsystem's source capture and the compositor's
+     * fade cache — to capture a subtree render into an off-screen buffer while nested opacity
+     * compositing still works correctly inside the capture.  Must be paired with
+     * er_scratch_pop_base().  Two levels may nest (a transform source capture inside a fade-cache
+     * capture).
      *
-     * @param[in] buf  Scratch buffer; ERUI_SCRATCH_W × ERUI_SCRATCH_H premultiplied ARGB8888.
+     * @param[in] buf  Premultiplied ARGB8888 buffer, w × h pixels, row-major.
      * @param[in] w    Buffer width in pixels.
      * @param[in] h    Buffer height in pixels.
      * @param[in] ox   World-space X coordinate that maps to buf column 0.
      * @param[in] oy   World-space Y coordinate that maps to buf row 0.
      */
     void er_scratch_push_base(uint32_t* buf, int w, int h, int ox, int oy);
+
+    /**
+     * @brief Returns true when no scratch routing is active (no opacity slots, no base captures).
+     */
+    bool er_scratch_idle(void);
 
     /**
      * @brief Clears the base scratch target and restores normal routing.

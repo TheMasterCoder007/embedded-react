@@ -180,13 +180,15 @@ void er_web_load_source(const char* js, int len)
 }
 
 EMSCRIPTEN_KEEPALIVE
-const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len)
+const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len, int strip)
 {
     /* Build-time `qjsc` for the consumer CLI: compile a JS bundle to QuickJS bytecode using the QuickJS
        already inside this module — no native toolchain. The host reads *out_len bytes from the returned
-       pointer and frees it with Module._free. Independent of any running app (throwaway runtime). */
+       pointer and frees it with Module._free. Independent of any running app (throwaway runtime).
+       strip != 0 drops the embedded source text + debug tables (release/device: ~8x smaller blob);
+       0 keeps them so dev stack traces have line numbers. */
     size_t n = 0;
-    uint8_t* bc = (src && len > 0) ? er_runtime_compile_bytecode(src, (size_t)len, &n) : NULL;
+    uint8_t* bc = (src && len > 0) ? er_runtime_compile_bytecode_ex(src, (size_t)len, &n, strip != 0) : NULL;
     if (out_len)
         *out_len = (int)n;
     return bc;

@@ -108,6 +108,11 @@ static void remap_touch(int* x, int* y)
    FreeRTOS task stack. Tune together with the task stack size if you hit "stack overflow" from JS. */
 #define ER_JS_MAX_STACK (48 * 1024)
 
+/* Hard cap on the JS heap (all of it lives in PSRAM via er_js_mf). A runaway app fails with a JS
+   out-of-memory error — caught and shown by the error overlay — instead of exhausting the PSRAM the
+   framebuffers and engine pools share. */
+#define ER_JS_MEMORY_LIMIT (4u * 1024u * 1024u)
+
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
 
@@ -298,6 +303,12 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
 }
 #endif
 
+/** @brief Microsecond clock for the engine's temporary ER_PROF instrumentation. */
+uint32_t er_prof_now_us(void)
+{
+    return (uint32_t)esp_timer_get_time();
+}
+
 /* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).
  * Light frames sleep the remainder up to this; heavy frames yield the minimum and run as fast as the
  * work allows. The real win needs fine ticks — see CONFIG_FREERTOS_HZ=1000 in sdkconfig.defaults. */
@@ -337,6 +348,77 @@ static bool load_config_partition(ErContainerStatus* out_status)
     return true;
 }
 
+#if ERUI_RENDER_WORKERS > 1
+/*----------------------------------------------------------------------------------------------------------------------
+ - Multi-core rendering: worker 1 on CPU core 1
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* The engine never creates threads — this example provides render worker 1 as a FreeRTOS task
+ * pinned to core 1 (the main/render task is pinned to core 0 by ESP-IDF's default main-task
+ * affinity, so xPortGetCoreID doubles as the worker id). The engine forks each commit's render
+ * into horizontal slices across both cores; see EmbeddedRenderWorkers in native_renderer.h. */
+static TaskHandle_t s_render_worker;
+static SemaphoreHandle_t s_render_worker_done;
+
+static void render_worker_main(void* arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        er_render_worker_exec(1);
+        xSemaphoreGive(s_render_worker_done);
+    }
+}
+
+static void render_worker_dispatch(int worker, void* ctx)
+{
+    (void)worker; /* only worker 1 exists */
+    (void)ctx;
+    xTaskNotifyGive(s_render_worker);
+}
+
+static void render_worker_sync(void* ctx)
+{
+    (void)ctx;
+    xSemaphoreTake(s_render_worker_done, portMAX_DELAY);
+}
+
+static int render_worker_id(void)
+{
+    return xPortGetCoreID(); /* workers are core-pinned: core id == worker id */
+}
+
+/** @brief Spawns the core-1 render worker and hands it to the engine. */
+static void install_render_workers(void)
+{
+    static const EmbeddedRenderWorkers workers = {
+        .count = 2,
+        .dispatch = render_worker_dispatch,
+        .sync = render_worker_sync,
+        .worker_id = render_worker_id,
+        .ctx = NULL,
+    };
+    /* 24 KB: the worker runs the full render recursion (nested composites + transform emits with
+     * their on-stack column arrays) but never QuickJS, so it needs render-depth headroom only —
+     * 12 KB measurably overflowed on the banded-fade pages. */
+    s_render_worker_done = xSemaphoreCreateBinary();
+    if (!s_render_worker_done
+        || xTaskCreatePinnedToCore(render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1) != pdPASS)
+    {
+        if (s_render_worker_done)
+        {
+            vSemaphoreDelete(s_render_worker_done);
+            s_render_worker_done = NULL;
+        }
+        ESP_LOGW(TAG, "render worker creation failed — rendering stays single-core");
+        return;
+    }
+    embedded_renderer_set_workers(&workers);
+    ESP_LOGI(TAG, "multi-core rendering: worker 1 pinned to core 1");
+}
+#endif /* ERUI_RENDER_WORKERS > 1 */
+
 /**
  * @brief Boots the engine + er_runtime, loads the config from flash, then drives the frame loop.
  */
@@ -356,6 +438,11 @@ static void run_app(void)
         ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
         embedded_renderer_set_backend(&k_noop_backend);
     }
+
+#if ERUI_RENDER_WORKERS > 1
+    /* Fork render passes across both CPU cores (after display init so its heap needs come first). */
+    install_render_workers();
+#endif
 
     /* No baked assets are compiled in: the config container carries its own images + fonts and they
        are registered when it loads (er_runtime_load_container) — just like the desktop demo. */
@@ -378,6 +465,7 @@ static void run_app(void)
         .log = uart_log,
         .malloc_functions = &er_js_mf, /* JS heap → PSRAM */
         .max_stack_size = ER_JS_MAX_STACK,
+        .memory_limit = ER_JS_MEMORY_LIMIT,
     };
     if (!er_runtime_init(&rt_cfg))
     {
@@ -472,7 +560,9 @@ static void run_app(void)
 
         const int64_t frame_start_us = esp_timer_get_time();
         er_runtime_pump(); /* drain JS promises + fire due timers */
+        const int64_t t_pump_us = esp_timer_get_time();
         er_commit();       /* lay out (if needed) + paint the changed region into the backend */
+        const int64_t t_commit_us = esp_timer_get_time();
 #if ER_PERF_OVERLAY
         /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
            expensive part) and snapshot that region. The backend then re-composites the snapshot on top
@@ -491,14 +581,46 @@ static void run_app(void)
         {
             er_esp32_lcd_present(); /* flush the app region + re-composite the overlay */
         }
+        const int64_t t_present_us = esp_timer_get_time();
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
         prev = now;
 
-        if ((++frame % 120U) == 0U)
+        /* Frame-phase trace: where the frame time goes, averaged over the log window. */
+        static uint32_t s_tr_pump = 0, s_tr_commit = 0, s_tr_present = 0, s_tr_n = 0;
+        s_tr_pump += (uint32_t)(t_pump_us - frame_start_us);
+        s_tr_commit += (uint32_t)(t_commit_us - t_pump_us);
+        s_tr_present += (uint32_t)(t_present_us - t_commit_us);
+        s_tr_n++;
+
+        if ((++frame % 30U) == 0U)
         {
-            ESP_LOGI(TAG, "alive: %u frames, %u ms uptime", (unsigned)frame, (unsigned)now);
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+            static int s_pie_diag_logged = 0;
+            if (!s_pie_diag_logged && !er_esp32_lcd_pie_enabled())
+            {
+                extern const char* er_pie_diag(void);
+                const char* diag = er_pie_diag();
+                if (diag[0] != '\0')
+                {
+                    ESP_LOGW(TAG, "PIE self-test diag: %s", diag);
+                }
+                s_pie_diag_logged = 1;
+            }
+#endif
+            ESP_LOGI(TAG,
+                     "alive: %u frames, %u ms uptime | avg us/frame: pump=%u commit=%u present=%u | display=%d "
+                     "pie=%d int_free=%u",
+                     (unsigned)frame,
+                     (unsigned)now,
+                     (unsigned)(s_tr_pump / s_tr_n),
+                     (unsigned)(s_tr_commit / s_tr_n),
+                     (unsigned)(s_tr_present / s_tr_n),
+                     (int)display,
+                     (int)er_esp32_lcd_pie_enabled(),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            s_tr_pump = s_tr_commit = s_tr_present = s_tr_n = 0;
         }
 
         /* Adaptive pacing: sleep only the remainder up to ER_TARGET_FRAME_MS so heavy frames are not

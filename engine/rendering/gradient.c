@@ -33,7 +33,15 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Single-row premultiplied ARGB8888 scratch buffer used during gradient rasterization. */
-static uint32_t s_grad_row[ERUI_MAX_IMG_ROW_PIXELS];
+/* One assembled row per render worker: cheap enough to duplicate, and it keeps gradient
+ * backgrounds parallel-safe (see the multi-core render fork in compositor.c). */
+static uint32_t s_grad_row_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+
+/** @brief The calling worker's gradient row buffer. */
+static inline uint32_t* grow(void)
+{
+    return s_grad_row_pool[er_render_worker_id()];
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -120,7 +128,7 @@ uint32_t er_gradient_premul(uint32_t sa)
  * 90° runs left→right.  The four corner projections onto the gradient direction vector are
  * used to normalise the per-pixel parameter t to [0.0–1.0] regardless of angle.
  *
- * Each row is computed into s_grad_row and flushed via er_blit_blend (premultiplied).
+ * Each row is computed into grow() and flushed via er_blit_blend (premultiplied).
  *
  * @param[in] vp  View props (gradient_angle, gradient_stop_count, gradient_stops).
  * @param[in] x   Destination left edge in framebuffer pixels.
@@ -172,10 +180,10 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
                 t = 0.0f;
             if (t > 1.0f)
                 t = 1.0f;
-            s_grad_row[col] =
+            grow()[col] =
                 er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
-        er_blit_blend(s_grad_row, capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
+        er_blit_blend(grow(), capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
     }
 }
 
@@ -188,7 +196,7 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
  * the centre to the farthest corner, so t = 1.0 is reached at exactly the corner pixels and
  * the full stop range is always visible inside the rect.
  *
- * Each row is computed into s_grad_row and flushed via er_blit_blend (premultiplied).
+ * Each row is computed into grow() and flushed via er_blit_blend (premultiplied).
  *
  * @param[in] vp  View props (gradient_stop_count, gradient_stops).
  * @param[in] x   Destination left edge in framebuffer pixels.
@@ -216,10 +224,10 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
             float t = sqrtf(dx2 + dy2) * inv_r;
             if (t > 1.0f)
                 t = 1.0f;
-            s_grad_row[col] =
+            grow()[col] =
                 er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
-        er_blit_blend(s_grad_row, capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
+        er_blit_blend(grow(), capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
     }
 }
 

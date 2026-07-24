@@ -204,6 +204,7 @@ export function usePersistentState<S>(
   initialState: S | (() => S),
 ): [S, (value: S | ((prev: S) => S)) => void];
 
+export function useHostValue(initial: number): number;
 export const Easing: Record<string, (t: number) => number>;
 export const LayoutAnimation: Record<string, unknown>;
 export function updateVector(...args: unknown[]): void;

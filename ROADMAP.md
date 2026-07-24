@@ -30,9 +30,11 @@ re-architecture.
   even if the change was unrelated. This is the top remaining per-frame layout cost (see
   the performance backlog).
 - **Static RAM footprint is desktop-sized by default.** The opacity/transform/shadow
-  scratch pools are sized to the framebuffer; at desktop defaults they total well over a
-  megabyte. Tune the `ERUI_*` flags (scratch dimensions, `ERUI_MAX_OPACITY_DEPTH`,
-  shadows/transforms) down for a board — the defaults are not board defaults.
+  scratch buffers default to generous dims. Opacity now composites through band strips
+  (`ERUI_SCRATCH_BAND_H`) — shrink the strip height for a large RAM saving with no size
+  cap on fades — and the transform source has its own dims (`ERUI_XFORM_W/H`). Tune these
+  plus `ERUI_MAX_OPACITY_DEPTH` and shadows/transforms per board — the defaults are not
+  board defaults.
 - **Performance ceiling on JS-driven drag (Flow A).** Continuous drag (e.g., the
   thermostat dial) tops out around ~24 fps on PSRAM-QuickJS hardware; the bottleneck is
   per-event JS dispatch, not rendering. 30 fps needs a native-side drag path or the AOT

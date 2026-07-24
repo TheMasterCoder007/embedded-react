@@ -28,11 +28,15 @@
  * entirely (for MCUs without the external RAM to host the VM). See js/aot/.
  *
  * Usage:
- *   er-bridge-quickjs-compile <input.js> <output.qbc>                  # raw bytecode blob
- *   er-bridge-quickjs-compile <input.js> <output.c> <array_name>       # C source: byte array + len
+ *   er-bridge-quickjs-compile [--debug] <input.js> <output.qbc>            # raw bytecode blob
+ *   er-bridge-quickjs-compile [--debug] <input.js> <output.c> <array_name> # C source: byte array + len
  *
  * The C-array form is what an MCU build embeds in flash; the raw form is handy for a host that
  * loads a blob from storage at runtime.
+ *
+ * By default the source text and debug tables are STRIPPED from the bytecode — they account for
+ * the vast majority of the blob and a device build never reads them. Pass --debug to keep them,
+ * which restores line numbers in stack traces (useful when a .qbc is being debugged on the desktop host).
  */
 
 #include "quickjs.h"
@@ -174,20 +178,27 @@ static void report_exception(JSContext* ctx)
  * @brief Entry point: compiles a JS bundle to QuickJS bytecode.
  *
  * @param[in] argc  Argument count.
- * @param[in] argv  argv[1] = input JS, argv[2] = output path, argv[3] = optional C array name.
+ * @param[in] argv  Optional --debug flag, then input JS, output path, optional C array name.
  *
  * @return 0 on success; non-zero on a usage, I/O, or compile error.
  */
 int main(int argc, char** argv)
 {
-    if (argc < 3)
+    bool keep_debug = false;
+    int arg = 1;
+    if (arg < argc && strcmp(argv[arg], "--debug") == 0)
     {
-        fprintf(stderr, "usage: %s <input.js> <output> [c_array_name]\n", argv[0]);
+        keep_debug = true;
+        arg++;
+    }
+    if (argc - arg < 2)
+    {
+        fprintf(stderr, "usage: %s [--debug] <input.js> <output> [c_array_name]\n", argv[0]);
         return 2;
     }
-    const char* in_path = argv[1];
-    const char* out_path = argv[2];
-    const char* array_name = (argc >= 4) ? argv[3] : NULL;
+    const char* in_path = argv[arg];
+    const char* out_path = argv[arg + 1];
+    const char* array_name = (argc - arg >= 3) ? argv[arg + 2] : NULL;
 
     size_t src_len = 0;
     char* src = read_file(in_path, &src_len);
@@ -214,7 +225,9 @@ int main(int argc, char** argv)
     else
     {
         size_t bc_len = 0;
-        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, JS_WRITE_OBJ_BYTECODE);
+        const int wr_flags =
+            JS_WRITE_OBJ_BYTECODE | (keep_debug ? 0 : (JS_WRITE_OBJ_STRIP_SOURCE | JS_WRITE_OBJ_STRIP_DEBUG));
+        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, wr_flags);
         if (!bc)
         {
             fprintf(stderr, "JS_WriteObject failed\n");

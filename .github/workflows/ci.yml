@@ -56,6 +56,16 @@ jobs:
         run: cmake --build engine/build-ci-grad
       - name: Test (gradients enabled)
         run: ctest --test-dir engine/build-ci-grad --output-on-failure
+      # Third pass with two render workers. The multi-worker code (hook-backed worker ids, the
+      # pthread fork-join in tests/rendering/test_parallel.c, per-worker context isolation) compiles
+      # out of the default single-worker build above, so it is ONLY exercised here — without this
+      # pass it would rot unbuilt, like any off-by-default config.
+      - name: Configure (2 render workers)
+        run: cmake -S engine -B engine/build-ci-mt -DERUI_RENDER_WORKERS=2 -DERUI_TRANSFORMS=FULL
+      - name: Build (2 render workers)
+        run: cmake --build engine/build-ci-mt
+      - name: Test (2 render workers)
+        run: ctest --test-dir engine/build-ci-mt --output-on-failure
 
   aot:
     name: AOT compile smoke

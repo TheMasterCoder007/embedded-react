@@ -26,6 +26,7 @@
  * milestone is folded into examples/linux later.
  */
 
+#include "er_runtime.h" /* er_js_new_context — the device's lite intrinsic profile */
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
@@ -148,7 +149,7 @@ int main(void)
     embedded_renderer_set_backend(&backend);
 
     JSRuntime* rt = JS_NewRuntime();
-    JSContext* ctx = JS_NewContext(rt);
+    JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL); /* lite profile + eval hook for JS_Eval */
 
     smoke_install_console(ctx);
     er_bridge_install(ctx);

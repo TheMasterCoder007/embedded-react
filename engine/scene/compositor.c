@@ -274,6 +274,63 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
 }
 
 /**
+ * @brief Per-worker composite-pass state (see er_render_worker_id).
+ *
+ * Tile bounds and band-pass generations are scoped to one worker's render traversal; the
+ * dirty-rect accumulator collects that worker's painted region and er_commit merges all
+ * workers' accumulators after the render. Generation tags only need to be unique within one
+ * worker (they guard that worker's own transform-source cache), so the counter is per-worker
+ * too; it starts at 0 so the first pass stamps generation 1, which the transform cache's
+ * zero-initialized state can never false-match.
+ */
+typedef struct
+{
+    bool tile_active;
+    int tile_x;
+    int tile_y;
+    int tile_w;
+    int tile_h;
+    uint32_t band_gen_counter;
+    uint32_t cur_loop_gen;
+    bool tile_first;
+    ERRect dirty_rect; /**< This worker's union of painted-node rects this commit. */
+    bool has_dirty;
+} CompCtx;
+
+static CompCtx s_comp_ctx[ERUI_RENDER_WORKERS];
+
+/* Multi-core render safety: vector rasterization and shadow blurs still run through large SHARED
+ * static scratch (engine/rendering/vector.c, shadow.c — too big to duplicate per worker), so a
+ * scene containing them renders single-core. Vector nodes and shadow-casting views are counted as
+ * they come and go; the sliced fork below only engages while the count is zero. Every other
+ * primitive (fills, borders, text, gradients, images, opacity strips, transforms) works from
+ * per-worker state and is safe to render concurrently. */
+static int s_parallel_unsafe = 0;
+
+/* True while er_commit is rendering slices on multiple workers. The fade cache sits out those
+ * frames (composite_from_cache checks this): its buffer is one shared global, and a capture from
+ * inside one worker's slice would race other workers reading or re-tagging it. Cache validity is
+ * generation-based, so it simply resumes on the next single-core frame. */
+static bool s_parallel_render = false;
+
+/* Commits rendered via the sliced fork since boot — a cheap engagement diagnostic (host frame
+ * traces, tests asserting the fork really ran). */
+static uint32_t s_parallel_frames = 0;
+
+/* A parallel frame wanted a fade-cache capture (see composite_from_cache): er_commit renders the
+ * next commit single-core so the capture can run — but only if the content generation is still
+ * the one recorded here, so ever-changing content doesn't thrash between modes. Workers may set
+ * this concurrently (same-value writes); er_commit consumes it sequentially. */
+static bool s_fade_capture_wanted = false;
+static uint32_t s_fade_capture_wanted_gen = 0;
+
+/** @brief The calling worker's composite context (constant &s_comp_ctx[0] in single-worker builds). */
+static inline CompCtx* cc(void)
+{
+    return &s_comp_ctx[er_render_worker_id()];
+}
+
+/**
  * @brief Expands the per-commit dirty rectangle to include the given screen-space rect.
  *
  * Called from render_tree() whenever a node is actually repainted. The union grows
@@ -289,27 +346,27 @@ static void union_dirty_rect(int x, int y, int w, int h)
     if (w <= 0 || h <= 0)
         return;
 
-    if (!s_has_dirty)
+    if (!cc()->has_dirty)
     {
-        s_dirty_rect.x = x;
-        s_dirty_rect.y = y;
-        s_dirty_rect.w = w;
-        s_dirty_rect.h = h;
-        s_has_dirty = true;
+        cc()->dirty_rect.x = x;
+        cc()->dirty_rect.y = y;
+        cc()->dirty_rect.w = w;
+        cc()->dirty_rect.h = h;
+        cc()->has_dirty = true;
         return;
     }
 
-    const int x2 = s_dirty_rect.x + s_dirty_rect.w;
-    const int y2 = s_dirty_rect.y + s_dirty_rect.h;
+    const int x2 = cc()->dirty_rect.x + cc()->dirty_rect.w;
+    const int y2 = cc()->dirty_rect.y + cc()->dirty_rect.h;
     const int nx2 = x + w;
     const int ny2 = y + h;
 
-    if (x < s_dirty_rect.x)
-        s_dirty_rect.x = x;
-    if (y < s_dirty_rect.y)
-        s_dirty_rect.y = y;
-    s_dirty_rect.w = (nx2 > x2 ? nx2 : x2) - s_dirty_rect.x;
-    s_dirty_rect.h = (ny2 > y2 ? ny2 : y2) - s_dirty_rect.y;
+    if (x < cc()->dirty_rect.x)
+        cc()->dirty_rect.x = x;
+    if (y < cc()->dirty_rect.y)
+        cc()->dirty_rect.y = y;
+    cc()->dirty_rect.w = (nx2 > x2 ? nx2 : x2) - cc()->dirty_rect.x;
+    cc()->dirty_rect.h = (ny2 > y2 ? ny2 : y2) - cc()->dirty_rect.y;
 }
 
 /**
@@ -362,7 +419,13 @@ void er_display_present(void)
         s_cur_buf = (s_cur_buf + 1) % s_display_buffer_count;
 }
 
-void er_mark_dirty_upward(ERNode* node)
+/* Global content generation: advanced by every mutation that changes rendered subtree content
+ * (er_mark_dirty_upward and friends). The fade cache stores the generation it captured at; any
+ * bump invalidates it. Deliberately coarse — a content change anywhere invalidates the one
+ * cached subtree — which keeps the check O(1) and always correct. */
+static uint32_t s_content_gen = 1U;
+
+void er_mark_dirty_upward_visual(ERNode* node)
 {
     /* Mark only the initiating node as source_dirty so the dirty-rect
      * accumulator can track which pixels actually changed, not which
@@ -375,6 +438,12 @@ void er_mark_dirty_upward(ERNode* node)
         node->dirty = true;
         node = er_get_node(node->parent_tag);
     }
+}
+
+void er_mark_dirty_upward(ERNode* node)
+{
+    s_content_gen++;
+    er_mark_dirty_upward_visual(node);
 }
 
 /**
@@ -743,6 +812,323 @@ static void compute_subtree_bounds(ERNode* n)
     n->subtree_prunable = prunable;
 }
 
+/* Banded opacity compositing: when a composite region exceeds one scratch strip, the subtree
+ * is re-rendered once per strip-sized tile. The tile currently being composited is recorded
+ * here (screen space) so the subtree-bounds prune can skip untransformed subtrees that miss
+ * it, and so nested composites can bound their own region to the tile. It is deliberately
+ * NOT a clip-stack entry — clipping the walk would truncate nested transform-source captures
+ * at the seam (same rule as the ER_LCD_BANDED backend band). */
+/* Fade cache: the composited subtree of ONE translucent group, kept across commits. During a
+ * pure opacity animation the subtree's content is identical every frame — only the blend alpha
+ * changes — so after a first full capture, each frame is a single blend of this buffer at the
+ * new alpha instead of a re-render + re-composite. Valid while the owning node, its size, and
+ * the global content generation are unchanged; ANY content mutation anywhere invalidates it
+ * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_W/H; 0 disables the feature. */
+#ifndef ERUI_FADE_CACHE_W
+#define ERUI_FADE_CACHE_W 0
+#endif
+#ifndef ERUI_FADE_CACHE_H
+#define ERUI_FADE_CACHE_H 0
+#endif
+#define ER_FADE_CACHE_ENABLED (ERUI_FADE_CACHE_W > 0 && ERUI_FADE_CACHE_H > 0)
+#if ER_FADE_CACHE_ENABLED
+static uint32_t s_fade_cache[(size_t)ERUI_FADE_CACHE_H * ERUI_FADE_CACHE_W];
+static uint16_t s_fade_cache_tag = 0xFFFFu; /* owning node; 0xFFFF = invalid */
+static uint32_t s_fade_cache_gen = 0;       /* s_content_gen at capture */
+static int s_fade_cache_w = 0;
+static int s_fade_cache_h = 0;
+static uint32_t s_fade_capture_commit = 0; /* anti-thrash: at most one capture per commit */
+#endif
+static uint32_t s_commit_seq = 0;
+
+/** @brief Drops the fade cache (owner destroyed, scene reset, or tag about to be recycled). */
+static void fade_cache_invalidate(void)
+{
+#if ER_FADE_CACHE_ENABLED
+    s_fade_cache_tag = 0xFFFFu;
+#endif
+}
+
+#if ER_PROF
+/* TEMP on-device profiling: phase accumulators printed every 30 commits (host provides the clock). */
+#include <stdio.h>
+extern uint32_t er_prof_now_us(void);
+static uint32_t s_prof_content_us = 0;  /* subtree render time inside composites */
+static uint32_t s_prof_blend_us = 0;    /* strip pop_blend time */
+static uint32_t s_prof_push_us = 0;     /* strip push (clear) time */
+static uint32_t s_prof_passes = 0;      /* band passes */
+static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that composited */
+#define ER_PROF_MARK(var) const uint32_t var = er_prof_now_us()
+#define ER_PROF_ACC(acc, from) (acc += er_prof_now_us() - (from))
+#else
+#define ER_PROF_MARK(var)
+#define ER_PROF_ACC(acc, from)
+#endif
+
+static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
+
+/**
+ * @brief Renders a node's own content and recurses into its children.
+ *
+ * This is the repeatable "body" of render_tree: the per-type draw switch, the overflow
+ * scissor push, and the z-sorted child recursion. It has no side effects on n's dirty
+ * flags (except one-shot consumption of vec_has_dirty by the vector rasterizer), so the
+ * banded opacity compositor can invoke it once per strip tile.
+ *
+ * @param[in] n              Node to render.
+ * @param[in] should_render  true when the node itself (not only descendants) must repaint.
+ * @param[in] px             Screen-space left edge (scroll translation applied).
+ * @param[in] py             Screen-space top edge.
+ * @param[in] w              Node width in pixels.
+ * @param[in] h              Node height in pixels.
+ * @param[in] translate_x    Accumulated horizontal scroll offset for children.
+ * @param[in] translate_y    Accumulated vertical scroll offset for children.
+ */
+static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
+                                int translate_y);
+
+/**
+ * @brief Composites a translucent subtree through the persistent fade cache when possible.
+ *
+ * Cache hit: one blend of the previously composited subtree at the current alpha — the whole
+ * subtree re-render is skipped. Cache miss (different node, content changed, first frame):
+ * captures the subtree once into the cache buffer (full size, unbanded), then blends it.
+ *
+ * Only engages for a top-level composite (no enclosing band tile, capture, or inherited
+ * alpha), when the node fits the cache buffer, and when the active scissor covers the whole
+ * node (a partial repaint would capture partial content). At most one capture per commit so
+ * two simultaneously-animating fades don't thrash the single cache slot.
+ *
+ * @return true when the subtree was composited via the cache; false → use the strip pool.
+ */
+static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
+                                 int translate_y)
+{
+#if ER_FADE_CACHE_ENABLED
+    if (cc()->tile_active || !er_scratch_idle() || er_get_draw_alpha() != 255U)
+        return false;
+    if (w <= 0 || h <= 0 || w > ERUI_FADE_CACHE_W || h > ERUI_FADE_CACHE_H)
+        return false;
+
+    /* Cache HIT: a read-only blend, clipped by the active scissor — safe under any scissor
+     * (a partial repaint blends just the damaged part) and from any render worker (slices blend
+     * disjoint rows of the same cached content). Checked before the full-coverage gate below,
+     * which only capture needs. */
+    if (s_fade_cache_tag == n->tag && s_fade_cache_gen == s_content_gen && s_fade_cache_w == w
+        && s_fade_cache_h == h)
+    {
+        er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
+        return true;
+    }
+
+    /* Capture writes the one shared cache buffer — never safe from inside a parallel slice.
+     * Signal er_commit instead: if the content generation is still the same next commit (a pure
+     * opacity animation), it renders that one frame single-core so the capture can happen, and
+     * every following parallel frame takes the hit path above. Content that mutates every frame
+     * (the generation moves) never requests the serial frame — those scenes gain more from
+     * staying parallel than from a cache that would be stale immediately. */
+    if (s_parallel_render)
+    {
+        /* Avoid concurrent writes: any worker may notice the need, but only worker 0 records it. */
+        if (er_render_worker_id() == 0)
+        {
+            s_fade_capture_wanted = true;
+            s_fade_capture_wanted_gen = s_content_gen;
+        }
+        return false;
+    }
+    int cx, cy, cw, ch;
+    if (er_get_clip_rect(&cx, &cy, &cw, &ch) && (cx > px || cy > py || cx + cw < px + w || cy + ch < py + h))
+        return false;
+
+    if (s_fade_capture_commit == s_commit_seq)
+        return false;
+    s_fade_capture_commit = s_commit_seq;
+
+    for (int row = 0; row < h; row++)
+        memset(s_fade_cache + (size_t)row * ERUI_FADE_CACHE_W, 0, (size_t)w * sizeof(uint32_t));
+    er_scratch_push_base(s_fade_cache, ERUI_FADE_CACHE_W, ERUI_FADE_CACHE_H, px, py);
+    render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+    er_scratch_pop_base();
+
+    s_fade_cache_tag = n->tag;
+    s_fade_cache_gen = s_content_gen;
+    s_fade_cache_w = w;
+    s_fade_cache_h = h;
+    er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
+    return true;
+#else
+    (void)n;
+    (void)alpha;
+    (void)px;
+    (void)py;
+    (void)w;
+    (void)h;
+    (void)translate_x;
+    (void)translate_y;
+    return false;
+#endif
+}
+
+/**
+ * @brief Composites a node subtree at a group alpha through the scratch strip pool.
+ *
+ * The composite region is the node rect intersected with the active scissor and any
+ * enclosing composite tile — group opacity is a per-pixel-local operation, so bounding
+ * the composite to the visible region is exact, and a small damage clip on a large faded
+ * node composites in a single pass. When the region fits one strip this is the classic
+ * single push/blend; otherwise the region is walked in strip-sized tiles, re-rendering
+ * the subtree once per tile (any node size composites correctly, bounded RAM).
+ *
+ * @param[in] n            Node whose subtree is composited.
+ * @param[in] alpha        Group opacity 0–255.
+ * @param[in] px           Screen-space left edge of the node.
+ * @param[in] py           Screen-space top edge.
+ * @param[in] w            Node width in pixels.
+ * @param[in] h            Node height in pixels.
+ * @param[in] translate_x  Accumulated scroll offset for children.
+ * @param[in] translate_y  Accumulated scroll offset for children.
+ *
+ * @return true when the subtree was composited; false when no slot was available or the
+ *         region is empty (caller falls back to a direct render).
+ */
+static bool composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
+                                   int translate_y)
+{
+    if (!er_scratch_avail())
+        return false;
+
+    int rx = px, ry = py, rx1 = px + w, ry1 = py + h;
+    int gx, gy, gw, gh;
+    if (er_get_clip_rect(&gx, &gy, &gw, &gh))
+    {
+        if (gx > rx)
+            rx = gx;
+        if (gy > ry)
+            ry = gy;
+        if (gx + gw < rx1)
+            rx1 = gx + gw;
+        if (gy + gh < ry1)
+            ry1 = gy + gh;
+    }
+    if (cc()->tile_active)
+    {
+        if (cc()->tile_x > rx)
+            rx = cc()->tile_x;
+        if (cc()->tile_y > ry)
+            ry = cc()->tile_y;
+        if (cc()->tile_x + cc()->tile_w < rx1)
+            rx1 = cc()->tile_x + cc()->tile_w;
+        if (cc()->tile_y + cc()->tile_h < ry1)
+            ry1 = cc()->tile_y + cc()->tile_h;
+    }
+    const int rw = rx1 - rx;
+    const int rh = ry1 - ry;
+    if (rw <= 0 || rh <= 0)
+        return false;
+
+    const int sw = er_scratch_strip_w();
+    const int sh = er_scratch_strip_h();
+
+    if (rw <= sw && rh <= sh)
+    {
+        ER_PROF_MARK(t_push);
+        if (!er_scratch_push(rx, ry, rw, rh))
+            return false;
+        ER_PROF_ACC(s_prof_push_us, t_push);
+        /* Scissor to the composite region so rasterisers do region-sized work, not node-sized. */
+        er_push_clip_rect(rx, ry, rw, rh);
+        ER_PROF_MARK(t_content);
+        render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+        ER_PROF_ACC(s_prof_content_us, t_content);
+        er_pop_clip_rect();
+        ER_PROF_MARK(t_blend);
+        er_scratch_pop_blend(alpha, rx, ry, rw, rh);
+        ER_PROF_ACC(s_prof_blend_us, t_blend);
+#if ER_PROF
+        s_prof_passes++;
+        s_prof_composites++;
+#endif
+        return true;
+    }
+
+    /* Banded pass: walk the region in strip-sized tiles. Each tile is pushed as a REAL clip
+     * rect so rasterisers (rrect AA, text, gradients, vector) do strip-sized work per pass —
+     * transform source captures are unaffected because er_transform_source_begin pushes a
+     * clip reset for the duration of the capture. */
+    const bool outer_active = cc()->tile_active;
+    const int ox = cc()->tile_x, oy = cc()->tile_y, ow = cc()->tile_w, oh = cc()->tile_h;
+    const uint32_t outer_gen = cc()->cur_loop_gen;
+    const bool outer_first = cc()->tile_first;
+    cc()->cur_loop_gen = ++cc()->band_gen_counter;
+    bool first = true;
+    for (int by = ry; by < ry1; by += sh)
+    {
+        const int bh = (ry1 - by) < sh ? (ry1 - by) : sh;
+        for (int bx = rx; bx < rx1; bx += sw)
+        {
+            const int bw = (rx1 - bx) < sw ? (rx1 - bx) : sw;
+            ER_PROF_MARK(t_push);
+            if (!er_scratch_push(bx, by, bw, bh))
+            {
+                /* Defensive fallback: avoid leaving holes if the scratch pool is unexpectedly exhausted. */
+                const uint8_t saved_alpha = er_get_draw_alpha();
+                er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * alpha / 255U));
+
+                cc()->tile_active = true;
+                cc()->tile_x = bx;
+                cc()->tile_y = by;
+                cc()->tile_w = bw;
+                cc()->tile_h = bh;
+                cc()->tile_first = first;
+                er_push_clip_rect(bx, by, bw, bh);
+                render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+                er_pop_clip_rect();
+
+                cc()->tile_active = outer_active;
+                cc()->tile_x = ox;
+                cc()->tile_y = oy;
+                cc()->tile_w = ow;
+                cc()->tile_h = oh;
+                er_set_draw_alpha(saved_alpha);
+
+                first = false;
+                continue;
+            }
+            ER_PROF_ACC(s_prof_push_us, t_push);
+            cc()->tile_active = true;
+            cc()->tile_x = bx;
+            cc()->tile_y = by;
+            cc()->tile_w = bw;
+            cc()->tile_h = bh;
+            cc()->tile_first = first;
+            er_push_clip_rect(bx, by, bw, bh);
+            ER_PROF_MARK(t_content);
+            render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+            ER_PROF_ACC(s_prof_content_us, t_content);
+            er_pop_clip_rect();
+            cc()->tile_active = outer_active;
+            cc()->tile_x = ox;
+            cc()->tile_y = oy;
+            cc()->tile_w = ow;
+            cc()->tile_h = oh;
+            ER_PROF_MARK(t_blend);
+            er_scratch_pop_blend(alpha, bx, by, bw, bh);
+            ER_PROF_ACC(s_prof_blend_us, t_blend);
+#if ER_PROF
+            s_prof_passes++;
+#endif
+            first = false;
+        }
+    }
+    cc()->cur_loop_gen = outer_gen;
+    cc()->tile_first = outer_first;
+#if ER_PROF
+    s_prof_composites++;
+#endif
+    return true;
+}
+
 /**
  * @brief Recursively renders a node and its children depth-first.
  *
@@ -788,6 +1174,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         int band_oy, band_h;
         if (er_band_active(&band_oy, &band_h) && (by1 <= band_oy || by0 >= band_oy + band_h))
             return;
+        /* Banded opacity compositing: skip subtrees entirely outside the strip tile currently being
+         * composited (same never-prune-transformed rule as above). */
+        if (cc()->tile_active
+            && (bx1 <= cc()->tile_x || by1 <= cc()->tile_y || bx0 >= cc()->tile_x + cc()->tile_w || by0 >= cc()->tile_y + cc()->tile_h))
+            return;
     }
 
     const bool should_render = n->dirty || parent_dirty;
@@ -802,6 +1193,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     /* --- 2D/3D transform application --- */
     bool doing_affine = false;
+    bool doing_replay = false;
     bool doing_3d = false;
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
@@ -821,10 +1213,19 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             er_transform_compute_homography_3d(n, px, py, w, h, H);
             er_transform_aabb_3d(px, py, w, h, H, &dst_x, &dst_y, &dst_w, &dst_h);
 
-            if (er_transform_homography_invert(H, xf_inv_H) && er_transform_source_begin(px, py, w, h))
+            if (er_transform_homography_invert(H, xf_inv_H))
             {
-                doing_affine = true;
-                doing_3d = true;
+                if (cc()->tile_active && !cc()->tile_first && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
+                {
+                    doing_replay = true;
+                    doing_3d = true;
+                }
+                else if (er_transform_source_begin(px, py, w, h))
+                {
+                    doing_affine = true;
+                    doing_3d = true;
+                    er_transform_source_note(n->tag, cc()->tile_active ? cc()->cur_loop_gen : 0U);
+                }
             }
         }
         else
@@ -837,10 +1238,17 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             er_transform_compute_matrix(n, px, py, w, h, &a, &b, &c, &d, &ftx, &fty);
             er_transform_aabb(px, py, w, h, a, b, c, d, ftx, fty, &dst_x, &dst_y, &dst_w, &dst_h);
 
-            if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity)
-                && er_transform_source_begin(px, py, w, h))
+            if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity))
             {
-                doing_affine = true;
+                if (cc()->tile_active && !cc()->tile_first && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
+                {
+                    doing_replay = true;
+                }
+                else if (er_transform_source_begin(px, py, w, h))
+                {
+                    doing_affine = true;
+                    er_transform_source_note(n->tag, cc()->tile_active ? cc()->cur_loop_gen : 0U);
+                }
             }
             /* On failure (too large or singular matrix) fall through to normal render at
              * the untransformed position as a graceful degradation. */
@@ -853,6 +1261,33 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             py += (int)n->tp_translate_y;
         }
     }
+
+    /* Banded-composite replay: later tiles of the same band pass reuse the transform source
+     * captured in the first tile — emit only, bounded to the tile scissor. The subtree
+     * re-render, damage recording, and dirty bookkeeping all happened in the first pass. */
+    if (doing_replay)
+    {
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+        if (doing_3d)
+        {
+            er_transform_source_replay_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
+            return;
+        }
+#endif
+#if ERUI_TRANSFORMS_FULL
+        er_transform_source_replay_blit(
+            px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+#endif
+        return;
+    }
+
+    /* A transform capture renders in SOURCE space: suspend the composite tile for its
+     * duration (the tile bounds the transformed OUTPUT via the clip stack at emit time), so
+     * pruning and nested composite regions inside the capture aren't bounded by a
+     * post-transform rectangle. er_transform_source_begin pushed the matching clip reset. */
+    const bool xf_saved_tile_active = cc()->tile_active;
+    if (doing_affine)
+        cc()->tile_active = false;
 
     /* Record where this node is painted so the next commit can damage-clip a move: the old rect
      * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint. */
@@ -891,7 +1326,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
      * contributes to the dirty rect, not ancestors that re-render merely to clear
      * backgrounds.  This keeps the reported rect tight around the actually-changed
      * pixels so MCU display drivers can restrict partial DMA transfers. */
-    if (n->source_dirty)
+    if (n->source_dirty && n->painted_seq != s_commit_seq)
     {
         if (doing_affine)
         {
@@ -926,22 +1361,60 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 #endif
             union_dirty_rect(ux, uy, uw, uh);
         }
-        n->source_dirty = false;
+        /* NOT cleared here: er_commit's post-pass clears source_dirty for painted nodes. The
+         * painted_seq gate above keeps this block first-visit-only (band strips revisit nodes). */
         /* NB: vec_has_dirty is consumed + cleared by the vector render below (which runs later in this
          * function), not here — clearing it now would hide the sub-region from the rasterize clip. */
     }
 
-    /* Opacity compositing: View-family nodes with opacity < 255 render into an off-screen
-     * scratch slot which is then blended at the node's alpha.  er_scratch_push returns
-     * false when the pool is exhausted or the node is too large; in that case the subtree
-     * renders at full opacity (graceful degradation). */
+    /* Opacity compositing: View-family nodes with opacity < 255 render into off-screen
+     * scratch strips which are then blended at the node's alpha. Regions larger than one
+     * strip are composited in multiple band passes (see composite_with_opacity); when no
+     * slot is available at all the subtree falls back to a direct render. */
     const uint8_t node_opacity =
         (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
          || (n->type == ER_NODE_MODAL && n->modal_visible) || n->type == ER_NODE_TEXT_INPUT)
             ? n->props.view.opacity
             : 255U;
-    const bool use_scratch = (node_opacity < 255U) && should_render && er_scratch_push(px, py, w, h);
 
+    bool composited = false;
+    if (node_opacity < 255U && should_render)
+    {
+        composited = composite_from_cache(n, node_opacity, px, py, w, h, translate_x, translate_y);
+        if (!composited)
+            composited = composite_with_opacity(n, node_opacity, px, py, w, h, translate_x, translate_y);
+    }
+    if (!composited)
+    {
+        /* Graceful degradation: when the group cannot be composited (scratch pool exhausted),
+         * multiply its opacity into every primitive draw instead of dropping it. Exact wherever
+         * siblings don't overlap; far closer to correct than rendering fully opaque. */
+        const uint8_t saved_alpha = er_get_draw_alpha();
+        if (node_opacity < 255U && should_render)
+            er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / 255U));
+        render_node_content(n, should_render, px, py, w, h, translate_x, translate_y);
+        er_set_draw_alpha(saved_alpha);
+    }
+
+    n->painted_seq = s_commit_seq; /* flags cleared in er_commit's sequential post-pass */
+
+    /* Affine/perspective transform: end source capture and blit the transformed result. */
+    if (doing_affine)
+    {
+#if ERUI_3D_TRANSFORMS
+        if (doing_3d)
+            er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
+        else
+#endif
+            er_transform_source_end_blit(
+                px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+        cc()->tile_active = xf_saved_tile_active;
+    }
+}
+
+static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
+                                int translate_y)
+{
     if (should_render)
     {
         switch (n->type)
@@ -1113,8 +1586,6 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         }
     }
 
-    n->dirty = false;
-
     /* Overflow clipping: push a scissor rect so children cannot draw outside this node. A scroller
      * (ScrollView / FlatList) ALWAYS clips to its viewport — that is its defining behaviour — regardless
      * of an explicit overflow style, so scrolled children can't escape past the top or bottom edge. */
@@ -1142,22 +1613,6 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     if (clips)
         er_pop_clip_rect();
-
-    /* Blend the scratch slot back at this node's opacity. */
-    if (use_scratch)
-        er_scratch_pop_blend(node_opacity, px, py, w, h);
-
-    /* Affine/perspective transform: end source capture and blit the transformed result. */
-    if (doing_affine)
-    {
-#if ERUI_3D_TRANSFORMS
-        if (doing_3d)
-            er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
-        else
-#endif
-            er_transform_source_end_blit(
-                px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
-    }
 }
 
 /**
@@ -1322,6 +1777,9 @@ ERNode* er_node_create(ERNodeType type)
     n->dirty = true;
     n->vector_slot = -1; /* memset cleared it to 0, which is a valid slot; -1 = "no geometry". */
 
+    if (type == ER_NODE_VECTOR)
+        s_parallel_unsafe++; /* vector rasterizer uses shared scratch — see s_parallel_unsafe */
+
     init_layout_defaults(&n->layout);
 
     /* View-type nodes default to fully opaque. */
@@ -1353,6 +1811,8 @@ void er_node_destroy(ERNode* node)
 {
     if (!node || !node->in_use)
         return;
+    /* Tags are recycled: never let the fade cache survive its owner (or a subtree member). */
+    fade_cache_invalidate();
     /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
     if (node->has_last_paint)
         damage_union(&s_removed_damage,
@@ -1364,6 +1824,15 @@ void er_node_destroy(ERNode* node)
 
     node->in_use = false;
     node->dirty = false;
+    if (node->type == ER_NODE_VECTOR)
+        s_parallel_unsafe--;
+#if ERUI_SHADOWS
+    if (node->casts_shadow)
+    {
+        node->casts_shadow = false;
+        s_parallel_unsafe--;
+    }
+#endif
     /* Release the vector storage slot so it can be reused (the binding lives on the node side). */
     if (node->vector_slot >= 0)
     {
@@ -1573,6 +2042,17 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_color = props->shadow_color;
             node->props.view.shadow_offset_x = props->shadow_offset_x;
             node->props.view.shadow_offset_y = props->shadow_offset_y;
+#if ERUI_SHADOWS
+            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
+            {
+                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
+                if (casts != node->casts_shadow)
+                {
+                    s_parallel_unsafe += casts ? 1 : -1;
+                    node->casts_shadow = casts;
+                }
+            }
+#endif
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
@@ -1695,6 +2175,17 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.shadow_color = props->shadow_color;
             node->props.view.shadow_offset_x = props->shadow_offset_x;
             node->props.view.shadow_offset_y = props->shadow_offset_y;
+#if ERUI_SHADOWS
+            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
+            {
+                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
+                if (casts != node->casts_shadow)
+                {
+                    s_parallel_unsafe += casts ? 1 : -1;
+                    node->casts_shadow = casts;
+                }
+            }
+#endif
             node->props.view.shadow_opacity = props->shadow_opacity;
             node->props.view.shadow_radius = props->shadow_radius;
             node->props.view.elevation = props->elevation;
@@ -2656,6 +3147,7 @@ void er_tree_set_root(ERNode* root)
 
 void er_reset(void)
 {
+    fade_cache_invalidate();
     /* Empty the node pool and clear the scene root. er_node_create pops the free list or bumps
      * s_next_tag and memsets each slot on allocation, so resetting the counters is a complete reset —
      * nothing scans s_nodes for stale in_use flags. */
@@ -2667,6 +3159,8 @@ void er_reset(void)
 
     /* Drop dirty/damage tracking and force the next commit to fully repaint and re-run layout. */
     s_has_dirty = false;
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+        s_comp_ctx[i].has_dirty = false;
     s_have_removed_damage = false;
     s_force_full_repaint = true;
     s_layout_dirty = true;
@@ -2684,6 +3178,43 @@ void er_reset(void)
     er_input_reset();
 }
 
+/**
+ * @brief One worker's share of a sliced parallel render: a horizontal band of the repaint region.
+ */
+typedef struct
+{
+    ERNode* root;
+    bool full_recomposite; /**< Multi-buffer replay: repaint everything inside the clip. */
+    int x0;                /**< Repaint region bounds (screen space). */
+    int x1;
+    int ry0;
+    int ry1;
+    int nslices;
+    int kbd_y;
+} ParallelRenderJob;
+
+/**
+ * @brief er_parallel_for job: renders slice `worker` of the repaint region.
+ *
+ * Each worker pushes its slice as a clip on its OWN clip stack (per-worker context) and walks the
+ * whole tree; per-worker scratch (opacity slots, transform buffers, row buffers) keeps concurrent
+ * composites isolated, and Phase 0's painted_seq deferral means the walk only reads shared node
+ * flags. A transform subtree straddling a slice boundary is captured fully by both workers (the
+ * capture pushes a clip reset — the seam-safety rule), each emitting only its slice's rows.
+ */
+static void render_slice_job(int worker, void* arg)
+{
+    const ParallelRenderJob* j = (const ParallelRenderJob*)arg;
+    const int rows = j->ry1 - j->ry0;
+    const int sy0 = j->ry0 + rows * worker / j->nslices;
+    const int sy1 = j->ry0 + rows * (worker + 1) / j->nslices;
+    if (sy0 >= sy1)
+        return;
+    er_push_clip_rect(j->x0, sy0, j->x1 - j->x0, sy1 - sy0);
+    render_tree(j->root, j->full_recomposite, 0, j->kbd_y);
+    er_pop_clip_rect();
+}
+
 void er_commit(void)
 {
     if (s_root_tag == ER_INVALID_TAG)
@@ -2693,8 +3224,12 @@ void er_commit(void)
     if (!root)
         return;
 
-    /* Reset dirty-rect accumulator for this commit. */
+    s_commit_seq++; /* per-commit sequence for the fade cache's one-capture-per-commit gate */
+
+    /* Reset the dirty-rect accumulators (global + every worker's) for this commit. */
     s_has_dirty = false;
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+        s_comp_ctx[i].has_dirty = false;
 
     /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the
      * 500 ms blink phase has changed since the last commit. This keeps the render
@@ -3043,24 +3578,101 @@ void er_commit(void)
     }
     else
     {
-        /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
-         * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
-         * clip, the whole tree repaints; otherwise scissor to the damage region.) */
-        bool clipped = false;
-        if (!render_full && !nothing_dirty)
+        const int nworkers = er_render_workers_active();
+        /* One single-core frame when a parallel frame wanted a fade-cache capture and the content
+         * has not changed since — the capture happens below, and following frames hit the cache
+         * from inside the parallel fork. */
+        const bool serial_for_capture = s_fade_capture_wanted && (s_fade_capture_wanted_gen == s_content_gen);
+        s_fade_capture_wanted = false;
+        if (nworkers > 1 && !serial_for_capture && !nothing_dirty && s_parallel_unsafe == 0
+            && (rb_y1 - rb_y0) >= nworkers * 16)
         {
+            /* Sliced parallel render: the repaint region is split into one horizontal band per
+             * worker and rendered concurrently (see render_slice_job). Engages only when the
+             * scene is parallel-safe (no shared-scratch primitives) and the region is tall
+             * enough that the fork overhead pays for itself; the fade cache sits these frames
+             * out (see s_parallel_render). Slices behave exactly like the serial damage clip:
+             * multi-buffer replay fully recomposites, single-buffer relies on dirty flags. */
+            ParallelRenderJob job;
+            job.root = root;
+            job.full_recomposite = (s_display_buffer_count > 1);
+            job.x0 = rb_x0;
+            job.x1 = rb_x1;
+            job.ry0 = rb_y0;
+            job.ry1 = rb_y1;
+            job.nslices = nworkers;
+            job.kbd_y = s_kbd_avoid_y;
+            s_parallel_render = true;
+            er_parallel_for(render_slice_job, &job);
+            s_parallel_render = false;
+            s_parallel_frames++;
             er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
-            clipped = true;
-        }
-        /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
-         * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
-         * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
-         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
-        const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
-        render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
-        er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
-        if (clipped)
+            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, sequential */
             er_pop_clip_rect();
+        }
+        else
+        {
+            /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
+             * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
+             * clip, the whole tree repaints; otherwise scissor to the damage region.) */
+            bool clipped = false;
+            if (!render_full && !nothing_dirty)
+            {
+                er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+                clipped = true;
+            }
+            /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
+             * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
+             * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
+             * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
+            const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
+            render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
+            if (clipped)
+                er_pop_clip_rect();
+        }
+    }
+
+    /* Merge every worker's dirty-rect accumulator into the global (single worker: a copy). */
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+    {
+        const CompCtx* wc = &s_comp_ctx[i];
+        if (!wc->has_dirty)
+            continue;
+        if (!s_has_dirty)
+        {
+            s_dirty_rect = wc->dirty_rect;
+            s_has_dirty = true;
+        }
+        else
+        {
+            const int x2 = s_dirty_rect.x + s_dirty_rect.w > wc->dirty_rect.x + wc->dirty_rect.w
+                               ? s_dirty_rect.x + s_dirty_rect.w
+                               : wc->dirty_rect.x + wc->dirty_rect.w;
+            const int y2 = s_dirty_rect.y + s_dirty_rect.h > wc->dirty_rect.y + wc->dirty_rect.h
+                               ? s_dirty_rect.y + s_dirty_rect.h
+                               : wc->dirty_rect.y + wc->dirty_rect.h;
+            if (wc->dirty_rect.x < s_dirty_rect.x)
+                s_dirty_rect.x = wc->dirty_rect.x;
+            if (wc->dirty_rect.y < s_dirty_rect.y)
+                s_dirty_rect.y = wc->dirty_rect.y;
+            s_dirty_rect.w = x2 - s_dirty_rect.x;
+            s_dirty_rect.h = y2 - s_dirty_rect.y;
+        }
+    }
+
+    /* Sequential post-pass: clear the dirty flags of every node painted this commit. The paint
+     * traversal itself only stamps painted_seq (an idempotent same-value write), so concurrent
+     * workers never race on flag mutation, and a dirty node that was NOT painted (e.g. scrolled
+     * offscreen) keeps its flags — exactly the previous clear-during-paint semantics. */
+    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
+    {
+        ERNode* pn = &s_nodes[i];
+        if (pn->in_use && pn->painted_seq == s_commit_seq)
+        {
+            pn->dirty = false;
+            pn->source_dirty = false;
+        }
     }
 
     /* Multi-buffer: er_get_dirty_rect() must report the region actually painted (the replayed union), not
@@ -3093,6 +3705,24 @@ void er_commit(void)
     s_force_full_repaint = false;
     s_kbd_dirty = false;           /* the keyboard strip (if any) was repainted this commit */
     s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
+
+#if ER_PROF
+    {
+        static uint32_t s_prof_commits = 0;
+        if (++s_prof_commits >= 30U)
+        {
+            printf("ERPROF: passes=%u composites=%u push_us=%u content_us=%u blend_us=%u (per 30 commits)\n",
+                   (unsigned)s_prof_passes,
+                   (unsigned)s_prof_composites,
+                   (unsigned)s_prof_push_us,
+                   (unsigned)s_prof_content_us,
+                   (unsigned)s_prof_blend_us);
+            s_prof_commits = 0;
+            s_prof_passes = s_prof_composites = 0;
+            s_prof_push_us = s_prof_content_us = s_prof_blend_us = 0;
+        }
+    }
+#endif
 }
 
 uint32_t er_layout_pass_count(void)
@@ -3165,4 +3795,9 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
         data.scroll_y = y;
         h->fn(node, &data, h->user_data);
     }
+}
+
+uint32_t er_parallel_frames(void)
+{
+    return s_parallel_frames;
 }

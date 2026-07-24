@@ -104,7 +104,10 @@ jobs:
         if: ${{ vars.PUBLISH_NPM == 'true' }}
         working-directory: bridges/quickjs/js
         run: |
-          npm install -g npm@latest   # ensure an npm with OIDC trusted-publishing support
+          # OIDC trusted publishing needs npm >= 11.5.1. Pin the npm 11 line — not @latest — because
+          # npm 12 dropped Node 20 support (EBADENGINE on this runner's Node), and 11.x is the newest
+          # major that runs on Node 20.
+          npm install -g npm@11
           # Idempotent: skip if this exact version is already on the registry, so a re-run (after a
           # transient failure or a partial release) never dies on "cannot publish over existing version".
           pkg=$(node -p "require('./package.json').name")

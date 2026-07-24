@@ -1518,6 +1518,72 @@ describe('AOT version-pin', () => {
   });
 });
 
+describe('AOT useHostValue (host-fed input)', () => {
+  const HOST_PRE = `import { useHostValue } from 'embedded-react';
+`;
+  it('lowers useHostValue to an s_state field + a public setter, read like state', () => {
+    const c = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() {
+        const steps = useHostValue(0);
+        return (<Text>{steps}</Text>);
+      }`);
+    expect(c).toContain('int steps;'); // field in ErAppState
+    expect(c).toContain('.steps = 0'); // initializer
+    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%d", s_state.steps);'); // read into Text
+    expect(c).toContain('void er_app_set_steps(int v)'); // generated public setter
+    expect(c).toContain('s_state.steps = v;');
+    expect(c).toContain('app_update();'); // setter refreshes dependent nodes
+  });
+
+  it('exposes the setter prototype in the generated header', () => {
+    const {h} = compileSource(
+      `import { useHostValue, Text } from 'embedded-react';
+      export function App() { const bpm = useHostValue(60); return (<Text>{bpm}</Text>); }`,
+      'test',
+    );
+    expect(h).toContain('void er_app_set_bpm(int v);');
+  });
+
+  it('uses a float setter for a float initial', () => {
+    const c = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const temp = useHostValue(0.0); return (<Text>{temp}</Text>); }`);
+    expect(c).toContain('float temp;');
+    expect(c).toContain('void er_app_set_temp(float v)');
+  });
+
+  it('rejects a string host value', () => {
+    expect(() =>
+      gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const name = useHostValue("hi"); return (<Text>{name}</Text>); }`),
+    ).toThrow(/useHostValue.*must be a number/);
+  });
+
+  it('rejects a boolean host value (cTypeOfValue would otherwise map it to int)', () => {
+    expect(() =>
+      gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const on = useHostValue(true); return (<Text>{on}</Text>); }`),
+    ).toThrow(/useHostValue.*must be a number/);
+  });
+
+  it('rejects a non-finite host value (NaN)', () => {
+    expect(() =>
+      gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const x = useHostValue(0 / 0); return (<Text>{x}</Text>); }`),
+    ).toThrow(/useHostValue.*must be a number/);
+  });
+
+  it('accepts an integer and a float initial', () => {
+    const ci = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const n = useHostValue(5); return (<Text>{n}</Text>); }`);
+    expect(ci).toContain('int n;');
+    expect(ci).toContain('void er_app_set_n(int v)');
+    const cf = gen(`${HOST_PRE}import { Text } from 'embedded-react';
+      export function App() { const f = useHostValue(1.5); return (<Text>{f}</Text>); }`);
+    expect(cf).toContain('float f;');
+    expect(cf).toContain('void er_app_set_f(float v)');
+  });
+});
+
 describe('AOT generated-C portability', () => {
   it('emits a guarded M_PI fallback when the app uses math (M_PI is not in ISO C99 <math.h>)', () => {
     const c = compileSource(

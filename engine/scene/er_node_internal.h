@@ -220,6 +220,14 @@ struct ERNode
     bool dirty;
     bool source_dirty; /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
                           dirty-rect accumulation. */
+    uint32_t painted_seq; /**< er_commit sequence that last painted this node. Render workers record it during the
+                             paint traversal (an idempotent same-value write, safe when a node straddles two
+                             workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
+                             sequential post-pass, so the paint recursion itself never mutates shared flags. */
+#if ERUI_SHADOWS
+    bool casts_shadow; /**< Shadow props currently active — feeds the multi-core parallel-unsafe count
+                          (the shadow blur runs through shared static scratch). */
+#endif
     int16_t z_index;
     uint8_t pointer_events;  /**< ERPointerEvents — controls which parts of the node receive touch events. */
     int16_t hit_slop_left;   /**< Pixels by which the left hit edge extends beyond the computed rect. */
@@ -306,10 +314,24 @@ ERNode* er_get_node(uint16_t tag);
 ERNode* er_get_root_node(void);
 
 /**
- * @brief Marks a node and all ancestors dirty.
+ * @brief Marks a node and all ancestors dirty, recording a content change.
+ *
+ * Also advances the global content generation, which invalidates the compositor's fade cache
+ * (the cache of a composited subtree reused across frames of a pure opacity animation).
  *
  * @param[in,out] node  Node whose ancestor chain should be invalidated.
  */
 void er_mark_dirty_upward(ERNode* node);
+
+/**
+ * @brief Marks a node and all ancestors dirty WITHOUT recording a content change.
+ *
+ * For repaints where the subtree's rendered content is unchanged and only its blend changes —
+ * today that is exactly an animated opacity value being applied. Keeping the content generation
+ * stable lets the fade cache reuse the composited subtree and only re-blend at the new alpha.
+ *
+ * @param[in,out] node  Node whose ancestor chain should be invalidated.
+ */
+void er_mark_dirty_upward_visual(ERNode* node);
 
 #endif

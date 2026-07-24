@@ -267,12 +267,13 @@ int main(void)
          * (The only blend calls, if any, would be from opacity compositing — none here.) */
 #if ERUI_SHADOWS
         /* With shadows enabled the rasteriser must respect the opacity=0 gate. */
-        const uint32_t shadow_corner = px(&tc, 2, 2);
-        /* Pixel at (2,2) is outside the child (child is at 0..3). Since there is no
-         * shadow, it should still be white (root background). */
+        const uint32_t shadow_corner = px(&tc, 5, 5);
+        /* Pixel at (5,5) is outside the child (child covers 0..3) but inside where the
+         * offset (2,2) shadow would land if it were drawn. Since there is no shadow, it
+         * should still be white (root background). */
         if ((shadow_corner >> 24) != 0xFFU || (shadow_corner >> 16 & 0xFFU) != 0xFFU
             || (shadow_corner >> 8 & 0xFFU) != 0xFFU || (shadow_corner & 0xFFU) != 0xFFU)
-            return fail("shadow_opacity=0: pixel at (2,2) should remain white (no shadow)");
+            return fail("shadow_opacity=0: pixel at (5,5) should remain white (no shadow)");
 #endif
 
         er_tree_remove_child(root, child);
@@ -374,24 +375,25 @@ int main(void)
         er_tree_set_root(root);
         er_commit();
 
-        /* Center of blur region (maps to center of node silhouette in blur buffer):
-         * node center in world = (8+2, 8+2) = (10,10).
-         * This pixel should have been blurred from 255 and must be darker than white. */
+        /* The framebuffer is opaque white, so blended alpha is 255 everywhere — the black
+         * shadow's strength shows up as *darkness* in the RGB channels, not in alpha.
+         * Center of blur region (maps to center of node silhouette in blur buffer):
+         * node center in world = (8+2, 8+2) = (10,10). Must be darker than white. */
         const uint32_t center = px(&tc, 10, 10);
-        const uint8_t center_a = (uint8_t)((center >> 24) & 0xFFU);
-        if (center_a == 0U)
-            return fail("soft shadow: center pixel must have non-zero alpha (shadow present)");
+        const uint8_t center_r = (uint8_t)((center >> 16) & 0xFFU);
+        if (center_r == 0xFFU)
+            return fail("soft shadow: center pixel must be darker than white (shadow present)");
 
         /* Outer corner of the shadow bleed region: node at (8,8) → shadow at (6,6).
-         * After blur, pixel (6,6) is at the corner of the shadow buffer and must still have
-         * non-zero alpha (blur spreads into surrounding pixels). */
+         * After blur, pixel (6,6) is at the corner of the shadow buffer and must still be
+         * slightly darkened (blur spreads into surrounding pixels). */
         const uint32_t outer_corner = px(&tc, 6, 6);
-        const uint8_t outer_a = (uint8_t)((outer_corner >> 24) & 0xFFU);
-        if (outer_a == 0U)
-            return fail("soft shadow: corner of blur spread at (6,6) must have non-zero alpha");
+        const uint8_t outer_r = (uint8_t)((outer_corner >> 16) & 0xFFU);
+        if (outer_r == 0xFFU)
+            return fail("soft shadow: corner of blur spread at (6,6) must be darkened");
 
-        /* The center must have higher alpha than the outer corner (blur gradient). */
-        if (center_a <= outer_a)
+        /* The center must be darker (lower RGB) than the outer corner (blur gradient). */
+        if (center_r >= outer_r)
             return fail("soft shadow: blur center must be darker than outer blur edge");
 
         /* Far from the shadow: root still white. */

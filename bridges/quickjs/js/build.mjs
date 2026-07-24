@@ -98,7 +98,16 @@ await build({
   // them: map the bare `embedded-react` import to the library source and let the demo's bare deps
   // (react, react-reconciler) resolve from this package's node_modules. (The library's own internal
   // imports still resolve relatively / from node_modules as before.)
-  alias: {'embedded-react': libEntry},
+  // Pin React to THIS package's copy: a demo/consumer project may carry its own node_modules
+  // (e.g., after `npm install` for device-dev deps), and esbuild resolving `react` from there while
+  // the library resolves its copy from here yields two React instances — the hook dispatcher is
+  // null and every component throws. One copy, always.
+  alias: {
+    'embedded-react': libEntry,
+    react: resolve(nodeModules, 'react'),
+    'react-reconciler': resolve(nodeModules, 'react-reconciler'),
+    scheduler: resolve(nodeModules, 'scheduler'),
+  },
   nodePaths: [nodeModules],
   plugins: [assetPlugin],
   // Production React: smaller and avoids dev-only warning machinery that needs more shims.
