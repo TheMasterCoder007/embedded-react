@@ -16,7 +16,7 @@ include(pico_sdk_import.cmake)
 include(FetchContent)
 
 # --- embedded-react engine + backend (local in-repo, else fetched) ---------------------------------
-# ../../.. = repo root (this project lives at examples/rp2040/rp2040-touch-lcd-1.28/).
+# ../../.. = repo root (this project lives at examples/rp2040/rp2040-touch-lcd-1.69/).
 set(_er_local "${CMAKE_CURRENT_LIST_DIR}/../../..")
 if(EXISTS "${_er_local}/engine/include/er_scene.h")
     set(EMBEDDED_REACT_SRC_DIR "${_er_local}" CACHE INTERNAL "embedded-react source (local monorepo)")

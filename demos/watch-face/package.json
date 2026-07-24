@@ -1,7 +1,7 @@
 {
   "name": "watch-face-demo",
   "private": true,
-  "description": "embedded-react watch face demo — digital watch face + level app (RP2040-Touch-LCD-1.28 — 240x280).",
+  "description": "embedded-react watch face demo — digital watch face + level app (RP2040-Touch-LCD-1.69 — 240x280)."
   "scripts": {
     "sim": "node ../../bridges/quickjs/js/sim.mjs watch-face",
     "build": "node ../../bridges/quickjs/js/build.mjs watch-face",

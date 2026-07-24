@@ -164,20 +164,42 @@ export function App() {
   const startX = useRef(0); // absolute touch x at drag start (onTouchMove has e.x/e.y but not e.dx)
 
   useEffect(() => {
-    setInterval(() => {
-      setT(v => v + 1); // 1 Hz clock
-      setHr(p =>
-        Math.max(61, Math.min(68, p + (Math.floor((t * 0.6180339887 - Math.floor(t * 0.6180339887)) * 3) - 1))),
-      );
+    const clockId = setInterval(() => {
+      setT(v => {
+        const next = v + 1; // 1 Hz clock
+        setHr(p =>
+          Math.max(
+            61,
+            Math.min(
+              68,
+              p +
+                (Math.floor(
+                  (next * 0.6180339887 - Math.floor(next * 0.6180339887)) * 3,
+                ) -
+                  1),
+            ),
+          ),
+        );
+        return next;
+      });
     }, 1000);
-    // Settle animation: while not dragging, ease `slide` toward the settled page (snap when very close so
-    // it comes to rest exactly and stops nudging). The finger owns `slide` during a drag.
-    setInterval(() => {
+    return () => clearInterval(clockId);
+  }, []);
+
+  // Settle animation: while not dragging, ease `slide` toward the settled page (snap when very close so
+  // it comes to rest exactly and stops nudging). The finger owns `slide` during a drag.
+  useEffect(() => {
+    const settleId = setInterval(() => {
       setSlide(s =>
-        dragging ? s : Math.abs(page * PAGE_W - s) < 0.5 ? page * PAGE_W : s + (page * PAGE_W - s) * 0.35,
+        dragging
+          ? s
+          : Math.abs(page * PAGE_W - s) < 0.5
+            ? page * PAGE_W
+            : s + (page * PAGE_W - s) * 0.35,
       );
     }, 33);
-  }, []);
+    return () => clearInterval(settleId);
+  }, [page, dragging]);
 
   return (
     <View style={styles.root}>

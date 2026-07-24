@@ -34,9 +34,9 @@ extern "C"
     /**
      * @brief Brings up the ST7789V2 SPI panel (SPI1) + PWM backlight.
      *
-     * Inits the display SPI bus at 40 MHz, runs the ST7789V2 register init sequence (the vendor's
-     * reference values: MADCTL 0x00 / RGB portrait, 16-bit color, inversion ON), clears GRAM, and
-     * ramps the backlight. Pass the ops from board_lcd_ops() to er_pico_spi_lcd_backend_init().
+     * Inits the display SPI bus at 62.5 MHz (see LCD_SPI_HZ in board.c), runs the ST7789V2 register init
+     * sequence (the vendor's reference values: MADCTL 0x00 / RGB portrait, 16-bit color, inversion ON),
+     * clears GRAM, and ramps the backlight. Pass the ops from board_lcd_ops() to er_pico_spi_lcd_backend_init().
      * The 240x280 visible area sits at a +20-row offset in the controller's 240x320 GRAM; the
      * window ops below apply it, so callers address (0,0)..(239,279).
      *
@@ -66,9 +66,9 @@ extern "C"
     /**
      * @brief Brings up the CST816S capacitive touch controller (I2C1, polled).
      *
-     * Hardware-resets the chip, verifies its chip ID, and disables auto-sleep so polling keeps
-     * working when the screen is idle.
-     *
+     * Hardware-resets the chip, verifies its chip ID, and configures its IRQ/reporting mode. Note that on
+     * this chip the controller may still auto-sleep and NAK I2C while idle; board_touch_read() uses the INT
+     * line to avoid polling unless a report is pending.
      * @return true on success; false if the chip didn't answer (logged).
      */
     bool board_touch_init(void);
