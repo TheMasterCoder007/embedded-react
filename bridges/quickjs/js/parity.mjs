@@ -25,11 +25,11 @@
 //
 // Then the two BMPs are pixel-diffed. Because the engine, fonts, and backend are shared, a correct demo
 // renders byte-identically through both paths — any difference is a real Flow A↔B divergence (this is
-// exactly how the music-player animated-transform binding bug was caught). Optional taps drive both
-// paths through the same interaction (ER_TAPS / ER_AOT_TAPS) so dynamic state is compared too.
+// exactly how an animated-transform binding bug was once caught). Optional taps drive both
+// paths through the same interaction (ER_TAPS / ER_AOT_TAPS), so the dynamic state is compared too.
 //
 // Responsive demos (e.g. thermostat) pick a layout from `screen.width`; each scenario sets a screen size
-// that is fed to BOTH paths (ER_W/ER_H for Flow A's window, ER_AOT_SCREEN_W/H for Flow B's compile +
+// fed to BOTH paths (ER_W/ER_H for Flow A's window, ER_AOT_SCREEN_W/H for Flow Bs compile +
 // window) so they render the same branch at the same dimensions.
 //
 // This is a DEV-MACHINE harness: it opens real SDL windows (the desktop backend has no headless renderer),
@@ -67,14 +67,9 @@ const MAX_DIFF_FRACTION = 0.0005; // 0.05%
 // Scenarios. `screen` is the board size both paths render at; `taps` (optional) is the shared interaction
 // in physical pixels, "x,y x,y …" (same string handed to ER_TAPS and ER_AOT_TAPS).
 const SCENARIOS = [
-  {demo: 'music-player', name: 'music-player', screen: {w: 800, h: 600}},
-  // Tap the Play button → toggles to Pause + reveals the "Playing now" badge (dynamic state parity).
-  {
-    demo: 'music-player',
-    name: 'music-player-playing',
-    screen: {w: 800, h: 600},
-    taps: '400,149',
-  },
+  // Watch face at its native RP2040 panel — an asset-free View/Text pager, so its initial frame is a clean
+  // base-render parity check (the swipe is a touch-drag, which the tap harness can't drive).
+  {demo: 'watch-face', name: 'watch-face', screen: {w: 240, h: 280}},
   // Thermostat is responsive: at a compact (<400px) width both paths compile/render the AOT-supported
   // compact branch — the only branch with Flow A↔B parity (the wide branch is Flow-A-only by design).
   {demo: 'thermostat', name: 'thermostat-compact', screen: {w: 320, h: 480}},

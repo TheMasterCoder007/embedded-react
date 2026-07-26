@@ -7,8 +7,7 @@ on `embedded-react`, wired to the `embedded-react` CLI exactly like a scaffolded
 ```
 demos/
   thermostat/     the default demo (starter features tour, growing into a climate-control UI)
-  music-player/   dynamic lists + Animated springs
-  watch-face/     digital watch face (clock + day/date/battery + heart/steps cards) for the RP2040 1.69"
+  watch-face/     two-page swipe pager: digital watch face + bubble level, for the RP2040 1.69"
   <your-demo>/    add a sibling folder with its own index.jsx + App.jsx
 ```
 
@@ -24,7 +23,7 @@ on `prepack`), so a consumer can start from any demo with one command.
 No repo checkout required — scaffold your own copy with the toolchain:
 
 ```bash
-npm create embedded-react@latest my-app -- --template thermostat   # or --template music-player
+npm create embedded-react@latest my-app -- --template thermostat   # or --template watch-face
 cd my-app
 npm install
 npm run dev          # WASM simulator with hot reload → http://localhost:3333

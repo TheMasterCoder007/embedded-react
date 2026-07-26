@@ -47,12 +47,21 @@ See the README for the release process.
   symptoms to fixes, and the pin list. The deeper detail moved below the get-it-running steps, and a
   duplicated explanation was merged.
 
+### Removed
+
+- Removed the music-player demo. It was an early bring-up test for the Cheap Yellow Display and never
+  grew into a real example. The thermostat and watch-face demos now cover the same ground — dynamic
+  layout, animation, and a full app — and there are the two starting templates going forward.
+
 ### Fixed
 
 - Corrected the ESP32-2432S028R example docs: fixed the display backend description to match the
   current design, fixed the documented pixel-clock speed (40 MHz, was 20), fixed the expected startup
   log line, and replaced the stale music-player description with the thermostat dial the example
   actually builds. Verified the example builds, flashes, and starts cleanly on a real board.
+- Fixed the ahead-of-time (AOT) compiler so a repeating timer started from inside an effect that has
+  dependencies — or from an event handler — generates C that compiles. The timer's callback is now
+  declared before it is used, which the watch-face demo needs for its swipe-to-settle animation.
 
 ## [0.9.0] - 2026-07-23
 ### Added

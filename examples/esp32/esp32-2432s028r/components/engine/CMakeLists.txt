@@ -3,10 +3,10 @@
 # Unlike the ESP32-S3 example, there is NO linker_psram.lf and NO PSRAM: every static pool must fit
 # internal DRAM alongside the 150 KB RGB565 framebuffer. So the RAM-driving flags are turned DOWN:
 #   - ERUI_MAX_NODES sizes the node pool (sizeof(ERNode) is several hundred bytes — the dominant cost).
-#     96 covers the music-player demo built with ER_AOT_LIST_CAP=8 (~53 nodes). Raise only if needed.
+#     96 covers the watch-face demo (~41 nodes) and the thermostat compact dial with headroom. Raise only if needed.
 #   - The opacity/transform SCRATCH pool is DEPTH x W x H x 4 bytes; kept tiny (8x8x1). A node with
-#     opacity < 255 that doesn't fit the scratch simply renders OPAQUE (graceful — no crash), so the
-#     demo's art-dim effect is skipped here but everything else works.
+#     opacity < 255 that doesn't fit the scratch simply renders OPAQUE (graceful — no crash), so an
+#     app's art-dim effect is skipped here but everything else works.
 #   - Shadows / 3D transforms are off (code + RAM). GRADIENTS are ON (linear + conic) for the thermostat
 #     dial's baked conic face (climate-face.svg's cool→warm ghost track); radial stays off (unused). Bilinear
 #     <Image> scaling is ON (it reuses the existing scaler row buffer — no extra RAM — so icons don't alias).

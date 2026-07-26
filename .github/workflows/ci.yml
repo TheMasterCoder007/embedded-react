@@ -83,9 +83,9 @@ jobs:
       - run: npm ci
       # gcc the generated C against the public engine headers — no SDL, no display. -fsyntax-only still
       # evaluates the version-pin _Static_assert, so an ABI/version mismatch fails here.
-      - name: music-player → C → gcc
+      - name: watch-face → C → gcc
         run: |
-          node aot/compile.mjs music-player
+          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mjs watch-face
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
       - name: thermostat (compact) → C → gcc

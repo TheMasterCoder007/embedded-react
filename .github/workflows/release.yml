@@ -75,7 +75,7 @@ jobs:
       - name: AOT compile smoke
         working-directory: bridges/quickjs/js
         run: |
-          node aot/compile.mjs music-player
+          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mjs watch-face
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
 
       # Build the prebuilt WASM simulator (engine + QuickJS + backends → embedded-react.{js,wasm}) and stage

@@ -155,7 +155,7 @@ const MANIFESTS = [
     write: depPinWrite('embedded-react'),
   },
   {
-    path: 'demos/music-player/package.json',
+    path: 'demos/watch-face/package.json',
     read: depPinRead('embedded-react'),
     write: depPinWrite('embedded-react'),
   },

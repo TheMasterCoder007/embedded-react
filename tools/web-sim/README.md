@@ -30,7 +30,7 @@ to build the module; after that, day-to-day dev is just `dev.mjs`.
 
 ```bash
 node tools/web-sim/build.mjs          # once → public/embedded-react.{js,wasm} (also fetches+builds QuickJS-ng)
-node tools/web-sim/dev.mjs [demo]     # watch + bake assets + hot reload → http://localhost:3333/  (default: music-player)
+node tools/web-sim/dev.mjs [demo]     # watch + bake assets + hot reload → http://localhost:3333/  (default: watch-face)
 ```
 
 Open the URL and edit the demo's JSX (or an image/font) — the page hot-reloads on save, preserving component

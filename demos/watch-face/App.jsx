@@ -165,23 +165,20 @@ export function App() {
 
   useEffect(() => {
     const clockId = setInterval(() => {
-      setT(v => {
-        const next = v + 1; // 1 Hz clock
-        setHr(p =>
-          Math.max(
-            61,
-            Math.min(
-              68,
-              p +
-                (Math.floor(
-                  (next * 0.6180339887 - Math.floor(next * 0.6180339887)) * 3,
-                ) -
-                  1),
-            ),
+      setT(v => v + 1);
+      setHr(p =>
+        Math.max(
+          61,
+          Math.min(
+            68,
+            p +
+              (Math.floor(
+                (p * 0.6180339887 - Math.floor(p * 0.6180339887)) * 3,
+              ) -
+                1),
           ),
-        );
-        return next;
-      });
+        ),
+      );
     }, 1000);
     return () => clearInterval(clockId);
   }, []);

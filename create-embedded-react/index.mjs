@@ -24,7 +24,7 @@
 //   npx create-embedded-react my-app [--ts] [--template <name>]
 //
 // Copies the chosen template into <my-app>: the built-in JS/TS starters ship in this package; the demo
-// templates (thermostat, music-player, …) are staged from the repo's demos/ into templates/ at publish
+// templates (thermostat, watch-face, …) are staged from the repo's demos/ into templates/ at publish
 // time (see sync-templates.mjs). The scaffolder sets the project name, pins the embedded-react dependency
 // to this scaffolder's version (lockstep), and restores the .gitignore. Then: cd my-app && npm install
 // && npm run dev.

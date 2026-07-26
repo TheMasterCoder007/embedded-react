@@ -103,7 +103,7 @@ backend, or the toolchain — read on.
 
 ## Working examples
 
-The same demo JSX (`demos/thermostat`, `demos/music-player`) runs across all four:
+The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:
 
 | Example | Flow | Hardware | Backend |
 |---|---|---|---|
@@ -161,7 +161,7 @@ bridges/     Frontends that drive the engine.
 
 create-embedded-react/  The `npm create embedded-react` scaffolder + starter template.
 
-demos/       JSX demo apps (thermostat, music-player) written against the public
+demos/       JSX demo apps (thermostat, watch-face) written against the public
              `embedded-react` API. Each compiles through both Flow A and Flow B.
 
 examples/    End-to-end host integrations — one engine + one backend + one flow,
@@ -221,7 +221,7 @@ cd my-app && npm install && npm run dev
 Or **start from a demo** — the same apps in [`demos/`](demos/), ready to run and flash:
 
 ```
-npm create embedded-react@latest my-app -- --template thermostat   # or music-player; --list to see all
+npm create embedded-react@latest my-app -- --template thermostat   # or watch-face; --list to see all
 ```
 
 The whole project ships at **one lockstep version** across the channels below (all the same `vX.Y.Z`):

@@ -9,7 +9,7 @@ project(embedded-react-desktop-aot C)
 # the generated C; the QuickJS bridge is deliberately absent.
 #
 # Generate the app first, then build:
-#   (in bridges/quickjs/js)  npm run aot -- music-player   # → dist/app.gen.{c,h}
+#   (in bridges/quickjs/js)  npm run aot -- watch-face   # → dist/app.gen.{c,h}
 #   cmake -S examples/linux-aot -B examples/linux-aot/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/...vcpkg.cmake]
 #   cmake --build examples/linux-aot/build
 # ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ set(ER_APP_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist")
 if (NOT EXISTS "${ER_APP_GEN_DIR}/app.gen.c")
     message(FATAL_ERROR
             "No AOT app at ${ER_APP_GEN_DIR}/app.gen.c — generate it first:\n"
-            "    cd bridges/quickjs/js && npm run aot -- <demo>   (e.g. music-player)")
+            "    cd bridges/quickjs/js && npm run aot -- <demo>   (e.g. watch-face)")
 endif ()
 
 # app.gen.c + assets.generated.c are produced together by `npm run aot`: the app tree and the baked-image

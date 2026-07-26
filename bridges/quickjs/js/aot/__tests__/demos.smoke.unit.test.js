@@ -31,12 +31,14 @@ const demosDir = resolve(
 const appSrc = demo => readFileSync(resolve(demosDir, demo, 'App.jsx'), 'utf8');
 
 describe('AOT demo compile smoke', () => {
-  it('compiles the music-player demo', () => {
-    const r = compileSource(appSrc('music-player'), 'music-player', {
-      filename: 'demos/music-player/App.jsx',
+  it('compiles the watch-face demo for the RP2040 240×280 panel', () => {
+    const r = compileSource(appSrc('watch-face'), 'watch-face', {
+      screen: {width: 240, height: 280},
+      filename: 'demos/watch-face/App.jsx',
     });
     expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
     expect(r.nodes).toBeGreaterThan(0);
+    expect(r.c).toContain('static void er_timer_fn_1(void);');
   });
 
   it('compiles the thermostat demo for a 240×320 (CYD) screen — the compact dial branch', async () => {
