@@ -6,7 +6,7 @@ on `embedded-react`, wired to the `embedded-react` CLI exactly like a scaffolded
 
 ```
 demos/
-  thermostat/     the default demo (starter features tour, growing into a climate-control UI)
+  thermostat/     the default demo — being rewritten; currently has no entry (see its README)
   watch-face/     two-page swipe pager: digital watch face + bubble level, for the RP2040 1.69"
   <your-demo>/    add a sibling folder with its own index.jsx + App.jsx
 ```
@@ -73,6 +73,6 @@ cd ../../demos/my-app
 npm run sim
 ```
 
-Or by hand: create `demos/<name>/index.jsx` + `App.jsx` (copy `thermostat/`), then build it by name with
+Or by hand: create `demos/<name>/index.jsx` + `App.jsx` (copy `watch-face/`), then build it by name with
 the `bridges/quickjs/js` scripts. To ship it as a `create-embedded-react` template too, give it the
 consumer-form `package.json` the other demos have and re-run `npm run sync-templates`.

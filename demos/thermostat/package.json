@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "embedded-react thermostat demo — a thermostat app with climate control and weather widget (Only when screen is large enough to fit weather)",
+  "description": "embedded-react thermostat demo",
   "scripts": {
     "dev": "embedded-react dev",
     "dev:device": "embedded-react dev --device",

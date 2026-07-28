@@ -52,6 +52,8 @@ See the README for the release process.
 - Removed the music-player demo. It was an early bring-up test for the Cheap Yellow Display and never
   grew into a real example. The thermostat and watch-face demos now cover the same ground — dynamic
   layout, animation, and a full app — and there are the two starting templates going forward.
+- Removed the old thermostat demo's app code (the arc-dial climate UI, its weather panel, and their
+  artwork) to make room for a redesigned thermostat demo.
 
 ### Fixed
 
