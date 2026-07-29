@@ -70,9 +70,10 @@ const SCENARIOS = [
   // Watch face at its native RP2040 panel — an asset-free View/Text pager, so its initial frame is a clean
   // base-render parity check (the swipe is a touch-drag, which the tap harness can't drive).
   {demo: 'watch-face', name: 'watch-face', screen: {w: 240, h: 280}},
-  // Thermostat is responsive: at a compact (<400px) width both paths compile/render the AOT-supported
-  // compact branch — the only branch with Flow A↔B parity (the wide branch is Flow-A-only by design).
-  {demo: 'thermostat', name: 'thermostat-compact', screen: {w: 320, h: 480}},
+  // Thermostat is responsive: 320×480 falls below both the split (≥760 and landscape) and stack (≥600 tall)
+  // thresholds, so both paths compile/render its `solo` branch — the only one with Flow A↔B parity (the
+  // split and stack branches are Flow-A-only by design).
+  {demo: 'thermostat', name: 'thermostat-solo', screen: {w: 320, h: 480}},
 ];
 
 const ANSI = {

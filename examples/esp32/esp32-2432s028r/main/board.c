@@ -53,10 +53,29 @@ static const char* TAG = "board";
 #define PIN_LCD_BL 21
 #define LCD_PCLK_HZ (40 * 1000 * 1000) /* 40 MHz for snappy flushes; if this unit glitches, step down (26/30) */
 
-#define BOARD_LCD_INVERT false  /* this unit shows correct brightness without inversion */
-#define BOARD_LCD_BGR false     /* set true if red/blue are swapped */
+#define BOARD_LCD_INVERT false /* this unit shows correct brightness without inversion */
+#define BOARD_LCD_BGR false    /* set true if red/blue are swapped */
+
+/* Orientation.
+ *
+ * swap_xy on its own is a REFLECTION, not a rotation — exchanging the axes flips handedness. Portrait
+ * is correct at mirror (X=true, Y=false), so simply adding the swap leaves that reflection in place and
+ * the whole image comes out mirrored. A true 90° turn is swap + EXACTLY ONE mirror flipped, which
+ * leaves two valid settings: (true,true) and (false,false). They differ by 180°, i.e. they are the
+ * clockwise and counter-clockwise quarter turns.
+ *
+ * The touch flips are not independent of that choice — the glass does not move, so which way the image
+ * turned decides where a tap lands. Both therefore hang off ONE switch below so they cannot disagree:
+ * if the display is rotated the wrong way round, flip BOARD_ROTATE_CW and the touch follows. */
+#define BOARD_ROTATE_CW 1
+
+#if BOARD_ROTATE_90
+#define BOARD_LCD_MIRROR_X (BOARD_ROTATE_CW ? true : false)
+#define BOARD_LCD_MIRROR_Y (BOARD_ROTATE_CW ? true : false)
+#else
 #define BOARD_LCD_MIRROR_X true /* this unit's panel scans X reversed (text was mirrored) */
 #define BOARD_LCD_MIRROR_Y false
+#endif
 
 /* --- Touch: XPT2046 on VSPI (SPI3_HOST), separate bus --- */
 #define TOUCH_SPI_HOST SPI3_HOST
@@ -75,9 +94,25 @@ static const char* TAG = "board";
 #define TOUCH_Y_MIN 100
 #define TOUCH_Y_MAX 1852
 /* The display is un-mirrored via panel mirror_x, but the resistive panel reports PHYSICAL coords, so
- * touch X ends up flipped relative to the app's layout (left/right buttons swap). Flip it back here. */
+ * touch X ends up flipped relative to the app's layout (left/right buttons swap). Flip it back here.
+ *
+ * These are applied AFTER the rotation swap above, i.e. in SCREEN space. Rotating exchanges which raw
+ * axis feeds which screen axis, so the portrait X-flip moves to screen Y in landscape. If a tap lands
+ * mirrored on one axis on a real board, flip that one — they are independent of the display mirrors.
+ *
+ * Derived, not guessed. Portrait maps raw->screen as sx = 239 - u, sy = v (u,v being the raw axes
+ * scaled to the screen). Rotating that image 90° CW sends a portrait point (px,py) to (319-py, px):
+ *   sx = 319 - v  and  sy = 239 - u   ->  both axes flipped.
+ * Counter-clockwise sends it to (py, 239-px):
+ *   sx = v  and  sy = u               ->  neither flipped.
+ * Anything else — one flipped, one not — is a mirror, which is what the first attempt here produced. */
+#if BOARD_ROTATE_90
+#define TOUCH_FLIP_X (BOARD_ROTATE_CW ? true : false)
+#define TOUCH_FLIP_Y (BOARD_ROTATE_CW ? true : false)
+#else
 #define TOUCH_FLIP_X true
 #define TOUCH_FLIP_Y false
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Display
@@ -138,8 +173,7 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel, esp_lcd_panel_io_hand
         return false;
     }
     esp_lcd_panel_invert_color(panel, BOARD_LCD_INVERT);
-    /* Portrait 240x320, top-left origin. Adjust swap_xy/mirror here if the image is rotated/mirrored. */
-    esp_lcd_panel_swap_xy(panel, false);
+    esp_lcd_panel_swap_xy(panel, BOARD_ROTATE_90 ? true : false);
     esp_lcd_panel_mirror(panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y);
     esp_lcd_panel_disp_on_off(panel, true);
 
@@ -246,8 +280,17 @@ bool board_touch_read(int* x, int* y, bool* pressed)
     const int rawy = sy / n;
     /* ESP_LOGI(TAG, "raw touch %d,%d", rawx, rawy); // re-enable to recalibrate a different unit */
 
+    /* Raw -> screen. The touch controller is bolted to the GLASS, so it keeps reporting in the panel's
+       physical frame no matter how the display is rotated: when the image is rotated 90°, the raw axes
+       must be exchanged here to follow it. The calibration range travels with its own raw axis, which
+       is why rawy is mapped against TOUCH_Y_* and lands on screen X. */
+#if BOARD_ROTATE_90
+    const int px = map_axis(rawy, TOUCH_Y_MIN, TOUCH_Y_MAX, BOARD_LCD_WIDTH);
+    const int py = map_axis(rawx, TOUCH_X_MIN, TOUCH_X_MAX, BOARD_LCD_HEIGHT);
+#else
     const int px = map_axis(rawx, TOUCH_X_MIN, TOUCH_X_MAX, BOARD_LCD_WIDTH);
     const int py = map_axis(rawy, TOUCH_Y_MIN, TOUCH_Y_MAX, BOARD_LCD_HEIGHT);
+#endif
     *x = TOUCH_FLIP_X ? (BOARD_LCD_WIDTH - 1 - px) : px;
     *y = TOUCH_FLIP_Y ? (BOARD_LCD_HEIGHT - 1 - py) : py;
     *pressed = true;

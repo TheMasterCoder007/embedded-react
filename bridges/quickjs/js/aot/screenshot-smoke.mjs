@@ -44,7 +44,7 @@ const exe = resolve(
 const tmpDir = resolve(jsDir, 'dist', '.smoke');
 
 // Demos to smoke-test. `screen` (optional) sets ER_AOT_SCREEN_W/H so the responsive thermostat folds to its
-// compact (AOT-compilable) branch. `minColors` is the floor of distinct sampled colours for "rendered".
+// `solo` (AOT-compilable) branch. `minColors` is the floor of distinct sampled colours for "rendered".
 const DEMOS = [
   {name: 'watch-face', screen: {w: 240, h: 280}, minColors: 40},
   {name: 'thermostat', screen: {w: 240, h: 320}, minColors: 40},

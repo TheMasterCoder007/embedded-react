@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+/*
+ * AOT codegen text is unit-tested by regex, but a regex can't catch a generated call that no longer matches
+ * an engine signature (e.g., a stale er_node_set_vector_ops arity). This smoke test closes that gap: it
+ * actually runs a C compiler over the generated app.gen.c. It targets the thermostat's solo (240×320)
+ * branch because that exercises a broad slice of the emission. The compiler step skips when no C compiler
+ * is present (so the suite still passes in a toolchain-less environment), but the compile-to-C always runs.
+ */
+
 import {describe, it, expect} from 'vitest';
 import {readFileSync, writeFileSync, mkdtempSync, rmSync} from 'node:fs';
 import {resolve, dirname, join} from 'node:path';
@@ -22,12 +30,6 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {compileSource, bakeSvgArtifacts} from '../compile.mjs';
 
-// AOT codegen text is unit-tested by regex, but a regex can't catch a generated call that no longer matches
-// an engine signature (e.g., a stale er_node_set_vector_ops arity). This smoke test closes that gap: it
-// actually runs a C compiler over the generated app.gen.c. It targets the thermostat's compact (240×320)
-// branch because that exercises the newest emission — a baked <Svg source> conic face (an ERVectorGradient
-// table) layered under a state-driven arc. The compile step skips when no C compiler is present (so the
-// suite still passes in a toolchain-less environment), but the bake+compile-to-C step always runs.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const demosDir = join(root, 'demos');
 const engineInc = join(root, 'engine', 'include');
@@ -47,7 +49,7 @@ async function emitThermostat() {
   });
 }
 
-/** First working C compiler from a small candidate list, or null. Tries the repo's MinGW first. */
+/** First, working C compiler from a small candidate list, or null. Tries the repo's MinGW first. */
 function findCC() {
   for (const cc of ['C:\\mingw32\\bin\\gcc.exe', 'gcc', 'cc', 'clang']) {
     try {
@@ -62,12 +64,13 @@ function findCC() {
 const CC = findCC();
 
 describe('AOT generated C compiles', () => {
-  it('emits the thermostat compact dial (baked <Svg source> + conic gradient table)', async () => {
+  it('emits the thermostat solo dial (a state-driven vector node rebuilt from trig)', async () => {
     const r = await emitThermostat();
-    expect(r.c).toContain('static const ERVectorGradient s_svg0_grads[] = {');
-    expect(r.c).toContain('.type = 3'); // the conic ghost track
+    expect(r.c).toMatch(/static void build_svg\d+\(void\)/);
+    expect(r.c).toMatch(/s_svg\d+_ops\[\d+\] = ER_VOP_ARC;/);
+    expect(r.c).toContain('cosf(');
     expect(r.c).toMatch(
-      /er_node_set_vector_ops\(n\d+, s_svg0_ops, \d+, s_svg0_paints, \d+, s_svg0_grads, 1\);/,
+      /er_node_set_vector_ops\(n\d+, s_svg\d+_ops, \d+, s_svg\d+_paints, \d+/,
     );
   });
 

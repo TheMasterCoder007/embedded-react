@@ -92,8 +92,8 @@ describe('pack-split: vendor/app split', () => {
       projectRoot,
       nodePaths,
     });
-    // Vendor is the framework; the app is a small slice of the total (thermostat bytecode measured ~6%).
-    expect(vendor.length).toBeGreaterThan(app.length * 4);
+    // Vendor is the framework; the app is a small slice of the total
+    expect(vendor.length).toBeGreaterThan(app.length * 3);
     const appShare = app.length / (vendor.length + app.length);
     expect(appShare).toBeLessThan(0.25);
   }, 30000);

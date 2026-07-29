@@ -88,7 +88,7 @@ jobs:
           ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mjs watch-face
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
-      - name: thermostat (compact) → C → gcc
+      - name: thermostat (solo) → C → gcc
         run: |
           ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mjs thermostat
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c

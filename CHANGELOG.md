@@ -12,6 +12,15 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Gradients on hand-written `<Svg>` shapes. Previously only an imported .svg artwork file could carry
+  one, so a shape you wrote yourself was always a flat color. A `fillGrad` / `strokeGrad` prop now works
+  on `<Arc>`, `<Path>`, `<Circle>` and the rest, in both the JavaScript runtime and the compiled-to-C
+  build, and inherits through `<G>`. In the compiled build the gradient may be driven by state — the
+  thermostat's Auto band uses that for its warm-to-cool sweep, which follows the two setpoints as you
+  drag them — and folds to a constant table when nothing about it changes. It may also be applied
+  conditionally (`cond ? { … } : null`), so a shape can be gradient-filled in some states and a flat
+  color in others.
+- Redesigned the thermostat demo with a new cleaner, fully responsive design
 - New example for the Waveshare RP2040-Touch-LCD-1.69, a small round-corner touch board. This is the
   smallest board supported so far: an RP2040 with 264 KB of memory and no PSRAM. It drives the 240 by
   280 screen and the capacitive touch panel, and runs the new watch-face demo. Tested building,
@@ -57,6 +66,24 @@ See the README for the release process.
 
 ### Fixed
 
+- Fixed division in apps compiled ahead of time to C. JavaScript always divides as decimals, but the
+  compiler emitted plain C division, which discards the fraction when both sides are whole numbers. Any
+  ratio built from the whole-number state stayed at 0 until the two sides were equal and then jumped to 1 —
+  on the thermostat's small-screen dial, a fill and handle that sat at the bottom of the range until the
+  setpoint reached maximum. Affects every ahead-of-time app.
+- Fixed vector graphics silently disappearing when a drawing is wider than the buffer the renderer
+  reserves for one row of it. It drew nothing and said nothing, because the warning behind that limit is
+  compiled out of release builds — the enlarged thermostat dial vanished on the Cheap Yellow Display
+  while its drag still worked. The board's buffer now covers the dial, and the limit is documented where
+  it is set.
+- The Cheap Yellow Display example can now run rotated. A single switch in the board header turns it to
+  landscape, swapping the screen size, the panel axes, and the touch axes together so they cannot end up
+  disagreeing. The example still ships in the panel's native portrait.
+- Fixed a blank screen in the simulator's dev server when a demo or scaffolded app carries its own
+  `node_modules`. The app's React and the library's React were resolved from two different places, giving
+  two copies of React — every component then failed with "cannot read property 'useRef' of null". The dev
+  server now pins React to a single copy, the same way the production bundler already did. Apps installed
+  normally, where there is only ever one copy, are unaffected.
 - Corrected the ESP32-2432S028R example docs: fixed the display backend description to match the
   current design, fixed the documented pixel-clock speed (40 MHz, was 20), fixed the expected startup
   log line, and replaced the stale music-player description with the thermostat dial the example
@@ -68,7 +95,7 @@ See the README for the release process.
 ## [0.9.0] - 2026-07-23
 ### Added
 
-- Multi-core rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
+- Multicore rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
   hand the engine extra render workers (`embedded_renderer_set_workers`) — the engine never
   creates threads itself — and each frame's repaint is then split into horizontal slices
   rendered concurrently, one worker per core. Scenes using vector graphics or shadows fall back
@@ -79,8 +106,8 @@ See the README for the release process.
 
 - The ESP32-S3 example renders on both cores, and its memory system now runs PSRAM and flash at
   120 MHz (up from 80). The faster bus matters beyond speed: with both cores drawing, the RGB
-  panel's continuous refresh from PSRAM was starved of bandwidth and the picture visibly
-  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental" 
+  panel's continuous refresh from PSRAM was starved of bandwidth, and the picture visibly
+  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental"
   feature; the example also enables vsync-based panel-sync recovery.
 
 - Ordered dithering on RGB565 panels (`ER_LCD_DITHER`, on by default with SIMD blending). Fading

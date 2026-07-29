@@ -498,18 +498,7 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
   // The engine's arc angle runs from +X (cos/sin); top-clockwise => subtract 90°.
   const a0 = ((a0deg - 90) * Math.PI) / 180;
   const a1 = ((a1deg - 90) * Math.PI) / 180;
-  return [
-    VOP_MOVE,
-    cx + r * Math.cos(a0),
-    cy + r * Math.sin(a0),
-    VOP_ARC,
-    cx,
-    cy,
-    r,
-    a0,
-    a1,
-    0,
-  ];
+  return [VOP_ARC, cx, cy, r, a0, a1, 0];
 }
 
 // --- Imperative shapes -> op-tape (the fast path; no JSX, no React) -------------------------------
@@ -530,12 +519,15 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
 // every move is pure GC. Push directly into these instead.
 const _vecOps = [];
 const _vecPaints = [];
+const _vecGrads = [];
 
 export function shapesToVector(shapes) {
   const ops = _vecOps;
   const paints = _vecPaints;
+  const gradients = _vecGrads;
   ops.length = 0;
   paints.length = 0;
+  gradients.length = 0;
   for (let si = 0; si < shapes.length; si++) {
     const s = shapes[si];
     const opStart = ops.length;
@@ -547,18 +539,7 @@ export function shapesToVector(shapes) {
       const r = s.arc[2];
       const a0 = ((s.arc[3] - 90) * Math.PI) / 180;
       const a1 = ((s.arc[4] - 90) * Math.PI) / 180;
-      ops.push(
-        VOP_MOVE,
-        cx + r * Math.cos(a0),
-        cy + r * Math.sin(a0),
-        VOP_ARC,
-        cx,
-        cy,
-        r,
-        a0,
-        a1,
-        0,
-      );
+      ops.push(VOP_ARC, cx, cy, r, a0, a1, 0);
     } else if (s.circle) {
       const cx = s.circle[0];
       const cy = s.circle[1];
@@ -606,6 +587,9 @@ export function shapesToVector(shapes) {
       ops.length = opStart; // nothing emitted — roll back the SHAPE header
       continue;
     }
+    // Optional gradients. `paint.fill_grad` / `stroke_grad` are 1-BASED indices into the gradient table
+    // (0 = solid), which is what lets one shape carry a smooth ramp instead of being chopped into many
+    // solid pieces. Stop colors may be strings here; the engine wants packed ARGB.
     paints.push(
       parseColor(s.fill),
       parseColor(s.stroke),
@@ -614,11 +598,28 @@ export function shapesToVector(shapes) {
       CAP[s.cap] ?? 0,
       JOIN[s.join] ?? 0,
       s.fillRule === 'evenodd' ? 1 : 0,
-      0, // fill_grad
-      0, // stroke_grad — the imperative path has no gradients
+      s.fillGrad ? pushGrad(gradients, s.fillGrad) : 0,
+      s.strokeGrad ? pushGrad(gradients, s.strokeGrad) : 0,
     );
   }
-  return {ops, paints};
+  return {ops, paints, gradients};
+}
+
+/** Appends a gradient descriptor (normalizing string stop colours) and returns its 1-based index. */
+function pushGrad(gradients, g) {
+  gradients.push({
+    type: g.type,
+    ax: g.ax,
+    ay: g.ay,
+    bx: g.bx,
+    by: g.by,
+    r: g.r,
+    stops: (g.stops || []).map(st => ({
+      color: typeof st.color === 'string' ? parseColor(st.color) : st.color,
+      offset: st.offset,
+    })),
+  });
+  return gradients.length;
 }
 
 // --- Flatten an <Svg> subtree --------------------------------------------------------------------
@@ -631,6 +632,8 @@ const PAINT_DEFAULT = {
   strokeLinejoin: 'miter',
   strokeMiterlimit: 4,
   fillRule: 'nonzero',
+  fillGrad: null,
+  strokeGrad: null,
 };
 
 function mergePaint(base, props) {
@@ -640,8 +643,10 @@ function mergePaint(base, props) {
   return out;
 }
 
-/** Maps the resolved paint to the PAINT_STRIDE-number record [fill,stroke,w,miter,cap,join,rule,fillGrad]. */
-function paintRecord(paint, scale) {
+/** Maps the resolved paint to the PAINT_STRIDE-number record [fill,stroke, w,miter,cap,join,rule,
+ *  fillGrad, strokeGrad]. Any gradient descriptor is appended to `gradients` and referenced by its
+ *  1-BASED index (0 = solid), the same encoding shapesToVector uses. */
+function paintRecord(paint, scale, gradients) {
   return [
     parseColor(paint.fill),
     parseColor(paint.stroke),
@@ -650,8 +655,8 @@ function paintRecord(paint, scale) {
     CAP[paint.strokeLinecap] ?? 0,
     JOIN[paint.strokeLinejoin] ?? 0,
     paint.fillRule === 'evenodd' ? 1 : 0,
-    0, // fill_grad: inline <Svg> children don't reference gradients (baked <Svg source> does)
-    0, // stroke_grad
+    paint.fillGrad && gradients ? pushGrad(gradients, paint.fillGrad) : 0,
+    paint.strokeGrad && gradients ? pushGrad(gradients, paint.strokeGrad) : 0,
   ];
 }
 
@@ -703,13 +708,15 @@ function isElement(c) {
 }
 
 /**
- * Flattens an <Svg> element's props into {ops, paints} flat number arrays for NativeUI.setVectorOps.
+ * Flattens an <Svg> element's props into {ops, paints, gradients} flat arrays for NativeUI.setVectorOps.
  * Handles Path/Circle/Ellipse/Rect/Line shapes, <G> grouping (inherited paint + translate/scale), and
- * a root viewBox -> width/height scale. Returns empty arrays when there is nothing to draw.
+ * a root viewBox -> width/height scale. A shape's fillGrad/strokeGrad descriptor lands in `gradients`
+ * and is referenced 1-based from its paint record. Returns empty arrays when there is nothing to draw.
  */
 export function flattenSvg(props) {
   const ops = [];
   const paints = [];
+  const gradients = [];
 
   // Root transform from viewBox vs width/height.
   let root = {sx: 1, sy: 1, tx: 0, ty: 0};
@@ -762,13 +769,13 @@ export function flattenSvg(props) {
 
       const paintIndex = paints.length / PAINT_STRIDE;
       const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
-      paints.push(...paintRecord(merged, scale));
+      paints.push(...paintRecord(merged, scale, gradients));
       ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
     }
   };
 
   walk(props.children, PAINT_DEFAULT, root);
-  return {ops, paints};
+  return {ops, paints, gradients};
 }
 
 // --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------

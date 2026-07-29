@@ -44,12 +44,12 @@ List everything available:
 npm create embedded-react@latest -- --list
 ```
 
-| Template       | What you get                                            |
-| -------------- |---------------------------------------------------------|
+| Template       | What you get                                  |
+| -------------- |-----------------------------------------------|
 | `starter`      | Minimal starter — pulsing logo + counter (the default). |
-| `starter-ts`   | The starter in TypeScript (same as `--ts`).             |
-| `thermostat`   | A thermostat with weather widget                        |
-| `watch-face`   | A digital watch face + bubble level (RP2040 1.69")      |
+| `starter-ts`   | The starter in TypeScript (same as `--ts`).   |
+| `thermostat`   | A thermostat with a 14-day weather panel      |
+| `watch-face`   | A digital watch face + bubble level (RP2040 1.69") |
 
 Every template scaffolds the same way — `npm install && npm run dev` for the browser simulator,
 `npm run dev:device` to hot-reload on a board, `npm run build` for the device artifact. The demos are the

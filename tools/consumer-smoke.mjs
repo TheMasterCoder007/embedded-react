@@ -228,7 +228,8 @@ for (const f of [
   'package.json',
   'index.jsx',
   'App.jsx',
-  'components/climate-dial.jsx',
+  'components/dial.jsx',
+  'components/weather.jsx',
   'assets/wx_sun.png',
 ]) {
   ok(

@@ -111,7 +111,7 @@ function applyVectorOps(type, handle, props) {
       svgBoxSize(props, 'height', src.height),
     ));
   } else {
-    ({ops, paints} = flattenSvg(props));
+    ({ops, paints, gradients} = flattenSvg(props));
   }
   warnVectorCaps(
     ops.length,

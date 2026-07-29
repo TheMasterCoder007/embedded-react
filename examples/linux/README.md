@@ -16,7 +16,7 @@ desktop **host core** (`host.c` / `host.h`): the host inits QuickJS, installs th
 host globals (`screen`, `console`, timers), loads the config container, and runs the SDL frame loop
 (pump → commit → present). Mouse is forwarded as touch. No config / a corrupt one shows an on-screen
 panel (no built-in fallback), and the window stays up — just like firmware. The default demo is the
-[thermostat](../../demos/thermostat/) (a draggable arc-dial climate UI). Press ESC to quit.
+[thermostat](../../demos/thermostat/). Press ESC to quit.
 
 > The old handwritten C-API showcase has been removed — this project is "JSX on embedded", so the
 > desktop demo is the JSX end-to-end path, not a separate C scene. The host core is factored out

@@ -45,6 +45,12 @@ const {transformPersist, shouldPersist} = await import(
   pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href
 );
 
+const REACT_PIN = Object.fromEntries(
+  ['react', 'react-reconciler', 'scheduler']
+    .map(p => [p, resolve(HERE, 'node_modules', p)])
+    .filter(([, p]) => existsSync(p)),
+);
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -159,7 +165,7 @@ function createBundle({
     platform: 'neutral',
     target: 'es2020',
     jsx: 'automatic',
-    alias: {'embedded-react': libSrc},
+    alias: {'embedded-react': libSrc, ...REACT_PIN},
     nodePaths,
     define: {'process.env.NODE_ENV': '"production"'},
     legalComments: 'none',

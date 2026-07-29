@@ -22,9 +22,26 @@
 
 #include <stdbool.h>
 
-/* DIYmall ESP32-2432S028R "Cheap Yellow Display" — 2.8" 240x320 SPI panel (portrait native). */
+/* DIYmall ESP32-2432S028R "Cheap Yellow Display" — 2.8" 240x320 SPI panel (portrait native).
+ *
+ * BOARD_ROTATE_90 turns the whole board landscape: it swaps the reported screen size here, swaps the
+ * panel's axes in board_display_init, and swaps the touch axes to match. Build the app for the SAME
+ * size — the thermostat picks its layout from the screen it is compiled against:
+ *     0 (native portrait):  ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat
+ *     1 (landscape):        ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=240 npm run aot -- thermostat
+ *
+ * If the image comes out upside down, flip BOARD_LCD_MIRROR_Y in board.c (that is the 180° twin of
+ * this rotation); if a touch lands mirrored along one axis, flip the matching TOUCH_FLIP_*. The two
+ * are independent — the panel rotation does not move the touch controller. */
+#define BOARD_ROTATE_90 0
+
+#if BOARD_ROTATE_90
+#define BOARD_LCD_WIDTH 320
+#define BOARD_LCD_HEIGHT 240
+#else
 #define BOARD_LCD_WIDTH 240
 #define BOARD_LCD_HEIGHT 320
+#endif
 
 #ifdef __cplusplus
 extern "C"

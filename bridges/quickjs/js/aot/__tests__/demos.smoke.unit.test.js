@@ -41,10 +41,8 @@ describe('AOT demo compile smoke', () => {
     expect(r.c).toContain('static void er_timer_fn_1(void);');
   });
 
-  it('compiles the thermostat demo for a 240×320 (CYD) screen — the compact dial branch', async () => {
+  it('compiles the thermostat demo for a 240×320 (CYD) screen — the solo dial branch', async () => {
     const src = appSrc('thermostat');
-    // The compact dial now layers a baked <Svg source={climateFace}> (conic face) under the state-driven
-    // arc, so the CLI's .svg bake must run before compile (mirrors `npm run aot`).
     const svgArtifacts = await bakeSvgArtifacts(
       src,
       resolve(demosDir, 'thermostat'),
@@ -55,8 +53,8 @@ describe('AOT demo compile smoke', () => {
       svgArtifacts,
     });
     expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
-    expect(r.c).toContain('static const ERVectorGradient s_svg0_grads'); // the baked CONIC dial face
-    expect(r.c).toMatch(/build_svg\d+\(/); // the state-driven setpoint overlay (arc + handle)
+    expect(r.c).toMatch(/build_svg\d+\(/); // the state-driven dial (track + progress arc + handle)
+    expect(r.c).toContain('cosf('); // handle geometry lowered to trig, not a state-driven <Path d>
     expect(r.c).toContain('er_cb_onDrag'); // touch-drag handler
     expect(r.handlers).toBeGreaterThan(0);
   });

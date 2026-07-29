@@ -21,7 +21,11 @@
 // a ref and push updates directly here: it skips React entirely and, for vectors, skips the d-string
 // parser too. Commit back to React state when the gesture ends so the declarative tree re-syncs.
 import {NativeUI} from '../native-ui.js';
-import {shapesToVector, warnVectorCaps} from './svg-ops.js';
+import {
+  shapesToVector,
+  warnVectorCaps,
+  encodeVectorGradients,
+} from './svg-ops.js';
 
 /**
  * Imperatively sets an <Svg> node's geometry from primitive shape descriptors (see shapesToVector).
@@ -33,18 +37,20 @@ import {shapesToVector, warnVectorCaps} from './svg-ops.js';
  */
 export function updateVector(handle, shapes, dirtyRect) {
   if (handle == null) return;
-  const {ops, paints} = shapesToVector(shapes);
+  const {ops, paints, gradients} = shapesToVector(shapes);
   warnVectorCaps(
     ops.length,
     paints.length,
     NativeUI.maxVectorOps,
     NativeUI.maxVectorPaints,
+    gradients.length,
+    NativeUI.maxVectorGrads,
   );
   NativeUI.setVectorOps(
     handle,
     ops,
     paints,
-    undefined /* gradients: imperative shapes are solid */,
+    gradients.length ? encodeVectorGradients(gradients) : undefined,
     dirtyRect,
   );
 }
