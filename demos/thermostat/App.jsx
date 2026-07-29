@@ -507,7 +507,7 @@ export function App() {
       // COOL only — OFF draws no arc and no handle, so it must not be draggable either.
       if (mode === 'cool' && Math.abs(t - coolSp) > 0.5) setCoolSp(t);
     },
-    [value],
+    [active, mode, hi, lo, heatSp, coolSp],
   );
 
   // Touch-down: latch whichever AUTO end is nearer the finger, so the drag above knows what it owns.

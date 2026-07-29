@@ -32,8 +32,8 @@ ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # writes dis
 > **Orientation.** The example ships in the panel's **native portrait (240x320)**. Set `BOARD_ROTATE_90`
 > to `1` in `main/board.h` for landscape 320x240 — it swaps the panel axes and the touch axes together.
 > The AOT screen size above must match — the thermostat picks its layout from the size it is compiled
-> against, so a mismatch gives you the wrong layout on a correctly-rotated screen. If the image comes
-> If it is rotated the wrong way round (180° out), flip `BOARD_ROTATE_CW` in `main/board.c` — the panel
+> against, so a mismatch gives you the wrong layout on a correctly-rotated screen.
+> If the image comes out upside down (180° out), flip `BOARD_ROTATE_CW` in `main/board.c` — the panel
 > mirrors and the touch flips both derive from it, so they cannot end up disagreeing.
 >
 > Note `swap_xy` alone is a *reflection*, not a rotation: a quarter turn is the swap plus exactly one

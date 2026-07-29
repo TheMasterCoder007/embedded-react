@@ -29,7 +29,7 @@
 // paths through the same interaction (ER_TAPS / ER_AOT_TAPS), so the dynamic state is compared too.
 //
 // Responsive demos (e.g. thermostat) pick a layout from `screen.width`; each scenario sets a screen size
-// fed to BOTH paths (ER_W/ER_H for Flow A's window, ER_AOT_SCREEN_W/H for Flow Bs compile +
+// fed to BOTH paths (ER_W/ER_H for Flow A's window, ER_AOT_SCREEN_W/H for Flow B's compile +
 // window) so they render the same branch at the same dimensions.
 //
 // This is a DEV-MACHINE harness: it opens real SDL windows (the desktop backend has no headless renderer),
