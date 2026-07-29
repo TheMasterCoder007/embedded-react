@@ -8,16 +8,20 @@ theme and units.
 
 One component, three layouts, chosen from the panel size:
 
-| Layout  | When                                 | Contents                              |
-| ------- | ------------------------------------ | ------------------------------------- |
-| `split` | ≥ 760 px wide and landscape          | dial + 14-day weather, side by side   |
-| `stack` | ≥ 600 px tall and ≥ 330 px wide      | the two cards stacked                 |
-| `solo`  | anything smaller (e.g. 240×320)      | the dial alone                        |
+| Layout  | When                            | Contents                            |
+| ------- | ------------------------------- | ----------------------------------- |
+| `split` | ≥ 760 px wide and landscape     | dial + 14-day weather, side by side |
+| `stack` | ≥ 600 px tall and ≥ 330 px wide | the two cards stacked               |
+| `solo`  | anything smaller (e.g. 240×320) | the dial alone                      |
+
+`solo` further adapts to the panel's shape: portrait puts the mode buttons in a row under the dial,
+landscape (a rotated 240×320, or 480×320) puts them in a column beside it — height is the scarce axis
+there, and a button row would spend it. Both fold at compile time, so an AOT build still emits one layout.
 
 Every dimension derives from the host-injected `screen` global, so one source flexes from a 1280×800 wall
 tablet down to the 240×320 panel on a no-PSRAM ESP32.
 
-It exercises four engine features: the **vector** dial (stroked `<Arc>` coils and `<Line>` handles, moved
+It exercises four engine features: the **vector** dial (stroked `<Arc>` ring and `<Line>` handles, moved
 imperatively during a drag), **baked images** (the weather icons — imported PNGs, baked at build time), a
 **`<Modal>`** settings sheet, and the **responsive layout**.
 
@@ -65,11 +69,11 @@ on-device examples.
 - **`App.jsx`** picks the layout, owns the model, and contains the whole `solo` branch inline. COOL and
   HEAT each keep their own setpoint, so switching between them restores what you last set; AUTO has its
   own low/high pair, held 4 °F apart by pushing the far end along rather than blocking.
-- **`components/dial.jsx`** is the rich Flow A dial. A drag repaints the coils, the handle, and the centre
-  number *imperatively* (`updateVector` / `updateText`) and commits to React state only on release, so the
-  app never reconciles mid-drag. The ring is a static full-sweep track plus ONE filled arc (AUTO
-  subdivides into 8 to blend amber→cool, since imperative shapes carry solid paints only), and a move
-  repaints just the sector the arc swept.
+- **`components/dial.jsx`** is the rich Flow A dial. A drag repaints the arc, the handles, and the centre
+  number _imperatively_ (`updateVector` / `updateText`) and commits to React state only on release, so the
+  app never reconciles mid-drag. The ring is a static full-sweep track plus ONE stroked arc — AUTO's
+  amber→cool blend is a conic gradient on that single stroke rather than a row of segments, which is what
+  keeps the junction artifacts out — and a move repaints just the sector the arc swept.
 - **`components/weather.jsx`** is the current conditions plus a scrolling 14-day outlook, each row a baked
   `<Image>` icon and a hi/lo range bar. Static, so it never re-renders during a drag.
 
@@ -79,7 +83,14 @@ on-device examples.
 JS runtime (Flow B), which constrains it to the AOT subset. That branch is therefore deliberately simpler:
 
 - The settings sheet offers **units only**. A live theme switch would require every color in the tree to
-  be a ternary of literals, so the theme is baked at build time.
+  be a ternary of literals, so the theme is baked at build time, and this branch is dark-only.
+- AUTO's pair renders as one `<Text>` (`59°-76°`) rather than two tappable numbers. The AOT lowers a
+  `<Text>`'s children to a single `snprintf`, so that is one node against four — and the branch has
+  little node headroom (40 of 44 on the CYD). Which end the steppers move is set by the last drag
+  instead of by tapping a number.
+- The dial is state-driven rather than imperative: a drag re-renders instead of calling `updateVector`.
+
+The arc and AUTO's conic gradient are _not_ differences — both work on inline `<Svg>` shapes in the AOT.
 
 A few constraints that are worth knowing if you edit this demo:
 
