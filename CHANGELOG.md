@@ -66,6 +66,15 @@ See the README for the release process.
 
 ### Fixed
 
+- Fixed a permanent slowdown after scrolling. Once a list had been scrolled, every later frame stayed
+  expensive for the rest of the run — nothing recovered it except restarting the device, not switching
+  screens, not scrolling back. Rows scrolled out of view kept asking to be redrawn where they used to be,
+  forever: scrolling moves a row, so it is reported as having moved, but a row that is now out of sight is
+  skipped when drawing, and only drawing updates the record of where it was last drawn. So it stayed
+  "moved" and kept the changed region of every frame propped open, which in turn defeated the shortcut
+  that normally lets the engine skip untouched parts of the screen. A row with nothing left on screen now 
+  settles after its old area is cleaned up once and is still redrawn normally when scrolled back into view. 
+  Affects every app with a ScrollView or FlatList.
 - Fixed division in apps compiled ahead of time to C. JavaScript always divides as decimals, but the
   compiler emitted plain C division, which discards the fraction when both sides are whole numbers. Any
   ratio built from the whole-number state stayed at 0 until the two sides were equal and then jumped to 1 —

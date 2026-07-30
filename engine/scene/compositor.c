@@ -3428,6 +3428,12 @@ void er_commit(void)
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 if (ow > 0 && oh > 0)
                     damage_union(&clip, &have, ox, oy, ow, oh); /* old position (erase trail) */
+
+                /* A node with NO visible current position (scrolled out of its clipper, or otherwise
+                 * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
+                 * its footprint now, because it will never be able to retire it itself. * /
+                if (nw <= 0 || nh <= 0)
+                    n->has_last_paint = false;
             }
         }
         if (trackable && have)
