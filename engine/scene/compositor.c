@@ -3431,7 +3431,17 @@ void er_commit(void)
 
                 /* A node with NO visible current position (scrolled out of its clipper, or otherwise
                  * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
-                 * its footprint now, because it will never be able to retire it itself. * /
+                 * its footprint now, because it will never be able to retire it itself.
+                 *
+                 * Without it, such a node is a permanent damage source: a scroll shifts its screen rect
+                 * (node_screen_rect folds in ancestor scroll offsets) while last_paint_rect still holds
+                 * where it was drawn, so it counts as `moved` and the pre-pass re-unions this same
+                 * footprint EVERY commit. Refreshing last_paint_rect requires painting it, painting
+                 * requires render_tree to reach it, and render_tree prunes it precisely because it is
+                 * invisible — so the loop sustains itself until reboot.
+                 *
+                 * Scrolling it back into view still repaints it: er_mark_dirty_upward marks the scroller
+                 * source_dirty, so its viewport enters the damage and the walk reaches the child again. */
                 if (nw <= 0 || nh <= 0)
                     n->has_last_paint = false;
             }

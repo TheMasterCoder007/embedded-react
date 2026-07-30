@@ -49,6 +49,15 @@ See the README for the release process.
 
 ### Changed
 
+- The Waveshare 7-inch ESP32-S3 example now keeps a single screen buffer instead of rotating three, which
+  makes dragging noticeably smoother — on the thermostat dial, 15-16 frames per second before and 20-26
+  after. Rotating buffers were costing more than they saved: each one remembers separately what it still
+  needs redrawn, so a frame had to repaint its own changes plus the last two frames' as one combined area,
+  and it had to rebuild that whole area from scratch rather than blending just what changed. With one
+  buffer the area is smaller and the work per pixel is lower. The tradeoff is that drawing now goes into
+  the buffer being shown, so a very large, very fast redraw could show a torn edge; dragging, theme
+  switches, and opening and closing the settings sheet were all checked on hardware and are clean. A board
+  that does tear can set the buffer count back to three, documented where it is set.
 - Updated the examples and backends README tables to list what is actually implemented, and added rows
   for the new RP2040 example and its display backend.
 - Rewrote the ESP32-2432S028R (Cheap Yellow Display) example README for clarity. A short intro and a
