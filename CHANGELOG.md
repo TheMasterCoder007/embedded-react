@@ -75,6 +75,14 @@ See the README for the release process.
 
 ### Fixed
 
+- Setting a text label's content directly from code (the `updateText` escape hatch) no longer re-measures
+  every piece of text on the screen when it cannot possibly change the layout. A label whose width is fixed
+  and that is limited to one line always occupies the same space whatever it says, so only that label is
+  redrawn now. Live readouts driven this way get cheaper: on the 800 by 480 thermostat, dragging the dial
+  updates the center temperature every few pixels, and that was triggering a full re-measure of the screen
+  on about nine of every ten frames, roughly 5.7 ms each. Labels that can still change size — content-sized
+  ones, or fixed-width ones allowed to wrap onto more lines — are unaffected and re-measure as before. The
+  thermostat's readouts were given fixed boxes so they benefit.
 - Fixed a permanent slowdown after scrolling. Once a list had been scrolled, every later frame stayed
   expensive for the rest of the run — nothing recovered it except restarting the device, not switching
   screens, not scrolling back. Rows scrolled out of view kept asking to be redrawn where they used to be,

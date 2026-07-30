@@ -517,10 +517,17 @@ export function Dial({
   // carry the mode on the ring and the mode row; coloring the numbers as well-made the pair read as two
   // unrelated values rather than one range. Tapping either still selects it for the steppers.
   const dualNum = (which, ref, v) => (
-    <Pressable onPress={() => onPick(which)}>
+    <Pressable onPress={() => onPick(which)} style={{width: '46%'}}>
       <Text
         ref={ref}
-        style={{fontSize: sz.dual, fontWeight: '500', color: theme.fg}}>
+        numberOfLines={1}
+        style={{
+          fontSize: sz.dual,
+          fontWeight: '500',
+          color: theme.fg,
+          width: '100%',
+          textAlign: which === 'lo' ? 'right' : 'left',
+        }}>
         {fmt(v)}
       </Text>
     </Pressable>
@@ -593,7 +600,13 @@ export function Dial({
           {labels.ambient}
         </Text>
         {isAuto ? (
-          <View style={{flexDirection: 'row', alignItems: 'flex-end', gap: 0}}>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'flex-end',
+              gap: 0,
+              width: 166 * S,
+            }}>
             {dualNum('lo', loRef, lo)}
             {/* Sized with the numbers, not with the captions: as a caption-sized glyph between two
                 readouts three times its height, it read as a stray mark rather than a separator. Set
@@ -607,7 +620,14 @@ export function Dial({
         ) : (
           <Text
             ref={bigRef}
-            style={{fontSize: sz.big, fontWeight: '500', color: theme.fg}}>
+            numberOfLines={1}
+            style={{
+              fontSize: sz.big,
+              fontWeight: '500',
+              color: theme.fg,
+              width: 166 * S,
+              textAlign: 'center',
+            }}>
             {mode === 'off' ? '––' : fmt(value)}
           </Text>
         )}

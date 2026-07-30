@@ -2326,8 +2326,14 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
         dst->text_decoration = spans[i].text_decoration;
         dst->letter_spacing = spans[i].letter_spacing;
     }
-    /* Span text feeds the Text node's intrinsic-width measurement during layout. */
-    mark_layout_dirty();
+
+    const bool pinned_w = (node->layout.width != ER_LAYOUT_AUTO) || (node->layout.width_pct > 0.0f);
+    const bool pinned_h = (node->layout.height != ER_LAYOUT_AUTO) || (node->layout.height_pct > 0.0f);
+    const bool single_line = (node->props.text.number_of_lines == 1U);
+    if (!(pinned_w && (single_line || pinned_h)))
+    {
+        mark_layout_dirty();
+    }
     er_mark_dirty_upward(node);
 }
 
