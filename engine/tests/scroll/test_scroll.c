@@ -558,12 +558,67 @@ static void test_momentum_decays(void)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief An unchanged scene settles to zero painting after a scroll, and a row scrolled back into view
+ *        is still repainted.
+ *
+ * HONEST SCOPE: this does NOT reproduce the scrolled-out-footprint leak fixed in compositor.c's damage
+ * pre-pass (a moved-but-invisible node re-damaging its old footprint on every commit forever). It was
+ * written to guard that fix and does not: it passes with the fix reverted, because this scene is small
+ * enough that the scroll commit still reaches c0 and refreshes its last_paint_rect, which clears `moved`
+ * before the loop can start.
+ *
+ * What this DOES guard is worth keeping: an idle scene must not paint, and retiring a footprint must not
+ * cost a row its next paint when it scrolls back.
+ */
+static void test_idle_scene_settles_after_scroll(void)
+{
+    printf("test_idle_scene_settles_after_scroll\n");
+    TestCtx tctx;
+    EmbeddedRenderBackend be;
+    setup_backend(&tctx, &be);
+
+    ERNode *sv, *c0, *c1, *c2;
+    build_scene(&sv, &c0, &c1, &c2); /* commits once: c0/c1 painted inside the viewport */
+
+    /* Scroll a full row down: c0 (was y 0..100) moves to y -100..0 — entirely outside the clipper. */
+    er_scroll_view_set_offset(sv, 0.0f, 100.0f);
+    tctx.fill_count = 0;
+    er_commit(); /* c0 is `moved`; its old footprint is unioned once, to erase the trail */
+
+    /* Nothing changes now, so the scene must settle to zero painting. Assert on the BACKEND's fill ops,
+     * not on er_get_dirty_rect(): that rect only unions source_dirty nodes the walk actually reached, so
+     * a moved-only, pruned node is invisible to it — which is exactly what made this bug so hard to see.
+     * An earlier version of this test asserted the rect and passed even with the bug present. */
+    tctx.fill_count = 0;
+    er_commit();
+    ASSERT_EQ(tctx.fill_count, 0);
+
+    /* ...and again, in case the footprint is merely alternating rather than retired. */
+    tctx.fill_count = 0;
+    er_commit();
+    ASSERT_EQ(tctx.fill_count, 0);
+
+    /* Scrolling it back into view must still repaint it: er_mark_dirty_upward marks the SCROLLER
+     * source_dirty, so its viewport enters the damage and the walk reaches the child again. Retiring the
+     * footprint must not cost the row its next paint. */
+    er_scroll_view_set_offset(sv, 0.0f, 0.0f);
+    tctx.fill_count = 0;
+    er_commit();
+    if (tctx.fill_count == 0)
+    {
+        fprintf(stderr, "  " FAIL " %s:%d  row scrolled back into view was never repainted\n", __FILE__, __LINE__);
+        g_failures++;
+    }
+}
+
+/**
  * @brief Test entry point.
  *
  * @return 0 on success, non-zero when any assertion failed.
  */
 int main(void)
 {
+    test_idle_scene_settles_after_scroll();
     test_offset_clamp_negative();
     test_offset_clamp_max();
     test_scroll_event_dedup();

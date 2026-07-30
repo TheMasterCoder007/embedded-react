@@ -14,11 +14,13 @@ reload loop (`sim_main.c`).
 cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake]
 cmake --build tools/simulator/build
 
-# then iterate from your app folder (React Native style):
-cd demos/thermostat && npm run sim
-# (equivalent: cd bridges/quickjs/js && npm run sim <demo>)
+# then run the SDL simulator against a demo, by name, from the JS package:
+cd bridges/quickjs/js && npm run sim -- thermostat
+# (omit the name for the default demo; `npm run build -- <demo>` / `npm run pack -- <demo>` build it too)
 ```
 
 `npm run sim` runs `esbuild --watch` (rebundling on save) and launches the simulator, which reloads on
-change. Remaining work (on-device hot reload, Fast Refresh, a prebuilt sim binary) is tracked in
+change. It reads `demos/<name>/index.jsx` directly against the in-repo library — no install needed. (For
+the browser/WASM simulator instead, `cd demos/<name> && npm install && npm run dev`.) Remaining work
+(on-device hot reload, Fast Refresh, a prebuilt sim binary) is tracked in
 [`/ROADMAP.md`](../../ROADMAP.md).

@@ -139,6 +139,70 @@ describe('parsePath', () => {
   });
 });
 
+describe('flattenSvg gradients', () => {
+  const grad = {
+    type: 3,
+    ax: 50,
+    ay: 50,
+    r: 1.5,
+    stops: [
+      {color: '#F2A64B', offset: 0},
+      {color: '#4FA9F5', offset: 0.5},
+    ],
+  };
+
+  it('collects a strokeGrad and references it 1-based from the paint', () => {
+    const props = {
+      children: {
+        type: 'Arc',
+        props: {
+          cx: 50,
+          cy: 50,
+          r: 40,
+          startAngle: 0,
+          endAngle: 90,
+          strokeGrad: grad,
+        },
+      },
+    };
+    const {paints, gradients} = flattenSvg(props);
+    expect(gradients).toHaveLength(1);
+    expect(gradients[0].type).toBe(3);
+    // String stop colours are normalised to ARGB on the way in.
+    expect(typeof gradients[0].stops[0].color).toBe('number');
+    expect(paints[8]).toBe(1); // stroke_grad, 1-based
+    expect(paints[7]).toBe(0); // fill_grad stays solid
+  });
+
+  it('leaves a shape with no gradient solid and the table empty', () => {
+    const props = {
+      children: {type: 'Circle', props: {cx: 10, cy: 10, r: 5, fill: '#fff'}},
+    };
+    const {paints, gradients} = flattenSvg(props);
+    expect(gradients).toHaveLength(0);
+    expect(paints[7]).toBe(0);
+    expect(paints[8]).toBe(0);
+  });
+
+  it('inherits a gradient through <G> like any other paint attribute', () => {
+    const props = {
+      children: {
+        type: 'G',
+        props: {
+          strokeGrad: grad,
+          children: {
+            type: 'Line',
+            props: {x1: 0, y1: 0, x2: 10, y2: 10},
+          },
+        },
+      },
+    };
+    const {paints, gradients} = flattenSvg(props);
+    expect(gradients).toHaveLength(1);
+    expect(paints[8]).toBe(1);
+  });
+});
+
 describe('flattenSvg', () => {
   it('emits one SHAPE per shape with a 9-field paint each', () => {
     const props = {
@@ -220,7 +284,7 @@ describe('flattenSvg', () => {
 // 7-field paint table as flattenSvg, but from flat primitive descriptors (no JSX) and into reused
 // buffers — so these also guard the reused-array reset that makes that allocation-free.
 describe('shapesToVector (imperative)', () => {
-  it('compiles an arc descriptor to MOVE + ARC with a stroke paint', () => {
+  it('compiles an arc descriptor to a bare ARC (no leading MOVE) with a stroke paint', () => {
     const {ops, paints} = shapesToVector([
       {
         arc: [100, 100, 80, -135, 135],
@@ -231,15 +295,51 @@ describe('shapesToVector (imperative)', () => {
     ]);
     expect(ops[0]).toBe(SHAPE);
     expect(ops[1]).toBe(0); // paint index
-    expect(ops[2]).toBe(MOVE);
-    expect(ops[5]).toBe(ARC);
-    expect(ops.slice(6, 9)).toEqual([100, 100, 80]); // cx, cy, r
+    expect(ops[2]).toBe(ARC); // straight to ARC — a MOVE here is the miter-spike bug
+    expect(ops.indexOf(MOVE)).toBe(-1);
+    expect(ops.slice(3, 6)).toEqual([100, 100, 80]); // cx, cy, r
     expect(ops[ops.length - 1]).toBe(0); // ccw flag
     expect(paints.length).toBe(9);
     expect(paints[0]).toBe(0); // fill none
     expect(paints[1] >>> 0).toBe(0xfff4a261); // stroke
     expect(paints[2]).toBe(14); // width
     expect(paints[4]).toBe(1); // round cap
+  });
+
+  it('carries a stroke gradient and indexes it 1-based in the paint record', () => {
+    const {paints, gradients} = shapesToVector([
+      {
+        arc: [100, 100, 80, 0, 90],
+        stroke: '#F2A64B',
+        strokeWidth: 20,
+        strokeGrad: {
+          type: 3, // conic
+          ax: 100,
+          ay: 100,
+          r: 0,
+          stops: [
+            {color: '#F2A64B', offset: 0},
+            {color: '#4FA9F5', offset: 0.25},
+          ],
+        },
+      },
+    ]);
+    expect(paints[7]).toBe(0); // fill_grad — unused
+    expect(paints[8]).toBe(1); // stroke_grad — 1-based index into the table
+    expect(gradients.length).toBe(1);
+    expect(gradients[0].type).toBe(3);
+    // Stop colours given as strings are normalized to packed ARGB for the engine.
+    expect(gradients[0].stops[0].color >>> 0).toBe(0xfff2a64b);
+    expect(gradients[0].stops[1].color >>> 0).toBe(0xff4fa9f5);
+  });
+
+  it('leaves both gradient slots at 0 for a plain solid shape', () => {
+    const {paints, gradients} = shapesToVector([
+      {arc: [0, 0, 10, 0, 90], stroke: '#fff'},
+    ]);
+    expect(paints[7]).toBe(0);
+    expect(paints[8]).toBe(0);
+    expect(gradients.length).toBe(0);
   });
 
   it('compiles a circle to a full-circle ARC + CLOSE', () => {

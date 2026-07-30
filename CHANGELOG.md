@@ -12,6 +12,15 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Gradients on hand-written `<Svg>` shapes. Previously only an imported .svg artwork file could carry
+  one, so a shape you wrote yourself was always a flat color. A `fillGrad` / `strokeGrad` prop now works
+  on `<Arc>`, `<Path>`, `<Circle>` and the rest, in both the JavaScript runtime and the compiled-to-C
+  build, and inherits through `<G>`. In the compiled build the gradient may be driven by state — the
+  thermostat's Auto band uses that for its warm-to-cool sweep, which follows the two setpoints as you
+  drag them — and folds to a constant table when nothing about it changes. It may also be applied
+  conditionally (`cond ? { … } : null`), so a shape can be gradient-filled in some states and a flat
+  color in others.
+- Redesigned the thermostat demo with a new cleaner, fully responsive design
 - New example for the Waveshare RP2040-Touch-LCD-1.69, a small round-corner touch board. This is the
   smallest board supported so far: an RP2040 with 264 KB of memory and no PSRAM. It drives the 240 by
   280 screen and the capacitive touch panel, and runs the new watch-face demo. Tested building,
@@ -30,9 +39,25 @@ See the README for the release process.
 - Real motion sensing on the RP2040-Touch-LCD-1.69 example. The board's accelerometer now drives a real
   step counter (using a simple step-detection algorithm) and the bubble level (using the direction of
   gravity). Both values reach the screen through useHostValue.
+- Start a new project from a demo. `npm create embedded-react@latest my-app -- --template <name>` scaffolds
+  a full example app (e.g. `thermostat`, `watch-face`) instead of the minimal starter, so you can build on
+  a real UI or try one on your hardware right away; `--list` shows what's available. The demo apps are now
+  self-contained projects wired to the `embedded-react` CLI.
+- `embedded-react build --aot --screen <WxH>` bakes a target panel size into the ahead-of-time build, so a
+  responsive app compiles to the layout that board actually renders (e.g. `--screen 240x320` for a small
+  no-PSRAM display).
 
 ### Changed
 
+- The Waveshare 7-inch ESP32-S3 example now keeps a single screen buffer instead of rotating three, which
+  makes dragging noticeably smoother — on the thermostat dial, 15-16 frames per second before and 20-26
+  after. Rotating buffers were costing more than they saved: each one remembers separately what it still
+  needs redrawn, so a frame had to repaint its own changes plus the last two frames' as one combined area,
+  and it had to rebuild that whole area from scratch rather than blending just what changed. With one
+  buffer the area is smaller and the work per pixel is lower. The tradeoff is that drawing now goes into
+  the buffer being shown, so a very large, very fast redraw could show a torn edge; dragging, theme
+  switches, and opening and closing the settings sheet were all checked on hardware and are clean. A board
+  that does tear can set the buffer count back to three, documented where it is set.
 - Updated the examples and backends README tables to list what is actually implemented, and added rows
   for the new RP2040 example and its display backend.
 - Rewrote the ESP32-2432S028R (Cheap Yellow Display) example README for clarity. A short intro and a
@@ -40,17 +65,63 @@ See the README for the release process.
   symptoms to fixes, and the pin list. The deeper detail moved below the get-it-running steps, and a
   duplicated explanation was merged.
 
+### Removed
+
+- Removed the music-player demo. It was an early bring-up test for the Cheap Yellow Display and never
+  grew into a real example. The thermostat and watch-face demos now cover the same ground — dynamic
+  layout, animation, and a full app — and there are the two starting templates going forward.
+- Removed the old thermostat demo's app code (the arc-dial climate UI, its weather panel, and their
+  artwork) to make room for a redesigned thermostat demo.
+
 ### Fixed
 
+- Setting a text label's content directly from code (the `updateText` escape hatch) no longer re-measures
+  every piece of text on the screen when it cannot possibly change the layout. A label whose width is fixed
+  and that is limited to one line always occupies the same space whatever it says, so only that label is
+  redrawn now. Live readouts driven this way get cheaper: on the 800 by 480 thermostat, dragging the dial
+  updates the center temperature every few pixels, and that was triggering a full re-measure of the screen
+  on about nine of every ten frames, roughly 5.7 ms each. Labels that can still change size — content-sized
+  ones, or fixed-width ones allowed to wrap onto more lines — are unaffected and re-measure as before. The
+  thermostat's readouts were given fixed boxes so they benefit.
+- Fixed a permanent slowdown after scrolling. Once a list had been scrolled, every later frame stayed
+  expensive for the rest of the run — nothing recovered it except restarting the device, not switching
+  screens, not scrolling back. Rows scrolled out of view kept asking to be redrawn where they used to be,
+  forever: scrolling moves a row, so it is reported as having moved, but a row that is now out of sight is
+  skipped when drawing, and only drawing updates the record of where it was last drawn. So it stayed
+  "moved" and kept the changed region of every frame propped open, which in turn defeated the shortcut
+  that normally lets the engine skip untouched parts of the screen. A row with nothing left on screen now 
+  settles after its old area is cleaned up once and is still redrawn normally when scrolled back into view. 
+  Affects every app with a ScrollView or FlatList.
+- Fixed division in apps compiled ahead of time to C. JavaScript always divides as decimals, but the
+  compiler emitted plain C division, which discards the fraction when both sides are whole numbers. Any
+  ratio built from the whole-number state stayed at 0 until the two sides were equal and then jumped to 1 —
+  on the thermostat's small-screen dial, a fill and handle that sat at the bottom of the range until the
+  setpoint reached maximum. Affects every ahead-of-time app.
+- Fixed vector graphics silently disappearing when a drawing is wider than the buffer the renderer
+  reserves for one row of it. It drew nothing and said nothing, because the warning behind that limit is
+  compiled out of release builds — the enlarged thermostat dial vanished on the Cheap Yellow Display
+  while its drag still worked. The board's buffer now covers the dial, and the limit is documented where
+  it is set.
+- The Cheap Yellow Display example can now run rotated. A single switch in the board header turns it to
+  landscape, swapping the screen size, the panel axes, and the touch axes together so they cannot end up
+  disagreeing. The example still ships in the panel's native portrait.
+- Fixed a blank screen in the simulator's dev server when a demo or scaffolded app carries its own
+  `node_modules`. The app's React and the library's React were resolved from two different places, giving
+  two copies of React — every component then failed with "cannot read property 'useRef' of null". The dev
+  server now pins React to a single copy, the same way the production bundler already did. Apps installed
+  normally, where there is only ever one copy, are unaffected.
 - Corrected the ESP32-2432S028R example docs: fixed the display backend description to match the
   current design, fixed the documented pixel-clock speed (40 MHz, was 20), fixed the expected startup
   log line, and replaced the stale music-player description with the thermostat dial the example
   actually builds. Verified the example builds, flashes, and starts cleanly on a real board.
+- Fixed the ahead-of-time (AOT) compiler so a repeating timer started from inside an effect that has
+  dependencies — or from an event handler — generates C that compiles. The timer's callback is now
+  declared before it is used, which the watch-face demo needs for its swipe-to-settle animation.
 
 ## [0.9.0] - 2026-07-23
 ### Added
 
-- Multi-core rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
+- Multicore rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
   hand the engine extra render workers (`embedded_renderer_set_workers`) — the engine never
   creates threads itself — and each frame's repaint is then split into horizontal slices
   rendered concurrently, one worker per core. Scenes using vector graphics or shadows fall back
@@ -61,8 +132,8 @@ See the README for the release process.
 
 - The ESP32-S3 example renders on both cores, and its memory system now runs PSRAM and flash at
   120 MHz (up from 80). The faster bus matters beyond speed: with both cores drawing, the RGB
-  panel's continuous refresh from PSRAM was starved of bandwidth and the picture visibly
-  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental" 
+  panel's continuous refresh from PSRAM was starved of bandwidth, and the picture visibly
+  drifted — at 120 MHz there is headroom for both. 120 MHz PSRAM is an ESP-IDF "experimental"
   feature; the example also enables vsync-based panel-sync recovery.
 
 - Ordered dithering on RGB565 panels (`ER_LCD_DITHER`, on by default with SIMD blending). Fading

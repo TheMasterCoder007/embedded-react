@@ -32,7 +32,7 @@
 // nodes (er_node_set_props) — no diffing, no reconciler. See the root README (Flow B).
 //
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
-//   npm run aot -- music-player      # a specific demo by folder name
+//   npm run aot -- watch-face        # a specific demo by folder name
 import {parse} from '@babel/parser';
 import {codeFrameColumns} from '@babel/code-frame';
 import {
@@ -55,6 +55,7 @@ import {
   parseColor,
   parsePath,
   PAINT_STRIDE,
+  GRAD_MAX_STOPS,
   scaleVectorArtifact,
 } from '../src/embedded-react/svg-ops.js';
 import {bakeAssets} from '../assets/index.mjs';
@@ -327,6 +328,11 @@ function emitExprImpl(node, env) {
       const l = emitExpr(node.left, env);
       const r = emitExpr(node.right, env);
       if (ARITH.has(node.operator)) {
+        if (node.operator === '/')
+          return {
+            code: `((float)(${l.code}) / (float)(${r.code}))`,
+            cType: 'float',
+          };
         const cType =
           l.cType === 'float' || r.cType === 'float' ? 'float' : 'int';
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
@@ -624,7 +630,10 @@ function collectState(fnBody, scope, prefix = '') {
       // useHostValue(0)` — no JS setter, the C host is the only writer.
       const isHost = init.callee.name === 'useHostValue';
       if (init.callee.name !== 'useState' && !isHost) continue;
-      if (isHost ? decl.id.type !== 'Identifier' : decl.id.type !== 'ArrayPattern') continue;
+      if (
+        isHost ? decl.id.type !== 'Identifier' : decl.id.type !== 'ArrayPattern'
+      )
+        continue;
       const name = isHost ? decl.id.name : decl.id.elements[0]?.name;
       const setter = isHost ? undefined : decl.id.elements[1]?.name;
       if (!name) continue;
@@ -897,8 +906,9 @@ export async function bakeSvgArtifacts(src, baseDir) {
   }).program;
   const imports = collectSvgImports(program);
   if (imports.size === 0) return {};
-  const {svgToVector, svgToRaster, writeRasterPng} =
-    await import('../assets/bake-svg.mjs');
+  const {svgToVector, svgToRaster, writeRasterPng} = await import(
+    '../assets/bake-svg.mjs'
+  );
   const artifacts = {};
   for (const [, imp] of imports) {
     const p = resolve(baseDir, imp.importPath);
@@ -2920,6 +2930,12 @@ function svgAttrs(openingElement, scope, env) {
     const name = attr.name.name;
     if (name === 'ref' || name === 'key') continue; // not geometry/paint
     const vn = attr.value;
+    if (name === 'fillGrad' || name === 'strokeGrad') {
+      if (vn == null || vn.type !== 'JSXExpressionContainer')
+        throw new Error(`AOT: "${name}" must be an object expression`);
+      out[name] = {gradNode: vn.expression};
+      continue;
+    }
     if (vn == null) out[name] = true;
     else if (vn.type === 'StringLiteral') out[name] = vn.value;
     else if (vn.type === 'JSXExpressionContainer') {
@@ -2939,6 +2955,154 @@ function svgAttrs(openingElement, scope, env) {
   return out;
 }
 
+/**
+ * Lowers a `{ type, ax, ay, bx, by, r, stops: [{ color, offset }] }` gradient descriptor — the SAME shape
+ * Flow A's svg-ops.js takes — to C-expression fields. Every geometry field and every stop may be static
+ * or state-driven; `type` and the stop COUNT must be static, since they decide the emitted table's shape.
+ *
+ * Conic gradients carry the sweep's start angle in `r` (radians, clockwise from the top), so a dial whose
+ * ramp must follow a setpoint drives `r` from state — which is exactly why the table can't be const.
+ */
+function gradSpec(node, scope, env, what) {
+  if (!node || node.type !== 'ObjectExpression')
+    throw new Error(`AOT: "${what}" must be an object literal`);
+  const props = {};
+  for (const pr of node.properties) {
+    if (pr.type !== 'ObjectProperty' || pr.computed)
+      throw new Error(`AOT: "${what}" takes plain key: value pairs only`);
+    props[pr.key.name ?? pr.key.value] = pr.value;
+  }
+  let anyDynamic = false;
+  // A numeric field: fold when it can be, otherwise emit the state-driven expression.
+  const numf = (v, dflt) => {
+    if (v == null) return floatLit(dflt);
+    try {
+      return floatLit(evalStatic(v, scope));
+    } catch {
+      anyDynamic = true;
+      return `(float)(${emitExpr(v, env).code})`;
+    }
+  };
+  let type;
+  try {
+    type = evalStatic(props.type, scope) | 0;
+  } catch {
+    throw new Error(
+      `AOT: "${what}.type" must be a compile-time constant (1 linear, 2 radial, 3 conic)`,
+    );
+  }
+  if (type < 1 || type > 3)
+    throw new Error(
+      `AOT: "${what}.type" must be 1 (linear), 2 (radial) or 3 (conic)`,
+    );
+  const stopsNode = props.stops;
+  if (!stopsNode || stopsNode.type !== 'ArrayExpression')
+    throw new Error(`AOT: "${what}.stops" must be an array literal`);
+  if (
+    stopsNode.elements.length < 2 ||
+    stopsNode.elements.length > GRAD_MAX_STOPS
+  )
+    throw new Error(
+      `AOT: "${what}.stops" needs 2..${GRAD_MAX_STOPS} entries (got ${stopsNode.elements.length})`,
+    );
+  const stops = stopsNode.elements.map(e => {
+    if (!e || e.type !== 'ObjectExpression')
+      throw new Error(
+        `AOT: each "${what}.stops" entry must be an object literal`,
+      );
+    const sp = {};
+    for (const pr of e.properties) sp[pr.key.name ?? pr.key.value] = pr.value;
+    let color;
+    try {
+      color = `${parseColor(evalStatic(sp.color, scope)) >>> 0}u`;
+    } catch {
+      anyDynamic = true;
+      color = emitColorExpr(sp.color, env);
+    }
+    return {color, offset: numf(sp.offset, 0)};
+  });
+  return {
+    type,
+    stops,
+    ax: numf(props.ax, 0),
+    ay: numf(props.ay, 0),
+    bx: numf(props.bx, 0),
+    by: numf(props.by, 0),
+    r: numf(props.r, 0),
+    anyDynamic,
+  };
+}
+
+/**
+ * Unwraps a gradient attribute, which may be a bare object literal or a CONDITIONAL one:
+ * `cond ? {…} : null` (either way round) or `cond && {…}`. The gradient table entry is emitted either
+ * way; what the condition drives is the PAINT'S INDEX, which becomes a runtime ternary of N or 0.
+ *
+ * Without this a gradient applied to a shape that is only sometimes gradient-filled leaks into every
+ * other state — the index is a compile-time constant, so "no gradient here" is not expressible by
+ * omission. The thermostat hit exactly that: its Auto ramp painted over Cool and Heat as well.
+ */
+function gradAttr(v, scope, env, what) {
+  if (!v) return null;
+  let node = v.gradNode;
+  let cond = null;
+  const nullish = n =>
+    n.type === 'NullLiteral' ||
+    (n.type === 'Identifier' && n.name === 'undefined');
+  if (node.type === 'ConditionalExpression') {
+    if (
+      node.consequent.type === 'ObjectExpression' &&
+      nullish(node.alternate)
+    ) {
+      cond = emitExpr(node.test, env).code;
+      node = node.consequent;
+    } else if (
+      node.alternate.type === 'ObjectExpression' &&
+      nullish(node.consequent)
+    ) {
+      cond = `!(${emitExpr(node.test, env).code})`;
+      node = node.alternate;
+    } else
+      throw new Error(
+        `AOT: a conditional "${what}" must be \`cond ? { … } : null\` (one branch an object literal, the other null)`,
+      );
+  } else if (
+    node.type === 'LogicalExpression' &&
+    node.operator === '&&' &&
+    node.right.type === 'ObjectExpression'
+  ) {
+    cond = emitExpr(node.left, env).code;
+    node = node.right;
+  }
+  const spec = gradSpec(node, scope, env, what);
+  spec.cond = cond;
+  return spec;
+}
+
+/** A `{ .type = …, .stops = { … }, … }` ERVectorGradient initializer from a gradSpec (const tables). */
+function gradInitFromSpec(g) {
+  const stops = g.stops.map(st => `{ ${st.color}, ${st.offset} }`).join(', ');
+  return (
+    `{ .type = ${g.type}, .stop_count = ${g.stops.length}, .stops = { ${stops} }, ` +
+    `.ax = ${g.ax}, .ay = ${g.ay}, .bx = ${g.bx}, .by = ${g.by}, .r = ${g.r} }`
+  );
+}
+
+/** Per-field assignments rebuilding one mutable gradient-table entry from state, for build_svgN(). */
+function gradAssigns(tab, i, g) {
+  const out = [
+    `    ${tab}[${i}].type = ${g.type};`,
+    `    ${tab}[${i}].stop_count = ${g.stops.length};`,
+  ];
+  g.stops.forEach((st, si) => {
+    out.push(`    ${tab}[${i}].stops[${si}].color = ${st.color};`);
+    out.push(`    ${tab}[${i}].stops[${si}].position = ${st.offset};`);
+  });
+  for (const f of ['ax', 'ay', 'bx', 'by', 'r'])
+    out.push(`    ${tab}[${i}].${f} = ${g[f]};`);
+  return out;
+}
+
 const CAP_MAP = {butt: 0, round: 1, square: 2};
 const JOIN_MAP = {miter: 0, round: 1, bevel: 2};
 
@@ -2951,6 +3115,8 @@ const PAINT_FIELDS = [
   'cap',
   'join',
   'fill_rule',
+  'fill_grad',
+  'stroke_grad',
 ];
 
 /**
@@ -2960,7 +3126,7 @@ const PAINT_FIELDS = [
  *   - strokeWidth may be DYNAMIC (numeric C expr); static → a float literal.
  *   - cap / join / miterlimit / fillRule must be STATIC (a dynamic one throws clear).
  */
-function paintSpec(a, env) {
+function paintSpec(a, env, scope) {
   let anyDynamic = false;
   const color = (v, dflt) => {
     if (isDyn(v)) {
@@ -2993,7 +3159,20 @@ function paintSpec(a, env) {
     String(JOIN_MAP[a.strokeLinejoin] ?? 0),
     String(a.fillRule === 'evenodd' ? 1 : 0),
   ];
-  return {fields, anyDynamic};
+  // Gradient table indices are appended by the caller, which is the only place that knows the table
+  // layout for the whole <Svg>. Placeholders keep `fields` aligned with PAINT_FIELDS until then.
+  fields.push('0', '0');
+  const fillGrad = gradAttr(a.fillGrad, scope, env, 'fillGrad');
+  const strokeGrad = gradAttr(a.strokeGrad, scope, env, 'strokeGrad');
+  // A conditional gradient makes the INDEX state-driven, so the paint table has to be mutable too.
+  if (
+    fillGrad?.anyDynamic ||
+    strokeGrad?.anyDynamic ||
+    fillGrad?.cond ||
+    strokeGrad?.cond
+  )
+    anyDynamic = true;
+  return {fields, anyDynamic, fillGrad, strokeGrad};
 }
 
 /** A `{ .fill = …, … }` ERVectorPaint initializer from a paintSpec's C-expr fields (used for static paints). */
@@ -3007,18 +3186,7 @@ function paintInitFromSpec(ps) {
 const arcEntriesC = (cx, cy, r, a0deg, a1deg) => {
   const a0 = `((${a0deg} - 90.0f) * (float)M_PI / 180.0f)`;
   const a1 = `((${a1deg} - 90.0f) * (float)M_PI / 180.0f)`;
-  return [
-    'ER_VOP_MOVE',
-    `(${cx} + ${r} * cosf(${a0}))`,
-    `(${cy} + ${r} * sinf(${a0}))`,
-    'ER_VOP_ARC',
-    cx,
-    cy,
-    r,
-    a0,
-    a1,
-    '0.0f',
-  ];
+  return ['ER_VOP_ARC', cx, cy, r, a0, a1, '0.0f'];
 };
 const circleEntriesC = (cx, cy, r) => [
   'ER_VOP_MOVE',
@@ -3149,7 +3317,6 @@ function emitSvgStatic(el, scope, out, env) {
     out.vectorData.push(
       `static const float s_svg${id}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`,
     );
-    // flattenSvg paints are PAINT_STRIDE-wide; inline <Svg> has no gradients so fill_grad/stroke_grad are 0.
     out.vectorData.push(
       `static const ERVectorPaint s_svg${id}_paints[] = {\n${Array.from({length: nPaints}, (_, i) => '    ' + emitVectorPaint(paints.slice(i * PAINT_STRIDE, i * PAINT_STRIDE + PAINT_STRIDE))).join(',\n')}\n};`,
     );
@@ -3291,7 +3458,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
     const shape = fn(a);
     if (!shape.length) continue;
     entries.push('ER_VOP_SHAPE', floatLit(specs.length), ...shape);
-    specs.push(paintSpec(a, env));
+    specs.push(paintSpec(a, env, scope));
   }
   const v = `n${out.n++}`;
   const id = out.svgN++;
@@ -3299,7 +3466,35 @@ function emitSvgDynamic(el, scope, out, env, state) {
   const nPaints = specs.length;
   const dynPaint = specs.some(p => p.anyDynamic);
   out.needsMath = true; // build_svg uses cosf/sinf/M_PI for arcs
+
+  // Gradients referenced by these shapes, flattened into ONE table per <Svg> (the engine indexes it
+  // 1-based off each paint). Done here rather than in paintSpec because the layout is per-<Svg>, not
+  // per-shape, so a shape cannot know its own index.
+  const grads = [];
+  for (const ps of specs) {
+    const idx = g => {
+      if (!g) return '0';
+      const n = grads.push(g); // push returns the new length = the 1-based index
+      return g.cond ? `((${g.cond}) ? ${n} : 0)` : String(n);
+    };
+    ps.fields[7] = idx(ps.fillGrad);
+    ps.fields[8] = idx(ps.strokeGrad);
+  }
+  const dynGrad = grads.some(g => g.anyDynamic);
+
   out.vectorData.push(`static float s_svg${id}_ops[${len}];`);
+  if (grads.length) {
+    // Mutable when any field is state-driven — a conic ramp anchored to a setpoint rewrites its start
+    // angle every update, exactly like the op-tape above it.
+    if (dynGrad)
+      out.vectorData.push(
+        `static ERVectorGradient s_svg${id}_grads[${grads.length}];`,
+      );
+    else
+      out.vectorData.push(
+        `static const ERVectorGradient s_svg${id}_grads[] = {\n${grads.map(g => '    ' + gradInitFromSpec(g)).join(',\n')}\n};`,
+      );
+  }
   // Dynamic paint → a MUTABLE paint table (re)filled by build_svg from state each update; else a const table.
   if (dynPaint)
     out.vectorData.push(`static ERVectorPaint s_svg${id}_paints[${nPaints}];`);
@@ -3318,6 +3513,10 @@ function emitSvgDynamic(el, scope, out, env, state) {
         ),
       ),
     );
+  if (dynGrad)
+    grads.forEach((g, gi) =>
+      builderLines.push(...gradAssigns(`s_svg${id}_grads`, gi, g)),
+    );
   out.vectorBuilders.push(
     `static void build_svg${id}(void)\n{\n${builderLines.join('\n')}\n}`,
   );
@@ -3325,11 +3524,17 @@ function emitSvgDynamic(el, scope, out, env, state) {
   emitSvgBox(v, svgA.width, svgA.height, el.openingElement, scope, out, env);
   out.build.push(
     `    build_svg${id}();`,
-    `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints}, NULL, 0);`,
+    `    er_node_set_vector_ops(${v}, s_svg${id}_ops, ${len}, s_svg${id}_paints, ${nPaints}, ${grads.length ? `s_svg${id}_grads` : 'NULL'}, ${grads.length});`,
     `    s_${v} = ${v};`,
   );
   out.handles.push(v);
-  out.svgUpdates.push({id, len, nPaints, nodeVar: `s_${v}`});
+  out.svgUpdates.push({
+    id,
+    len,
+    nPaints,
+    nGrads: grads.length,
+    nodeVar: `s_${v}`,
+  });
   return v;
 }
 
@@ -4616,7 +4821,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     for (const s of out.svgUpdates) {
       lines.push(`    build_svg${s.id}();`);
       lines.push(
-        `    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints}, NULL, 0);`,
+        `    er_node_set_vector_ops(${s.nodeVar}, s_svg${s.id}_ops, ${s.len}, s_svg${s.id}_paints, ${s.nPaints}, ${s.nGrads ? `s_svg${s.id}_grads` : 'NULL'}, ${s.nGrads || 0});`,
       );
     }
     // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
@@ -4691,6 +4896,12 @@ static void er_timer_clear(int id)
   const timerFnDefs = out.timerFns
     .map(t => `static void ${t.name}(void)\n{\n${t.body.join('\n')}\n}`)
     .join('\n\n');
+
+  // Timer callbacks are defined last, but a handler or a dep-driven effect fn can register one
+  // (er_timer_add(…, er_timer_fn_N)) and those defs come earlier — so forward-declare every timer fn.
+  const timerFnFwdDecls = out.timerFns
+    .map(t => `static void ${t.name}(void);`)
+    .join('\n');
 
   // Animated.sequence on_complete callbacks: each starts the next step when the previous finishes. Forward-
   // declared (the handler that starts step 0 references the first callback, and each callback the next).
@@ -4794,7 +5005,7 @@ static void er_timer_clear(int id)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "embedded-react version mismatch: app.gen.c was generated by ${PKG_VERSION} but the engine header (er_version.h) is a different major.minor. Regenerate the app with 'npm run aot', or align the engine and npm versions.");
-${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 ${hostSettersBlock ? '\n' + hostSettersBlock + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)

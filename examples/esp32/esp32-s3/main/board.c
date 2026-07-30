@@ -139,9 +139,7 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT,
         .data_width = 16, /* RGB565 */
-        .num_fbs = 3,     /* triple-buffered: the backend rotates the panel fbs directly (see the
-                             esp32-lcd backend's direct mode); with three, there is always a
-                             swapped-out buffer ready to draw into, so no flip-wait per frame */
+        .num_fbs = 1,     /* Single framebuffer, drawn incrementally. */
         .bounce_buffer_size_px = 10 * BOARD_LCD_WIDTH, /* smooth PSRAM-fb DMA, avoids tearing/underrun */
         .dma_burst_size = 64,
         .hsync_gpio_num = 46,

@@ -18,26 +18,45 @@ release.
 There is no RTC on the target board, so time is a second counter that **starts at 12:00 AM** — the
 factory default of a device whose clock has never been set (with a matching unset weekday/date,
 Wed · Jan 1 2020) — and is advanced by a 1 Hz `setInterval`. The heart rate is a small pseudo-random
-walk in 61–68 bpm (deterministic, seeded off the time — there is no `Math.random` in the AOT subset).
+walk in 61–68 bpm (deterministic, seeded off its own previous reading — there is no `Math.random` in
+the AOT subset, and the interval closure can't see the live time).
 **Steps and the level are real** on the RP2040 example: they read `useHostValue(0)`, host-fed values
 the board's IMU writes each frame — the pedometer via `er_app_set_steps`, and the accelerometer tilt
 (gravity direction) via `er_app_set_dotx` / `er_app_set_doty`. In the simulator (no IMU) `useHostValue`
 just returns its initial, so those stay centered/at 0.
 
-## Running it
+## Start from this demo
+
+Scaffold your own copy with the toolchain — no repo checkout required:
 
 ```bash
-# Flow B (AOT) — compile to C for the RP2040 example (240×280):
-cd bridges/quickjs/js
-ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face    # → dist/app.gen.{c,h}
-
-# Desktop preview of the SAME compiled app (examples/linux-aot):
-cd ../../../examples/linux-aot && cmake -S . -B build && cmake --build build
-ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 ./build/embedded-react-desktop-aot
-
-# Or the hot-reload simulator (Flow A):
-cd demos/watch-face && npm run sim
+npm create embedded-react@latest my-watch -- --template watch-face
+cd my-watch
+npm install
+npm run dev          # WASM simulator with hot reload → http://localhost:3333
 ```
+
+## Develop
+
+```bash
+npm install
+npm run dev          # WASM simulator with hot reload → http://localhost:3333
+npm run dev:device   # hot-reload on a real board over USB (pass -- <port> for non-ESP32 boards)
+```
+
+The browser's device toolbar drives the panel size — set it to 240×280 to match the target board.
+
+## Build for a device
+
+```bash
+npm run build        # Flow A → dist/app.erpkg   (QuickJS bytecode; PSRAM-class chips)
+npm run build:aot    # Flow B → app.gen.c        (compiled to C for the RP2040 example; targets 240×280)
+```
+
+`build:aot` bakes the 240×280 panel size in. Flash the generated C via the
+[RP2040 example](../../examples/rp2040/rp2040-touch-lcd-1.69) — its `main.c` feeds the real step count
+and accelerometer tilt into the app's `useHostValue` setters. For a desktop preview of the same compiled
+app, build `examples/linux-aot` and run it with `ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280`.
 
 ## Design notes (the AOT house rules)
 

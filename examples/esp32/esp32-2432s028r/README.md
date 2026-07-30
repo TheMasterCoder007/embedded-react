@@ -5,7 +5,7 @@ widely available ESP32 board with a 2.4" touchscreen and **no PSRAM**.
 
 Because there's no PSRAM to hold a JavaScript engine, this example uses **Flow B (AOT)**: your JSX is
 compiled **ahead-of-time to C** on your computer and linked straight into the firmware. There's **no
-QuickJS and no JavaScript on the device** — the compiled C app *is* the firmware.
+QuickJS and no JavaScript on the device** — the compiled C app _is_ the firmware.
 
 ```
 App.jsx ──(npm run aot)──▶ app.gen.c ──▶ C engine ──▶ SPI backend ──▶ ST7789 screen
@@ -14,8 +14,8 @@ App.jsx ──(npm run aot)──▶ app.gen.c ──▶ C engine ──▶ SPI 
 ```
 
 **Board:** ESP32-2432S028R **v3** (two USB ports: micro + USB-C). ESP32-WROOM-32, 240×320 **ST7789**
-panel, **XPT2046** resistive touch, 4 MB flash, no PSRAM. *Have the older v1/v2 (single micro-USB)? It
-uses an **ILI9341** panel — see [Tuning for your board](#tuning-for-your-board).*
+panel, **XPT2046** resistive touch, 4 MB flash, no PSRAM. _Have the older v1/v2 (single micro-USB)? It
+uses an **ILI9341** panel — see [Tuning for your board](#tuning-for-your-board)._
 
 ## Quick start
 
@@ -28,6 +28,18 @@ You need **ESP-IDF v5.3 or newer** installed and active in your shell (tested on
 ```bash
 cd bridges/quickjs/js
 ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # writes dist/app.gen.c
+
+> **Orientation.** The example ships in the panel's **native portrait (240x320)**. Set `BOARD_ROTATE_90`
+> to `1` in `main/board.h` for landscape 320x240 — it swaps the panel axes and the touch axes together.
+> The AOT screen size above must match — the thermostat picks its layout from the size it is compiled
+> against, so a mismatch gives you the wrong layout on a correctly-rotated screen.
+> If the image comes out upside down (180° out), flip `BOARD_ROTATE_CW` in `main/board.c` — the panel
+> mirrors and the touch flips both derive from it, so they cannot end up disagreeing.
+>
+> Note `swap_xy` alone is a *reflection*, not a rotation: a quarter turn is the swap plus exactly one
+> mirror flipped, which is why only `(true,true)` and `(false,false)` are valid there and the two
+> differ by 180°. Software rotation in the engine is a feature of the `esp32-lcd` backend (RGB/parallel
+> panels), not this SPI one — here orientation is the panel's own MADCTL.
 cd ../../..
 ```
 
@@ -42,8 +54,9 @@ idf.py -p <PORT> flash monitor    # e.g. -p /dev/ttyUSB0  or  -p COM5
 Replace `<PORT>` with your board's serial port (the CYD's USB-C shows up as a CH340 serial device).
 `monitor` opens the live log — press `Ctrl-]` to exit.
 
-**That's it.** The thermostat appears on the screen: tap **−** / **+** to change the temperature, and
-**Heat / Cool / Auto / Off** to switch mode (the dial recolors to match). Whenever you edit the JSX,
+**That's it.** The thermostat appears on the screen: drag around the dial — or tap **−** / **+** — to
+change the temperature, tap the cog to switch between °F and °C, and use
+**COOL / HEAT / AUTO / OFF** to switch mode (the dial recolors to match). Whenever you edit the JSX,
 re-run **step 1** and `idf.py flash` again.
 
 You should see this in the log:
@@ -89,20 +102,20 @@ The settings below are dialed in for the **v3 (dual-USB) CYD** this example was 
 vary slightly — everything here is a `#define` at the top of [`main/board.c`](main/board.c) (or the
 backend's `CMakeLists.txt`). Change one, rebuild, reflash.
 
-| Symptom on screen | Fix |
-|---|---|
-| Colors look like a photo negative | Toggle `BOARD_LCD_INVERT` |
-| Red and blue are swapped | Toggle `BOARD_LCD_BGR` |
-| Text/image is mirrored | Toggle `BOARD_LCD_MIRROR_X` (or `_Y`) |
-| Faint lines or glitches | Lower `LCD_PCLK_HZ` (default 40 MHz → try 30 or 26) |
-| Colors subtly wrong (gray→green, blue→pink) | See *color byte order* below |
-| Taps land in the wrong place | Recalibrate touch — see below |
+| Symptom on screen                           | Fix                                                 |
+| ------------------------------------------- | --------------------------------------------------- |
+| Colors look like a photo negative           | Toggle `BOARD_LCD_INVERT`                           |
+| Red and blue are swapped                    | Toggle `BOARD_LCD_BGR`                              |
+| Text/image is mirrored                      | Toggle `BOARD_LCD_MIRROR_X` (or `_Y`)               |
+| Faint lines or glitches                     | Lower `LCD_PCLK_HZ` (default 40 MHz → try 30 or 26) |
+| Colors subtly wrong (gray→green, blue→pink) | See _color byte order_ below                        |
+| Taps land in the wrong place                | Recalibrate touch — see below                       |
 
 - **Older v1/v2 board (ILI9341 panel).** In `board.c`, swap `esp_lcd_new_panel_st7789` for
   `esp_lcd_new_panel_ili9341`. The pins are identical.
 
 - **Color byte order (`ER_SPI_LCD_SWAP_BGR`).** This particular CYD's panel wants its two color bytes
-  swapped *and* red/blue in BGR order, so the backend enables `ER_SPI_LCD_SWAP_BGR=1`. If your panel
+  swapped _and_ red/blue in BGR order, so the backend enables `ER_SPI_LCD_SWAP_BGR=1`. If your panel
   shows gray as pastel-green or blue as pink (while red and white look fine), it needs this flag; a
   standard RGB565 panel does not. It lives in the backend component's `CMakeLists.txt`.
 
@@ -113,13 +126,13 @@ backend's `CMakeLists.txt`). Change one, rebuild, reflash.
 
 ## Pinout
 
-| Bus | Pins (GPIO) |
-|---|---|
+| Bus                          | Pins (GPIO)                                                 |
+| ---------------------------- | ----------------------------------------------------------- |
 | **Display** — ST7789 on HSPI | SCLK 14, MOSI 13, CS 15, DC 2, RST (software), Backlight 21 |
-| **Touch** — XPT2046 on VSPI | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36 |
+| **Touch** — XPT2046 on VSPI  | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36                     |
 
 There's no official datasheet for these generic Sunton/DIYmall boards; this pin map comes from the
-community CYD references (randomnerdtutorials, mischianti, and witnessmenow's *ESP32-Cheap-Yellow-Display*).
+community CYD references (randomnerdtutorials, mischianti, and witnessmenow's _ESP32-Cheap-Yellow-Display_).
 
 ## Using this outside the monorepo
 

@@ -16,7 +16,7 @@
 
 // bundle-app.mjs — bundle a demo's JSX into a Flow A app bundle for the WASM simulator.
 //
-//   node tools/web-sim/bundle-app.mjs [demo]      → tools/web-sim/public/app.js   (default: music-player)
+//   node tools/web-sim/bundle-app.mjs [demo]      → tools/web-sim/public/app.js   (default: watch-face)
 //
 // One-shot esbuild (the same config tools/simulator's sim.mjs uses): bundles demos/<demo>/index.jsx with
 // React + the reconciler + the embedded-react library into a single IIFE the host page fetches and hands to
@@ -35,7 +35,7 @@ const JS = resolve(REPO, 'bridges/quickjs/js'); // where esbuild + react + the l
 // esbuild + react + the reconciler are installed in the JS package, not here — resolve from there.
 const require = createRequire(resolve(JS, 'package.json'));
 const {build} = require('esbuild');
-const demo = process.argv[2] || process.env.DEMO || 'music-player';
+const demo = process.argv[2] || process.env.DEMO || 'watch-face';
 const entry = resolve(REPO, 'demos', demo, 'index.jsx');
 const outfile = resolve(HERE, 'public', 'app.js');
 

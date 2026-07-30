@@ -2326,8 +2326,14 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
         dst->text_decoration = spans[i].text_decoration;
         dst->letter_spacing = spans[i].letter_spacing;
     }
-    /* Span text feeds the Text node's intrinsic-width measurement during layout. */
-    mark_layout_dirty();
+
+    const bool pinned_w = (node->layout.width != ER_LAYOUT_AUTO) || (node->layout.width_pct > 0.0f);
+    const bool pinned_h = (node->layout.height != ER_LAYOUT_AUTO) || (node->layout.height_pct > 0.0f);
+    const bool single_line = (node->props.text.number_of_lines == 1U);
+    if (!(pinned_w && (single_line || pinned_h)))
+    {
+        mark_layout_dirty();
+    }
     er_mark_dirty_upward(node);
 }
 
@@ -3428,6 +3434,22 @@ void er_commit(void)
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 if (ow > 0 && oh > 0)
                     damage_union(&clip, &have, ox, oy, ow, oh); /* old position (erase trail) */
+
+                /* A node with NO visible current position (scrolled out of its clipper, or otherwise
+                 * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
+                 * its footprint now, because it will never be able to retire it itself.
+                 *
+                 * Without it, such a node is a permanent damage source: a scroll shifts its screen rect
+                 * (node_screen_rect folds in ancestor scroll offsets) while last_paint_rect still holds
+                 * where it was drawn, so it counts as `moved` and the pre-pass re-unions this same
+                 * footprint EVERY commit. Refreshing last_paint_rect requires painting it, painting
+                 * requires render_tree to reach it, and render_tree prunes it precisely because it is
+                 * invisible — so the loop sustains itself until reboot.
+                 *
+                 * Scrolling it back into view still repaints it: er_mark_dirty_upward marks the scroller
+                 * source_dirty, so its viewport enters the damage and the walk reaches the child again. */
+                if (nw <= 0 || nh <= 0)
+                    n->has_last_paint = false;
             }
         }
         if (trackable && have)

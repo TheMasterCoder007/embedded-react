@@ -237,7 +237,9 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('#include <math.h>');
     expect(c).toMatch(/static float s_svg0_ops\[\d+\];/); // mutable, not const
     expect(c).toContain('static void build_svg0(void)');
-    expect(c).toContain('cosf('); // arc trig in C
+    expect(c).toContain('ER_VOP_ARC');
+    expect((c.match(/ER_VOP_MOVE/g) || []).length).toBe(1);
+    expect(c).toContain('(float)M_PI / 180.0f'); // degrees → radians for the arc angles
     expect(c).toContain('(s_state.temp * 2)'); // dynamic endAngle expression
     expect(c).toContain('build_svg0();');
     expect(c).toMatch(
@@ -702,6 +704,128 @@ describe('AOT responsive layout', () => {
   });
 });
 
+describe('AOT inline-Svg gradients', () => {
+  const GRAD = `strokeGrad={{type: 3, ax: 100, ay: 100, r: (lo * Math.PI) / 180,
+      stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 0.25}]}}`;
+  // endAngle is state-driven, so the <Svg> takes the dynamic path — the only one that supports
+  // gradients on inline shapes. A fully static <Svg> ignores them (see emitSvgStatic).
+  const arc = extra => `${PRE}
+    export function App() {
+      const [lo, setLo] = useState(68);
+      return (<View><Svg width={200} height={200}>
+        <Arc cx={100} cy={100} r={80} startAngle={240} endAngle={240 + lo} fill="none"
+             strokeWidth={12} stroke="#F2A64B" ${extra} />
+      </Svg></View>);
+    }`;
+
+  it('emits a MUTABLE gradient table when a field is state-driven, and drives it from state', () => {
+    const c = gen(arc(GRAD));
+    // Mutable, not const — the conic start angle is rebuilt from state on every update.
+    expect(c).toContain('static ERVectorGradient s_svg0_grads[1];');
+    expect(c).toMatch(/s_svg0_grads\[0\]\.type = 3;/);
+    expect(c).toMatch(/s_svg0_grads\[0\]\.r = .*s_state\.lo/);
+    // 1-based index on the paint, and the table reaches the engine on BOTH build and update.
+    expect(c).toContain('s_svg0_paints[0].stroke_grad = 1;');
+    expect(
+      c.match(/er_node_set_vector_ops\([^)]*s_svg0_grads, 1\)/g),
+    ).toHaveLength(2);
+  });
+
+  it('applies a CONDITIONAL gradient by switching the paint index, not by omission', () => {
+    const c = gen(
+      arc(`strokeGrad={lo > 60 ? {type: 3, ax: 100, ay: 100, r: 0,
+        stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 0.25}]} : null}`),
+    );
+    // The table entry always exists; the INDEX is what varies, so the shape falls back to its solid
+    // stroke when the condition is false instead of the gradient leaking into every other state.
+    expect(c).toMatch(
+      /s_svg0_paints\[0\]\.stroke_grad = \(\(.*s_state\.lo.*\) \? 1 : 0\);/,
+    );
+  });
+
+  it('accepts the `cond && { … }` form too', () => {
+    const c = gen(
+      arc(`strokeGrad={lo > 60 && {type: 3, ax: 100, ay: 100, r: 0,
+        stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 0.25}]}}`),
+    );
+    expect(c).toMatch(/stroke_grad = \(\(.*s_state\.lo.*\) \? 1 : 0\);/);
+  });
+
+  it('rejects a conditional whose other branch is not null', () => {
+    expect(() =>
+      gen(
+        arc(`strokeGrad={lo > 60
+          ? {type: 3, ax: 0, ay: 0, r: 0, stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}
+          : {type: 1, ax: 0, ay: 0, bx: 1, by: 0, stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}}`),
+      ),
+    ).toThrow(/conditional "strokeGrad"/);
+  });
+
+  it('bakes a CONST gradient table when every field folds', () => {
+    const c = gen(
+      arc(`strokeGrad={{type: 1, ax: 0, ay: 0, bx: 200, by: 0,
+        stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}}`),
+    );
+    expect(c).toContain('static const ERVectorGradient s_svg0_grads[]');
+    expect(c).not.toContain('static ERVectorGradient s_svg0_grads[1];');
+  });
+
+  it('leaves shapes without a gradient solid (index 0, no table)', () => {
+    const c = gen(arc(''));
+    expect(c).not.toContain('s_svg0_grads');
+    expect(c).toMatch(/er_node_set_vector_ops\([^)]*NULL, 0\)/);
+  });
+
+  it('rejects a non-constant gradient type — it decides the emitted table shape', () => {
+    expect(() =>
+      gen(
+        arc(`strokeGrad={{type: lo, ax: 0, ay: 0,
+          stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}}`),
+      ),
+    ).toThrow(/type.*compile-time constant/);
+  });
+
+  it('rejects a stop count the engine table cannot hold', () => {
+    const many = Array.from(
+      {length: 9},
+      (_, i) => `{color: '#F2A64B', offset: ${i / 9}}`,
+    ).join(', ');
+    expect(() =>
+      gen(
+        arc(
+          `strokeGrad={{type: 1, ax: 0, ay: 0, bx: 1, by: 0, stops: [${many}]}}`,
+        ),
+      ),
+    ).toThrow(/stops.*2\.\.8/);
+  });
+});
+
+describe('AOT arithmetic semantics', () => {
+  // JS `/` is always floating point. Emitting it verbatim gave C INTEGER division whenever both sides
+  // happened to be ints, which silently zeroed every ratio built from integer state: a dial driven by
+  // `(sp - MINF) / (MAXF - MINF)` sat at the bottom of its sweep for every value below the maximum and
+  // snapped to the top at it.
+  it('divides as float even when both operands are integers', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [sp, setSp] = useState(72);
+        return (<View style={{ width: ((sp - 50) / (90 - 50)) * 240 }}><Text>x</Text></View>);
+      }`);
+    expect(c).toContain('(float)((s_state.sp - 50)) / (float)((90 - 50))');
+    // The bare int division that produced the bug must not survive.
+    expect(c).not.toContain('(s_state.sp - 50) / (90 - 50)');
+  });
+
+  it('leaves + - * on integers as integer arithmetic', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<View style={{ width: (n + 2) * 4 }}><Text>x</Text></View>);
+      }`);
+    expect(c).toMatch(/\(s_state\.n \+ 2\) \* 4/);
+  });
+});
+
 describe('AOT touch drag', () => {
   it('wires onLayout / onTouchStart / onTouchMove and lowers e.layout.* + e.x to EREventData fields', () => {
     const c = gen(`${PRE}
@@ -723,7 +847,7 @@ describe('AOT touch drag', () => {
     expect(c).toContain('ER_EVENT_TOUCH_MOVE');
     // onLayout rect: x/y stay, width/height map to ERRect w/h
     expect(c).toContain(
-      's_ref_cx = (data->layout_rect.x + (data->layout_rect.w / 2));',
+      's_ref_cx = (data->layout_rect.x + ((float)(data->layout_rect.w) / (float)(2)));',
     );
     // touch coord + ref read in the shared drag handler
     expect(c).toContain('static void er_cb_onDrag(');
@@ -1529,7 +1653,9 @@ describe('AOT useHostValue (host-fed input)', () => {
       }`);
     expect(c).toContain('int steps;'); // field in ErAppState
     expect(c).toContain('.steps = 0'); // initializer
-    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%d", s_state.steps);'); // read into Text
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%d", s_state.steps);',
+    ); // read into Text
     expect(c).toContain('void er_app_set_steps(int v)'); // generated public setter
     expect(c).toContain('s_state.steps = v;');
     expect(c).toContain('app_update();'); // setter refreshes dependent nodes

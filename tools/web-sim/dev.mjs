@@ -39,7 +39,7 @@ const demo =
     (a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1),
   ) ||
   process.env.DEMO ||
-  'music-player';
+  'watch-face';
 
 const demoDir = resolve(REPO, 'demos', demo);
 const entry = resolve(demoDir, 'index.jsx');

@@ -535,6 +535,81 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * Test: er_node_set_text_spans vs the global layout pass.
+     *
+     * Span text feeds a Text node's intrinsic size, so changing it must re-solve
+     * layout — unless the node's box cannot change with the glyphs.  A pinned
+     * width + single line produces the same rect for every string, so it must
+     * take the fast path; content-sized and pinned-but-multi-line must not.
+     * Guards the imperative-readout path (updateText on a dial's centre number
+     * every drag move): a ~5.7 ms pass on ~90% of drag frames on an ESP32-S3.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* ts_root = er_node_create(ER_NODE_VIEW);
+        ERProps tsp = props_default();
+        tsp.width = 200;
+        tsp.height = 100;
+        er_node_set_props(ts_root, &tsp);
+
+        ERNode* ts_auto = er_node_create(ER_NODE_TEXT); /* content-sized */
+        tsp = props_default();
+        tsp.font_size = 16;
+        er_node_set_props(ts_auto, &tsp);
+
+        ERNode* ts_pinned = er_node_create(ER_NODE_TEXT); /* pinned width, single line */
+        tsp = props_default();
+        tsp.font_size = 16;
+        tsp.width = 120;
+        tsp.number_of_lines = 1;
+        er_node_set_props(ts_pinned, &tsp);
+
+        ERNode* ts_multi = er_node_create(ER_NODE_TEXT); /* pinned width, wraps → height varies */
+        tsp = props_default();
+        tsp.font_size = 16;
+        tsp.width = 120;
+        tsp.number_of_lines = 0;
+        er_node_set_props(ts_multi, &tsp);
+
+        er_tree_append_child(ts_root, ts_auto);
+        er_tree_append_child(ts_root, ts_pinned);
+        er_tree_append_child(ts_root, ts_multi);
+        er_tree_set_root(ts_root);
+        er_commit(); /* settle */
+
+        ERTextSpan span;
+        memset(&span, 0, sizeof(span));
+
+        strncpy(span.text, "72", ER_SPAN_TEXT_MAX);
+        er_node_set_text_spans(ts_auto, &span, 1);
+        uint32_t c = er_layout_pass_count();
+        er_commit();
+        if (er_layout_pass_count() != c + 1)
+            return fail("text-spans: content-sized Text did not re-run layout");
+
+        strncpy(span.text, "68", ER_SPAN_TEXT_MAX);
+        er_node_set_text_spans(ts_pinned, &span, 1);
+        c = er_layout_pass_count();
+        er_commit();
+        if (er_layout_pass_count() != c)
+            return fail("text-spans: pinned single-line Text forced a global layout pass");
+
+        strncpy(span.text, "a much longer string that has to wrap", ER_SPAN_TEXT_MAX);
+        er_node_set_text_spans(ts_multi, &span, 1);
+        c = er_layout_pass_count();
+        er_commit();
+        if (er_layout_pass_count() != c + 1)
+            return fail("text-spans: pinned multi-line Text skipped a needed layout pass");
+
+        er_tree_remove_child(ts_root, ts_auto);
+        er_tree_remove_child(ts_root, ts_pinned);
+        er_tree_remove_child(ts_root, ts_multi);
+        er_node_destroy(ts_auto);
+        er_node_destroy(ts_pinned);
+        er_node_destroy(ts_multi);
+        er_node_destroy(ts_root);
+    }
+
+    /* -----------------------------------------------------------------------
      * Test: container auto cross-size — a row with no explicit height grows to
      * fit its children instead of collapsing to 0.  Regression for the Flow A
      * demo where a row of cards rendered but was not hit-testable because the
