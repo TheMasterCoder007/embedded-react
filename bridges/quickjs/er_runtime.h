@@ -78,15 +78,28 @@ typedef struct
                                                     (dev/simulator). Off on devices, where it falls back to useState. */
     void (*log)(const char* line);             /**< console.log/warn/error + error sink (one line, no newline).
                                                     NULL → stdout. On a device, point this at your UART logger. */
-    const JSMallocFunctions* malloc_functions; /**< Custom JS-heap allocator, or NULL for the QuickJS
-                                        default. On an MCU with external RAM, point the JS heap at PSRAM
-                                        (JS_NewRuntime2). Must outlive the runtime. */
+    const JSMallocFunctions* malloc_functions; /**< Custom JS-heap allocator, or NULL for the bridge default.
+                                        On an MCU with external RAM, point the JS heap at PSRAM (JS_NewRuntime2).
+                                        Must outlive the runtime.
+
+                                        If you supply one, js_malloc_usable_size MUST return the real byte size
+                                        of a block (e.g. heap_caps_get_allocated_size, tlsf_block_size,
+                                        malloc_usable_size). QuickJS drives BOTH its garbage collector and
+                                        `memory_limit` off that number: a stub returning 0 disables the GC
+                                        entirely, and JS garbage then grows until the heap is exhausted — a
+                                        silent failure that looks exactly like a leak in the app or engine.
+                                        er_runtime_init probes for this at boot and warns through `log`; see also
+                                        er_runtime_gc_accounting_ok(). Leaving this NULL is always safe: the
+                                        bridge default accounts correctly on every platform, including bare-metal
+                                        newlib and Emscripten (er_js_alloc.h). */
     size_t max_stack_size;                     /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
                                                 QuickJS default. Set below the host/task stack on an MCU. */
     size_t memory_limit;                       /**< JS_SetMemoryLimit value: hard cap on the JS heap so a runaway
                                                 app fails with a JS out-of-memory error (caught by the error
                                                 overlay) instead of exhausting the shared system heap. 0 = no cap.
-                                                On an MCU, set to your JS arena size. */
+                                                On an MCU, set to your JS arena size. Counted in the same bytes
+                                                as the GC, so it depends on a working `malloc_functions`
+                                                js_malloc_usable_size (see above). */
     uint32_t extra_intrinsics;                 /**< ER_JS_INTRINSIC_* flags for features beyond the lite profile;
                                                 0 = the lite set only (what the React runtime needs). */
 } ErRuntimeConfig;
@@ -276,6 +289,20 @@ void er_runtime_pump(void);
  * @return true on success.
  */
 bool er_runtime_reset(void);
+
+/**
+ * @brief Reports whether the JS heap can account for bytes — i.e. whether the GC and
+ *        ErRuntimeConfig.memory_limit actually work.
+ *
+ * false means the runtime's js_malloc_usable_size does not report real block sizes, so QuickJS never
+ * crosses its GC threshold and never enforces the memory limit: the app will grow until the heap is
+ * exhausted. Only possible with a host-supplied `malloc_functions` (the bridge default always accounts);
+ * er_runtime_init already logs a warning in that case. Exposed so firmware can refuse to boot, fall back,
+ * or surface it on screen instead of shipping a slow leak.
+ *
+ * @return true when byte accounting works (also before init, when nothing has been probed).
+ */
+bool er_runtime_gc_accounting_ok(void);
 
 /**
  * @brief Returns the last uncaught JS error (message + stack), or "" if none.

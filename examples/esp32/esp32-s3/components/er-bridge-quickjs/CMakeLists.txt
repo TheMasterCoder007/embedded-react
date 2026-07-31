@@ -3,6 +3,8 @@
 #   native_ui_bridge.c — the NativeUI surface over er_scene.h
 #   er_runtime.c       — the portable QuickJS host core (context/globals/load/pump/reset/overlay +
 #                        the ERCF config-container loader main.c uses)
+#   er_js_alloc.c      — default JS-heap allocator with working GC size accounting (unused here: main.c
+#                        supplies its own PSRAM allocator, but er_runtime's boot-time probe lives with it)
 #   er_assets.c        — the portable ERPK asset-pack parser (the container's asset section)
 #   er_hotreload.c     — the portable ERHR transport-frame parser for on-device hot reload (main.c's
 #                        RX task feeds received USB/serial bytes into it, then applies a ready frame)
@@ -12,6 +14,7 @@ set(BRIDGE_DIR "${EMBEDDED_REACT_SRC_DIR}/bridges/quickjs")
 idf_component_register(
     SRCS "${BRIDGE_DIR}/native_ui_bridge.c"
          "${BRIDGE_DIR}/er_runtime.c"
+         "${BRIDGE_DIR}/er_js_alloc.c"
          "${BRIDGE_DIR}/er_assets.c"
          "${BRIDGE_DIR}/er_hotreload.c"
          "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)

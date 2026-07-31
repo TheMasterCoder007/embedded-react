@@ -1,0 +1,350 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * JS-heap accounting regression test — the guard against a silently dead garbage collector.
+ *
+ * QuickJS triggers its GC (and enforces JS_SetMemoryLimit) purely off js_malloc_usable_size(). Its own
+ * default returns 0 on any platform outside Apple/Win32/glibc — bare-metal newlib and Emscripten
+ * included — which disables both, and the app then grows until the heap is exhausted. That shipped once
+ * (a Flow A STM32F746 host losing ~2.6-6.5 KB per re-render, never recovering), so it gets a test.
+ *
+ * The failure is platform-dependent but the MECHANISM is not: a JSMallocFunctions whose usable_size
+ * returns 0 reproduces it exactly, on any host. So this runs on the Linux CI runner:
+ *
+ *   - the bridge's default allocator reports real byte sizes (er_js_alloc.c, both modes),
+ *   - a broken allocator is detected by er_js_probe_alloc_health / er_runtime_gc_accounting_ok,
+ *   - and with working accounting the GC actually reclaims churned garbage.
+ *
+ * Needs the JS parser, so it is not built for ER_BRIDGE_QUICKJS_LITE.
+ */
+
+#include "er_js_alloc.h"
+#include "er_runtime.h"
+#include "native_renderer.h"
+#include "quickjs.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Live bytes the growth script allocates (one-byte chars; keep in sync with SRC_GROW). */
+#define GROWTH_BYTES 262144
+
+/** @brief Byte-accounting is proven if malloc_size grows by at least this much for that string. */
+#define GROWTH_MIN_TRACKED 100000
+
+/** @brief With accounting dead, malloc_size only moves by MALLOC_OVERHEAD per live allocation. */
+#define GROWTH_MAX_UNTRACKED 4096
+
+/** @brief Headroom allowed above the pre-churn heap once ~10 MB of garbage has been created and collected. */
+#define CHURN_MAX_RETAINED (2 * 1024 * 1024)
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+static int s_failures = 0;
+
+/**
+ * @brief Materialises one live GROWTH_BYTES string — a heap change any byte accounting must see.
+ *
+ * repeat(), not `s += s`: quickjs-ng concatenation builds a ROPE, and doubling a string by appending it
+ * to itself shares both halves, so 256 KB of `length` costs ~1.7 KB of heap. That version measures
+ * nothing.
+ */
+static const char* const SRC_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
+                                    "globalThis.keep.length;\n";
+
+/** @brief Churns ~10 MB of immediately-unreachable objects/strings/arrays; the live set stays tiny. */
+static const char* const SRC_CHURN = "var acc = 0;\n"
+                                     "for (var i = 0; i < 50000; i++) {\n"
+                                     "    var o = { a: i, b: 'value-' + i, c: [i, i + 1, i + 2] };\n"
+                                     "    acc += o.c[0];\n"
+                                     "}\n"
+                                     "acc;\n";
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — broken allocators (what a host on an unsupported platform effectively gets)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Zeroed allocation. @param opaque Unused. @param count Element count. @param size Element size. */
+static void* plain_calloc(void* opaque, size_t count, size_t size)
+{
+    (void)opaque;
+    return calloc(count, size);
+}
+
+/** @brief Allocation. @param opaque Unused. @param size Byte count. */
+static void* plain_malloc(void* opaque, size_t size)
+{
+    (void)opaque;
+    return malloc(size);
+}
+
+/** @brief Free. @param opaque Unused. @param ptr Block. */
+static void plain_free(void* opaque, void* ptr)
+{
+    (void)opaque;
+    free(ptr);
+}
+
+/** @brief Resize. @param opaque Unused. @param ptr Block. @param size New byte count. */
+static void* plain_realloc(void* opaque, void* ptr, size_t size)
+{
+    (void)opaque;
+    return realloc(ptr, size);
+}
+
+/** @brief What QuickJS's cutils.h fallback does off the supported platforms. @param ptr Block. */
+static size_t usable_size_zero(const void* ptr)
+{
+    (void)ptr;
+    return 0;
+}
+
+/** @brief A usable_size reading someone else's heap header: an answer, but not about this block. */
+static size_t usable_size_constant(const void* ptr)
+{
+    (void)ptr;
+    return 16;
+}
+
+static const JSMallocFunctions MF_NO_ACCOUNTING = {plain_calloc, plain_malloc, plain_free, plain_realloc,
+                                                   usable_size_zero};
+
+static const JSMallocFunctions MF_IMPLAUSIBLE = {plain_calloc, plain_malloc, plain_free, plain_realloc,
+                                                 usable_size_constant};
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — no-op backend (the font registry needs one; nothing is painted here)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief No-op fill. @param argb Color. @param x X. @param y Y. @param w Width. @param h Height. @param ctx Context. */
+static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+{
+    (void)argb;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
+
+/** @brief No-op copy. @param src Source. @param stride Stride. @param x X. @param y Y. @param w Width. @param h Height.
+ * @param ctx Context. */
+static void noop_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
+
+/** @brief No-op blend. @param src Source. @param stride Stride. @param a Alpha. @param x X. @param y Y. @param w Width.
+ * @param h Height. @param ctx Context. */
+static void noop_blend(const void* src, int stride, uint8_t a, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)a;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — harness
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Records one assertion. @param ok Result. @param what Description printed either way. */
+static void check(bool ok, const char* what)
+{
+    printf("%s  %s\n", ok ? "ok  " : "FAIL", what);
+    if (!ok)
+    {
+        s_failures++;
+    }
+}
+
+/** @brief Returns the runtime's tracked heap size in bytes. @param rt Runtime. */
+static int64_t tracked_bytes(JSRuntime* rt)
+{
+    JSMemoryUsage usage;
+    JS_ComputeMemoryUsage(rt, &usage);
+    return usage.malloc_size;
+}
+
+/** @brief Evaluates a script, reporting any exception. @param ctx Context. @param src Source. @param name Trace name. */
+static bool run_js(JSContext* ctx, const char* src, const char* name)
+{
+    JSValue result = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_GLOBAL);
+    const bool ok = !JS_IsException(result);
+    if (!ok)
+    {
+        JSValue exc = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, exc);
+        fprintf(stderr, "JS exception in %s: %s\n", name, msg ? msg : "(unknown)");
+        if (msg)
+        {
+            JS_FreeCString(ctx, msg);
+        }
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, result);
+    return ok;
+}
+
+/**
+ * @brief Runs SRC_GROW under @p mf and returns how many bytes the runtime's accounting noticed.
+ *
+ * @param[in] mf  Allocator to build the runtime with.
+ *
+ * @return malloc_size delta across the script, or -1 if the script did not run.
+ */
+static int64_t measure_growth(const JSMallocFunctions* mf)
+{
+    JSRuntime* rt = JS_NewRuntime2(mf, NULL);
+    JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL);
+
+    /* Collect on both sides so the delta is the LIVE string and nothing else: without the first
+       collection the baseline still holds context-setup garbage, which an automatic GC part-way through
+       the script would reclaim — hiding the string's growth behind someone else's shrink. */
+    JS_RunGC(rt);
+    const int64_t before = tracked_bytes(rt);
+    const bool ok = run_js(ctx, SRC_GROW, "<grow>");
+    JS_RunGC(rt);
+    const int64_t delta = tracked_bytes(rt) - before;
+
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    return ok ? delta : -1;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Exercises the heap-accounting probe, the default allocator, and real GC reclamation.
+ *
+ * @return 0 when every check passes, 1 otherwise.
+ */
+int main(void)
+{
+    static const EmbeddedRenderBackend backend = {noop_fill, noop_copy, noop_blend, NULL, NULL, NULL};
+    embedded_renderer_set_backend(&backend);
+
+    printf("JS heap accounting mode: %s\n", er_js_usable_size_mode());
+
+    /* --- 1. The probe classifies each allocator correctly ------------------------------------------ */
+    {
+        size_t reported = 0;
+
+        JSRuntime* good = JS_NewRuntime2(er_js_default_malloc_functions(), NULL);
+        check(er_js_probe_alloc_health(good, &reported) == ER_JS_ALLOC_OK, "probe: bridge default -> OK");
+        check(reported >= 1000, "probe: bridge default reports >= the requested bytes");
+        JS_FreeRuntime(good);
+
+        JSRuntime* dead = JS_NewRuntime2(&MF_NO_ACCOUNTING, NULL);
+        check(er_js_probe_alloc_health(dead, &reported) == ER_JS_ALLOC_NO_ACCOUNTING,
+              "probe: usable_size returning 0 -> NO_ACCOUNTING");
+        JS_FreeRuntime(dead);
+
+        JSRuntime* wrong = JS_NewRuntime2(&MF_IMPLAUSIBLE, NULL);
+        check(er_js_probe_alloc_health(wrong, &reported) == ER_JS_ALLOC_IMPLAUSIBLE,
+              "probe: usable_size answering about another heap -> IMPLAUSIBLE");
+        JS_FreeRuntime(wrong);
+
+        /* A NULL usable_size is the same defect wearing a different hat: QuickJS silently substitutes a
+           zero-returning stub, so the probe must see through the substitution. */
+        JSMallocFunctions mf_null = MF_NO_ACCOUNTING;
+        mf_null.js_malloc_usable_size = NULL;
+        JSRuntime* null_us = JS_NewRuntime2(&mf_null, NULL);
+        check(er_js_probe_alloc_health(null_us, &reported) == ER_JS_ALLOC_NO_ACCOUNTING,
+              "probe: NULL usable_size -> NO_ACCOUNTING (QuickJS's silent stub)");
+        JS_FreeRuntime(null_us);
+    }
+
+    /* --- 2. The default allocator accounts in bytes; the broken one does not ----------------------- */
+    {
+        const int64_t tracked = measure_growth(er_js_default_malloc_functions());
+        char msg[128];
+        snprintf(msg, sizeof msg, "accounting: %d KB live string tracked as %d KB (bridge default)",
+                 GROWTH_BYTES / 1024, (int)(tracked / 1024));
+        check(tracked >= GROWTH_MIN_TRACKED, msg);
+
+        /* The defect itself, pinned down: same script, same heap traffic, invisible to the GC. */
+        const int64_t untracked = measure_growth(&MF_NO_ACCOUNTING);
+        check(untracked >= 0 && untracked < GROWTH_MAX_UNTRACKED,
+              "accounting: the same string is invisible when usable_size returns 0 (the reported bug)");
+    }
+
+    /* --- 3. With accounting live, the GC actually reclaims churned garbage ------------------------- */
+    {
+        JSRuntime* rt = JS_NewRuntime2(er_js_default_malloc_functions(), NULL);
+        JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL);
+
+        JS_RunGC(rt); /* baseline = the live set, so the growth measured below is the churn's alone */
+        const int64_t before = tracked_bytes(rt);
+        const bool ok = run_js(ctx, SRC_CHURN, "<churn>");
+        const int64_t after = tracked_bytes(rt); /* NOT collected first: the automatic GC must have run */
+
+        char msg[128];
+        snprintf(msg, sizeof msg, "gc: ~10 MB churned, heap grew %d KB (bounded)", (int)((after - before) / 1024));
+        check(ok && (after - before) < CHURN_MAX_RETAINED, msg);
+
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+    }
+
+    /* --- 4. End to end through er_runtime, which is what hosts actually call ----------------------- */
+    {
+        ErRuntimeConfig cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.screen_width = 240;
+        cfg.screen_height = 240;
+
+        /* malloc_functions = NULL is the path every host copies from the README. It must be safe on
+           EVERY platform, which is why er_runtime never calls JS_NewRuntime(). */
+        check(er_runtime_init(&cfg), "er_runtime: init with malloc_functions = NULL");
+        check(er_runtime_gc_accounting_ok(), "er_runtime: default allocator reports working accounting");
+        er_runtime_shutdown();
+
+        /* A host that supplies its own broken allocator still gets caught (and warned about) at boot. */
+        cfg.malloc_functions = &MF_NO_ACCOUNTING;
+        check(er_runtime_init(&cfg), "er_runtime: init with a host allocator that has no accounting");
+        check(!er_runtime_gc_accounting_ok(), "er_runtime: broken host allocator is reported, not ignored");
+        er_runtime_shutdown();
+    }
+
+    if (s_failures)
+    {
+        printf("\n%d check(s) FAILED\n", s_failures);
+        return 1;
+    }
+    printf("\nall checks passed\n");
+    return 0;
+}
