@@ -432,6 +432,9 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     {
         s_cfg.screen_scale = 1.0f;
     }
+    /* Back to the optimistic default before anything can fail: this outlives the runtime it describes,
+       and a verdict from a PREVIOUS runtime must not survive into an init that never got to probe. */
+    s_gc_accounting_ok = true;
     /* Never JS_NewRuntime(): its default allocator answers js_malloc_usable_size with 0 on any platform
        outside Apple/Win32/glibc (bare-metal newlib, Emscripten), which silently disables the GC and the
        memory limit. er_js_default_malloc_functions() always accounts for bytes — see er_js_alloc.h. */

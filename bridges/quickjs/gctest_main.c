@@ -133,6 +133,27 @@ static const JSMallocFunctions MF_NO_ACCOUNTING = {plain_calloc, plain_malloc, p
 static const JSMallocFunctions MF_IMPLAUSIBLE = {plain_calloc, plain_malloc, plain_free, plain_realloc,
                                                  usable_size_constant};
 
+/** @brief Refuses everything. @param opaque Unused. @param count Element count. @param size Element size. */
+static void* failing_calloc(void* opaque, size_t count, size_t size)
+{
+    (void)opaque;
+    (void)count;
+    (void)size;
+    return NULL;
+}
+
+/** @brief Refuses everything. @param opaque Unused. @param size Byte count. */
+static void* failing_malloc(void* opaque, size_t size)
+{
+    (void)opaque;
+    (void)size;
+    return NULL;
+}
+
+/** @brief An out-of-memory host: JS_NewRuntime2 cannot even allocate the JSRuntime, so init fails early. */
+static const JSMallocFunctions MF_ALLOCATION_FAILS = {failing_calloc, failing_malloc, plain_free, plain_realloc,
+                                                      usable_size_zero};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — no-op backend (the font registry needs one; nothing is painted here)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -347,6 +368,13 @@ int main(void)
         check(er_runtime_init(&cfg), "er_runtime: init with a host allocator that has no accounting");
         check(!er_runtime_gc_accounting_ok(), "er_runtime: broken host allocator is reported, not ignored");
         er_runtime_shutdown();
+
+        /* The verdict outlives the runtime it describes, so a later init that fails BEFORE probing must
+           not still be answering for the broken runtime above. This init dies inside JS_NewRuntime2 (its
+           allocator refuses the JSRuntime itself), so nothing is probed. */
+        cfg.malloc_functions = &MF_ALLOCATION_FAILS;
+        check(!er_runtime_init(&cfg), "er_runtime: init fails when the JS heap cannot be allocated");
+        check(er_runtime_gc_accounting_ok(), "er_runtime: a failed init does not report the previous runtime's verdict");
     }
 
     if (s_failures)
