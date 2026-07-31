@@ -2,6 +2,8 @@
 # windows, so it stays a dev-machine check, not CI). Three independent jobs:
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
+#   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
+#             in both the native and the bare-metal allocator configurations.
 #   aot     — compile a demo to C with the Flow B AOT, then gcc the generated C against the engine headers
 #             (verifies the output compiles + the embedded-react version-pin _Static_assert holds).
 name: CI
@@ -66,6 +68,37 @@ jobs:
         run: cmake --build engine/build-ci-mt
       - name: Test (2 render workers)
         run: ctest --test-dir engine/build-ci-mt --output-on-failure
+
+  bridge:
+    name: QuickJS bridge build + heap-accounting test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the bridge against the pinned QuickJS (FetchContent) and runs the smoke + heap-accounting
+      # tests. The heap test guards the GC trigger itself: QuickJS collects only when
+      # js_malloc_usable_size() says enough bytes are live, and an allocator that answers 0 (QuickJS's own
+      # default off Apple/Win32/glibc — i.e. bare metal and Emscripten) silently disables the collector
+      # AND memory_limit. The runner is glibc, so the platform-specific bug can't reproduce here directly;
+      # the test injects a zero-returning allocator to reproduce the mechanism instead.
+      - name: Configure
+        run: cmake -S bridges/quickjs -B bridges/quickjs/build-ci -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build bridges/quickjs/build-ci -j
+      - name: Test
+        run: ctest --test-dir bridges/quickjs/build-ci --output-on-failure
+      - name: Smoke
+        run: ./bridges/quickjs/build-ci/er-bridge-quickjs-smoke
+      # Second pass forcing the bare-metal allocator. It is selected by platform, so on a Linux runner
+      # the shim path would otherwise never be compiled or run — exactly the kind of off-by-default code
+      # that rots unbuilt (and it is the path that ships to MCUs).
+      - name: Configure (bare-metal size-prefix allocator)
+        run: >
+          cmake -S bridges/quickjs -B bridges/quickjs/build-ci-shim
+          -DCMAKE_BUILD_TYPE=Release -DER_BRIDGE_JS_USABLE_SIZE=shim
+      - name: Build (bare-metal size-prefix allocator)
+        run: cmake --build bridges/quickjs/build-ci-shim -j
+      - name: Test (bare-metal size-prefix allocator)
+        run: ctest --test-dir bridges/quickjs/build-ci-shim --output-on-failure
 
   aot:
     name: AOT compile smoke

@@ -26,6 +26,7 @@
 #include "er_runtime.h"
 
 #include "er_assets.h"                 /* er_assets_load_pack (ERPK asset section of the container) */
+#include "er_js_alloc.h"               /* default JS-heap allocator with working GC size accounting */
 #include "er_scene.h"                  /* er_reset, er_now_ms */
 #include "native_ui_bridge.h"          /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
 #include "overlay/message_overlay.qbc.h" /* precompiled error-overlay app (works on parser-less builds) */
@@ -52,6 +53,9 @@ static ErRuntimeConfig s_cfg;
 
 /** @brief Last uncaught JS error (message + stack), for er_runtime_show_error / _last_error. */
 static char s_last_error[512] = "";
+
+/** @brief Result of the boot-time heap-accounting probe (see er_runtime_gc_accounting_ok). */
+static bool s_gc_accounting_ok = true;
 
 /* The message-overlay app (RN redbox) ships as precompiled bytecode — see overlay/message_overlay.js
  * for the source, what it renders, and how to regenerate message_overlay.qbc.c. */
@@ -386,6 +390,37 @@ static bool rt_report(JSValue result)
     return ok;
 }
 
+/**
+ * @brief Verifies the new runtime can account for heap bytes, and warns loudly through the log sink if not.
+ *
+ * QuickJS runs its GC — and enforces ErRuntimeConfig.memory_limit — purely off
+ * js_malloc_usable_size(). A host that supplies JSMallocFunctions whose usable_size returns 0 (or
+ * reads the wrong heap's header) silently gets NO garbage collection and NO memory cap: JS garbage
+ * accumulates until the heap is exhausted, which looks exactly like a leak in the app or the engine.
+ * The bridge's own default allocator always reports correctly (er_js_alloc.h), so this only fires for
+ * a host-supplied allocator — but that is precisely the case that used to fail undiagnosed for hours.
+ */
+static void check_gc_accounting(void)
+{
+    size_t reported = 0;
+    const ErJsAllocHealth health = er_js_probe_alloc_health(s_rt, &reported);
+    s_gc_accounting_ok = (health == ER_JS_ALLOC_OK);
+    if (s_gc_accounting_ok)
+    {
+        return;
+    }
+
+    char line[160];
+    emit_line("embedded-react: WARNING - the JS heap has no byte accounting.");
+    snprintf(line, sizeof(line), "  js_malloc_usable_size() reported %zu bytes for a 1000-byte allocation.", reported);
+    emit_line(line);
+    emit_line("  Consequences: the garbage collector never runs (JS garbage grows until the heap is");
+    emit_line("  exhausted) and ErRuntimeConfig.memory_limit cannot cap the heap.");
+    emit_line("  Fix: give js_malloc_usable_size a real implementation for your heap (e.g."
+              " tlsf_block_size / heap_caps_get_allocated_size), or leave malloc_functions NULL to use the"
+              " bridge default.");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -397,11 +432,18 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     {
         s_cfg.screen_scale = 1.0f;
     }
-    s_rt = s_cfg.malloc_functions ? JS_NewRuntime2(s_cfg.malloc_functions, NULL) : JS_NewRuntime();
+    /* Back to the optimistic default before anything can fail: this outlives the runtime it describes,
+       and a verdict from a PREVIOUS runtime must not survive into an init that never got to probe. */
+    s_gc_accounting_ok = true;
+    /* Never JS_NewRuntime(): its default allocator answers js_malloc_usable_size with 0 on any platform
+       outside Apple/Win32/glibc (bare-metal newlib, Emscripten), which silently disables the GC and the
+       memory limit. er_js_default_malloc_functions() always accounts for bytes — see er_js_alloc.h. */
+    s_rt = JS_NewRuntime2(s_cfg.malloc_functions ? s_cfg.malloc_functions : er_js_default_malloc_functions(), NULL);
     if (!s_rt)
     {
         return false;
     }
+    check_gc_accounting();
     if (s_cfg.max_stack_size)
     {
         JS_SetMaxStackSize(s_rt, s_cfg.max_stack_size);
@@ -442,8 +484,9 @@ uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out
     {
         *out_len = 0;
     }
-    /* A throwaway runtime — compiling must not touch the app runtime (or require it to exist). */
-    JSRuntime* rt = JS_NewRuntime();
+    /* A throwaway runtime — compiling must not touch the app runtime (or require it to exist). Same
+       allocator as the app runtime: on-device compilation churns a lot of garbage, so it needs a live GC. */
+    JSRuntime* rt = JS_NewRuntime2(er_js_default_malloc_functions(), NULL);
     if (!rt)
     {
         return NULL;
@@ -751,6 +794,11 @@ bool er_runtime_reset(void)
     er_reset();
     install_globals();
     return s_ctx != NULL;
+}
+
+bool er_runtime_gc_accounting_ok(void)
+{
+    return s_gc_accounting_ok;
 }
 
 const char* er_runtime_last_error(void)

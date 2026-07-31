@@ -30,8 +30,27 @@ custom firmware with ~10 lines of glue (`er_runtime_init` → `er_runtime_load_b
 `er_runtime_pump`/`er_commit` per frame). The desktop demo + simulator's `examples/linux/host.c` is
 just an SDL wrapper over it.
 
+**JS heap + GC accounting** (`er_js_alloc.{c,h}`): QuickJS decides when to collect garbage — and
+enforces `ErRuntimeConfig.memory_limit` — purely from what `js_malloc_usable_size()` reports for each
+allocation. QuickJS's own default implements that for macOS, Windows, and the glibc/Linux/BSD family
+and returns **0 everywhere else**, which includes bare-metal `arm-none-eabi`/newlib and Emscripten. A
+zero there means the GC threshold is never crossed: the collector never runs, JS garbage accumulates
+until the heap is exhausted, and the memory limit cannot cap anything — silently, and only on those
+platforms, so it looks exactly like a leak in the app or the engine. The bridge therefore never uses
+QuickJS's default allocator. When `ErRuntimeConfig.malloc_functions` is NULL it installs its own: the
+platform's usable-size call where one exists, and a size-prefix allocator (one extra word per
+allocation) on bare metal, where nothing can be assumed about the heap behind `malloc`. Override the
+choice with `-DER_BRIDGE_JS_USABLE_SIZE=native|shim` if you know your target.
+
+> **If you supply your own `malloc_functions`** (e.g., to put the JS heap in PSRAM — see
+> `examples/esp32/esp32-s3/main/main.c`), its `js_malloc_usable_size` **must** return the real block
+> size (`heap_caps_get_allocated_size`, `tlsf_block_size`, `malloc_usable_size`, …). `er_runtime_init`
+> probes this at boot and logs a warning if it does not; `er_runtime_gc_accounting_ok()` exposes the
+> same answer to firmware.
+
 Targets (CMake): `er-bridge-quickjs` (the bridge lib), `er-bridge-quickjs-smoke` (§0 link check),
-`er-bridge-quickjs-runtest` (headless test harness; also runs `.qbc` bytecode), and
+`er-bridge-quickjs-runtest` (headless test harness; also runs `.qbc` bytecode),
+`er-bridge-quickjs-gctest` (heap-accounting/GC regression test, also registered with ctest), and
 `er-bridge-quickjs-compile` (bytecode precompiler: JS bundle → QuickJS bytecode blob / C array for
 MCU flash).
 

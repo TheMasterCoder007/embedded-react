@@ -86,10 +86,33 @@ endforeach ()
 add_library(er-bridge-quickjs STATIC
         native_ui_bridge.c
         er_runtime.c
+        er_js_alloc.c
         er_assets.c
         er_hotreload.c
         overlay/message_overlay.qbc.c # precompiled error-overlay app (regen: see overlay/message_overlay.js)
 )
+
+# ---------------------------------------------------------------------------
+# JS-heap size accounting. QuickJS runs its GC (and enforces memory_limit) purely off
+# js_malloc_usable_size(); its own default returns 0 outside Apple/Win32/glibc, which silently
+# disables both. The bridge therefore ships its own default allocator (er_js_alloc.c):
+#
+#   auto   — the platform's usable-size call on Apple/Win32/glibc/Emscripten, size-prefix shim
+#            elsewhere (bare metal). The right answer for almost everyone.
+#   native — force the platform call. Use on a bare-metal target whose libc malloc is NOT replaced
+#            and whose malloc_usable_size is known good; saves one word per JS allocation.
+#   shim   — force the size-prefix shim (e.g. to reproduce device behaviour on a desktop build).
+# ---------------------------------------------------------------------------
+set(ER_BRIDGE_JS_USABLE_SIZE "auto" CACHE STRING "JS heap size accounting: auto | native | shim")
+set_property(CACHE ER_BRIDGE_JS_USABLE_SIZE PROPERTY STRINGS auto native shim)
+
+if (ER_BRIDGE_JS_USABLE_SIZE STREQUAL "native")
+    target_compile_definitions(er-bridge-quickjs PRIVATE ER_JS_USABLE_SIZE_NATIVE=1)
+elseif (ER_BRIDGE_JS_USABLE_SIZE STREQUAL "shim")
+    target_compile_definitions(er-bridge-quickjs PRIVATE ER_JS_USABLE_SIZE_SHIM=1)
+elseif (NOT ER_BRIDGE_JS_USABLE_SIZE STREQUAL "auto")
+    message(FATAL_ERROR "ER_BRIDGE_JS_USABLE_SIZE must be auto, native or shim (got '${ER_BRIDGE_JS_USABLE_SIZE}')")
+endif ()
 
 target_link_libraries(er-bridge-quickjs
         PUBLIC
@@ -134,6 +157,31 @@ option(ER_BRIDGE_QUICKJS_SPLITTEST "Build the vendor/app split round-trip harnes
 if (ER_BRIDGE_QUICKJS_SPLITTEST)
     add_executable(er-bridge-quickjs-splittest splittest_main.c)
     target_link_libraries(er-bridge-quickjs-splittest PRIVATE er-bridge-quickjs)
+endif ()
+
+# ---------------------------------------------------------------------------
+# JS heap-accounting test — guards the GC trigger itself. QuickJS runs its GC (and enforces
+# memory_limit) purely off js_malloc_usable_size(); when that reports 0 the collector never fires and
+# the app grows until the heap is exhausted. Platform-dependent in the wild, but reproducible anywhere
+# with a stub allocator, so it runs on the CI runner. Needs the parser (evaluates JS source).
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_GCTEST "Build the JS heap-accounting / GC regression test" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_GCTEST)
+    message(STATUS "er-bridge-quickjs-gctest skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_GCTEST OFF)
+endif ()
+
+if (ER_BRIDGE_QUICKJS_GCTEST)
+    add_executable(er-bridge-quickjs-gctest gctest_main.c)
+    target_link_libraries(er-bridge-quickjs-gctest PRIVATE er-bridge-quickjs)
+
+    # Register with ctest only when this folder is the top-level project (standalone bridge build / CI);
+    # when an example add_subdirectory's us, its own test setup owns that.
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME js-heap-accounting COMMAND er-bridge-quickjs-gctest)
+    endif ()
 endif ()
 
 # ---------------------------------------------------------------------------

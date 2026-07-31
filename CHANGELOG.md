@@ -10,6 +10,24 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- Apps running the JavaScript runtime on a bare-metal board could run out of memory over time, even
+  when the app itself was correct. QuickJS only cleans up unused JavaScript objects once it believes a
+  certain number of bytes are in use, and it works that number out by asking the system how big each
+  allocation was. On Mac, Windows, and Linux it gets a real answer; on a bare-metal chip (and inside the
+  browser simulator) it silently got zero, so the cleanup never ran and memory use only ever grew —
+  on one STM32 board, a few kilobytes per screen redraw until the board ran out. The same gap also
+  meant the `memory_limit` setting could not actually cap the JavaScript heap. The bridge now supplies
+  its own allocator that always reports real sizes, so cleanup and the memory cap work on every
+  board without any host changes. Boards that supply their own allocator are unaffected and are now
+  checked at start-up: if theirs cannot report sizes, a clear warning is logged instead of the problem
+  going unnoticed.
+
+### Added
+
+- `er_runtime_gc_accounting_ok()`, so firmware can check at boot whether its JavaScript heap
+  cleanup and memory cap are working, and refuse to start or show it on screen if not.
 
 ## [0.10.0] - 2026-07-30
 ### Added
