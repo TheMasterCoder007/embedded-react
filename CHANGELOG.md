@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.10.1] - 2026-07-31
 ### Fixed
 
 - Apps running the JavaScript runtime on a bare-metal board could run out of memory over time, even
@@ -389,7 +391,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.7.0...v0.8.0
