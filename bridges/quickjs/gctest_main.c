@@ -227,7 +227,16 @@ static bool run_js(JSContext* ctx, const char* src, const char* name)
 static int64_t measure_growth(const JSMallocFunctions* mf)
 {
     JSRuntime* rt = JS_NewRuntime2(mf, NULL);
+    if (!rt)
+    {
+        return -1;
+    }
     JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL);
+    if (!ctx)
+    {
+        JS_FreeRuntime(rt);
+        return -1;
+    }
 
     /* Collect on both sides so the delta is the LIVE string and nothing else: without the first
        collection the baseline still holds context-setup garbage, which an automatic GC part-way through

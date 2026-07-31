@@ -412,8 +412,7 @@ static void check_gc_accounting(void)
 
     char line[160];
     emit_line("embedded-react: WARNING - the JS heap has no byte accounting.");
-    snprintf(line, sizeof(line), "  js_malloc_usable_size() reported %u bytes for a 1000-byte allocation.",
-             (unsigned)reported);
+    snprintf(line, sizeof(line), "  js_malloc_usable_size() reported %zu bytes for a 1000-byte allocation.", reported);
     emit_line(line);
     emit_line("  Consequences: the garbage collector never runs (JS garbage grows until the heap is");
     emit_line("  exhausted) and ErRuntimeConfig.memory_limit cannot cap the heap.");
