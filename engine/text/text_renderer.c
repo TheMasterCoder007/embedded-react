@@ -51,6 +51,15 @@ typedef struct
 } LineSpan;
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* Diagnostic: number of glyph-run measurement calls (er_text_measure + er_text_measure_spans)
+ * since process start. Exposed via er_text_measure_count() so callers (and tests) can confirm
+ * the layout pass's measure_content() cache is actually skipping redundant remeasurement. */
+static uint32_t s_text_measure_count = 0;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -762,6 +771,8 @@ void er_text_measure(const char* text,
                      int* out_width,
                      int* out_height)
 {
+    s_text_measure_count++;
+
     if (font_size < 8U)
         font_size = 8U;
     if (font_size > 96U)
@@ -810,6 +821,8 @@ void er_text_measure_spans(const ERTextSpan* spans,
                            int* out_width,
                            int* out_height)
 {
+    s_text_measure_count++;
+
     if (font_size < 8U)
         font_size = 8U;
     if (font_size > 96U)
@@ -851,4 +864,9 @@ void er_text_measure_spans(const ERTextSpan* spans,
         *out_width = (int)width;
     if (out_height)
         *out_height = (int)font->line_height;
+}
+
+uint32_t er_text_measure_count(void)
+{
+    return s_text_measure_count;
 }

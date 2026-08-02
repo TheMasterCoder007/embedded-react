@@ -799,5 +799,167 @@ int main(void)
         er_node_destroy(ne_root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Test: measure_content() memoisation — a Text leaf must be measured once
+     * per layout pass, not once per ancestor depth. Regression for issue #51:
+     * Pass 1 called measure_content(child) for every in-flow child and that
+     * recursed the child's entire subtree, so before memoisation a leaf D
+     * levels deep was remeasured D times as compute_layout descended one
+     * level at a time (compute_layout re-enters Pass 1 at every level, and
+     * nothing cached the result of the level above).
+     *
+     * A chain of MC_DEPTH auto-sized Views under a fixed root, ending in one
+     * auto-sized Text leaf, must produce exactly one er_text_measure*() call
+     * per commit — and, since the memoisation cache is keyed by a per-pass
+     * generation, a second commit after a real layout-affecting change must
+     * remeasure it again exactly once (not zero, and not accumulate stale
+     * counts from the first pass).
+     * -----------------------------------------------------------------------*/
+    {
+#define MC_DEPTH 8
+        ERNode* mc_root = er_node_create(ER_NODE_VIEW);
+        ERProps mcp = props_default();
+        mcp.width = 200;
+        mcp.height = 200;
+        er_node_set_props(mc_root, &mcp);
+        er_tree_set_root(mc_root);
+
+        ERNode* mc_chain[MC_DEPTH];
+        ERNode* mc_parent = mc_root;
+        for (int i = 0; i < MC_DEPTH; i++)
+        {
+            mc_chain[i] = er_node_create(ER_NODE_VIEW);
+            ERProps vp = props_default(); /* width/height stay AUTO */
+            er_node_set_props(mc_chain[i], &vp);
+            er_tree_append_child(mc_parent, mc_chain[i]);
+            mc_parent = mc_chain[i];
+        }
+
+        ERNode* mc_text = er_node_create(ER_NODE_TEXT);
+        ERProps mctp = props_default(); /* width/height stay AUTO */
+        mctp.font_size = 16;
+        strncpy(mctp.text, "measure me", ER_TEXT_MAX);
+        er_node_set_props(mc_text, &mctp);
+        er_tree_append_child(mc_parent, mc_text);
+
+        const uint32_t tm0 = er_text_measure_count();
+        er_commit();
+        const uint32_t tm1 = er_text_measure_count();
+        if (tm1 != tm0 + 1U)
+            return fail("measure-cache: deep chain remeasured the Text leaf more than once per pass");
+
+        /* A real layout-affecting change must invalidate the per-pass cache and remeasure —
+         * exactly once, proving the cache doesn't leak a stale hit into the next pass. */
+        mcp.width = 210;
+        er_node_set_props(mc_root, &mcp);
+        er_commit();
+        const uint32_t tm2 = er_text_measure_count();
+        if (tm2 != tm1 + 1U)
+            return fail("measure-cache: second layout pass did not remeasure the Text leaf exactly once");
+
+        er_tree_remove_child(mc_parent, mc_text);
+        er_node_destroy(mc_text);
+        for (int i = MC_DEPTH - 1; i >= 0; i--)
+        {
+            ERNode* p = (i == 0) ? mc_root : mc_chain[i - 1];
+            er_tree_remove_child(p, mc_chain[i]);
+            er_node_destroy(mc_chain[i]);
+        }
+        er_node_destroy(mc_root);
+#undef MC_DEPTH
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: measure_content() memoisation — a wide (not deep) tree. Even a
+     * single container with many auto-sized Text siblings used to measure
+     * each one twice per commit: once while the container computed its own
+     * intrinsic content size (summing each child's measurement), and once
+     * more when compute_layout's Pass 1 ran for real on that same container.
+     * With the cache, the second lookup is a hit — exactly one measurement
+     * per Text sibling per commit.
+     * -----------------------------------------------------------------------*/
+    {
+#define MC_WIDE_COUNT 6
+        ERNode* mw_root = er_node_create(ER_NODE_VIEW);
+        ERProps mwp = props_default();
+        mwp.width = 300;
+        mwp.height = 300;
+        er_node_set_props(mw_root, &mwp);
+
+        ERNode* mw_container = er_node_create(ER_NODE_VIEW);
+        ERProps mwcp = props_default(); /* width/height stay AUTO */
+        er_node_set_props(mw_container, &mwcp);
+        er_tree_append_child(mw_root, mw_container);
+
+        ERNode* mw_texts[MC_WIDE_COUNT];
+        for (int i = 0; i < MC_WIDE_COUNT; i++)
+        {
+            mw_texts[i] = er_node_create(ER_NODE_TEXT);
+            ERProps wtp = props_default(); /* width/height stay AUTO */
+            wtp.font_size = 16;
+            strncpy(wtp.text, "sib", ER_TEXT_MAX);
+            er_node_set_props(mw_texts[i], &wtp);
+            er_tree_append_child(mw_container, mw_texts[i]);
+        }
+        er_tree_set_root(mw_root);
+
+        const uint32_t tw0 = er_text_measure_count();
+        er_commit();
+        const uint32_t tw1 = er_text_measure_count();
+        if (tw1 != tw0 + (uint32_t)MC_WIDE_COUNT)
+            return fail("measure-cache: wide tree measured a Text sibling more than once per commit");
+
+        for (int i = 0; i < MC_WIDE_COUNT; i++)
+        {
+            er_tree_remove_child(mw_container, mw_texts[i]);
+            er_node_destroy(mw_texts[i]);
+        }
+        er_tree_remove_child(mw_root, mw_container);
+        er_node_destroy(mw_container);
+        er_node_destroy(mw_root);
+#undef MC_WIDE_COUNT
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: measure_content() short-circuit — a Text node with both width and
+     * height explicit never needs its glyph run measured (the measured value
+     * is not consulted for either axis), even nested inside auto-sized
+     * ancestors that themselves must be measured. Zero er_text_measure*()
+     * calls for the whole commit.
+     * -----------------------------------------------------------------------*/
+    {
+        ERNode* mf_root = er_node_create(ER_NODE_VIEW);
+        ERProps mfp = props_default();
+        mfp.width = 200;
+        mfp.height = 200;
+        er_node_set_props(mf_root, &mfp);
+
+        ERNode* mf_mid = er_node_create(ER_NODE_VIEW);
+        ERProps mfmp = props_default(); /* auto — forces mf_root's Pass 1 to measure mf_mid */
+        er_node_set_props(mf_mid, &mfmp);
+        er_tree_append_child(mf_root, mf_mid);
+
+        ERNode* mf_text = er_node_create(ER_NODE_TEXT);
+        ERProps mftp = props_default();
+        mftp.width = 60;
+        mftp.height = 20;
+        strncpy(mftp.text, "fixed size, never measured", ER_TEXT_MAX);
+        er_node_set_props(mf_text, &mftp);
+        er_tree_append_child(mf_mid, mf_text);
+        er_tree_set_root(mf_root);
+
+        const uint32_t tf0 = er_text_measure_count();
+        er_commit();
+        const uint32_t tf1 = er_text_measure_count();
+        if (tf1 != tf0)
+            return fail("measure-cache: fully-explicit Text size still triggered a glyph-run measurement");
+
+        er_tree_remove_child(mf_mid, mf_text);
+        er_node_destroy(mf_text);
+        er_tree_remove_child(mf_root, mf_mid);
+        er_node_destroy(mf_mid);
+        er_node_destroy(mf_root);
+    }
+
     return EXIT_SUCCESS;
 }

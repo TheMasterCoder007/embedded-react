@@ -17,6 +17,7 @@
 #include "layout_engine.h"
 #include "text_renderer.h"
 #include <stdint.h>
+#include <string.h>
 
 #ifndef ERUI_MAX_NODES
 #define ERUI_MAX_NODES 512
@@ -53,12 +54,31 @@ typedef struct
     uint8_t frozen;   /**< Pass 3: 1 once the item's flexed main size is final. */
 } FlexChild;
 
+/**
+ * @brief Per-pass memoisation slot for measure_content(), keyed by node tag.
+ *
+ * measure_content() is pure intrinsic sizing — for a given tag it depends only on that
+ * node's own subtree, which nothing mutates during a layout pass — so its result is a
+ * constant for the whole er_layout_compute() call. Without this cache, compute_layout()
+ * re-measures every child once per Pass 1 it participates in *and* recurses into that
+ * same child, so a leaf at ancestor depth d gets remeasured d times. The `gen` tag makes
+ * the cache self-invalidating across passes without a memset: a slot is only valid when
+ * its gen matches the current pass's s_measure_gen.
+ */
+typedef struct
+{
+    int16_t w, h;
+    uint16_t gen;
+} MeasureCacheEntry;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static FlexChild s_scratch[ERUI_MAX_NODES];
 static int16_t s_line_cross[ERUI_MAX_NODES];
+static MeasureCacheEntry s_measure_cache[ERUI_MAX_NODES];
+static uint16_t s_measure_gen; /**< Current layout pass id; 0 means "no pass has run yet". */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -125,6 +145,30 @@ static bool is_reverse_dir(const uint8_t d)
     return d == ER_FLEX_ROW_REVERSE || d == ER_FLEX_COL_REVERSE;
 }
 
+static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h);
+
+/**
+ * @brief Measures a child's intrinsic content size at most once, on first use.
+ *
+ * Most Pass 1 children resolve both axes from explicit size / percentage / flex_basis
+ * and never touch the intrinsic size at all — measuring them anyway would recurse their
+ * whole subtree for nothing. Callers thread `measured`/`iw`/`ih` through the main-axis and
+ * cross-axis resolution so the (potentially expensive) measure_content() call happens on
+ * demand and is shared between the two axes when both need it.
+ *
+ * @param[in]      tag       Tag of the child to measure.
+ * @param[in,out]  measured  Set to true once this call has measured; skips re-measuring.
+ * @param[out]     iw        Receives the intrinsic width (only written on the first call).
+ * @param[out]     ih        Receives the intrinsic height (only written on the first call).
+ */
+static void measure_lazy(const uint16_t tag, bool* measured, int16_t* iw, int16_t* ih)
+{
+    if (*measured)
+        return;
+    measure_content(tag, iw, ih);
+    *measured = true;
+}
+
 /**
  * @brief Computes a node's intrinsic content size, independent of the space its parent allocates.
  *
@@ -148,6 +192,17 @@ static bool is_reverse_dir(const uint8_t d)
  */
 static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
 {
+    /* Per-pass memoisation: measure_content(tag) is a pure function of that node's own
+     * subtree for the duration of one er_layout_compute() call, so a cache hit here is
+     * exactly what turns the O(depth) remeasurement into O(1) per node per pass. */
+    const bool cacheable = tag < (uint16_t)ERUI_MAX_NODES;
+    if (cacheable && s_measure_cache[tag].gen == s_measure_gen)
+    {
+        *out_w = s_measure_cache[tag].w;
+        *out_h = s_measure_cache[tag].h;
+        return;
+    }
+
     ERNode* n = er_get_node(tag);
     if (!n)
     {
@@ -160,39 +215,55 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
     const int16_t exp_w = L->width;
     const int16_t exp_h = L->height;
 
-    /* Text leaf: measure the glyph run (mirrors the Text branch of Pass 1). */
+    /* Text leaf: measure the glyph run (mirrors the Text branch of Pass 1). Both axes
+     * explicit means the measurement result is never consulted below, so skip it. */
     if (n->type == ER_NODE_TEXT)
     {
-        int measured_w = 0, measured_h = 0;
-        if (n->props.text.span_count > 0U)
+        int16_t tw, th;
+        if (exp_w != ER_LAYOUT_AUTO && exp_h != ER_LAYOUT_AUTO)
         {
-            /* Styled spans render with per-run weight/spacing — measure them the same way so a
-               bold/styled run does not overflow an auto-sized node and clip its trailing glyphs. */
-            er_text_measure_spans(n->props.text.spans,
-                                  n->props.text.span_count,
-                                  n->props.text.font_size,
-                                  n->props.text.font_family,
-                                  n->props.text.letter_spacing,
-                                  n->props.text.font_weight,
-                                  &measured_w,
-                                  &measured_h);
+            tw = exp_w;
+            th = exp_h;
         }
         else
         {
-            er_text_measure(n->props.text.text,
-                            n->props.text.font_size,
-                            n->props.text.font_family,
-                            n->props.text.letter_spacing,
-                            n->props.text.font_weight,
-                            &measured_w,
-                            &measured_h);
+            int measured_w = 0, measured_h = 0;
+            if (n->props.text.span_count > 0U)
+            {
+                /* Styled spans render with per-run weight/spacing — measure them the same way so a
+                   bold/styled run does not overflow an auto-sized node and clip its trailing glyphs. */
+                er_text_measure_spans(n->props.text.spans,
+                                      n->props.text.span_count,
+                                      n->props.text.font_size,
+                                      n->props.text.font_family,
+                                      n->props.text.letter_spacing,
+                                      n->props.text.font_weight,
+                                      &measured_w,
+                                      &measured_h);
+            }
+            else
+            {
+                er_text_measure(n->props.text.text,
+                                n->props.text.font_size,
+                                n->props.text.font_family,
+                                n->props.text.letter_spacing,
+                                n->props.text.font_weight,
+                                &measured_w,
+                                &measured_h);
+            }
+            const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
+            const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
+            tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)measured_w;
+            th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines);
         }
-        const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
-        const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
-        const int16_t tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)measured_w;
-        const int16_t th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines);
         *out_w = clamp_size(tw, L->min_width, L->max_width);
         *out_h = clamp_size(th, L->min_height, L->max_height);
+        if (cacheable)
+        {
+            s_measure_cache[tag].w = *out_w;
+            s_measure_cache[tag].h = *out_h;
+            s_measure_cache[tag].gen = s_measure_gen;
+        }
         return;
     }
 
@@ -260,6 +331,12 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
     const int16_t ih = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(content_h + pt + pb);
     *out_w = clamp_size(iw, L->min_width, L->max_width);
     *out_h = clamp_size(ih, L->min_height, L->max_height);
+    if (cacheable)
+    {
+        s_measure_cache[tag].w = *out_w;
+        s_measure_cache[tag].h = *out_h;
+        s_measure_cache[tag].gen = s_measure_gen;
+    }
 }
 
 /**
@@ -340,9 +417,13 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             const ERLayoutSpec* cl = &c->layout;
 
             /* Intrinsic content size — Text measures its glyph run; containers measure their
-             * children (so an auto-sized container fits its content instead of collapsing to 0). */
+             * children (so an auto-sized container fits its content instead of collapsing to 0).
+             * Measured lazily below: most children resolve both axes from an explicit size,
+             * percentage, or flex_basis and never need it, and measuring recurses the child's
+             * whole subtree, so paying for it unconditionally here is exactly the O(depth)
+             * remeasurement this cache/laziness combination avoids. */
+            bool measured = false;
             int16_t intr_w = 0, intr_h = 0;
-            measure_content(ct, &intr_w, &intr_h);
 
             /* Base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > intrinsic. */
             int16_t hypo_main;
@@ -363,24 +444,35 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 else if (mainsz != ER_LAYOUT_AUTO)
                     hypo_main = mainsz;
                 else
+                {
+                    measure_lazy(ct, &measured, &intr_w, &intr_h);
                     hypo_main = is_row ? intr_w : intr_h;
+                }
             }
             const int16_t main_mn = is_row ? cl->min_width : cl->min_height;
             const int16_t main_mx = is_row ? cl->max_width : cl->max_height;
             hypo_main = clamp_size(hypo_main, main_mn, main_mx);
 
-            /* Base cross size (stretch may override later if still auto). */
+            /* Base cross size (stretch may override later if still auto). When aspect_ratio
+             * will drive the cross size below, skip measuring: the aspect branch overwrites
+             * whatever the intrinsic fallback would have produced anyway. */
             const int16_t crosssz = is_row ? cl->height : cl->width;
             const float cross_pct = is_row ? cl->height_pct : cl->width_pct;
             const int16_t cross_mn = is_row ? cl->min_height : cl->min_width;
             const int16_t cross_mx = is_row ? cl->max_height : cl->max_width;
+            const bool cross_via_aspect = cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO && cross_pct <= 0.0f;
             int16_t hypo_cross;
             if (cross_pct > 0.0f)
                 hypo_cross = (int16_t)((float)cross_avail * cross_pct / 100.0f + 0.5f);
             else if (crosssz != ER_LAYOUT_AUTO)
                 hypo_cross = crosssz;
+            else if (cross_via_aspect)
+                hypo_cross = 0; /* placeholder — overwritten by the aspect_ratio branch below */
             else
+            {
+                measure_lazy(ct, &measured, &intr_w, &intr_h);
                 hypo_cross = is_row ? intr_h : intr_w;
+            }
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
 
             /* aspect_ratio: if the cross dimension is auto (no explicit size or percentage),
@@ -388,7 +480,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
              *   row  direction: cross (height) = main (width)  / aspect_ratio
              *   col  direction: cross (width)  = main (height) * aspect_ratio
              */
-            if (cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO && cross_pct <= 0.0f)
+            if (cross_via_aspect)
             {
                 const float new_cross =
                     is_row ? (float)hypo_main / cl->aspect_ratio : (float)hypo_main * cl->aspect_ratio;
@@ -913,5 +1005,15 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
 
 void er_layout_compute(uint16_t root_tag, int16_t w, int16_t h)
 {
+    /* Advance the measure-cache generation so every measure_content() call this pass
+     * starts with a clean slate. gen 0 is reserved as "never valid" (a fresh
+     * s_measure_cache is zero-initialized), so skip it on wraparound; a wrap also means
+     * every table slot could coincidentally hold stale gen 1 already, so clear it. */
+    s_measure_gen++;
+    if (s_measure_gen == 0U)
+    {
+        memset(s_measure_cache, 0, sizeof(s_measure_cache));
+        s_measure_gen = 1U;
+    }
     compute_layout(root_tag, w, h, 0, 0);
 }
