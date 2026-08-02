@@ -10,6 +10,18 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- Any state change that touched layout (a resized View, new text, a mounted/unmounted node) cost far
+  more than a plain repaint, and the gap grew with how deeply nested the UI was. The flex engine
+  measures each node's natural content size (a Text node's glyph run, or a container's summed
+  children) before laying it out. However, that measurement was neither cached nor skipped when unneeded —
+  a node D levels deep in the tree got its content remeasured D times as the layout pass descended one
+  level at a time, and even a flat row of auto-sized text siblings was measured twice per commit. The
+  layout pass now measures each node's content at most once per pass. It skips the measurement
+  entirely when a node's size is already fully pinned (explicit width and height, or driven by
+  `flexBasis`/percentage/`aspectRatio`) — for the common case of mostly fixed-size embedded layouts,
+  the text-measuring work drops to zero.
 
 ## [0.10.1] - 2026-07-31
 ### Fixed

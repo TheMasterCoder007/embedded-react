@@ -995,6 +995,18 @@ extern "C"
     uint32_t er_layout_pass_count(void);
 
     /**
+     * @brief Returns how many times the text renderer has measured a glyph run
+     *        (er_text_measure() + er_text_measure_spans() combined).
+     *
+     * Monotonic since process start. Intended for diagnostics and profiling — e.g. confirming
+     * that the layout pass's per-node intrinsic-size cache is actually preventing a Text node
+     * from being remeasured once per ancestor it has, rather than once per layout pass.
+     *
+     * @return Monotonic count of glyph-run measurements since process start.
+     */
+    uint32_t er_text_measure_count(void);
+
+    /**
      * @brief Returns the number of milliseconds elapsed since embedded_renderer_set_backend() was called.
      *
      * @return Monotonic timestamp in milliseconds, accumulated from embedded_renderer_tick() calls.
