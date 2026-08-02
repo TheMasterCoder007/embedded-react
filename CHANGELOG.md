@@ -12,6 +12,19 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- Re-rendering a component no longer re-serializes every host node's props across the JS→C bridge
+  when nothing actually changed. The reconciler's `prepareUpdate` used to rubber-stamp every update
+  (`return true`), so a single state change re-marshaled the style/props of every re-rendered node —
+  the dominant per-node cost of a Flow A update (~10 ms/node on an ESP32-S3) — even when the values
+  were identical. It now diffs the old and new props by value and returns `null` when nothing
+  observable changed, which makes React skip the commit for that node entirely. When something did
+  change, a section-flag payload re-applies only the affected part: a new inline event handler
+  re-registers the handler without re-serializing props, a `<Text>` re-uploads spans only when its
+  content or style changed, and an `<Svg>` re-uploads its vector op-tape only when the tape's real
+  inputs changed (shape children, `viewBox`, `width`/`height`, or the `source` artifact/box) — so a
+  position-only style move, the interactive-drag hot path, no longer re-flattens declarative shapes
+  every frame.
+
 - Any state change that touched layout (a resized View, new text, a mounted/unmounted node) cost far
   more than a plain repaint, and the gap grew with how deeply nested the UI was. The flex engine
   measures each node's natural content size (a Text node's glyph run, or a container's summed

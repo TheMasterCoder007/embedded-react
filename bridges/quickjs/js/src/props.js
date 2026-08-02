@@ -180,6 +180,60 @@ export function buildProps(type, props) {
   return flat;
 }
 
+// Bail-out depth for deepEqualProps. Real host props are shallow (style ≈ 2 levels, a nested-<Text>
+// span or <Svg> shape tree ≈ 3 levels per element); anything deeper is pathological and bails to
+// "changed", whose worst case is a redundant re-apply — exactly the pre-diff behavior.
+const DEEP_EQUAL_MAX_DEPTH = 24;
+
+/**
+ * Deep value equality for host-prop diffing (the reconciler's prepareUpdate). Re-renders recreate
+ * prop objects every time, so identity alone can't tell "nothing changed" — this compares by value:
+ * primitives via Object.is, arrays elementwise, React elements by type and props (keys don't affect a
+ * flattened <Text>/<Svg> subtree's output), and plain objects key-by-key. Class instances (e.g.,
+ * Animated.Value) compare by IDENTITY only: a fresh instance must read as changed, so it gets bound
+ * to the node, while the same instance is already bound and can be skipped.
+ */
+export function deepEqualProps(a, b, depth = 0) {
+  if (Object.is(a, b)) return true;
+  if (depth >= DEEP_EQUAL_MAX_DEPTH) return false;
+  if (
+    typeof a !== 'object' ||
+    typeof b !== 'object' ||
+    a === null ||
+    b === null
+  )
+    return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+      return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqualProps(a[i], b[i], depth + 1)) return false;
+    }
+    return true;
+  }
+  // React elements: equal when they render the same host output — same type, same props.
+  if (a.$$typeof !== b.$$typeof) return false;
+  if (a.$$typeof !== undefined) {
+    return a.type === b.type && deepEqualProps(a.props, b.props, depth + 1);
+  }
+  // Plain objects only; class instances fall through to "changed" (identity already ruled equal out).
+  const protoA = Object.getPrototypeOf(a);
+  const protoB = Object.getPrototypeOf(b);
+  if (
+    (protoA !== null && protoA !== Object.prototype) ||
+    (protoB !== null && protoB !== Object.prototype)
+  )
+    return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!deepEqualProps(a[k], b[k], depth + 1)) return false;
+  }
+  return true;
+}
+
 /**
  * True for an `onXxx` prop whose value is a function (an event handler to route via setEvent).
  */

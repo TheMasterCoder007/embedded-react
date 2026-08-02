@@ -23,6 +23,7 @@ import {NativeUI} from './native-ui.js';
 import {
   buildProps,
   buildTextSpans,
+  deepEqualProps,
   isEventProp,
   isTextContent,
 } from './props.js';
@@ -132,20 +133,12 @@ function applyVectorOps(type, handle, props) {
 }
 
 /**
- * Decides whether a committed <Svg> update actually needs its op-tape re-uploaded.
- *
- * Re-marshaling a baked vector op-tape across the JS->C bridge every frame is expensive (it dominates an
- * interactive drag on PSRAM-QuickJS), and it's pure waste when only the node's POSITION changed: a
- * `<Svg source>` whose imported artifact and resolved box are unchanged renders identical geometry, and its
- * on-screen movement is already handled by the layout props (left/top/width/height) via applyProps. So we
- * re-upload only when the source artifact reference changes or the resolved box size changes. Declarative
- * `<Svg><Path/></Svg>` has no `source` — its shapes live in props/children, which we can't cheaply diff
- * here, so it always re-flattens (unchanged behavior).
+ * True when a `<Svg source={vectorArtifact}>`'s resolved render box changed between renders — the
+ * one style-driven input to the op-tape (the tape is scaled from the artifact's intrinsic px to the
+ * box, see scaleVectorArtifact). A style change that leaves the box alone (a position move during a
+ * drag, a color tweak) does not need the tape re-uploaded.
  */
-function vectorNeedsUpload(type, prevProps, nextProps) {
-  if (type !== 'Svg') return false;
-  if (!nextProps.source) return true; // declarative children: re-flatten as before
-  if (!prevProps || prevProps.source !== nextProps.source) return true;
+function svgSourceBoxChanged(prevProps, nextProps) {
   const src = nextProps.source;
   const iw = src && src.kind === 'vector' ? src.width : undefined;
   const ih = src && src.kind === 'vector' ? src.height : undefined;
@@ -153,6 +146,88 @@ function vectorNeedsUpload(type, prevProps, nextProps) {
     svgBoxSize(prevProps, 'width', iw) !== svgBoxSize(nextProps, 'width', iw) ||
     svgBoxSize(prevProps, 'height', ih) !== svgBoxSize(nextProps, 'height', ih)
   );
+}
+
+/**
+ * Diffs a re-rendered host element's props and returns what commitUpdate must re-apply — or null
+ * when nothing observable changed, which makes React skip the commit entirely (no Update effect, no
+ * bridge traffic). Re-marshaling props across the JS->C bridge is the dominant cost of a Flow A
+ * re-render, and a parent's state change re-renders every non-memoized child with identical props,
+ * so the null case is the common one on interactive screens.
+ *
+ * The payload is a set of section flags, so a partial change re-applies only its section:
+ *   props  — NativeUI.setProps (resolved style + passthrough props + text)
+ *   spans  — inline text spans (<Text> only; derived from children + style)
+ *   vector — the <Svg> op-tape upload (flattenSvg/scaleVectorArtifact + setVectorOps)
+ *   events — on* handler registration (an inline closure has a new identity every render and must be
+ *            re-stored — its captures went stale — but that alone shouldn't re-serialize the props)
+ *
+ * The vector flag tracks the op-tape's actual inputs. A source artifact tape depends on the source
+ * reference and the resolved box; a declarative <Svg><Path/></Svg> tape depends on the shape
+ * children, viewBox, and the direct width/height props (flattenSvg never reads style). So a
+ * position-only style move of either kind — the interactive-drag hot path — skips the upload.
+ *
+ * Props buildProps never reads still set the props flag when they change — conservative, and only
+ * paid when such a value actually changed.
+ */
+function diffUpdate(type, prevProps, nextProps) {
+  let props = false;
+  let spans = false;
+  let events = false;
+  let vector = false;
+  const diffKey = key => {
+    const a = prevProps[key];
+    const b = nextProps[key];
+    if (Object.is(a, b)) return;
+    if (isEventProp(key, a) || isEventProp(key, b)) {
+      events = true;
+      return;
+    }
+    switch (key) {
+      case 'children':
+        // Only subtree-owning types render children through their OWN props (shouldSetTextContent);
+        // everywhere else children are separate host instances React mutates directly.
+        if (type === 'Text') {
+          if (!deepEqualProps(a, b)) {
+            props = true; // flat.text is built from children
+            spans = true;
+          }
+        } else if (type === 'Svg') {
+          if (!deepEqualProps(a, b)) vector = true;
+        }
+        return;
+      case 'style':
+        if (!deepEqualProps(a, b)) {
+          props = true;
+          if (type === 'Text') spans = true;
+          if (type === 'Svg' && nextProps.source)
+            vector = vector || svgSourceBoxChanged(prevProps, nextProps);
+        }
+        return;
+      case 'source':
+        props = true; // imageName (Image / raster Svg fallback)
+        if (type === 'Svg') vector = true; // artifact swap → new tape
+        return;
+      case 'width':
+      case 'height':
+      case 'viewBox':
+        if (type === 'Svg') {
+          props = true; // width/height fold into the resolved style box
+          vector = true; // and drive the tape's root transform / artifact scale
+          return;
+        }
+      // fall through: on other types these are ordinary (ignored or passthrough) props
+      default:
+        if (!deepEqualProps(a, b)) props = true;
+    }
+  };
+  for (const key in prevProps) diffKey(key);
+  for (const key in nextProps) {
+    if (!Object.prototype.hasOwnProperty.call(prevProps, key)) diffKey(key);
+  }
+  return props || spans || events || vector
+    ? {props, spans, events, vector}
+    : null;
 }
 
 /**
@@ -266,23 +341,24 @@ export const hostConfig = {
   clearContainer() {
     // Children are removed individually via removeChildFromContainer.
   },
-  prepareUpdate() {
-    // Always re-apply: NativeUI.setProps is fully declarative, so a non-null payload is enough.
-    return true;
+  prepareUpdate(instance, type, oldProps, newProps) {
+    // Runs in the render phase. null → React schedules no Update effect and commitUpdate never
+    // fires for this node — the win that makes an unchanged re-render bridge-free.
+    return diffUpdate(type, oldProps, newProps);
   },
-  commitUpdate(instance, _payload, type, prevProps, nextProps) {
+  commitUpdate(instance, payload, type, prevProps, nextProps) {
     const raster = rasterSvgArtifact(type, nextProps);
     if (raster) {
       // The Svg instance is an Image node (raster fallback); re-apply as image props, never vector ops.
-      applyProps('Image', instance, rasterImageProps(nextProps, raster));
-      applyEvents(instance, prevProps, nextProps);
+      if (payload.props)
+        applyProps('Image', instance, rasterImageProps(nextProps, raster));
+      if (payload.events) applyEvents(instance, prevProps, nextProps);
       return;
     }
-    applyProps(type, instance, nextProps);
-    applyTextSpans(type, instance, nextProps);
-    if (vectorNeedsUpload(type, prevProps, nextProps))
-      applyVectorOps(type, instance, nextProps);
-    applyEvents(instance, prevProps, nextProps);
+    if (payload.props) applyProps(type, instance, nextProps);
+    if (payload.spans) applyTextSpans(type, instance, nextProps);
+    if (payload.vector) applyVectorOps(type, instance, nextProps);
+    if (payload.events) applyEvents(instance, prevProps, nextProps);
   },
   commitTextUpdate(textInstance, _oldText, newText) {
     NativeUI.setProps(textInstance, {text: String(newText)});
