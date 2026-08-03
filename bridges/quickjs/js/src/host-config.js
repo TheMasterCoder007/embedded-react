@@ -41,23 +41,28 @@ import {splitAnimatedStyle} from './embedded-react/split-style.js';
  * style={{ transform: [{ scale: v }] }}>` binds without an Animated.* wrapper — which is what the
  * Flow B AOT compiler does too, so the two render paths stay in parity. An Animated.* wrapper has
  * already stripped its bindings into a ref, so splitAnimatedStyle finds none here (no double bind).
+ *
+ * Returns the resolved flat style so a paired applyTextSpans call can reuse it instead of
+ * re-flattening props.style from scratch — style flattening (recursive array walk and object merge)
+ * is one of the costlier steps in commitUpdate's JS-side work on a bytecode-interpreted MCU target.
  */
 function applyProps(type, handle, props) {
   const {staticStyle, bindings} = splitAnimatedStyle(props.style);
-  NativeUI.setProps(
-    handle,
-    buildProps(type, bindings.length ? {...props, style: staticStyle} : props),
-  );
+  NativeUI.setProps(handle, buildProps(type, props, staticStyle));
   for (const b of bindings) b.value.__bind(handle, b.prop);
+  return staticStyle;
 }
 
 /**
  * Applies inline-styled text spans for a <Text> node (no-op for other types). buildTextSpans returns
  * [] for uniform text, which reverts the node to plain-text rendering — so this also clears stale
- * spans when a Text changes from styled-runs to a single style across renders.
+ * spans when a Text changes from styled-runs to a single style across renders. `flatStyle`, when
+ * given, is the already-resolved style from a paired applyProps call on the same props (avoids a
+ * second full flattening of props.style).
  */
-function applyTextSpans(type, handle, props) {
-  if (type === 'Text') NativeUI.setTextSpans(handle, buildTextSpans(props));
+function applyTextSpans(type, handle, props, flatStyle) {
+  if (type === 'Text')
+    NativeUI.setTextSpans(handle, buildTextSpans(props, flatStyle));
 }
 
 /** Resolves an <Svg>'s render-box dimension from style/props, falling back to the source's intrinsic size. */
@@ -289,8 +294,8 @@ export const hostConfig = {
       return handle;
     }
     const handle = NativeUI.createNode(type);
-    applyProps(type, handle, props);
-    applyTextSpans(type, handle, props);
+    const flatStyle = applyProps(type, handle, props);
+    applyTextSpans(type, handle, props, flatStyle);
     applyVectorOps(type, handle, props);
     applyEvents(handle, null, props);
     return handle;
@@ -355,8 +360,11 @@ export const hostConfig = {
       if (payload.events) applyEvents(instance, prevProps, nextProps);
       return;
     }
-    if (payload.props) applyProps(type, instance, nextProps);
-    if (payload.spans) applyTextSpans(type, instance, nextProps);
+    // payload.spans is only ever set alongside payload.props for Text nodes (see diffUpdate), so
+    // flatStyle is defined whenever applyTextSpans actually needs it.
+    let flatStyle;
+    if (payload.props) flatStyle = applyProps(type, instance, nextProps);
+    if (payload.spans) applyTextSpans(type, instance, nextProps, flatStyle);
     if (payload.vector) applyVectorOps(type, instance, nextProps);
     if (payload.events) applyEvents(instance, prevProps, nextProps);
   },

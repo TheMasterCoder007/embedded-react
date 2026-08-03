@@ -185,6 +185,30 @@ describe('prepareUpdate diffing: unchanged re-renders are bridge-free', () => {
       true,
     );
   });
+
+  it('a simultaneous text-content AND span-style change resolves both correctly from one flatten', () => {
+    // Exercises commitUpdate's payload.props + payload.spans path together: applyProps and
+    // applyTextSpans must each see the CURRENT (post-change) style even though the flattened style
+    // is computed once and shared between them.
+    const ui = (n, color) =>
+      el(
+        'Text',
+        {style: {color: '#ffffff'}},
+        `count: ${n} `,
+        el('Text', {style: {color}}, 'live'),
+      );
+    const update = mount(ui(0, '#ff0000'));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(1, '#00ff00'));
+
+    expect(calls.setProps).toHaveLength(1);
+    expect(calls.setProps[0].p.text).toBe('count: 1 live');
+    expect(calls.setTextSpans).toHaveLength(1);
+    const spans = calls.setTextSpans[0].spans;
+    expect(spans.find(s => s.text === 'count: 1 ').color).toBe('#ffffff');
+    expect(spans.find(s => s.text === 'live').color).toBe('#00ff00');
+  });
 });
 
 describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs', () => {

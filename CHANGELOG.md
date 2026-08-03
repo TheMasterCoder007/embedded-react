@@ -12,6 +12,14 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- `commitUpdate`'s JS-side prop marshaling no longer flattens a node's `style` redundantly. A
+  `<Text>` update used to flatten the same style object up to four times and walk its children tree
+  twice (once each in `splitAnimatedStyle`, `buildProps`'s prop bag, `buildProps`'s text-content
+  build, and `buildTextSpans`) before a single value ever reached the bridge — costly JS/bytecode
+  work on an interpreted MCU target, separate from and in addition to the prop re-serialization
+  fixed below. The style is now flattened once per commit and threaded through to every consumer
+  that needs it.
+
 - Re-rendering a component no longer re-serializes every host node's props across the JS→C bridge
   when nothing actually changed. The reconciler's `prepareUpdate` used to rubber-stamp every update
   (`return true`), so a single state change re-marshaled the style/props of every re-rendered node —
