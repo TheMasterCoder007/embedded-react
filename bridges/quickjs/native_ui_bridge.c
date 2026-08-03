@@ -859,44 +859,311 @@ static void props_init_defaults(ERProps* p)
     er_props_default(p);
 }
 
-/* Marshalling convenience macros — each reads one key from `obj` into the ERProps `p`.
-   They share the locals (ctx, obj, p) of apply_props() and are #undef'd at its end. */
+/**
+ * @brief Every JS prop name apply_props() understands, as an index into s_prop_slots.
+ *
+ * Order doesn't matter for correctness (lookup is by atom, not by enum value) — grouped here to
+ * mirror apply_props()'s own layout/text/etc. sections for readability.
+ */
+typedef enum
+{
+    PROP_WIDTH,
+    PROP_HEIGHT,
+    PROP_MIN_WIDTH,
+    PROP_MAX_WIDTH,
+    PROP_MIN_HEIGHT,
+    PROP_MAX_HEIGHT,
+    PROP_TOP,
+    PROP_LEFT,
+    PROP_RIGHT,
+    PROP_BOTTOM,
+    PROP_MARGIN,
+    PROP_MARGIN_TOP,
+    PROP_MARGIN_RIGHT,
+    PROP_MARGIN_BOTTOM,
+    PROP_MARGIN_LEFT,
+    PROP_MARGIN_HORIZONTAL,
+    PROP_MARGIN_VERTICAL,
+    PROP_PADDING,
+    PROP_PADDING_TOP,
+    PROP_PADDING_RIGHT,
+    PROP_PADDING_BOTTOM,
+    PROP_PADDING_LEFT,
+    PROP_PADDING_HORIZONTAL,
+    PROP_PADDING_VERTICAL,
+    PROP_GAP,
+    PROP_ROW_GAP,
+    PROP_COLUMN_GAP,
+    PROP_FLEX,
+    PROP_FLEX_GROW,
+    PROP_FLEX_SHRINK,
+    PROP_FLEX_BASIS,
+    PROP_FLEX_DIRECTION,
+    PROP_FLEX_WRAP,
+    PROP_JUSTIFY_CONTENT,
+    PROP_ALIGN_ITEMS,
+    PROP_ALIGN_SELF,
+    PROP_ALIGN_CONTENT,
+    PROP_POSITION,
+    PROP_DISPLAY,
+    PROP_OVERFLOW,
+    PROP_POINTER_EVENTS,
+    PROP_ASPECT_RATIO,
+    PROP_BACKGROUND_COLOR,
+    PROP_OPACITY,
+    PROP_BORDER_RADIUS,
+    PROP_BORDER_TOP_LEFT_RADIUS,
+    PROP_BORDER_TOP_RIGHT_RADIUS,
+    PROP_BORDER_BOTTOM_LEFT_RADIUS,
+    PROP_BORDER_BOTTOM_RIGHT_RADIUS,
+    PROP_BORDER_WIDTH,
+    PROP_BORDER_LEFT_WIDTH,
+    PROP_BORDER_TOP_WIDTH,
+    PROP_BORDER_RIGHT_WIDTH,
+    PROP_BORDER_BOTTOM_WIDTH,
+    PROP_BORDER_COLOR,
+    PROP_BORDER_LEFT_COLOR,
+    PROP_BORDER_TOP_COLOR,
+    PROP_BORDER_RIGHT_COLOR,
+    PROP_BORDER_BOTTOM_COLOR,
+    PROP_BORDER_STYLE,
+    PROP_Z_INDEX,
+    PROP_TEXT,
+    PROP_FONT_FAMILY,
+    PROP_COLOR,
+    PROP_FONT_SIZE,
+    PROP_FONT_WEIGHT,
+    PROP_FONT_STYLE,
+    PROP_TEXT_ALIGN,
+    PROP_TEXT_DECORATION_LINE,
+    PROP_NUMBER_OF_LINES,
+    PROP_ELLIPSIZE_MODE,
+    PROP_LINE_HEIGHT,
+    PROP_LETTER_SPACING,
+    PROP_IMAGE_NAME,
+    PROP_RESIZE_MODE,
+    PROP_TINT_COLOR,
+    PROP_TRANSFORM,
+    PROP_TRANSFORM_ORIGIN,
+    PROP_SHADOW_COLOR,
+    PROP_SHADOW_OFFSET,
+    PROP_SHADOW_OPACITY,
+    PROP_SHADOW_RADIUS,
+    PROP_ELEVATION,
+    PROP_ANIMATING,
+    PROP_VALUE,
+    PROP_TRACK_COLOR,
+    PROP_THUMB_COLOR,
+    PROP_PLACEHOLDER,
+    PROP_PLACEHOLDER_TEXT_COLOR,
+    PROP_CURSOR_COLOR,
+    PROP_EDITABLE,
+    PROP_VISIBLE,
+    PROP_BACKDROP_COLOR,
+    PROP_COUNT_,
+} PropId;
 
-#define ER_DIM(key, field)                                                                                             \
+/** @brief JS prop names, indexed by PropId. Designated initializers keep this in sync with the enum. */
+static const char* const k_prop_names[PROP_COUNT_] = {
+    [PROP_WIDTH] = "width",
+    [PROP_HEIGHT] = "height",
+    [PROP_MIN_WIDTH] = "minWidth",
+    [PROP_MAX_WIDTH] = "maxWidth",
+    [PROP_MIN_HEIGHT] = "minHeight",
+    [PROP_MAX_HEIGHT] = "maxHeight",
+    [PROP_TOP] = "top",
+    [PROP_LEFT] = "left",
+    [PROP_RIGHT] = "right",
+    [PROP_BOTTOM] = "bottom",
+    [PROP_MARGIN] = "margin",
+    [PROP_MARGIN_TOP] = "marginTop",
+    [PROP_MARGIN_RIGHT] = "marginRight",
+    [PROP_MARGIN_BOTTOM] = "marginBottom",
+    [PROP_MARGIN_LEFT] = "marginLeft",
+    [PROP_MARGIN_HORIZONTAL] = "marginHorizontal",
+    [PROP_MARGIN_VERTICAL] = "marginVertical",
+    [PROP_PADDING] = "padding",
+    [PROP_PADDING_TOP] = "paddingTop",
+    [PROP_PADDING_RIGHT] = "paddingRight",
+    [PROP_PADDING_BOTTOM] = "paddingBottom",
+    [PROP_PADDING_LEFT] = "paddingLeft",
+    [PROP_PADDING_HORIZONTAL] = "paddingHorizontal",
+    [PROP_PADDING_VERTICAL] = "paddingVertical",
+    [PROP_GAP] = "gap",
+    [PROP_ROW_GAP] = "rowGap",
+    [PROP_COLUMN_GAP] = "columnGap",
+    [PROP_FLEX] = "flex",
+    [PROP_FLEX_GROW] = "flexGrow",
+    [PROP_FLEX_SHRINK] = "flexShrink",
+    [PROP_FLEX_BASIS] = "flexBasis",
+    [PROP_FLEX_DIRECTION] = "flexDirection",
+    [PROP_FLEX_WRAP] = "flexWrap",
+    [PROP_JUSTIFY_CONTENT] = "justifyContent",
+    [PROP_ALIGN_ITEMS] = "alignItems",
+    [PROP_ALIGN_SELF] = "alignSelf",
+    [PROP_ALIGN_CONTENT] = "alignContent",
+    [PROP_POSITION] = "position",
+    [PROP_DISPLAY] = "display",
+    [PROP_OVERFLOW] = "overflow",
+    [PROP_POINTER_EVENTS] = "pointerEvents",
+    [PROP_ASPECT_RATIO] = "aspectRatio",
+    [PROP_BACKGROUND_COLOR] = "backgroundColor",
+    [PROP_OPACITY] = "opacity",
+    [PROP_BORDER_RADIUS] = "borderRadius",
+    [PROP_BORDER_TOP_LEFT_RADIUS] = "borderTopLeftRadius",
+    [PROP_BORDER_TOP_RIGHT_RADIUS] = "borderTopRightRadius",
+    [PROP_BORDER_BOTTOM_LEFT_RADIUS] = "borderBottomLeftRadius",
+    [PROP_BORDER_BOTTOM_RIGHT_RADIUS] = "borderBottomRightRadius",
+    [PROP_BORDER_WIDTH] = "borderWidth",
+    [PROP_BORDER_LEFT_WIDTH] = "borderLeftWidth",
+    [PROP_BORDER_TOP_WIDTH] = "borderTopWidth",
+    [PROP_BORDER_RIGHT_WIDTH] = "borderRightWidth",
+    [PROP_BORDER_BOTTOM_WIDTH] = "borderBottomWidth",
+    [PROP_BORDER_COLOR] = "borderColor",
+    [PROP_BORDER_LEFT_COLOR] = "borderLeftColor",
+    [PROP_BORDER_TOP_COLOR] = "borderTopColor",
+    [PROP_BORDER_RIGHT_COLOR] = "borderRightColor",
+    [PROP_BORDER_BOTTOM_COLOR] = "borderBottomColor",
+    [PROP_BORDER_STYLE] = "borderStyle",
+    [PROP_Z_INDEX] = "zIndex",
+    [PROP_TEXT] = "text",
+    [PROP_FONT_FAMILY] = "fontFamily",
+    [PROP_COLOR] = "color",
+    [PROP_FONT_SIZE] = "fontSize",
+    [PROP_FONT_WEIGHT] = "fontWeight",
+    [PROP_FONT_STYLE] = "fontStyle",
+    [PROP_TEXT_ALIGN] = "textAlign",
+    [PROP_TEXT_DECORATION_LINE] = "textDecorationLine",
+    [PROP_NUMBER_OF_LINES] = "numberOfLines",
+    [PROP_ELLIPSIZE_MODE] = "ellipsizeMode",
+    [PROP_LINE_HEIGHT] = "lineHeight",
+    [PROP_LETTER_SPACING] = "letterSpacing",
+    [PROP_IMAGE_NAME] = "imageName",
+    [PROP_RESIZE_MODE] = "resizeMode",
+    [PROP_TINT_COLOR] = "tintColor",
+    [PROP_TRANSFORM] = "transform",
+    [PROP_TRANSFORM_ORIGIN] = "transformOrigin",
+    [PROP_SHADOW_COLOR] = "shadowColor",
+    [PROP_SHADOW_OFFSET] = "shadowOffset",
+    [PROP_SHADOW_OPACITY] = "shadowOpacity",
+    [PROP_SHADOW_RADIUS] = "shadowRadius",
+    [PROP_ELEVATION] = "elevation",
+    [PROP_ANIMATING] = "animating",
+    [PROP_VALUE] = "value",
+    [PROP_TRACK_COLOR] = "trackColor",
+    [PROP_THUMB_COLOR] = "thumbColor",
+    [PROP_PLACEHOLDER] = "placeholder",
+    [PROP_PLACEHOLDER_TEXT_COLOR] = "placeholderTextColor",
+    [PROP_CURSOR_COLOR] = "cursorColor",
+    [PROP_EDITABLE] = "editable",
+    [PROP_VISIBLE] = "visible",
+    [PROP_BACKDROP_COLOR] = "backdropColor",
+};
+
+/** @brief (atom, id) pair; s_prop_atoms is sorted by atom value once, for prop_id_from_atom()'s bsearch. */
+typedef struct
+{
+    JSAtom atom;
+    PropId id;
+} PropAtomEntry;
+
+static PropAtomEntry s_prop_atoms[PROP_COUNT_];
+
+/** @brief Runtime s_prop_atoms was built against; atoms are runtime-scoped, not context-scoped. */
+static JSRuntime* s_prop_atoms_rt = NULL;
+
+static int prop_atom_entry_cmp(const void* a, const void* b)
+{
+    const JSAtom aa = ((const PropAtomEntry*)a)->atom;
+    const JSAtom ab = ((const PropAtomEntry*)b)->atom;
+    return (aa > ab) - (aa < ab);
+}
+
+/**
+ * @brief Interns every apply_props() key into s_prop_atoms, sorted for prop_id_from_atom()'s bsearch.
+ *
+ * Atoms live in the JSRuntime, not the JSContext, and er_bridge_install() runs on every hot-reload
+ * (see its doc comment: the simulator's live reload frees the JSContext but keeps the JSRuntime, so
+ * a fresh context is installed on the same runtime). This only rebuilds the table when the runtime
+ * actually changed, so a hot-reload doesn't re-intern (and leak a ref on) the same 90-odd atoms.
+ *
+ * @param[in] ctx  QuickJS context to intern the names into.
+ */
+static void prop_atoms_init(JSContext* ctx)
+{
+    JSRuntime* rt = JS_GetRuntime(ctx);
+    if (rt == s_prop_atoms_rt)
+    {
+        return;
+    }
+    for (int i = 0; i < PROP_COUNT_; i++)
+    {
+        s_prop_atoms[i].atom = JS_NewAtom(ctx, k_prop_names[i]);
+        s_prop_atoms[i].id = (PropId)i;
+    }
+    qsort(s_prop_atoms, PROP_COUNT_, sizeof(s_prop_atoms[0]), prop_atom_entry_cmp);
+    s_prop_atoms_rt = rt;
+}
+
+/**
+ * @brief Maps a JS own-property atom to the PropId apply_props() knows it by.
+ *
+ * @param[in] atom  Atom from JS_GetOwnPropertyNames() on the props object.
+ *
+ * @return The matching PropId, or PROP_COUNT_ if apply_props() doesn't read this key.
+ */
+static PropId prop_id_from_atom(JSAtom atom)
+{
+    const PropAtomEntry key = {.atom = atom, .id = PROP_COUNT_};
+    const PropAtomEntry* hit = bsearch(&key, s_prop_atoms, PROP_COUNT_, sizeof(s_prop_atoms[0]), prop_atom_entry_cmp);
+    return hit ? hit->id : PROP_COUNT_;
+}
+
+/**
+ * @brief Per-call scratch built by apply_props(): s_prop_slots[id] is the (owned) value read for
+ * that key on the current call's object, or JS_UNDEFINED if the key was absent. Populated at the
+ * start of every apply_props() call and freed back to all-JS_UNDEFINED at its end — see the comment
+ * there on why a static table is safe despite apply_props() not being obviously single-threaded.
+ */
+static JSValue s_prop_slots[PROP_COUNT_];
+
+/* Marshalling convenience macros — each reads one slot (populated from the object's own keys by
+   apply_props()) into the ERProps `p`. They share the locals (ctx, p) of apply_props() and are
+   #undef'd at its end. */
+
+#define ER_DIM(id, field)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValue _v;                                                                                                    \
-        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
             int16_t _d;                                                                                                \
             if (to_dim(ctx, _v, &_d))                                                                                  \
             {                                                                                                          \
                 p.field = _d;                                                                                          \
             }                                                                                                          \
-            JS_FreeValue(ctx, _v);                                                                                     \
         }                                                                                                              \
     } while (0)
 
-#define ER_COL(key, field)                                                                                             \
+#define ER_COL(id, field)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValue _v;                                                                                                    \
-        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
             uint32_t _c;                                                                                               \
             if (to_color(ctx, _v, &_c))                                                                                \
             {                                                                                                          \
                 p.field = _c;                                                                                          \
             }                                                                                                          \
-            JS_FreeValue(ctx, _v);                                                                                     \
         }                                                                                                              \
     } while (0)
 
-#define ER_ENUM(key, field, fn)                                                                                        \
+#define ER_ENUM(id, field, fn)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValue _v;                                                                                                    \
-        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
             const char* _s = JS_ToCString(ctx, _v);                                                                    \
             if (_s)                                                                                                    \
@@ -904,30 +1171,28 @@ static void props_init_defaults(ERProps* p)
                 p.field = fn(_s);                                                                                      \
                 JS_FreeCString(ctx, _s);                                                                               \
             }                                                                                                          \
-            JS_FreeValue(ctx, _v);                                                                                     \
         }                                                                                                              \
     } while (0)
 
-#define ER_U8(key, field)                                                                                              \
+#define ER_U8(id, field)                                                                                               \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValue _v;                                                                                                    \
-        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
             int32_t _n;                                                                                                \
             if (JS_ToInt32(ctx, &_n, _v) == 0)                                                                         \
             {                                                                                                          \
                 p.field = (uint8_t)clamp_u8(_n);                                                                       \
             }                                                                                                          \
-            JS_FreeValue(ctx, _v);                                                                                     \
         }                                                                                                              \
     } while (0)
 
-#define ER_STR(key, field, maxlen)                                                                                     \
+#define ER_STR(id, field, maxlen)                                                                                      \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValue _v;                                                                                                    \
-        if (prop_get(ctx, obj, key, &_v))                                                                              \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
             const char* _s = JS_ToCString(ctx, _v);                                                                    \
             if (_s)                                                                                                    \
@@ -936,7 +1201,6 @@ static void props_init_defaults(ERProps* p)
                 p.field[(maxlen)] = '\0';                                                                              \
                 JS_FreeCString(ctx, _s);                                                                               \
             }                                                                                                          \
-            JS_FreeValue(ctx, _v);                                                                                     \
         }                                                                                                              \
     } while (0)
 
@@ -947,10 +1211,9 @@ static void props_init_defaults(ERProps* p)
  * @param[in]     obj  Source props object.
  * @param[in,out] p    Props to update.
  */
-static void apply_flex_shorthand(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_flex_shorthand(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "flex", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -974,20 +1237,18 @@ static void apply_flex_shorthand(JSContext* ctx, JSValueConst obj, ERProps* p)
             p->flex_shrink = 1;
         }
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
  * @brief Reads `flexBasis`, supporting both numeric pixels and percentage strings.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `flexBasis` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_flex_basis(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "flexBasis", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1013,25 +1274,22 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst obj, ERProps* p)
             JS_FreeCString(ctx, s);
         }
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
- * @brief Reads a dimension key that may be a number (pixels) or a percentage string.
+ * @brief Reads a dimension value that may be a number (pixels) or a percentage string.
  *
  * A numeric value sets the px field; a `"N%"` string sets the percent field (which the engine
  * resolves against the parent's content size and which takes precedence over the px field).
  *
  * @param[in]  ctx  QuickJS context.
- * @param[in]  obj  Source props object.
- * @param[in]  key  Property name (e.g. "width").
+ * @param[in]  v    Pre-fetched value (e.g. `width`), JS_UNDEFINED if absent.
  * @param[out] px   Receives the pixel value when the JS value is numeric.
  * @param[out] pct  Receives the percentage when the JS value is a `"N%"` string.
  */
-static void apply_dim_pct(JSContext* ctx, JSValueConst obj, const char* key, int16_t* px, float* pct)
+static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pct)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, key, &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1057,20 +1315,18 @@ static void apply_dim_pct(JSContext* ctx, JSValueConst obj, const char* key, int
             JS_FreeCString(ctx, s);
         }
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
  * @brief Reads `fontWeight` (string keyword, numeric, or numeric string) into a 0/1 weight.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `fontWeight` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_font_weight(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_font_weight(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "fontWeight", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1091,20 +1347,18 @@ static void apply_font_weight(JSContext* ctx, JSValueConst obj, ERProps* p)
             JS_FreeCString(ctx, s);
         }
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
  * @brief Reads `opacity` (RN 0.0–1.0 float) into the engine's 0–255 byte opacity.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `opacity` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_opacity(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_opacity(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "opacity", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1121,7 +1375,6 @@ static void apply_opacity(JSContext* ctx, JSValueConst obj, ERProps* p)
         }
         p->opacity = (uint8_t)(d * 255.0 + 0.5);
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
@@ -1177,13 +1430,12 @@ static bool item_angle(JSContext* ctx, JSValueConst item, const char* key, float
  * @brief Flattens the RN `transform` array (list of single-key objects) into transform_* fields.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     arr  Pre-fetched `transform` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_transform(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_transform(JSContext* ctx, JSValueConst arr, ERProps* p)
 {
-    JSValue arr;
-    if (!prop_get(ctx, obj, "transform", &arr))
+    if (JS_IsUndefined(arr))
     {
         return;
     }
@@ -1245,20 +1497,18 @@ static void apply_transform(JSContext* ctx, JSValueConst obj, ERProps* p)
             JS_FreeValue(ctx, item);
         }
     }
-    JS_FreeValue(ctx, arr);
 }
 
 /**
  * @brief Reads `transformOrigin` as a two-element [x, y] array of fractional pivots [0–1].
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `transformOrigin` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_transform_origin(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_transform_origin(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "transformOrigin", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1279,20 +1529,18 @@ static void apply_transform_origin(JSContext* ctx, JSValueConst obj, ERProps* p)
         JS_FreeValue(ctx, e0);
         JS_FreeValue(ctx, e1);
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
  * @brief Reads `shadowOffset` ({width, height}) into the shadow_offset_x/y fields.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `shadowOffset` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_shadow_offset(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_shadow_offset(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "shadowOffset", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1313,20 +1561,18 @@ static void apply_shadow_offset(JSContext* ctx, JSValueConst obj, ERProps* p)
         JS_FreeValue(ctx, w);
         JS_FreeValue(ctx, h);
     }
-    JS_FreeValue(ctx, v);
 }
 
 /**
  * @brief Reads `trackColor` ({false, true}) into the Switch track_color_false/true fields.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
+ * @param[in]     v    Pre-fetched `trackColor` value (JS_UNDEFINED if absent).
  * @param[in,out] p    Props to update.
  */
-static void apply_track_color(JSContext* ctx, JSValueConst obj, ERProps* p)
+static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, "trackColor", &v))
+    if (JS_IsUndefined(v))
     {
         return;
     }
@@ -1346,7 +1592,47 @@ static void apply_track_color(JSContext* ctx, JSValueConst obj, ERProps* p)
         JS_FreeValue(ctx, f);
         JS_FreeValue(ctx, t);
     }
-    JS_FreeValue(ctx, v);
+}
+
+/**
+ * @brief Reads obj's own enumerable string keys into s_prop_slots.
+ *
+ * Keys apply_props() doesn't recognise, and keys whose value is undefined/null/exception (same
+ * filter prop_get() used to apply), are skipped — s_prop_slots[id] stays JS_UNDEFINED for those,
+ * matching "absent" for every ER_* macro and custom applier.
+ *
+ * @param[in] ctx  QuickJS context.
+ * @param[in] obj  Flat props object passed to apply_props().
+ */
+static void gather_prop_slots(JSContext* ctx, JSValueConst obj)
+{
+    for (int i = 0; i < PROP_COUNT_; i++)
+    {
+        s_prop_slots[i] = JS_UNDEFINED;
+    }
+
+    JSPropertyEnum* tab = NULL;
+    uint32_t len = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) != 0)
+    {
+        return;
+    }
+    for (uint32_t i = 0; i < len; i++)
+    {
+        const PropId id = prop_id_from_atom(tab[i].atom);
+        if (id == PROP_COUNT_)
+        {
+            continue;
+        }
+        JSValue v = JS_GetProperty(ctx, obj, tab[i].atom);
+        if (JS_IsUndefined(v) || JS_IsNull(v) || JS_IsException(v))
+        {
+            JS_FreeValue(ctx, v);
+            continue;
+        }
+        s_prop_slots[id] = v;
+    }
+    JS_FreePropertyEnum(ctx, tab, len);
 }
 
 /**
@@ -1354,6 +1640,13 @@ static void apply_track_color(JSContext* ctx, JSValueConst obj, ERProps* p)
  *
  * Reads a single flat object (the JS layer merges resolved style + props before calling).
  * Unrecognised keys are ignored; unspecified props fall back to engine defaults.
+ *
+ * Rather than probing all ~90 known prop names against `obj` (a JS_GetPropertyStr per name, every
+ * call, regardless of how many keys `obj` actually has), this walks obj's own keys once via
+ * JS_GetOwnPropertyNames and dispatches each into s_prop_slots by atom — see gather_prop_slots().
+ * The statement order below is unchanged from the probing version and still matters: the `flex`
+ * shorthand must run before the explicit flexGrow/flexShrink/flexBasis overrides, and `color`
+ * legitimately feeds both the text `color` field and ActivityIndicator's `indicator_color`.
  *
  * @param[in] ctx   QuickJS context.
  * @param[in] node  Target node.
@@ -1364,146 +1657,152 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ERProps p;
     props_init_defaults(&p);
 
+    gather_prop_slots(ctx, obj);
+
     /* Layout — dimensions and box model. */
-    apply_dim_pct(ctx, obj, "width", &p.width, &p.width_pct);
-    apply_dim_pct(ctx, obj, "height", &p.height, &p.height_pct);
-    ER_DIM("minWidth", min_width);
-    ER_DIM("maxWidth", max_width);
-    ER_DIM("minHeight", min_height);
-    ER_DIM("maxHeight", max_height);
-    ER_DIM("top", top);
-    ER_DIM("left", left);
-    ER_DIM("right", right);
-    ER_DIM("bottom", bottom);
-    ER_DIM("margin", margin);
-    ER_DIM("marginTop", margin_top);
-    ER_DIM("marginRight", margin_right);
-    ER_DIM("marginBottom", margin_bottom);
-    ER_DIM("marginLeft", margin_left);
-    ER_DIM("marginHorizontal", margin_horizontal);
-    ER_DIM("marginVertical", margin_vertical);
-    ER_DIM("padding", padding);
-    ER_DIM("paddingTop", padding_top);
-    ER_DIM("paddingRight", padding_right);
-    ER_DIM("paddingBottom", padding_bottom);
-    ER_DIM("paddingLeft", padding_left);
-    ER_DIM("paddingHorizontal", padding_horizontal);
-    ER_DIM("paddingVertical", padding_vertical);
-    ER_DIM("gap", gap);
-    ER_DIM("rowGap", row_gap);
-    ER_DIM("columnGap", column_gap);
+    apply_dim_pct(ctx, s_prop_slots[PROP_WIDTH], &p.width, &p.width_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_HEIGHT], &p.height, &p.height_pct);
+    ER_DIM(PROP_MIN_WIDTH, min_width);
+    ER_DIM(PROP_MAX_WIDTH, max_width);
+    ER_DIM(PROP_MIN_HEIGHT, min_height);
+    ER_DIM(PROP_MAX_HEIGHT, max_height);
+    ER_DIM(PROP_TOP, top);
+    ER_DIM(PROP_LEFT, left);
+    ER_DIM(PROP_RIGHT, right);
+    ER_DIM(PROP_BOTTOM, bottom);
+    ER_DIM(PROP_MARGIN, margin);
+    ER_DIM(PROP_MARGIN_TOP, margin_top);
+    ER_DIM(PROP_MARGIN_RIGHT, margin_right);
+    ER_DIM(PROP_MARGIN_BOTTOM, margin_bottom);
+    ER_DIM(PROP_MARGIN_LEFT, margin_left);
+    ER_DIM(PROP_MARGIN_HORIZONTAL, margin_horizontal);
+    ER_DIM(PROP_MARGIN_VERTICAL, margin_vertical);
+    ER_DIM(PROP_PADDING, padding);
+    ER_DIM(PROP_PADDING_TOP, padding_top);
+    ER_DIM(PROP_PADDING_RIGHT, padding_right);
+    ER_DIM(PROP_PADDING_BOTTOM, padding_bottom);
+    ER_DIM(PROP_PADDING_LEFT, padding_left);
+    ER_DIM(PROP_PADDING_HORIZONTAL, padding_horizontal);
+    ER_DIM(PROP_PADDING_VERTICAL, padding_vertical);
+    ER_DIM(PROP_GAP, gap);
+    ER_DIM(PROP_ROW_GAP, row_gap);
+    ER_DIM(PROP_COLUMN_GAP, column_gap);
 
     /* Layout — flex. flex shorthand first; explicit grow/shrink/basis override it. */
-    apply_flex_shorthand(ctx, obj, &p);
-    ER_DIM("flexGrow", flex_grow);
-    ER_DIM("flexShrink", flex_shrink);
-    apply_flex_basis(ctx, obj, &p);
-    ER_ENUM("flexDirection", flex_direction, map_flex_direction);
-    ER_ENUM("flexWrap", flex_wrap, map_flex_wrap);
-    ER_ENUM("justifyContent", justify_content, map_justify);
-    ER_ENUM("alignItems", align_items, map_align);
-    ER_ENUM("alignSelf", align_self, map_align);
-    ER_ENUM("alignContent", align_content, map_align_content);
-    ER_ENUM("position", position, map_position);
-    ER_ENUM("display", display, map_display);
-    ER_ENUM("overflow", overflow, map_overflow);
-    ER_ENUM("pointerEvents", pointer_events, map_pointer_events);
+    apply_flex_shorthand(ctx, s_prop_slots[PROP_FLEX], &p);
+    ER_DIM(PROP_FLEX_GROW, flex_grow);
+    ER_DIM(PROP_FLEX_SHRINK, flex_shrink);
+    apply_flex_basis(ctx, s_prop_slots[PROP_FLEX_BASIS], &p);
+    ER_ENUM(PROP_FLEX_DIRECTION, flex_direction, map_flex_direction);
+    ER_ENUM(PROP_FLEX_WRAP, flex_wrap, map_flex_wrap);
+    ER_ENUM(PROP_JUSTIFY_CONTENT, justify_content, map_justify);
+    ER_ENUM(PROP_ALIGN_ITEMS, align_items, map_align);
+    ER_ENUM(PROP_ALIGN_SELF, align_self, map_align);
+    ER_ENUM(PROP_ALIGN_CONTENT, align_content, map_align_content);
+    ER_ENUM(PROP_POSITION, position, map_position);
+    ER_ENUM(PROP_DISPLAY, display, map_display);
+    ER_ENUM(PROP_OVERFLOW, overflow, map_overflow);
+    ER_ENUM(PROP_POINTER_EVENTS, pointer_events, map_pointer_events);
 
     {
-        JSValue v;
-        if (prop_get(ctx, obj, "aspectRatio", &v))
+        JSValueConst v = s_prop_slots[PROP_ASPECT_RATIO];
+        if (!JS_IsUndefined(v))
         {
             double d = 0.0;
             if (JS_ToFloat64(ctx, &d, v) == 0)
             {
                 p.aspect_ratio = (float)d;
             }
-            JS_FreeValue(ctx, v);
         }
     }
 
     /* View visual. */
-    ER_COL("backgroundColor", background_color);
-    apply_opacity(ctx, obj, &p);
-    ER_DIM("borderRadius", border_radius);
-    ER_DIM("borderTopLeftRadius", border_top_left_radius);
-    ER_DIM("borderTopRightRadius", border_top_right_radius);
-    ER_DIM("borderBottomLeftRadius", border_bottom_left_radius);
-    ER_DIM("borderBottomRightRadius", border_bottom_right_radius);
-    ER_DIM("borderWidth", border_width);
-    ER_DIM("borderLeftWidth", border_left_width);
-    ER_DIM("borderTopWidth", border_top_width);
-    ER_DIM("borderRightWidth", border_right_width);
-    ER_DIM("borderBottomWidth", border_bottom_width);
-    ER_COL("borderColor", border_color);
-    ER_COL("borderLeftColor", border_left_color);
-    ER_COL("borderTopColor", border_top_color);
-    ER_COL("borderRightColor", border_right_color);
-    ER_COL("borderBottomColor", border_bottom_color);
-    ER_ENUM("borderStyle", border_style, map_border_style);
-    ER_DIM("zIndex", z_index);
+    ER_COL(PROP_BACKGROUND_COLOR, background_color);
+    apply_opacity(ctx, s_prop_slots[PROP_OPACITY], &p);
+    ER_DIM(PROP_BORDER_RADIUS, border_radius);
+    ER_DIM(PROP_BORDER_TOP_LEFT_RADIUS, border_top_left_radius);
+    ER_DIM(PROP_BORDER_TOP_RIGHT_RADIUS, border_top_right_radius);
+    ER_DIM(PROP_BORDER_BOTTOM_LEFT_RADIUS, border_bottom_left_radius);
+    ER_DIM(PROP_BORDER_BOTTOM_RIGHT_RADIUS, border_bottom_right_radius);
+    ER_DIM(PROP_BORDER_WIDTH, border_width);
+    ER_DIM(PROP_BORDER_LEFT_WIDTH, border_left_width);
+    ER_DIM(PROP_BORDER_TOP_WIDTH, border_top_width);
+    ER_DIM(PROP_BORDER_RIGHT_WIDTH, border_right_width);
+    ER_DIM(PROP_BORDER_BOTTOM_WIDTH, border_bottom_width);
+    ER_COL(PROP_BORDER_COLOR, border_color);
+    ER_COL(PROP_BORDER_LEFT_COLOR, border_left_color);
+    ER_COL(PROP_BORDER_TOP_COLOR, border_top_color);
+    ER_COL(PROP_BORDER_RIGHT_COLOR, border_right_color);
+    ER_COL(PROP_BORDER_BOTTOM_COLOR, border_bottom_color);
+    ER_ENUM(PROP_BORDER_STYLE, border_style, map_border_style);
+    ER_DIM(PROP_Z_INDEX, z_index);
 
     /* Text. */
-    ER_STR("text", text, ER_TEXT_MAX);
-    ER_STR("fontFamily", font_family, ER_FONT_FAMILY_MAX);
-    ER_COL("color", color);
-    ER_U8("fontSize", font_size);
-    apply_font_weight(ctx, obj, &p);
-    ER_ENUM("fontStyle", font_style, map_font_style);
-    ER_ENUM("textAlign", text_align, map_text_align);
-    ER_ENUM("textDecorationLine", text_decoration, map_text_decoration);
-    ER_U8("numberOfLines", number_of_lines);
-    ER_ENUM("ellipsizeMode", ellipsize_mode, map_ellipsize);
-    ER_DIM("lineHeight", line_height);
-    ER_DIM("letterSpacing", letter_spacing);
+    ER_STR(PROP_TEXT, text, ER_TEXT_MAX);
+    ER_STR(PROP_FONT_FAMILY, font_family, ER_FONT_FAMILY_MAX);
+    ER_COL(PROP_COLOR, color);
+    ER_U8(PROP_FONT_SIZE, font_size);
+    apply_font_weight(ctx, s_prop_slots[PROP_FONT_WEIGHT], &p);
+    ER_ENUM(PROP_FONT_STYLE, font_style, map_font_style);
+    ER_ENUM(PROP_TEXT_ALIGN, text_align, map_text_align);
+    ER_ENUM(PROP_TEXT_DECORATION_LINE, text_decoration, map_text_decoration);
+    ER_U8(PROP_NUMBER_OF_LINES, number_of_lines);
+    ER_ENUM(PROP_ELLIPSIZE_MODE, ellipsize_mode, map_ellipsize);
+    ER_DIM(PROP_LINE_HEIGHT, line_height);
+    ER_DIM(PROP_LETTER_SPACING, letter_spacing);
 
     /* Image. */
-    ER_STR("imageName", image_name, ER_IMAGE_NAME_MAX);
-    ER_ENUM("resizeMode", resize_mode, map_resize_mode);
-    ER_COL("tintColor", tint_color);
+    ER_STR(PROP_IMAGE_NAME, image_name, ER_IMAGE_NAME_MAX);
+    ER_ENUM(PROP_RESIZE_MODE, resize_mode, map_resize_mode);
+    ER_COL(PROP_TINT_COLOR, tint_color);
 
     /* Transforms. */
-    apply_transform(ctx, obj, &p);
-    apply_transform_origin(ctx, obj, &p);
+    apply_transform(ctx, s_prop_slots[PROP_TRANSFORM], &p);
+    apply_transform_origin(ctx, s_prop_slots[PROP_TRANSFORM_ORIGIN], &p);
 
     /* Shadow (View-family; rendered only when ERUI_SHADOWS and shadow_opacity > 0). */
-    ER_COL("shadowColor", shadow_color);
-    apply_shadow_offset(ctx, obj, &p);
+    ER_COL(PROP_SHADOW_COLOR, shadow_color);
+    apply_shadow_offset(ctx, s_prop_slots[PROP_SHADOW_OFFSET], &p);
     {
-        JSValue v;
-        if (prop_get(ctx, obj, "shadowOpacity", &v))
+        JSValueConst v = s_prop_slots[PROP_SHADOW_OPACITY];
+        if (!JS_IsUndefined(v))
         {
             double d = 0.0;
             if (JS_ToFloat64(ctx, &d, v) == 0)
             {
                 p.shadow_opacity = (float)d;
             }
-            JS_FreeValue(ctx, v);
         }
     }
-    ER_U8("shadowRadius", shadow_radius);
-    ER_U8("elevation", elevation);
+    ER_U8(PROP_SHADOW_RADIUS, shadow_radius);
+    ER_U8(PROP_ELEVATION, elevation);
 
     /* ActivityIndicator (RN uses `color` for the spinner tint). */
-    ER_COL("color", indicator_color);
-    ER_U8("animating", animating);
+    ER_COL(PROP_COLOR, indicator_color);
+    ER_U8(PROP_ANIMATING, animating);
 
     /* Switch. */
-    ER_U8("value", switch_value);
-    apply_track_color(ctx, obj, &p);
-    ER_COL("thumbColor", thumb_color);
+    ER_U8(PROP_VALUE, switch_value);
+    apply_track_color(ctx, s_prop_slots[PROP_TRACK_COLOR], &p);
+    ER_COL(PROP_THUMB_COLOR, thumb_color);
 
     /* TextInput. */
-    ER_STR("placeholder", placeholder, ER_PLACEHOLDER_MAX);
-    ER_COL("placeholderTextColor", placeholder_color);
-    ER_COL("cursorColor", cursor_color);
-    ER_U8("editable", editable);
+    ER_STR(PROP_PLACEHOLDER, placeholder, ER_PLACEHOLDER_MAX);
+    ER_COL(PROP_PLACEHOLDER_TEXT_COLOR, placeholder_color);
+    ER_COL(PROP_CURSOR_COLOR, cursor_color);
+    ER_U8(PROP_EDITABLE, editable);
 
     /* Modal. */
-    ER_U8("visible", modal_visible);
-    ER_COL("backdropColor", backdrop_color);
+    ER_U8(PROP_VISIBLE, modal_visible);
+    ER_COL(PROP_BACKDROP_COLOR, backdrop_color);
 
     er_node_set_props(node, &p);
+
+    for (int i = 0; i < PROP_COUNT_; i++)
+    {
+        JS_FreeValue(ctx, s_prop_slots[i]);
+        s_prop_slots[i] = JS_UNDEFINED;
+    }
 }
 
 #undef ER_DIM
@@ -3548,6 +3847,10 @@ JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* buf, size_t len)
 void er_bridge_install(JSContext* ctx)
 {
     s_bridge_ctx = ctx;
+
+    /* Builds (or, on a hot-reload reusing the same JSRuntime, confirms) the apply_props() atom
+     * table used to dispatch a setProps object's own keys — see prop_atoms_init()'s doc comment. */
+    prop_atoms_init(ctx);
 
     /* Start with an empty node-handle table so a re-install on a fresh context (the simulator's live
      * reload — see tools/simulator/README.md) doesn't alias stale handles onto newly created nodes. Pair this with

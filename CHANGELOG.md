@@ -12,6 +12,16 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- `native_ui_bridge.c`'s `apply_props` no longer probes all ~90 known prop names (`JS_GetPropertyStr`
+  per name — a C-string hash + atom intern + lookup) against every `setProps` object regardless of
+  how many keys it actually has. It now walks the object's own enumerable keys once via
+  `JS_GetOwnPropertyNames` and dispatches each into a pre-interned atom table, so cost scales with
+  the object's own key count instead of the full known-prop surface. A host microbenchmark
+  (200k calls) measured ~7.6µs → ~3.0µs per `setProps` call for a typical 5-key style object (~2.5x),
+  and ~7.1µs → ~3.7µs for an 18-key object (~1.9x) — narrower than the sparse case since the atom
+  lookup cost still scales with the object's own key count, not the constant 90-name probe it
+  replaced.
+
 - `commitUpdate`'s JS-side prop marshaling no longer flattens a node's `style` redundantly. A
   `<Text>` update used to flatten the same style object up to four times and walk its children tree
   twice (once each in `splitAnimatedStyle`, `buildProps`'s prop bag, `buildProps`'s text-content
