@@ -1121,9 +1121,9 @@ static PropId prop_id_from_atom(JSAtom atom)
 
 /**
  * @brief Per-call scratch built by apply_props(): s_prop_slots[id] is the (owned) value read for
- * that key on the current call's object, or JS_UNDEFINED if the key was absent. Populated at the
- * start of every apply_props() call and freed back to all-JS_UNDEFINED at its end — see the comment
- * there on why a static table is safe despite apply_props() not being obviously single-threaded.
+ * that key on the current call's object, or JS_UNDEFINED if the key was absent.
+ *
+ * NOTE: Static storage is safe because the bridge is single-threaded and apply_props() is not re-entrant.
  */
 static JSValue s_prop_slots[PROP_COUNT_];
 

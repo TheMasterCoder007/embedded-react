@@ -52,8 +52,8 @@ check(
 // before the explicit overrides, and the rewrite preserves that statement order.
 root.render(<FlexRow styleA={{flex: 2, flexGrow: 0, flexBasis: 40}} />);
 check(
-  aRect.width === 40,
-  `explicit flexGrow/flexBasis override the flex shorthand (got ${aRect.width})`,
+  aRect && aRect.width === 40,
+  `explicit flexGrow/flexBasis override the flex shorthand (got ${aRect && aRect.width})`,
 );
 
 // Percentage width resolves against the row's content box, independent of the px path.
