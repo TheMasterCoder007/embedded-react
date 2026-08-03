@@ -143,6 +143,24 @@ describe('buildTextSpans', () => {
   it('returns [] for non-flattenable children', () => {
     expect(buildTextSpans({children: View(null, 'x')})).toEqual([]);
   });
+
+  it('an explicit flatStyle is used verbatim instead of re-flattening props.style', () => {
+    // host-config passes the base style applyProps already flattened, so this must not fall back
+    // to flattening props.style again — a props.style that disagrees proves the flattening was skipped.
+    const spans = buildTextSpans(
+      {
+        style: {color: 'ignored'},
+        children: [
+          'Hello ',
+          Text({fontWeight: 'bold', color: 'red'}, 'world'),
+          '!',
+        ],
+      },
+      {color: 'white'},
+    );
+    expect(spans[0]).toEqual({text: 'Hello ', color: 'white'});
+    expect(spans[2]).toEqual({text: '!', color: 'white'});
+  });
 });
 
 describe('buildProps Text content', () => {

@@ -130,6 +130,29 @@ describe('buildProps', () => {
     expect(PASSTHROUGH.length).toBeGreaterThan(0);
     expect(PASSTHROUGH.every(k => typeof k === 'string')).toBe(true);
   });
+
+  it('an explicit flatStyle is used verbatim instead of re-flattening props.style', () => {
+    // host-config passes the style it already flattened (splitAnimatedStyle's output) to avoid a
+    // second recursive flattening per commit; buildProps must trust that value over props.style.
+    const viaStyle = buildProps('View', {style: [{width: 10}, {height: 20}]});
+    const viaFlatStyle = buildProps('View', {}, {width: 10, height: 20});
+    expect(viaFlatStyle).toEqual(viaStyle);
+
+    // props.style is ignored entirely when flatStyle is supplied — proves the flatten was skipped,
+    // not merely that the two happen to agree.
+    expect(buildProps('View', {style: {width: 999}}, {width: 10})).toEqual({
+      width: 10,
+    });
+  });
+
+  it('Text content flattens against the supplied flatStyle, not props.style', () => {
+    const viaStyle = buildProps('Text', {
+      style: {color: 'red'},
+      children: 'hi',
+    });
+    const viaFlatStyle = buildProps('Text', {children: 'hi'}, {color: 'red'});
+    expect(viaFlatStyle).toEqual(viaStyle);
+  });
 });
 
 describe('resolveImageSource', () => {

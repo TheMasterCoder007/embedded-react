@@ -118,9 +118,9 @@ export function flattenTextChildren(children, baseStyle) {
  * is uniformly the base style (plain text — no spans needed); otherwise one span per styled segment,
  * each carrying only the span-relevant style keys (the engine inherits the rest from the node).
  */
-export function buildTextSpans(props) {
+export function buildTextSpans(props, flatStyle) {
   if (!isTextContent(props.children)) return [];
-  const baseStyle = flattenStyleObj(props.style);
+  const baseStyle = flatStyle || flattenStyleObj(props.style);
   const segments = flattenTextChildren(props.children, baseStyle);
   if (!segments.some(s => s.style !== baseStyle)) return [];
   return segments.map(s => {
@@ -148,9 +148,9 @@ export function resolveImageSource(source) {
   return null;
 }
 
-export function buildProps(type, props) {
-  const flat = {};
-  flattenStyle(props.style, flat);
+export function buildProps(type, props, flatStyle) {
+  const flat = flatStyle ? {...flatStyle} : {};
+  if (!flatStyle) flattenStyle(props.style, flat);
   for (const k of PASSTHROUGH) {
     if (props[k] !== undefined) flat[k] = props[k];
   }
@@ -172,7 +172,7 @@ export function buildProps(type, props) {
   // The engine renders this when no spans are set; with spans (buildTextSpans) it carries the same
   // text for the plain-text fallback. Non-flattenable children fall back to mounted child instances.
   if (type === 'Text' && isTextContent(props.children)) {
-    const base = flattenStyleObj(props.style);
+    const base = flatStyle || flattenStyleObj(props.style);
     flat.text = flattenTextChildren(props.children, base)
       .map(s => s.text)
       .join('');
