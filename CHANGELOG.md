@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.10.2] - 2026-08-03
 ### Fixed
 
 - `native_ui_bridge.c`'s `apply_props` no longer probes all ~90 known prop names (`JS_GetPropertyStr`
@@ -434,7 +436,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.8.0...v0.9.0
