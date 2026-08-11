@@ -7,8 +7,9 @@ set(EMBEDDED_REACT_SOURCES
         core/native_renderer.c
         core/er_parallel.c
 
-        # scene: node pool, tree, render pass, hit-testing
+        # scene: node pool, tree, render pass, hit-testing, disjoint damage set
         scene/compositor.c
+        scene/damage.c
         scene/hit_test.c
 
         # layout: Yoga 7-pass flexbox

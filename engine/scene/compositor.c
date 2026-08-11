@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "er_damage_internal.h"
 #include "er_node_internal.h"
 #include "er_perf.h"
 #include "gradient.h"
@@ -58,15 +59,20 @@ static int s_kbd_avoid_y = 0;   /**< Pixels the whole scene is shifted UP so a f
 static ERRect s_dirty_rect;
 static bool s_has_dirty = false;
 
+/* The disjoint repaint rects of the last er_commit() (post-replay, exactly what was scissored and
+ * painted). Backs er_get_dirty_rects(); a full repaint records one root-sized rect. */
+static ERDamageSet s_last_paint_set;
+
 /* Damage-clipped rendering: when true the next commit repaints the whole screen (first frame, an
  * invalidated framebuffer, or a new root). Otherwise render_tree is scissored to just the rects that
  * actually changed, so a small animation flushes a small region instead of all 800x480. */
 static bool s_force_full_repaint = true;
 
-/* Pending damage from removed/destroyed nodes (their last painted rects): merged into the next
- * commit's clip so the vacated pixels are erased without a full-screen repaint. */
-static ERRect s_removed_damage;
-static bool s_have_removed_damage = false;
+/* Pending damage from removed/destroyed nodes (their last painted rects): seeded into the next
+ * commit's damage set so the vacated pixels are erased without a full-screen repaint. A set rather
+ * than one bbox, so two far-apart unmounts (a common React conditional-render pattern) don't drag
+ * the span between them into the repaint. */
+static ERDamageSet s_removed_set;
 
 /* Layout-dirty gate: er_commit() re-runs the flex + text-measure layout pass only when
  * something that can change a computed rect has happened since the last commit (a prop set,
@@ -80,11 +86,11 @@ static bool s_layout_dirty = true;
 static uint32_t s_layout_pass_count = 0;
 
 /* Multi-buffer (page-flip) damage tracking. A buffer's outstanding "debt": the pixels it has not yet
- * absorbed — either a single bounding rect (has), the whole screen (full), or nothing (already current). */
+ * absorbed — either a set of disjoint rects, the whole screen (full), or nothing (empty set, already
+ * current). Slot saturation degrades toward one bbox, i.e. exactly the pre-rect-set behaviour. */
 typedef struct
 {
-    ERRect rect;
-    bool has;
+    ERDamageSet set;
     bool full;
 } ERDamageSlot;
 
@@ -390,9 +396,8 @@ static void debt_reset_all_full(void)
 {
     for (int i = 0; i < ER_DISPLAY_BUFFERS_MAX; i++)
     {
-        s_buf_debt[i].has = false;
         s_buf_debt[i].full = true;
-        s_buf_debt[i].rect.x = s_buf_debt[i].rect.y = s_buf_debt[i].rect.w = s_buf_debt[i].rect.h = 0;
+        er_damage_set_clear(&s_buf_debt[i].set);
     }
 }
 
@@ -546,42 +551,42 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
 }
 
 /**
- * @brief Grows an accumulator rect to include (x,y,w,h). Skips empty inputs; seeds on first union.
+ * @brief Pads a damage rect for anti-aliased / sub-pixel edges, clamps it to the root rect, adds it.
  *
- * @param[in,out] acc   Accumulator rectangle.
- * @param[in,out] have  Whether @p acc has been seeded yet.
- * @param[in]     x,y,w,h  Rectangle to merge in.
+ * Padding happens HERE, before insertion, so the set's disjointness invariant holds for the final
+ * geometry — two rects 3 px apart that would overlap only after padding are coalesced instead of
+ * stored "disjoint" and later double-painted. (Rects within 2×margin of each other auto-merge.)
+ *
+ * @param[in,out] s    Damage set to add to.
+ * @param[in]     x,y,w,h  Raw damage rectangle (screen space).
+ * @param[in]     rx0,ry0  Root rect top-left (clamp bounds).
+ * @param[in]     rx1,ry1  Root rect bottom-right exclusive (clamp bounds).
  */
-static void damage_union(ERRect* acc, bool* have, int x, int y, int w, int h)
+static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int ry0, int rx1, int ry1)
 {
     if (w <= 0 || h <= 0)
         return;
-    if (!*have)
-    {
-        acc->x = x;
-        acc->y = y;
-        acc->w = w;
-        acc->h = h;
-        *have = true;
-        return;
-    }
-    const int x2 = acc->x + acc->w;
-    const int y2 = acc->y + acc->h;
-    const int nx2 = x + w;
-    const int ny2 = y + h;
-    if (x < acc->x)
-        acc->x = x;
-    if (y < acc->y)
-        acc->y = y;
-    acc->w = (nx2 > x2 ? nx2 : x2) - acc->x;
-    acc->h = (ny2 > y2 ? ny2 : y2) - acc->y;
+    const int margin = 2;
+    int cx0 = x - margin;
+    int cy0 = y - margin;
+    int cx1 = x + w + margin;
+    int cy1 = y + h + margin;
+    if (cx0 < rx0)
+        cx0 = rx0;
+    if (cy0 < ry0)
+        cy0 = ry0;
+    if (cx1 > rx1)
+        cx1 = rx1;
+    if (cy1 > ry1)
+        cy1 = ry1;
+    er_damage_set_add(s, cx0, cy0, cx1 - cx0, cy1 - cy0); /* empty after clamping: ignored */
 }
 
 /**
  * @brief Accumulates a removed subtree's last-painted rects into the pending removal damage.
  *
- * Called while the subtree is still intact (before detach). The next er_commit() merges this into its
- * clip so the vacated pixels are repainted (erased) without forcing a full-screen redraw.
+ * Called while the subtree is still intact (before detach). The next er_commit() seeds its damage set
+ * from this so the vacated pixels are repainted (erased) without forcing a full-screen redraw.
  *
  * @param[in] n  Root of the subtree being removed.
  */
@@ -590,12 +595,11 @@ static void note_removed_subtree(const ERNode* n)
     if (!n)
         return;
     if (n->has_last_paint)
-        damage_union(&s_removed_damage,
-                     &s_have_removed_damage,
-                     (int)n->last_paint_rect.x,
-                     (int)n->last_paint_rect.y,
-                     (int)n->last_paint_rect.w,
-                     (int)n->last_paint_rect.h);
+        er_damage_set_add(&s_removed_set,
+                          (int)n->last_paint_rect.x,
+                          (int)n->last_paint_rect.y,
+                          (int)n->last_paint_rect.w,
+                          (int)n->last_paint_rect.h);
     uint16_t c = n->first_child_tag;
     while (c != ER_INVALID_TAG)
     {
@@ -874,9 +878,9 @@ static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that com
 #define ER_PERF_END(phase) er_perf_phase_end(phase)
 #define ER_PERF_REPAINT(x, y, w, h) er_perf_note_repaint((x), (y), (w), (h))
 #else
-#define ER_PERF_BEGIN(phase)
-#define ER_PERF_END(phase)
-#define ER_PERF_REPAINT(x, y, w, h)
+#define ER_PERF_BEGIN(phase) ((void)0)
+#define ER_PERF_END(phase) ((void)0)
+#define ER_PERF_REPAINT(x, y, w, h) ((void)0)
 #endif
 
 static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
@@ -1829,12 +1833,11 @@ void er_node_destroy(ERNode* node)
     fade_cache_invalidate();
     /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
     if (node->has_last_paint)
-        damage_union(&s_removed_damage,
-                     &s_have_removed_damage,
-                     (int)node->last_paint_rect.x,
-                     (int)node->last_paint_rect.y,
-                     (int)node->last_paint_rect.w,
-                     (int)node->last_paint_rect.h);
+        er_damage_set_add(&s_removed_set,
+                          (int)node->last_paint_rect.x,
+                          (int)node->last_paint_rect.y,
+                          (int)node->last_paint_rect.w,
+                          (int)node->last_paint_rect.h);
 
     node->in_use = false;
     node->dirty = false;
@@ -3181,7 +3184,8 @@ void er_reset(void)
     s_has_dirty = false;
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
         s_comp_ctx[i].has_dirty = false;
-    s_have_removed_damage = false;
+    er_damage_set_clear(&s_removed_set);
+    er_damage_set_clear(&s_last_paint_set);
     s_force_full_repaint = true;
     s_layout_dirty = true;
 
@@ -3345,15 +3349,19 @@ void er_commit(void)
      * The persistent framebuffer keeps the untouched pixels, so the compositor and the backend's flush
      * both shrink from full-screen to just the changed region. */
     /* Compute this commit's repaint region in screen space. Default is the whole root rect (a full
-     * repaint); the damage pre-pass below narrows it to the union of changed/moved node rects whenever
-     * change tracking is possible. The region then drives EITHER a single damage-clipped render_tree
-     * (full-framebuffer backend) OR a per-strip banded render (backend->band_height > 0). */
+     * repaint); the damage pre-pass below narrows it to a SET of disjoint changed/moved rects whenever
+     * change tracking is possible — so a change in one corner and another in the opposite corner
+     * repaint two small areas, not the span between them. The set (with its bounding box in rb_*)
+     * then drives EITHER per-rect damage-clipped render_tree passes (full-framebuffer backend) OR a
+     * per-strip banded render over the set's dirty row ranges (backend->band_height > 0). */
     int rb_x0 = root->computed.x;
     int rb_y0 = root->computed.y;
     int rb_x1 = rb_x0 + root->computed.w;
     int rb_y1 = rb_y0 + root->computed.h;
     bool render_full = true;    /* repaint the whole root rect */
     bool nothing_dirty = false; /* tracked, but nothing changed (or changes clamped off-screen) */
+    ERDamageSet dmg;            /* this commit's repaint rects (only meaningful when narrowed) */
+    er_damage_set_clear(&dmg);
     if (s_force_full_repaint)
     {
         /* Full repaint requested: this commit's OWN damage is the whole screen. For multi-buffer that is
@@ -3363,19 +3371,18 @@ void er_commit(void)
     }
     else
     {
-        ERRect clip = {0, 0, 0, 0};
-        bool have = false;
         bool trackable = true;
         /* Seed with any pixels vacated by removed/destroyed nodes since the last commit. */
-        if (s_have_removed_damage)
-            damage_union(&clip, &have, s_removed_damage.x, s_removed_damage.y, s_removed_damage.w, s_removed_damage.h);
+        for (uint8_t ri = 0U; ri < s_removed_set.count; ri++)
+            add_damage(&dmg, s_removed_set.r[ri].x, s_removed_set.r[ri].y, s_removed_set.r[ri].w,
+                       s_removed_set.r[ri].h, rb_x0, rb_y0, rb_x1, rb_y1);
 #if ERUI_ONSCREEN_KEYBOARD
         /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
         if (s_kbd_dirty)
         {
             ERRect kr;
             er_keyboard_rect((int)root->computed.w, (int)root->computed.h, &kr);
-            damage_union(&clip, &have, kr.x, kr.y, kr.w, kr.h);
+            add_damage(&dmg, kr.x, kr.y, kr.w, kr.h, rb_x0, rb_y0, rb_x1, rb_y1);
         }
 #endif
         for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
@@ -3400,15 +3407,13 @@ void er_commit(void)
                     {
                         int nx = tx, ny = ty, nw = tw, nh = th;
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
-                        if (nw > 0 && nh > 0)
-                            damage_union(&clip, &have, nx, ny, nw, nh); /* new transformed footprint */
+                        add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new transformed footprint */
                         if (n->has_last_paint)
                         {
                             int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
                                 ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
                             clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
-                            if (ow > 0 && oh > 0)
-                                damage_union(&clip, &have, ox, oy, ow, oh); /* old footprint (erase trail) */
+                            add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
                         }
                     }
                     continue;
@@ -3433,13 +3438,16 @@ void er_commit(void)
             {
                 /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
                  * screen), not the whole box. The caller's rect already covers old+new content, so the
-                 * full last_paint_rect is intentionally NOT unioned (it would balloon back to the box). */
-                damage_union(&clip,
-                             &have,
-                             rx + (int)n->vec_dirty_x,
-                             ry + (int)n->vec_dirty_y,
-                             (int)n->vec_dirty_w,
-                             (int)n->vec_dirty_h);
+                 * full last_paint_rect is intentionally NOT added (it would balloon back to the box). */
+                add_damage(&dmg,
+                           rx + (int)n->vec_dirty_x,
+                           ry + (int)n->vec_dirty_y,
+                           (int)n->vec_dirty_w,
+                           (int)n->vec_dirty_h,
+                           rb_x0,
+                           rb_y0,
+                           rb_x1,
+                           rb_y1);
                 continue;
             }
             /* Clip both contributions to any clipping ancestor (ScrollView / overflow:hidden) so a scrolled
@@ -3447,15 +3455,13 @@ void er_commit(void)
              * repaint, where it would be cleared but not restored for a frame. */
             int nx = rx, ny = ry, nw = rw, nh = rh;
             clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
-            if (nw > 0 && nh > 0)
-                damage_union(&clip, &have, nx, ny, nw, nh); /* new position */
+            add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
             if (n->has_last_paint)
             {
                 int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
                     oh = (int)n->last_paint_rect.h;
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
-                if (ow > 0 && oh > 0)
-                    damage_union(&clip, &have, ox, oy, ow, oh); /* old position (erase trail) */
+                add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
 
                 /* A node with NO visible current position (scrolled out of its clipper, or otherwise
                  * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
@@ -3474,38 +3480,22 @@ void er_commit(void)
                     n->has_last_paint = false;
             }
         }
-        if (trackable && have)
+        /* Padding + clamping happened per-insert (add_damage), so an empty set covers both "nothing
+         * changed" and "every change clamped off-screen". rb_* stays the set's bounding box — the
+         * banded clip, the parallel-height gate, and diagnostics all still want one covering box. */
+        if (trackable && dmg.count > 0U)
         {
-            /* Pad for anti-aliased / sub-pixel edges, then clamp to the root rect. */
-            const int margin = 2;
-            int cx0 = clip.x - margin;
-            int cy0 = clip.y - margin;
-            int cx1 = clip.x + clip.w + margin;
-            int cy1 = clip.y + clip.h + margin;
-            if (cx0 < rb_x0)
-                cx0 = rb_x0;
-            if (cy0 < rb_y0)
-                cy0 = rb_y0;
-            if (cx1 > rb_x1)
-                cx1 = rb_x1;
-            if (cy1 > rb_y1)
-                cy1 = rb_y1;
-            if (cx1 > cx0 && cy1 > cy0)
-            {
-                rb_x0 = cx0;
-                rb_y0 = cy0;
-                rb_x1 = cx1;
-                rb_y1 = cy1;
-                render_full = false; /* narrowed to the damage region */
-            }
-            else
-            {
-                nothing_dirty = true; /* damage collapsed to empty after clamping (off-screen change) */
-            }
+            ERRect bb;
+            er_damage_set_bounds(&dmg, &bb);
+            rb_x0 = bb.x;
+            rb_y0 = bb.y;
+            rb_x1 = bb.x + bb.w;
+            rb_y1 = bb.y + bb.h;
+            render_full = false; /* narrowed to the damage rects */
         }
         else if (trackable)
         {
-            nothing_dirty = true; /* nothing changed this commit */
+            nothing_dirty = true; /* nothing changed this commit (or changes clamped off-screen) */
         }
         /* !trackable: render_full stays true (repaint the whole root rect). */
     }
@@ -3533,18 +3523,20 @@ void er_commit(void)
             for (int b = 0; b < s_display_buffer_count; b++)
             {
                 s_buf_debt[b].full = true;
-                s_buf_debt[b].has = false;
+                er_damage_set_clear(&s_buf_debt[b].set);
             }
         }
         else
         {
+            /* Each rect stays a separate debt entry (the slot's set merges/saturates on its own), so
+             * disjoint damage replays as disjoint rects instead of ballooning into one span. */
             for (int b = 0; b < s_display_buffer_count; b++)
                 if (!s_buf_debt[b].full)
-                    damage_union(&s_buf_debt[b].rect, &s_buf_debt[b].has, rb_x0, rb_y0, rb_x1 - rb_x0,
-                                 rb_y1 - rb_y0);
+                    for (uint8_t ri = 0U; ri < dmg.count; ri++)
+                        er_damage_set_add(&s_buf_debt[b].set, dmg.r[ri].x, dmg.r[ri].y, dmg.r[ri].w, dmg.r[ri].h);
         }
 
-        /* (2) Derive this commit's render region from the CURRENT buffer's debt (what it still owes). */
+        /* (2) Derive this commit's render set from the CURRENT buffer's debt (what it still owes). */
         ERDamageSlot* d = &s_buf_debt[s_cur_buf];
         if (d->full)
         {
@@ -3556,12 +3548,15 @@ void er_commit(void)
             nothing_dirty = false;
             root->dirty = true; /* full recomposite of the whole screen into the stale buffer */
         }
-        else if (d->has)
+        else if (d->set.count > 0U)
         {
-            rb_x0 = d->rect.x;
-            rb_y0 = d->rect.y;
-            rb_x1 = d->rect.x + d->rect.w;
-            rb_y1 = d->rect.y + d->rect.h;
+            ERRect bb;
+            dmg = d->set; /* the replayed debt becomes this commit's render set */
+            er_damage_set_bounds(&dmg, &bb);
+            rb_x0 = bb.x;
+            rb_y0 = bb.y;
+            rb_x1 = bb.x + bb.w;
+            rb_y1 = bb.y + bb.h;
             render_full = false;
             nothing_dirty = false;
         }
@@ -3572,19 +3567,31 @@ void er_commit(void)
         }
 
         /* The current buffer is being brought fully current this commit, so it owes nothing afterward.
-         * (Cleared here, before render, is fine: the region to paint is captured in rb_* above.) */
+         * (Cleared here, before render, is fine: the set to paint was copied into dmg above.) */
         d->full = false;
-        d->has = false;
-        d->rect.x = d->rect.y = d->rect.w = d->rect.h = 0;
+        er_damage_set_clear(&d->set);
     }
 
-    /* rb_* is final here (damage pre-pass + any multi-buffer debt replay): report it as this frame's
-     * repaint region. It is the scissor the composite runs under AND what the backend flushes, so its
-     * area is the number both the raster and present phases scale with. */
+    /* The render set is final here (damage pre-pass + any multi-buffer debt replay): record it as
+     * this frame's repaint rects — exactly what the passes below scissor to and what the backend
+     * flushes, so the summed area is the number both the raster and present phases scale with.
+     * Exposed via er_get_dirty_rects() and the perf counters. */
+    er_damage_set_clear(&s_last_paint_set);
     if (nothing_dirty)
-        ER_PERF_REPAINT(0, 0, 0, 0);
-    else
+    {
+        /* nothing painted: empty set, no perf contribution (frame counters were reset at frame begin) */
+    }
+    else if (render_full)
+    {
+        er_damage_set_add(&s_last_paint_set, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
         ER_PERF_REPAINT(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+    }
+    else
+    {
+        s_last_paint_set = dmg;
+        for (uint8_t ri = 0U; ri < dmg.count; ri++)
+            ER_PERF_REPAINT(dmg.r[ri].x, dmg.r[ri].y, dmg.r[ri].w, dmg.r[ri].h);
+    }
 
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
      * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
@@ -3608,21 +3615,74 @@ void er_commit(void)
             /* Strips span the FULL screen width (only the dirty ROWS are narrowed). A band backend
              * flushes each strip as one tightly-packed full-width block straight from the band buffer,
              * so partial-width strips are intentionally not used; on the narrow panels this targets the
-             * extra horizontal fill is negligible. The damage box still bounds the dirty rows. */
+             * extra horizontal fill is negligible. The damage rects still bound the dirty rows: strips
+             * run only over the set's merged row ranges, so two changes far apart vertically skip the
+             * clean rows between them (retained by panel GRAM), instead of sweeping the whole span. */
+            int ry0s[ER_DAMAGE_RECTS_MAX];
+            int ry1s[ER_DAMAGE_RECTS_MAX];
+            int nranges = 0;
+            if (render_full)
+            {
+                ry0s[0] = rb_y0;
+                ry1s[0] = rb_y1;
+                nranges = 1;
+            }
+            else
+            {
+                /* Collect each rect's row interval (insertion sort by y0 — count <= 4), then merge
+                 * overlapping/adjacent intervals: disjoint rects can still share rows (side by side). */
+                for (uint8_t ri = 0U; ri < dmg.count; ri++)
+                {
+                    const int y0 = dmg.r[ri].y;
+                    const int y1 = dmg.r[ri].y + dmg.r[ri].h;
+                    int j = nranges++;
+                    while (j > 0 && ry0s[j - 1] > y0)
+                    {
+                        ry0s[j] = ry0s[j - 1];
+                        ry1s[j] = ry1s[j - 1];
+                        j--;
+                    }
+                    ry0s[j] = y0;
+                    ry1s[j] = y1;
+                }
+                int merged = 0;
+                for (int j = 1; j < nranges; j++)
+                {
+                    if (ry0s[j] <= ry1s[merged])
+                    {
+                        if (ry1s[j] > ry1s[merged])
+                            ry1s[merged] = ry1s[j];
+                    }
+                    else
+                    {
+                        merged++;
+                        ry0s[merged] = ry0s[j];
+                        ry1s[merged] = ry1s[j];
+                    }
+                }
+                nranges = merged + 1;
+            }
+
             const int bh = backend->band_height;
             const int fx = root->computed.x;
             const int fw = root->computed.w;
+            /* ONE clip over the whole repaint bbox for the duration (enabling subtree pruning and,
+             * crucially, keeping transform/opacity scratch sources complete — it contains every
+             * changed node in full). Row narrowing happens purely via the strip loop + er_set_band. */
             er_push_clip_rect(fx, rb_y0, fw, rb_y1 - rb_y0);
-            for (int sy = rb_y0; sy < rb_y1; sy += bh)
+            for (int r = 0; r < nranges; r++)
             {
-                const int sh = (rb_y1 - sy < bh) ? (rb_y1 - sy) : bh;
-                if (backend->band_begin)
-                    backend->band_begin(fx, sy, fw, sh, backend->ctx);
-                er_set_band(sy, sh);
-                render_tree(root, true, 0, s_kbd_avoid_y);   /* whole scene shifted up to clear the keyboard */
-                er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
-                if (backend->band_flush)
-                    backend->band_flush(backend->ctx);
+                for (int sy = ry0s[r]; sy < ry1s[r]; sy += bh)
+                {
+                    const int sh = (ry1s[r] - sy < bh) ? (ry1s[r] - sy) : bh;
+                    if (backend->band_begin)
+                        backend->band_begin(fx, sy, fw, sh, backend->ctx);
+                    er_set_band(sy, sh);
+                    render_tree(root, true, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+                    er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
+                    if (backend->band_flush)
+                        backend->band_flush(backend->ctx);
+                }
             }
             er_set_band(0, 0);
             er_pop_clip_rect();
@@ -3633,55 +3693,97 @@ void er_commit(void)
         const int nworkers = er_render_workers_active();
         /* One single-core frame when a parallel frame wanted a fade-cache capture and the content
          * has not changed since — the capture happens below, and following frames hit the cache
-         * from inside the parallel fork. */
+         * from inside the parallel fork. Consumed ONCE per commit, before any per-rect pass. */
         const bool serial_for_capture = s_fade_capture_wanted && (s_fade_capture_wanted_gen == s_content_gen);
         s_fade_capture_wanted = false;
-        if (nworkers > 1 && !serial_for_capture && !nothing_dirty && s_parallel_unsafe == 0
-            && (rb_y1 - rb_y0) >= nworkers * 16)
+        /* Parallel gate minus the region-height test, which is per-region below. */
+        const bool can_parallel = nworkers > 1 && !serial_for_capture && s_parallel_unsafe == 0;
+        /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
+         * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
+         * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
+         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
+        const bool full_recomposite = (s_display_buffer_count > 1);
+
+        if (nothing_dirty)
         {
-            /* Sliced parallel render: the repaint region is split into one horizontal band per
-             * worker and rendered concurrently (see render_slice_job). Engages only when the
-             * scene is parallel-safe (no shared-scratch primitives) and the region is tall
-             * enough that the fork overhead pays for itself; the fade cache sits these frames
-             * out (see s_parallel_render). Slices behave exactly like the serial damage clip:
-             * multi-buffer replay fully recomposites, single-buffer relies on dirty flags. */
-            ParallelRenderJob job;
-            job.root = root;
-            job.full_recomposite = (s_display_buffer_count > 1);
-            job.x0 = rb_x0;
-            job.x1 = rb_x1;
-            job.ry0 = rb_y0;
-            job.ry1 = rb_y1;
-            job.nslices = nworkers;
-            job.kbd_y = s_kbd_avoid_y;
-            s_parallel_render = true;
-            er_parallel_for(render_slice_job, &job);
-            s_parallel_render = false;
-            s_parallel_frames++;
-            er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
-            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, sequential */
-            er_pop_clip_rect();
+            /* Nothing to paint — but still walk once, unclipped, with parent_dirty = false: no node
+             * emits pixels, while any node whose damage clamped off-screen (e.g. dirtied while
+             * scrolled out of view) is reached, stamped, and has its stale flags cleared in the
+             * post-pass — matching the pre-rect-set behaviour. */
+            render_tree(root, false, 0, s_kbd_avoid_y);
+            er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
+        }
+        else if (render_full)
+        {
+            /* Full repaint: one unclipped pass over the whole tree (sliced across workers when the
+             * screen is tall enough to pay for the fork). */
+            if (can_parallel && (rb_y1 - rb_y0) >= nworkers * 16)
+            {
+                ParallelRenderJob job;
+                job.root = root;
+                job.full_recomposite = full_recomposite;
+                job.x0 = rb_x0;
+                job.x1 = rb_x1;
+                job.ry0 = rb_y0;
+                job.ry1 = rb_y1;
+                job.nslices = nworkers;
+                job.kbd_y = s_kbd_avoid_y;
+                s_parallel_render = true;
+                er_parallel_for(render_slice_job, &job);
+                s_parallel_render = false;
+                s_parallel_frames++;
+                er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+                er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, sequential */
+                er_pop_clip_rect();
+            }
+            else
+            {
+                render_tree(root, full_recomposite, 0, s_kbd_avoid_y);
+                er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
+            }
         }
         else
         {
-            /* Full-framebuffer render: one damage-clipped pass; the persistent framebuffer retains the
-             * untouched pixels. (nothing_dirty → no clip, render_tree repaints nothing; render_full → no
-             * clip, the whole tree repaints; otherwise scissor to the damage region.) */
-            bool clipped = false;
-            if (!render_full && !nothing_dirty)
+            /* Damage-clipped render: one pass PER DISJOINT RECT, so two changes in opposite corners
+             * repaint two small areas instead of the span between them. Multi-pass is safe by
+             * construction: passes only stamp painted_seq (flags clear in the sequential post-pass
+             * below), the rects are pairwise disjoint so no pixel composites twice (which would darken
+             * translucent blends), and each pass prunes to its own clip so a pass over a small rect
+             * walks only that corner's subtrees. Each rect independently takes the sliced parallel
+             * fork when it is tall enough to pay for it (see render_slice_job — slices behave exactly
+             * like the serial damage clip). The persistent framebuffer retains untouched pixels. */
+            bool any_parallel = false;
+            for (uint8_t ri = 0U; ri < dmg.count; ri++)
             {
-                er_push_clip_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
-                clipped = true;
-            }
-            /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
-             * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
-             * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
-             * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
-            const bool full_recomposite = (s_display_buffer_count > 1) && (clipped || render_full);
-            render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
-            er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, clipped to the damage */
-            if (clipped)
+                const ERRect* R = &dmg.r[ri];
+                if (can_parallel && R->h >= nworkers * 16)
+                {
+                    ParallelRenderJob job;
+                    job.root = root;
+                    job.full_recomposite = full_recomposite;
+                    job.x0 = R->x;
+                    job.x1 = R->x + R->w;
+                    job.ry0 = R->y;
+                    job.ry1 = R->y + R->h;
+                    job.nslices = nworkers;
+                    job.kbd_y = s_kbd_avoid_y;
+                    s_parallel_render = true;
+                    er_parallel_for(render_slice_job, &job);
+                    s_parallel_render = false;
+                    any_parallel = true;
+                }
+                else
+                {
+                    er_push_clip_rect(R->x, R->y, R->w, R->h);
+                    render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* scene shifted up for keyboard */
+                    er_pop_clip_rect();
+                }
+                er_push_clip_rect(R->x, R->y, R->w, R->h);
+                er_keyboard_draw((int)root->computed.w, (int)root->computed.h); /* overlay, per-rect clip */
                 er_pop_clip_rect();
+            }
+            if (any_parallel)
+                s_parallel_frames++;
         }
     }
 
@@ -3755,8 +3857,8 @@ void er_commit(void)
     }
 
     s_force_full_repaint = false;
-    s_kbd_dirty = false;           /* the keyboard strip (if any) was repainted this commit */
-    s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
+    s_kbd_dirty = false;                 /* the keyboard strip (if any) was repainted this commit */
+    er_damage_set_clear(&s_removed_set); /* consumed (or covered by a full repaint) this commit */
 
     ER_PERF_END(ER_PERF_PHASE_RASTER);
 
@@ -3804,6 +3906,23 @@ bool er_get_dirty_rect(ERRect* out)
         }
     }
     return s_has_dirty;
+}
+
+int er_get_dirty_rects(ERRect* out, int max_rects)
+{
+    const int count = (int)s_last_paint_set.count;
+    if (!out || max_rects <= 0)
+        return count; /* size query */
+    if (count <= max_rects)
+    {
+        for (int i = 0; i < count; i++)
+            out[i] = s_last_paint_set.r[i];
+        return count;
+    }
+    /* Caller's buffer is too small: collapse to the covering bounding box so the guarantee ("the
+     * returned rects cover every modified pixel") holds no matter what capacity was passed. */
+    er_damage_set_bounds(&s_last_paint_set, &out[0]);
+    return 1;
 }
 
 void er_tick(uint32_t delta_ms)

@@ -50,6 +50,12 @@ add_executable(test_gradient test_gradient.c)
 target_link_libraries(test_gradient PRIVATE embedded-react)
 add_test(NAME rendering_gradient COMMAND test_gradient)
 
+add_executable(test_damage_rects test_damage_rects.c)
+target_link_libraries(test_damage_rects PRIVATE embedded-react)
+# test_damage_rects needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
+target_include_directories(test_damage_rects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_damage_rects COMMAND test_damage_rects)
+
 add_executable(test_perf test_perf.c)
 target_link_libraries(test_perf PRIVATE embedded-react)
 add_test(NAME rendering_perf COMMAND test_perf)

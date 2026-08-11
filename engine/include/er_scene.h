@@ -59,11 +59,22 @@ extern "C"
 /**
  * @brief Upper bound on the display buffer count accepted by er_set_display_buffer_count().
  *
- * The engine stores per-buffer damage “debt” slots in a fixed-size array, so this caps the maximum supported buffer count.
- * Real page-flip hardware uses 2 (double buffer) or 3 (triple buffer); the default remains 1.
+ * The engine stores per-buffer damage “debt” slots in a fixed-size array, so this caps the maximum supported buffer
+ * count. Real page-flip hardware uses 2 (double buffer) or 3 (triple buffer); the default remains 1.
  */
 #ifndef ER_DISPLAY_BUFFERS_MAX
 #define ER_DISPLAY_BUFFERS_MAX 4
+#endif
+
+/**
+ * @brief Maximum disjoint dirty rectangles the engine tracks per commit (see er_get_dirty_rects()).
+ *
+ * Damage beyond this budget is merged into whichever tracked rect wastes the least area, degrading
+ * gracefully toward a single bounding box — coverage is never dropped. 4 covers the common "a few
+ * independent widgets updated" case; raise it for screens with many spatially-scattered updaters.
+ */
+#ifndef ER_DAMAGE_RECTS_MAX
+#define ER_DAMAGE_RECTS_MAX 4
 #endif
 
     /*----------------------------------------------------------------------------------------------------------------------
@@ -1318,6 +1329,29 @@ extern "C"
      *         non-empty rectangle; false when the scene was already clean this frame.
      */
     bool er_get_dirty_rect(ERRect* out);
+
+    /**
+     * @brief Returns the disjoint rectangles actually repainted by the last er_commit().
+     *
+     * The engine tracks damage as a small set of pairwise-disjoint rects rather than one bounding
+     * box, so a change in one screen corner and another in the opposite corner repaint (and can be
+     * flushed as) two small regions instead of the span between them. This is the per-rect
+     * counterpart of er_get_dirty_rect(), for display drivers that can issue one transfer window per
+     * region.
+     *
+     * Guarantees: the returned rects are pairwise disjoint, screen-bounded, and together cover every
+     * pixel modified by the last er_commit() (a full repaint reports one root-sized rect; a clean
+     * frame reports none). When @p max_rects is too small to hold them all, the covering bounding box
+     * is written to out[0] and 1 is returned, so coverage holds for any capacity. Like
+     * er_get_dirty_rect(), the value is invalidated by the next er_commit().
+     *
+     * @param[in,out] out        Receives up to @p max_rects rectangles. Pass NULL to query the count.
+     * @param[in]     max_rects  Capacity of @p out. At most ER_DAMAGE_RECTS_MAX rects exist.
+     *
+     * @return Number of rects written (0 when nothing was repainted); with @p out NULL or
+     *         @p max_rects <= 0, the number of rects available.
+     */
+    int er_get_dirty_rects(ERRect* out, int max_rects);
 
     /**
      * @brief Programmatically sets the scroll offset of a ScrollView node.

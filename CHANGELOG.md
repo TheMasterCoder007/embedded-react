@@ -19,6 +19,13 @@ See the README for the release process.
   one-off spike diagnosable after the fact. Wired up in the ESP32-S3 example and the desktop
   simulator; gated by `ER_PERF_STATS` (defaults to `ER_PERF_OVERLAY` unless overridden by the build).
 
+### Changed
+
+- Damage tracking now keeps up to `ER_DAMAGE_RECTS_MAX` disjoint dirty rects per commit instead of
+  one bounding box, so two widgets updating in opposite corners repaint two small areas rather than
+  the whole span between them. Display drivers that can flush multiple windows can read the rects
+  via the new `er_get_dirty_rects()`; `er_get_dirty_rect()` still returns the covering box.
+
 ## [0.10.2] - 2026-08-03
 ### Fixed
 
