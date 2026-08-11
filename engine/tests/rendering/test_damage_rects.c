@@ -289,14 +289,14 @@ static int check_pixel_equivalence(void)
     frame();
     frame();
 
-    /* Also park a translucent box NEAR box A (5 px gap: the 2 px pads make the damage rects touch,
+    /* Also park a translucent box NEAR box A (4 px gap: the 2 px pads make the damage rects touch,
      * so the set must coalesce them — stored-overlap would double-composite the seam). */
     ERNode* c = er_node_create(ER_NODE_VIEW);
     ERProps cp = props_default();
     cp.width = 30;
     cp.height = 30;
     cp.position = ER_POS_ABSOLUTE;
-    cp.left = 45;
+    cp.left = 44;
     cp.top = 10;
     cp.background_color = 0x8000AA55U;
     er_node_set_props(c, &cp);
