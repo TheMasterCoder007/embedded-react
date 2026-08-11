@@ -180,3 +180,17 @@ const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads)
     return 0;
 #endif
 }
+
+int er_vector_slots_in_use(void)
+{
+    int n = 0;
+    for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
+        if (s_slots[i].used)
+            n++;
+    return n;
+}
+
+int er_vector_slots_total(void)
+{
+    return ERUI_MAX_VECTOR_NODES;
+}

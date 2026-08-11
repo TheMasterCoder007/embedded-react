@@ -34,7 +34,9 @@
  * translucent box would let the previous text bleed through and leave a fading ghost. */
 #define ER_PERF_BG 0xFF141A24U /* opaque dark panel */
 #define ER_PERF_FG 0xFF7CF08CU /* light-green metric text */
-#define ER_PERF_MAX_LINES 8    /* clamp so a stray count can't run away */
+/* Clamp so a stray count can't run away. Sized to fit a host's own metrics (FPS/CPU/heap) plus the
+ * ER_PERF_OVERLAY_LINES frame-instrumentation lines from er_perf_overlay_lines(). */
+#define ER_PERF_MAX_LINES 12
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public

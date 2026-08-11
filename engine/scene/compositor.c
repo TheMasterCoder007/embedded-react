@@ -15,6 +15,7 @@
  */
 
 #include "er_node_internal.h"
+#include "er_perf.h"
 #include "gradient.h"
 #include "image_scaler.h"
 #include "layout_anim.h"
@@ -863,6 +864,19 @@ static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that com
 #else
 #define ER_PROF_MARK(var)
 #define ER_PROF_ACC(acc, from)
+#endif
+
+/* Frame instrumentation (er_perf.h): the commit reports its own layout/raster split and the region it
+ * repainted, so a spike can be attributed without the host guessing. The entry points are no-op stubs
+ * when ER_PERF_STATS == 0, but the macros drop even the calls so a disabled build is byte-identical. */
+#if ER_PERF_STATS
+#define ER_PERF_BEGIN(phase) er_perf_phase_begin(phase)
+#define ER_PERF_END(phase) er_perf_phase_end(phase)
+#define ER_PERF_REPAINT(x, y, w, h) er_perf_note_repaint((x), (y), (w), (h))
+#else
+#define ER_PERF_BEGIN(phase)
+#define ER_PERF_END(phase)
+#define ER_PERF_REPAINT(x, y, w, h)
 #endif
 
 static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
@@ -3301,6 +3315,7 @@ void er_commit(void)
     const bool layout_ran = (s_layout_dirty || er_layout_anim_has_pending());
     if (layout_ran)
     {
+        ER_PERF_BEGIN(ER_PERF_PHASE_LAYOUT);
         const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
         const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
@@ -3312,7 +3327,14 @@ void er_commit(void)
 
         s_layout_dirty = false;
         s_layout_pass_count++;
+        ER_PERF_END(ER_PERF_PHASE_LAYOUT);
     }
+
+    /* Everything from here to the end of the commit is the paint pipeline: the damage pre-pass that
+     * decides what to repaint, the composite itself, and the dirty-flag sweep. Attributed as one
+     * RASTER phase — the pre-pass walks the whole node pool, so it belongs with the paint cost it is
+     * there to reduce rather than in an unaccounted gap. */
+    ER_PERF_BEGIN(ER_PERF_PHASE_RASTER);
 
     /* Damage-clipped render. Unless we must repaint everything (first frame, an invalidated
      * framebuffer, a removed node, or a changing node with a transform we can't bound), scissor
@@ -3556,6 +3578,14 @@ void er_commit(void)
         d->rect.x = d->rect.y = d->rect.w = d->rect.h = 0;
     }
 
+    /* rb_* is final here (damage pre-pass + any multi-buffer debt replay): report it as this frame's
+     * repaint region. It is the scissor the composite runs under AND what the backend flushes, so its
+     * area is the number both the raster and present phases scale with. */
+    if (nothing_dirty)
+        ER_PERF_REPAINT(0, 0, 0, 0);
+    else
+        ER_PERF_REPAINT(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
      * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
      * pruning self-disables there regardless. */
@@ -3727,6 +3757,8 @@ void er_commit(void)
     s_force_full_repaint = false;
     s_kbd_dirty = false;           /* the keyboard strip (if any) was repainted this commit */
     s_have_removed_damage = false; /* consumed (or covered by a full repaint) this commit */
+
+    ER_PERF_END(ER_PERF_PHASE_RASTER);
 
 #if ER_PROF
     {

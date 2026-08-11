@@ -64,6 +64,15 @@ bool image_registry_store(const char* name, const void* argb_buf, int w, int h)
     return true;
 }
 
+unsigned image_registry_in_use(void)
+{
+    unsigned n = 0U;
+    for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)
+        if (s_entries[i].in_use)
+            n++;
+    return n;
+}
+
 const ImageEntry* image_registry_get(const char* name)
 {
     if (!name || name[0] == '\0')

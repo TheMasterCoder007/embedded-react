@@ -106,6 +106,61 @@ strips through a small RGB565 band buffer (~19 KB) while panel GRAM retains the 
 16-bit color at less RAM than a full framebuffer. Band tiling is applied at backend-emit,
 not as a clip, so transform/opacity scratch sources don't truncate at the seam.
 
+### Frame instrumentation
+
+`er_perf.h` splits each frame into the four phases that can independently blow up, and
+samples the fixed-size pools alongside them — so an occasional 2-second frame can be
+attributed instead of guessed at. An FPS counter can't do this: the average stays fine
+and the spike is gone before anyone looks, which is why the **worst frame seen so far is
+retained with its whole split** (`er_perf_get_worst`) until you `er_perf_reset()`.
+
+| Phase | Marked by | Covers |
+|---|---|---|
+| `ER_PERF_PHASE_JS` | host | JS pump + React's commit into the scene graph |
+| `ER_PERF_PHASE_LAYOUT` | engine | The flex solve + text measurement inside `er_commit()` |
+| `ER_PERF_PHASE_RASTER` | engine | The rest of `er_commit()` — damage pre-pass, composite, blits |
+| `ER_PERF_PHASE_PRESENT` | host | Backend flush / panel transfer |
+
+Whatever the four don't cover (input polling, the animation tick, host work) lands in
+`other_us`, so the split always reconstructs `frame_us`. Counters sampled per frame:
+the repainted region and its area (what raster *and* present both scale with), vector
+storage slots in use out of `ERUI_MAX_VECTOR_NODES`, and image registry slots out of
+`IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here.
+
+The engine has no clock of its own, so timing is opt-in: hand it one with
+`er_perf_set_clock()` (without one the phase times read 0 and the counters still work).
+The host owns the frame boundary and its own two phases:
+
+```c
+er_perf_set_clock(now_us);                 /* once, at startup */
+
+er_perf_frame_begin();
+er_perf_phase_begin(ER_PERF_PHASE_JS);
+er_runtime_pump();
+er_perf_phase_end(ER_PERF_PHASE_JS);
+er_commit();                               /* times LAYOUT + RASTER itself */
+er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
+er_display_present();
+er_perf_phase_end(ER_PERF_PHASE_PRESENT);
+er_perf_frame_end();
+```
+
+`er_perf_overlay_lines()` formats the whole thing into short lines ready to pass to
+`er_perf_overlay_draw()`, so a host gets the panel without writing any `snprintf`:
+
+```
+FRM 18.4 PK 2013.1     last frame / worst frame, ms
+J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
+PK J1900 L12 R80 P9    the WORST frame's split — what to blame the spike on
+DRT 800x40 32k         repainted region and its area
+VEC 3/8 IMG 5/32       slots in use, out of the compiled-in pool size
+```
+
+Gated by `ER_PERF_STATS` (see the flag table below), which defaults to `ER_PERF_OVERLAY`
+so turning the panel on turns the instrumentation on with it. Set it explicitly to
+collect the numbers without drawing anything — to log them, or ship them over a debug
+link. At 0 every entry point becomes a no-op and the compositor drops even the calls.
+
 ## Compile-time feature flags
 
 Set these in CMake before `FetchContent_MakeAvailable` (or at the ESP-IDF component
@@ -131,6 +186,7 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_FADE_CACHE_W` | 0 | Fade-cache width (composited-subtree reuse across fade frames); 0 disables |
 | `ERUI_FADE_CACHE_H` | 0 | Fade-cache height; 0 disables |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
+| `ERUI_PERF_STATS` | 1 | Per-frame timing split + resource counters (`ERUI_PERF_STATS=OFF` compiles them out). Defaults to `ER_PERF_OVERLAY` on the ESP-IDF component path, which never sees this CMake option — see [Frame instrumentation](#frame-instrumentation) |
 | `ERUI_RENDER_WORKERS` | 1 | Max render workers for multi-core rendering. Above 1, per-worker context/scratch arrays are sized for N workers and a host may install threads via `embedded_renderer_set_workers` (see `native_renderer.h`); the repaint region is then rendered as horizontal slices, one per core. The opacity strip pool is split between workers (`ERUI_MAX_OPACITY_DEPTH / workers` slots each — raise the depth alongside), and each extra worker costs a full transform-source buffer. Scenes with vector or shadow nodes automatically render single-core. 1 (the default) is the plain single-core engine |
 
 ### Vector pools (SVG / `<Svg>` rasteriser)

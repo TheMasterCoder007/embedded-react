@@ -80,4 +80,14 @@ bool image_registry_store(const char* name, const void* argb_buf, int w, int h);
  */
 const ImageEntry* image_registry_get(const char* name);
 
+/**
+ * @brief Counts the registry slots currently holding an asset.
+ *
+ * The perf overlay's "image slots in use" counter — a screen that silently fails to show an image
+ * because the registry filled up reads as IMAGE_REGISTRY_MAX here.
+ *
+ * @return Number of occupied slots, 0 to IMAGE_REGISTRY_MAX.
+ */
+unsigned image_registry_in_use(void);
+
 #endif
