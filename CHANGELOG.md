@@ -12,6 +12,12 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- Borders with a per-edge width or color, and dashed or dotted borders, ignored `borderRadius` and
+  squared off every corner: they were drawn as four straight rectangles, which then overhung the
+  rounded background. They now follow the same corners as the rest of the node, and a dash pattern
+  is stepped around the perimeter, so it flows through the corners as one continuous run instead of
+  stopping at each one.
+
 - A View with a border and no `backgroundColor` rendered as a solid block of the border color
   instead of an outline. The border was painted by filling the whole shape and covering the middle
   back up with the background — which does nothing when there is no background to paint. Borders are

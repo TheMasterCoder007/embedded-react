@@ -51,6 +51,25 @@ typedef struct
     int r_dy; /**< @see l_dy */
 } ERRRectRow;
 
+/**
+ * @brief A border with an independent thickness and colour per edge.
+ *
+ * A zero thickness or a zero-alpha colour leaves that edge unpainted, which is what makes a
+ * bottom-only rule or the transparent-border spacing trick work.
+ */
+typedef struct
+{
+    int l;         /**< Left edge thickness in pixels. */
+    int t;         /**< Top edge thickness. */
+    int r;         /**< Right edge thickness. */
+    int bo;        /**< Bottom edge thickness (`bo`, since `b` names the struct at most call sites). */
+    uint32_t cl;   /**< Left edge colour, straight-alpha ARGB8888. */
+    uint32_t ct;   /**< Top edge colour. */
+    uint32_t cr;   /**< Right edge colour. */
+    uint32_t cb;   /**< Bottom edge colour. */
+    uint8_t style; /**< 0 = solid, 1 = dashed (8 on / 6 off), 2 = dotted (3 on / 3 off). */
+} ERRRectBorder;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -191,20 +210,31 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
 void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int bw);
 
 /**
- * @brief Draws a single border edge with an optional dash or dot pattern.
+ * @brief Strokes a rounded-rect border whose edges carry independent thicknesses and colours.
  *
- * The edge is oriented horizontally when horizontal != 0, vertically otherwise.
- * style == 0 renders a solid fill; style == 1 dashes (8 px on, 6 px off);
- * style == 2 dots (3 px on, 3 px off).
+ * The general form of er_rrect_fill_ring(), and the reason per-edge borders can follow a corner
+ * radius at all: drawing them as four straight rects — as this engine used to — gives a node square
+ * border corners no matter what borderRadius says.
  *
- * @param[in] argb        Fill color (straight-alpha ARGB8888).
- * @param[in] style       0 = solid, 1 = dashed, 2 = dotted.
- * @param[in] x           Left edge in framebuffer pixels.
- * @param[in] y           Top edge in framebuffer pixels.
- * @param[in] w           Width in pixels.
- * @param[in] h           Height in pixels.
- * @param[in] horizontal  Non-zero to dash along the X axis; zero to dash along Y.
+ * Each row's band takes its colour from the edge that owns it: the top and bottom edges claim their
+ * full width, the side edges own only the rows between them. That is the same split four straight
+ * edge rects made, so per-edge colours land where they always did; it differs from CSS, which meets
+ * adjacent colours on a diagonal through each corner. Equal colours make the distinction moot.
+ *
+ * A dashed or dotted style is stepped by ARC LENGTH around the perimeter, so the pattern flows
+ * through the corner arcs as one continuous run and closes cleanly where it started.
+ *
+ * @param[in] x     Left edge of the outer bounding box in framebuffer pixels.
+ * @param[in] y     Top edge of the outer bounding box in framebuffer pixels.
+ * @param[in] w     Outer width in pixels.
+ * @param[in] h     Outer height in pixels.
+ * @param[in] r_tl  Outer top-left corner radius in pixels.
+ * @param[in] r_tr  Outer top-right corner radius.
+ * @param[in] r_br  Outer bottom-right corner radius.
+ * @param[in] r_bl  Outer bottom-left corner radius.
+ * @param[in] b     Per-edge thicknesses and colours; NULL or all-empty draws nothing.
  */
-void er_rrect_border_edge(uint32_t argb, uint8_t style, int x, int y, int w, int h, int horizontal);
+void er_rrect_fill_ring_edges(
+    int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, const ERRRectBorder* b);
 
 #endif
