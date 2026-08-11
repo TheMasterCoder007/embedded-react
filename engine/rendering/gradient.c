@@ -16,6 +16,7 @@
 
 #include "gradient.h"
 #include "renderer_internal.h"
+#include "rrect.h" /* rounded-corner geometry, shared so the mask matches the fill pixel for pixel */
 #include <math.h>
 
 #ifndef ERUI_MAX_IMG_ROW_PIXELS
@@ -121,6 +122,134 @@ uint32_t er_gradient_premul(uint32_t sa)
 
 #if ERUI_GRADIENT
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Rounded-corner masking
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief The rounded-rect silhouette a gradient's rows are masked to.
+ *
+ * A gradient is a background: it must stop at the same edge the node's background_color would have,
+ * or its square corners poke out past the rounded ones (invisible at radius 4, obvious by radius 12).
+ * The radii are resolved and clamped exactly as render_view_bg does, so the mask and the border ring
+ * drawn on top of it describe one shape.
+ */
+typedef struct
+{
+    int w;        /**< Box width — the coordinate space of the row spans. */
+    int h;        /**< Box height. */
+    int r_tl;     /**< Clamped corner radii. */
+    int r_tr;     /**< @see r_tl */
+    int r_br;     /**< @see r_tl */
+    int r_bl;     /**< @see r_tl */
+    bool rounded; /**< False when every radius is 0: rows blit whole, at no extra cost. */
+} GradMask;
+
+/**
+ * @brief Resolves a node's corner radii into the mask its gradient rows are clipped to.
+ *
+ * @param[out] m   Receives the silhouette.
+ * @param[in]  vp  View props carrying border_radius and the per-corner overrides.
+ * @param[in]  w   Box width in pixels.
+ * @param[in]  h   Box height in pixels.
+ */
+static void mask_init(GradMask* m, const ERViewProps* vp, int w, int h)
+{
+    /* Per-corner radius, falling back to the uniform one — the same resolution render_view_bg uses. */
+    m->r_tl = vp->border_tl_radius > 0 ? (int)vp->border_tl_radius : (int)vp->border_radius;
+    m->r_tr = vp->border_tr_radius > 0 ? (int)vp->border_tr_radius : (int)vp->border_radius;
+    m->r_br = vp->border_br_radius > 0 ? (int)vp->border_br_radius : (int)vp->border_radius;
+    m->r_bl = vp->border_bl_radius > 0 ? (int)vp->border_bl_radius : (int)vp->border_radius;
+    er_rrect_clamp_radii(w, h, &m->r_tl, &m->r_tr, &m->r_br, &m->r_bl);
+    m->w = w;
+    m->h = h;
+    m->rounded = (m->r_tl > 0 || m->r_tr > 0 || m->r_br > 0 || m->r_bl > 0);
+}
+
+/**
+ * @brief Scales a premultiplied ARGB8888 pixel by an anti-aliasing coverage byte.
+ *
+ * Every channel scales, not just alpha: the value is premultiplied, so leaving the colour channels
+ * alone would brighten the fringe instead of fading it.
+ *
+ * @param[in] p    Premultiplied ARGB8888 pixel.
+ * @param[in] cov  Coverage in [0, 255].
+ *
+ * @return The pixel scaled by cov/255, still premultiplied.
+ */
+static uint32_t premul_scale(uint32_t p, uint32_t cov)
+{
+    const uint32_t a = (((p >> 24) & 0xFFu) * cov + 127u) / 255u;
+    const uint32_t r = (((p >> 16) & 0xFFu) * cov + 127u) / 255u;
+    const uint32_t g = (((p >> 8) & 0xFFu) * cov + 127u) / 255u;
+    const uint32_t b = ((p & 0xFFu) * cov + 127u) / 255u;
+    return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/**
+ * @brief Blits one assembled gradient row, clipped to the rounded-rect silhouette.
+ *
+ * Rows clear of the corner arcs blit whole; rows the arcs cut into blit only their covered span, then
+ * fade the anti-aliased fringe pixels beside it (matching er_rrect_fill_corners' fringe walk, so the
+ * gradient's corner is the same shape a solid background would have painted).
+ *
+ * @param[in] m         Silhouette to clip to.
+ * @param[in] row       Assembled premultiplied ARGB8888 row, @p capped_w pixels wide.
+ * @param[in] x         Destination left edge in framebuffer pixels.
+ * @param[in] y         Destination row in framebuffer pixels.
+ * @param[in] row_idx   Row index within the box, 0 = top.
+ * @param[in] capped_w  Assembled width (may be less than m->w on very wide boxes).
+ */
+static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, int row_idx, int capped_w)
+{
+    if (!m->rounded)
+    {
+        er_blit_blend(row, capped_w * (int)sizeof(uint32_t), 255, x, y, capped_w, 1);
+        return;
+    }
+
+    ERRRectRow rr;
+    er_rrect_row(m->w, m->h, m->r_tl, m->r_tr, m->r_br, m->r_bl, row_idx, &rr);
+
+    const int x1 = (rr.x1 < capped_w) ? rr.x1 : capped_w;
+    if (x1 > rr.x0)
+        er_blit_blend(&row[rr.x0], (x1 - rr.x0) * (int)sizeof(uint32_t), 255, x + rr.x0, y, x1 - rr.x0, 1);
+
+#if ERUI_BORDER_AA
+    /* Fringe pixels take the gradient colour at their own column, faded by the arc's coverage. */
+    if (rr.l_r > 0)
+    {
+        for (int k = 0;; k++)
+        {
+            const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
+            if (cov <= 0.0f)
+                break;
+            const int ax = rr.x0 - 1 - k;
+            if (cov < 1.0f && ax >= 0 && ax < capped_w)
+            {
+                const uint32_t p = premul_scale(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
+                er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
+            }
+        }
+    }
+    if (rr.r_r > 0)
+    {
+        for (int k = 0;; k++)
+        {
+            const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
+            if (cov <= 0.0f)
+                break;
+            const int ax = rr.x1 + k;
+            if (cov < 1.0f && ax >= 0 && ax < capped_w && ax < m->w)
+            {
+                const uint32_t p = premul_scale(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
+                er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
+            }
+        }
+    }
+#endif
+}
+
 /**
  * @brief Renders a linear gradient into a rectangular framebuffer region.
  *
@@ -140,6 +269,9 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
 {
     if (vp->gradient_stop_count < 2 || w <= 0 || h <= 0)
         return;
+
+    GradMask mask;
+    mask_init(&mask, vp, w, h);
 
     const float angle_rad = vp->gradient_angle * (GRAD_PI / 180.0f);
     const float ddx = sinf(angle_rad);
@@ -183,7 +315,7 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
             grow()[col] =
                 er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
-        er_blit_blend(grow(), capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
+        mask_blit_row(&mask, grow(), x, y + row, row, capped_w);
     }
 }
 
@@ -209,6 +341,9 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
     if (vp->gradient_stop_count < 2 || w <= 0 || h <= 0)
         return;
 
+    GradMask mask;
+    mask_init(&mask, vp, w, h);
+
     const float cx = (float)(w - 1) * 0.5f;
     const float cy = (float)(h - 1) * 0.5f;
     const float r = sqrtf(cx * cx + cy * cy);
@@ -227,7 +362,7 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
             grow()[col] =
                 er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
         }
-        er_blit_blend(grow(), capped_w * (int)sizeof(uint32_t), 255, x, y + row, capped_w, 1);
+        mask_blit_row(&mask, grow(), x, y + row, row, capped_w);
     }
 }
 

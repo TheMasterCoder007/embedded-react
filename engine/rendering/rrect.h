@@ -20,8 +20,89 @@
 #include <stdint.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Macros
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* Shared by every rasterizer that draws or masks to a rounded-rect edge (rrect.c, gradient.c), so
+ * they agree on whether the corner carries an anti-aliased fringe. */
+#ifndef ERUI_BORDER_AA
+#define ERUI_BORDER_AA 1
+#endif
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Types: Rounded-rect geometry (shared so a mask can match a fill pixel for pixel)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief One scanline's coverage inside a rounded rectangle.
+ *
+ * All coordinates are offsets from the rectangle's left edge, so the same row description works for
+ * any destination position. Produced by er_rrect_row().
+ */
+typedef struct
+{
+    int x0;   /**< First fully-covered column; 0 on rows clear of the left corner arcs. */
+    int x1;   /**< One past the last fully-covered column; w on rows clear of the right arcs. */
+    int l_r;  /**< Left corner arc radius in play on this row; 0 = straight edge, no fringe. */
+    int l_dx; /**< Solid half-width from the left arc centre — the fringe walk starts here. */
+    int l_dy; /**< This row's distance from the left arc centre. */
+    int r_r;  /**< Right corner arc radius in play; 0 = straight edge. */
+    int r_dx; /**< @see l_dx */
+    int r_dy; /**< @see l_dy */
+} ERRRectRow;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Clamps per-corner radii to the shape a rounded-rect fill will actually paint.
+ *
+ * Uniform radii keep opposite arcs tangent (the pill / capsule clamp); mixed radii scale each
+ * opposing pair down proportionally so neighbouring arcs meet at most tangentially. Radii are
+ * clamped in place and never go negative.
+ *
+ * Anything that MASKS to a filled rounded rect — the gradient background — must clamp through this
+ * same function, or its edge disagrees with the fill's by a pixel at radii large enough to clamp.
+ *
+ * @param[in]     w      Box width in pixels.
+ * @param[in]     h      Box height in pixels.
+ * @param[in,out] r_tl   Top-left radius.
+ * @param[in,out] r_tr   Top-right radius.
+ * @param[in,out] r_br   Bottom-right radius.
+ * @param[in,out] r_bl   Bottom-left radius.
+ */
+void er_rrect_clamp_radii(int w, int h, int* r_tl, int* r_tr, int* r_br, int* r_bl);
+
+/**
+ * @brief Resolves one scanline's covered span inside a rounded rectangle.
+ *
+ * @param[in]  w     Box width in pixels.
+ * @param[in]  h     Box height in pixels.
+ * @param[in]  r_tl  Top-left radius, already clamped by er_rrect_clamp_radii().
+ * @param[in]  r_tr  Top-right radius (clamped).
+ * @param[in]  r_br  Bottom-right radius (clamped).
+ * @param[in]  r_bl  Bottom-left radius (clamped).
+ * @param[in]  row   Scanline index, 0 = the box's top row.
+ * @param[out] out   Receives the row's span and the corner arcs in play.
+ */
+void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row, ERRRectRow* out);
+
+/**
+ * @brief Anti-aliasing coverage of the k-th fringe pixel stepping outward from a corner's solid edge.
+ *
+ * Signed-distance coverage sampled at the pixel centre, matching the arc er_rrect_row() reports.
+ * Walk k upward from 0 and stop at the first non-positive result.
+ *
+ * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r).
+ * @param[in] dx  Solid half-width at this row (ERRRectRow::l_dx / r_dx).
+ * @param[in] dy  Row distance from the arc centre (ERRRectRow::l_dy / r_dy).
+ * @param[in] k   Steps outward from the solid edge, starting at 0.
+ *
+ * @return Coverage: <= 0 past the arc (stop the walk), >= 1 fully inside (already solid — skip the
+ *         pixel), otherwise the fraction to scale the source alpha by.
+ */
+float er_rrect_fringe_cov(int r, int dx, int dy, int k);
 
 /**
  * @brief Fills a rounded rectangle with a solid color.

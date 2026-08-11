@@ -434,6 +434,105 @@ int main(void)
             return fail("three-stop linear: mid-stop orange not visible at mid row");
     }
 
+    /* -----------------------------------------------------------------------
+     * Test 6: border radius clips the gradient.
+     *
+     * A gradient is a background, so it has to stop at exactly the edge a solid background_color
+     * would have — otherwise its square corners poke out past the rounded ones. The assertion is
+     * therefore not "the corner is empty" but the stronger "the gradient covers precisely what the
+     * solid fill covers": render the same rounded box twice, once with a flat colour and once with
+     * a gradient, and require the two coverage masks (the premultiplied alpha channel, including
+     * anti-aliased corner fringes) to be identical pixel for pixel.
+     * ----------------------------------------------------------------------- */
+    {
+        const int radius = 16; /* well past the ~4 px where the overhang hides */
+        static uint8_t solid_cov[FB_W * FB_H];
+
+        ERProps p;
+        memset(&p, 0, sizeof(p));
+        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+        p.width = FB_W;
+        p.height = FB_H;
+        p.opacity = 255;
+        p.border_radius = (int16_t)radius;
+
+        /* Reference: the same rounded box filled with an opaque solid colour. */
+        p.background_color = 0xFF2A9D8F;
+        er_node_set_props(root, &p);
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+        for (int i = 0; i < FB_W * FB_H; i++)
+            solid_cov[i] = (uint8_t)((tc.fb[i] >> 24) & 0xFFu);
+
+        /* Same box, gradient background (two opaque stops → the same full coverage). */
+        p.background_color = 0;
+        p.gradient_type = ER_GRADIENT_LINEAR;
+        p.gradient_angle = 45.0f; /* diagonal: every corner sees a different colour */
+        p.gradient_stop_count = 2;
+        p.gradient_stops[0].color = 0xFF2A9D8F;
+        p.gradient_stops[0].position = 0.0f;
+        p.gradient_stops[1].color = 0xFF9B59B6;
+        p.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &p);
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+
+        /* The corners must actually be cut — otherwise the comparison below could pass on two
+         * equally-square shapes if the solid fill ever regressed. */
+        if (solid_cov[0] != 0 || solid_cov[FB_W - 1] != 0)
+            return fail("radius clip: the solid reference did not round its own corners");
+
+        for (int y = 0; y < FB_H; y++)
+        {
+            for (int x = 0; x < FB_W; x++)
+            {
+                const uint8_t want = solid_cov[y * FB_W + x];
+                const uint8_t got = (uint8_t)((px(&tc, x, y) >> 24) & 0xFFu);
+                if (want != got)
+                {
+                    printf("  at (%d,%d): solid alpha %u, gradient alpha %u\n", x, y, want, got);
+                    return fail("radius clip: gradient coverage differs from the solid fill's");
+                }
+            }
+        }
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 7: per-corner radii clip the gradient independently.
+     *
+     * Only the top-left corner is rounded, so the gradient must be cut there and reach the pixel in
+     * the other three — the case a single uniform-radius mask would get wrong.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps p;
+        memset(&p, 0, sizeof(p));
+        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+        p.width = FB_W;
+        p.height = FB_H;
+        p.opacity = 255;
+        p.border_top_left_radius = 20;
+        p.gradient_type = ER_GRADIENT_LINEAR;
+        p.gradient_angle = 90.0f;
+        p.gradient_stop_count = 2;
+        p.gradient_stops[0].color = 0xFF2A9D8F;
+        p.gradient_stops[0].position = 0.0f;
+        p.gradient_stops[1].color = 0xFF9B59B6;
+        p.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &p);
+
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+
+        if (((px(&tc, 0, 0) >> 24) & 0xFFu) != 0)
+            return fail("per-corner radius: the rounded top-left corner still painted");
+        if (((px(&tc, FB_W - 1, 0) >> 24) & 0xFFu) == 0)
+            return fail("per-corner radius: the square top-right corner was clipped");
+        if (((px(&tc, 0, FB_H - 1) >> 24) & 0xFFu) == 0)
+            return fail("per-corner radius: the square bottom-left corner was clipped");
+        if (((px(&tc, FB_W - 1, FB_H - 1) >> 24) & 0xFFu) == 0)
+            return fail("per-corner radius: the square bottom-right corner was clipped");
+    }
+
 #else /* ERUI_GRADIENT == 0 */
 
     /* -----------------------------------------------------------------------

@@ -10,6 +10,13 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- Gradient backgrounds are now clipped by `borderRadius`. A gradient painted its full rectangle, so
+  its square corners poked out past the node's rounded ones — unnoticeable at a radius of 4, plainly
+  visible by 16. It now stops at exactly the edge a solid `backgroundColor` would, anti-aliased
+  corner fringe included.
+
 ### Added
 
 - Frame instrumentation in the perf overlay (`engine/include/er_perf.h`). Each frame is now split
