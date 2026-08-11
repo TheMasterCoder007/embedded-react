@@ -17,7 +17,7 @@ See the README for the release process.
   image slot usage — so a frame that spikes can be blamed on the right subsystem instead of guessed
   at. The worst frame is kept with its full breakdown until you reset it, which is what makes a
   one-off spike diagnosable after the fact. Wired up in the ESP32-S3 example and the desktop
-  simulator; gated by `ER_PERF_STATS`, which follows `ER_PERF_OVERLAY` by default.
+  simulator; gated by `ER_PERF_STATS` (defaults to `ER_PERF_OVERLAY` unless overridden by the build).
 
 ## [0.10.2] - 2026-08-03
 ### Fixed

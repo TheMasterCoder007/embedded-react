@@ -87,7 +87,7 @@ option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
 option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
 option(ERUI_GRADIENT_CONIC "Enable conic/angular vector gradients (requires ERUI_GRADIENT)" OFF)
 option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
-option(ERUI_PERF_STATS "Per-frame timing split + resource counters for the perf overlay" ON)
+option(ERUI_PERF_STATS "Force-enable per-frame timing split + resource counters (otherwise follows ER_PERF_OVERLAY)" OFF)
 
 # TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
 # FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.

@@ -156,9 +156,9 @@ DRT 800x40 32k         repainted region and its area
 VEC 3/8 IMG 5/32       slots in use, out of the compiled-in pool size
 ```
 
-Gated by `ER_PERF_STATS` (see the flag table below), which defaults to `ER_PERF_OVERLAY`
-so turning the panel on turns the instrumentation on with it. Set it explicitly to
-collect the numbers without drawing anything — to log them, or ship them over a debug
+Gated by `ER_PERF_STATS` (see the flag table below). If `ER_PERF_STATS` is not defined by the build,
+it defaults to `ER_PERF_OVERLAY`, so turning the panel on turns the instrumentation on with it. Set it
+explicitly to collect the numbers without drawing anything — to log them, or ship them over a debug
 link. At 0 every entry point becomes a no-op and the compositor drops even the calls.
 
 ## Compile-time feature flags
