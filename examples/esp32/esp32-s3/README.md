@@ -244,14 +244,36 @@ Notes / limits:
 
 ## Performance overlay
 
-A built-in LVGL-style metrics panel (FPS, CPU load, free PSRAM / internal RAM) can be drawn in the
-bottom-right corner for on-device diagnostics. It's gated by the `ER_PERF_OVERLAY` preprocessor
-define (in `engine/include/perf_overlay.h`), **off by default** — flip it to `1` (or build with
+A built-in LVGL-style metrics panel can be drawn in the bottom-right corner for on-device
+diagnostics. It's gated by the `ER_PERF_OVERLAY` preprocessor define (in
+`engine/include/perf_overlay.h`), **off by default** — flip it to `1` (or build with
 `-DER_PERF_OVERLAY=1`) and reflash:
 
 ```c
 #define ER_PERF_OVERLAY 1   // engine/include/perf_overlay.h
 ```
+
+The panel shows this host's own metrics (FPS, CPU load, free PSRAM / internal RAM) followed by the
+engine's frame instrumentation — the per-frame timing split and the resource counters
+(`engine/include/er_perf.h`, enabled by the same flag):
+
+```
+FPS 48                 host metrics
+CPU 61%
+PSRAM 3204K
+IRAM 118K
+FRM 18.4 PK 2013.1     frame time: last / worst, ms
+J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
+PK J1900 L12 R80 P9    the WORST frame's split — which subsystem to blame
+DRT 800x40 32k         repainted region and its area
+VEC 3/8 IMG 5/32       vector + image slots in use
+```
+
+The `PK` lines are the point: a frame that spikes once and recovers is invisible to the FPS
+counter, but its full split is retained until `er_perf_reset()`, so you can read minutes later
+whether the 2 seconds went into JS, layout, raster, or the panel transfer. `main.c` closes each
+frame before the pacing `vTaskDelay`, so `FRM` is work time — the same basis as the CPU-load
+metric.
 
 ## Frame pacing
 

@@ -20,6 +20,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/image_registry.c
         rendering/image_scaler.c
         rendering/perf_overlay.c
+        rendering/perf_stats.c
         rendering/rrect.c
         rendering/scratch_pool.c
         rendering/shadow.c
@@ -86,6 +87,7 @@ option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
 option(ERUI_GRADIENT_RADIAL "Enable radial gradients (requires ERUI_GRADIENT)" OFF)
 option(ERUI_GRADIENT_CONIC "Enable conic/angular vector gradients (requires ERUI_GRADIENT)" OFF)
 option(ERUI_ONSCREEN_KEYBOARD "Built-in on-screen software keyboard for TextInput (touch-only devices)" OFF)
+option(ERUI_PERF_STATS "Force-enable per-frame timing split + resource counters (otherwise follows ER_PERF_OVERLAY)" OFF)
 
 # TRANSLATE_ONLY: pure-integer pixel shifts, no scratch buffers needed for transforms.
 # FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
@@ -159,6 +161,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_XFORM_H=${ERUI_XFORM_H}
         ERUI_FADE_CACHE_W=${ERUI_FADE_CACHE_W}
         ERUI_FADE_CACHE_H=${ERUI_FADE_CACHE_H}
+        ER_PERF_STATS=$<BOOL:${ERUI_PERF_STATS}>
 )
 
 target_compile_definitions(embedded-react PRIVATE

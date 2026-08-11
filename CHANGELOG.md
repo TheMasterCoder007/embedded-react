@@ -10,6 +10,14 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Frame instrumentation in the perf overlay (`engine/include/er_perf.h`). Each frame is now split
+  into JS/commit, layout, raster, and present, alongside counters for dirty-rect area and vector /
+  image slot usage — so a frame that spikes can be blamed on the right subsystem instead of guessed
+  at. The worst frame is kept with its full breakdown until you reset it, which is what makes a
+  one-off spike diagnosable after the fact. Wired up in the ESP32-S3 example and the desktop
+  simulator; gated by `ER_PERF_STATS` (defaults to `ER_PERF_OVERLAY` unless overridden by the build).
 
 ## [0.10.2] - 2026-08-03
 ### Fixed

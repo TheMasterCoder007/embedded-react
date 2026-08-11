@@ -144,4 +144,10 @@ const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints);
 /** @brief Returns a slot's gradient table and writes its count to @p n_grads (NULL/0 when none / no ERUI_GRADIENT). */
 const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads);
 
+/** @brief Storage slots currently holding geometry — the perf overlay's "vector slots in use" counter. */
+int er_vector_slots_in_use(void);
+
+/** @brief Total storage slots compiled in (ERUI_MAX_VECTOR_NODES); the denominator for the above. */
+int er_vector_slots_total(void);
+
 #endif

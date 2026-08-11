@@ -34,6 +34,7 @@
 
 #include "host.h"
 
+#include "er_perf.h"
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "native_renderer.h"
@@ -114,6 +115,20 @@ static bool is_container_path(const char* path)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/**
+ * @brief Microsecond clock for the frame instrumentation (er_perf.h).
+ *
+ * Whole seconds and the sub-second remainder are scaled separately: the counter is nanoseconds on
+ * macOS, so the naive counter * 1000000 would overflow 64 bits within hours of uptime. The truncation
+ * to 32 bits wraps every ~71 minutes, which er_perf's unsigned deltas handle.
+ */
+static uint32_t host_now_us(void)
+{
+    static Uint64 freq = 0; if (!freq) freq = SDL_GetPerformanceFrequency();
+    const Uint64 now = SDL_GetPerformanceCounter();
+    return (uint32_t)((now / freq) * 1000000ULL + (now % freq) * 1000000ULL / freq);
+}
+
 bool er_host_start(const ErHostConfig* cfg, ErHost* host)
 {
     memset(host, 0, sizeof(*host));
@@ -124,6 +139,7 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return false;
     }
+    er_perf_set_clock(host_now_us); /* frame timing split; a no-op when ER_PERF_STATS is off */
 
     host->window = SDL_CreateWindow(cfg->title ? cfg->title : "embedded-react",
                                     SDL_WINDOWPOS_CENTERED,
@@ -299,6 +315,8 @@ int er_host_event_px(const ErHost* host, int logical)
 
 bool er_host_step(ErHost* host)
 {
+    er_perf_frame_begin(); /* frame instrumentation: JS/layout/raster/present split (er_perf.h) */
+
     SDL_Event ev;
     while (SDL_PollEvent(&ev))
     {
@@ -334,14 +352,21 @@ bool er_host_step(ErHost* host)
     /* Service Promises and setTimeout/setInterval before painting, so timer/async-driven state
        updates land in this frame's commit. The engine clock used by timers was advanced by last
        frame's embedded_renderer_tick. */
+    er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_runtime_pump();
+    er_perf_phase_end(ER_PERF_PHASE_JS);
 
-    er_commit();
+    er_commit(); /* times its own LAYOUT + RASTER phases */
+
+    er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
     er_sdl_present();
+    er_perf_phase_end(ER_PERF_PHASE_PRESENT);
 
     const uint32_t now = SDL_GetTicks();
     embedded_renderer_tick(now - host->prev_ticks);
     host->prev_ticks = now;
+
+    er_perf_frame_end();
 
     return host->running;
 }

@@ -50,6 +50,10 @@ add_executable(test_gradient test_gradient.c)
 target_link_libraries(test_gradient PRIVATE embedded-react)
 add_test(NAME rendering_gradient COMMAND test_gradient)
 
+add_executable(test_perf test_perf.c)
+target_link_libraries(test_perf PRIVATE embedded-react)
+add_test(NAME rendering_perf COMMAND test_perf)
+
 add_executable(test_vector test_vector.c)
 target_link_libraries(test_vector PRIVATE embedded-react)
 # test_vector needs engine/rendering for vector.h (a private engine header).

@@ -17,6 +17,7 @@ idf_component_register(
         "${E}/rendering/image_registry.c"
         "${E}/rendering/image_scaler.c"
         "${E}/rendering/perf_overlay.c"
+        "${E}/rendering/perf_stats.c"
         "${E}/rendering/rrect.c"
         "${E}/rendering/scratch_pool.c"
         "${E}/rendering/shadow.c"
@@ -85,10 +86,12 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     # ER_PROF=1                # uncomment for on-device compositor phase profiling (prints ERPROF lines)
 )
 
-# Performance overlay (FPS/CPU/memory, bottom-right). The actual drawing lives in this component's
-# perf_overlay.c, which is a no-op stub unless ER_PERF_OVERLAY=1 reaches it — so it must be set HERE,
-# not only on the main component (which gathers the host-side metrics). Keep this in sync with
-# main/CMakeLists.txt; set both to 0 to compile the overlay out entirely.
+# Performance overlay (FPS/CPU/memory + the per-frame timing split, bottom-right). The actual drawing
+# lives in this component's perf_overlay.c, which is a no-op stub unless ER_PERF_OVERLAY=1 reaches it —
+# so it must be set HERE, not only on the main component (which gathers the host-side metrics). The
+# frame instrumentation (perf_stats.c + the compositor's layout/raster marks) defaults ER_PERF_STATS to
+# this same flag, so it turns on and off with the overlay. Keep this in sync with main/CMakeLists.txt;
+# set both to 0 to compile the overlay and its instrumentation out entirely.
 if(NOT DEFINED ER_PERF_OVERLAY)
     set(ER_PERF_OVERLAY 1)
 endif()

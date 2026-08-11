@@ -35,6 +35,7 @@
 
 #include "board.h"
 #include "er_hotreload.h" /* er_hotreload_apply (on-device hot reload) */
+#include "er_perf.h"      /* per-frame timing split + resource counters (feeds the overlay) */
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
@@ -247,8 +248,13 @@ static uint32_t now_ms(void)
  - Performance overlay metrics (gathered host-side; ER_PERF_OVERLAY only)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static char s_perf_buf[4][24];
-static const char* s_perf_lines[4] = {s_perf_buf[0], s_perf_buf[1], s_perf_buf[2], s_perf_buf[3]};
+/** @brief Lines this host formats itself (FPS / CPU / heap); the engine appends its own below them. */
+#define PERF_HOST_LINES 4
+
+static char s_perf_buf[PERF_HOST_LINES][24];
+/* Host lines first, then the engine's frame-instrumentation lines (timing split + resource counters,
+ * er_perf_overlay_lines) — those point into engine-owned static storage, so they are not copied. */
+static const char* s_perf_lines[PERF_HOST_LINES + ER_PERF_OVERLAY_LINES];
 static int s_perf_nlines = 0;
 static uint32_t s_perf_busy_us = 0; /* the previous frame's full work time (pump+commit+present) */
 
@@ -294,7 +300,14 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
     snprintf(s_perf_buf[1], sizeof(s_perf_buf[1]), "CPU %u%%", (unsigned)cpu);
     snprintf(s_perf_buf[2], sizeof(s_perf_buf[2]), "PSRAM %uK", (unsigned)spiram_k);
     snprintf(s_perf_buf[3], sizeof(s_perf_buf[3]), "IRAM %uK", (unsigned)iram_k);
-    s_perf_nlines = 4;
+    for (int i = 0; i < PERF_HOST_LINES; i++)
+    {
+        s_perf_lines[i] = s_perf_buf[i];
+    }
+    /* Append the engine's split + counters. This runs before this frame's er_perf_frame_end(), so the
+     * numbers are the previous frame's — irrelevant at a 500 ms refresh, and the retained peak (the
+     * "PK" lines, which is what a spike hunt actually reads) is unaffected either way. */
+    s_perf_nlines = PERF_HOST_LINES + er_perf_overlay_lines(&s_perf_lines[PERF_HOST_LINES], ER_PERF_OVERLAY_LINES);
 
     frames = 0;
     busy_sum = 0;
@@ -303,7 +316,7 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
 }
 #endif
 
-/** @brief Microsecond clock for the engine's temporary ER_PROF instrumentation. */
+/** @brief Microsecond clock for the engine's instrumentation (er_perf.h, and the temporary ER_PROF probes). */
 uint32_t er_prof_now_us(void)
 {
     return (uint32_t)esp_timer_get_time();
@@ -424,6 +437,8 @@ static void install_render_workers(void)
  */
 static void run_app(void)
 {
+    er_perf_set_clock(er_prof_now_us); /* frame instrumentation clock; no-op when ER_PERF_STATS is off */
+
     /* Bring up the RGB panel and draw to it; fall back to the no-op backend if it fails so the JS
        stack still runs (and logs why) over UART. */
     esp_lcd_panel_handle_t panel = NULL;
@@ -559,9 +574,12 @@ static void run_app(void)
 #endif
 
         const int64_t frame_start_us = esp_timer_get_time();
+        er_perf_frame_begin(); /* frame instrumentation: JS/layout/raster/present split (er_perf.h) */
+        er_perf_phase_begin(ER_PERF_PHASE_JS);
         er_runtime_pump(); /* drain JS promises + fire due timers */
+        er_perf_phase_end(ER_PERF_PHASE_JS);
         const int64_t t_pump_us = esp_timer_get_time();
-        er_commit();       /* lay out (if needed) + paint the changed region into the backend */
+        er_commit(); /* lay out (if needed) + paint the changed region into the backend; times itself */
         const int64_t t_commit_us = esp_timer_get_time();
 #if ER_PERF_OVERLAY
         /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
@@ -579,13 +597,19 @@ static void run_app(void)
 #endif
         if (display)
         {
+            er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
             er_esp32_lcd_present(); /* flush the app region + re-composite the overlay */
+            er_perf_phase_end(ER_PERF_PHASE_PRESENT);
         }
         const int64_t t_present_us = esp_timer_get_time();
 
         const uint32_t now = now_ms();
         embedded_renderer_tick(now - prev);
         prev = now;
+
+        /* Close the frame BEFORE the pacing sleep, so frame_us is work time — the same basis as the
+         * CPU-load metric, and the number a frame budget is actually measured against. */
+        er_perf_frame_end();
 
         /* Frame-phase trace: where the frame time goes, averaged over the log window. */
         static uint32_t s_tr_pump = 0, s_tr_commit = 0, s_tr_present = 0, s_tr_n = 0;
