@@ -231,6 +231,8 @@ static int check_worst_frame_is_retained(int screen)
         return fail("a later, faster frame displaced the retained peak");
     if (still.phase_us[ER_PERF_PHASE_JS] != spike.phase_us[ER_PERF_PHASE_JS])
         return fail("the retained peak's split changed");
+    if (still.dirty_px != spike.dirty_px || still.dirty_w != spike.dirty_w || still.dirty_h != spike.dirty_h)
+        return fail("the retained peak's repaint region changed (PKDRT would show the wrong frame)");
 
     ERPerfFrame last;
     er_perf_get_last(&last);
@@ -365,11 +367,21 @@ static int check_counters(int screen)
     return EXIT_SUCCESS;
 }
 
-/* The overlay lines: non-empty, null-terminated, and short enough for a 240 px panel. */
+/* The overlay lines: non-empty, null-terminated, short enough for a 240 px panel — and the region
+ * line reports the PEAK frame, not the (nearly always empty) last frame. */
 static int check_overlay_lines(void)
 {
     const char* lines[ER_PERF_OVERLAY_LINES];
     memset(lines, 0, sizeof(lines));
+
+    /* An idle frame first: the LAST frame now repainted nothing, while the retained peak (the mount
+     * frame of the preceding test) covered the whole screen. The region line must show the peak. */
+    frame();
+    ERPerfFrame last, worst;
+    er_perf_get_last(&last);
+    er_perf_get_worst(&worst);
+    if (last.dirty_px != 0U || worst.dirty_px == 0U)
+        return fail("setup: expected an empty last frame under a non-empty retained peak");
 
     const int n = er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES);
     if (n != ER_PERF_OVERLAY_LINES)
@@ -382,6 +394,13 @@ static int check_overlay_lines(void)
             return fail("an overlay line overran ER_PERF_LINE_MAX");
         printf("  overlay: %s\n", lines[i]);
     }
+
+    /* The region line: labelled as the peak's, showing the peak's geometry — not the last frame's
+     * zeros, which would make the line read 0 on almost every refresh. */
+    char want[ER_PERF_LINE_MAX];
+    snprintf(want, sizeof(want), "PKDRT %dx%d", (int)worst.dirty_w, (int)worst.dirty_h);
+    if (strncmp(lines[3], want, strlen(want)) != 0)
+        return fail("the region line does not show the PEAK frame's repaint region");
 
     /* A smaller request must be honoured (a host merging its own metrics has limited room). */
     const char* two[2] = {NULL, NULL};

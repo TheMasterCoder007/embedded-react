@@ -265,13 +265,16 @@ IRAM 118K
 FRM 18.4 PK 2013.1     frame time: last / worst, ms
 J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
 PK J1900 L12 R80 P9    the WORST frame's split — which subsystem to blame
-DRT 800x40 32k         repainted region and its area
+PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK)
 VEC 3/8 IMG 5/32       vector + image slots in use
 ```
 
-The `PK` lines are the point: a frame that spikes once and recovers is invisible to the FPS
-counter, but its full split is retained until `er_perf_reset()`, so you can read minutes later
-whether the 2 seconds went into JS, layout, raster, or the panel transfer. `main.c` closes each
+The `PK`/`PKDRT` lines are the point: a frame that spikes once and recovers is invisible to the
+FPS counter, but its full split and the region it repainted are retained until `er_perf_reset()`,
+so you can read minutes later whether the 2 seconds went into JS, layout, raster, or the panel
+transfer — and whether it went full-screen doing it. (For a "what did that interaction just
+cost?" line instead, latch the last frame with `dirty_px > 0` from `er_perf_get_last()` — see the
+engine README's frame-instrumentation section for the recipe.) `main.c` closes each
 frame before the pacing `vTaskDelay`, so `FRM` is work time — the same basis as the CPU-load
 metric.
 
