@@ -230,7 +230,7 @@ extern "C"
      *     FRM 18.4 PK 2013.1     last frame / worst frame
      *     J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
      *     PK J1900 L12 R80 P9    the WORST frame's split — what to blame the spike on
-     *     DRT 800x40 32k         repainted region and its area
+     *     PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK above)
      *     VEC 3/8 IMG 5/32       vector + image slots in use, out of the compiled-in pool size
      *
      * @param[out] lines      Receives pointers to the formatted lines.

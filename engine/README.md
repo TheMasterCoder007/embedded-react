@@ -165,9 +165,27 @@ er_perf_frame_end();
 FRM 18.4 PK 2013.1     last frame / worst frame, ms
 J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
 PK J1900 L12 R80 P9    the WORST frame's split — what to blame the spike on
-DRT 800x40 32k         repainted region and its area
+PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK above)
 VEC 3/8 IMG 5/32       slots in use, out of the compiled-in pool size
 ```
+
+The same `ERPerfFrame.dirty_*` data supports three region policies, and the overlay only has room
+for one — pick per host:
+
+1. **Peak** — what `PKDRT` shows: the region that accompanied the worst frame, so it pairs with the
+   `PK` split above it and answers "did anything ever go full-screen?". Retained until
+   `er_perf_reset()`, like the split.
+2. **Last frame** — `er_perf_get_last()` directly; nearly always 0 (most frames repaint nothing),
+   so it is rarely useful on screen by itself.
+3. **Last non-empty frame** — "what did that interaction just cost?", the everyday debugging
+   question. Latch it host-side, a few lines per frame:
+
+   ```c
+   static ERPerfFrame s_last_paint; /* the most recent frame that actually repainted */
+   ERPerfFrame f;
+   if (er_perf_get_last(&f) && f.dirty_px > 0U)
+       s_last_paint = f; /* format s_last_paint.dirty_* into your own overlay line */
+   ```
 
 Gated by `ER_PERF_STATS` (see the flag table below). If `ER_PERF_STATS` is not defined by the build,
 it defaults to `ER_PERF_OVERLAY`, so turning the panel on turns the instrumentation on with it. Set it

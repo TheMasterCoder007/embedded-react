@@ -251,19 +251,24 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
              ER_PERF_MS(w->phase_us[ER_PERF_PHASE_LAYOUT]),
              ER_PERF_MS(w->phase_us[ER_PERF_PHASE_RASTER]),
              ER_PERF_MS(w->phase_us[ER_PERF_PHASE_PRESENT]));
-    if (l->dirty_px >= 10000U)
+
+    if (w->dirty_px >= 10000U)
     {
         snprintf(s_lines[3],
                  sizeof(s_lines[3]),
-                 "DRT %dx%d %uk",
-                 (int)l->dirty_w,
-                 (int)l->dirty_h,
-                 (unsigned)(l->dirty_px / 1000U));
+                 "PKDRT %dx%d %uk",
+                 (int)w->dirty_w,
+                 (int)w->dirty_h,
+                 (unsigned)(w->dirty_px / 1000U));
     }
     else
     {
-        snprintf(
-            s_lines[3], sizeof(s_lines[3]), "DRT %dx%d %upx", (int)l->dirty_w, (int)l->dirty_h, (unsigned)l->dirty_px);
+        snprintf(s_lines[3],
+                 sizeof(s_lines[3]),
+                 "PKDRT %dx%d %upx",
+                 (int)w->dirty_w,
+                 (int)w->dirty_h,
+                 (unsigned)w->dirty_px);
     }
     snprintf(s_lines[4],
              sizeof(s_lines[4]),
