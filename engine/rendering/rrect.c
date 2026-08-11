@@ -325,6 +325,139 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
     }
 }
 
+/**
+ * @brief Counts the anti-aliased fringe pixels stepping outward from a corner's solid edge.
+ *
+ * The ring needs this up front: its solid band has to stop where the inset shape's fringe begins,
+ * which the fill paths never need to know because they walk the fringe after painting their span.
+ *
+ * @param[in] r   Corner arc radius; 0 (a straight edge) has no fringe.
+ * @param[in] dx  Solid half-width at this row.
+ * @param[in] dy  Row distance from the arc centre.
+ *
+ * @return Number of fringe pixels, 0 when ERUI_BORDER_AA is off.
+ */
+static int fringe_len(int r, int dx, int dy)
+{
+#if ERUI_BORDER_AA
+    if (r <= 0)
+        return 0;
+    int k = 0;
+    while (er_rrect_fringe_cov(r, dx, dy, k) > 0.0f) /* strictly decreasing in k, so this terminates */
+        k++;
+    return k;
+#else
+    (void)r;
+    (void)dx;
+    (void)dy;
+    return 0;
+#endif
+}
+
+void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int bw)
+{
+    if (w <= 0 || h <= 0 || bw <= 0 || (argb >> 24) == 0)
+        return;
+
+    er_rrect_clamp_radii(w, h, &r_tl, &r_tr, &r_br, &r_bl);
+
+    /* The inset shape the band is hollowed out by. Corners stay concentric by shrinking each radius
+     * by the band thickness; a band thick enough to consume the interior leaves no hole at all. */
+    const int iw = w - 2 * bw;
+    const int ih = h - 2 * bw;
+    const bool has_inner = (iw > 0 && ih > 0);
+    int ir_tl = (r_tl > bw) ? r_tl - bw : 0;
+    int ir_tr = (r_tr > bw) ? r_tr - bw : 0;
+    int ir_br = (r_br > bw) ? r_br - bw : 0;
+    int ir_bl = (r_bl > bw) ? r_bl - bw : 0;
+    if (has_inner)
+        er_rrect_clamp_radii(iw, ih, &ir_tl, &ir_tr, &ir_br, &ir_bl);
+
+    for (int row = 0; row < h; row++)
+    {
+        ERRRectRow o;
+        er_rrect_row(w, h, r_tl, r_tr, r_br, r_bl, row, &o);
+
+        const int irow = row - bw;
+        const bool inner_here = has_inner && irow >= 0 && irow < ih;
+
+        if (!inner_here)
+        {
+            /* A row above or below the interior: solid band all the way across. */
+            fill_span(argb, y + row, x + o.x0, x + o.x1);
+        }
+        else
+        {
+            ERRRectRow in;
+            er_rrect_row(iw, ih, ir_tl, ir_tr, ir_br, ir_bl, irow, &in);
+            in.x0 += bw; /* inset-relative -> outer-relative; the arc fields stay radius-relative */
+            in.x1 += bw;
+
+            /* Left band: outer edge inward, stopping short of the interior's own fringe. */
+            const int nl = fringe_len(in.l_r, in.l_dx, in.l_dy);
+            fill_span(argb, y + row, x + o.x0, x + in.x0 - nl);
+
+            /* Right band: mirror. */
+            const int nr = fringe_len(in.r_r, in.r_dx, in.r_dy);
+            fill_span(argb, y + row, x + in.x1 + nr, x + o.x1);
+
+#if ERUI_BORDER_AA
+            /* Inner edge: these pixels are partly inside the interior, so the band keeps only the
+             * share the interior does NOT cover. */
+            for (int k = 0; k < nl; k++)
+            {
+                const float cov = er_rrect_fringe_cov(in.l_r, in.l_dx, in.l_dy, k);
+                const int ax = x + in.x0 - 1 - k;
+                if (cov < 1.0f && ax >= x + o.x0 && ax < x + o.x1)
+                    er_blit_fill(scale_alpha(argb, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), ax, y + row, 1, 1);
+            }
+            for (int k = 0; k < nr; k++)
+            {
+                const float cov = er_rrect_fringe_cov(in.r_r, in.r_dx, in.r_dy, k);
+                const int ax = x + in.x1 + k;
+                if (cov < 1.0f && ax >= x + o.x0 && ax < x + o.x1)
+                    er_blit_fill(scale_alpha(argb, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), ax, y + row, 1, 1);
+            }
+#endif
+        }
+
+#if ERUI_BORDER_AA
+        /* Outer edge: the same fringe a filled rounded rect lays down, so the ring's silhouette
+         * matches a solid fill's exactly. */
+        if (o.l_r > 0)
+        {
+            for (int k = 0;; k++)
+            {
+                const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
+                if (cov <= 0.0f)
+                    break;
+                if (cov < 1.0f)
+                {
+                    const int ax = x + o.x0 - 1 - k;
+                    if (ax >= x)
+                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                }
+            }
+        }
+        if (o.r_r > 0)
+        {
+            for (int k = 0;; k++)
+            {
+                const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
+                if (cov <= 0.0f)
+                    break;
+                if (cov < 1.0f)
+                {
+                    const int ax = x + o.x1 + k;
+                    if (ax < x + w)
+                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                }
+            }
+        }
+#endif
+    }
+}
+
 void er_rrect_border_edge(uint32_t argb, uint8_t style, int x, int y, int w, int h, int horizontal)
 {
     if (w <= 0 || h <= 0 || (argb >> 24) == 0)
@@ -354,21 +487,32 @@ void er_rrect_border_edge(uint32_t argb, uint8_t style, int x, int y, int w, int
 void er_rrect_fill_bordered(
     uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius)
 {
-    if (border_w > 0 && (border_argb >> 24) != 0)
-    {
-        er_rrect_fill(border_argb, x, y, w, h, radius);
-
-        int ix = x + border_w;
-        int iy = y + border_w;
-        int iw = w - 2 * border_w;
-        int ih = h - 2 * border_w;
-        int ir = radius > border_w ? radius - border_w : 0;
-
-        if (iw > 0 && ih > 0)
-            er_rrect_fill(bg_argb, ix, iy, iw, ih, ir);
-    }
-    else
+    if (border_w <= 0 || (border_argb >> 24) == 0)
     {
         er_rrect_fill(bg_argb, x, y, w, h, radius);
+        return;
     }
+
+    const int ix = x + border_w;
+    const int iy = y + border_w;
+    const int iw = w - 2 * border_w;
+    const int ih = h - 2 * border_w;
+    const int ir = radius > border_w ? radius - border_w : 0;
+
+    if ((bg_argb >> 24) == 0xFFu)
+    {
+        /* Opaque background: fill the whole shape in the border colour and paint the background back
+         * over the inset. Cheaper than stroking a ring, and the background hides every border pixel
+         * it needs to. */
+        er_rrect_fill(border_argb, x, y, w, h, radius);
+        if (iw > 0 && ih > 0)
+            er_rrect_fill(bg_argb, ix, iy, iw, ih, ir);
+        return;
+    }
+
+    /* Anything less than opaque — a translucent background, the transparent default, or a gradient
+     * already painted into this box — cannot cover a filled border shape, so stroke the band only. */
+    er_rrect_fill_ring(border_argb, x, y, w, h, radius, radius, radius, radius, border_w);
+    if ((bg_argb >> 24) != 0 && iw > 0 && ih > 0)
+        er_rrect_fill(bg_argb, ix, iy, iw, ih, ir);
 }

@@ -164,6 +164,33 @@ void er_rrect_fill_bordered(
 void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl);
 
 /**
+ * @brief Strokes a rounded-rect border as a hollow ring, leaving the interior untouched.
+ *
+ * The alternative — filling the whole shape in the border colour and painting the background back
+ * over the inset — only works when that background is fully opaque. With a transparent background
+ * (React Native's default for a View) the fill has nothing to cover it and the node renders as a
+ * solid block of border colour; with a translucent one the border shows through it; and with a
+ * gradient background, already painted into this box, the fill hides it outright. A ring covers only
+ * the band, so all three keep whatever is behind them.
+ *
+ * Both edges of the band are anti-aliased when ERUI_BORDER_AA is set: the outer edge fades out of
+ * the border colour, the inner edge fades by the coverage the inset shape takes back.
+ *
+ * @param[in] argb  Border colour as straight-alpha ARGB8888.
+ * @param[in] x     Left edge of the outer bounding box in framebuffer pixels.
+ * @param[in] y     Top edge of the outer bounding box in framebuffer pixels.
+ * @param[in] w     Outer width in pixels.
+ * @param[in] h     Outer height in pixels.
+ * @param[in] r_tl  Outer top-left corner radius in pixels.
+ * @param[in] r_tr  Outer top-right corner radius.
+ * @param[in] r_br  Outer bottom-right corner radius.
+ * @param[in] r_bl  Outer bottom-left corner radius.
+ * @param[in] bw    Band thickness in pixels; <= 0 draws nothing. A band thick enough to swallow the
+ *                  interior fills the whole shape, matching a plain rounded-rect fill.
+ */
+void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int bw);
+
+/**
  * @brief Draws a single border edge with an optional dash or dot pattern.
  *
  * The edge is oriented horizontally when horizontal != 0, vertically otherwise.

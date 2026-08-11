@@ -12,6 +12,12 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- A View with a border and no `backgroundColor` rendered as a solid block of the border color
+  instead of an outline. The border was painted by filling the whole shape and covering the middle
+  back up with the background — which does nothing when there is no background to paint. Borders are
+  now stroked as a ring whenever the background can't hide them, so transparent, translucent, and
+  gradient-backed nodes all keep what's behind them. Opaque backgrounds are unaffected.
+
 - Gradient backgrounds are now clipped by `borderRadius`. A gradient painted its full rectangle, so
   its square corners poked out past the node's rounded ones — unnoticeable at a radius of 4, plainly
   visible by 16. It now stops at exactly the edge a solid `backgroundColor` would, anti-aliased

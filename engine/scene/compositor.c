@@ -521,8 +521,6 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
 
     if (has_border && uniform_bw && uniform_bc && vp->border_style == 0 && (bc_l >> 24))
     {
-        /* Uniform solid border with per-corner radii: outer → background inset. */
-        er_rrect_fill_corners(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl);
         const int ix = px + bw_l;
         const int iy = py + bw_t;
         const int iw = w - bw_l - bw_r;
@@ -532,8 +530,23 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
         const int ir_tr = (r_tr > bw_r) ? r_tr - bw_r : 0;
         const int ir_br = (r_br > bw_r) ? r_br - bw_r : 0;
         const int ir_bl = (r_bl > bw_l) ? r_bl - bw_l : 0;
-        if (iw > 0 && ih > 0)
-            er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+
+        if ((bg_color >> 24) == 0xFFu)
+        {
+            /* Uniform solid border with per-corner radii, opaque background: outer → background
+             * inset. The background hides every border pixel it needs to. */
+            er_rrect_fill_corners(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl);
+            if (iw > 0 && ih > 0)
+                er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+        }
+        else
+        {
+            /* Transparent, translucent, or gradient-backed: a filled border shape would cover what
+             * is behind it (see er_rrect_fill_ring), so stroke the band only. */
+            er_rrect_fill_ring(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl, bw_l);
+            if ((bg_color >> 24) != 0 && iw > 0 && ih > 0)
+                er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+        }
     }
     else
     {

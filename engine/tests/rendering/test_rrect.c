@@ -259,6 +259,92 @@ int main(void)
     if (px(&tc, 2, 0) != 0)
         return fail("border ring: pixel outside outer arc should be empty");
 
+    /* The assertions above cover the OPAQUE background path, which still fills the whole shape in
+     * the border colour and paints the background back over the inset — the cheap route, and the
+     * one this file has always exercised. Everything below covers the ring the non-opaque cases
+     * take instead. */
+
+    /* --- transparent background: a border must leave a RING, not a solid blob ---
+     *
+     * The regression: er_rrect_fill_bordered used to fill the whole shape in the border colour and
+     * rely on the background fill to carve the interior back out — but er_rrect_fill returns early
+     * on a zero-alpha colour, so a View with a border and no backgroundColor (React Native's
+     * default) rendered as a solid block of border colour. fill_cb overwrites rather than
+     * composites, so an untouched interior pixel reads as exactly 0 here. */
+    reset(&tc);
+    er_rrect_fill_bordered(0x00000000, 0xFFFF0000, 4, 0, 0, 40, 40, 10);
+    if (px(&tc, 20, 20) != 0)
+        return fail("transparent bg + border: the interior was painted (solid blob, not a ring)");
+    if (px(&tc, 0, 20) != 0xFFFF0000)
+        return fail("transparent bg + border: the left band is not border colour");
+    if (px(&tc, 39, 20) != 0xFFFF0000)
+        return fail("transparent bg + border: the right band is not border colour");
+    if (px(&tc, 20, 0) != 0xFFFF0000)
+        return fail("transparent bg + border: the top band is not border colour");
+    if (px(&tc, 4, 20) != 0)
+        return fail("transparent bg + border: the band is thicker than borderWidth");
+    if (px(&tc, 0, 0) != 0)
+        return fail("transparent bg + border: the rounded corner was filled");
+    /* The whole interior, inset clear of the band's anti-aliased inner edge, must be untouched. */
+    for (int yy = 7; yy < 33; yy++)
+        for (int xx = 7; xx < 33; xx++)
+            if (px(&tc, xx, yy) != 0)
+                return fail("transparent bg + border: interior pixels were painted");
+
+    /* --- the ring never paints outside the silhouette a solid fill would cover ---
+     *
+     * Same box, once filled solid and once stroked: every pixel the fill leaves empty must stay
+     * empty in the ring too, or the border overhangs its own rounded corner. */
+    {
+        static uint8_t solid[FB_W * FB_H];
+        reset(&tc);
+        er_rrect_fill(0xFF000000, 8, 8, 44, 36, 12);
+        for (int i = 0; i < FB_W * FB_H; i++)
+            solid[i] = (uint8_t)(tc.fb[i] != 0);
+
+        reset(&tc);
+        er_rrect_fill_ring(0xFF000000, 8, 8, 44, 36, 12, 12, 12, 12, 5);
+        if (tc.out_of_bounds != 0)
+            return fail("ring: produced out-of-bounds fills");
+        for (int yy = 0; yy < FB_H; yy++)
+            for (int xx = 0; xx < FB_W; xx++)
+                if (tc.fb[yy * FB_W + xx] != 0 && !solid[yy * FB_W + xx])
+                    return fail("ring: painted a pixel outside the solid fill's silhouette");
+        /* ...and it really is hollow. */
+        if (px(&tc, 30, 26) != 0)
+            return fail("ring: the interior was painted");
+    }
+
+    /* --- per-corner radii: only the rounded corners are cut --- */
+    reset(&tc);
+    er_rrect_fill_ring(0xFF00FF00, 0, 0, 40, 40, 16, 0, 16, 0, 4);
+    if (px(&tc, 0, 0) != 0)
+        return fail("per-corner ring: the rounded top-left corner was filled");
+    if (px(&tc, 39, 0) != 0xFF00FF00)
+        return fail("per-corner ring: the square top-right corner was cut");
+    if (px(&tc, 0, 39) != 0xFF00FF00)
+        return fail("per-corner ring: the square bottom-left corner was cut");
+    if (px(&tc, 39, 39) != 0)
+        return fail("per-corner ring: the rounded bottom-right corner was filled");
+    if (px(&tc, 20, 20) != 0)
+        return fail("per-corner ring: the interior was painted");
+
+    /* --- a band thick enough to swallow the interior fills the whole shape --- */
+    reset(&tc);
+    er_rrect_fill_ring(0xFF123456, 0, 0, 20, 20, 6, 6, 6, 6, 40);
+    if (px(&tc, 10, 10) != 0xFF123456)
+        return fail("over-thick ring: the shape was not filled solid");
+    if (px(&tc, 0, 0) != 0)
+        return fail("over-thick ring: the rounded corner was filled");
+
+    /* --- degenerate inputs draw nothing rather than misbehaving --- */
+    reset(&tc);
+    er_rrect_fill_ring(0x00FF0000, 0, 0, 30, 30, 8, 8, 8, 8, 3); /* transparent colour */
+    er_rrect_fill_ring(0xFFFF0000, 0, 0, 30, 30, 8, 8, 8, 8, 0); /* zero-width band */
+    er_rrect_fill_ring(0xFFFF0000, 0, 0, 0, 30, 8, 8, 8, 8, 3);  /* empty box */
+    if (tc.fills != 0)
+        return fail("degenerate ring: emitted fills");
+
     /* --- large radius clamps to pill shape without crashing --- */
     reset(&tc);
     er_rrect_fill(0xFFAABBCC, 0, 0, 30, 20, 999);
