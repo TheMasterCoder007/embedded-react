@@ -111,11 +111,12 @@ extern "C"
         uint32_t frame_us;                      /**< Whole frame: frame_begin -> frame_end. */
         uint32_t phase_us[ER_PERF_PHASE_COUNT]; /**< Per-phase totals (a phase may be entered more than once). */
         uint32_t other_us;                      /**< frame_us minus the four phases: input, tick, host work. */
-        int32_t dirty_x;                        /**< Repainted region this frame (screen px). */
+        int32_t dirty_x;                        /**< Bounding box of this frame's repaint rects (screen px). */
         int32_t dirty_y;                        /**< @see dirty_x */
-        int32_t dirty_w;                        /**< Repainted region width; 0 when the frame painted nothing. */
-        int32_t dirty_h;                        /**< Repainted region height; 0 when the frame painted nothing. */
-        uint32_t dirty_px;                      /**< dirty_w * dirty_h — the area raster and present both pay for. */
+        int32_t dirty_w;                        /**< Repaint bbox width; 0 when the frame painted nothing. */
+        int32_t dirty_h;                        /**< Repaint bbox height; 0 when the frame painted nothing. */
+        uint32_t dirty_px;                      /**< SUM of the disjoint repaint rects' areas (<= bbox area) — the
+                                                     pixels actually repainted, which raster cost scales with. */
         uint16_t vector_slots_used;             /**< Vector (Svg) storage slots holding geometry. */
         uint16_t vector_slots_total;            /**< ERUI_MAX_VECTOR_NODES. */
         uint16_t image_slots_used;              /**< Image registry slots holding a registered asset. */
@@ -175,16 +176,18 @@ extern "C"
     void er_perf_frame_end(void);
 
     /**
-     * @brief Reports the region er_commit() repainted this frame (called by the engine, not the host).
+     * @brief Notes one repainted rect for this frame (called by the engine, not the host).
      *
-     * This is the compositor's own repaint region — the scissor that bounds the composite and the
-     * backend's flush — so it is the area raster and present cost is proportional to. Ignored outside
-     * an open frame.
+     * The compositor calls this once per disjoint repaint rect — its own scissors, which also bound
+     * the backend's flush. The frame accumulates: dirty_x/y/w/h grow to the union bounding box and
+     * dirty_px sums the (disjoint) areas, so it reports the pixels actually repainted rather than the
+     * span between far-apart changes. Empty rects and calls outside an open frame are ignored; a
+     * frame with no notes reports all-zero.
      *
-     * @param[in] x  Region left edge in screen pixels.
-     * @param[in] y  Region top edge in screen pixels.
-     * @param[in] w  Region width; 0 when the commit painted nothing.
-     * @param[in] h  Region height; 0 when the commit painted nothing.
+     * @param[in] x  Rect left edge in screen pixels.
+     * @param[in] y  Rect top edge in screen pixels.
+     * @param[in] w  Rect width in pixels.
+     * @param[in] h  Rect height in pixels.
      */
     void er_perf_note_repaint(int x, int y, int w, int h);
 

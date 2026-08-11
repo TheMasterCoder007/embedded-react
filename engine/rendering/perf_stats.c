@@ -106,21 +106,32 @@ void er_perf_phase_end(ERPerfPhase phase)
 
 void er_perf_note_repaint(int x, int y, int w, int h)
 {
-    if (!s_frame_open)
+    if (!s_frame_open || w <= 0 || h <= 0)
     {
-        return;
+        return; /* frame_begin zeroed the counters, so a frame that never notes stays at 0 */
     }
-    if (w <= 0 || h <= 0)
+    /* Accumulate: the engine notes each disjoint repaint rect separately. dirty_x/y/w/h grow to the
+     * union bounding box; dirty_px sums the areas — exact, since the rects are disjoint, and the
+     * honest cost number (two small corners sum small even when their bbox spans the screen). */
+    if (s_cur.dirty_px == 0U)
     {
-        s_cur.dirty_x = s_cur.dirty_y = s_cur.dirty_w = s_cur.dirty_h = 0;
-        s_cur.dirty_px = 0U;
-        return;
+        s_cur.dirty_x = (int32_t)x;
+        s_cur.dirty_y = (int32_t)y;
+        s_cur.dirty_w = (int32_t)w;
+        s_cur.dirty_h = (int32_t)h;
     }
-    s_cur.dirty_x = (int32_t)x;
-    s_cur.dirty_y = (int32_t)y;
-    s_cur.dirty_w = (int32_t)w;
-    s_cur.dirty_h = (int32_t)h;
-    s_cur.dirty_px = (uint32_t)w * (uint32_t)h;
+    else
+    {
+        const int32_t x1 = (s_cur.dirty_x + s_cur.dirty_w > x + w) ? s_cur.dirty_x + s_cur.dirty_w : x + w;
+        const int32_t y1 = (s_cur.dirty_y + s_cur.dirty_h > y + h) ? s_cur.dirty_y + s_cur.dirty_h : y + h;
+        if ((int32_t)x < s_cur.dirty_x)
+            s_cur.dirty_x = (int32_t)x;
+        if ((int32_t)y < s_cur.dirty_y)
+            s_cur.dirty_y = (int32_t)y;
+        s_cur.dirty_w = x1 - s_cur.dirty_x;
+        s_cur.dirty_h = y1 - s_cur.dirty_y;
+    }
+    s_cur.dirty_px += (uint32_t)w * (uint32_t)h;
 }
 
 void er_perf_frame_end(void)

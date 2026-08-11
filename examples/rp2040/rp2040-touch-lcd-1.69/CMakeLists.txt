@@ -59,6 +59,7 @@ add_library(er_engine STATIC
     "${E}/core/native_renderer.c"
     "${E}/core/er_parallel.c"
     "${E}/scene/compositor.c"
+    "${E}/scene/damage.c"
     "${E}/scene/hit_test.c"
     "${E}/layout/layout_engine.c"
     "${E}/rendering/canvas_bindings.c"

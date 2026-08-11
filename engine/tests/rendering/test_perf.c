@@ -280,6 +280,36 @@ static int check_counters(int screen)
     if (f.dirty_w < 30 || f.dirty_h < 30)
         return fail("the dirty rect does not cover the changed node");
 
+    /* Disjoint damage: recolour the box AND a second box in the far corner in one frame. dirty_w/h
+     * grow to the union bbox (spanning both corners) while dirty_px stays the SUM of the two small
+     * rects — strictly less than the bbox area. This is what lets the overlay show "two small
+     * changes" instead of "most of the screen". */
+    ERNode* far_box = er_node_create(ER_NODE_VIEW);
+    ERProps fp = props_default();
+    fp.width = 30;
+    fp.height = 30;
+    fp.margin_left = (int16_t)(screen - 40);
+    fp.margin_top = (int16_t)(screen - 90); /* below the first box (bottom edge y=50): lands at screen-40 */
+    fp.background_color = 0xFF884422U;
+    er_node_set_props(far_box, &fp);
+    er_tree_append_child(root, far_box);
+    frame(); /* paint it */
+    frame(); /* settle */
+    recolour(box, 0xFF66AA22U);
+    fp.background_color = 0xFF2266AAU;
+    er_node_set_props(far_box, &fp);
+    frame();
+    er_perf_get_last(&f);
+    if (f.dirty_px == 0U)
+        return fail("the two-corner frame reported no repaint");
+    if (f.dirty_w < 100 || f.dirty_h < 100)
+        return fail("the two-corner bbox does not span both corners");
+    if (f.dirty_px >= (uint32_t)(f.dirty_w * f.dirty_h))
+        return fail("dirty_px is not the sum of disjoint rects (equals the bbox area)");
+    er_node_destroy(far_box);
+    frame(); /* consume the removal damage so later assertions see a settled scene */
+    frame();
+
     /* Resource pools: start empty, then fill as the scene registers assets. */
     if (f.vector_slots_used != 0U)
         return fail("vector slots reported in use before any vector node exists");

@@ -98,6 +98,19 @@ wherever siblings don't overlap.
   the largest node you animate opacity on (device boards typically place it in external
   RAM).
 
+### Disjoint dirty rects (damage tracking)
+
+Each commit's damage is tracked as up to `ER_DAMAGE_RECTS_MAX` (default 4, an `#ifndef` override
+in `er_scene.h` like `ER_DISPLAY_BUFFERS_MAX`) **pairwise-disjoint rects** rather than one
+bounding box, so a widget updating top-left and another bottom-right
+repaint two small areas — not the span between them. Overlapping or touching damage merges on
+insert (disjointness is what makes multiple clipped render passes safe: no pixel composites
+twice); when the budget is exceeded, the least-wasteful pair merges, degrading gracefully toward
+the old single-box behavior without ever dropping coverage. The multi-buffer page-flip debt
+(`er_set_display_buffer_count`) replays disjoint history the same way. Hosts read the rects with
+`er_get_dirty_rects()` — one transfer window per region on capable display drivers — while
+`er_get_dirty_rect()` still returns the covering box.
+
 ### Banded rendering (low-RAM panels)
 
 A backend can opt into banded RGB565 (`ER_LCD_BANDED`): it sets a band height and
