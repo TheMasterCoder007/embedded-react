@@ -387,6 +387,84 @@ int main(void)
     if (px(&tc, 47, 24) != 0xFF81C784)
         return fail("per-edge colours: the right edge is not its own colour");
 
+    /* --- adjacent edge colours meet on a corner diagonal ---
+     *
+     * The regression: the owning edge was picked per ROW — top and bottom claimed their full width —
+     * so two colours met on a hard horizontal step instead of a mitre. The split now follows the line
+     * the two band widths imply, which is 45 degrees when they are equal.
+     */
+    {
+        const uint32_t TOP = 0xFFE53935, RIGHT = 0xFF43A047, BOT = 0xFF1E88E5, LEFT = 0xFFFDD835;
+
+        /* Square corners, equal widths: the mitre is the 45-degree diagonal. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {10, 10, 10, 10, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+        }
+        if (px(&tc, 8, 2) != TOP)
+            return fail("square mitre: above the diagonal is not the top colour");
+        if (px(&tc, 2, 8) != LEFT)
+            return fail("square mitre: below the diagonal is not the left colour");
+        if (px(&tc, 51, 2) != TOP)
+            return fail("square mitre: top-right corner is not the top colour above the diagonal");
+        if (px(&tc, 57, 8) != RIGHT)
+            return fail("square mitre: top-right corner is not the right colour below the diagonal");
+        if (px(&tc, 2, 51) != LEFT)
+            return fail("square mitre: bottom-left corner is not the left colour");
+        if (px(&tc, 8, 57) != BOT)
+            return fail("square mitre: bottom-left corner is not the bottom colour");
+
+        /* Rounded corners, equal widths: the mitre becomes a radial line through the arc. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {6, 6, 6, 6, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 20, 20, 20, 20, &b);
+        }
+        if (px(&tc, 18, 1) != TOP)
+            return fail("rounded mitre: the top of the arc is not the top colour");
+        if (px(&tc, 1, 18) != LEFT)
+            return fail("rounded mitre: the left of the arc is not the left colour");
+
+        /* Unequal widths tilt the mitre toward the thinner edge, so a thick top owns more of the
+         * corner. With top 16 and left 4 the dividing line runs (0,0) to (4,16): at row 6 it sits at
+         * x = 1.5, so x = 3 is still the top's and x = 0 is the left's. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {4, 16, 4, 16, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+        }
+        if (px(&tc, 3, 6) != TOP)
+            return fail("tilted mitre: a thick top did not claim its side of the diagonal");
+        if (px(&tc, 0, 6) != LEFT)
+            return fail("tilted mitre: a thin left lost its side of the diagonal");
+
+#if ERUI_BORDER_AA
+        /* The seam itself is anti-aliased. Every other edge here is, so a hard mitre staircases
+         * badly at 45 degrees and reads as the two colours interlocking. Pure red against pure blue
+         * makes the ramp checkable: the pixel the diagonal passes through is a half-and-half mix,
+         * and it steps exactly one column per row. */
+        reset(&tc);
+        {
+            const uint32_t RED = 0xFFFF0000, BLUE = 0xFF0000FF;
+            const ERRRectBorder b = {12, 12, 12, 12, BLUE, RED, RED, BLUE, 0};
+            er_rrect_fill_ring_edges(0, 0, 48, 48, 0, 0, 0, 0, &b);
+            for (int d = 2; d <= 8; d++)
+            {
+                const uint32_t seam = px(&tc, d, d);
+                const uint32_t r = (seam >> 16) & 0xFFu;
+                const uint32_t bch = seam & 0xFFu;
+                if (r < 100 || r > 155 || bch < 100 || bch > 155)
+                    return fail("mitre AA: the seam pixel is not a blend of the two edge colours");
+                if (px(&tc, d - 1, d) != BLUE)
+                    return fail("mitre AA: the pixel before the seam is not the left colour");
+                if (px(&tc, d + 1, d) != RED)
+                    return fail("mitre AA: the pixel after the seam is not the top colour");
+            }
+        }
+#endif
+    }
+
     /* --- a bottom-only rule follows the bottom corners and leaves the rest alone --- */
     reset(&tc);
     {

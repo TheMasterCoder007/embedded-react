@@ -216,10 +216,10 @@ void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int
  * radius at all: drawing them as four straight rects — as this engine used to — gives a node square
  * border corners no matter what borderRadius says.
  *
- * Each row's band takes its colour from the edge that owns it: the top and bottom edges claim their
- * full width, the side edges own only the rows between them. That is the same split four straight
- * edge rects made, so per-edge colours land where they always did; it differs from CSS, which meets
- * adjacent colours on a diagonal through each corner. Equal colours make the distinction moot.
+ * Adjacent edge colours meet on a mitre through each corner — the diagonal the two band widths imply,
+ * 45 degrees when they are equal and tilted toward the thinner edge otherwise, which is how the web
+ * splits a border corner. Inside a rounded corner that mitre becomes a radial line through the arc.
+ * The seam is anti-aliased with ERUI_BORDER_AA, like every other edge here.
  *
  * A dashed or dotted style is stepped by ARC LENGTH around the perimeter, so the pattern flows
  * through the corner arcs as one continuous run and closes cleanly where it started.

@@ -18,6 +18,11 @@ See the README for the release process.
   is stepped around the perimeter, so it flows through the corners as one continuous run instead of
   stopping at each one.
 
+- A border with a different color per edge changed color on a hard horizontal step in each corner,
+  because the top and bottom edges claimed their full width. Adjacent colors now meet on a miter
+  through the corner, the way they do on the web. The seam is anti-aliased like every other edge
+  the renderer draws.
+
 - A View with a border and no `backgroundColor` rendered as a solid block of the border color
   instead of an outline. The border was painted by filling the whole shape and covering the middle
   back up with the background — which does nothing when there is no background to paint. Borders are

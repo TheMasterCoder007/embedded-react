@@ -362,28 +362,94 @@ static int inset_radius(int r, int a, int b)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
- - Dashed / dotted borders: arc-length stepping around the rounded perimeter
+ - Band shading: which edge owns a pixel, and whether a dash pattern paints it there
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_RRECT_HALF_PI 1.57079632679f
 
 /**
- * @brief Precomputed perimeter walk for stippling a border band.
+ * @brief Everything a band pixel needs to be shaded: its owning edge, and the dash phase there.
  *
- * A dash pattern has to run ALONG the border, which on a rounded rect means measuring arc length
- * around eight segments — four straight runs and four quarter arcs — rather than stepping x or y.
- * Every band pixel is mapped back to its distance along that path and painted only where the
- * pattern is "on", so the dashes flow through the corners instead of stopping at them.
+ * Two questions get asked per pixel. WHICH EDGE — adjacent colours have to meet on a diagonal
+ * through each corner, not on a horizontal or vertical cut, or a two-colour border shows an obvious
+ * step where the colours change. AND IS THE DASH ON — a dash pattern runs ALONG the border, which on
+ * a rounded rect means measuring arc length around eight segments (four straight runs, four quarter
+ * arcs) rather than stepping x or y, so the dashes flow through the corners instead of stopping at
+ * them.
+ *
+ * A single-colour solid border answers both trivially and takes the `uniform` fast path.
  */
 typedef struct
 {
-    uint8_t style;              /**< 0 = solid (the walk is skipped entirely). */
-    int w, h;                   /**< Outer box size. */
-    int r_tl, r_tr, r_br, r_bl; /**< Clamped outer radii. */
-    float seg[8];               /**< Arc-length at the start of each segment, clockwise from (r_tl, 0). */
-    float period;               /**< One dash + gap. */
-    float on_len;               /**< Painted share of a period. */
-} DashCtx;
+    uint8_t style;                /**< 0 = solid (the perimeter walk is skipped entirely). */
+    bool uniform;                 /**< One colour, no dashes: whole runs emit in a single fill. */
+    bool one_color;               /**< All four edges the same colour: no mitre to resolve. */
+    int w, h;                     /**< Outer box size. */
+    int r_tl, r_tr, r_br, r_bl;   /**< Clamped outer radii. */
+    int bl, bt, br, bb;           /**< Per-edge band widths, clamped to >= 0. */
+    uint32_t cl, ct, cr, cb;      /**< Per-edge colours. */
+    float n_tl, n_tr, n_br, n_bl; /**< 1 / |(width, width)| per corner: scales a mitre cross product to pixels. */
+    float seg[8];                 /**< Arc-length at the start of each segment, clockwise from (r_tl, 0). */
+    float period;                 /**< One dash + gap. */
+    float on_len;                 /**< Painted share of a period. */
+} BandCtx;
+
+/**
+ * @brief Mixes two straight-alpha ARGB8888 colours channel by channel.
+ *
+ * @param[in] a     Colour at t = 0.
+ * @param[in] b     Colour at t = 256.
+ * @param[in] t256  Blend position in [0, 256].
+ *
+ * @return The blended colour.
+ */
+static uint32_t mix_argb(uint32_t a, uint32_t b, int t256)
+{
+    uint32_t out = 0;
+    for (int s = 0; s < 32; s += 8)
+    {
+        const int ca = (int)((a >> s) & 0xFFu);
+        const int cb = (int)((b >> s) & 0xFFu);
+        out |= (uint32_t)(ca + (cb - ca) * t256 / 256) << s;
+    }
+    return out;
+}
+
+/**
+ * @brief Blends the two colours meeting at a mitre, by how far the pixel sits across the seam.
+ *
+ * Without this the mitre is the one hard edge in the whole rasterizer — every arc it meets is
+ * anti-aliased — and at 45 degrees a hard diagonal staircases badly, reading as the two colours
+ * interlocking rather than meeting on a line.
+ *
+ * @param[in] neg  Colour on the negative side of the seam.
+ * @param[in] pos  Colour on the positive side.
+ * @param[in] d    Signed distance from the pixel centre to the seam, in pixels, positive toward @p pos.
+ *
+ * @return The colour for this pixel.
+ */
+static uint32_t mitre_mix(uint32_t neg, uint32_t pos, float d)
+{
+    if (neg == pos)
+        return pos;
+#if ERUI_BORDER_AA
+    const float cov = d + 0.5f;
+    if (cov <= 0.0f)
+        return neg;
+    if (cov >= 1.0f)
+        return pos;
+    return mix_argb(neg, pos, (int)(cov * 256.0f + 0.5f));
+#else
+    return (d > 0.0f) ? pos : neg;
+#endif
+}
+
+/** @brief 1 / |(a, b)|, or 0 when the corner has no band at all. */
+static float mitre_norm(int a, int b)
+{
+    const float n = sqrtf((float)(a * a + b * b));
+    return (n > 0.0f) ? (1.0f / n) : 0.0f;
+}
 
 /**
  * @brief atan(a/b) for non-negative arguments, to about 0.0015 rad.
@@ -412,8 +478,8 @@ static float atan_ratio(float a, float b)
  * The nominal pattern (8-on/6-off dashed, 3-on/3-off dotted) is stretched slightly so a whole number
  * of periods spans the perimeter — otherwise the walk closes on a stub dash at the top-left corner.
  *
- * @param[out] d      Receives the walk.
- * @param[in]  style  0 = solid, 1 = dashed, 2 = dotted.
+ * @param[out] c      Receives the shading context.
+ * @param[in]  b       Per-edge widths, colours and style.
  * @param[in]  w      Outer width in pixels.
  * @param[in]  h      Outer height in pixels.
  * @param[in]  r_tl   Clamped top-left radius.
@@ -421,15 +487,30 @@ static float atan_ratio(float a, float b)
  * @param[in]  r_br   Clamped bottom-right radius.
  * @param[in]  r_bl   Clamped bottom-left radius.
  */
-static void dash_init(DashCtx* d, uint8_t style, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
+static void band_init(BandCtx* c, const ERRRectBorder* b, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
 {
-    d->style = style;
-    d->w = w;
-    d->h = h;
-    d->r_tl = r_tl;
-    d->r_tr = r_tr;
-    d->r_br = r_br;
-    d->r_bl = r_bl;
+    const uint8_t style = b->style;
+    c->style = style;
+    c->w = w;
+    c->h = h;
+    c->r_tl = r_tl;
+    c->r_tr = r_tr;
+    c->r_br = r_br;
+    c->r_bl = r_bl;
+    c->bl = (b->l > 0) ? b->l : 0;
+    c->bt = (b->t > 0) ? b->t : 0;
+    c->br = (b->r > 0) ? b->r : 0;
+    c->bb = (b->bo > 0) ? b->bo : 0;
+    c->cl = b->cl;
+    c->ct = b->ct;
+    c->cr = b->cr;
+    c->cb = b->cb;
+    c->one_color = (b->cl == b->ct) && (b->ct == b->cr) && (b->cr == b->cb);
+    c->uniform = (style == 0) && c->one_color;
+    c->n_tl = mitre_norm(c->bl, c->bt);
+    c->n_tr = mitre_norm(c->br, c->bt);
+    c->n_br = mitre_norm(c->br, c->bb);
+    c->n_bl = mitre_norm(c->bl, c->bb);
     if (style == 0)
         return;
 
@@ -439,15 +520,15 @@ static void dash_init(DashCtx* d, uint8_t style, int w, int h, int r_tl, int r_t
     const float left = (float)(h - r_bl - r_tl) > 0.0f ? (float)(h - r_bl - r_tl) : 0.0f;
 
     /* Clockwise from the top edge's left end. */
-    d->seg[0] = 0.0f;                                       /* top edge, left -> right */
-    d->seg[1] = d->seg[0] + top;                            /* top-right arc */
-    d->seg[2] = d->seg[1] + ER_RRECT_HALF_PI * (float)r_tr; /* right edge, top -> bottom */
-    d->seg[3] = d->seg[2] + right;                          /* bottom-right arc */
-    d->seg[4] = d->seg[3] + ER_RRECT_HALF_PI * (float)r_br; /* bottom edge, right -> left */
-    d->seg[5] = d->seg[4] + bottom;                         /* bottom-left arc */
-    d->seg[6] = d->seg[5] + ER_RRECT_HALF_PI * (float)r_bl; /* left edge, bottom -> top */
-    d->seg[7] = d->seg[6] + left;                           /* top-left arc */
-    const float perim = d->seg[7] + ER_RRECT_HALF_PI * (float)r_tl;
+    c->seg[0] = 0.0f;                                       /* top edge, left -> right */
+    c->seg[1] = c->seg[0] + top;                            /* top-right arc */
+    c->seg[2] = c->seg[1] + ER_RRECT_HALF_PI * (float)r_tr; /* right edge, top -> bottom */
+    c->seg[3] = c->seg[2] + right;                          /* bottom-right arc */
+    c->seg[4] = c->seg[3] + ER_RRECT_HALF_PI * (float)r_br; /* bottom edge, right -> left */
+    c->seg[5] = c->seg[4] + bottom;                         /* bottom-left arc */
+    c->seg[6] = c->seg[5] + ER_RRECT_HALF_PI * (float)r_bl; /* left edge, bottom -> top */
+    c->seg[7] = c->seg[6] + left;                           /* top-left arc */
+    const float perim = c->seg[7] + ER_RRECT_HALF_PI * (float)r_tl;
 
     const float on = (style == 1) ? 8.0f : 3.0f;
     const float off = (style == 1) ? 6.0f : 3.0f;
@@ -456,20 +537,117 @@ static void dash_init(DashCtx* d, uint8_t style, int w, int h, int r_tl, int r_t
     periods = (float)(int)(periods + 0.5f); /* round to a whole number so the pattern closes */
     if (periods < 1.0f)
         periods = 1.0f;
-    d->period = (perim > 0.0f) ? (perim / periods) : nominal;
-    d->on_len = d->period * (on / nominal);
+    c->period = (perim > 0.0f) ? (perim / periods) : nominal;
+    c->on_len = c->period * (on / nominal);
+}
+
+/**
+ * @brief Picks which edge owns a band pixel.
+ *
+ * Adjacent colours meet on the line the two band widths imply — 45 degrees when they are equal,
+ * tilted toward the thinner edge otherwise, matching how the web splits a border corner. Inside a
+ * ROUNDED corner that line is radial from the arc centre; the comparison there reads inverted next
+ * to the square case, because those pixels sit up-and-left of the centre rather than down-and-right
+ * of a corner point.
+ *
+ * @param[in] c   Shading context.
+ * @param[in] px  Pixel column, relative to the box's left edge.
+ * @param[in] py  Pixel row, relative to the box's top edge.
+ *
+ * @return The owning edge's colour.
+ */
+static uint32_t band_color(const BandCtx* c, int px, int py)
+{
+    if (c->one_color)
+        return c->ct;
+
+    /* Pixel centre: the seam is a real line, so it has to be measured from the centre of the pixel
+     * to fade correctly rather than snapping to the grid. */
+    const float fx = (float)px + 0.5f;
+    const float fy = (float)py + 0.5f;
+
+    /* Top-left. The rounded case measures from the arc centre, which is why its terms read inverted
+     * next to the square one: those pixels sit up-and-left of the centre, not down-and-right of a
+     * corner point. Positive distance is the top edge's side. */
+    if (c->r_tl > 0)
+    {
+        if (px < c->r_tl && py < c->r_tl)
+            return mitre_mix(
+                c->cl, c->ct, ((float)c->bt * ((float)c->r_tl - fy) - (float)c->bl * ((float)c->r_tl - fx)) * c->n_tl);
+    }
+    else if (px < c->bl && py < c->bt)
+    {
+        return mitre_mix(c->cl, c->ct, ((float)c->bt * fx - (float)c->bl * fy) * c->n_tl);
+    }
+
+    /* Top-right. */
+    if (c->r_tr > 0)
+    {
+        if (px >= c->w - c->r_tr && py < c->r_tr)
+            return mitre_mix(c->cr,
+                             c->ct,
+                             ((float)c->bt * ((float)c->r_tr - fy) - (float)c->br * (fx - (float)(c->w - c->r_tr)))
+                                 * c->n_tr);
+    }
+    else if (px >= c->w - c->br && py < c->bt)
+    {
+        return mitre_mix(c->cr, c->ct, ((float)c->bt * ((float)c->w - fx) - (float)c->br * fy) * c->n_tr);
+    }
+
+    /* Bottom-right. */
+    if (c->r_br > 0)
+    {
+        if (px >= c->w - c->r_br && py >= c->h - c->r_br)
+            return mitre_mix(
+                c->cr,
+                c->cb,
+                ((float)c->bb * (fy - (float)(c->h - c->r_br)) - (float)c->br * (fx - (float)(c->w - c->r_br)))
+                    * c->n_br);
+    }
+    else if (px >= c->w - c->br && py >= c->h - c->bb)
+    {
+        return mitre_mix(
+            c->cr, c->cb, ((float)c->bb * ((float)c->w - fx) - (float)c->br * ((float)c->h - fy)) * c->n_br);
+    }
+
+    /* Bottom-left. */
+    if (c->r_bl > 0)
+    {
+        if (px < c->r_bl && py >= c->h - c->r_bl)
+            return mitre_mix(c->cl,
+                             c->cb,
+                             ((float)c->bb * (fy - (float)(c->h - c->r_bl)) - (float)c->bl * ((float)c->r_bl - fx))
+                                 * c->n_bl);
+    }
+    else if (px < c->bl && py >= c->h - c->bb)
+    {
+        return mitre_mix(c->cl, c->cb, ((float)c->bb * fx - (float)c->bl * ((float)c->h - fy)) * c->n_bl);
+    }
+
+    /* Clear of every corner: the pixel hugs exactly one straight edge. */
+    const int dt = py;
+    const int db = c->h - 1 - py;
+    const int dl = px;
+    const int dr = c->w - 1 - px;
+    if (dt <= db && dt <= dl && dt <= dr)
+        return c->ct;
+    if (dr <= db && dr <= dl)
+        return c->cr;
+    if (db <= dl)
+        return c->cb;
+    return c->cl;
 }
 
 /**
  * @brief Maps a band pixel to its distance along the rounded perimeter.
  *
- * @param[in] d   The walk.
+ * @param[in] d   Shading context.
  * @param[in] px  Pixel column, relative to the box's left edge.
  * @param[in] py  Pixel row, relative to the box's top edge.
  *
  * @return Arc length from the start of the top edge, clockwise.
  */
-static float perimeter_s(const DashCtx* d, int px, int py)
+static float perimeter_s(const BandCtx* d, int px, int py)
 {
     /* Corner arcs, each measured from where the preceding straight edge ends. */
     if (px < d->r_tl && py < d->r_tl)
@@ -496,7 +674,7 @@ static float perimeter_s(const DashCtx* d, int px, int py)
 }
 
 /** @brief True when the dash pattern paints the band at this pixel (always true for a solid border). */
-static bool dash_on(const DashCtx* d, int px, int py)
+static bool dash_on(const BandCtx* d, int px, int py)
 {
     if (d->style == 0)
         return true;
@@ -504,37 +682,49 @@ static bool dash_on(const DashCtx* d, int px, int py)
 }
 
 /**
- * @brief Emits one horizontal band run, broken into the dash pattern's painted stretches.
+ * @brief Emits one horizontal band run, split wherever the owning edge or the dash phase changes.
  *
- * @param[in] d      The walk; a solid border emits the run in one call.
- * @param[in] argb   Band colour.
+ * A single-colour solid border emits the whole run in one fill; otherwise the run is walked pixel by
+ * pixel and equal neighbours are coalesced, so a corner that changes colour mid-run still costs only
+ * the two fills it needs.
+ *
+ * @param[in] c      Shading context.
  * @param[in] x      Box left edge in framebuffer pixels.
  * @param[in] y_abs  Scanline in framebuffer pixels.
  * @param[in] row    Scanline relative to the box's top edge.
  * @param[in] x0     Run start, relative to the box's left edge.
  * @param[in] x1     Run end (exclusive), relative to the box's left edge.
  */
-static void band_run(const DashCtx* d, uint32_t argb, int x, int y_abs, int row, int x0, int x1)
+static void band_run(const BandCtx* c, int x, int y_abs, int row, int x0, int x1)
 {
-    if (x1 <= x0 || (argb >> 24) == 0)
+    if (x1 <= x0)
         return;
-    if (d->style == 0)
+    if (c->uniform)
     {
-        fill_span(argb, y_abs, x + x0, x + x1);
+        if (c->cl >> 24)
+            fill_span(c->cl, y_abs, x + x0, x + x1);
         return;
     }
     int run = -1;
+    uint32_t run_col = 0;
     for (int i = x0; i <= x1; i++)
     {
-        const bool on = (i < x1) && dash_on(d, i, row);
+        uint32_t col = 0;
+        bool on = false;
+        if (i < x1)
+        {
+            col = band_color(c, i, row);
+            on = ((col >> 24) != 0) && dash_on(c, i, row);
+        }
+        if (run >= 0 && (!on || col != run_col))
+        {
+            fill_span(run_col, y_abs, x + run, x + i);
+            run = -1;
+        }
         if (on && run < 0)
         {
             run = i;
-        }
-        else if (!on && run >= 0)
-        {
-            fill_span(argb, y_abs, x + run, x + i);
-            run = -1;
+            run_col = col;
         }
     }
 }
@@ -568,19 +758,13 @@ void er_rrect_fill_ring_edges(
     if (has_inner)
         er_rrect_clamp_radii(iw, ih, &ir_tl, &ir_tr, &ir_br, &ir_bl);
 
-    DashCtx dash;
-    dash_init(&dash, b->style, w, h, r_tl, r_tr, r_br, r_bl);
+    BandCtx band;
+    band_init(&band, b, w, h, r_tl, r_tr, r_br, r_bl);
 
     for (int row = 0; row < h; row++)
     {
         ERRRectRow o;
         er_rrect_row(w, h, r_tl, r_tr, r_br, r_bl, row, &o);
-
-        /* Which edge owns this row's band. Top and bottom claim their full width; the side edges own
-         * only the rows between them — the same split the four straight edge rects used to make, so
-         * per-edge colours land where they always did. */
-        const uint32_t cl = (row < bt) ? b->ct : ((row >= h - bb) ? b->cb : b->cl);
-        const uint32_t cr = (row < bt) ? b->ct : ((row >= h - bb) ? b->cb : b->cr);
 
         const int irow = row - bt;
         const bool inner_here = has_inner && irow >= 0 && irow < ih;
@@ -588,7 +772,7 @@ void er_rrect_fill_ring_edges(
         if (!inner_here)
         {
             /* A row above or below the interior: band all the way across. */
-            band_run(&dash, cl, x, y + row, row, o.x0, o.x1);
+            band_run(&band, x, y + row, row, o.x0, o.x1);
         }
         else
         {
@@ -599,34 +783,34 @@ void er_rrect_fill_ring_edges(
 
             /* Left band: outer edge inward, stopping short of the interior's own fringe. */
             const int nl = fringe_len(in.l_r, in.l_dx, in.l_dy);
-            band_run(&dash, cl, x, y + row, row, o.x0, in.x0 - nl);
+            band_run(&band, x, y + row, row, o.x0, in.x0 - nl);
 
             /* Right band: mirror. */
             const int nr = fringe_len(in.r_r, in.r_dx, in.r_dy);
-            band_run(&dash, cr, x, y + row, row, in.x1 + nr, o.x1);
+            band_run(&band, x, y + row, row, in.x1 + nr, o.x1);
 
 #if ERUI_BORDER_AA
             /* Inner edge: these pixels are partly inside the interior, so the band keeps only the
              * share the interior does NOT cover. */
-            if (cl >> 24)
+            for (int k = 0; k < nl; k++)
             {
-                for (int k = 0; k < nl; k++)
-                {
-                    const float cov = er_rrect_fringe_cov(in.l_r, in.l_dx, in.l_dy, k);
-                    const int ax = in.x0 - 1 - k;
-                    if (cov < 1.0f && ax >= o.x0 && ax < o.x1 && dash_on(&dash, ax, row))
-                        er_blit_fill(scale_alpha(cl, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-                }
+                const float cov = er_rrect_fringe_cov(in.l_r, in.l_dx, in.l_dy, k);
+                const int ax = in.x0 - 1 - k;
+                if (cov >= 1.0f || ax < o.x0 || ax >= o.x1 || !dash_on(&band, ax, row))
+                    continue;
+                const uint32_t fc = band_color(&band, ax, row);
+                if (fc >> 24)
+                    er_blit_fill(scale_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
-            if (cr >> 24)
+            for (int k = 0; k < nr; k++)
             {
-                for (int k = 0; k < nr; k++)
-                {
-                    const float cov = er_rrect_fringe_cov(in.r_r, in.r_dx, in.r_dy, k);
-                    const int ax = in.x1 + k;
-                    if (cov < 1.0f && ax >= o.x0 && ax < o.x1 && dash_on(&dash, ax, row))
-                        er_blit_fill(scale_alpha(cr, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-                }
+                const float cov = er_rrect_fringe_cov(in.r_r, in.r_dx, in.r_dy, k);
+                const int ax = in.x1 + k;
+                if (cov >= 1.0f || ax < o.x0 || ax >= o.x1 || !dash_on(&band, ax, row))
+                    continue;
+                const uint32_t fc = band_color(&band, ax, row);
+                if (fc >> 24)
+                    er_blit_fill(scale_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
 #endif
         }
@@ -634,34 +818,34 @@ void er_rrect_fill_ring_edges(
 #if ERUI_BORDER_AA
         /* Outer edge: the same fringe a filled rounded rect lays down, so the ring's silhouette
          * matches a solid fill's exactly. */
-        if (o.l_r > 0 && (cl >> 24))
+        if (o.l_r > 0)
         {
             for (int k = 0;; k++)
             {
                 const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
                 if (cov <= 0.0f)
                     break;
-                if (cov < 1.0f)
-                {
-                    const int ax = o.x0 - 1 - k;
-                    if (ax >= 0 && dash_on(&dash, ax, row))
-                        er_blit_fill(scale_alpha(cl, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-                }
+                const int ax = o.x0 - 1 - k;
+                if (cov >= 1.0f || ax < 0 || !dash_on(&band, ax, row))
+                    continue;
+                const uint32_t fc = band_color(&band, ax, row);
+                if (fc >> 24)
+                    er_blit_fill(scale_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
         }
-        if (o.r_r > 0 && (cr >> 24))
+        if (o.r_r > 0)
         {
             for (int k = 0;; k++)
             {
                 const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
                 if (cov <= 0.0f)
                     break;
-                if (cov < 1.0f)
-                {
-                    const int ax = o.x1 + k;
-                    if (ax < w && dash_on(&dash, ax, row))
-                        er_blit_fill(scale_alpha(cr, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-                }
+                const int ax = o.x1 + k;
+                if (cov >= 1.0f || ax >= w || !dash_on(&band, ax, row))
+                    continue;
+                const uint32_t fc = band_color(&band, ax, row);
+                if (fc >> 24)
+                    er_blit_fill(scale_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
         }
 #endif
