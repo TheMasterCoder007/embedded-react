@@ -178,9 +178,16 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
     Cur c = {src, src + len, true};
 
     const uint8_t* magic = rd_bytes(&c, 4);
-    if (!magic || memcmp(magic, "ERPK", 4) != 0 || rd_u32(&c) != 1u)
+    if (!magic || memcmp(magic, "ERPK", 4) != 0)
     {
         return false; /* not our pack (or truncated header) */
+    }
+    /* Version 2 adds a per-image format byte (0=ARGB8888, 1=RGB565) plus a pad that 4-byte
+     * aligns the pixels; a pack with no RGB565 images is still emitted as version 1. */
+    const uint32_t version = rd_u32(&c);
+    if (version != 1u && version != 2u)
+    {
+        return false;
     }
     const uint32_t n_images = rd_u32(&c);
     const uint32_t n_fonts = rd_u32(&c);
@@ -192,10 +199,24 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
         rd_name(&c, name, sizeof(name));
         const uint32_t w = rd_u32(&c);
         const uint32_t h = rd_u32(&c);
-        const uint8_t* px = rd_bytes(&c, (size_t)w * h * 4u);
+        uint8_t fmt = 0u; /* v1 packs are always ARGB8888 */
+        if (version >= 2u)
+        {
+            fmt = rd_u8(&c);
+            if (fmt > 1u)
+            {
+                return false; /* unknown pixel format: the record length is unknowable, abort */
+            }
+            rd_bytes(&c, (size_t)((4u - ((uintptr_t)(c.p - src) & 3u)) & 3u)); /* skip alignment pad */
+        }
+        const uint8_t* px = rd_bytes(&c, (size_t)w * h * (fmt == 1u ? 2u : 4u));
         if (c.ok && px)
         {
-            er_image_load(name, px, (int)w, (int)h); /* references px in `buf` (caller keeps it live) */
+            /* Both reference px in `buf` (caller keeps it live). */
+            if (fmt == 1u)
+                er_image_load_rgb565(name, px, (int)w, (int)h);
+            else
+                er_image_load(name, px, (int)w, (int)h);
         }
     }
 

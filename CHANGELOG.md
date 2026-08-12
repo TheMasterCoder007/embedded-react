@@ -10,6 +10,23 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Opaque images now render through a copy fast path instead of per-pixel blending. Every image is
+  scanned once at registration; if no pixel is transparent, repaints replace destination pixels
+  outright — no framebuffer read-modify-write and no blend math — which is the common case for
+  full-screen backgrounds that previously paid the full ~4 B/px blend cost on every repaint.
+
+- Images can be baked as 16-bit RGB565 (`er_image_load_rgb565()`, or per-image
+  `images: { name: { format: 'rgb565' } }` in `assets.config.js` for the JS pipeline): half the
+  flash footprint and half the source-read bandwidth of ARGB8888. RGB565 is for fully opaque art —
+  the baker rejects sources with transparency — and always uses the opaque copy path. Asset packs
+  that use it are written as ERPK version 2 (with 4-byte-aligned pixel records); packs without
+  RGB565 images still emit version 1, so existing firmware keeps loading them.
+
+- For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
+  art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
+
 ### Fixed
 
 - A `<Modal>` whose style did not cover the whole screen drew its backdrop only behind itself: the

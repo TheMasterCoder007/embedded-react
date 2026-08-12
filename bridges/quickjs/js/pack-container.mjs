@@ -183,6 +183,7 @@ const configPath = resolve(demoDir, 'assets.config.js');
 if (existsSync(configPath))
   config = (await import(pathToFileURL(configPath).href)).default || {};
 const fontConfig = config.fonts || {};
+const imageConfig = config.images || {};
 
 const fontJobs = [...fonts.entries()].map(([family, path]) => {
   const fc = fontConfig[family] || {};
@@ -194,7 +195,11 @@ const fontJobs = [...fonts.entries()].map(([family, path]) => {
         : [16];
   return {path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii'};
 });
-const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
+const imageJobs = [...images.entries()].map(([name, path]) => ({
+  path,
+  name,
+  format: imageConfig[name]?.format,
+}));
 
 const bakedImages = imageJobs.map(i => bakeImage(i));
 const bakedFonts = fontJobs.map(f => bakeFont(f));

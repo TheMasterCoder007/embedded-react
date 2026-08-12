@@ -145,11 +145,48 @@ static int test_image_replace(void)
     for (int i = 1; i < (int)IMAGE_REGISTRY_MAX; i++) /* slot 0 holds "logo" */
     {
         snprintf(name, sizeof(name), "img%d", i);
-        const bool ok = image_registry_store(name, buf_a, 1, 1);
+        const bool ok = image_registry_store(name, buf_a, 1, 1, ER_IMG_ARGB8888);
         CHECK(ok, "image: fill to capacity");
     }
-    CHECK(image_registry_store("logo", buf_a, 2, 2), "image: replace when registry is full");
-    CHECK(!image_registry_store("overflow", buf_a, 1, 1), "image: new name rejected when full");
+    CHECK(image_registry_store("logo", buf_a, 2, 2, ER_IMG_ARGB8888), "image: replace when registry is full");
+    CHECK(!image_registry_store("overflow", buf_a, 1, 1, ER_IMG_ARGB8888), "image: new name rejected when full");
+
+    return s_fail;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Tests: Image registry format + opacity scan
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Verifies the registration-time opacity scan and the RGB565 format tagging.
+ *
+ * @return 0 on success, 1 on failure.
+ */
+static int test_image_format_and_opacity(void)
+{
+    image_registry_init();
+
+    static const uint32_t opaque_px[4] = {0xFF112233U, 0xFFFFFFFFU, 0xFF000000U, 0xFF445566U};
+    static const uint32_t translucent_px[4] = {0xFF112233U, 0xFF445566U, 0x80102030U, 0xFF778899U};
+    static const uint16_t rgb565_px[4] = {0xF800U, 0x07E0U, 0x001FU, 0xFFFFU};
+
+    er_image_load("opaque", opaque_px, 2, 2);
+    const ImageEntry* e = image_registry_get("opaque");
+    CHECK(e && e->format == ER_IMG_ARGB8888 && e->opaque, "format: fully opaque ARGB scans as opaque");
+
+    er_image_load("translucent", translucent_px, 2, 2);
+    e = image_registry_get("translucent");
+    CHECK(e && e->format == ER_IMG_ARGB8888 && !e->opaque, "format: one translucent pixel scans as non-opaque");
+
+    er_image_load_rgb565("bg565", rgb565_px, 2, 2);
+    e = image_registry_get("bg565");
+    CHECK(e && e->format == ER_IMG_RGB565 && e->opaque, "format: RGB565 registers as opaque 565");
+
+    /* Re-registering an existing name with new pixels must re-scan and can change format. */
+    er_image_load("bg565", translucent_px, 2, 2);
+    e = image_registry_get("bg565");
+    CHECK(e && e->format == ER_IMG_ARGB8888 && !e->opaque, "format: replace re-scans opacity and format");
 
     return s_fail;
 }
@@ -313,6 +350,7 @@ static int test_font_register_public(void)
 int main(void)
 {
     (void)test_image_replace();
+    (void)test_image_format_and_opacity();
     (void)test_font_registry_replace();
     (void)test_font_blob_reuse();
     (void)test_font_register_public();

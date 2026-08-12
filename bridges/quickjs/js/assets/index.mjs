@@ -28,7 +28,8 @@ import {emitAssetPack} from './emit-pack.mjs';
  * Bakes the given assets and writes assets.generated.{c,h} into outDir.
  *
  * @param {object} opts
- * @param {Array<{path:string,name:string}>} [opts.images]  Discovered image imports.
+ * @param {Array<{path:string,name:string,format?:string}>} [opts.images]  Discovered image
+ *        imports; format 'rgb565' bakes 16-bit (see bake-image.mjs), default ARGB8888.
  * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any}>} [opts.fonts]
  *        Discovered font imports with their resolved size/bpp/glyph config.
  * @param {string} opts.outDir   Directory to write the generated files into.

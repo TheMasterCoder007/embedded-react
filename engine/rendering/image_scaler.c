@@ -48,6 +48,34 @@ static inline uint32_t* irow(void)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Expands one RGB565 pixel to opaque premultiplied ARGB8888.
+ *
+ * Bit-replicates the 5/6/5 channels into 8 bits (the standard lossless-round-trip expansion),
+ * so pure white/black stay exactly 0xFF/0x00.
+ */
+static inline uint32_t rgb565_to_argb(uint16_t p)
+{
+    const uint32_t r5 = (p >> 11) & 0x1Fu;
+    const uint32_t g6 = (p >> 5) & 0x3Fu;
+    const uint32_t b5 = p & 0x1Fu;
+    const uint32_t r = (r5 << 3) | (r5 >> 2);
+    const uint32_t g = (g6 << 2) | (g6 >> 4);
+    const uint32_t b = (b5 << 3) | (b5 >> 2);
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+/**
+ * @brief Reads one source pixel as premultiplied ARGB8888, whatever the image's storage format.
+ */
+static inline uint32_t fetch_px(const ImageEntry* img, int x, int y)
+{
+    const size_t idx = (size_t)y * (size_t)img->w + (size_t)x;
+    if (img->format == ER_IMG_RGB565)
+        return rgb565_to_argb(((const uint16_t*)img->buf)[idx]);
+    return ((const uint32_t*)img->buf)[idx];
+}
+
+/**
  * @brief Applies a tint to a premultiplied ARGB8888 pixel.
  *
  * Preserves the original alpha. Replaces the RGB channels with the tint color
@@ -79,8 +107,7 @@ static uint32_t apply_tint(uint32_t pixel, uint8_t tr, uint8_t tg, uint8_t tb)
  * computing the four-tap bilinear weights. Bilinear interpolation on premultiplied values is
  * mathematically exact (no alpha halo artefacts).
  *
- * @param[in] buf    Premultiplied ARGB8888 image buffer (row-major, img_w pixels wide).
- * @param[in] img_w  Full image row stride in pixels.
+ * @param[in] img    Source image entry (any storage format; taps are fetched as ARGB8888).
  * @param[in] src_x  Left edge of the valid crop region.
  * @param[in] src_y  Top edge of the valid crop region.
  * @param[in] src_w  Width of the valid crop region.
@@ -91,7 +118,7 @@ static uint32_t apply_tint(uint32_t pixel, uint8_t tr, uint8_t tg, uint8_t tb)
  * @return Bilinearly sampled premultiplied ARGB8888 pixel.
  */
 static uint32_t
-bilinear_sample(const uint32_t* buf, int img_w, int src_x, int src_y, int src_w, int src_h, float sx_f, float sy_f)
+bilinear_sample(const ImageEntry* img, int src_x, int src_y, int src_w, int src_h, float sx_f, float sy_f)
 {
     /* Clamp to crop bounds. */
     const float x_min = (float)src_x, x_max = (float)(src_x + src_w - 1);
@@ -119,10 +146,10 @@ bilinear_sample(const uint32_t* buf, int img_w, int src_x, int src_y, int src_w,
     const float w01 = (1.0f - tx) * ty;
     const float w11 = tx * ty;
 
-    const uint32_t p00 = buf[(size_t)y0 * (size_t)img_w + (size_t)x0];
-    const uint32_t p10 = buf[(size_t)y0 * (size_t)img_w + (size_t)x1];
-    const uint32_t p01 = buf[(size_t)y1 * (size_t)img_w + (size_t)x0];
-    const uint32_t p11 = buf[(size_t)y1 * (size_t)img_w + (size_t)x1];
+    const uint32_t p00 = fetch_px(img, x0, y0);
+    const uint32_t p10 = fetch_px(img, x1, y0);
+    const uint32_t p01 = fetch_px(img, x0, y1);
+    const uint32_t p11 = fetch_px(img, x1, y1);
 
     const uint32_t a = (uint32_t)(((p00 >> 24) & 0xFFu) * w00 + ((p10 >> 24) & 0xFFu) * w10
                                   + ((p01 >> 24) & 0xFFu) * w01 + ((p11 >> 24) & 0xFFu) * w11);
@@ -142,10 +169,14 @@ bilinear_sample(const uint32_t* buf, int img_w, int src_x, int src_y, int src_w,
  *
  * Uses bilinear sampling when ERUI_BILINEAR_SCALE is non-zero, otherwise nearest-neighbor.
  * When the source and destination sizes match and no tint is applied, the original buffer
- * rows are blended directly without copying into the row scratch buffer.
+ * rows are emitted directly without copying into the row scratch buffer.
  *
- * @param[in] buf         Premultiplied ARGB8888 image data (row-major, img_w pixels wide).
- * @param[in] img_w       Total width of the source image in pixels.
+ * Fully opaque images (every source alpha 0xFF — scanned once at registration; all RGB565
+ * images) are emitted through er_blit_copy instead of er_blit_blend: backends replace the
+ * destination pixels outright instead of read-modify-write compositing, which is the fast
+ * path for full-screen backgrounds.
+ *
+ * @param[in] img         Source image entry (buffer, dimensions, format, opacity).
  * @param[in] src_x       Left edge of the source crop rectangle.
  * @param[in] src_y       Top edge of the source crop rectangle.
  * @param[in] src_w       Width of the source crop rectangle.
@@ -159,8 +190,7 @@ bilinear_sample(const uint32_t* buf, int img_w, int src_x, int src_y, int src_w,
  * @param[in] tg          Tint green channel.
  * @param[in] tb          Tint blue channel.
  */
-static void render_region(const uint32_t* buf,
-                          int img_w,
+static void render_region(const ImageEntry* img,
                           int src_x,
                           int src_y,
                           int src_w,
@@ -177,13 +207,35 @@ static void render_region(const uint32_t* buf,
     if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
         return;
 
-    const int img_stride = img_w * (int)sizeof(uint32_t);
-
-    /* Fast path: source and destination regions are the same size and no tint is needed.
-     * Blend directly from the source buffer rows using the image's own row stride. */
+    /* Fast path: source and destination regions are the same size and no tint is needed. */
     if (!has_tint && src_w == dst_w && src_h == dst_h)
     {
-        er_blit_blend(buf + (size_t)src_y * (size_t)img_w + (size_t)src_x, img_stride, 255, dst_x, dst_y, dst_w, dst_h);
+        if (img->format == ER_IMG_ARGB8888)
+        {
+            /* Emit directly from the source buffer rows using the image's own row stride. */
+            const int img_stride = img->w * (int)sizeof(uint32_t);
+            const uint32_t* rows = (const uint32_t*)img->buf + (size_t)src_y * (size_t)img->w + (size_t)src_x;
+            if (img->opaque)
+                er_blit_copy(rows, img_stride, dst_x, dst_y, dst_w, dst_h);
+            else
+                er_blit_blend(rows, img_stride, 255, dst_x, dst_y, dst_w, dst_h);
+            return;
+        }
+
+        /* RGB565 1:1: expand each row into the scratch buffer (internal RAM — reads from the
+         * 2 B/px source are the only external-memory source traffic), then copy it out.
+         * Chunked horizontally so widths beyond the scratch capacity still render fully. */
+        for (int dy = 0; dy < dst_h; dy++)
+        {
+            const uint16_t* srow = (const uint16_t*)img->buf + (size_t)(src_y + dy) * (size_t)img->w + (size_t)src_x;
+            for (int cx = 0; cx < dst_w; cx += ERUI_MAX_IMG_ROW_PIXELS)
+            {
+                const int cw = (dst_w - cx) < ERUI_MAX_IMG_ROW_PIXELS ? (dst_w - cx) : ERUI_MAX_IMG_ROW_PIXELS;
+                for (int dx = 0; dx < cw; dx++)
+                    irow()[dx] = rgb565_to_argb(srow[cx + dx]);
+                er_blit_copy(irow(), cw * (int)sizeof(uint32_t), dst_x + cx, dst_y + dy, cw, 1);
+            }
+        }
         return;
     }
 
@@ -197,17 +249,23 @@ static void render_region(const uint32_t* buf,
             /* Fractional source coords with half-pixel alignment for correct up-sampling. */
             const float sx_f = (float)src_x + ((float)dx + 0.5f) * (float)src_w / (float)dst_w - 0.5f;
             const float sy_f = (float)src_y + ((float)dy + 0.5f) * (float)src_h / (float)dst_h - 0.5f;
-            uint32_t p = bilinear_sample(buf, img_w, src_x, src_y, src_w, src_h, sx_f, sy_f);
+            uint32_t p = bilinear_sample(img, src_x, src_y, src_w, src_h, sx_f, sy_f);
 #else
             const int sy = src_y + (dy * src_h) / dst_h;
             const int sx = src_x + (dx * src_w) / dst_w;
-            uint32_t p = buf[(size_t)sy * (size_t)img_w + (size_t)sx];
+            uint32_t p = fetch_px(img, sx, sy);
 #endif
+            if (img->opaque)
+                p |= 0xFF000000u; /* squash bilinear float dust so the row stays exactly opaque */
             if (has_tint)
                 p = apply_tint(p, tr, tg, tb);
             irow()[dx] = p;
         }
-        er_blit_blend(irow(), capped_w * (int)sizeof(uint32_t), 255, dst_x, dst_y + dy, capped_w, 1);
+        /* Tint preserves alpha, so an opaque image stays opaque through every branch above. */
+        if (img->opaque)
+            er_blit_copy(irow(), capped_w * (int)sizeof(uint32_t), dst_x, dst_y + dy, capped_w, 1);
+        else
+            er_blit_blend(irow(), capped_w * (int)sizeof(uint32_t), 255, dst_x, dst_y + dy, capped_w, 1);
     }
 }
 
@@ -217,7 +275,12 @@ static void render_region(const uint32_t* buf,
 
 void er_image_load(const char* name, const void* argb_buf, int w, int h)
 {
-    image_registry_store(name, argb_buf, w, h);
+    image_registry_store(name, argb_buf, w, h, ER_IMG_ARGB8888);
+}
+
+void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h)
+{
+    image_registry_store(name, rgb565_buf, w, h, ER_IMG_RGB565);
 }
 
 void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
@@ -239,7 +302,7 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
     {
         default:
         case ER_RESIZE_STRETCH:
-            render_region(img->buf, img->w, 0, 0, img->w, img->h, x, y, w, h, has_tint, tr, tg, tb);
+            render_region(img, 0, 0, img->w, img->h, x, y, w, h, has_tint, tr, tg, tb);
             break;
 
         case ER_RESIZE_COVER:
@@ -262,7 +325,7 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
                 crop_h = 1;
             const int crop_x = (img->w - crop_w) / 2;
             const int crop_y = (img->h - crop_h) / 2;
-            render_region(img->buf, img->w, crop_x, crop_y, crop_w, crop_h, x, y, w, h, has_tint, tr, tg, tb);
+            render_region(img, crop_x, crop_y, crop_w, crop_h, x, y, w, h, has_tint, tr, tg, tb);
             break;
         }
 
@@ -286,8 +349,7 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
                 scaled_h = 1;
             const int off_x = (w - scaled_w) / 2;
             const int off_y = (h - scaled_h) / 2;
-            render_region(
-                img->buf, img->w, 0, 0, img->w, img->h, x + off_x, y + off_y, scaled_w, scaled_h, has_tint, tr, tg, tb);
+            render_region(img, 0, 0, img->w, img->h, x + off_x, y + off_y, scaled_w, scaled_h, has_tint, tr, tg, tb);
             break;
         }
 
@@ -300,8 +362,7 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
             const int vis_h = (img->h < h) ? img->h : h;
             const int off_x = (img->w < w) ? (w - img->w) / 2 : 0;
             const int off_y = (img->h < h) ? (h - img->h) / 2 : 0;
-            render_region(
-                img->buf, img->w, src_x, src_y, vis_w, vis_h, x + off_x, y + off_y, vis_w, vis_h, has_tint, tr, tg, tb);
+            render_region(img, src_x, src_y, vis_w, vis_h, x + off_x, y + off_y, vis_w, vis_h, has_tint, tr, tg, tb);
             break;
         }
 
@@ -314,8 +375,7 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
                 for (int tx = 0; tx < w; tx += img->w)
                 {
                     const int tile_w = (tx + img->w <= w) ? img->w : (w - tx);
-                    render_region(
-                        img->buf, img->w, 0, 0, tile_w, tile_h, x + tx, y + ty, tile_w, tile_h, has_tint, tr, tg, tb);
+                    render_region(img, 0, 0, tile_w, tile_h, x + tx, y + ty, tile_w, tile_h, has_tint, tr, tg, tb);
                 }
             }
             break;

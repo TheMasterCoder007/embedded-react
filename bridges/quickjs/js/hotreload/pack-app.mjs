@@ -157,6 +157,7 @@ export async function packAppContainer({
   if (existsSync(cp))
     cfg = (await import(pathToFileURL(cp).href)).default || {};
   const fontConfig = cfg.fonts || {};
+  const imageConfig = cfg.images || {};
   const fontJobs = [...fonts.entries()].map(([family, path]) => {
     const fc = fontConfig[family] || {};
     return {
@@ -171,7 +172,11 @@ export async function packAppContainer({
       glyphs: fc.glyphs ?? 'ascii',
     };
   });
-  const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
+  const imageJobs = [...images.entries()].map(([name, path]) => ({
+    path,
+    name,
+    format: imageConfig[name]?.format,
+  }));
   const bakedImages = imageJobs.map(bakeImage);
   const bakedFonts = fontJobs.map(bakeFont);
   const assetPack =

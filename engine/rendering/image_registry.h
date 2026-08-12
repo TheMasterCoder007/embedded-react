@@ -35,14 +35,25 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Pixel format of a registered image's caller-owned buffer.
+ */
+typedef enum
+{
+    ER_IMG_ARGB8888 = 0, /**< 32-bit premultiplied ARGB (0xAARRGGBB), 4 bytes per pixel. */
+    ER_IMG_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
+} ERImageFormat;
+
+/**
  * @brief One slot in the image registry representing a single named image asset.
  */
 typedef struct
 {
     char name[IMAGE_NAME_MAX + 1]; /**< Null-terminated asset name. */
-    const uint32_t* buf;           /**< Premultiplied ARGB8888 pixel data (caller-owned). */
+    const void* buf;               /**< Pixel data in `format` layout (caller-owned). */
     int w;                         /**< Image width in pixels. */
     int h;                         /**< Image height in pixels. */
+    uint8_t format;                /**< Pixel layout of buf (ERImageFormat). */
+    bool opaque;                   /**< Every pixel is fully opaque (scanned at registration). */
     bool in_use;                   /**< True when this slot holds a valid entry. */
 } ImageEntry;
 
@@ -58,18 +69,21 @@ void image_registry_init(void);
 /**
  * @brief Stores or replaces an image entry under the given name.
  *
- * If an entry with this name already exists its buffer pointer, width, and height are
+ * If an entry with this name already exists its buffer pointer, dimensions, and format are
  * updated in place (the caller-owned pixel data is not copied). If the name is new, a
- * free slot is claimed.
+ * free slot is claimed. ARGB8888 pixels are scanned once here for full opacity so the
+ * renderer can take the opaque copy path on every subsequent blit; RGB565 has no alpha
+ * channel and is always opaque.
  *
- * @param[in] name      Null-terminated asset name (max IMAGE_NAME_MAX characters).
- * @param[in] argb_buf  Premultiplied ARGB8888 pixel data; caller must keep it live.
- * @param[in] w         Image width in pixels.
- * @param[in] h         Image height in pixels.
+ * @param[in] name    Null-terminated asset name (max IMAGE_NAME_MAX characters).
+ * @param[in] buf     Pixel data in the given format; caller must keep it live.
+ * @param[in] w       Image width in pixels.
+ * @param[in] h       Image height in pixels.
+ * @param[in] format  Pixel layout of buf.
  *
  * @return true on success, false if the registry is full or the arguments are invalid.
  */
-bool image_registry_store(const char* name, const void* argb_buf, int w, int h);
+bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format);
 
 /**
  * @brief Retrieves a registered image entry by name.

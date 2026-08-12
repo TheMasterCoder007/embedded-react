@@ -84,6 +84,47 @@ describe('bakeImage', () => {
       fs.rmSync(tmp, {force: true});
     }
   });
+
+  it('bakes an opaque PNG to RGB565 when format is rgb565', () => {
+    const png = new PNG({width: 4, height: 1});
+    png.data = Buffer.from([
+      255, 0, 0, 255 /* red */, 0, 255, 0, 255 /* green */, 0, 0, 255,
+      255 /* blue */, 255, 255, 255, 255 /* white */,
+    ]);
+    const tmp = join(os.tmpdir(), `er-bake565-${process.pid}.png`);
+    fs.writeFileSync(tmp, PNG.sync.write(png));
+    try {
+      const out = bakeImage({path: tmp, name: 'bg', format: 'rgb565'});
+      expect(out.format).toBe('rgb565');
+      expect(out.pixels).toBeInstanceOf(Uint16Array);
+      expect(out.pixels[0]).toBe(0xf800); // red
+      expect(out.pixels[1]).toBe(0x07e0); // green
+      expect(out.pixels[2]).toBe(0x001f); // blue
+      expect(out.pixels[3]).toBe(0xffff); // white
+    } finally {
+      fs.rmSync(tmp, {force: true});
+    }
+  });
+
+  it('rejects a non-opaque source for rgb565', () => {
+    const png = new PNG({width: 2, height: 1});
+    png.data = Buffer.from([255, 0, 0, 255, 0, 0, 255, 128]);
+    const tmp = join(os.tmpdir(), `er-bake565a-${process.pid}.png`);
+    fs.writeFileSync(tmp, PNG.sync.write(png));
+    try {
+      expect(() => bakeImage({path: tmp, name: 'bg', format: 'rgb565'})).toThrow(
+        /alpha 128/,
+      );
+    } finally {
+      fs.rmSync(tmp, {force: true});
+    }
+  });
+
+  it('rejects an unknown format', () => {
+    expect(() => bakeImage({path: 'x.png', name: 'x', format: 'rgb888'})).toThrow(
+      /unknown format/,
+    );
+  });
 });
 
 describe('resolveExtras', () => {
@@ -186,9 +227,14 @@ function readPack(buf) {
     const name = str();
     const w = u32();
     const h = u32();
+    let format = 0; // v1: implicitly ARGB8888
+    if (version >= 2) {
+      format = u8();
+      o += (4 - (o % 4)) % 4; // skip the 4-byte alignment pad before the pixels
+    }
     const pixels = [];
-    for (let p = 0; p < w * h; p++) pixels.push(u32());
-    images.push({name, w, h, pixels});
+    for (let p = 0; p < w * h; p++) pixels.push(format === 1 ? u16() : u32());
+    images.push({name, w, h, format, pixels});
   }
   const fonts = [];
   for (let i = 0; i < nFonts; i++) {
@@ -265,6 +311,43 @@ describe('emitAssetPack', () => {
     // Every byte is accounted for — the reader consumes exactly what the writer produced.
     expect(p.consumed).toBe(p.total);
   });
+
+  it('stays version 1 when no image is RGB565', () => {
+    const image = {
+      name: 'logo',
+      width: 1,
+      height: 1,
+      format: 'argb8888',
+      pixels: new Uint32Array([0xffffffff]),
+    };
+    const p = readPack(emitAssetPack({images: [image], fonts: []}));
+    expect(p.version).toBe(1);
+  });
+
+  it('writes version 2 with per-image format + aligned pixels when RGB565 is used', () => {
+    const bg = {
+      name: 'bg',
+      width: 3,
+      height: 1,
+      format: 'rgb565',
+      pixels: new Uint16Array([0xf800, 0x07e0, 0x001f]),
+    };
+    // An odd-length name would leave the pixels misaligned without the v2 pad.
+    const icon = {
+      name: 'ico',
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([0x80000080]),
+    };
+    const p = readPack(emitAssetPack({images: [bg, icon], fonts: []}));
+
+    expect(p.version).toBe(2);
+    expect(p.images[0]).toMatchObject({name: 'bg', w: 3, h: 1, format: 1});
+    expect(p.images[0].pixels).toEqual([0xf800, 0x07e0, 0x001f]);
+    expect(p.images[1]).toMatchObject({name: 'ico', w: 1, h: 1, format: 0});
+    expect(p.images[1].pixels[0] >>> 0).toBe(0x80000080);
+    expect(p.consumed).toBe(p.total);
+  });
 });
 
 describe('emitAssetsC', () => {
@@ -291,5 +374,25 @@ describe('emitAssetsC', () => {
     expect(c).toContain('void er_register_assets(void)');
     expect(c).toContain('er_image_load("logo", logo_px, 1, 1);');
     expect(c).toContain('er_font_register("Inter", &g_font_Inter_16);');
+  });
+
+  it('emits uint16_t arrays and er_image_load_rgb565 for RGB565 images', () => {
+    const bg = {
+      name: 'bg',
+      width: 2,
+      height: 1,
+      format: 'rgb565',
+      pixels: new Uint16Array([0xf800, 0xffff]),
+    };
+    const {c} = emitAssetsC({
+      headerName: 'assets.generated.h',
+      images: [bg],
+      fonts: [],
+    });
+
+    expect(c).toContain('static const uint16_t bg_px[]');
+    expect(c).toContain('0xF800u');
+    expect(c).toContain('er_image_load_rgb565("bg", bg_px, 2, 1);');
+    expect(c).not.toContain('er_image_load("bg"');
   });
 });

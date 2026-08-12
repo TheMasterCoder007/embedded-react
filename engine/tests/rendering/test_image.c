@@ -41,6 +41,7 @@ typedef struct
     int fb_w;        /**< Framebuffer width in pixels. */
     int fb_h;        /**< Framebuffer height in pixels. */
     int blend_calls; /**< Total blend_rect calls received. */
+    int copy_calls;  /**< Total copy_rect calls received. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -69,25 +70,34 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 }
 
 /**
- * @brief Backend copy_rect stub — no-op; image rendering uses blend_rect, not copy_rect.
+ * @brief Backend copy_rect that writes premultiplied ARGB rows into the test framebuffer.
  *
- * @param[in] src     Source pixel buffer (unused).
- * @param[in] stride  Source stride in bytes (unused).
- * @param[in] x       Destination X coordinate (unused).
- * @param[in] y       Destination Y coordinate (unused).
- * @param[in] w       Width in pixels (unused).
- * @param[in] h       Height in pixels (unused).
- * @param[in] ctx     Opaque context (unused).
+ * Fully opaque images render through this path (the engine's opaque fast path); the test
+ * writes the pixels verbatim, matching a real backend's replace semantics for opaque sources.
+ *
+ * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] stride  Source row stride in bytes.
+ * @param[in] x       Destination left edge in framebuffer pixels.
+ * @param[in] y       Destination top edge in framebuffer pixels.
+ * @param[in] w       Width of the region in pixels.
+ * @param[in] h       Height of the region in pixels.
+ * @param[in] ctx     Pointer to the TestCtx to write into.
  */
 static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
 {
-    (void)src;
-    (void)stride;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
+    TestCtx* t = ctx;
+    t->copy_calls++;
+    for (int row = 0; row < h; row++)
+    {
+        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + row * stride);
+        for (int col = 0; col < w; col++)
+        {
+            int px = x + col;
+            int py = y + row;
+            if (px >= 0 && px < t->fb_w && py >= 0 && py < t->fb_h)
+                t->fb[py * t->fb_w + px] = src_row[col];
+        }
+    }
 }
 
 /**
@@ -158,6 +168,7 @@ static void reset(TestCtx* t)
 {
     memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
     t->blend_calls = 0;
+    t->copy_calls = 0;
 }
 
 /**
@@ -208,7 +219,7 @@ static ERProps props_default(void)
 int main(void)
 {
     static uint32_t fb[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H, 0};
+    TestCtx tc = {fb, FB_W, FB_H, 0, 0};
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
     embedded_renderer_set_backend(&be);
 
@@ -252,8 +263,8 @@ int main(void)
         er_tree_set_root(root);
         er_commit();
 
-        if (tc.blend_calls != 0)
-            return fail("unknown image name: blend_rect was called");
+        if (tc.blend_calls != 0 || tc.copy_calls != 0)
+            return fail("unknown image name: a blit was emitted");
 
         er_tree_remove_child(root, img_node);
         er_node_destroy(img_node);
@@ -517,6 +528,168 @@ int main(void)
             return fail("tint: green channel should be 0 for red tint on cyan");
         if (b != 0)
             return fail("tint: blue channel should be 0 for red tint on cyan");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Opaque fast path — a fully opaque image must arrive via copy_rect
+     * (replace), never blend_rect, both at 1:1 and when scaled.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2; /* 1:1 with the 2×2 opaque image */
+        ip.height = 2;
+        strncpy(ip.image_name, "test2x2", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.copy_calls == 0)
+            return fail("opaque 1:1: expected copy_rect to be used");
+        if (tc.blend_calls != 0)
+            return fail("opaque 1:1: blend_rect should not be called for an opaque image");
+
+        /* Scale it up 2x: the row-scratch path must also stay on copy_rect. */
+        reset(&tc);
+        ip.width = 4;
+        ip.height = 4;
+        er_node_set_props(img_node, &ip);
+        er_commit();
+
+        if (tc.copy_calls == 0)
+            return fail("opaque scaled: expected copy_rect to be used");
+        if (tc.blend_calls != 0)
+            return fail("opaque scaled: blend_rect should not be called for an opaque image");
+        if (px(&tc, 0, 0) != 0xFFFF0000)
+            return fail("opaque scaled: (0,0) should be red");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Translucent image — one pixel with alpha < 255 must keep the blend path.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        static const uint32_t img_tl[4] = {
+            0xFFFF0000, /* opaque red */
+            0x8000FF00, /* HALF-TRANSPARENT green (premultiplied would be 0x80008000; value irrelevant) */
+            0xFF0000FF,
+            0xFFFFFF00,
+        };
+        er_image_load("translucent2x2", img_tl, 2, 2);
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2;
+        ip.height = 2;
+        strncpy(ip.image_name, "translucent2x2", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.blend_calls == 0)
+            return fail("translucent: expected blend_rect to be used");
+        if (tc.copy_calls != 0)
+            return fail("translucent: copy_rect must not be used for a non-opaque image");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * RGB565 image — registered via er_image_load_rgb565: expands to exact
+     * ARGB (bit replication), renders via copy_rect, and scales correctly.
+     *   0xF800 → red, 0x07E0 → green, 0x001F → blue, 0xFFFF → white.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        static const uint16_t img565[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
+        er_image_load_rgb565("test565", img565, 2, 2);
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2; /* 1:1 */
+        ip.height = 2;
+        strncpy(ip.image_name, "test565", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.copy_calls == 0)
+            return fail("rgb565 1:1: expected copy_rect to be used");
+        if (tc.blend_calls != 0)
+            return fail("rgb565 1:1: blend_rect should not be called");
+        if (px(&tc, 0, 0) != 0xFFFF0000)
+            return fail("rgb565 1:1: (0,0) should expand to opaque red");
+        if (px(&tc, 1, 0) != 0xFF00FF00)
+            return fail("rgb565 1:1: (1,0) should expand to opaque green");
+        if (px(&tc, 0, 1) != 0xFF0000FF)
+            return fail("rgb565 1:1: (0,1) should expand to opaque blue");
+        if (px(&tc, 1, 1) != 0xFFFFFFFF)
+            return fail("rgb565 1:1: (1,1) should expand to opaque white");
+
+        /* Stretch 2x through the scaling path. */
+        reset(&tc);
+        ip.width = 4;
+        ip.height = 4;
+        er_node_set_props(img_node, &ip);
+        er_commit();
+
+        if (tc.copy_calls == 0)
+            return fail("rgb565 scaled: expected copy_rect to be used");
+        if (tc.blend_calls != 0)
+            return fail("rgb565 scaled: blend_rect should not be called");
+        if (px(&tc, 0, 0) != 0xFFFF0000)
+            return fail("rgb565 scaled: (0,0) should be red");
+        if (px(&tc, 3, 3) != 0xFFFFFFFF)
+            return fail("rgb565 scaled: (3,3) should be white");
+
+        /* Tint: alpha is preserved (opaque), RGB replaced by the tint color. */
+        reset(&tc);
+        ip.width = 2;
+        ip.height = 2;
+        ip.tint_color = 0xFF00FFu; /* magenta tint */
+        er_node_set_props(img_node, &ip);
+        er_commit();
+
+        if (px(&tc, 0, 0) != 0xFFFF00FF)
+            return fail("rgb565 tint: (0,0) should be opaque magenta");
 
         er_tree_remove_child(root, img_node);
         er_node_destroy(img_node);
