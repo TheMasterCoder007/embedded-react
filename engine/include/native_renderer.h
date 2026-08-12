@@ -88,9 +88,13 @@ extern "C"
          - Format-aware opaque copy (optional). The engine hands a KNOWN-FULLY-OPAQUE source buffer to
            the backend in its registered pixel format, as one call for the whole rect. Contract:
              * fmt names src's pixel layout; src_stride_bytes is the row stride in BYTES of that format.
+             * The callback may be invoked with ER_IMG_ARGB8888 or ER_IMG_RGB565; implementations must
+               handle both (ARGB sources may be forwarded to copy_rect).
              * Every source pixel is opaque — the engine only routes buffers its registration-time scan
                (or the format itself, for RGB565) proved opaque. Replace destination pixels outright:
                no per-pixel alpha inspection, no read-modify-write, no opacity pre-scan needed.
+             * Coordinates match the other blit callbacks: in banded mode, y is band-local (already
+               offset by the strip's top).
              * On DMA2D-class hardware this maps to a single M2M(_PFC) transfer (e.g. FGPFCCR color
                mode RGB565 with an ARGB8888/RGB565 output); on an RGB565 framebuffer a 565 source is
                a plain row memcpy.

@@ -211,9 +211,9 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
  * @param[in] h       Height of the region in pixels.
  *
  * @return true when the blit was fully handled (including "fully clipped, nothing to draw").
- *         false only for a non-ARGB source the backend path cannot take — the caller must then
- *         expand rows on the CPU and emit them through er_blit_copy/er_blit_blend. ARGB8888
- *         sources are always handled (they fall back to er_blit_copy internally).
+ *         false only when fmt != ER_IMG_ARGB8888 and the format-aware backend path is unavailable
+ *         (no copy_rect_fmt backend, scratch capture, or inherited alpha) — the caller must then
+ *         expand rows on the CPU and emit them through er_blit_copy/er_blit_blend.
  */
 bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h);
 
