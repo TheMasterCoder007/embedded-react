@@ -144,7 +144,11 @@ firmware that prefers to **compile assets into the image** and call it once at b
 `er_font_register`, both flash-resident, zero runtime RAM). Either way the asset name/family is the
 file's basename.
 
-- **Images:** PNG → premultiplied ARGB8888 (`bake-image.mjs`, via `pngjs`).
+- **Images:** PNG → premultiplied ARGB8888 (`bake-image.mjs`, via `pngjs`). Fully opaque art —
+  full-screen backgrounds especially — can opt into a 16-bit **RGB565** bake per image (see the
+  config below): half the flash and half the source-read bandwidth on every repaint. The baker
+  rejects a non-opaque source rather than silently dropping transparency, and the engine renders
+  RGB565 images through its opaque copy fast path (no per-pixel blending).
 - **Fonts:** TTF/OTF → pre-rasterized `BitmapFont` glyphs (`bake-font.mjs`, via `opentype.js` + a
   pure-JS rasterizer). The engine has no runtime rasterizer, so the baker rasterizes **exactly the
   literal `fontSize` values the bundle uses**. Computed/dynamic sizes snap to the nearest baked size
@@ -156,6 +160,9 @@ Optional per-demo overrides live in `demos/<demo>/assets.config.js`:
 export default {
   fonts: {
     Inter: { sizes: [14, 18, 24], bpp: 4, glyphs: 'common' }, // bpp 1|2|4|8 (4 default); glyphs: 'ascii'|'common'|'minimal'|'greek'|[codepoints]
+  },
+  images: {
+    bg: { format: 'rgb565' }, // 16-bit bake for opaque art; default is 'argb8888'
   },
 };
 ```

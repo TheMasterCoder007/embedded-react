@@ -30,7 +30,7 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildApp, runDevServer} from './sim-server.mjs';
@@ -383,9 +383,18 @@ async function buildAot(cwd, explicit, outDir, screen) {
   writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
   writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
 
+  // Optional per-image overrides (same file the JS flows read): assets.config.js
+  //   export default { images: { 'bg': { format: 'rgb565' } } }
+  let cfg = {};
+  const cp = resolve(cwd, 'assets.config.js');
+  if (existsSync(cp))
+    cfg = (await import(pathToFileURL(cp).href)).default || {};
+  const imageConfig = cfg.images || {};
+
   const imageJobs = result.images.map(im => ({
     name: im.name,
     path: resolve(appDir, im.importPath),
+    format: imageConfig[im.name]?.format,
   }));
   for (const j of imageJobs) {
     if (!existsSync(j.path)) {

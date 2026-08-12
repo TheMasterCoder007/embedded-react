@@ -218,6 +218,7 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
   if (existsSync(cp))
     cfg = (await import(pathToFileURL(cp).href)).default || {};
   const fontConfig = cfg.fonts || {};
+  const imageConfig = cfg.images || {};
 
   const fontJobs = [...fonts.entries()].map(([family, path]) => {
     const fc = fontConfig[family] || {};
@@ -233,7 +234,11 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
       glyphs: fc.glyphs ?? 'ascii',
     };
   });
-  const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
+  const imageJobs = [...images.entries()].map(([name, path]) => ({
+    path,
+    name,
+    format: imageConfig[name]?.format,
+  }));
   const bakedImages = imageJobs.map(bakeImage);
   const bakedFonts = fontJobs.map(bakeFont);
   return bakedImages.length || bakedFonts.length

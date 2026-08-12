@@ -101,6 +101,7 @@ async function bakePack() {
     cfg =
       (await import(`${pathToFileURL(cp).href}?t=${mtime(cp)}`)).default || {};
   const fontConfig = cfg.fonts || {};
+  const imageConfig = cfg.images || {};
 
   const fontJobs = [...fonts.entries()].map(([family, path]) => {
     const fc = fontConfig[family] || {};
@@ -118,11 +119,15 @@ async function bakePack() {
       glyphs: fc.glyphs ?? 'ascii',
     };
   });
-  const imageJobs = [...images.entries()].map(([name, path]) => ({path, name}));
+  const imageJobs = [...images.entries()].map(([name, path]) => ({
+    path,
+    name,
+    format: imageConfig[name]?.format,
+  }));
 
   // Only re-bake when the asset inputs actually changed (avoids re-rasterizing fonts on every save).
   const sig = JSON.stringify({
-    i: imageJobs.map(j => [j.name, j.path, mtime(j.path)]).sort(),
+    i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
     f: fontJobs
       .map(j => [j.family, j.path, mtime(j.path), j.sizes, j.bpp, j.glyphs])
       .sort(),

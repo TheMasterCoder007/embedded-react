@@ -1073,6 +1073,24 @@ extern "C"
     void er_image_load(const char* name, const void* argb_buf, int w, int h);
 
     /**
+     * @brief Registers a 16-bit RGB565 image under a name for use by Image nodes.
+     *
+     * Same ownership and replacement rules as er_image_load(), but the pixel data is
+     * RGB565 (2 bytes per pixel, row-major, native endianness, 2-byte aligned) instead of
+     * ARGB8888 — half the storage and half the source-read bandwidth on every repaint.
+     * RGB565 has no alpha channel, so the image is treated as fully opaque and rendered
+     * through the opaque copy path (no per-pixel blending). Intended for full-screen
+     * backgrounds and other opaque art; use er_image_load() for anything with
+     * transparency.
+     *
+     * @param[in] name        Null-terminated image asset name.
+     * @param[in] rgb565_buf  Pointer to the RGB565 pixel data (row-major).
+     * @param[in] w           Image width in pixels.
+     * @param[in] h           Image height in pixels.
+     */
+    void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h);
+
+    /**
      * @brief Starts an animation on a node property.
      *
      * Any previously running animation on the same node+prop is cancelled before

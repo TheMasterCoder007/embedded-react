@@ -9,6 +9,37 @@ from the LTDC vsync IRQ.
 **Status:** Stub. `renderer_backend.c` is currently a placeholder; real implementation
 will land alongside the first STM32H7 example.
 
+## Static full-screen art on a second LTDC layer
+
+The LTDC composites two hardware layers per scanout, which is a zero-cost way to take a
+static full-screen background out of the render loop entirely: the engine never re-blits
+art the panel controller composites for free.
+
+- Put the baked art in **layer 0** (bottom), pointed at a flash- or SDRAM-resident bitmap
+  the engine never touches. RGB565 halves the LTDC's own fetch bandwidth vs ARGB8888 —
+  bake it with the asset pipeline's `format: 'rgb565'` option and point the layer at the
+  baked array directly.
+- Render the UI into **layer 1** (top) with a per-pixel-alpha pixel format (ARGB8888 /
+  ARGB1555) and an initial clear to fully transparent. Don't mount the art as an
+  `<Image>` at all — regions no UI node ever paints stay transparent and the background
+  shows through.
+
+Two caveats to design around:
+
+- The engine's blit callbacks are host-implemented here, and the stock backends keep the
+  framebuffer opaque (alpha forced to 0xFF). For the show-through to work your callbacks
+  must preserve alpha 0 in never-painted pixels — only pixels a node actually covers get
+  written, which the damage-clipped repaint already guarantees.
+- Translucent UI composites against the **engine's own framebuffer**, not the art below
+  it (the engine can't see layer 0). Fully opaque UI panels over the art are exact;
+  a half-transparent panel blends with whatever layer 1 held underneath, so give such
+  panels an opaque backing if they sit on the art.
+
+If the art must live in the scene graph instead (it scrolls, fades, or sits between UI
+elements), skip the second layer and lean on the engine's opaque-image fast path + RGB565
+bake — a fully opaque background already blits with no read-modify-write and half the
+source traffic.
+
 ## Page-flipped (double / triple buffered) LTDC panels
 
 Many STM32 boards drive the LTDC from two (or three) framebuffers in SDRAM and hardware

@@ -21,15 +21,20 @@
 // loads this at runtime and calls er_image_load / er_font_register, so assets hot-reload without a
 // sim rebuild. Little-endian (the simulator is x86). Format:
 //
-//   magic "ERPK" (4 bytes), version u32=1, n_images u32, n_font_sizes u32
-//   images[n_images]:    name(u16 len + bytes), width u32, height u32, pixels (w*h * u32 ARGB)
+//   magic "ERPK" (4 bytes), version u32 (1 or 2), n_images u32, n_font_sizes u32
+//   images[n_images]:    name(u16 len + bytes), width u32, height u32,
+//                        [v2 only: format u8 (0=ARGB8888, 1=RGB565), zero-pad to 4-byte alignment],
+//                        pixels (w*h * u32 ARGB, or w*h * u16 RGB565 when format=1)
 //   fonts[n_font_sizes]: family(u16 len + bytes), pixel_size/line_height/baseline/format (4*u8),
 //                        first u16, last u16, glyph_count u16, extras_count u16, bitmap_len u32,
 //                        glyphs[glyph_count] (9B: off u32, w/h u8, xo/yo i8, adv u8),
 //                        extras[extras_count] (13B: codepoint u32 + the 9B glyph),
 //                        bitmap (bitmap_len bytes)
-
-const VERSION = 1;
+//
+// Version 2 exists only for the 16-bit image bake: a pack with no RGB565 images is still written
+// as version 1, so existing device parsers keep loading unchanged packs. The v2 alignment pad also
+// guarantees the in-place pixel pointer handed to the engine is 4-byte aligned (v1 relied on names
+// keeping the offset aligned).
 
 /** Accumulates little-endian binary chunks. */
 class Writer {
@@ -64,6 +69,12 @@ class Writer {
   bytes(buf) {
     this.chunks.push(Buffer.from(buf));
   }
+  /** Zero-pads so the next write lands on an n-byte boundary from the pack start. */
+  align(n) {
+    const len = this.chunks.reduce((a, b) => a + b.length, 0);
+    const pad = (n - (len % n)) % n;
+    if (pad) this.chunks.push(Buffer.alloc(pad));
+  }
   done() {
     return Buffer.concat(this.chunks);
   }
@@ -88,9 +99,12 @@ function writeGlyph(w, g) {
  * @returns {Buffer} The pack bytes.
  */
 export function emitAssetPack({images = [], fonts = []}) {
+  // A pack stays version 1 unless the 16-bit image bake is actually used, so packs without
+  // RGB565 images remain loadable by parsers that predate version 2.
+  const version = images.some(i => i.format === 'rgb565') ? 2 : 1;
   const w = new Writer();
   w.bytes(Buffer.from('ERPK', 'ascii'));
-  w.u32(VERSION);
+  w.u32(version);
   w.u32(images.length);
   const fontSizes = fonts.reduce((n, f) => n + f.sizes.length, 0);
   w.u32(fontSizes);
@@ -99,7 +113,12 @@ export function emitAssetPack({images = [], fonts = []}) {
     w.str(img.name);
     w.u32(img.width);
     w.u32(img.height);
-    // pixels is a Uint32Array (premultiplied ARGB words); copy its LE bytes verbatim.
+    if (version >= 2) {
+      w.u8(img.format === 'rgb565' ? 1 : 0);
+      w.align(4); // the engine reads the pixels in place; keep the pointer 4-byte aligned
+    }
+    // pixels is a Uint32Array (premultiplied ARGB words) or Uint16Array (RGB565);
+    // copy its LE bytes verbatim.
     w.bytes(
       Buffer.from(
         img.pixels.buffer,
