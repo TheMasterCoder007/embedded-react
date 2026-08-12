@@ -182,17 +182,38 @@ static int corner_dx(int r, int dy)
 
 void er_rrect_clamp_radii(int w, int h, int* r_tl, int* r_tr, int* r_br, int* r_bl)
 {
+    /* Degenerate box: no area, so no corners to round. Handled first so the clamps below can divide
+     * and scale by w and h freely. */
+    if (w <= 0 || h <= 0)
+    {
+        *r_tl = *r_tr = *r_br = *r_bl = 0;
+        return;
+    }
+
+    /* A negative radius is meaningless — square that corner off. This has to happen BEFORE the
+     * uniform test below, for two reasons: it decides which clamp runs (a stray negative would drop
+     * an otherwise-uniform set into the mixed path), and the proportional scaling there multiplies by
+     * the radius, so a negative would survive it and come back out negative. Reachable from an app:
+     * borderTopLeftRadius 10 with borderRadius -5 resolves to (10, -5, -5, -5). */
+    if (*r_tl < 0)
+        *r_tl = 0;
+    if (*r_tr < 0)
+        *r_tr = 0;
+    if (*r_br < 0)
+        *r_br = 0;
+    if (*r_bl < 0)
+        *r_bl = 0;
+
     if (*r_tl == *r_tr && *r_tr == *r_br && *r_br == *r_bl)
     {
         /* Uniform: keep opposite arcs tangent, the same clamp er_rrect_fill applies, so a uniform
-         * radius produces one shape no matter which of the two fills paints it. */
+         * radius produces one shape no matter which of the two fills paints it. Cannot go negative:
+         * the input is >= 0 and w, h are >= 1, so (w - 1) / 2 is >= 0 too. */
         int r = *r_tl;
         if (2 * r >= w)
             r = (w - 1) / 2;
         if (2 * r >= h)
             r = (h - 1) / 2;
-        if (r < 0)
-            r = 0;
         *r_tl = *r_tr = *r_br = *r_bl = r;
         return;
     }

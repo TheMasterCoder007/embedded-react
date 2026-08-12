@@ -183,6 +183,64 @@ int main(void)
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
     embedded_renderer_set_backend(&be);
 
+    /* --- er_rrect_clamp_radii is total: no input produces a negative radius ---
+     *
+     * Three call sites now share this helper to agree on one silhouette, so its contract matters more
+     * than the arithmetic. The mixed path multiplies by the radius while scaling an overlapping pair
+     * down, which would carry a negative straight through — and a stray negative would also flip the
+     * uniform/mixed choice itself. An app can reach that: borderTopLeftRadius 10 alongside
+     * borderRadius -5 resolves to (10, -5, -5, -5). */
+    {
+        struct
+        {
+            int w, h, tl, tr, br, bl;
+        } cases[] = {
+            {40, 40, -5, -5, -5, -5}, /* uniform negative */
+            {40, 40, 10, -5, -5, -5}, /* the reachable mixed-with-negative case */
+            {40, 40, -8, 30, 30, -8}, /* negatives paired with an overlapping run */
+            {40, 40, 60, 60, 60, 60}, /* uniform, far past the box */
+            {40, 40, 60, 10, 60, 10}, /* mixed, far past the box */
+            {0, 40, 10, 10, 10, 10},  /* degenerate width */
+            {40, 0, 10, 20, 30, 40},  /* degenerate height */
+            {-4, -4, 10, 20, 30, 40}, /* negative box */
+            {1, 1, 10, 10, 10, 10},   /* one-pixel box */
+            {40, 40, 0, 0, 0, 0},     /* already square */
+        };
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        {
+            int tl = cases[i].tl, tr = cases[i].tr, br = cases[i].br, bl = cases[i].bl;
+            er_rrect_clamp_radii(cases[i].w, cases[i].h, &tl, &tr, &br, &bl);
+            if (tl < 0 || tr < 0 || br < 0 || bl < 0)
+            {
+                printf("  w=%d h=%d in(%d,%d,%d,%d) -> out(%d,%d,%d,%d)\n",
+                       cases[i].w,
+                       cases[i].h,
+                       cases[i].tl,
+                       cases[i].tr,
+                       cases[i].br,
+                       cases[i].bl,
+                       tl,
+                       tr,
+                       br,
+                       bl);
+                return fail("clamp_radii: returned a negative radius");
+            }
+            /* A radius may never exceed the box either, or a row's span inverts. */
+            const int cap = (cases[i].w > cases[i].h) ? cases[i].w : cases[i].h;
+            if (cases[i].w > 0 && cases[i].h > 0 && (tl > cap || tr > cap || br > cap || bl > cap))
+                return fail("clamp_radii: returned a radius larger than the box");
+            /* Opposing pairs must fit along their shared edge, which is the whole point. */
+            if (cases[i].w > 0 && cases[i].h > 0
+                && (tl + tr > cases[i].w || bl + br > cases[i].w || tl + bl > cases[i].h || tr + br > cases[i].h))
+                return fail("clamp_radii: an opposing pair still overlaps");
+            if (cases[i].w <= 0 || cases[i].h <= 0)
+            {
+                if (tl != 0 || tr != 0 || br != 0 || bl != 0)
+                    return fail("clamp_radii: a box with no area kept its corner radii");
+            }
+        }
+    }
+
     /* --- transparent color: no fill_rect calls emitted --- */
     er_rrect_fill(0x00FF0000, 0, 0, 20, 20, 4);
     if (tc.fills != 0)

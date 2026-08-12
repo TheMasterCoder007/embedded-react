@@ -78,8 +78,10 @@ typedef struct
  * @brief Clamps per-corner radii to the shape a rounded-rect fill will actually paint.
  *
  * Uniform radii keep opposite arcs tangent (the pill / capsule clamp); mixed radii scale each
- * opposing pair down proportionally so neighbouring arcs meet at most tangentially. Radii are
- * clamped in place and never go negative.
+ * opposing pair down proportionally so neighbouring arcs meet at most tangentially.
+ *
+ * Total: every radius comes back in [0, max(w, h)] for any input. Negative radii are squared off
+ * before either clamp runs, and a box with no area (@p w or @p h <= 0) zeroes all four.
  *
  * Anything that MASKS to a filled rounded rect — the gradient background — must clamp through this
  * same function, or its edge disagrees with the fill's by a pixel at radii large enough to clamp.
