@@ -9,6 +9,23 @@ from the LTDC vsync IRQ.
 **Status:** Stub. `renderer_backend.c` is currently a placeholder; real implementation
 will land alongside the first STM32H7 example.
 
+## Opaque images: implement `copy_rect_fmt`
+
+A DMA2D implementation should provide the optional `copy_rect_fmt` callback. The engine
+routes every fully opaque image blit through it — the whole rect in one call, source
+handed over in its registered pixel format, with a hard guarantee that every pixel is
+opaque. That maps 1:1 onto a plain M2M(_PFC) transfer:
+
+- `ER_IMG_RGB565` source → `FGPFCCR` color mode `DMA2D_CM_RGB565` (PFC to an ARGB8888
+  output, or straight M2M when the framebuffer is RGB565 too).
+- `ER_IMG_ARGB8888` source → plain M2M.
+
+No `region_is_opaque` pre-scan and no per-pixel alpha path is needed on this entry point —
+the registry already scanned the pixels once at load. Without `copy_rect_fmt` a 16-bit
+image is expanded on the CPU and emitted per row, which on a full-screen background is
+~1M conversions plus one transfer per scanline: measurably slower than the single-shot
+ARGB path it was meant to beat.
+
 ## Static full-screen art on a second LTDC layer
 
 The LTDC composites two hardware layers per scanout, which is a zero-cost way to take a

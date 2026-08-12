@@ -525,6 +525,44 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
     }
 }
 
+bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h)
+{
+    /* The format-aware hook applies only when the backend can take the buffer as-is: no inherited
+     * draw alpha to composite and no scratch capture in flight (scratch buffers are ARGB8888). */
+    const bool hook = g_backend && g_backend->copy_rect_fmt && rc()->draw_alpha == 255U && !rc()->scratch_buf;
+    if (!hook)
+    {
+        if (fmt != ER_IMG_ARGB8888)
+            return false; /* caller expands rows on the CPU */
+        er_blit_copy(src, stride, x, y, w, h);
+        return true;
+    }
+
+    const int bpp = (fmt == ER_IMG_RGB565) ? 2 : 4;
+    const int orig_x = x;
+    const int orig_y = y;
+    if (!apply_clip(&x, &y, &w, &h))
+        return true; /* fully clipped: nothing to draw */
+    src = (const uint8_t*)src + (size_t)(y - orig_y) * (size_t)stride + (size_t)(x - orig_x) * (size_t)bpp;
+    if (rc()->band_h > 0)
+    {
+        const int top = rc()->band_oy, bot = rc()->band_oy + rc()->band_h;
+        if (y < top)
+        {
+            const int d = top - y;
+            src = (const uint8_t*)src + (size_t)d * (size_t)stride;
+            h -= d;
+            y = top;
+        }
+        if (y + h > bot)
+            h = bot - y;
+        if (h <= 0)
+            return true;
+    }
+    g_backend->copy_rect_fmt(src, stride, fmt, x, y - rc()->band_oy, w, h, g_backend->ctx);
+    return true;
+}
+
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h)
 {
     if (rc()->draw_alpha < 255U)

@@ -17,6 +17,8 @@
 #ifndef EMBEDDED_REACT_IMAGE_REGISTRY_H
 #define EMBEDDED_REACT_IMAGE_REGISTRY_H
 
+#include "native_renderer.h" /* ERImageFormat */
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -35,16 +37,9 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Pixel format of a registered image's caller-owned buffer.
- */
-typedef enum
-{
-    ER_IMG_ARGB8888 = 0, /**< 32-bit premultiplied ARGB (0xAARRGGBB), 4 bytes per pixel. */
-    ER_IMG_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
-} ERImageFormat;
-
-/**
  * @brief One slot in the image registry representing a single named image asset.
+ *
+ * (ERImageFormat lives in native_renderer.h — it is part of the backend blit contract.)
  */
 typedef struct
 {

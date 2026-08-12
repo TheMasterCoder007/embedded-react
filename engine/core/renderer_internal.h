@@ -194,6 +194,30 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h);
 void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
 
 /**
+ * @brief Copies a KNOWN-FULLY-OPAQUE source buffer in the given pixel format via the active backend.
+ *
+ * The caller guarantees every source pixel is opaque (the image registry's registration-time scan,
+ * or the format itself for RGB565). When the backend provides copy_rect_fmt and no engine-side
+ * compositing is pending (no inherited draw alpha, no scratch capture), the buffer is handed
+ * through in its source format as ONE backend call for the whole rect — on DMA2D-class hardware
+ * a single M2M(_PFC) transfer.
+ *
+ * @param[in] src     Pointer to the source pixel buffer in @p fmt layout.
+ * @param[in] stride  Row stride of the source buffer in bytes (of @p fmt).
+ * @param[in] fmt     Pixel format of src.
+ * @param[in] x       X coordinate of the destination rectangle.
+ * @param[in] y       Y coordinate of the destination rectangle.
+ * @param[in] w       Width of the region in pixels.
+ * @param[in] h       Height of the region in pixels.
+ *
+ * @return true when the blit was fully handled (including "fully clipped, nothing to draw").
+ *         false only for a non-ARGB source the backend path cannot take — the caller must then
+ *         expand rows on the CPU and emit them through er_blit_copy/er_blit_blend. ARGB8888
+ *         sources are always handled (they fall back to er_blit_copy internally).
+ */
+bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h);
+
+/**
  * @brief Blends a source buffer onto the framebuffer at a given global opacity via the active backend.
  *
  * @param[in] src     Pointer to the source pixel buffer (ARGB8888, premultiplied).

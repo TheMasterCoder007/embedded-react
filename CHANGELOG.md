@@ -24,6 +24,17 @@ See the README for the release process.
   that use it are written as ERPK version 2 (with 4-byte-aligned pixel records); packs without
   RGB565 images still emit version 1, so existing firmware keeps loading them.
 
+- Backends can take opaque image blits in the image's native format: a new optional
+  `copy_rect_fmt` callback on `EmbeddedRenderBackend` receives the source buffer, its pixel format
+  (`ERImageFormat`, now part of the public backend header), and the engine's guarantee that every
+  pixel is opaque — one whole-rect call, no per-pixel alpha inspection needed. On DMA2D-class
+  hardware that is a single M2M_PFC transfer; the bundled ESP32 RGB LCD backend implements it as a
+  straight row `memcpy` on its RGB565 framebuffer. Without the callback the engine keeps the CPU
+  expansion fallback, so existing backends are unaffected. This closes the gap where a 1:1 RGB565
+  background decayed into per-scanline CPU conversion plus one backend call per row — on a
+  format-aware backend a full-screen 16-bit background now costs the same single transfer as the
+  ARGB path, instead of ~1M conversions and one row blit per scanline.
+
 - For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
   art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
 

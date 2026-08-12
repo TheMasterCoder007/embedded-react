@@ -581,6 +581,61 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
     mark_dirty(x, y, w, h);
 }
 
+/** @brief Copies a KNOWN-FULLY-OPAQUE source in its native format into the framebuffer (replace).
+ *
+ *  The engine only routes buffers its registration-time opacity scan proved opaque (RGB565 is
+ *  opaque by construction), so there is no per-pixel alpha branch and no destination read. On the
+ *  RGB565 canonical framebuffer a 565 source row is a straight burst memcpy — the whole point of
+ *  the 16-bit bake: a full-screen background repaint is h row copies, not ~1M CPU conversions. */
+static void copy_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+{
+    (void)ctx;
+    flip_gate();
+    const int ox = x, oy = y;
+    if (!clip_rect(&x, &y, &w, &h))
+    {
+        return;
+    }
+    const int skip_x = x - ox;
+    const int skip_y = y - oy;
+    if (fmt == ER_IMG_RGB565)
+    {
+        for (int row = 0; row < h; row++)
+        {
+            const uint16_t* s =
+                (const uint16_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
+            fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+#if ER_LCD_FB_RGB565
+            memcpy(d, s, (size_t)w * sizeof(fbpx_t));
+#else
+            for (int col = 0; col < w; col++)
+            {
+                /* Expand 565 → opaque ARGB canonical pixel (bit replication, matching the engine). */
+                const uint32_t r5 = (s[col] >> 11) & 0x1FU;
+                const uint32_t g6 = (s[col] >> 5) & 0x3FU;
+                const uint32_t b5 = s[col] & 0x1FU;
+                d[col] = 0xFF000000U | (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8)
+                         | ((b5 << 3) | (b5 >> 2));
+            }
+#endif
+        }
+    }
+    else
+    {
+        for (int row = 0; row < h; row++)
+        {
+            const uint32_t* s =
+                (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
+            fbpx_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+            for (int col = 0; col < w; col++)
+            {
+                d[col] = fb_store(s[col]); /* opaque contract: no alpha inspection */
+            }
+        }
+    }
+    mark_dirty(x, y, w, h);
+}
+
 /** @brief Blends a premultiplied ARGB8888 buffer over the framebuffer at a global alpha. */
 static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
@@ -1085,6 +1140,7 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     static EmbeddedRenderBackend backend;
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
+    backend.copy_rect_fmt = copy_fmt_cb;
     backend.blend_rect = blend_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL; /* engine doesn't auto-present; the host calls er_esp32_lcd_present() */

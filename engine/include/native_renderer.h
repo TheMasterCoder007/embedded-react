@@ -30,6 +30,15 @@ extern "C"
      ---------------------------------------------------------------------------------------------------------------------*/
 
     /**
+     * @brief Pixel format of a source buffer handed to a backend blit (and of registered images).
+     */
+    typedef enum
+    {
+        ER_IMG_ARGB8888 = 0, /**< 32-bit premultiplied ARGB (0xAARRGGBB), 4 bytes per pixel. */
+        ER_IMG_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
+    } ERImageFormat;
+
+    /**
      * @brief Platform-supplied rendering callbacks.
      *
      * The host application fills this struct and passes it to embedded_renderer_set_backend().
@@ -74,6 +83,24 @@ extern "C"
 
         /** @brief Flush the strip begun by band_begin() to the panel (convert + DMA). */
         void (*band_flush)(void* ctx);
+
+        /*------------------------------------------------------------------------------------------------
+         - Format-aware opaque copy (optional). The engine hands a KNOWN-FULLY-OPAQUE source buffer to
+           the backend in its registered pixel format, as one call for the whole rect. Contract:
+             * fmt names src's pixel layout; src_stride_bytes is the row stride in BYTES of that format.
+             * Every source pixel is opaque — the engine only routes buffers its registration-time scan
+               (or the format itself, for RGB565) proved opaque. Replace destination pixels outright:
+               no per-pixel alpha inspection, no read-modify-write, no opacity pre-scan needed.
+             * On DMA2D-class hardware this maps to a single M2M(_PFC) transfer (e.g. FGPFCCR color
+               mode RGB565 with an ARGB8888/RGB565 output); on an RGB565 framebuffer a 565 source is
+               a plain row memcpy.
+           Leave NULL to keep the classic path: the engine expands non-ARGB sources on the CPU and
+           emits ARGB8888 through copy_rect — behaviour is then unchanged.
+         ------------------------------------------------------------------------------------------------*/
+
+        /** @brief Copy a fully opaque src in the given format into the framebuffer (replace). */
+        void (*copy_rect_fmt)(
+            const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx);
     } EmbeddedRenderBackend;
 
     /**
@@ -126,11 +153,11 @@ extern "C"
      */
     typedef struct EmbeddedRenderWorkers
     {
-        int count;                                /**< Total workers including worker 0 (the render thread). */
-        void (*dispatch)(int worker, void* ctx);  /**< Signal worker k to run er_render_worker_exec(k). */
-        void (*sync)(void* ctx);                  /**< Wait for all dispatched workers to finish. */
-        int (*worker_id)(void);                   /**< Calling thread's worker index. */
-        void* ctx;                                /**< Opaque host context passed to dispatch/sync. */
+        int count;                               /**< Total workers including worker 0 (the render thread). */
+        void (*dispatch)(int worker, void* ctx); /**< Signal worker k to run er_render_worker_exec(k). */
+        void (*sync)(void* ctx);                 /**< Wait for all dispatched workers to finish. */
+        int (*worker_id)(void);                  /**< Calling thread's worker index. */
+        void* ctx;                               /**< Opaque host context passed to dispatch/sync. */
     } EmbeddedRenderWorkers;
 
     /**

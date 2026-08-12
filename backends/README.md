@@ -1,7 +1,8 @@
 # backends
 
-Reference implementations of the `EmbeddedRenderBackend` struct (five function pointers:
-`fill_rect`, `copy_rect`, `blend_rect`, `wait`, `frame_ready`). The engine is portable;
+Reference implementations of the `EmbeddedRenderBackend` struct (five core function pointers:
+`fill_rect`, `copy_rect`, `blend_rect`, `wait`, `frame_ready` — plus optional extensions such as
+banded rendering and the `copy_rect_fmt` opaque native-format blit). The engine is portable;
 backends are not. Each folder is one rendering API or peripheral, not one chip — multiple
 chips can share a backend (any STM32 with DMA2D uses `dma2d/`; any board with no GPU
 falls back to `software/`).

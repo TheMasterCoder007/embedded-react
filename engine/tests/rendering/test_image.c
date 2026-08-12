@@ -42,6 +42,8 @@ typedef struct
     int fb_h;        /**< Framebuffer height in pixels. */
     int blend_calls; /**< Total blend_rect calls received. */
     int copy_calls;  /**< Total copy_rect calls received. */
+    int fmt_calls;   /**< Total copy_rect_fmt calls received. */
+    int last_fmt;    /**< Format of the most recent copy_rect_fmt call (-1 = none). */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -169,6 +171,44 @@ static void reset(TestCtx* t)
     memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
     t->blend_calls = 0;
     t->copy_calls = 0;
+    t->fmt_calls = 0;
+    t->last_fmt = -1;
+}
+
+/** @brief Expands an RGB565 pixel to opaque ARGB8888 by bit replication (mirrors the engine). */
+static uint32_t expand565(uint16_t p)
+{
+    const uint32_t r5 = (p >> 11) & 0x1Fu;
+    const uint32_t g6 = (p >> 5) & 0x3Fu;
+    const uint32_t b5 = p & 0x1Fu;
+    return 0xFF000000u | (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8) | ((b5 << 3) | (b5 >> 2));
+}
+
+/**
+ * @brief Backend copy_rect_fmt that consumes the source in its native format.
+ *
+ * Emulates a format-converting blitter (DMA2D M2M_PFC): RGB565 sources are expanded per pixel on
+ * write, ARGB sources are written verbatim — no alpha inspection, per the opaque-source contract.
+ */
+static void copy_fmt_cb(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+{
+    TestCtx* t = ctx;
+    t->fmt_calls++;
+    t->last_fmt = (int)fmt;
+    for (int row = 0; row < h; row++)
+    {
+        const uint8_t* src_row = (const uint8_t*)src + (size_t)row * (size_t)stride;
+        for (int col = 0; col < w; col++)
+        {
+            const int px = x + col;
+            const int py = y + row;
+            if (px < 0 || px >= t->fb_w || py < 0 || py >= t->fb_h)
+                continue;
+            const uint32_t p =
+                (fmt == ER_IMG_RGB565) ? expand565(((const uint16_t*)src_row)[col]) : ((const uint32_t*)src_row)[col];
+            t->fb[py * t->fb_w + px] = p;
+        }
+    }
 }
 
 /**
@@ -219,7 +259,7 @@ static ERProps props_default(void)
 int main(void)
 {
     static uint32_t fb[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H, 0, 0};
+    TestCtx tc = {fb, FB_W, FB_H, 0, 0, 0, -1};
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
     embedded_renderer_set_backend(&be);
 
@@ -690,6 +730,148 @@ int main(void)
 
         if (px(&tc, 0, 0) != 0xFFFF00FF)
             return fail("rgb565 tint: (0,0) should be opaque magenta");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* =======================================================================
+     * copy_rect_fmt backend: opaque sources must reach the backend in their
+     * native format as ONE whole-rect call (the DMA2D M2M_PFC path) — never
+     * row-expanded on the CPU, never per-pixel scanned via copy_rect.
+     * ======================================================================= */
+    EmbeddedRenderBackend be_fmt = be;
+    be_fmt.copy_rect_fmt = copy_fmt_cb;
+    embedded_renderer_set_backend(&be_fmt); /* resets the image registry: re-register below */
+
+    static const uint16_t img565b[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
+    static const uint32_t img_tl2[4] = {0xFFFF0000, 0x8000FF00, 0xFF0000FF, 0xFFFFFF00};
+    er_image_load("test2x2", img2x2, 2, 2);
+    er_image_load("translucent2x2", img_tl2, 2, 2);
+    er_image_load_rgb565("test565", img565b, 2, 2);
+
+    /* -----------------------------------------------------------------------
+     * RGB565 1:1 — one copy_rect_fmt call carrying raw 565 rows; no CPU
+     * expansion (copy_rect stays untouched), no blending.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2;
+        ip.height = 2;
+        strncpy(ip.image_name, "test565", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.fmt_calls != 1)
+            return fail("fmt backend rgb565 1:1: expected exactly one copy_rect_fmt call");
+        if (tc.last_fmt != (int)ER_IMG_RGB565)
+            return fail("fmt backend rgb565 1:1: source should arrive as RGB565");
+        if (tc.copy_calls != 0)
+            return fail("fmt backend rgb565 1:1: copy_rect must not be used (no CPU row expansion)");
+        if (tc.blend_calls != 0)
+            return fail("fmt backend rgb565 1:1: blend_rect must not be used");
+        if (px(&tc, 0, 0) != 0xFFFF0000 || px(&tc, 1, 0) != 0xFF00FF00 || px(&tc, 0, 1) != 0xFF0000FF
+            || px(&tc, 1, 1) != 0xFFFFFFFF)
+            return fail("fmt backend rgb565 1:1: expanded pixels wrong");
+
+        /* Scaled draw: sampling is inherently per-pixel, so the CPU path (copy_rect rows)
+         * is expected — the hook is only for the 1:1 pass-through. */
+        reset(&tc);
+        ip.width = 4;
+        ip.height = 4;
+        er_node_set_props(img_node, &ip);
+        er_commit();
+
+        if (tc.fmt_calls != 0)
+            return fail("fmt backend rgb565 scaled: copy_rect_fmt must not be used for scaling");
+        if (tc.copy_calls == 0)
+            return fail("fmt backend rgb565 scaled: expected the CPU copy path");
+        if (px(&tc, 0, 0) != 0xFFFF0000 || px(&tc, 3, 3) != 0xFFFFFFFF)
+            return fail("fmt backend rgb565 scaled: pixels wrong");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Opaque ARGB 1:1 — also routed through copy_rect_fmt (the opacity
+     * guarantee lets the backend skip its per-pixel alpha scan).
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2;
+        ip.height = 2;
+        strncpy(ip.image_name, "test2x2", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.fmt_calls != 1)
+            return fail("fmt backend argb 1:1: expected exactly one copy_rect_fmt call");
+        if (tc.last_fmt != (int)ER_IMG_ARGB8888)
+            return fail("fmt backend argb 1:1: source should arrive as ARGB8888");
+        if (tc.copy_calls != 0)
+            return fail("fmt backend argb 1:1: copy_rect must not be used");
+        if (px(&tc, 0, 0) != 0xFFFF0000 || px(&tc, 1, 1) != 0xFFFFFF00)
+            return fail("fmt backend argb 1:1: pixels wrong");
+
+        er_tree_remove_child(root, img_node);
+        er_node_destroy(img_node);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Translucent image — must NOT take the opaque hook; blend as before.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        er_node_set_props(root, &rp);
+
+        ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 2;
+        ip.height = 2;
+        strncpy(ip.image_name, "translucent2x2", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        er_node_set_props(img_node, &ip);
+
+        er_tree_append_child(root, img_node);
+        er_tree_set_root(root);
+        er_commit();
+
+        if (tc.fmt_calls != 0)
+            return fail("fmt backend translucent: copy_rect_fmt must not receive a non-opaque source");
+        if (tc.blend_calls == 0)
+            return fail("fmt backend translucent: expected blend_rect");
 
         er_tree_remove_child(root, img_node);
         er_node_destroy(img_node);
