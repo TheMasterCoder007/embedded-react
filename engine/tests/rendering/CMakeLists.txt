@@ -56,6 +56,10 @@ target_link_libraries(test_damage_rects PRIVATE embedded-react)
 target_include_directories(test_damage_rects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_damage_rects COMMAND test_damage_rects)
 
+add_executable(test_modal_damage test_modal_damage.c)
+target_link_libraries(test_modal_damage PRIVATE embedded-react)
+add_test(NAME rendering_modal_damage COMMAND test_modal_damage)
+
 add_executable(test_perf test_perf.c)
 target_link_libraries(test_perf PRIVATE embedded-react)
 add_test(NAME rendering_perf COMMAND test_perf)

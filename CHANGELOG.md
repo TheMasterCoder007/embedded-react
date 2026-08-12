@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Fixed
 
+- A `<Modal>` whose style did not cover the whole screen drew its backdrop only behind itself: the
+  rest of the page was never dimmed, and closing the modal left the dimming that had been drawn.
+  The backdrop always covers the screen, so it is now tracked that way. Modals styled to fill the
+  screen — which is what the demos and the docs show — are unaffected.
+
 - Borders with a per-edge width or color, and dashed or dotted borders, ignored `borderRadius` and
   squared off every corner: they were drawn as four straight rectangles, which then overhung the
   rounded background. They now follow the same corners as the rest of the node, and a dash pattern
