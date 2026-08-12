@@ -204,7 +204,7 @@ const THEMES = {
   },
 };
 
-// Full-screen centring overlay for the settings sheet — see the <Modal> below for why it is explicit.
+// Full-screen centring overlay for the settings sheet
 const OVERLAY = {
   position: 'absolute',
   left: 0,

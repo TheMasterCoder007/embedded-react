@@ -218,8 +218,8 @@ struct ERNode
     ERNodeType type;
     bool in_use;
     bool dirty;
-    bool source_dirty; /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
-                          dirty-rect accumulation. */
+    bool source_dirty;    /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
+                             dirty-rect accumulation. */
     uint32_t painted_seq; /**< er_commit sequence that last painted this node. Render workers record it during the
                              paint traversal (an idempotent same-value write, safe when a node straddles two
                              workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
@@ -269,6 +269,11 @@ struct ERNode
     bool is_focused;
     /* Modal: visibility and backdrop color (stored here to avoid growing ERViewProps). */
     uint8_t modal_visible;
+    /* Set while a backdrop is on screen. The backdrop covers the whole ROOT, not this node's box, so
+     * damage tracking has to know the modal painted further than it measures — and it still has to
+     * know that for the one commit that HIDES the modal, when modal_visible is already 0 but the
+     * scrim is still on the framebuffer waiting to be erased. */
+    uint8_t modal_scrim_shown;
     uint32_t modal_backdrop_color;
     /* Vector (ER_NODE_VECTOR): index into the vector op-tape/paint storage pool, or -1 if none. */
     int16_t vector_slot;

@@ -1365,6 +1365,19 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         else
         {
             int ux = px, uy = py, uw = w, uh = h;
+            if (n->type == ER_NODE_MODAL && n->modal_visible)
+            {
+                /* The backdrop covers the root, so a host flushing er_get_dirty_rect() has to send
+                 * all of it — the node's own box would leave the scrim's edges untransferred. */
+                const ERNode* rt = er_get_root_node();
+                if (rt)
+                {
+                    ux = rt->computed.x;
+                    uy = rt->computed.y;
+                    uw = rt->computed.w;
+                    uh = rt->computed.h;
+                }
+            }
             if (n->type == ER_NODE_VECTOR && n->vec_has_dirty)
             {
                 /* Match the sub-region damage so the engine's dirty-rect tracker stays tight too. */
@@ -1470,6 +1483,7 @@ static void render_node_content(ERNode* n, bool should_render, int px, int py, i
                 {
                     const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
+                    n->modal_scrim_shown = 1U;
                 }
                 const ERViewProps* vp = &n->props.view;
 #if ERUI_GRADIENT
@@ -3446,6 +3460,21 @@ void er_commit(void)
                                    || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
+            if (n->type == ER_NODE_MODAL && (n->modal_visible || n->modal_scrim_shown))
+            {
+                /* A modal's backdrop covers the whole ROOT, not its own box, so that is what it
+                 * repaints — measuring it by node_screen_rect would scissor the scrim to the box and
+                 * leave the rest of the page uncovered (or, on hide, still scrimmed). The scrim flag
+                 * carries the hide case, where modal_visible has already gone but the old scrim is
+                 * still on screen; it is cleared here because this damage is what erases it.
+                 *
+                 * Reached only when the modal is source_dirty or moved, so a steady on-screen modal
+                 * still costs nothing and a change to one of its CHILDREN keeps its own tight damage. */
+                add_damage(&dmg, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0, rb_x0, rb_y0, rb_x1, rb_y1);
+                if (!n->modal_visible)
+                    n->modal_scrim_shown = 0U;
+                continue;
+            }
             if (n->type == ER_NODE_VECTOR && n->vec_has_dirty && !moved)
             {
                 /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
