@@ -155,6 +155,35 @@ static uint32_t at(int x, int y)
     return s_fb[y * SW + x] & 0xFFFFFFu;
 }
 
+/**
+ * @brief Asserts er_get_dirty_rect() spans the whole root.
+ *
+ * A scrim covers the screen, so the commits that raise and drop one have to REPORT the screen, not
+ * just the modal's box. The framebuffer being right is not enough: a partial-update host flushes only
+ * the reported rect, so anything outside it stays on the panel — scrim pixels that never wash off.
+ * This is the single-buffer path; the multi-buffer case rewrites the rect wholesale after render.
+ *
+ * @param[in] when  Label for the failure message.
+ *
+ * @return 0 when the rect spans the root, 1 otherwise.
+ */
+static int dirty_rect_spans_root(const char* when)
+{
+    ERRect d;
+    if (!er_get_dirty_rect(&d))
+    {
+        fprintf(stderr, "  %s: er_get_dirty_rect() reported nothing\n", when);
+        return 1;
+    }
+    if (d.x > 0 || d.y > 0 || d.x + d.w < SW || d.y + d.h < SH)
+    {
+        fprintf(
+            stderr, "  %s: dirty rect (%d,%d %dx%d) does not span the %dx%d root\n", when, d.x, d.y, d.w, d.h, SW, SH);
+        return 1;
+    }
+    return 0;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Scene
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -403,10 +432,14 @@ int main(void)
         fprintf(stderr, "  (%d,%d) still %06X with the modal shown\n", px_x, px_y, unscrimmed);
         return fail("a non-full-screen modal did not scrim the page outside its own box");
     }
+    if (dirty_rect_spans_root("show"))
+        return fail("raising a scrim did not report a full-root dirty rect");
 
     s_modal_p.modal_visible = 0;
     er_node_set_props(s_modal, &s_modal_p);
     frame_distinct();
+    if (dirty_rect_spans_root("hide"))
+        return fail("dropping a scrim did not report a full-root dirty rect");
     frame_distinct();
     if (at(px_x, px_y) != unscrimmed)
     {

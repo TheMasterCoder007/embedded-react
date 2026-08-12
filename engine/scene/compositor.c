@@ -1480,10 +1480,11 @@ static void render_node_content(ERNode* n, bool should_render, int px, int py, i
                 /* Draw backdrop over the entire root before the modal's own background. */
                 ERNode* root = er_get_root_node();
                 if (root)
+                {
                     const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
-                    if (er_render_worker_id() == 0)
-                        n->modal_scrim_shown = 1U;
+                    n->modal_scrim_shown = 1U;
+                }
                 const ERViewProps* vp = &n->props.view;
 #if ERUI_GRADIENT
                 er_gradient_render(vp, px, py, w, h);
@@ -3470,6 +3471,11 @@ void er_commit(void)
                  * Reached only when the modal is source_dirty or moved, so a steady on-screen modal
                  * still costs nothing and a change to one of its CHILDREN keeps its own tight damage. */
                 add_damage(&dmg, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0, rb_x0, rb_y0, rb_x1, rb_y1);
+                /* Report it too, or a partial-update host flushes less than was repainted and leaves
+                 * scrim on the panel. It has to happen HERE rather than in render_tree's accumulator:
+                 * on the hide commit the modal is display:none, so the walk never reaches it and
+                 * nothing would contribute at all. */
+                union_dirty_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
                 if (!n->modal_visible)
                     n->modal_scrim_shown = 0U;
                 continue;
