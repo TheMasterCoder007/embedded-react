@@ -188,6 +188,16 @@ static int test_image_format_and_opacity(void)
     e = image_registry_get("bg565");
     CHECK(e && e->format == ER_IMG_ARGB8888 && !e->opaque, "format: replace re-scans opacity and format");
 
+    /* An out-of-range format must be rejected before it decides the buffer's element size. */
+    CHECK(!image_registry_store("badfmt", opaque_px, 2, 2, (ERImageFormat)7), "format: unknown format rejected");
+    CHECK(image_registry_get("badfmt") == NULL, "format: rejected format stored nothing");
+
+    /* RGB565 buffers are read as uint16_t: a misaligned pointer must be rejected up front. */
+    const uint8_t* misaligned = (const uint8_t*)rgb565_px + 1;
+    CHECK(!image_registry_store("badalign", misaligned, 1, 1, ER_IMG_RGB565),
+          "format: misaligned RGB565 buffer rejected");
+    CHECK(image_registry_get("badalign") == NULL, "format: rejected alignment stored nothing");
+
     return s_fail;
 }
 
