@@ -183,6 +183,64 @@ int main(void)
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
     embedded_renderer_set_backend(&be);
 
+    /* --- er_rrect_clamp_radii is total: no input produces a negative radius ---
+     *
+     * Three call sites now share this helper to agree on one silhouette, so its contract matters more
+     * than the arithmetic. The mixed path multiplies by the radius while scaling an overlapping pair
+     * down, which would carry a negative straight through — and a stray negative would also flip the
+     * uniform/mixed choice itself. An app can reach that: borderTopLeftRadius 10 alongside
+     * borderRadius -5 resolves to (10, -5, -5, -5). */
+    {
+        struct
+        {
+            int w, h, tl, tr, br, bl;
+        } cases[] = {
+            {40, 40, -5, -5, -5, -5}, /* uniform negative */
+            {40, 40, 10, -5, -5, -5}, /* the reachable mixed-with-negative case */
+            {40, 40, -8, 30, 30, -8}, /* negatives paired with an overlapping run */
+            {40, 40, 60, 60, 60, 60}, /* uniform, far past the box */
+            {40, 40, 60, 10, 60, 10}, /* mixed, far past the box */
+            {0, 40, 10, 10, 10, 10},  /* degenerate width */
+            {40, 0, 10, 20, 30, 40},  /* degenerate height */
+            {-4, -4, 10, 20, 30, 40}, /* negative box */
+            {1, 1, 10, 10, 10, 10},   /* one-pixel box */
+            {40, 40, 0, 0, 0, 0},     /* already square */
+        };
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        {
+            int tl = cases[i].tl, tr = cases[i].tr, br = cases[i].br, bl = cases[i].bl;
+            er_rrect_clamp_radii(cases[i].w, cases[i].h, &tl, &tr, &br, &bl);
+            if (tl < 0 || tr < 0 || br < 0 || bl < 0)
+            {
+                printf("  w=%d h=%d in(%d,%d,%d,%d) -> out(%d,%d,%d,%d)\n",
+                       cases[i].w,
+                       cases[i].h,
+                       cases[i].tl,
+                       cases[i].tr,
+                       cases[i].br,
+                       cases[i].bl,
+                       tl,
+                       tr,
+                       br,
+                       bl);
+                return fail("clamp_radii: returned a negative radius");
+            }
+            /* A radius may never exceed the box either, or a row's span inverts. */
+            const int cap = (cases[i].w > cases[i].h) ? cases[i].w : cases[i].h;
+            if (cases[i].w > 0 && cases[i].h > 0 && (tl > cap || tr > cap || br > cap || bl > cap))
+                return fail("clamp_radii: returned a radius larger than the box");
+            /* Opposing pairs must fit along their shared edge, which is the whole point. */
+            if (cases[i].w > 0 && cases[i].h > 0
+                && (tl + tr > cases[i].w || bl + br > cases[i].w || tl + bl > cases[i].h || tr + br > cases[i].h))
+                return fail("clamp_radii: an opposing pair still overlaps");
+            if (cases[i].w <= 0 || cases[i].h <= 0)
+            {
+                if (tl != 0 || tr != 0 || br != 0 || bl != 0)
+                    return fail("clamp_radii: a box with no area kept its corner radii");
+            }
+        }
+    }
+
     /* --- transparent color: no fill_rect calls emitted --- */
     er_rrect_fill(0x00FF0000, 0, 0, 20, 20, 4);
     if (tc.fills != 0)
@@ -258,6 +316,336 @@ int main(void)
         return fail("border ring: top-row center pixel should be border color");
     if (px(&tc, 2, 0) != 0)
         return fail("border ring: pixel outside outer arc should be empty");
+
+    /* The assertions above cover the OPAQUE background path, which still fills the whole shape in
+     * the border colour and paints the background back over the inset — the cheap route, and the
+     * one this file has always exercised. Everything below covers the ring the non-opaque cases
+     * take instead. */
+
+    /* --- transparent background: a border must leave a RING, not a solid blob ---
+     *
+     * The regression: er_rrect_fill_bordered used to fill the whole shape in the border colour and
+     * rely on the background fill to carve the interior back out — but er_rrect_fill returns early
+     * on a zero-alpha colour, so a View with a border and no backgroundColor (React Native's
+     * default) rendered as a solid block of border colour. fill_cb overwrites rather than
+     * composites, so an untouched interior pixel reads as exactly 0 here. */
+    reset(&tc);
+    er_rrect_fill_bordered(0x00000000, 0xFFFF0000, 4, 0, 0, 40, 40, 10);
+    if (px(&tc, 20, 20) != 0)
+        return fail("transparent bg + border: the interior was painted (solid blob, not a ring)");
+    if (px(&tc, 0, 20) != 0xFFFF0000)
+        return fail("transparent bg + border: the left band is not border colour");
+    if (px(&tc, 39, 20) != 0xFFFF0000)
+        return fail("transparent bg + border: the right band is not border colour");
+    if (px(&tc, 20, 0) != 0xFFFF0000)
+        return fail("transparent bg + border: the top band is not border colour");
+    if (px(&tc, 4, 20) != 0)
+        return fail("transparent bg + border: the band is thicker than borderWidth");
+    if (px(&tc, 0, 0) != 0)
+        return fail("transparent bg + border: the rounded corner was filled");
+    /* The whole interior, inset clear of the band's anti-aliased inner edge, must be untouched. */
+    for (int yy = 7; yy < 33; yy++)
+        for (int xx = 7; xx < 33; xx++)
+            if (px(&tc, xx, yy) != 0)
+                return fail("transparent bg + border: interior pixels were painted");
+
+    /* --- the ring never paints outside the silhouette a solid fill would cover ---
+     *
+     * Same box, once filled solid and once stroked: every pixel the fill leaves empty must stay
+     * empty in the ring too, or the border overhangs its own rounded corner. */
+    {
+        static uint8_t solid[FB_W * FB_H];
+        reset(&tc);
+        er_rrect_fill(0xFF000000, 8, 8, 44, 36, 12);
+        for (int i = 0; i < FB_W * FB_H; i++)
+            solid[i] = (uint8_t)(tc.fb[i] != 0);
+
+        reset(&tc);
+        er_rrect_fill_ring(0xFF000000, 8, 8, 44, 36, 12, 12, 12, 12, 5);
+        if (tc.out_of_bounds != 0)
+            return fail("ring: produced out-of-bounds fills");
+        for (int yy = 0; yy < FB_H; yy++)
+            for (int xx = 0; xx < FB_W; xx++)
+                if (tc.fb[yy * FB_W + xx] != 0 && !solid[yy * FB_W + xx])
+                    return fail("ring: painted a pixel outside the solid fill's silhouette");
+        /* ...and it really is hollow. */
+        if (px(&tc, 30, 26) != 0)
+            return fail("ring: the interior was painted");
+    }
+
+    /* --- per-corner radii: only the rounded corners are cut --- */
+    reset(&tc);
+    er_rrect_fill_ring(0xFF00FF00, 0, 0, 40, 40, 16, 0, 16, 0, 4);
+    if (px(&tc, 0, 0) != 0)
+        return fail("per-corner ring: the rounded top-left corner was filled");
+    if (px(&tc, 39, 0) != 0xFF00FF00)
+        return fail("per-corner ring: the square top-right corner was cut");
+    if (px(&tc, 0, 39) != 0xFF00FF00)
+        return fail("per-corner ring: the square bottom-left corner was cut");
+    if (px(&tc, 39, 39) != 0)
+        return fail("per-corner ring: the rounded bottom-right corner was filled");
+    if (px(&tc, 20, 20) != 0)
+        return fail("per-corner ring: the interior was painted");
+
+    /* --- a band thick enough to swallow the interior fills the whole shape --- */
+    reset(&tc);
+    er_rrect_fill_ring(0xFF123456, 0, 0, 20, 20, 6, 6, 6, 6, 40);
+    if (px(&tc, 10, 10) != 0xFF123456)
+        return fail("over-thick ring: the shape was not filled solid");
+    if (px(&tc, 0, 0) != 0)
+        return fail("over-thick ring: the rounded corner was filled");
+
+    /* --- per-edge borders follow the corner radius ---
+     *
+     * The regression: per-edge widths/colours were drawn as four straight rects, so the border
+     * squared off every corner no matter what borderRadius said. The band is now stroked through the
+     * same rounded geometry, and must stay inside the silhouette a solid fill would cover. */
+    {
+        static uint8_t solid[FB_W * FB_H];
+        reset(&tc);
+        er_rrect_fill(0xFF000000, 0, 0, 48, 40, 14);
+        for (int i = 0; i < FB_W * FB_H; i++)
+            solid[i] = (uint8_t)(tc.fb[i] != 0);
+
+        reset(&tc);
+        {
+            /* Thin sides, thick top and bottom, one colour. */
+            const ERRRectBorder b = {2, 8, 2, 8, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+            er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &b);
+        }
+        if (tc.out_of_bounds != 0)
+            return fail("per-edge ring: produced out-of-bounds fills");
+        for (int yy = 0; yy < FB_H; yy++)
+            for (int xx = 0; xx < FB_W; xx++)
+                if (tc.fb[yy * FB_W + xx] != 0 && !solid[yy * FB_W + xx])
+                    return fail("per-edge ring: the border escaped the rounded silhouette");
+        /* Each edge is as thick as it was asked to be, measured at the box's mid-lines. */
+        if (px(&tc, 0, 20) == 0 || px(&tc, 1, 20) == 0)
+            return fail("per-edge ring: the 2px left edge is missing");
+        if (px(&tc, 2, 20) != 0)
+            return fail("per-edge ring: the left edge is thicker than borderLeftWidth");
+        if (px(&tc, 24, 7) == 0)
+            return fail("per-edge ring: the 8px top edge is missing");
+        if (px(&tc, 24, 8) != 0)
+            return fail("per-edge ring: the top edge is thicker than borderTopWidth");
+    }
+
+    /* --- each edge keeps its own colour --- */
+    reset(&tc);
+    {
+        const ERRRectBorder b = {5, 5, 5, 5, 0xFFFFD54F, 0xFFE57373, 0xFF81C784, 0xFF64B5F6};
+        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &b);
+    }
+    if (px(&tc, 24, 0) != 0xFFE57373)
+        return fail("per-edge colours: the top edge is not its own colour");
+    if (px(&tc, 24, 47) != 0xFF64B5F6)
+        return fail("per-edge colours: the bottom edge is not its own colour");
+    if (px(&tc, 0, 24) != 0xFFFFD54F)
+        return fail("per-edge colours: the left edge is not its own colour");
+    if (px(&tc, 47, 24) != 0xFF81C784)
+        return fail("per-edge colours: the right edge is not its own colour");
+
+    /* --- adjacent edge colours meet on a corner diagonal ---
+     *
+     * The regression: the owning edge was picked per ROW — top and bottom claimed their full width —
+     * so two colours met on a hard horizontal step instead of a mitre. The split now follows the line
+     * the two band widths imply, which is 45 degrees when they are equal.
+     */
+    {
+        const uint32_t TOP = 0xFFE53935, RIGHT = 0xFF43A047, BOT = 0xFF1E88E5, LEFT = 0xFFFDD835;
+
+        /* Square corners, equal widths: the mitre is the 45-degree diagonal. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {10, 10, 10, 10, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+        }
+        if (px(&tc, 8, 2) != TOP)
+            return fail("square mitre: above the diagonal is not the top colour");
+        if (px(&tc, 2, 8) != LEFT)
+            return fail("square mitre: below the diagonal is not the left colour");
+        if (px(&tc, 51, 2) != TOP)
+            return fail("square mitre: top-right corner is not the top colour above the diagonal");
+        if (px(&tc, 57, 8) != RIGHT)
+            return fail("square mitre: top-right corner is not the right colour below the diagonal");
+        if (px(&tc, 2, 51) != LEFT)
+            return fail("square mitre: bottom-left corner is not the left colour");
+        if (px(&tc, 8, 57) != BOT)
+            return fail("square mitre: bottom-left corner is not the bottom colour");
+
+        /* Rounded corners, equal widths: the mitre becomes a radial line through the arc. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {6, 6, 6, 6, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 20, 20, 20, 20, &b);
+        }
+        if (px(&tc, 18, 1) != TOP)
+            return fail("rounded mitre: the top of the arc is not the top colour");
+        if (px(&tc, 1, 18) != LEFT)
+            return fail("rounded mitre: the left of the arc is not the left colour");
+
+        /* Unequal widths tilt the mitre toward the thinner edge, so a thick top owns more of the
+         * corner. With top 16 and left 4 the dividing line runs (0,0) to (4,16): at row 6 it sits at
+         * x = 1.5, so x = 3 is still the top's and x = 0 is the left's. */
+        reset(&tc);
+        {
+            const ERRRectBorder b = {4, 16, 4, 16, LEFT, TOP, RIGHT, BOT, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+        }
+        if (px(&tc, 3, 6) != TOP)
+            return fail("tilted mitre: a thick top did not claim its side of the diagonal");
+        if (px(&tc, 0, 6) != LEFT)
+            return fail("tilted mitre: a thin left lost its side of the diagonal");
+
+#if ERUI_BORDER_AA
+        /* The seam itself is anti-aliased. Every other edge here is, so a hard mitre staircases
+         * badly at 45 degrees and reads as the two colours interlocking. Pure red against pure blue
+         * makes the ramp checkable: the pixel the diagonal passes through is a half-and-half mix,
+         * and it steps exactly one column per row. */
+        reset(&tc);
+        {
+            const uint32_t RED = 0xFFFF0000, BLUE = 0xFF0000FF;
+            const ERRRectBorder b = {12, 12, 12, 12, BLUE, RED, RED, BLUE, 0};
+            er_rrect_fill_ring_edges(0, 0, 48, 48, 0, 0, 0, 0, &b);
+            for (int d = 2; d <= 8; d++)
+            {
+                const uint32_t seam = px(&tc, d, d);
+                const uint32_t r = (seam >> 16) & 0xFFu;
+                const uint32_t bch = seam & 0xFFu;
+                if (r < 100 || r > 155 || bch < 100 || bch > 155)
+                    return fail("mitre AA: the seam pixel is not a blend of the two edge colours");
+                if (px(&tc, d - 1, d) != BLUE)
+                    return fail("mitre AA: the pixel before the seam is not the left colour");
+                if (px(&tc, d + 1, d) != RED)
+                    return fail("mitre AA: the pixel after the seam is not the top colour");
+            }
+        }
+#endif
+    }
+
+    /* --- a bottom-only rule follows the bottom corners and leaves the rest alone --- */
+    reset(&tc);
+    {
+        const ERRRectBorder b = {0, 0, 0, 6, 0, 0, 0, 0xFF4DD0E1};
+        er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &b);
+    }
+    if (px(&tc, 24, 0) != 0 || px(&tc, 0, 20) != 0)
+        return fail("bottom-only rule: painted an edge that has no width");
+    if (px(&tc, 24, 39) != 0xFF4DD0E1)
+        return fail("bottom-only rule: the bottom edge is missing");
+    if (px(&tc, 0, 39) != 0)
+        return fail("bottom-only rule: the underline squared off the bottom-left corner");
+
+    /* --- transparent edge colours draw nothing (the borderWidth-as-spacing trick) --- */
+    reset(&tc);
+    {
+        const ERRRectBorder b = {8, 8, 8, 8, 0, 0, 0, 0};
+        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &b);
+    }
+    if (tc.fills != 0)
+        return fail("transparent edges: emitted fills");
+
+    /* --- dashed / dotted borders run around the corners ---
+     *
+     * The regression: the dash pattern was stepped along x or y over four straight rects, so it both
+     * ignored the radius and stopped dead at each corner. It now steps by arc length around the
+     * rounded perimeter. */
+    {
+        static uint8_t solid[FB_W * FB_H];
+        const int bx = 4, by = 4, bw_ = 56, bh = 48, rad = 16;
+
+        reset(&tc);
+        er_rrect_fill(0xFF000000, bx, by, bw_, bh, rad);
+        for (int i = 0; i < FB_W * FB_H; i++)
+            solid[i] = (uint8_t)(tc.fb[i] != 0);
+
+        for (uint8_t style = 1; style <= 2; style++)
+        {
+            reset(&tc);
+            {
+                const ERRRectBorder b = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, style};
+                er_rrect_fill_ring_edges(bx, by, bw_, bh, rad, rad, rad, rad, &b);
+            }
+            if (tc.out_of_bounds != 0)
+                return fail("dashed border: produced out-of-bounds fills");
+
+            int painted = 0;
+            int corner_on = 0;
+            for (int yy = 0; yy < FB_H; yy++)
+            {
+                for (int xx = 0; xx < FB_W; xx++)
+                {
+                    if (tc.fb[yy * FB_W + xx] == 0)
+                        continue;
+                    painted++;
+                    /* THE regression check: a straight dash rect spills past the rounded corner. */
+                    if (!solid[yy * FB_W + xx])
+                        return fail("dashed border: a dash escaped the rounded silhouette");
+                    if (xx < bx + rad && yy < by + rad)
+                        corner_on++;
+                }
+            }
+            if (painted == 0)
+                return fail("dashed border: nothing was painted");
+
+            /* The solid ring of the same box, for the two ratios below. */
+            reset(&tc);
+            {
+                const ERRRectBorder b = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0};
+                er_rrect_fill_ring_edges(bx, by, bw_, bh, rad, rad, rad, rad, &b);
+            }
+            int solid_ring = 0;
+            int solid_corner = 0;
+            for (int yy = 0; yy < FB_H; yy++)
+                for (int xx = 0; xx < FB_W; xx++)
+                    if (tc.fb[yy * FB_W + xx] != 0)
+                    {
+                        solid_ring++;
+                        if (xx < bx + rad && yy < by + rad)
+                            solid_corner++;
+                    }
+            if (painted >= solid_ring)
+                return fail("dashed border: painted as much as a solid ring (no gaps)");
+            /* The arc carries the pattern rather than being skipped or filled straight through: the
+             * corner quarter must hold both painted and unpainted band pixels. */
+            if (corner_on == 0)
+                return fail("dashed border: the corner arc carries no dashes");
+            if (corner_on >= solid_corner)
+                return fail("dashed border: the corner arc was painted solid, not dashed");
+        }
+    }
+
+    /* --- a dash pattern with no radius still steps along the straight edges --- */
+    reset(&tc);
+    {
+        const ERRRectBorder b = {2, 2, 2, 2, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 1};
+        er_rrect_fill_ring_edges(0, 0, 60, 40, 0, 0, 0, 0, &b);
+    }
+    {
+        int on_run = 0, gaps = 0;
+        for (int xx = 0; xx < 60; xx++)
+        {
+            if (px(&tc, xx, 0) != 0)
+            {
+                on_run++;
+            }
+            else if (on_run > 0)
+            {
+                gaps++;
+                on_run = 0;
+            }
+        }
+        if (gaps == 0)
+            return fail("square dashed border: the top edge has no gaps");
+    }
+
+    /* --- degenerate inputs draw nothing rather than misbehaving --- */
+    reset(&tc);
+    er_rrect_fill_ring(0x00FF0000, 0, 0, 30, 30, 8, 8, 8, 8, 3); /* transparent colour */
+    er_rrect_fill_ring(0xFFFF0000, 0, 0, 30, 30, 8, 8, 8, 8, 0); /* zero-width band */
+    er_rrect_fill_ring(0xFFFF0000, 0, 0, 0, 30, 8, 8, 8, 8, 3);  /* empty box */
+    if (tc.fills != 0)
+        return fail("degenerate ring: emitted fills");
 
     /* --- large radius clamps to pill shape without crashing --- */
     reset(&tc);

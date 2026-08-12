@@ -29,16 +29,18 @@
  * Dispatches to the linear or radial rasterizer based on vp->gradient_type.  Each rasterizer
  * writes one row of premultiplied ARGB8888 pixels at a time and flushes it via er_blit_blend.
  *
- * The fill is rectangular — border_radius clipping is NOT applied.  When a View also carries a
- * border, the border strokes (which are rounded) are rendered on top of the gradient by the
- * caller after this function returns.
+ * The fill is clipped to the node's rounded-rect silhouette, resolved from vp's border_radius and
+ * per-corner overrides through the same er_rrect_clamp_radii / er_rrect_row geometry the background
+ * and border fills use — so a gradient stops exactly where a solid background_color would, and the
+ * rounded border stroked on top of it by the caller describes the same shape.  Rows clear of the
+ * corner arcs cost nothing extra; a square-cornered node takes the plain full-row path.
  *
  * When ERUI_GRADIENT is 0 this function compiles to a no-op.
  * When ERUI_GRADIENT_RADIAL is 0 the radial path is excluded but the linear path remains.
  *
- * @param[in] vp  View props carrying gradient_type, gradient_angle, gradient_stop_count, and
- *                gradient_stops.  Nothing is drawn when vp is NULL or gradient_type ==
- *                ER_GRADIENT_NONE.
+ * @param[in] vp  View props carrying gradient_type, gradient_angle, gradient_stop_count,
+ *                gradient_stops, and the corner radii the fill is clipped to.  Nothing is drawn
+ *                when vp is NULL or gradient_type == ER_GRADIENT_NONE.
  * @param[in] x   Destination left edge in framebuffer pixels.
  * @param[in] y   Destination top edge in framebuffer pixels.
  * @param[in] w   Destination width in pixels.

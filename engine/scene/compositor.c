@@ -469,8 +469,8 @@ static void mark_layout_dirty(void)
  * @brief Renders the background and border of a View-family node.
  *
  * Resolves per-corner radii, per-edge widths/colors, and border style from ERViewProps,
- * then dispatches to er_rrect_fill_bordered (fast uniform path) or the general
- * per-corner/per-edge path using er_rrect_fill_corners and er_rrect_border_edge.
+ * then dispatches to er_rrect_fill_bordered (fast uniform path) or the general per-corner/per-edge
+ * path using er_rrect_fill_corners and er_rrect_fill_ring_edges.
  *
  * @param[in] vp  Visual properties of the node.
  * @param[in] px  Left edge of the node in framebuffer pixels (after scroll offset).
@@ -521,8 +521,6 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
 
     if (has_border && uniform_bw && uniform_bc && vp->border_style == 0 && (bc_l >> 24))
     {
-        /* Uniform solid border with per-corner radii: outer → background inset. */
-        er_rrect_fill_corners(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl);
         const int ix = px + bw_l;
         const int iy = py + bw_t;
         const int iw = w - bw_l - bw_r;
@@ -532,21 +530,35 @@ static void render_view_bg(const ERViewProps* vp, int px, int py, int w, int h)
         const int ir_tr = (r_tr > bw_r) ? r_tr - bw_r : 0;
         const int ir_br = (r_br > bw_r) ? r_br - bw_r : 0;
         const int ir_bl = (r_bl > bw_l) ? r_bl - bw_l : 0;
-        if (iw > 0 && ih > 0)
-            er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+
+        if ((bg_color >> 24) == 0xFFu)
+        {
+            /* Uniform solid border with per-corner radii, opaque background: outer → background
+             * inset. The background hides every border pixel it needs to. */
+            er_rrect_fill_corners(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl);
+            if (iw > 0 && ih > 0)
+                er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+        }
+        else
+        {
+            /* Transparent, translucent, or gradient-backed: a filled border shape would cover what
+             * is behind it (see er_rrect_fill_ring), so stroke the band only. */
+            er_rrect_fill_ring(bc_l, px, py, w, h, r_tl, r_tr, r_br, r_bl, bw_l);
+            if ((bg_color >> 24) != 0 && iw > 0 && ih > 0)
+                er_rrect_fill_corners(bg_color, ix, iy, iw, ih, ir_tl, ir_tr, ir_br, ir_bl);
+        }
     }
     else
     {
-        /* Per-edge or styled borders: fill background shape first, then overlay each edge. */
+        /* Per-edge widths/colours and/or a dashed or dotted style. The background fills the whole
+         * rounded shape (a transparent or translucent edge shows it through, as it does on the web),
+         * then the band is stroked on top following the same corners — including the dash pattern,
+         * which is stepped by arc length so it flows through them. Drawn as four straight rects — as
+         * this used to be — the border ignored borderRadius entirely and squared off every corner. */
         er_rrect_fill_corners(bg_color, px, py, w, h, r_tl, r_tr, r_br, r_bl);
-        if (bw_t > 0 && (bc_t >> 24))
-            er_rrect_border_edge(bc_t, vp->border_style, px, py, w, bw_t, 1);
-        if (bw_b > 0 && (bc_b >> 24))
-            er_rrect_border_edge(bc_b, vp->border_style, px, py + h - bw_b, w, bw_b, 1);
-        if (bw_l > 0 && (bc_l >> 24))
-            er_rrect_border_edge(bc_l, vp->border_style, px, py + bw_t, bw_l, h - bw_t - bw_b, 0);
-        if (bw_r > 0 && (bc_r >> 24))
-            er_rrect_border_edge(bc_r, vp->border_style, px + w - bw_r, py + bw_t, bw_r, h - bw_t - bw_b, 0);
+        const ERRRectBorder border = {bw_l, bw_t, bw_r, bw_b, bc_l, bc_t, bc_r, bc_b, vp->border_style};
+        if (has_border)
+            er_rrect_fill_ring_edges(px, py, w, h, r_tl, r_tr, r_br, r_bl, &border);
     }
 }
 

@@ -10,6 +10,30 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- Borders with a per-edge width or color, and dashed or dotted borders, ignored `borderRadius` and
+  squared off every corner: they were drawn as four straight rectangles, which then overhung the
+  rounded background. They now follow the same corners as the rest of the node, and a dash pattern
+  is stepped around the perimeter, so it flows through the corners as one continuous run instead of
+  stopping at each one.
+
+- A border with a different color per edge changed color on a hard horizontal step in each corner,
+  because the top and bottom edges claimed their full width. Adjacent colors now meet on a miter
+  through the corner, the way they do on the web. The seam is anti-aliased like every other edge
+  the renderer draws.
+
+- A View with a border and no `backgroundColor` rendered as a solid block of the border color
+  instead of an outline. The border was painted by filling the whole shape and covering the middle
+  back up with the background — which does nothing when there is no background to paint. Borders are
+  now stroked as a ring whenever the background can't hide them, so transparent, translucent, and
+  gradient-backed nodes all keep what's behind them. Opaque backgrounds are unaffected.
+
+- Gradient backgrounds are now clipped by `borderRadius`. A gradient painted its full rectangle, so
+  its square corners poked out past the node's rounded ones — unnoticeable at a radius of 4, plainly
+  visible by 16. It now stops at exactly the edge a solid `backgroundColor` would, anti-aliased
+  corner fringe included.
+
 ### Added
 
 - Frame instrumentation in the perf overlay (`engine/include/er_perf.h`). Each frame is now split
