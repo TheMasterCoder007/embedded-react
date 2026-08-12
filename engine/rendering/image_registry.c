@@ -55,6 +55,16 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
 {
     if (!name || !buf || w <= 0 || h <= 0)
         return false;
+    /* Validate the format before it decides buf's element size: an out-of-range value would make
+     * scan_opaque() and the renderer read the buffer with the wrong stride (out-of-bounds reads). */
+    if (format != ER_IMG_ARGB8888 && format != ER_IMG_RGB565)
+        return false;
+    /* RGB565 pixels are read as uint16_t; reject a misaligned buffer at registration rather than
+     * fault mid-frame on strict-alignment targets. ARGB8888 is deliberately not word-checked:
+     * version-1 asset packs have always handed out pixel pointers at offset 2 (mod 4) and every
+     * shipping target tolerates those reads — rejecting them here would break existing packs. */
+    if (format == ER_IMG_RGB565 && ((uintptr_t)buf & 1u) != 0u)
+        return false;
 
     int free_slot = -1;
     for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)

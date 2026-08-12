@@ -76,12 +76,14 @@ void image_registry_init(void);
  * channel and is always opaque.
  *
  * @param[in] name    Null-terminated asset name (max IMAGE_NAME_MAX characters).
- * @param[in] buf     Pixel data in the given format; caller must keep it live.
+ * @param[in] buf     Pixel data in the given format; caller must keep it live. RGB565 buffers
+ *                    must be 2-byte aligned (they are read as uint16_t).
  * @param[in] w       Image width in pixels.
  * @param[in] h       Image height in pixels.
- * @param[in] format  Pixel layout of buf.
+ * @param[in] format  Pixel layout of buf; values outside ERImageFormat are rejected.
  *
- * @return true on success, false if the registry is full or the arguments are invalid.
+ * @return true on success, false if the registry is full or the arguments are invalid
+ *         (unknown format, misaligned RGB565 buffer, non-positive dimensions, NULL name/buf).
  */
 bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format);
 
