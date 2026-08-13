@@ -162,7 +162,13 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_XFORM_H=${ERUI_XFORM_H}
         ERUI_FADE_CACHE_W=${ERUI_FADE_CACHE_W}
         ERUI_FADE_CACHE_H=${ERUI_FADE_CACHE_H}
-        ER_PERF_STATS=$<BOOL:${ERUI_PERF_STATS}>
+        # Only emit this when the force-on option is actually set. Emitting it unconditionally (even
+        # as 0) beats er_perf.h's own "#ifndef ER_PERF_STATS -> follow ER_PERF_OVERLAY" fallback to
+        # the punch: the header sees ER_PERF_STATS already defined by the compiler command line and
+        # never falls through, so a consumer that sets ER_PERF_OVERLAY=1 without also opting into
+        # ERUI_PERF_STATS gets a fully stubbed er_perf (every entry point a no-op, the overlay frozen
+        # at zero) instead of the instrumentation the option's own docstring promises it would follow.
+        $<$<BOOL:${ERUI_PERF_STATS}>:ER_PERF_STATS=1>
 )
 
 target_compile_definitions(embedded-react PRIVATE

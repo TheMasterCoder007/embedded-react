@@ -212,22 +212,35 @@ static void render_region(const ImageEntry* img,
     {
         if (img->format == ER_IMG_ARGB8888)
         {
-            /* Emit directly from the source buffer rows using the image's own row stride. */
+            /* Emit directly from the source buffer rows using the image's own row stride. An opaque
+             * image goes through the format-aware entry point: with a copy_rect_fmt backend that is
+             * one whole-rect call carrying the engine's opacity guarantee (no per-pixel alpha scan
+             * backend-side); otherwise it degrades to the classic er_blit_copy. */
             const int img_stride = img->w * (int)sizeof(uint32_t);
             const uint32_t* rows = (const uint32_t*)img->buf + (size_t)src_y * (size_t)img->w + (size_t)src_x;
             if (img->opaque)
-                er_blit_copy(rows, img_stride, dst_x, dst_y, dst_w, dst_h);
+                er_blit_copy_fmt(rows, img_stride, ER_IMG_ARGB8888, dst_x, dst_y, dst_w, dst_h);
             else
                 er_blit_blend(rows, img_stride, 255, dst_x, dst_y, dst_w, dst_h);
             return;
         }
 
-        /* RGB565 1:1: expand each row into the scratch buffer (internal RAM — reads from the
-         * 2 B/px source are the only external-memory source traffic), then copy it out.
-         * Chunked horizontally so widths beyond the scratch capacity still render fully. */
+        /* RGB565 1:1: hand the 16-bit rows straight to the backend when it can take them — one
+         * whole-rect transfer (a single M2M_PFC on DMA2D-class hardware), the same one-shot cost
+         * as the ARGB path. A full-screen background must NOT decay into per-row CPU expansion:
+         * that is ~1M conversions plus one backend call per scanline. */
+        const int stride565 = img->w * (int)sizeof(uint16_t);
+        const uint16_t* rows565 = (const uint16_t*)img->buf + (size_t)src_y * (size_t)img->w + (size_t)src_x;
+        if (er_blit_copy_fmt(rows565, stride565, ER_IMG_RGB565, dst_x, dst_y, dst_w, dst_h))
+            return;
+
+        /* CPU fallback (no copy_rect_fmt backend, scratch capture, or inherited alpha): expand each
+         * row into the scratch buffer (internal RAM — reads from the 2 B/px source are the only
+         * external-memory source traffic), then emit it. Chunked horizontally so widths beyond the
+         * scratch capacity still render fully. */
         for (int dy = 0; dy < dst_h; dy++)
         {
-            const uint16_t* srow = (const uint16_t*)img->buf + (size_t)(src_y + dy) * (size_t)img->w + (size_t)src_x;
+            const uint16_t* srow = rows565 + (size_t)dy * (size_t)img->w;
             for (int cx = 0; cx < dst_w; cx += ERUI_MAX_IMG_ROW_PIXELS)
             {
                 const int cw = (dst_w - cx) < ERUI_MAX_IMG_ROW_PIXELS ? (dst_w - cx) : ERUI_MAX_IMG_ROW_PIXELS;

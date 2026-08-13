@@ -17,6 +17,34 @@
 #include "image_registry.h"
 #include <string.h>
 
+/* Registration failures are silent falses to the caller (er_image_load is void), and both failure
+ * modes — registry full, misaligned RGB565 pixels — present identically as "the image just isn't
+ * there". Warn once per failure mode in diagnostics builds so a sim/debug run names the problem.
+ * Same knob convention as ERUI_VECTOR_DIAGNOSTICS: on unless NDEBUG, forcible either way. */
+#ifndef ERUI_IMAGE_DIAGNOSTICS
+#ifdef NDEBUG
+#define ERUI_IMAGE_DIAGNOSTICS 0
+#else
+#define ERUI_IMAGE_DIAGNOSTICS 1
+#endif
+#endif
+
+#if ERUI_IMAGE_DIAGNOSTICS
+#include <stdio.h>
+#define ERUI_IMG_WARN_ONCE(...)                                                                                        \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        static bool er_img_warned_ = false;                                                                            \
+        if (!er_img_warned_)                                                                                           \
+        {                                                                                                              \
+            er_img_warned_ = true;                                                                                     \
+            fprintf(stderr, __VA_ARGS__);                                                                              \
+        }                                                                                                              \
+    } while (0)
+#else
+#define ERUI_IMG_WARN_ONCE(...) ((void)0)
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -64,7 +92,13 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
      * version-1 asset packs have always handed out pixel pointers at offset 2 (mod 4) and every
      * shipping target tolerates those reads — rejecting them here would break existing packs. */
     if (format == ER_IMG_RGB565 && ((uintptr_t)buf & 1u) != 0u)
+    {
+        ERUI_IMG_WARN_ONCE("embedded-react image: \"%s\" RGB565 pixels at odd address %p - rejected, will not draw "
+                           "(is the asset pack/container placed word-aligned?).\n",
+                           name,
+                           buf);
         return false;
+    }
 
     int free_slot = -1;
     for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)
@@ -83,7 +117,13 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
     }
 
     if (free_slot < 0)
+    {
+        ERUI_IMG_WARN_ONCE("embedded-react image: registry full (%d slots) - \"%s\" and later images will not draw; "
+                           "raise IMAGE_REGISTRY_MAX.\n",
+                           (int)IMAGE_REGISTRY_MAX,
+                           name);
         return false;
+    }
 
     ImageEntry* e = &s_entries[free_slot];
     strncpy(e->name, name, IMAGE_NAME_MAX);

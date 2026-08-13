@@ -32,14 +32,25 @@
 //   qjs_tag        u16 len + bytes   — QuickJS release the bytecode targets (loader rejects mismatch)
 //   section_count  u32
 //   sections[section_count]: type u32, len u32, bytes
+//     type 0 = alignment padding (zero bytes — carries no payload, skipped by loaders)
 //     type 1 = QuickJS bytecode (the app — run last)
 //     type 2 = ERPK asset pack (registered before the app mounts)
 //     type 3 = QuickJS vendor bytecode (react + reconciler + lib — run FIRST, before the app). Optional;
 //              present only for the vendor/app split used by incremental hot reload. A container with no
 //              type-3 section is a plain monolithic app, loaded exactly as before (backwards-compatible).
+//
+// Alignment contract: the engine reads asset pixels IN PLACE from wherever the container sits (e.g.
+// memory-mapped flash), and the pack's internal pixel padding is computed relative to the pack's own
+// first byte. Those pads only mean anything at the absolute addresses the engine reads if the pack
+// itself starts on a 4-byte boundary — so the emitter inserts a type-0 padding section before the
+// asset pack whenever needed to 4-align the pack's first byte RELATIVE TO THE CONTAINER, and the host
+// must place the container at a 4-byte-aligned base address (linker scripts typically give 16; malloc
+// guarantees it). Loaders bounds-walk every section and dispatch only on types they know, so old
+// loaders skip the padding section untouched — no format version bump.
 
 const FORMAT_VERSION = 1;
 
+export const SECTION_PAD = 0;
 export const SECTION_BYTECODE = 1;
 export const SECTION_ASSET_PACK = 2;
 export const SECTION_VENDOR_BYTECODE = 3;
@@ -118,8 +129,26 @@ export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   if (assetPack && assetPack.length)
     sections.push([SECTION_ASSET_PACK, assetPack]);
   sections.push([SECTION_BYTECODE, bytecode]);
-  body.u32(sections.length);
+
+  // 4-align the asset pack's first byte relative to the container (see the alignment contract above)
+  // by inserting a type-0 padding section ahead of it when the layout calls for one. Walk the layout
+  // once to place pads, then write — section_count must already include them.
+  const withPads = [];
+  let off = 12 + 2 + Buffer.byteLength(qjsTag, 'utf8') + 4; // header + tag + section_count
   for (const [type, data] of sections) {
+    if (type === SECTION_ASSET_PACK) {
+      const pad = (4 - ((off + 8) % 4)) % 4; // +8 = this section's own type+len header
+      if (pad) {
+        withPads.push([SECTION_PAD, Buffer.alloc(pad)]);
+        off += 8 + pad;
+      }
+    }
+    withPads.push([type, data]);
+    off += 8 + data.length;
+  }
+
+  body.u32(withPads.length);
+  for (const [type, data] of withPads) {
     body.u32(type);
     body.u32(data.length);
     body.bytes(data);
