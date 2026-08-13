@@ -348,6 +348,18 @@ describe('emitAssetPack', () => {
     expect(p.images[1].pixels[0] >>> 0).toBe(0x80000080);
     expect(p.consumed).toBe(p.total);
   });
+
+  it('emits byte-identical packs regardless of input order (reproducible builds)', () => {
+    // Discovery order upstream is whatever order esbuild's onLoad callbacks fire in — the emitter
+    // must not let that leak into the artifact, or in-flash asset addresses churn between builds.
+    const a = {name: 'aa', width: 1, height: 1, pixels: new Uint32Array([1])};
+    const b = {name: 'bb', width: 1, height: 1, pixels: new Uint32Array([2])};
+    const c = {name: 'cc', width: 1, height: 1, pixels: new Uint32Array([3])};
+    const one = emitAssetPack({images: [a, b, c], fonts: []});
+    const two = emitAssetPack({images: [c, a, b], fonts: []});
+    expect(Buffer.compare(one, two)).toBe(0);
+    expect(readPack(one).images.map(i => i.name)).toEqual(['aa', 'bb', 'cc']);
+  });
 });
 
 describe('emitAssetsC', () => {

@@ -548,7 +548,12 @@ void er_runtime_free(void* p)
 /* --- ERCF config container ------------------------------------------------------------------------
  * Layout (little-endian): "ERCF" | format_version u32 | crc32 u32 (over everything after it) |
  *   qjs_tag (u16 len + bytes) | section_count u32 | sections[ type u32 | len u32 | bytes ]
- * Section types: 1 = QuickJS bytecode, 2 = ERPK asset pack. */
+ * Section types: 1 = QuickJS bytecode, 2 = ERPK asset pack, 3 = vendor bytecode, 0 = alignment
+ * padding (zero bytes the emitter inserts so the asset pack starts 4-byte aligned relative to the
+ * container — asset pixels are read in place, so the pack's internal alignment pads only hold at the
+ * absolute addresses the engine reads when the pack itself starts on a word boundary). Unknown types
+ * are skipped, so new section types never break older loaders. The CALLER must place the container at
+ * a 4-byte-aligned base (flash linker section or malloc'd buffer both do). */
 
 static uint16_t rd_le16(const uint8_t* p)
 {

@@ -21,8 +21,10 @@ import {describe, it, expect} from 'vitest';
 import {
   emitContainer,
   crc32,
+  SECTION_PAD,
   SECTION_BYTECODE,
   SECTION_ASSET_PACK,
+  SECTION_VENDOR_BYTECODE,
 } from '../emit-container.mjs';
 
 /** Re-reads a little-endian ERCF container into a structured object (mirrors the C loader's walk). */
@@ -51,11 +53,14 @@ function parseContainer(buf) {
     const type = u32();
     const len = u32();
     const data = buf.subarray(off, off + len);
+    sections.push({type, data, dataOffset: off});
     off += len;
-    sections.push({type, data});
   }
   return {magic, formatVersion, storedCrc, qjsTag, sections, end: off};
 }
+
+/** The sections a loader acts on — type-0 padding is skipped exactly like any unknown type. */
+const realSections = p => p.sections.filter(s => s.type !== SECTION_PAD);
 
 describe('crc32', () => {
   it('matches the canonical CRC-32/IEEE check value (so it matches the C loader)', () => {
@@ -80,12 +85,45 @@ describe('emitContainer', () => {
     expect(p.formatVersion).toBe(1);
     expect(p.qjsTag).toBe('v0.15.0');
     expect(p.end).toBe(c.length); // consumed every byte — no trailing slop
-    expect(p.sections.map(s => s.type)).toEqual([
-      SECTION_ASSET_PACK,
-      SECTION_BYTECODE,
-    ]);
-    expect(Buffer.compare(p.sections[0].data, assetPack)).toBe(0);
-    expect(Buffer.compare(p.sections[1].data, bytecode)).toBe(0);
+    const real = realSections(p);
+    expect(real.map(s => s.type)).toEqual([SECTION_ASSET_PACK, SECTION_BYTECODE]);
+    expect(Buffer.compare(real[0].data, assetPack)).toBe(0);
+    expect(Buffer.compare(real[1].data, bytecode)).toBe(0);
+  });
+
+  it('4-aligns the asset pack relative to the container, whatever precedes it', () => {
+    // The pack's in-place pixel alignment only holds at absolute addresses if the pack itself starts
+    // on a word boundary within the container (a 4n+3 pack start put every RGB565 image at an odd
+    // flash address — rejected at registration, image silently absent). Sweep tag lengths and vendor
+    // sizes so every preceding-byte parity is exercised.
+    for (const qjsTag of ['v', 'v0', 'v0.15', 'v0.15.0', 'v0.15.0-rc1']) {
+      for (let vlen = 0; vlen <= 5; vlen++) {
+        const vendorBytecode = vlen ? Buffer.alloc(vlen, 0xab) : undefined;
+        const c = emitContainer({bytecode, vendorBytecode, assetPack, qjsTag});
+        const p = parseContainer(c);
+        const pack = p.sections.find(s => s.type === SECTION_ASSET_PACK);
+        expect(pack.dataOffset % 4).toBe(0);
+        expect(Buffer.compare(pack.data, assetPack)).toBe(0);
+        // Padding, when present, is zero-filled, precedes the pack, and is at most 3 bytes.
+        for (const pad of p.sections.filter(s => s.type === SECTION_PAD)) {
+          expect(pad.data.length).toBeLessThan(4);
+          expect(pad.data.every(b => b === 0)).toBe(true);
+        }
+        // The loader-visible sections are unchanged by padding.
+        expect(realSections(p).map(s => s.type)).toEqual(
+          vlen
+            ? [SECTION_VENDOR_BYTECODE, SECTION_ASSET_PACK, SECTION_BYTECODE]
+            : [SECTION_ASSET_PACK, SECTION_BYTECODE],
+        );
+      }
+    }
+  });
+
+  it('emits no padding section when there is nothing to align', () => {
+    // No asset pack → nothing has an alignment requirement → byte-identical to the old emitter.
+    const c = emitContainer({bytecode, qjsTag: 'v0.15.0'});
+    const p = parseContainer(c);
+    expect(p.sections.map(s => s.type)).toEqual([SECTION_BYTECODE]);
   });
 
   it('stores a CRC over the bytes after the crc field, and it verifies', () => {
@@ -105,7 +143,7 @@ describe('emitContainer', () => {
   it('omits the asset section when there are no assets', () => {
     const c = emitContainer({bytecode, qjsTag: 'v0.15.0'});
     const p = parseContainer(c);
-    expect(p.sections.map(s => s.type)).toEqual([SECTION_BYTECODE]);
+    expect(realSections(p).map(s => s.type)).toEqual([SECTION_BYTECODE]);
   });
 
   it('rejects missing bytecode or tag', () => {

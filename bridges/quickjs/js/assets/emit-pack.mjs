@@ -99,6 +99,12 @@ function writeGlyph(w, g) {
  * @returns {Buffer} The pack bytes.
  */
 export function emitAssetPack({images = [], fonts = []}) {
+  // Emit in a locale-independent sorted order: the discovery maps upstream are filled by esbuild
+  // onLoad callbacks in whatever order the bundler visits files, which varies run to run — and an
+  // unstable pack means unstable in-flash addresses and non-reproducible builds.
+  const byName = k => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
+  images = [...images].sort(byName('name'));
+  fonts = [...fonts].sort(byName('family'));
   // A pack stays version 1 unless the 16-bit image bake is actually used, so packs without
   // RGB565 images remain loadable by parsers that predate version 2.
   const version = images.some(i => i.format === 'rgb565') ? 2 : 1;
