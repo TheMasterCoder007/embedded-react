@@ -31,10 +31,11 @@
 //                        extras[extras_count] (13B: codepoint u32 + the 9B glyph),
 //                        bitmap (bitmap_len bytes)
 //
-// Version 2 exists only for the 16-bit image bake: a pack with no RGB565 images is still written
-// as version 1, so existing device parsers keep loading unchanged packs. The v2 alignment pad also
-// guarantees the in-place pixel pointer handed to the engine is 4-byte aligned (v1 relied on names
-// keeping the offset aligned).
+// Version 2 is now emitted ALWAYS. It was introduced for the 16-bit image bake, but its real value
+// is the per-image alignment pad: the engine reads pixels in place, and a DMA2D-class backend
+// refuses a word-misaligned ARGB8888 source (configuration error — silently absent image). v1 had
+// no alignment machinery, so whether an image's pixels landed word-aligned in flash was an accident
+// of the name strings — it varied build to build. Parsers still accept v1 packs from older tooling.
 
 /** Accumulates little-endian binary chunks. */
 class Writer {
@@ -105,9 +106,8 @@ export function emitAssetPack({images = [], fonts = []}) {
   const byName = k => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
   images = [...images].sort(byName('name'));
   fonts = [...fonts].sort(byName('family'));
-  // A pack stays version 1 unless the 16-bit image bake is actually used, so packs without
-  // RGB565 images remain loadable by parsers that predate version 2.
-  const version = images.some(i => i.format === 'rgb565') ? 2 : 1;
+
+  const version = 2;
   const w = new Writer();
   w.bytes(Buffer.from('ERPK', 'ascii'));
   w.u32(version);

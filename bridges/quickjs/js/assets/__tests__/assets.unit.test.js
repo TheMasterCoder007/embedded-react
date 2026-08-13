@@ -232,9 +232,10 @@ function readPack(buf) {
       format = u8();
       o += (4 - (o % 4)) % 4; // skip the 4-byte alignment pad before the pixels
     }
+    const pixelOffset = o; // pack-relative; what the in-place pointer's alignment derives from
     const pixels = [];
     for (let p = 0; p < w * h; p++) pixels.push(format === 1 ? u16() : u32());
-    images.push({name, w, h, format, pixels});
+    images.push({name, w, h, format, pixels, pixelOffset});
   }
   const fonts = [];
   for (let i = 0; i < nFonts; i++) {
@@ -295,7 +296,7 @@ describe('emitAssetPack', () => {
     const p = readPack(emitAssetPack({images: [image], fonts: [font]}));
 
     expect(p.magic).toBe('ERPK');
-    expect(p.version).toBe(1);
+    expect(p.version).toBe(2);
     expect(p.nImages).toBe(1);
     expect(p.nFonts).toBe(1); // one font *size*
 
@@ -312,7 +313,10 @@ describe('emitAssetPack', () => {
     expect(p.consumed).toBe(p.total);
   });
 
-  it('stays version 1 when no image is RGB565', () => {
+  it('emits version 2 (aligned pixels) even when no image is RGB565', () => {
+    // v1 had no pixel-alignment machinery — an all-ARGB pack's pixel offsets were an accident of
+    // the name strings, and a word-misaligned ARGB8888 source is refused outright by DMA2D-class
+    // backends (configuration error, image silently absent). Every pack now carries the v2 pad.
     const image = {
       name: 'logo',
       width: 1,
@@ -321,7 +325,24 @@ describe('emitAssetPack', () => {
       pixels: new Uint32Array([0xffffffff]),
     };
     const p = readPack(emitAssetPack({images: [image], fonts: []}));
-    expect(p.version).toBe(1);
+    expect(p.version).toBe(2);
+  });
+
+  it('4-aligns every image\'s pixels relative to the pack, whatever the name lengths', () => {
+    // Odd/varied name lengths are exactly what knocked v1 pixel offsets off word alignment.
+    const mk = (name, i) => ({
+      name,
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([i]),
+    });
+    const images = ['a', 'bb', 'ccc', 'dddd', 'eeeee'].map(mk);
+    const buf = emitAssetPack({images, fonts: []});
+    const p = readPack(buf);
+    expect(p.version).toBe(2);
+    for (const img of p.images) {
+      expect(img.pixelOffset % 4).toBe(0);
+    }
   });
 
   it('writes version 2 with per-image format + aligned pixels when RGB565 is used', () => {
