@@ -1063,7 +1063,7 @@ extern "C"
      * The pixel buffer is caller-owned and referenced by pointer, never copied, so it must
      * stay live for as long as any Image node uses the name. Registering an existing name
      * replaces its buffer/dimensions in place (no engine-side memory is leaked); each
-     * distinct name occupies one of IMAGE_REGISTRY_MAX slots.
+     * distinct name occupies one of ERUI_IMAGE_REGISTRY_MAX slots.
      *
      * @param[in] name      Null-terminated image asset name.
      * @param[in] argb_buf  Pointer to the premultiplied ARGB8888 pixel data (row-major).

@@ -18,7 +18,7 @@
 
 #if ER_PERF_STATS
 
-#include "image_registry.h" /* image_registry_in_use / IMAGE_REGISTRY_MAX */
+#include "image_registry.h" /* image_registry_in_use / ERUI_IMAGE_REGISTRY_MAX */
 #include "vector.h"         /* er_vector_slots_in_use / er_vector_slots_total */
 
 #include <stdio.h>
@@ -167,7 +167,7 @@ void er_perf_frame_end(void)
     s_cur.vector_slots_used = (uint16_t)er_vector_slots_in_use();
     s_cur.vector_slots_total = (uint16_t)er_vector_slots_total();
     s_cur.image_slots_used = (uint16_t)image_registry_in_use();
-    s_cur.image_slots_total = (uint16_t)IMAGE_REGISTRY_MAX;
+    s_cur.image_slots_total = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
     s_cur.vector_slots_overflow = er_vector_slots_overflowed();
 
     s_last = s_cur;

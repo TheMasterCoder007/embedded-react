@@ -26,8 +26,23 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Maximum number of images that can be registered simultaneously. */
-#define IMAGE_REGISTRY_MAX 32U
+/**
+ * @brief Maximum number of images that can be registered simultaneously.
+ *
+ * Registration past this point is refused and those images never draw, so the pool has to clear the
+ * size of a real asset set rather than a demo's: an icon-heavy app runs well past a hundred images,
+ * and the old fixed 32 turned that into an unexplained blank halfway down the screen. Sized here
+ * for that case and shrunk per board, the same way as the other pools.
+ *
+ * Cost is ~80 B/slot on a 32-bit target — ~10 KB at the default — and the 64-byte name field is
+ * most of it. Nothing scales with it per frame: lookups skip free slots on a bool test, so a board
+ * with 6 images pays only the .bss. RAM-tight boards should still set it down (the RP2040 and
+ * ESP32-2432S028R examples do); the CMake knob is `ERUI_IMAGE_REGISTRY_MAX`, and an ESP-IDF
+ * consumer appends `ERUI_IMAGE_REGISTRY_MAX=n` to COMPILE_DEFINITIONS like any other ERUI_* flag.
+ */
+#ifndef ERUI_IMAGE_REGISTRY_MAX
+#define ERUI_IMAGE_REGISTRY_MAX 128U
+#endif
 
 /** @brief Maximum length of an image asset name, excluding the null terminator. */
 #define IMAGE_NAME_MAX 63U
@@ -95,9 +110,9 @@ const ImageEntry* image_registry_get(const char* name);
  * @brief Counts the registry slots currently holding an asset.
  *
  * The perf overlay's "image slots in use" counter — a screen that silently fails to show an image
- * because the registry filled up reads as IMAGE_REGISTRY_MAX here.
+ * because the registry filled up reads as ERUI_IMAGE_REGISTRY_MAX here.
  *
- * @return Number of occupied slots, 0 to IMAGE_REGISTRY_MAX.
+ * @return Number of occupied slots, 0 to ERUI_IMAGE_REGISTRY_MAX.
  */
 unsigned image_registry_in_use(void);
 

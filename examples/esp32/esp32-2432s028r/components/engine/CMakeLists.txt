@@ -68,6 +68,8 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_SCRATCH_H=8
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=240
+    ERUI_IMAGE_REGISTRY_MAX=16  # the engine default (128) is sized for icon-heavy apps at ~80 B/slot;
+                                # ~10 KB of .bss does not fit beside the 150 KB framebuffer here
 )
 
 # The SVG/vector rasterizer's static pools

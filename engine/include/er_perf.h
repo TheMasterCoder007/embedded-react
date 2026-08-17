@@ -120,7 +120,7 @@ extern "C"
         uint16_t vector_slots_used;             /**< Vector (Svg) storage slots holding geometry. */
         uint16_t vector_slots_total;            /**< ERUI_MAX_VECTOR_NODES. */
         uint16_t image_slots_used;              /**< Image registry slots holding a registered asset. */
-        uint16_t image_slots_total;             /**< IMAGE_REGISTRY_MAX. */
+        uint16_t image_slots_total;             /**< ERUI_IMAGE_REGISTRY_MAX. */
         bool vector_slots_overflow;             /**< A vector node was denied a slot since the last er_reset(): it
                                                      holds no geometry and draws NOTHING. Sticky, not per-frame —
                                                      the store fails at commit time but the blank node persists. */

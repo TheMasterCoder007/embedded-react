@@ -89,6 +89,15 @@ See the README for the release process.
 
 ### Changed
 
+- The image registry is now sized by `ERUI_IMAGE_REGISTRY_MAX` (`-DERUI_IMAGE_REGISTRY_MAX=n`, or
+  appended to `COMPILE_DEFINITIONS` on the ESP-IDF path), and the default rises from 32 to 128. It
+  was a bare `#define` with no way to change it from a build, so an icon-heavy app that baked more
+  than 32 images simply lost the ones registered last — no crash, no layout change, just a hole
+  where the art should be. Slots cost ~80 B each on a 32-bit target, so the new default is ~10 KB of
+  `.bss`; nothing scales with it per frame, and the two RAM-tight examples pin it lower rather than
+  absorb that. The macro was renamed `IMAGE_REGISTRY_MAX` → `ERUI_IMAGE_REGISTRY_MAX` to match every
+  other tunable; it lives in a private engine header, so no public API changes.
+
 - Damage tracking now keeps up to `ER_DAMAGE_RECTS_MAX` disjoint dirty rects per commit instead of
   one bounding box, so two widgets updating in opposite corners repaint two small areas rather than
   the whole span between them. Display drivers that can flush multiple windows can read the rects

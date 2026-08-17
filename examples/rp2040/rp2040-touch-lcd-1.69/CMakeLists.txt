@@ -103,6 +103,8 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_SCRATCH_H=8
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=240
+    ERUI_IMAGE_REGISTRY_MAX=8  # the watch face registers none; the engine default (128) is sized for
+                               # icon-heavy apps and would cost ~10 KB of .bss this board cannot spare
 )
 # Vector rasterizer pools (internal to vector.c → PRIVATE). The current digital watch face uses NO <Svg>,
 # so these are sized to the floor — just enough that the pools exist. Bump them if a demo brings back
