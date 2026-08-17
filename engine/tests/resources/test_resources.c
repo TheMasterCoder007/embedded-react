@@ -142,7 +142,7 @@ static int test_image_replace(void)
     /* Fill the registry to capacity, then re-register an existing name: must still succeed
      * (replace does not consume a free slot). */
     char name[16];
-    for (int i = 1; i < (int)IMAGE_REGISTRY_MAX; i++) /* slot 0 holds "logo" */
+    for (int i = 1; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++) /* slot 0 holds "logo" */
     {
         snprintf(name, sizeof(name), "img%d", i);
         const bool ok = image_registry_store(name, buf_a, 1, 1, ER_IMG_ARGB8888);
@@ -150,6 +150,19 @@ static int test_image_replace(void)
     }
     CHECK(image_registry_store("logo", buf_a, 2, 2, ER_IMG_ARGB8888), "image: replace when registry is full");
     CHECK(!image_registry_store("overflow", buf_a, 1, 1, ER_IMG_ARGB8888), "image: new name rejected when full");
+
+    /* The pool really is ERUI_IMAGE_REGISTRY_MAX slots deep, not the header's #ifndef fallback. The
+     * define is PUBLIC precisely so a build that tunes the knob moves this loop with it; were it
+     * PRIVATE, this test would fill to 128 against a 32-slot library and fail at slot 32 instead. */
+    CHECK(image_registry_in_use() == ERUI_IMAGE_REGISTRY_MAX, "image: in-use count matches the configured capacity");
+
+    /* Everything registered before the pool filled is still addressable — overflow refuses the new
+     * image, it does not evict an old one. Check both ends of the pool. */
+    snprintf(name, sizeof(name), "img%d", (int)ERUI_IMAGE_REGISTRY_MAX - 1); /* the last slot claimed */
+    CHECK(image_registry_get("logo") != NULL, "image: the first entry survived the overflow");
+    CHECK(ERUI_IMAGE_REGISTRY_MAX < 2U || image_registry_get(name) != NULL,
+          "image: the last entry survived the overflow");
+    CHECK(image_registry_get("overflow") == NULL, "image: the refused image is genuinely absent");
 
     return s_fail;
 }

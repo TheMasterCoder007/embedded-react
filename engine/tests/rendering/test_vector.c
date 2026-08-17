@@ -171,6 +171,8 @@ static int bluOf(uint32_t p)
  *   - A stroked line with round caps fills the band AND the cap region that overlaps the band — the
  *     regression guard for the round-cap winding bug (opposite-wound cap punched a hole in the stroke).
  *   - The clip box bounds the rasterize: geometry outside the clip emits no pixels.
+ *   - Exhausting the per-node storage pool raises the sticky overflow flag (and a full-but-coping
+ *     pool does not) — the signal that separates "missing shapes" from "pool merely at capacity".
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
@@ -434,6 +436,44 @@ int main(void)
             return fail("conic gradient: bottom (t=0.5) should be ~green");
     }
 #endif
+
+    /* --- storage pool exhaustion is flagged, not silent --- */
+    {
+        er_vector_reset();
+        if (er_vector_slots_overflowed())
+            return fail("storage pool: er_vector_reset left the overflow flag raised");
+
+        const float tape[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 0, 0, ER_VOP_LINE, 4, 0, ER_VOP_LINE, 4, 4, ER_VOP_CLOSE};
+        const int n_tape = (int)(sizeof(tape) / sizeof(tape[0]));
+        const ERVectorPaint p = {0xFF010203u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO};
+        const int total = er_vector_slots_total();
+
+        for (int i = 0; i < total; i++)
+            if (er_vector_store(-1, tape, n_tape, &p, 1, NULL, 0) < 0)
+                return fail("storage pool: a slot within the pool size was refused");
+        if (er_vector_slots_in_use() != total)
+            return fail("storage pool: filling every slot did not show in the in-use count");
+        if (er_vector_slots_overflowed())
+            return fail("storage pool: a merely full pool was reported as overflowed");
+
+        /* One node too many. It is refused (and so draws nothing) — the point of the flag is that this
+         * is distinguishable from a pool that is simply at capacity and rendering fine. The first
+         * refusal also prints one warning to stderr; that line below is expected output, not a fault. */
+        printf("  (expect one 'ERUI_MAX_VECTOR_NODES exhausted' warning next)\n");
+        if (er_vector_store(-1, tape, n_tape, &p, 1, NULL, 0) >= 0)
+            return fail("storage pool: handed out a slot past the pool size");
+        if (!er_vector_slots_overflowed())
+            return fail("storage pool: exhaustion was not flagged");
+
+        /* Sticky across a later free: room reopening does not un-blank the node that was turned away. */
+        er_vector_free(0);
+        if (!er_vector_slots_overflowed())
+            return fail("storage pool: the overflow flag was cleared by an unrelated free");
+
+        er_vector_reset();
+        if (er_vector_slots_overflowed() || er_vector_slots_in_use() != 0)
+            return fail("storage pool: er_vector_reset did not clear the pool and its flag");
+    }
 
     return EXIT_SUCCESS;
 }

@@ -107,6 +107,7 @@ set(ERUI_FADE_CACHE_W "0" CACHE STRING "Fade-cache width: composited-subtree cac
 set(ERUI_FADE_CACHE_H "0" CACHE STRING "Fade-cache height; 0 disables")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
 set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
+set(ERUI_IMAGE_REGISTRY_MAX "128" CACHE STRING "Concurrently registered images (~80 B/slot; images past it never draw)")
 set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
 set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
 
@@ -162,6 +163,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_XFORM_H=${ERUI_XFORM_H}
         ERUI_FADE_CACHE_W=${ERUI_FADE_CACHE_W}
         ERUI_FADE_CACHE_H=${ERUI_FADE_CACHE_H}
+        ERUI_IMAGE_REGISTRY_MAX=${ERUI_IMAGE_REGISTRY_MAX}
         # Only emit this when the force-on option is actually set. Emitting it unconditionally (even
         # as 0) beats er_perf.h's own "#ifndef ER_PERF_STATS -> follow ER_PERF_OVERLAY" fallback to
         # the punch: the header sees ER_PERF_STATS already defined by the compiler command line and

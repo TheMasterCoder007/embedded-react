@@ -38,6 +38,17 @@ See the README for the release process.
 - For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
   art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
 
+- Running out of vector storage slots (`ERUI_MAX_VECTOR_NODES`) now says so in release builds. A
+  `<Svg>` that cannot get a slot holds no geometry and draws nothing. Because slots go out in
+  mount order, *which* shapes vanish moves around as screens mount and unmount — on a panel that
+  looks like random glitching rather than a pool that needs raising, and it previously cost a full
+  debugging cycle to trace. The first refusal now prints one `stderr` line (once per process, even
+  under `NDEBUG` — unlike the other vector pools, whose warnings are debug-only) and raises a flag
+  the perf overlay shows as `!FULL` on its slot line (`VEC 8/8!FULL`), readable by hosts as
+  `ERPerfFrame::vector_slots_overflow`. The marker appears only once a node has actually been
+  turned away, since a screen that exactly fills the pool renders fine. `-DERUI_VECTOR_STORE_WARN=0`
+  drops the `stderr` line (and with it any `<stdio.h>` dependency) while keeping the flag.
+
 ### Fixed
 
 - A `<Modal>` whose style did not cover the whole screen drew its backdrop only behind itself: the
@@ -77,6 +88,15 @@ See the README for the release process.
   simulator; gated by `ER_PERF_STATS` (defaults to `ER_PERF_OVERLAY` unless overridden by the build).
 
 ### Changed
+
+- The image registry is now sized by `ERUI_IMAGE_REGISTRY_MAX` (`-DERUI_IMAGE_REGISTRY_MAX=n`, or
+  appended to `COMPILE_DEFINITIONS` on the ESP-IDF path), and the default rises from 32 to 128. It
+  was a bare `#define` with no way to change it from a build, so an icon-heavy app that baked more
+  than 32 images simply lost the ones registered last — no crash, no layout change, just a hole
+  where the art should be. Slots cost ~80 B each on a 32-bit target, so the new default is ~10 KB of
+  `.bss`; nothing scales with it per frame, and the two RAM-tight examples pin it lower rather than
+  absorb that. The macro was renamed `IMAGE_REGISTRY_MAX` → `ERUI_IMAGE_REGISTRY_MAX` to match every
+  other tunable; it lives in a private engine header, so no public API changes.
 
 - Damage tracking now keeps up to `ER_DAMAGE_RECTS_MAX` disjoint dirty rects per commit instead of
   one bounding box, so two widgets updating in opposite corners repaint two small areas rather than

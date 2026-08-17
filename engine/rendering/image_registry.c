@@ -49,7 +49,7 @@
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static ImageEntry s_entries[IMAGE_REGISTRY_MAX];
+static ImageEntry s_entries[ERUI_IMAGE_REGISTRY_MAX];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -101,7 +101,7 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
     }
 
     int free_slot = -1;
-    for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)
+    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
     {
         if (s_entries[i].in_use && strncmp(s_entries[i].name, name, IMAGE_NAME_MAX) == 0)
         {
@@ -119,8 +119,8 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
     if (free_slot < 0)
     {
         ERUI_IMG_WARN_ONCE("embedded-react image: registry full (%d slots) - \"%s\" and later images will not draw; "
-                           "raise IMAGE_REGISTRY_MAX.\n",
-                           (int)IMAGE_REGISTRY_MAX,
+                           "raise ERUI_IMAGE_REGISTRY_MAX.\n",
+                           (int)ERUI_IMAGE_REGISTRY_MAX,
                            name);
         return false;
     }
@@ -140,7 +140,7 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
 unsigned image_registry_in_use(void)
 {
     unsigned n = 0U;
-    for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)
+    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
         if (s_entries[i].in_use)
             n++;
     return n;
@@ -150,7 +150,7 @@ const ImageEntry* image_registry_get(const char* name)
 {
     if (!name || name[0] == '\0')
         return NULL;
-    for (int i = 0; i < (int)IMAGE_REGISTRY_MAX; i++)
+    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
     {
         if (s_entries[i].in_use && strncmp(s_entries[i].name, name, IMAGE_NAME_MAX) == 0)
             return &s_entries[i];

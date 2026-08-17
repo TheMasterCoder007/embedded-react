@@ -138,7 +138,8 @@ Whatever the four don't cover (input polling, the animation tick, host work) lan
 `other_us`, so the split always reconstructs `frame_us`. Counters sampled per frame:
 the repainted region and its area (what raster *and* present both scale with), vector
 storage slots in use out of `ERUI_MAX_VECTOR_NODES`, and image registry slots out of
-`IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here.
+`ERUI_IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here. The vector
+field gains a `!FULL` marker once a node has actually been turned away (see the vector section).
 
 The engine has no clock of its own, so timing is opt-in: hand it one with
 `er_perf_set_clock()` (without one the phase times read 0 and the counters still work).
@@ -217,8 +218,25 @@ level). The defaults are desktop-sized — tune them down for a board.
 | `ERUI_FADE_CACHE_W` | 0 | Fade-cache width (composited-subtree reuse across fade frames); 0 disables |
 | `ERUI_FADE_CACHE_H` | 0 | Fade-cache height; 0 disables |
 | `ERUI_FONT_POOL_BYTES` | 0 | Static pool for runtime-loaded fonts; 0 disables `er_font_load` |
+| `ERUI_IMAGE_REGISTRY_MAX` | 128 | Concurrently registered images. ~80 B/slot (~10 KB at the default), so shrink it on a RAM-tight board — but see below before shrinking it *below* your asset count |
 | `ERUI_PERF_STATS` | 1 | Per-frame timing split + resource counters (`ERUI_PERF_STATS=OFF` compiles them out). Defaults to `ER_PERF_OVERLAY` on the ESP-IDF component path, which never sees this CMake option — see [Frame instrumentation](#frame-instrumentation) |
 | `ERUI_RENDER_WORKERS` | 1 | Max render workers for multi-core rendering. Above 1, per-worker context/scratch arrays are sized for N workers and a host may install threads via `embedded_renderer_set_workers` (see `native_renderer.h`); the repaint region is then rendered as horizontal slices, one per core. The opacity strip pool is split between workers (`ERUI_MAX_OPACITY_DEPTH / workers` slots each — raise the depth alongside), and each extra worker costs a full transform-source buffer. Scenes with vector or shadow nodes automatically render single-core. 1 (the default) is the plain single-core engine |
+
+### Image registry
+
+`er_image_load()` puts each distinct name in one of `ERUI_IMAGE_REGISTRY_MAX` slots. Past
+that, registration is **refused**, and a refused image simply never draws — no crash, no
+layout change, just a hole where the art should be, on whichever assets happened to load
+last. An icon-heavy app runs well past a hundred images, so the old fixed 32 was well
+under a real asset set. The default is now 128; a diagnostics build warns once on the
+first refusal (`ERUI_IMAGE_DIAGNOSTICS`, on unless `NDEBUG`), and the perf overlay's
+`IMG n/n` counter reads full.
+
+Each slot is ~80 B on a 32-bit target — the 64-byte name field is most of it — so the
+default costs ~10 KB of `.bss`. Nothing scales with it per frame (lookups skip free slots
+on a bool test), so the only reason to shrink it is RAM: the RP2040 and ESP32-2432S028R
+examples pin it to 8 and 16. Set it **at or above the number of images your app bakes**;
+the count is whatever `assets.config.js` emits.
 
 ### Vector pools (SVG / `<Svg>` rasteriser)
 
@@ -262,6 +280,18 @@ the internal-RAM-bound default**. See `examples/esp32/esp32-s3` —
 A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the
 macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a
 release MCU pulls in no `<stdio.h>`.
+
+**`ERUI_MAX_VECTOR_NODES` is the exception, and warns in release builds too.** The other caps
+truncate one shape, so the screen shows something recognisably wrong, and the culprit is the shape
+you were editing. Running out of *storage slots* instead denies a whole node its geometry — it
+draws nothing — and since slots are handed out in mount order, *which* nodes go missing shifts as
+screens mount and unmount. On a panel that reads as random glitching with no obvious cause. So the
+first refusal prints one `stderr` line even under `NDEBUG`, and raises a sticky flag the perf
+overlay shows as `!FULL` on its `VEC` field (`VEC 8/8!FULL`) — the counter alone can't carry this,
+since a screen that exactly fills the pool renders perfectly well. Hosts can read the same flag
+from `ERPerfFrame::vector_slots_overflow`. The flag clears on `er_reset()`; the warning is
+one-shot per process. Set `-DERUI_VECTOR_STORE_WARN=0` on a target that must not link `<stdio.h>`
+(the flag and the overlay marker keep working).
 
 Override from CMake (`-DERUI_VECTOR_MAX_PTS=4096`), or in an ESP-IDF build from your project's
 `CMakeLists.txt`:

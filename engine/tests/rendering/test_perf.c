@@ -353,6 +353,8 @@ static int check_counters(int screen)
         return fail("registered images did not show up in the image-slot counter");
     if (f.vector_slots_used > f.vector_slots_total || f.image_slots_used > f.image_slots_total)
         return fail("a slot counter exceeded its pool size");
+    if (f.vector_slots_overflow)
+        return fail("a scene well inside the vector pool reported an overflow");
 
     printf("PASS: counters — dirty %dx%d (%u px), VEC %u/%u, IMG %u/%u\n",
            (int)f.dirty_w,
@@ -401,6 +403,11 @@ static int check_overlay_lines(void)
     snprintf(want, sizeof(want), "PKDRT %dx%d", (int)worst.dirty_w, (int)worst.dirty_h);
     if (strncmp(lines[3], want, strlen(want)) != 0)
         return fail("the region line does not show the PEAK frame's repaint region");
+
+    /* The slot line carries the pool-exhaustion marker only when it happened — a false "!FULL" would
+     * send someone raising a macro that was never the problem. */
+    if (!last.vector_slots_overflow && strstr(lines[4], "!FULL") != NULL)
+        return fail("the slot line shows !FULL without a vector-pool overflow");
 
     /* A smaller request must be honoured (a host merging its own metrics has limited room). */
     const char* two[2] = {NULL, NULL};
