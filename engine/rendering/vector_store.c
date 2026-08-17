@@ -31,6 +31,10 @@
 #include <stdbool.h>
 #include <string.h>
 
+#if ERUI_VECTOR_STORE_WARN
+#include <stdio.h>
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Tunables (the storage pool's caps; the rasterizer's caps live in vector.c)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -67,6 +71,32 @@ typedef struct
 
 static VecSlot s_slots[ERUI_MAX_VECTOR_NODES];
 
+/* Sticky: set the first time a node is denied a slot, cleared only by er_vector_reset(). @see
+ * er_vector_slots_overflowed. */
+static bool s_pool_overflowed = false;
+
+/**
+ * @brief Records pool exhaustion: raises the sticky flag and warns once per process.
+ *
+ * Unlike the per-shape caps, this one warns in RELEASE builds too — the symptom (a node with no
+ * geometry, so nothing drawn) carries no hint of its cause. @see ERUI_VECTOR_STORE_WARN.
+ */
+static void note_pool_overflow(void)
+{
+    s_pool_overflowed = true;
+#if ERUI_VECTOR_STORE_WARN
+    static bool warned = false;
+    if (!warned)
+    {
+        warned = true;
+        fprintf(stderr,
+                "embedded-react vector: ERUI_MAX_VECTOR_NODES (%d) exhausted - this <Svg> node and any "
+                "further one will draw NOTHING until a slot frees; raise it.\n",
+                (int)ERUI_MAX_VECTOR_NODES);
+    }
+#endif
+}
+
 int er_vector_store(int slot,
                     const float* ops,
                     int n_ops,
@@ -87,7 +117,7 @@ int er_vector_store(int slot,
         }
         if (slot < 0)
         {
-            ERUI_VEC_WARN_ONCE("ERUI_MAX_VECTOR_NODES", ERUI_MAX_VECTOR_NODES);
+            note_pool_overflow();
             return -1; /* pool exhausted; node renders nothing */
         }
     }
@@ -133,6 +163,9 @@ void er_vector_reset(void)
     /* Free every storage slot. The rasterizer's scratch (vector.c) is reset per shape inside
      * er_vector_render, so it needs no clearing here. */
     memset(s_slots, 0, sizeof(s_slots));
+    /* The overflow flag describes the geometry that was in the pool, so it goes with it — a fresh scene
+     * gets a fresh verdict. The one-shot warning latch is deliberately NOT cleared: it is per process. */
+    s_pool_overflowed = false;
 }
 
 const float* er_vector_slot_ops(int slot, int* n_ops)
@@ -193,4 +226,9 @@ int er_vector_slots_in_use(void)
 int er_vector_slots_total(void)
 {
     return ERUI_MAX_VECTOR_NODES;
+}
+
+bool er_vector_slots_overflowed(void)
+{
+    return s_pool_overflowed;
 }

@@ -168,6 +168,7 @@ void er_perf_frame_end(void)
     s_cur.vector_slots_total = (uint16_t)er_vector_slots_total();
     s_cur.image_slots_used = (uint16_t)image_registry_in_use();
     s_cur.image_slots_total = (uint16_t)IMAGE_REGISTRY_MAX;
+    s_cur.vector_slots_overflow = er_vector_slots_overflowed();
 
     s_last = s_cur;
     s_have_last = true;
@@ -270,11 +271,14 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
                  (int)w->dirty_h,
                  (unsigned)w->dirty_px);
     }
+    /* "!FULL" only when the pool actually turned a node away: "VEC 8/8" alone is legitimate (a screen
+     * that exactly fills the pool renders fine), so the counter cannot carry this on its own. */
     snprintf(s_lines[4],
              sizeof(s_lines[4]),
-             "VEC %u/%u IMG %u/%u",
+             "VEC %u/%u%s IMG %u/%u",
              (unsigned)l->vector_slots_used,
              (unsigned)l->vector_slots_total,
+             l->vector_slots_overflow ? "!FULL" : "",
              (unsigned)l->image_slots_used,
              (unsigned)l->image_slots_total);
 

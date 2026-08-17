@@ -19,6 +19,7 @@
 
 #include "er_scene.h" /* ERVectorPaint + the ER_VOP / ER_VCAP / ER_VJOIN / ER_VFILL contract */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -66,6 +67,18 @@
     } while (0)
 #else
 #define ERUI_VEC_WARN_ONCE(macro_name, cap) ((void)0)
+#endif
+
+/* Running the STORAGE pool out of slots is the one overflow that stays hidden in a release build, so it
+ * gets its own always-on knob. The caps above truncate a single shape — the screen shows something
+ * recognisably wrong, and the shape that broke is the one you were editing. Exhausting the slot pool
+ * instead denies a whole node its geometry: it draws nothing, and because slots are handed out in mount
+ * order, WHICH nodes go missing shifts as screens mount and unmount. That reads on a panel as random
+ * glitching with no obvious culprit and cost a full debugging cycle to trace, so it warns once per
+ * process even under NDEBUG (and raises a flag the perf overlay shows). One fprintf on a path that has
+ * already failed; force it off with -DERUI_VECTOR_STORE_WARN=0 on a target that must not link stdio. */
+#ifndef ERUI_VECTOR_STORE_WARN
+#define ERUI_VECTOR_STORE_WARN 1
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -149,5 +162,15 @@ int er_vector_slots_in_use(void);
 
 /** @brief Total storage slots compiled in (ERUI_MAX_VECTOR_NODES); the denominator for the above. */
 int er_vector_slots_total(void);
+
+/**
+ * @brief True once a node has been denied a storage slot, i.e. the pool ran out.
+ *
+ * Sticky rather than momentary: the store fails at commit time, but the consequence — a vector node
+ * left with no geometry — persists for as long as that node is mounted, so a per-frame sample would
+ * miss the event that explains what is on screen. Cleared only by er_vector_reset() (er_reset()).
+ * Surfaced per frame as ERPerfFrame::vector_slots_overflow / the overlay's "VEC n/n!FULL".
+ */
+bool er_vector_slots_overflowed(void);
 
 #endif

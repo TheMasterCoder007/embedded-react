@@ -38,6 +38,17 @@ See the README for the release process.
 - For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
   art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
 
+- Running out of vector storage slots (`ERUI_MAX_VECTOR_NODES`) now says so in release builds. A
+  `<Svg>` that cannot get a slot holds no geometry and draws nothing. Because slots go out in
+  mount order, *which* shapes vanish moves around as screens mount and unmount — on a panel that
+  looks like random glitching rather than a pool that needs raising, and it previously cost a full
+  debugging cycle to trace. The first refusal now prints one `stderr` line (once per process, even
+  under `NDEBUG` — unlike the other vector pools, whose warnings are debug-only) and raises a flag
+  the perf overlay shows as `!FULL` on its slot line (`VEC 8/8!FULL`), readable by hosts as
+  `ERPerfFrame::vector_slots_overflow`. The marker appears only once a node has actually been
+  turned away, since a screen that exactly fills the pool renders fine. `-DERUI_VECTOR_STORE_WARN=0`
+  drops the `stderr` line (and with it any `<stdio.h>` dependency) while keeping the flag.
+
 ### Fixed
 
 - A `<Modal>` whose style did not cover the whole screen drew its backdrop only behind itself: the

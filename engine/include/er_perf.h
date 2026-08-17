@@ -121,6 +121,9 @@ extern "C"
         uint16_t vector_slots_total;            /**< ERUI_MAX_VECTOR_NODES. */
         uint16_t image_slots_used;              /**< Image registry slots holding a registered asset. */
         uint16_t image_slots_total;             /**< IMAGE_REGISTRY_MAX. */
+        bool vector_slots_overflow;             /**< A vector node was denied a slot since the last er_reset(): it
+                                                     holds no geometry and draws NOTHING. Sticky, not per-frame —
+                                                     the store fails at commit time but the blank node persists. */
         uint32_t index;                         /**< Monotonic frame number since the last er_perf_reset(). */
     } ERPerfFrame;
 
@@ -232,6 +235,10 @@ extern "C"
      *     PK J1900 L12 R80 P9    the WORST frame's split — what to blame the spike on
      *     PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK above)
      *     VEC 3/8 IMG 5/32       vector + image slots in use, out of the compiled-in pool size
+     *
+     * The VEC field gains a `!FULL` marker (`VEC 8/8!FULL`) once a vector node has been denied a
+     * storage slot, because a full pool and a pool that has already turned a node away look the same
+     * on the counter alone — and only the second one explains missing shapes.
      *
      * @param[out] lines      Receives pointers to the formatted lines.
      * @param[in]  max_lines  Capacity of @p lines; at most ER_PERF_OVERLAY_LINES are written.

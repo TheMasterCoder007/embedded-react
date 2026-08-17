@@ -138,7 +138,8 @@ Whatever the four don't cover (input polling, the animation tick, host work) lan
 `other_us`, so the split always reconstructs `frame_us`. Counters sampled per frame:
 the repainted region and its area (what raster *and* present both scale with), vector
 storage slots in use out of `ERUI_MAX_VECTOR_NODES`, and image registry slots out of
-`IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here.
+`IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here. The vector
+field gains a `!FULL` marker once a node has actually been turned away (see the vector section).
 
 The engine has no clock of its own, so timing is opt-in: hand it one with
 `er_perf_set_clock()` (without one the phase times read 0 and the counters still work).
@@ -262,6 +263,18 @@ the internal-RAM-bound default**. See `examples/esp32/esp32-s3` —
 A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the
 macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a
 release MCU pulls in no `<stdio.h>`.
+
+**`ERUI_MAX_VECTOR_NODES` is the exception, and warns in release builds too.** The other caps
+truncate one shape, so the screen shows something recognisably wrong, and the culprit is the shape
+you were editing. Running out of *storage slots* instead denies a whole node its geometry — it
+draws nothing — and since slots are handed out in mount order, *which* nodes go missing shifts as
+screens mount and unmount. On a panel that reads as random glitching with no obvious cause. So the
+first refusal prints one `stderr` line even under `NDEBUG`, and raises a sticky flag the perf
+overlay shows as `!FULL` on its `VEC` field (`VEC 8/8!FULL`) — the counter alone can't carry this,
+since a screen that exactly fills the pool renders perfectly well. Hosts can read the same flag
+from `ERPerfFrame::vector_slots_overflow`. The flag clears on `er_reset()`; the warning is
+one-shot per process. Set `-DERUI_VECTOR_STORE_WARN=0` on a target that must not link `<stdio.h>`
+(the flag and the overlay marker keep working).
 
 Override from CMake (`-DERUI_VECTOR_MAX_PTS=4096`), or in an ESP-IDF build from your project's
 `CMakeLists.txt`:
