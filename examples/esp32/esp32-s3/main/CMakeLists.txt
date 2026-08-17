@@ -38,6 +38,15 @@ idf_component_register(
 # the panel. Set here too so the host wiring is enabled regardless of requirement propagation order.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_OVERLAY=1)
 
+# Engine frame diagnostics (timing split + resource counters) on the overlay — a debugging aid, OFF
+# by default: the everyday overlay shows only FPS / CPU / PSRAM / IRAM. Build with
+# `idf.py -DER_PERF_DETAIL=1` when hunting a spike; components/engine/CMakeLists.txt keys the
+# engine's ER_PERF_STATS instrumentation off the same switch.
+if(NOT DEFINED ER_PERF_DETAIL)
+    set(ER_PERF_DETAIL 0)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_DETAIL=${ER_PERF_DETAIL})
+
 # Pass the hot-reload switch through to the C (main.c gates the receiver start + persist install on it).
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOTRELOAD}>)
 

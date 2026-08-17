@@ -38,6 +38,10 @@ See the README for the release process.
 - For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
   art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
 
+- The `copy_rect_fmt` opaque native-format blit is now implemented in the `esp32-spi-lcd`,
+  `pico-spi-lcd`, and `sdl` backends, so every example gets the fast path — not just the
+  ESP32-S3 RGB board.
+
 - Running out of vector storage slots (`ERUI_MAX_VECTOR_NODES`) now says so in release builds. A
   `<Svg>` that cannot get a slot holds no geometry and draws nothing. Because slots go out in
   mount order, *which* shapes vanish moves around as screens mount and unmount — on a panel that
@@ -48,6 +52,14 @@ See the README for the release process.
   `ERPerfFrame::vector_slots_overflow`. The marker appears only once a node has actually been
   turned away, since a screen that exactly fills the pool renders fine. `-DERUI_VECTOR_STORE_WARN=0`
   drops the `stderr` line (and with it any `<stdio.h>` dependency) while keeping the flag.
+
+### Changed
+
+- The ESP32-S3 example's on-screen perf overlay now shows only the four host metrics (FPS / CPU /
+  PSRAM / IRAM) by default. The engine's frame diagnostics — the FRM/PK timing split, PKDRT repaint
+  region, and VEC/IMG slot counters — are a debugging aid and are compiled out with the
+  instrumentation that feeds them (`ER_PERF_STATS=0`) unless the firmware is built with
+  `idf.py -DER_PERF_DETAIL=1`.
 
 ### Fixed
 
