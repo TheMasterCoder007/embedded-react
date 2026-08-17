@@ -46,10 +46,10 @@ re-architecture.
 
 ### Backends
 
-The backends that run on hardware (`sdl`, `esp32-lcd`, `esp32-spi-lcd`) and power the
-simulators (`software`, `web`) are done. The remaining backends are stubs / README-only:
+The backends that run on hardware (`sdl`, `esp32-lcd`, `esp32-spi-lcd`, `pico-spi-lcd`,
+`dma2d`) and power the simulators (`software`, `web`) are done. The remaining backends are
+stubs / README-only:
 
-- **`backends/dma2d/`** — STM32 DMA2D hardware blitter. Pairs with the STM32H7 bring-up.
 - **`backends/framebuffer/`** — Linux `/dev/fb0` direct framebuffer (embedded Linux SBCs).
 - **`backends/opengl/`** — OpenGL ES 2.0 (Raspberry Pi, Android).
 
@@ -57,7 +57,8 @@ simulators (`software`, `web`) are done. The remaining backends are stubs / READ
 
 Four examples run end-to-end (see README). These are README-only and need wiring:
 
-- **`examples/stm32h7/`** — first STM32 bring-up (with `backends/dma2d/`).
+- **`examples/stm32h7/`** — first STM32 bring-up. The backend (`backends/dma2d/`) is done;
+  what is missing is a board project that wires it to an LTDC panel end to end.
 - **`examples/raspberry-pi/`** — RPi reference app (with `backends/framebuffer/` or `opengl`).
 - **`examples/dashboard-demo/`**, **`examples/marine-display/`** — larger reference apps.
 

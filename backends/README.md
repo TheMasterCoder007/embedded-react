@@ -9,7 +9,7 @@ falls back to `software/`).
 
 | Backend | Description | Status |
 |---|---|---|
-| `dma2d/` | STM32 DMA2D hardware blitter | Stub (planned reference backend) |
+| `dma2d/` | STM32 DMA2D (Chrom-ART) hardware blitter — F4/F7/H7/U5, SDK-free | **Implemented** |
 | `esp32-lcd/` | ESP32-S3 LCD peripheral + PSRAM framebuffer, CPU blit | **Implemented** |
 | `esp32-spi-lcd/` | Lean SPI-LCD for no-PSRAM ESP32 (single internal-RAM fb, banded flush) | **Implemented** |
 | `pico-spi-lcd/` | Portable SPI-LCD for small MCUs (RP2040 — single RGB565 fb, dirty-rect flush) | **Implemented** |

@@ -35,8 +35,23 @@ See the README for the release process.
   format-aware backend a full-screen 16-bit background now costs the same single transfer as the
   ARGB path, instead of ~1M conversions and one row blit per scanline.
 
+- The STM32 DMA2D (Chrom-ART) backend is implemented — `backends/dma2d/` is no longer a stub.
+  Opaque fills become register-to-memory transfers, opaque copies become memory-to-memory with
+  pixel-format conversion (including `copy_rect_fmt`, so an RGB565 image is converted by the
+  peripheral's PFC in a single whole-rect transfer), and everything with alpha stays on a CPU
+  source-over compositor — DMA2D's blender expects straight-alpha foregrounds while the engine
+  emits premultiplied ones, so hardware blending would darken every anti-aliased edge. The
+  backend is SDK-free: it carries its own register map (identical on F4/F7/H7/U5) and takes the
+  peripheral base address in its config, so it drops into bare-CMSIS, HAL, or service-owned
+  firmware alike, with optional hooks for interrupt-driven start/wait and Cortex-M7 D-cache
+  maintenance and a `min_dma_pixels` floor below which tiny ops stay on the CPU. Framebuffers may
+  be ARGB8888, RGB888, or RGB565, tightly packed or row-padded. Link it as the CMake target
+  `er-backend-dma2d`.
+
 - For STM32 LTDC targets, `backends/dma2d/README.md` now documents how to keep static full-screen
-  art on a second LTDC layer so the engine (and the bus) never re-blit it at all.
+  art on a second LTDC layer so the engine (and the bus) never re-blit it at all, plus the
+  page-flip loop (`er_set_display_buffer_count` + `er_dma2d_backend_take_dirty`/`set_framebuffer`/
+  `er_display_present`) for double- and triple-buffered panels.
 
 - The `copy_rect_fmt` opaque native-format blit is now implemented in the `esp32-spi-lcd`,
   `pico-spi-lcd`, and `sdl` backends, so every example gets the fast path — not just the
