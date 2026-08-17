@@ -28,8 +28,8 @@
  * No rotation (the panel's MADCTL handles orientation), no double-buffer, no overlay.
  */
 
-#include "pico_spi_lcd_backend.h"
 #include "native_renderer.h"
+#include "pico_spi_lcd_backend.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -198,6 +198,52 @@ static void copy_cb(const void* src, int src_stride_bytes, int x, int y, int w, 
     mark_dirty(x, y, w, h);
 }
 
+/** @brief Copies a KNOWN-FULLY-OPAQUE source in its native format into the framebuffer (replace).
+ *
+ *  The engine only routes buffers its registration-time opacity scan proved opaque (RGB565 is opaque
+ *  by construction), so pixels replace outright: no fb_load read-back and no over_premul math. The
+ *  fb stores wire-order (byte-swapped) RGB565, so a 565 source is one bswap16 per pixel — far cheaper
+ *  than the blend path's load/composite/store, which is what makes 16-bit-baked backgrounds cheap on
+ *  an RP2040-class CPU. */
+static void copy_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+{
+    (void)ctx;
+    const int ox = x, oy = y;
+    if (!clip_rect(&x, &y, &w, &h))
+    {
+        return;
+    }
+    const int skip_x = x - ox;
+    const int skip_y = y - oy;
+    if (fmt == ER_IMG_RGB565)
+    {
+        for (int row = 0; row < h; row++)
+        {
+            const uint16_t* s =
+                (const uint16_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
+            uint16_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+            for (int col = 0; col < w; col++)
+            {
+                d[col] = (uint16_t)__builtin_bswap16(s[col]);
+            }
+        }
+    }
+    else
+    {
+        for (int row = 0; row < h; row++)
+        {
+            const uint32_t* s =
+                (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
+            uint16_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+            for (int col = 0; col < w; col++)
+            {
+                d[col] = fb_store(s[col]); /* opaque contract: no alpha inspection */
+            }
+        }
+    }
+    mark_dirty(x, y, w, h);
+}
+
 /** @brief Blends a premultiplied ARGB8888 buffer over the framebuffer at a global alpha. */
 static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
@@ -307,6 +353,7 @@ bool er_pico_spi_lcd_backend_init(const ErPicoLcdPanelOps* ops, int width, int h
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
+    backend.copy_rect_fmt = copy_fmt_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL;
     backend.ctx = NULL;

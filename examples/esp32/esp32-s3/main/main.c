@@ -230,7 +230,8 @@ static const EmbeddedRenderBackend k_noop_backend = {
     NULL, /* fill / copy / blend / wait / frame_ready / ctx */
     0,    /* band_height: 0 = classic full-framebuffer path */
     NULL,
-    NULL /* band_begin / band_flush (unused without banding) */
+    NULL, /* band_begin / band_flush (unused without banding) */
+    NULL  /* copy_rect_fmt (headless: nothing to blit into) */
 };
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -248,7 +249,16 @@ static uint32_t now_ms(void)
  - Performance overlay metrics (gathered host-side; ER_PERF_OVERLAY only)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Lines this host formats itself (FPS / CPU / heap); the engine appends its own below them. */
+/* Engine frame diagnostics on the overlay (timing split + resource counters, er_perf.h) — a debugging
+ * aid, OFF by default: the everyday overlay is just the four host lines below. Build with
+ * `idf.py -DER_PERF_DETAIL=1` to append the engine's lines; the same switch compiles the engine's
+ * per-frame instrumentation in (components/engine/CMakeLists.txt keys ER_PERF_STATS off it), so the
+ * default build also pays none of its cost. */
+#ifndef ER_PERF_DETAIL
+#define ER_PERF_DETAIL 0
+#endif
+
+/** @brief Lines this host formats itself (FPS / CPU / PSRAM / IRAM); ER_PERF_DETAIL appends the engine's. */
 #define PERF_HOST_LINES 4
 
 static char s_perf_buf[PERF_HOST_LINES][24];
@@ -304,10 +314,14 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
     {
         s_perf_lines[i] = s_perf_buf[i];
     }
+#if ER_PERF_DETAIL
     /* Append the engine's split + counters. This runs before this frame's er_perf_frame_end(), so the
      * numbers are the previous frame's — irrelevant at a 500 ms refresh, and the retained peak (the
      * "PK" lines, which is what a spike hunt actually reads) is unaffected either way. */
     s_perf_nlines = PERF_HOST_LINES + er_perf_overlay_lines(&s_perf_lines[PERF_HOST_LINES], ER_PERF_OVERLAY_LINES);
+#else
+    s_perf_nlines = PERF_HOST_LINES;
+#endif
 
     frames = 0;
     busy_sum = 0;

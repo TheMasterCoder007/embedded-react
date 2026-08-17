@@ -53,6 +53,7 @@ typedef struct
     SDL_Renderer* renderer;      /**< SDL2 renderer owned by the caller. */
     SDL_Texture* fb;             /**< Render-target texture used as a persistent framebuffer. */
     SDL_Texture* scratch;        /**< Streaming ARGB8888 texture for copy/blend ops. */
+    SDL_Texture* scratch565;     /**< Streaming RGB565 texture for opaque native-format blits. */
     int scratch_w;               /**< Width of the scratch texture in pixels. */
     int scratch_h;               /**< Height of the scratch texture in pixels. */
     SDL_BlendMode premult_blend; /**< Custom blend mode for premultiplied ARGB sources. */
@@ -157,6 +158,44 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
     SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
 }
 
+/**
+ * @brief Copies a KNOWN-FULLY-OPAQUE source in its native format to the framebuffer (replace).
+ *
+ * The engine only routes buffers its registration-time opacity scan proved opaque (RGB565 is opaque
+ * by construction), so the strip renders with blending disabled — a straight replace. RGB565 sources
+ * upload to a dedicated RGB565 streaming texture and the GPU does the format conversion; ARGB sources
+ * reuse the regular scratch texture with its premultiplied blend mode temporarily bypassed.
+ *
+ * @param[in] src              Source pixel buffer (fully opaque, in fmt's layout).
+ * @param[in] src_stride_bytes Row stride of src in bytes.
+ * @param[in] fmt              Pixel format of src (ER_IMG_ARGB8888 or ER_IMG_RGB565).
+ * @param[in] x                Destination X coordinate.
+ * @param[in] y                Destination Y coordinate.
+ * @param[in] w                Width of the region in pixels.
+ * @param[in] h                Height of the region in pixels.
+ * @param[in] ctx              Pointer to the SDLCtx.
+ */
+static void
+copy_rect_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+{
+    SDLCtx* c = ctx;
+    SDL_Rect src_rect = {0, 0, w, h};
+    SDL_Rect dst_rect = {x, y, w, h};
+
+    if (fmt == ER_IMG_RGB565)
+    {
+        SDL_UpdateTexture(c->scratch565, &src_rect, src, src_stride_bytes);
+        SDL_RenderCopy(c->renderer, c->scratch565, &src_rect, &dst_rect);
+        return;
+    }
+    SDL_UpdateTexture(c->scratch, &src_rect, src, src_stride_bytes);
+    SDL_SetTextureColorMod(c->scratch, 255, 255, 255);
+    SDL_SetTextureAlphaMod(c->scratch, 255);
+    SDL_SetTextureBlendMode(c->scratch, SDL_BLENDMODE_NONE); /* opaque contract: replace, no blend */
+    SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
+    SDL_SetTextureBlendMode(c->scratch, c->premult_blend);
+}
+
 #if ER_LCD_BANDED
 /**
  * @brief Begins a strip: targets the band texture and clears its used region to opaque black.
@@ -257,6 +296,16 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
     s_backend.frame_ready = NULL;
     s_backend.ctx = &s_ctx;
 
+    /* Opaque native-format blit path. Optional: if the RGB565 texture can't be created the hook stays
+     * NULL and the engine falls back to CPU expansion through copy_rect — behaviour is unchanged. */
+    s_backend.copy_rect_fmt = NULL;
+    s_ctx.scratch565 = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
+    if (s_ctx.scratch565)
+    {
+        SDL_SetTextureBlendMode(s_ctx.scratch565, SDL_BLENDMODE_NONE);
+        s_backend.copy_rect_fmt = copy_rect_fmt_cb;
+    }
+
 #if ER_LCD_BANDED
     /* Band buffer: a strip of the screen the engine recomposites and flushes one row-range at a time. */
     s_ctx.band =
@@ -339,6 +388,11 @@ void er_sdl_backend_destroy(void)
     {
         SDL_DestroyTexture(s_ctx.scratch);
         s_ctx.scratch = NULL;
+    }
+    if (s_ctx.scratch565)
+    {
+        SDL_DestroyTexture(s_ctx.scratch565);
+        s_ctx.scratch565 = NULL;
     }
     s_ctx.renderer = NULL;
 }
