@@ -298,6 +298,7 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
 
     /* Opaque native-format blit path. Optional: if the RGB565 texture can't be created the hook stays
      * NULL and the engine falls back to CPU expansion through copy_rect — behaviour is unchanged. */
+    s_backend.copy_rect_fmt = NULL;
     s_ctx.scratch565 = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
     if (s_ctx.scratch565)
     {

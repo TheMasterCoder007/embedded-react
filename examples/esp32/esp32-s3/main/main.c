@@ -258,7 +258,7 @@ static uint32_t now_ms(void)
 #define ER_PERF_DETAIL 0
 #endif
 
-/** @brief Lines this host formats itself (FPS / CPU / heap); ER_PERF_DETAIL appends the engine's. */
+/** @brief Lines this host formats itself (FPS / CPU / PSRAM / IRAM); ER_PERF_DETAIL appends the engine's. */
 #define PERF_HOST_LINES 4
 
 static char s_perf_buf[PERF_HOST_LINES][24];
