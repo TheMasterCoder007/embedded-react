@@ -241,11 +241,10 @@ static void wait_pending(void)
     }
     else
     {
-        while ((s_ctx.regs->ISR & (DMA2D_ISR_TCIF | DMA2D_ISR_TEIF)) == 0U)
+        while ((s_ctx.regs->ISR & DMA2D_IFCR_ALL) == 0U)
         {
         }
         s_ctx.regs->IFCR = DMA2D_IFCR_ALL;
-    }
     s_ctx.pending = false;
 }
 
