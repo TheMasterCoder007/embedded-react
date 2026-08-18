@@ -76,6 +76,8 @@ typedef struct
 #define DMA2D_CR_MODE_R2M 0x00030000U     /* register-to-memory fill */
 #define DMA2D_ISR_TCIF 0x00000002U
 #define DMA2D_ISR_TEIF 0x00000001U
+#define DMA2D_ISR_CEIF 0x00000020U
+#define DMA2D_ISR_DONE (DMA2D_ISR_TCIF | DMA2D_ISR_TEIF | DMA2D_ISR_CEIF)
 #define DMA2D_IFCR_ALL 0x0000003FU
 #define DMA2D_AMTCR_EN 0x00000001U
 
@@ -241,10 +243,12 @@ static void wait_pending(void)
     }
     else
     {
-        while ((s_ctx.regs->ISR & DMA2D_IFCR_ALL) == 0U)
+        while ((s_ctx.regs->ISR & DMA2D_ISR_DONE) == 0U)
         {
         }
         s_ctx.regs->IFCR = DMA2D_IFCR_ALL;
+    }
+
     s_ctx.pending = false;
 }
 

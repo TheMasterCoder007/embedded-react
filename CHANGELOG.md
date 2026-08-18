@@ -11,6 +11,14 @@ See the README for the release process.
 
 ## [Unreleased]
 
+### Fixed
+
+- The STM32 DMA2D backend did not compile in 0.11.0 — `wait_pending()` was missing the brace closing
+  its polling branch, so every function after it parsed as a nested definition. The poll now waits on
+  a named mask (`DMA2D_ISR_DONE`: transfer complete, transfer error, or configuration error) rather
+  than on every interrupt flag, so a refused transfer still ends the wait and an unrelated flag
+  cannot end it early.
+
 ## [0.11.0] - 2026-08-18
 ### Added
 
