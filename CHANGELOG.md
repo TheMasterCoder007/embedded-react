@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.11.0] - 2026-08-18
 ### Added
 
 - Opaque images now render through a copy fast path instead of per-pixel blending. Every image is
@@ -555,7 +557,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.9.0...v0.10.0
