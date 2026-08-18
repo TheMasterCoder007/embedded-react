@@ -11,6 +11,7 @@ See the README for the release process.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-08-18
 ### Fixed
 
 - The STM32 DMA2D backend did not compile in 0.11.0 — `wait_pending()` was missing the brace closing
@@ -565,7 +566,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.0...v0.10.1
