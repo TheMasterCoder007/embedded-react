@@ -1328,7 +1328,7 @@ function lowerDynamicStyleValue(key, valueNode, env) {
   if (!meta)
     throw aotError(
       `AOT: a state-driven value for style "${key}" is not supported (static only)`,
-      `state-driven styles supported: colors, opacity, sizes/margins/padding, and the layout enums (flexDirection, alignItems, alignSelf, justifyContent, position). Make "${key}" static, or drive the change another way.`,
+      `state-driven styles supported: colors, opacity, sizes/margins/padding, and the layout enums (flexDirection, alignItems, alignSelf, justifyContent, position, display). Make "${key}" static, or drive the change another way.`,
     );
   if (meta.kind === 'color')
     return [{field: meta.field, code: emitColorExpr(valueNode, env)}];
@@ -1449,6 +1449,7 @@ function collectStyleAssigns(openingElement, scope, env) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
     apply(attrExpr(attr));
   }
+
   const staticAssigns = [];
   const dynAssigns = [];
   for (const [field, v] of fields)
@@ -3297,6 +3298,18 @@ function emitSvg(el, scope, out, env, state, opts) {
     throw new Error(
       'AOT: an <Svg> inside a dynamic conditional is not yet supported',
     );
+  // The vector emitter builds its box from static style assigns only, so it cannot honour `visible`
+  // (nor a state-driven style `display`). Say so rather than dropping the prop — a silently inert
+  // hide prop is exactly the trap this alias exists to remove.
+  if (
+    el.openingElement.attributes.some(
+      a => a.type === 'JSXAttribute' && a.name && a.name.name === 'visible',
+    )
+  )
+    throw aotError(
+      'AOT: `visible` on an <Svg> is not supported',
+      'wrap it: <View visible={…}><Svg …/></View> — the View carries the hide and the whole subtree goes with it.',
+    );
   const sourceAttr = el.openingElement.attributes.find(
     a => a.type === 'JSXAttribute' && a.name && a.name.name === 'source',
   );
@@ -4260,8 +4273,42 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   if (image?.tintColor)
     staticAssigns.push({field: 'tint_color', expr: image.tintColor});
 
+  // `visible` is the prop spelling of `display` (props.js does the same mapping in Flow A). An
+  // explicit style `display` WINS, exactly as it does there, so the two spellings cannot disagree.
+  // This lives here rather than in collectStyleAssigns because that helper is shared with <Modal> —
+  // whose `visible` is its own show/hide prop, lowered to modal_visible by emitModal — and with the
+  // typed components, which reject any prop they do not whitelist. All of those dispatch before this
+  // point, so they are structurally out of reach.
+  const visibleAttr = el.openingElement.attributes.find(
+    a => a.type === 'JSXAttribute' && a.name && a.name.name === 'visible',
+  );
+  if (
+    visibleAttr &&
+    !staticAssigns.some(a => a.field === 'display') &&
+    !dynAssigns.some(a => a.field === 'display')
+  ) {
+    const expr = visibleAttr.value == null ? null : attrExpr(visibleAttr); // bare `visible` === true
+    if (expr == null) {
+      staticAssigns.push({field: 'display', expr: 'ER_DISPLAY_FLEX'});
+    } else {
+      try {
+        staticAssigns.push({
+          field: 'display',
+          expr: evalStatic(expr, scope) ? 'ER_DISPLAY_FLEX' : 'ER_DISPLAY_NONE',
+        });
+      } catch {
+        dynAssigns.push({
+          field: 'display',
+          code: `((${emitExpr(expr, env).code}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`,
+        });
+      }
+    }
+  }
+
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
   // `display` flips between flex and none in app_update (joining any state-driven style assigns).
+  // Pushed last so an enclosing conditional beats the element's own visible/display — app_update
+  // applies staticAssigns before dynAssigns, so a dynamic toggle also beats a static one.
   if (opts.displayCode)
     dynAssigns.push({
       field: 'display',

@@ -108,6 +108,25 @@ interpolation like `Hi {name}`, or nested `<Text>` runs) becomes the node's `tex
 `Animated`, `Easing`, and the web timer globals (`setTimeout` / `setInterval`) are all available;
 `useEffect` flushes via the host pump.
 
+### Hiding a subtree (`display: 'none'`) — page caching
+
+```jsx
+<View style={{display: page === 'home' ? 'flex' : 'none'}}><Home /></View>
+<View style={{display: page === 'settings' ? 'flex' : 'none'}}><Settings /></View>
+```
+
+A hidden subtree drops out of layout, rendering, and hit-testing, but stays **mounted** — its React
+state and effects survive, and the native nodes behind it keep their props. That is the difference
+from the conditional render (`{page === 'home' && <Home/>}`) it replaces: a conditional unmounts the
+page and rebuilds every node in interpreted QuickJS on the way back, which is the dominant cost of a
+page change. Hiding costs a repaint, and a hidden page costs nothing per frame even while React keeps
+rendering into it.
+
+`visible={false}` is the same switch under the other spelling, with an explicit `style.display`
+winning over it (`<Modal visible>` is unaffected — that is the Modal's own show/hide prop). Both work in Flow B too, where `display` can be static or 
+The trade is memory: a cached page holds its nodes for the life of the app, so cache
+the pages you flip between, not every page.
+
 ## Build
 
 ```

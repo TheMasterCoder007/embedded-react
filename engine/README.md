@@ -111,6 +111,26 @@ the old single-box behavior without ever dropping coverage. The multi-buffer pag
 `er_get_dirty_rects()` — one transfer window per region on capable display drivers — while
 `er_get_dirty_rect()` still returns the covering box.
 
+### Hidden subtrees (`display: none`)
+
+A node with `ERProps.display = ER_DISPLAY_NONE` and everything under it is pruned from the layout
+solver, the render walk, and hit-testing, while its nodes stay allocated with their props intact —
+so an app can build a page once and flip it on and off instead of destroying and recreating its
+nodes. Hiding collapses the node's computed rect to zero, so it takes no space and `onLayout` reports 
+an empty box.
+
+The bookkeeping is what makes it cheap and correct. `ERNode::subtree_hidden` — maintained by the
+tree and prop mutators, never by a per-frame walk — lets the flat per-commit passes, which have no
+top-down parent context, skip a hidden node in O(1). On the transition itself, the engine banks each
+node's last painted rect as vacated damage (the same channel node removal uses) and drops the stale
+trail, because layout stops maintaining a hidden node's descendants: they would otherwise read as
+unchanged-and-in-place, and any pixels they painted outside their parent's box would stay on screen.
+Showing marks the subtree dirty so it repaints. Hidden nodes are also swept clear of dirty flags at
+the end of each commit — they can never reach the paint that would clear them, and a stuck flag is a
+rect re-damaged on every commit forever, which matters because React keeps rendering into a cached
+page while it is off screen. The result is that a hidden page costs nothing per frame and reports no
+dirty rect.
+
 ### Banded rendering (low-RAM panels)
 
 A backend can opt into banded RGB565 (`ER_LCD_BANDED`): it sets a band height and

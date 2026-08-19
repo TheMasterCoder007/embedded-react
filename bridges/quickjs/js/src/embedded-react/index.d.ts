@@ -54,6 +54,7 @@ export interface ViewStyle {
   borderColor?: string;
   opacity?: number;
   transform?: TransformStyle[];
+  display?: 'flex' | 'none';
 }
 
 export interface TextStyle extends ViewStyle {
@@ -78,6 +79,7 @@ export type StyleProp<T> = T | false | null | undefined | StyleProp<T>[];
 export interface ViewProps {
   style?: StyleProp<ViewStyle>;
   children?: ReactNode;
+  visible?: boolean;
 }
 
 export interface TextProps {
@@ -91,6 +93,7 @@ export interface PressableProps {
   children?: ReactNode;
   onPress?: () => void;
   disabled?: boolean;
+  visible?: boolean;
 }
 
 export type ImageSource = number | string | {uri: string};

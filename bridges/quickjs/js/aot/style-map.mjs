@@ -100,6 +100,7 @@ const FLEX_DIRECTION = {
   'column-reverse': 'ER_FLEX_COL_REVERSE',
 };
 const POSITION = {relative: 'ER_POS_RELATIVE', absolute: 'ER_POS_ABSOLUTE'};
+const DISPLAY = {flex: 'ER_DISPLAY_FLEX', none: 'ER_DISPLAY_NONE'};
 
 const enumKey = (table, name) => v => {
   const c = table[v];
@@ -183,6 +184,7 @@ const KEYS = {
   ],
   // Positioning: `position: 'absolute'` takes a node out of flow; left/top/right/bottom are its anchors.
   position: v => [{field: 'position', expr: enumKey(POSITION, 'position')(v)}],
+  display: v => [{field: 'display', expr: enumKey(DISPLAY, 'display')(v)}],
   left: v => [{field: 'left', expr: dim(v)}],
   top: v => [{field: 'top', expr: dim(v)}],
   right: v => [{field: 'right', expr: dim(v)}],
@@ -305,6 +307,7 @@ const ENUM_FIELDS = {
   alignSelf: {field: 'align_self', table: ALIGN},
   justifyContent: {field: 'justify_content', table: JUSTIFY},
   position: {field: 'position', table: POSITION},
+  display: {field: 'display', table: DISPLAY},
 };
 
 export const DYN_FIELDS = {

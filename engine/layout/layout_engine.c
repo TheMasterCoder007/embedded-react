@@ -932,13 +932,20 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         c->computed.h = ch;
     }
 
-    /* Pass 6b — recurse via sibling chain using pre-stored computed rects. */
+    /* Pass 6b — recurse via sibling chain using pre-stored computed rects. A display:none child was
+     * excluded from every sizing pass above, so its computed rect still holds whatever it had when it
+     * was last visible; run it through compute_layout anyway (which zeroes the box and stops without
+     * recursing) so a hidden node reports the empty layout it actually occupies — onLayout included —
+     * rather than a stale one. Absolutely-positioned children are otherwise handled by pass 7, but a
+     * hidden one is collapsed here since pass 7 skips it too. */
     for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
     {
         ERNode* c = er_get_node(ct);
         if (!c)
             break;
-        if (c->layout.position != ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
+        if (c->layout.display == ER_DISPLAY_NONE)
+            compute_layout(c->tag, 0, 0, 0, 0);
+        else if (c->layout.position != ER_POS_ABSOLUTE)
             compute_layout(c->tag, c->computed.w, c->computed.h, c->computed.x, c->computed.y);
         ct = c->next_sibling_tag;
     }

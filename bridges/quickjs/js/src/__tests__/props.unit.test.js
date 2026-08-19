@@ -88,6 +88,36 @@ describe('buildProps', () => {
     });
   });
 
+  it('passes a style display straight through (the subtree page-cache switch)', () => {
+    expect(buildProps('View', {style: {display: 'none'}})).toEqual({
+      display: 'none',
+    });
+  });
+
+  it('maps visible={false} on a non-Modal to display:none', () => {
+    expect(buildProps('View', {style: {}, visible: false})).toEqual({
+      display: 'none',
+    });
+  });
+
+  it('maps visible={true} on a non-Modal to display:flex', () => {
+    expect(buildProps('Pressable', {style: {}, visible: true})).toEqual({
+      display: 'flex',
+    });
+  });
+
+  it('an explicit style display wins over visible', () => {
+    expect(
+      buildProps('View', {style: {display: 'none'}, visible: true}),
+    ).toEqual({display: 'none'});
+  });
+
+  it("leaves visible alone on a <Modal> (it is that node's own show/hide prop)", () => {
+    expect(buildProps('Modal', {style: {}, visible: false})).toEqual({
+      visible: false,
+    });
+  });
+
   it('resolves an <Image source> string to imageName', () => {
     expect(buildProps('Image', {style: {}, source: 'wx_sun'})).toEqual({
       imageName: 'wx_sun',

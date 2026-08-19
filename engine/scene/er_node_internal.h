@@ -224,6 +224,11 @@ struct ERNode
                              paint traversal (an idempotent same-value write, safe when a node straddles two
                              workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
                              sequential post-pass, so the paint recursion itself never mutates shared flags. */
+    bool subtree_hidden;  /**< This node is display:none, or an ancestor is. Maintained by the tree/prop mutators
+                             (never by the per-frame walks), so the flat per-commit passes — which have no
+                             top-down parent context — can skip a hidden page in O(1) per node instead of
+                             measuring it. It also retires its dirty flags: a pruned node can never paint, so a
+                             flag it cannot clear would make it damage the same rect on every commit forever. */
 #if ERUI_SHADOWS
     bool casts_shadow; /**< Shadow props currently active — feeds the multi-core parallel-unsafe count
                           (the shadow blur runs through shared static scratch). */

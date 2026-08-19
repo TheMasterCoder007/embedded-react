@@ -80,6 +80,84 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('ER_DISPLAY_NONE');
   });
 
+  it('lowers a static style display to the ERProps field', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View style={{display: 'none'}}><Text>hidden page</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_NONE;');
+  });
+
+  it('lowers a state-driven style display (the page-cache switch) into app_update', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [onHome, setOnHome] = useState(true);
+        return (<View style={{display: onHome ? 'flex' : 'none'}}><Text>home</Text></View>);
+      }`);
+    expect(c).toContain('ER_DISPLAY_FLEX');
+    expect(c).toContain('ER_DISPLAY_NONE');
+    expect(c).toContain('s_state.onHome');
+    // The toggle must land in the update path, not only in the one-shot build.
+    expect(c.slice(c.indexOf('app_update'))).toMatch(/\.display\s*=/);
+  });
+
+  it('lowers visible={false} to a static display (the prop spelling, Flow A<->B parity)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View visible={false}><Text>hidden</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_NONE;');
+  });
+
+  it('lowers a bare `visible` to display:flex', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View visible><Text>shown</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_FLEX;');
+  });
+
+  it('an explicit style display wins over visible (matches Flow A precedence)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View visible={true} style={{display: 'none'}}><Text>x</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_NONE;');
+    expect(c).not.toContain('p.display = ER_DISPLAY_FLEX;');
+  });
+
+  it('a state-driven style display wins over visible too', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [onHome, setOnHome] = useState(true);
+        return (<View visible={false} style={{display: onHome ? 'flex' : 'none'}}><Text>x</Text></View>);
+      }`);
+    // The style's toggle is the only display write — visible must not have added a second, static one.
+    expect(c).toContain(
+      'p.display = ((s_state.onHome) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
+    );
+    expect(c).not.toContain('p.display = ER_DISPLAY_NONE;');
+  });
+
+  it('rejects `visible` on an <Svg> instead of silently dropping it', () => {
+    expect(() =>
+      gen(`${PRE}
+      export function App() {
+        return (<View><Svg visible={false} width={10} height={10}><Path d="M0 0 L1 1" fill="none" stroke="#fff" /></Svg></View>);
+      }`),
+    ).toThrow(/`visible` on an <Svg> is not supported/);
+  });
+
+  it('lowers a state-driven visible into app_update', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [onHome, setOnHome] = useState(true);
+        return (<View visible={onHome}><Text>home</Text></View>);
+      }`);
+    expect(c.slice(c.indexOf('app_update'))).toMatch(/\.display\s*=/);
+    expect(c).toContain('s_state.onHome');
+  });
+
   it('compiles multiple sequential setters in one handler with a single app_update', () => {
     const c = gen(`${PRE}
       export function App() {
@@ -1130,6 +1208,10 @@ describe('AOT Modal', () => {
       }`);
     expect(c).toContain('er_node_create(ER_NODE_MODAL)');
     expect(c).toContain('p.modal_visible = (uint8_t)((s_state.show) ? 1 : 0);');
+    // <Modal>'s `visible` is its OWN show/hide prop — the engine derives layout.display from
+    // modal_visible itself. The generic visible->display alias must not also fire here, or the node
+    // carries two independent encodings of the same state that can disagree.
+    expect(c).not.toMatch(/p\.display\s*=/);
     expect(c).toContain('p.backdrop_color = 0xCC000000u;');
     expect(c).toContain('p.position = ER_POS_ABSOLUTE;'); // overlay defaults…
     expect(c).toContain('p.right = 0;'); // …filled via 4 insets
