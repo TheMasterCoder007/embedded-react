@@ -168,6 +168,15 @@ export function buildProps(type, props, flatStyle) {
     const name = resolveImageSource(props.source);
     if (name != null) flat.imageName = name;
   }
+  // `visible` is the Modal's own show/hide prop (it maps to ERProps.modal_visible). On every other
+  // component it used to be silently inert; it now means the same thing as `display`, so a subtree can
+  // be pruned from layout, raster and hit-testing without unmounting it. An explicit style `display`
+  // wins, so the two spellings can't disagree.
+  if (type !== 'Modal' && flat.visible !== undefined) {
+    if (flat.display === undefined)
+      flat.display = flat.visible ? 'flex' : 'none';
+    delete flat.visible;
+  }
   // <Text> content: flatten string/number/nested-<Text> children into the node's full-text string.
   // The engine renders this when no spans are set; with spans (buildTextSpans) it carries the same
   // text for the plain-text fallback. Non-flattenable children fall back to mounted child instances.

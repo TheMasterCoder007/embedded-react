@@ -10,6 +10,38 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- `display: 'none'` hides a subtree without unmounting it. The node and everything under it drop out
+  of layout, rendering, and hit-testing. However, the native nodes stay allocated with their props intact,
+  so showing the subtree again is a repaint rather than a rebuild (build each page once, then flip between 
+  them, instead of tearing down and recreating a few hundred nodes in interpreted QuickJS on every page change). 
+  `visible`, which was listed as a passthrough prop but did nothing outside `<Modal>`, is now an alias for it:
+  `visible={false}` means `display: 'none'` (on `<Modal>` it keeps its existing meaning). Works in
+  both flows — Flow A through `style` or the prop, Flow B as a static or state-driven style key —
+  and is declared in the TypeScript types.
+
+### Fixed
+
+- Hiding a subtree with `display: 'none'` left pixels on screen when any descendant painted outside
+  the hidden node's own box (an absolutely positioned child of a small container, for example).
+  Layout stops maintaining a hidden node's descendants, so the damage pre-pass read them as
+  unchanged-and-in-place, and they contributed nothing to the repaint; their footprint is now banked
+  when the subtree is hidden, the same way a removed node is.
+
+- A hidden subtree is no longer processed every frame. Props set on a node the paint walk prunes —
+  which happens continuously, since React keeps rendering a cached page — used to leave dirty flags
+  that nothing could ever clear, so the page re-damaged its own rect on every commit for the rest of
+  the run. A hidden page now costs nothing per frame and reports no dirty rect.
+
+- `display: 'none'` collapses the hidden node's computed rect, so `onLayout` reports the empty box it
+  actually occupies instead of the one it had when it was last visible.
+
+- Pixels vacated by a removed, destroyed, or hidden node are now reported through
+  `er_get_dirty_rect()` / `er_get_dirty_rects()` as well as repainted. The node that owned them is
+  gone from the render walk, so nothing contributed them to the reported rect, and a host that
+  transfers only that rect left the stale content on the panel.
+
 
 ## [0.11.1] - 2026-08-18
 ### Fixed

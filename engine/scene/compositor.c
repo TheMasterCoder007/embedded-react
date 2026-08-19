@@ -433,6 +433,15 @@ static uint32_t s_content_gen = 1U;
 
 void er_mark_dirty_upward_visual(ERNode* node)
 {
+    /* A node inside a display:none subtree cannot paint, so changing it changes no pixels. Marking
+     * it (or its ancestors) would be worse than useless: neither flag can be cleared by painting,
+     * so a cached page that React keeps re-rendering would repaint its own rect on every commit —
+     * and, once an ancestor up to the root is stuck dirty, the "nothing changed" commit path walks
+     * unclipped and repaints the whole screen. propagate_hidden re-marks the subtree when it is
+     * shown, which is when the change becomes visible. */
+    if (node && node->subtree_hidden)
+        return;
+
     /* Mark only the initiating node as source_dirty so the dirty-rect
      * accumulator can track which pixels actually changed, not which
      * ancestors were incidentally re-rendered to clear the background. */
@@ -602,25 +611,99 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
  *
  * @param[in] n  Root of the subtree being removed.
  */
-static void note_removed_subtree(const ERNode* n)
+static void note_removed_subtree(ERNode* n)
 {
     if (!n)
         return;
     if (n->has_last_paint)
+    {
         er_damage_set_add(&s_removed_set,
                           (int)n->last_paint_rect.x,
                           (int)n->last_paint_rect.y,
                           (int)n->last_paint_rect.w,
                           (int)n->last_paint_rect.h);
+
+        n->has_last_paint = false;
+    }
     uint16_t c = n->first_child_tag;
     while (c != ER_INVALID_TAG)
     {
-        const ERNode* ch = er_get_node(c);
+        ERNode* ch = er_get_node(c);
         if (!ch)
             break;
         note_removed_subtree(ch);
         c = ch->next_sibling_tag;
     }
+}
+
+/**
+ * @brief Recomputes ERNode::subtree_hidden for a subtree and settles its damage bookkeeping.
+ *
+ * A display:none node is pruned from layout, from render_tree and from hit-testing, so its
+ * DESCENDANTS silently stop being maintained: layout leaves their computed rects frozen and the
+ * paint walk never reaches them. The damage pre-pass, which measures each node on its own, then
+ * reads them as unchanged-and-in-place and they contribute nothing — so a descendant that painted
+ * outside the hidden node's own box would stay on screen forever, and one that was dirty when the
+ * subtree went away would keep a flag it can never clear (a rect re-damaged on every commit for the
+ * rest of the run). Both are settled here, once per transition rather than per frame:
+ *
+ *   - hiding: register each node's last painted rect as vacated — the same channel node removal
+ *     uses — then drop the stale trail and retire the dirty flags,
+ *   - showing: mark each node dirty so the pre-pass unions its rect back into the damage and the
+ *     paint walk repaints it.
+ *
+ * Nothing about the nodes themselves changes: they keep their tags, props and geometry, which is
+ * the whole point of hiding a page instead of unmounting it. Nested display:none subtrees stay
+ * hidden when an ancestor is shown, because each level ORs in its own display.
+ *
+ * @param[in,out] n                Subtree root to walk (NULL is ignored).
+ * @param[in]     ancestor_hidden  Whether an ancestor of @p n is (or is inside) a display:none node.
+ */
+static void propagate_hidden(ERNode* n, bool ancestor_hidden)
+{
+    if (!n)
+        return;
+
+    const bool hidden = ancestor_hidden || (n->layout.display == ER_DISPLAY_NONE);
+    if (hidden != n->subtree_hidden)
+    {
+        n->subtree_hidden = hidden;
+        if (hidden)
+        {
+            if (n->has_last_paint)
+            {
+                er_damage_set_add(&s_removed_set,
+                                  (int)n->last_paint_rect.x,
+                                  (int)n->last_paint_rect.y,
+                                  (int)n->last_paint_rect.w,
+                                  (int)n->last_paint_rect.h);
+                n->has_last_paint = false;
+            }
+        }
+        else
+        {
+            n->dirty = true;
+            n->source_dirty = true;
+        }
+    }
+
+    /* Recurse unconditionally: an unchanged flag here says nothing about a subtree that was just
+     * spliced in from somewhere else (append/insert re-runs this from the new parent). */
+    for (uint16_t c = n->first_child_tag; c != ER_INVALID_TAG;)
+    {
+        ERNode* ch = er_get_node(c);
+        if (!ch)
+            break;
+        propagate_hidden(ch, hidden);
+        c = ch->next_sibling_tag;
+    }
+}
+
+/** @brief True when @p n sits under a display:none ancestor (false for a node with no parent). */
+static bool parent_hidden(const ERNode* n)
+{
+    const ERNode* p = er_get_node(n->parent_tag);
+    return p && p->subtree_hidden;
 }
 
 /**
@@ -804,6 +887,14 @@ static void compute_subtree_bounds(ERNode* n)
         ERNode* c = er_get_node(child_tag);
         if (!c)
             break;
+        if (c->layout.display == ER_DISPLAY_NONE)
+        {
+            /* A hidden subtree paints nothing, so it must not widen this node's prune bounds — its
+             * own box has collapsed to the origin and unioning that in would stretch the parent's
+             * bounds back to (0,0) and defeat the pruning for everything around it. */
+            child_tag = c->next_sibling_tag;
+            continue;
+        }
         compute_subtree_bounds(c);
         if (!clips)
         {
@@ -1975,6 +2066,10 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->props_hash = h;
     node->has_props_hash = true;
 
+    /* Remembered across the layout copy below so a display:none toggle can be detected and the
+     * subtree's hidden state settled once, after this node's own dirty marking (see propagate_hidden). */
+    const uint8_t prev_display = node->layout.display;
+
     /* Copy all layout fields. */
     ERLayoutSpec* L = &node->layout;
     L->left = props->left;
@@ -2254,6 +2349,18 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     {
         mark_layout_dirty();
         er_mark_dirty_upward(node);
+    }
+
+    /* display:none show/hide. Runs AFTER the dirty marking above so that hiding retires this node's
+     * freshly-set flags too (the ancestors' propagated dirty stays, which is what repaints the
+     * background the subtree vacated). ER_NODE_MODAL drives node->layout.display from modal_visible
+     * further up, so its show/hide lands here as well. */
+    if (node->layout.display != prev_display)
+    {
+        propagate_hidden(node, parent_hidden(node));
+
+        if (!node->subtree_hidden)
+            er_mark_dirty_upward(node);
     }
 }
 
@@ -3114,6 +3221,7 @@ void er_tree_append_child(ERNode* parent, ERNode* child)
     child->next_sibling_tag = ER_INVALID_TAG;
     parent->dirty = true;
     mark_layout_dirty();
+    propagate_hidden(child, parent->subtree_hidden);
 }
 
 void er_tree_insert_before(ERNode* parent, ERNode* child, ERNode* before)
@@ -3164,6 +3272,7 @@ void er_tree_insert_before(ERNode* parent, ERNode* child, ERNode* before)
 
     parent->dirty = true;
     mark_layout_dirty();
+    propagate_hidden(child, parent->subtree_hidden);
 }
 
 void er_tree_remove_child(ERNode* parent, ERNode* child)
@@ -3179,6 +3288,7 @@ void er_tree_remove_child(ERNode* parent, ERNode* child)
     child->parent_tag = ER_INVALID_TAG;
     parent->dirty = true;
     mark_layout_dirty();
+    propagate_hidden(child, true);
 }
 
 void er_tree_set_root(ERNode* root)
@@ -3191,7 +3301,8 @@ void er_tree_set_root(ERNode* root)
     }
     s_root_tag = root->tag;
     mark_layout_dirty();
-    er_force_full_repaint(); /* whole new scene: repaint everything */
+    propagate_hidden(root, false); /* a new root is on screen: its subtree is no longer detached */
+    er_force_full_repaint();       /* whole new scene: repaint everything */
 }
 
 void er_reset(void)
@@ -3398,10 +3509,23 @@ void er_commit(void)
     else
     {
         bool trackable = true;
-        /* Seed with any pixels vacated by removed/destroyed nodes since the last commit. */
+        /* Seed with any pixels vacated by removed, destroyed or hidden nodes since the last commit.
+         * They are REPORTED as well as repainted: the node that owned those pixels is gone from the
+         * walk, so nothing downstream would contribute them to er_get_dirty_rect(), and a host that
+         * flushes only the reported rect would leave the vacated content on the panel. (Same reason
+         * the Modal scrim below reports its own erase explicitly.) */
         for (uint8_t ri = 0U; ri < s_removed_set.count; ri++)
-            add_damage(&dmg, s_removed_set.r[ri].x, s_removed_set.r[ri].y, s_removed_set.r[ri].w,
-                       s_removed_set.r[ri].h, rb_x0, rb_y0, rb_x1, rb_y1);
+        {
+            const ERRect* v = &s_removed_set.r[ri];
+            add_damage(&dmg, v->x, v->y, v->w, v->h, rb_x0, rb_y0, rb_x1, rb_y1);
+            /* Clamped to the root the same way add_damage clamps its insert, so a footprint that lies
+             * (partly) off-screen is never reported as repainted when it was not. */
+            const int vx0 = (v->x > rb_x0) ? v->x : rb_x0;
+            const int vy0 = (v->y > rb_y0) ? v->y : rb_y0;
+            const int vx1 = (v->x + v->w < rb_x1) ? (v->x + v->w) : rb_x1;
+            const int vy1 = (v->y + v->h < rb_y1) ? (v->y + v->h) : rb_y1;
+            union_dirty_rect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+        }
 #if ERUI_ONSCREEN_KEYBOARD
         /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
         if (s_kbd_dirty)
@@ -3415,6 +3539,9 @@ void er_commit(void)
         {
             ERNode* n = er_get_node(tag);
             if (!n)
+                continue;
+
+            if (n->subtree_hidden && !(n->type == ER_NODE_MODAL && n->modal_scrim_shown))
                 continue;
             int rx, ry, rw, rh;
             if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
@@ -3868,7 +3995,7 @@ void er_commit(void)
     for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
     {
         ERNode* pn = &s_nodes[i];
-        if (pn->in_use && pn->painted_seq == s_commit_seq)
+        if (pn->in_use && (pn->painted_seq == s_commit_seq || pn->subtree_hidden))
         {
             pn->dirty = false;
             pn->source_dirty = false;

@@ -1328,7 +1328,7 @@ function lowerDynamicStyleValue(key, valueNode, env) {
   if (!meta)
     throw aotError(
       `AOT: a state-driven value for style "${key}" is not supported (static only)`,
-      `state-driven styles supported: colors, opacity, sizes/margins/padding, and the layout enums (flexDirection, alignItems, alignSelf, justifyContent, position). Make "${key}" static, or drive the change another way.`,
+      `state-driven styles supported: colors, opacity, sizes/margins/padding, and the layout enums (flexDirection, alignItems, alignSelf, justifyContent, position, display). Make "${key}" static, or drive the change another way.`,
     );
   if (meta.kind === 'color')
     return [{field: meta.field, code: emitColorExpr(valueNode, env)}];
@@ -1449,6 +1449,28 @@ function collectStyleAssigns(openingElement, scope, env) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
     apply(attrExpr(attr));
   }
+
+  for (const attr of openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute' || attr.name.name !== 'visible') continue;
+    const expr = attr.value == null ? null : attrExpr(attr); // bare `visible` === visible={true}
+    if (expr == null) {
+      fields.set('display', {dynamic: false, code: 'ER_DISPLAY_FLEX'});
+      continue;
+    }
+    try {
+      const on = evalStatic(expr, scope);
+      fields.set('display', {
+        dynamic: false,
+        code: on ? 'ER_DISPLAY_FLEX' : 'ER_DISPLAY_NONE',
+      });
+    } catch {
+      fields.set('display', {
+        dynamic: true,
+        code: `((${emitExpr(expr, env).code}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`,
+      });
+    }
+  }
+
   const staticAssigns = [];
   const dynAssigns = [];
   for (const [field, v] of fields)

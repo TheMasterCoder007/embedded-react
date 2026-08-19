@@ -80,6 +80,53 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('ER_DISPLAY_NONE');
   });
 
+  it('lowers a static style display to the ERProps field', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View style={{display: 'none'}}><Text>hidden page</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_NONE;');
+  });
+
+  it('lowers a state-driven style display (the page-cache switch) into app_update', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [onHome, setOnHome] = useState(true);
+        return (<View style={{display: onHome ? 'flex' : 'none'}}><Text>home</Text></View>);
+      }`);
+    expect(c).toContain('ER_DISPLAY_FLEX');
+    expect(c).toContain('ER_DISPLAY_NONE');
+    expect(c).toContain('s_state.onHome');
+    // The toggle must land in the update path, not only in the one-shot build.
+    expect(c.slice(c.indexOf('app_update'))).toMatch(/\.display\s*=/);
+  });
+
+  it('lowers visible={false} to a static display (the prop spelling, Flow A<->B parity)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View visible={false}><Text>hidden</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_NONE;');
+  });
+
+  it('lowers a bare `visible` to display:flex', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (<View visible><Text>shown</Text></View>);
+      }`);
+    expect(c).toContain('p.display = ER_DISPLAY_FLEX;');
+  });
+
+  it('lowers a state-driven visible into app_update', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [onHome, setOnHome] = useState(true);
+        return (<View visible={onHome}><Text>home</Text></View>);
+      }`);
+    expect(c.slice(c.indexOf('app_update'))).toMatch(/\.display\s*=/);
+    expect(c).toContain('s_state.onHome');
+  });
+
   it('compiles multiple sequential setters in one handler with a single app_update', () => {
     const c = gen(`${PRE}
       export function App() {
