@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.12.0] - 2026-08-19
 ### Added
 
 - `display: 'none'` hides a subtree without unmounting it. The node and everything under it drop out
@@ -598,7 +600,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.10.1...v0.10.2
