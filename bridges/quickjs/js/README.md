@@ -122,9 +122,9 @@ page and rebuilds every node in interpreted QuickJS on the way back, which is th
 page change. Hiding costs a repaint, and a hidden page costs nothing per frame even while React keeps
 rendering into it.
 
-`visible={false}` is the same switch under the other spelling (`<Modal visible>` is unaffected — that
-is the Modal's own show/hide prop). Both work in Flow B too, where `display` can be static or
-state-driven. The trade is memory: a cached page holds its nodes for the life of the app, so cache
+`visible={false}` is the same switch under the other spelling, with an explicit `style.display`
+winning over it (`<Modal visible>` is unaffected — that is the Modal's own show/hide prop). Both work in Flow B too, where `display` can be static or 
+The trade is memory: a cached page holds its nodes for the life of the app, so cache
 the pages you flip between, not every page.
 
 ## Build

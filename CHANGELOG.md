@@ -17,9 +17,9 @@ See the README for the release process.
   so showing the subtree again is a repaint rather than a rebuild (build each page once, then flip between 
   them, instead of tearing down and recreating a few hundred nodes in interpreted QuickJS on every page change). 
   `visible`, which was listed as a passthrough prop but did nothing outside `<Modal>`, is now an alias for it:
-  `visible={false}` means `display: 'none'` (on `<Modal>` it keeps its existing meaning). Works in
-  both flows — Flow A through `style` or the prop, Flow B as a static or state-driven style key —
-  and is declared in the TypeScript types.
+  `visible={false}` means `display: 'none'`, with an explicit `style.display` winning over it (on
+  `<Modal>` it keeps its existing meaning). Works in both flows — Flow A through `style` or the prop,
+  Flow B as a static or state-driven style key — and is declared in the TypeScript types.
 
 ### Fixed
 

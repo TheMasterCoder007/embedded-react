@@ -79,7 +79,6 @@ export type StyleProp<T> = T | false | null | undefined | StyleProp<T>[];
 export interface ViewProps {
   style?: StyleProp<ViewStyle>;
   children?: ReactNode;
-  /** Alias for the `display` style: `false` is `display: 'none'`, `true` is `display: 'flex'`. */
   visible?: boolean;
 }
 
@@ -94,7 +93,6 @@ export interface PressableProps {
   children?: ReactNode;
   onPress?: () => void;
   disabled?: boolean;
-  /** Alias for the `display` style: `false` is `display: 'none'`, `true` is `display: 'flex'`. */
   visible?: boolean;
 }
 
