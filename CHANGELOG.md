@@ -10,6 +10,22 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- The perf instrumentation splits the RASTER phase into its four sub-steps, so "raster is slow" now
+  names a culprit instead of a phase (`ERPerfFrame.raster_us`, indexed by `ERPerfRasterSub`):
+  the damage **pre-pass** (the full node-pool walk — an `ERUI_MAX_NODES`-proportional floor paid
+  even by an idle commit, together with the multi-buffer debt fold/replay), the **composite**
+  passes (tree walk + software raster, scaling with the damage area), the backend **blits** (the
+  actual framebuffer writes — fill/copy/blend callbacks plus banded `band_begin`/`band_flush`,
+  scaling with write bandwidth), and the post-paint dirty-flag **sweep** (the other node-pool
+  floor). The buckets are disjoint and sum to at most the RASTER phase. Alongside them, `blit_px`
+  counts the pixels actually handed to the backend each frame; read against `dirty_px` it is the
+  frame's write amplification (overlapping layers, erase-then-repaint, and multi-buffer debt
+  replay all push it above the damage area). The overlay grows two lines for it — `RST …` (last
+  frame, the line to watch during a steady drag) and `PKR …` (the retained worst frame) — and
+  `ER_PERF_OVERLAY_LINES` is now 7. All of it compiles out with `ER_PERF_STATS=0` as before.
+
 ### Changed
 
 - Touch-move dispatch is coalesced to one per frame. A host reports moves as fast as its panel or

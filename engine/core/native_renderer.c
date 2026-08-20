@@ -15,6 +15,7 @@
  */
 
 #include "native_renderer.h"
+#include "er_perf.h" /* per-blit accounting (compiled to nothing when ER_PERF_STATS == 0) */
 #include "er_scene.h"
 #include "font_blob.h"
 #include "font_registry.h"
@@ -94,6 +95,14 @@ typedef struct
 
     /* Assembled premultiplied row for the translucent-fill fallback (transient within one blit). */
     uint32_t fill_row[ER_FILL_ROW_CHUNK];
+
+    /* Frame-instrumentation accumulators (er_perf.h): time inside this worker's backend callbacks and
+     * the pixels they were handed. Per-worker because blits run on render-worker threads, where the
+     * shared er_perf frame state must not be touched; the compositor resets them at raster begin and
+     * collects the sums on the commit thread (er_blit_perf_reset / er_blit_perf_collect). Only ever
+     * written when ER_PERF_STATS is on — otherwise they just sit at zero. */
+    uint32_t perf_blit_us;
+    uint32_t perf_blit_px;
 } NRCtx;
 
 /* Zero-initialized; draw_alpha is set to 255 for every worker in embedded_renderer_set_backend
@@ -105,6 +114,25 @@ static inline NRCtx* rc(void)
 {
     return &s_ctx[er_render_worker_id()];
 }
+
+/* Backend-blit accounting: brackets exactly the g_backend callback invocation (after clip and band
+ * clamping), so what accumulates is the backend's own pixel-write time and the final pixel count —
+ * not the engine-side routing around it. Scratch-buffer writes deliberately do NOT pass through
+ * here: they are compositing work and belong to the composite bucket. Two clock reads per backend
+ * call when enabled; compiled to nothing when ER_PERF_STATS == 0. */
+#if ER_PERF_STATS
+#define ER_BLIT_PERF_BEGIN() const uint32_t blit_t0 = er_perf_now_us()
+#define ER_BLIT_PERF_END(w, h)                                                                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        NRCtx* bc = rc();                                                                                              \
+        bc->perf_blit_us += er_perf_now_us() - blit_t0;                                                                \
+        bc->perf_blit_px += (uint32_t)(w) * (uint32_t)(h);                                                             \
+    } while (0)
+#else
+#define ER_BLIT_PERF_BEGIN() ((void)0)
+#define ER_BLIT_PERF_END(w, h) ((void)0)
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -478,7 +506,9 @@ void er_blit_fill(uint32_t argb, int x, int y, int w, int h)
             if (h <= 0)
                 return;
         }
+        ER_BLIT_PERF_BEGIN();
         g_backend->fill_rect(argb, x, y - rc()->band_oy, w, h, g_backend->ctx);
+        ER_BLIT_PERF_END(w, h);
     }
 }
 
@@ -521,7 +551,9 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h)
             if (h <= 0)
                 return;
         }
+        ER_BLIT_PERF_BEGIN();
         g_backend->copy_rect(src, stride, x, y - rc()->band_oy, w, h, g_backend->ctx);
+        ER_BLIT_PERF_END(w, h);
     }
 }
 
@@ -559,7 +591,9 @@ bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int
         if (h <= 0)
             return true;
     }
+    ER_BLIT_PERF_BEGIN();
     g_backend->copy_rect_fmt(src, stride, fmt, x, y - rc()->band_oy, w, h, g_backend->ctx);
+    ER_BLIT_PERF_END(w, h);
     return true;
 }
 
@@ -600,8 +634,34 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
             if (h <= 0)
                 return;
         }
+        ER_BLIT_PERF_BEGIN();
         g_backend->blend_rect(src, stride, alpha, x, y - rc()->band_oy, w, h, g_backend->ctx);
+        ER_BLIT_PERF_END(w, h);
     }
+}
+
+void er_blit_perf_reset(void)
+{
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+    {
+        s_ctx[i].perf_blit_us = 0U;
+        s_ctx[i].perf_blit_px = 0U;
+    }
+}
+
+void er_blit_perf_collect(uint32_t* us, uint32_t* px)
+{
+    uint32_t total_us = 0U;
+    uint32_t total_px = 0U;
+    for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+    {
+        total_us += s_ctx[i].perf_blit_us;
+        total_px += s_ctx[i].perf_blit_px;
+    }
+    if (us)
+        *us = total_us;
+    if (px)
+        *px = total_px;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

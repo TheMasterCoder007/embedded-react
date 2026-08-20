@@ -161,6 +161,21 @@ storage slots in use out of `ERUI_MAX_VECTOR_NODES`, and image registry slots ou
 `ERUI_IMAGE_REGISTRY_MAX` — a screen silently missing an asset reads as a full pool here. The vector
 field gains a `!FULL` marker once a node has actually been turned away (see the vector section).
 
+RASTER gets one more level of detail (`ERPerfFrame.raster_us`, indexed by `ERPerfRasterSub`),
+because its jobs scale with different things and "raster is slow" alone doesn't say which one to fix:
+
+| Sub-step | Scales with | Covers |
+|---|---|---|
+| `ER_PERF_RASTER_PREPASS` | `ERUI_MAX_NODES` | The damage pre-pass node-pool walk + multi-buffer debt fold/replay — runs even when nothing changed |
+| `ER_PERF_RASTER_RENDER` | damage area | The composite passes: tree walk, software raster, scratch composites (net of the blits inside them) |
+| `ER_PERF_RASTER_BLIT` | write bandwidth | The backend fill/copy/blend callbacks (the framebuffer writes) + banded `band_begin`/`band_flush` |
+| `ER_PERF_RASTER_SWEEP` | `ERUI_MAX_NODES` | The post-paint dirty-flag sweep + per-worker dirty-rect merge |
+
+The buckets are disjoint and sum to at most `phase_us[ER_PERF_PHASE_RASTER]`. Alongside them,
+`blit_px` counts the pixels actually handed to the backend (each call's post-clip `w*h`): read it
+against `dirty_px` for the frame's write amplification — overlapping layers, erase-then-repaint,
+and multi-buffer debt replay all push it above the damage area.
+
 The engine has no clock of its own, so timing is opt-in: hand it one with
 `er_perf_set_clock()` (without one the phase times read 0 and the counters still work).
 The host owns the frame boundary and its own two phases:
@@ -188,6 +203,10 @@ J6.2 L0.3 R9.1 P2.4    last frame: JS, layout, raster, present
 PK J1900 L12 R80 P9    the WORST frame's split — what to blame the spike on
 PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK above)
 VEC 3/8 IMG 5/32       slots in use, out of the compiled-in pool size
+RST P0.4 C7.2 B22.1 S0.9 W96k   last frame's raster split (pre-pass, composite, blit, sweep)
+                       + backend pixels — the line to watch during a steady drag, where the
+                       PK lines are stuck on the mount frame
+PKR P2 C11 B16 S1 W96k the WORST frame's raster split + backend pixels (pairs with PK)
 ```
 
 The same `ERPerfFrame.dirty_*` data supports three region policies, and the overlay only has room
