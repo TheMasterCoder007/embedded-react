@@ -111,8 +111,8 @@ extern "C"
      * @brief The sub-steps the RASTER phase is split into (all engine-marked).
      *
      * The buckets are disjoint: BLIT is measured inside the composite passes but subtracted back out
-     * of RENDER when the frame closes, so the four sum to (at most) phase_us[ER_PERF_PHASE_RASTER] —
-     * any gap is unattributed raster bookkeeping, kept out rather than guessed at.
+     * of RENDER when the frame closes, so BLIT and RENDER do not double-count time. Any gap is
+     * unattributed raster bookkeeping, kept out rather than guessed at.
      *
      * With parallel render workers BLIT is CPU time SUMMED across workers while RENDER is wall time,
      * so the subtraction can clamp RENDER to 0 on a heavily parallel frame — the split stays honest
@@ -148,8 +148,8 @@ extern "C"
         uint32_t frame_us;                        /**< Whole frame: frame_begin -> frame_end. */
         uint32_t phase_us[ER_PERF_PHASE_COUNT];   /**< Per-phase totals (a phase may be entered more than once). */
         uint32_t other_us;                        /**< frame_us minus the four phases: input, tick, host work. */
-        uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSub): disjoint,
-                                                       summing to at most phase_us[ER_PERF_PHASE_RASTER]. */
+        uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSub): disjoint; may exceed
+                                                       the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is summed across workers. */
         uint32_t blit_px;                         /**< Pixels pushed through the backend blit callbacks this
                                                        frame (sum of each call's w*h, post-clip). Against
                                                        dirty_px this is the write amplification: overlapping
