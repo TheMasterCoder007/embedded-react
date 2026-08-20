@@ -10,6 +10,24 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Touch-move dispatch is coalesced to one per frame. A host reports moves as fast as its panel or
+  window system produces them — several per frame on a desktop or browser host, one per poll on a
+  device — and each one used to run the full handler chain, which under Flow A means a React render
+  for a position that is already stale by the time the frame is painted. The engine now keeps only
+  the newest move per finger and dispatches it at the frame boundary: at the top of `er_commit()`,
+  and (first) at the top of the QuickJS frame pump, so whatever the handler schedules still settles
+  in the same frame. Down, up, and cancel are never coalesced, and a move parked behind one is
+  dispatched ahead of it, so gesture structure and ordering are unchanged. A move that repeats the
+  last dispatched position is dropped outright, so a finger held still on a panel that keeps
+  reporting now costs nothing at all instead of one full dispatch per frame.
+
+  Nothing changes for a host: keep calling `embedded_renderer_touch()` for every sample. Two new
+  entry points come with it — `embedded_renderer_flush_touch()` dispatches the pending moves right
+  now (for a host that wants input to land somewhere other than its commit, or a test-driving a drag
+  one frame at a time), and `embedded_renderer_set_touch_coalescing(false)` restores dispatch-per-
+  sample for a host that needs every point, such as freehand capture.
 
 ## [0.12.0] - 2026-08-19
 ### Added

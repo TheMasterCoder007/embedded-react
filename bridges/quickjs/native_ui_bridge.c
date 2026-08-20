@@ -3800,11 +3800,16 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Runs one host pump: drains microtasks, fires due timers, then drains again.
+ * @brief Runs one host pump: dispatches pending touch-moves, drains microtasks, fires due timers, then drains again.
  *
  * Drains before and after firing so a Promise that schedules a timer, and a timer callback
  * that resolves a Promise, both settle within the same pump. Call once per frame from the
  * host loop (after advancing the engine clock).
+ *
+ * The touch-move flush leads because it is the frame's first piece of JS: the engine coalesces a
+ * drag's moves to the newest one per frame (see embedded_renderer_touch), and running it here rather
+ * than at er_commit() lets whatever the handler schedules — a Promise continuation, a timer — settle
+ * inside the same pump, so a drag never pays a frame of latency for being coalesced.
  *
  * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
  */
@@ -3814,6 +3819,7 @@ void er_bridge_pump(JSContext* ctx)
     {
         return;
     }
+    embedded_renderer_flush_touch();
     bridge_run_microtasks(ctx);
     bridge_fire_due_timers(ctx);
     bridge_run_microtasks(ctx);

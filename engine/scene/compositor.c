@@ -3378,6 +3378,8 @@ static void render_slice_job(int worker, void* arg)
 
 void er_commit(void)
 {
+    er_input_flush_moves();
+
     if (s_root_tag == ER_INVALID_TAG)
         return;
 
