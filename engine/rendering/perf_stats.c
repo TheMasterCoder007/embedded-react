@@ -34,6 +34,8 @@ static bool s_frame_open = false;
 static uint32_t s_frame_start = 0U;
 static uint32_t s_phase_start[ER_PERF_PHASE_COUNT];
 static bool s_phase_open[ER_PERF_PHASE_COUNT];
+static uint32_t s_sub_start[ER_PERF_RASTER_COUNT];
+static bool s_sub_open[ER_PERF_RASTER_COUNT];
 
 static ERPerfFrame s_cur;   /* accumulating: the frame currently open */
 static ERPerfFrame s_last;  /* the most recently completed frame */
@@ -73,6 +75,7 @@ void er_perf_frame_begin(void)
 {
     memset(&s_cur, 0, sizeof(s_cur));
     memset(s_phase_open, 0, sizeof(s_phase_open));
+    memset(s_sub_open, 0, sizeof(s_sub_open));
     s_cur.index = s_next_index++;
     s_frame_start = perf_now();
     s_frame_open = true;
@@ -102,6 +105,45 @@ void er_perf_phase_end(ERPerfPhase phase)
      * elapsed time — only a single phase longer than ~71 minutes would alias. */
     s_cur.phase_us[phase] += perf_now() - s_phase_start[phase];
     s_phase_open[phase] = false;
+}
+
+void er_perf_raster_begin(ERPerfRasterSub sub)
+{
+    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_RASTER_COUNT)
+    {
+        return;
+    }
+    s_sub_start[sub] = perf_now();
+    s_sub_open[sub] = true;
+}
+
+void er_perf_raster_end(ERPerfRasterSub sub)
+{
+    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_RASTER_COUNT)
+    {
+        return;
+    }
+    if (!s_sub_open[sub])
+    {
+        return;
+    }
+    s_cur.raster_us[sub] += perf_now() - s_sub_start[sub];
+    s_sub_open[sub] = false;
+}
+
+void er_perf_note_blit(uint32_t us, uint32_t px)
+{
+    if (!s_frame_open)
+    {
+        return;
+    }
+    s_cur.raster_us[ER_PERF_RASTER_BLIT] += us;
+    s_cur.blit_px += px;
+}
+
+uint32_t er_perf_now_us(void)
+{
+    return perf_now();
 }
 
 void er_perf_note_repaint(int x, int y, int w, int h)
@@ -149,6 +191,27 @@ void er_perf_frame_end(void)
             s_cur.phase_us[i] += perf_now() - s_phase_start[i];
             s_phase_open[i] = false;
         }
+    }
+    for (int i = 0; i < (int)ER_PERF_RASTER_COUNT; i++)
+    {
+        if (s_sub_open[i])
+        {
+            s_cur.raster_us[i] += perf_now() - s_sub_start[i];
+            s_sub_open[i] = false;
+        }
+    }
+
+    /* The composite passes were timed as one span WITH the backend blits they emitted inside it;
+     * subtract the blit total so the two buckets are disjoint and the split sums to the raster
+     * phase. Clamped at zero: with parallel workers the blit total is CPU time summed across
+     * workers and can legitimately exceed the composite wall span (see ERPerfRasterSub). */
+    if (s_cur.raster_us[ER_PERF_RASTER_RENDER] > s_cur.raster_us[ER_PERF_RASTER_BLIT])
+    {
+        s_cur.raster_us[ER_PERF_RASTER_RENDER] -= s_cur.raster_us[ER_PERF_RASTER_BLIT];
+    }
+    else
+    {
+        s_cur.raster_us[ER_PERF_RASTER_RENDER] = 0U;
     }
 
     s_cur.frame_us = perf_now() - s_frame_start;
@@ -282,6 +345,41 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
              (unsigned)l->image_slots_used,
              (unsigned)l->image_slots_total);
 
+    /* The raster split, LAST frame: unlike the PK lines this stays live during a steady-state drag —
+     * the case where every frame is equally slow and the peak lines are stuck on the mount frame. W is
+     * the pixels handed to the backend; read it against PKDRT/dirty_px for the write amplification.
+     * The W field is pre-formatted so each line keeps one literal format string (same k/px switch as
+     * the PKDRT line). */
+    char blit_last[12];
+    char blit_worst[12];
+    if (l->blit_px >= 10000U)
+        snprintf(blit_last, sizeof(blit_last), "%uk", (unsigned)(l->blit_px / 1000U));
+    else
+        snprintf(blit_last, sizeof(blit_last), "%upx", (unsigned)l->blit_px);
+    if (w->blit_px >= 10000U)
+        snprintf(blit_worst, sizeof(blit_worst), "%uk", (unsigned)(w->blit_px / 1000U));
+    else
+        snprintf(blit_worst, sizeof(blit_worst), "%upx", (unsigned)w->blit_px);
+
+    snprintf(s_lines[5],
+             sizeof(s_lines[5]),
+             "RST P%u.%u C%u.%u B%u.%u S%u.%u W%s",
+             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_PREPASS]),
+             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_RENDER]),
+             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_BLIT]),
+             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_SWEEP]),
+             blit_last);
+
+    /* The WORST frame's raster split (pairs with the PK lines above), whole milliseconds. */
+    snprintf(s_lines[6],
+             sizeof(s_lines[6]),
+             "PKR P%u C%u B%u S%u W%s",
+             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_PREPASS]),
+             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_RENDER]),
+             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_BLIT]),
+             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_SWEEP]),
+             blit_worst);
+
     const int n = (max_lines < ER_PERF_OVERLAY_LINES) ? max_lines : ER_PERF_OVERLAY_LINES;
     for (int i = 0; i < n; i++)
     {
@@ -311,6 +409,27 @@ void er_perf_phase_begin(ERPerfPhase phase)
 void er_perf_phase_end(ERPerfPhase phase)
 {
     (void)phase;
+}
+
+void er_perf_raster_begin(ERPerfRasterSub sub)
+{
+    (void)sub;
+}
+
+void er_perf_raster_end(ERPerfRasterSub sub)
+{
+    (void)sub;
+}
+
+void er_perf_note_blit(uint32_t us, uint32_t px)
+{
+    (void)us;
+    (void)px;
+}
+
+uint32_t er_perf_now_us(void)
+{
+    return 0U;
 }
 
 void er_perf_note_repaint(int x, int y, int w, int h)

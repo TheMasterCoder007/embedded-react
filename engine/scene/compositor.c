@@ -980,10 +980,28 @@ static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that com
 #define ER_PERF_BEGIN(phase) er_perf_phase_begin(phase)
 #define ER_PERF_END(phase) er_perf_phase_end(phase)
 #define ER_PERF_REPAINT(x, y, w, h) er_perf_note_repaint((x), (y), (w), (h))
+#define ER_PERF_RASTER_BEGIN(sub) er_perf_raster_begin(sub)
+#define ER_PERF_RASTER_END(sub) er_perf_raster_end(sub)
+/* Bracket the raster phase's backend-blit accounting: reset the per-worker accumulators when the
+ * phase opens (dropping anything a host blitted between commits, e.g. its own overlay panel), and
+ * report the sums once the render passes have joined — the only point where reading the worker
+ * accumulators is race-free. */
+#define ER_PERF_BLIT_RESET() er_blit_perf_reset()
+#define ER_PERF_BLIT_COLLECT()                                                                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        uint32_t blit_us_, blit_px_;                                                                                   \
+        er_blit_perf_collect(&blit_us_, &blit_px_);                                                                    \
+        er_perf_note_blit(blit_us_, blit_px_);                                                                         \
+    } while (0)
 #else
 #define ER_PERF_BEGIN(phase) ((void)0)
 #define ER_PERF_END(phase) ((void)0)
 #define ER_PERF_REPAINT(x, y, w, h) ((void)0)
+#define ER_PERF_RASTER_BEGIN(sub) ((void)0)
+#define ER_PERF_RASTER_END(sub) ((void)0)
+#define ER_PERF_BLIT_RESET() ((void)0)
+#define ER_PERF_BLIT_COLLECT() ((void)0)
 #endif
 
 static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
@@ -3476,8 +3494,14 @@ void er_commit(void)
     /* Everything from here to the end of the commit is the paint pipeline: the damage pre-pass that
      * decides what to repaint, the composite itself, and the dirty-flag sweep. Attributed as one
      * RASTER phase — the pre-pass walks the whole node pool, so it belongs with the paint cost it is
-     * there to reduce rather than in an unaccounted gap. */
+     * there to reduce rather than in an unaccounted gap. Within it, the sub-steps that can
+     * independently blow up are marked separately (ERPerfRasterSub): the pre-pass and the flag sweep
+     * are ERUI_MAX_NODES-proportional floors paid even by an idle commit, while composite and blit
+     * scale with the damage — the split is what tells a "the pool walk dominates" frame from a "the
+     * framebuffer writes dominate" one. */
     ER_PERF_BEGIN(ER_PERF_PHASE_RASTER);
+    ER_PERF_BLIT_RESET();
+    ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_PREPASS);
 
     /* Damage-clipped render. Unless we must repaint everything (first frame, an invalidated
      * framebuffer, a removed node, or a changing node with a transform we can't bound), scissor
@@ -3768,6 +3792,9 @@ void er_commit(void)
             ER_PERF_REPAINT(dmg.r[ri].x, dmg.r[ri].y, dmg.r[ri].w, dmg.r[ri].h);
     }
 
+    ER_PERF_RASTER_END(ER_PERF_RASTER_PREPASS);
+    ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_RENDER);
+
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
      * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
      * pruning self-disables there regardless. */
@@ -3851,12 +3878,20 @@ void er_commit(void)
                 {
                     const int sh = (ry1s[r] - sy < bh) ? (ry1s[r] - sy) : bh;
                     if (backend->band_begin)
+                    {
+                        ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
                         backend->band_begin(fx, sy, fw, sh, backend->ctx);
+                        ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
+                    }
                     er_set_band(sy, sh);
-                    render_tree(root, true, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+                    render_tree(root, true, 0, s_kbd_avoid_y);   /* whole scene shifted up to clear the keyboard */
                     er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
                     if (backend->band_flush)
+                    {
+                        ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
                         backend->band_flush(backend->ctx);
+                        ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
+                    }
                 }
             }
             er_set_band(0, 0);
@@ -3962,6 +3997,13 @@ void er_commit(void)
         }
     }
 
+    ER_PERF_RASTER_END(ER_PERF_RASTER_RENDER);
+    /* Workers have joined: fold their backend-blit time + pixel counts into the frame. (RENDER was
+     * timed WITH the blits inside it; er_perf subtracts the blit total back out at frame end so the
+     * buckets stay disjoint.) */
+    ER_PERF_BLIT_COLLECT();
+    ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_SWEEP);
+
     /* Merge every worker's dirty-rect accumulator into the global (single worker: a copy). */
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
     {
@@ -4035,6 +4077,7 @@ void er_commit(void)
     s_kbd_dirty = false;                 /* the keyboard strip (if any) was repainted this commit */
     er_damage_set_clear(&s_removed_set); /* consumed (or covered by a full repaint) this commit */
 
+    ER_PERF_RASTER_END(ER_PERF_RASTER_SWEEP);
     ER_PERF_END(ER_PERF_PHASE_RASTER);
 
 #if ER_PROF

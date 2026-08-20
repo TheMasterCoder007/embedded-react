@@ -19,11 +19,16 @@
  *
  * Real durations are not reproducible, so these tests install a FAKE clock that advances by a fixed
  * step on every read. Each begin/end pair therefore measures exactly one step, which turns "did the
- * engine time the right thing?" into an exact-equality assertion:
+ * engine time the right thing?" into an exact-equality assertion wherever the phase contains no
+ * further instrumented reads (JS, layout, present). The raster phase DOES contain further reads —
+ * its own sub-split plus one pair per backend blit — so raster assertions are entered-or-not
+ * (0 vs > 0) and structural (the sub-steps sum to at most the phase):
  *
  *   - a frame that ran layout reports layout_us == step; a static frame reports exactly 0 (the phase
  *     was never entered — the fast path really was taken),
  *   - the four phases plus other_us always reconstruct frame_us,
+ *   - the raster split attributes the phase to pre-pass / composite / blit / sweep, and blit_px
+ *     counts exactly the pixels handed to the backend,
  *   - the worst frame is retained with its whole split, so a spike minutes ago is still attributable,
  *   - the dirty-rect / vector-slot / image-slot counters track the scene.
  */
@@ -154,7 +159,7 @@ static int check_phase_split(int screen)
         return fail("no frame recorded after the first commit");
     if (f.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
         return fail("mount frame did not time the layout pass");
-    if (f.phase_us[ER_PERF_PHASE_RASTER] != g_step)
+    if (f.phase_us[ER_PERF_PHASE_RASTER] == 0U)
         return fail("mount frame did not time the raster pass");
     if (f.phase_us[ER_PERF_PHASE_JS] != g_step || f.phase_us[ER_PERF_PHASE_PRESENT] != g_step)
         return fail("host-marked JS/present phases were not timed");
@@ -172,7 +177,7 @@ static int check_phase_split(int screen)
         return fail("no frame recorded for the idle frame");
     if (f.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
         return fail("idle frame reported layout time although the solver never ran");
-    if (f.phase_us[ER_PERF_PHASE_RASTER] != g_step)
+    if (f.phase_us[ER_PERF_PHASE_RASTER] == 0U)
         return fail("idle frame did not time the raster phase (the damage pre-pass still runs)");
 
     /* A recolour changes no layout input, yet er_node_set_props conservatively marks layout dirty, so
@@ -187,6 +192,73 @@ static int check_phase_split(int screen)
 
     er_node_destroy(root);
     printf("PASS: phase split — layout timed only when it runs, phases account for the frame\n");
+    return EXIT_SUCCESS;
+}
+
+/* The raster phase's own split: pre-pass / composite / blit / sweep, plus the backend pixel count.
+ * This is the instrumentation that turns "raster is 31 ms" into a named culprit — the node-pool
+ * walk, the compositing, or the framebuffer writes — so what it must get right is attribution:
+ * every sub-step that ran shows up, none of them over-claims the phase, and blit_px counts exactly
+ * the pixels the backend was handed (not the damage, not the walk). */
+static int check_raster_split(int screen)
+{
+    ERNode* root;
+    ERNode* box = build_scene(screen, &root);
+
+    frame(); /* mount: full-screen repaint through the backend */
+    ERPerfFrame f;
+    if (!er_perf_get_last(&f))
+        return fail("no frame recorded after the mount commit");
+    if (f.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
+        return fail("mount frame did not time the damage pre-pass");
+    if (f.raster_us[ER_PERF_RASTER_RENDER] == 0U)
+        return fail("mount frame did not time the composite passes");
+    if (f.raster_us[ER_PERF_RASTER_BLIT] == 0U)
+        return fail("mount frame did not time the backend blits");
+    if (f.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
+        return fail("mount frame did not time the dirty-flag sweep");
+    /* Disjointness: the buckets must never claim more than the phase they subdivide (RENDER is
+     * reported net of BLIT precisely so this holds). */
+    uint32_t sub_sum = 0U;
+    for (int i = 0; i < (int)ER_PERF_RASTER_COUNT; i++)
+        sub_sum += f.raster_us[i];
+    if (sub_sum > f.phase_us[ER_PERF_PHASE_RASTER])
+        return fail("the raster sub-steps sum to more than the raster phase");
+    /* The mount paints the root AND the box over it, so the backend saw at least every screen pixel
+     * once — blit_px is write traffic, not coverage, and overlap is exactly what it must not hide. */
+    if (f.blit_px < (uint32_t)(screen * screen))
+        return fail("the mount frame's blit_px is less than the screen it painted");
+
+    /* Idle: the pre-pass and the sweep still walk the pool (their cost is the per-commit floor this
+     * split exists to expose), but not one pixel may reach the backend. */
+    frame();
+    er_perf_get_last(&f);
+    if (f.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
+        return fail("idle frame did not time the damage pre-pass (the pool walk still runs)");
+    if (f.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
+        return fail("idle frame did not time the dirty-flag sweep");
+    if (f.raster_us[ER_PERF_RASTER_BLIT] != 0U || f.blit_px != 0U)
+        return fail("an idle frame reported backend blit work");
+
+    /* One recoloured 30x30 box. The composite restores the parent's background over the padded
+     * damage rect and then paints the box over it, and the backend sees BOTH writes: blit_px is
+     * deliberately the write-traffic number, not the coverage number, so here it EXCEEDS dirty_px —
+     * the write amplification the counter exists to expose (with the fake clock, blit time counts
+     * the backend calls exactly: one step each). */
+    recolour(box, 0xFF22CC88U);
+    frame();
+    er_perf_get_last(&f);
+    if (f.raster_us[ER_PERF_RASTER_BLIT] != 2U * g_step)
+        return fail("the recolour frame's blit time is not exactly two backend calls (bg + box)");
+    if (f.blit_px < 900U)
+        return fail("the recolour frame's blit_px does not cover the recoloured box");
+    if (f.blit_px <= f.dirty_px)
+        return fail("blit_px hides the bg-restore write under the box (no amplification reported)");
+    if (f.blit_px >= (uint32_t)(screen * screen))
+        return fail("a single recoloured box pushed a whole screen of pixels");
+
+    er_node_destroy(root);
+    printf("PASS: raster split — pre-pass/composite/blit/sweep attributed, blit_px counts write traffic\n");
     return EXIT_SUCCESS;
 }
 
@@ -409,6 +481,14 @@ static int check_overlay_lines(void)
     if (!last.vector_slots_overflow && strstr(lines[4], "!FULL") != NULL)
         return fail("the slot line shows !FULL without a vector-pool overflow");
 
+    /* The raster-split lines: the last frame's (live during a steady drag) and the peak's. */
+    if (strncmp(lines[5], "RST P", 5) != 0)
+        return fail("the last-frame raster-split line is missing");
+    if (strncmp(lines[6], "PKR P", 5) != 0)
+        return fail("the peak raster-split line is missing");
+    if (strchr(lines[5], 'W') == NULL || strchr(lines[6], 'W') == NULL)
+        return fail("a raster-split line dropped the blit-pixel field");
+
     /* A smaller request must be honoured (a host merging its own metrics has limited room). */
     const char* two[2] = {NULL, NULL};
     if (er_perf_overlay_lines(two, 2) != 2 || !two[0] || !two[1])
@@ -422,7 +502,7 @@ static int check_overlay_lines(void)
 static int check_degrades_safely(int screen)
 {
     ERNode* root;
-    (void)build_scene(screen, &root);
+    ERNode* box = build_scene(screen, &root);
 
     /* Marks outside a frame are ignored rather than accumulated into the next one. */
     er_perf_phase_begin(ER_PERF_PHASE_JS);
@@ -445,12 +525,18 @@ static int check_degrades_safely(int screen)
     if (f.phase_us[ER_PERF_PHASE_JS] != g_step)
         return fail("an unbalanced phase leaked into the following frame");
 
-    /* No clock: timings go to zero, counters keep working. */
+    /* No clock: timings go to zero, counters keep working — including blit_px, which must keep
+     * counting pixels while the blit TIME correctly collapses to zero. */
     er_perf_set_clock(NULL);
+    recolour(box, 0xFF112233U); /* make the clockless frame actually paint something */
     frame();
     er_perf_get_last(&f);
     if (f.frame_us != 0U || f.phase_us[ER_PERF_PHASE_RASTER] != 0U)
         return fail("timings are non-zero without a clock installed");
+    if (f.raster_us[ER_PERF_RASTER_BLIT] != 0U)
+        return fail("blit time is non-zero without a clock installed");
+    if (f.blit_px == 0U)
+        return fail("blit_px stopped counting without a clock");
     if (f.vector_slots_total == 0U)
         return fail("counters stopped working without a clock");
     er_perf_set_clock(fake_now_us);
@@ -468,11 +554,16 @@ int main(void)
     er_perf_frame_begin();
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_perf_phase_end(ER_PERF_PHASE_JS);
+    er_perf_raster_begin(ER_PERF_RASTER_BLIT);
+    er_perf_raster_end(ER_PERF_RASTER_BLIT);
+    er_perf_note_blit(123U, 456U);
     er_perf_frame_end();
+    if (er_perf_now_us() != 0U)
+        return fail("ER_PERF_STATS=0 sampled the clock");
     ERPerfFrame f;
     if (er_perf_get_last(&f) || er_perf_get_worst(&f))
         return fail("ER_PERF_STATS=0 reported a frame");
-    if (f.frame_us != 0U)
+    if (f.frame_us != 0U || f.raster_us[ER_PERF_RASTER_BLIT] != 0U || f.blit_px != 0U)
         return fail("ER_PERF_STATS=0 did not zero the out struct");
     const char* lines[ER_PERF_OVERLAY_LINES];
     if (er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES) != 0)
@@ -488,6 +579,12 @@ int main(void)
     const int screen = 200;
 
     int rc = check_phase_split(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+    er_reset();
+    er_perf_reset();
+
+    rc = check_raster_split(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
     er_reset();

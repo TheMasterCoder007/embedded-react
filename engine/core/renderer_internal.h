@@ -231,6 +231,32 @@ bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int
 void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h);
 
 /**
+ * @brief Clears every worker's backend-blit accounting accumulators (er_perf instrumentation).
+ *
+ * The compositor calls this when the RASTER phase opens, so whatever accumulates until
+ * er_blit_perf_collect() is exactly that commit's backend-blit cost — anything a host draws
+ * directly between commits (e.g. the perf overlay panel itself) is discarded here instead of
+ * being mis-billed to the next frame's raster phase.
+ *
+ * Call only while no render workers are in flight (worker accumulators are touched unlocked).
+ */
+void er_blit_perf_reset(void);
+
+/**
+ * @brief Sums every worker's backend-blit accounting since the last er_blit_perf_reset().
+ *
+ * Reports the time spent inside backend blit callbacks (CPU time, summed across workers) and the
+ * pixels handed to them (each call's final post-clip w*h). Both read 0 when ER_PERF_STATS is
+ * compiled out, and the time alone reads 0 when no er_perf clock is installed.
+ *
+ * Call only from the commit thread after the render passes have joined.
+ *
+ * @param[out] us  Receives the summed callback time in microseconds. May be NULL.
+ * @param[out] px  Receives the summed pixel count. May be NULL.
+ */
+void er_blit_perf_collect(uint32_t* us, uint32_t* px);
+
+/**
  * @brief Sets the inherited draw alpha multiplied into every subsequent blit.
  *
  * Used by the compositor's graceful-degradation path: when a translucent group cannot be
