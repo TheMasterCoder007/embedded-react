@@ -64,11 +64,39 @@ typedef struct
     uint16_t responder_tag; /**< Node currently owning this touch as the gesture responder. */
 } ERTouchState;
 
+/**
+ * @brief Newest un-dispatched touch-move for one finger, plus the last position actually dispatched.
+ *
+ * Hosts report moves as fast as their panel or window system produces them — a handful per frame on an
+ * SDL or browser host, one per poll on a device. Dispatching each one runs the whole handler chain (and,
+ * under the JS bridge, a React render) for a position that is already stale by the time the frame is
+ * painted: only the last sample of the frame still describes where the finger is. Moves are therefore
+ * parked here and dispatched once per frame by er_input_flush_moves().
+ */
+typedef struct
+{
+    bool pending;  /**< A coalesced move is waiting to be dispatched. */
+    bool has_last; /**< last_x/last_y describe a real position (something has been dispatched). */
+    int x;         /**< Newest move X, in the coordinates the host passed in. */
+    int y;         /**< Newest move Y, in the coordinates the host passed in. */
+    int last_x;    /**< X of the last touch dispatched for this finger. */
+    int last_y;    /**< Y of the last touch dispatched for this finger. */
+} ERPendingMove;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static ERTouchState s_touches[ER_MAX_TOUCHES];
+
+/** @brief Per-finger move coalescing buffer, drained by er_input_flush_moves(). */
+static ERPendingMove s_pending_moves[ER_MAX_TOUCHES];
+
+/** @brief When false, moves are dispatched as they arrive (er_input_set_move_coalescing). */
+static bool s_coalesce_moves = true;
+
+/** @brief Guards er_input_flush_moves() against a handler re-entering the frame path. */
+static bool s_flushing_moves = false;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -85,6 +113,30 @@ static void reset_touch(ERTouchState* touch)
     touch->press_target_tag = ER_INVALID_TAG;
     touch->touch_target_tag = ER_INVALID_TAG;
     touch->responder_tag = ER_INVALID_TAG;
+}
+
+/**
+ * @brief Dispatches this finger's parked move, if it still says anything new, and clears it.
+ *
+ * @param[in] finger_id  Finger index; must be below ER_MAX_TOUCHES.
+ */
+static void flush_finger_move(uint8_t finger_id)
+{
+    ERPendingMove* pm = &s_pending_moves[finger_id];
+    if (!pm->pending)
+        return;
+
+    pm->pending = false;
+
+    /* A move that lands on the position already dispatched tells the app nothing, and a finger resting
+     * on a panel that reports at 100 Hz produces a stream of exactly those. Drop them. */
+    if (pm->has_last && pm->x == pm->last_x && pm->y == pm->last_y)
+        return;
+
+    pm->last_x = pm->x;
+    pm->last_y = pm->y;
+    pm->has_last = true;
+    er_dispatch_touch(finger_id, ER_TOUCH_MOVE, pm->x, pm->y);
 }
 
 /**
@@ -701,6 +753,11 @@ void er_input_reset(void)
     for (int i = 0; i < ER_MAX_TOUCHES; i++)
         reset_touch(&s_touches[i]);
 
+    /* Drop any coalesced move: it names a node from the scene being torn down. The coalescing policy
+     * itself is the host's, not the scene's, so s_coalesce_moves survives the reset. */
+    memset(s_pending_moves, 0, sizeof(s_pending_moves));
+    s_flushing_moves = false;
+
     /* Zero momentum velocities on every pool node so that scroll state from a previous
      * scene (or a previous test) cannot outlive the backend reset and fire a stale
      * event callback.  er_get_node() returns NULL for unused slots. */
@@ -761,6 +818,49 @@ void er_input_tick(uint32_t delta_ms)
                                   sv->scroll_offset_x + sv->scroll_vel_x * (float)delta_ms,
                                   sv->scroll_offset_y + sv->scroll_vel_y * (float)delta_ms);
     }
+}
+
+void er_input_queue_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
+{
+    if (finger_id >= ER_MAX_TOUCHES)
+        return;
+
+    ERPendingMove* pm = &s_pending_moves[finger_id];
+
+    if (phase == ER_TOUCH_MOVE && s_coalesce_moves)
+    {
+        pm->x = x;
+        pm->y = y;
+        pm->pending = true;
+        return;
+    }
+
+    /* Down, up and cancel carry the shape of the gesture rather than just a position, so they are never
+     * coalesced. A move parked behind one is flushed first, so the app still sees the finger travel to
+     * the release point before it sees the release. */
+    flush_finger_move(finger_id);
+    pm->last_x = x;
+    pm->last_y = y;
+    pm->has_last = true;
+    er_dispatch_touch(finger_id, phase, x, y);
+}
+
+void er_input_flush_moves(void)
+{
+    if (s_flushing_moves)
+        return; /* a handler re-entered the frame path (e.g. NativeUI.commit()) — don't recurse */
+
+    s_flushing_moves = true;
+    for (uint8_t i = 0U; i < (uint8_t)ER_MAX_TOUCHES; i++)
+        flush_finger_move(i);
+    s_flushing_moves = false;
+}
+
+void er_input_set_move_coalescing(bool enabled)
+{
+    if (!enabled)
+        er_input_flush_moves(); /* never strand a parked move when switching to immediate dispatch */
+    s_coalesce_moves = enabled;
 }
 
 void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)

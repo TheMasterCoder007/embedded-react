@@ -341,6 +341,23 @@ static void build_scene(ERNode** sv, ERNode** child0, ERNode** child1, ERNode** 
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Sends one touch-move and dispatches it, standing in for a host frame.
+ *
+ * embedded_renderer_touch() coalesces moves to the newest one per finger and dispatches that one at
+ * the frame boundary, so a test that wants each move observed has to mark the boundary the way a host
+ * loop does — er_commit() and the JS pump both flush, and embedded_renderer_flush_touch() is that same
+ * flush on its own.
+ *
+ * @param[in] x  X coordinate of the move.
+ * @param[in] y  Y coordinate of the move.
+ */
+static void touch_move(int x, int y)
+{
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, x, y);
+    embedded_renderer_flush_touch();
+}
+
+/**
  * @brief Negative offsets are clamped to zero and do not fire ER_EVENT_SCROLL.
  */
 static void test_offset_clamp_negative(void)
@@ -481,7 +498,7 @@ static void test_gesture_claims_scroll_view(void)
 
     /* Touch child0 area and drag upward 10 px (> 5 px slop). */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 50);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 100, 44); /* 6 px above slop */
+    touch_move(100, 44); /* 6 px above slop */
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 44);
 
     /* Offset must have increased (upward swipe → scroll down). */
@@ -508,7 +525,7 @@ static void test_momentum_advances_offset(void)
     /* Fast upward drag to build velocity. */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 100, 80); /* -20 px in 16 ms */
+    touch_move(100, 80); /* -20 px in 16 ms */
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 80);
 
     const float offset_at_release = rec.last_y;
@@ -537,7 +554,7 @@ static void test_momentum_decays(void)
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 100, 70); /* 30 px drag */
+    touch_move(100, 70); /* 30 px drag */
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 70);
 
     /* Tick many frames; offset must eventually stop changing. */

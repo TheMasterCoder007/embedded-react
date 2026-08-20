@@ -464,6 +464,23 @@ static int fail(const char* msg)
 }
 
 /**
+ * @brief Sends one touch-move and dispatches it, standing in for a host frame.
+ *
+ * embedded_renderer_touch() coalesces moves to the newest one per finger and dispatches that one at
+ * the frame boundary, so a test that wants each move observed has to mark the boundary the way a host
+ * loop does — er_commit() and the JS pump both flush, and embedded_renderer_flush_touch() is that same
+ * flush on its own.
+ *
+ * @param[in] x  X coordinate of the move.
+ * @param[in] y  Y coordinate of the move.
+ */
+static void touch_move(int x, int y)
+{
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, x, y);
+    embedded_renderer_flush_touch();
+}
+
+/**
  * @brief Creates a fixed-size root node.
  *
  * @return New root node.
@@ -592,8 +609,8 @@ static int test_move_out_and_back_in(void)
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 140, 120);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 35, 35);
+    touch_move(140, 120);
+    touch_move(35, 35);
     embedded_renderer_touch(0, ER_TOUCH_UP, 35, 35);
 
     if (counts.press_count != 1)
@@ -602,6 +619,191 @@ static int test_move_out_and_back_in(void)
         return fail("press in/out counts for move out/back in were wrong");
     if (strcmp(counts.log, "SIMOMIEOP") != 0)
         return fail("move out/back in event order was wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks a frame's worth of moves collapses to one dispatch at the newest position.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_collapses_to_latest(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 50, 34);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 60, 40);
+
+    if (counts.touch_move_count != 0)
+        return fail("moves must not dispatch until the frame boundary");
+
+    embedded_renderer_flush_touch();
+
+    if (counts.touch_move_count != 1)
+        return fail("a frame's moves must collapse to a single dispatch");
+    if (counts.last_x != 60 || counts.last_y != 40)
+        return fail("the surviving move must carry the newest position");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 60, 40);
+    if (counts.press_count != 1)
+        return fail("release after a coalesced drag must still press");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks a parked move is dispatched ahead of the down/up that overtakes it.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_flushes_before_up(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 40);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 55, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 55, 50);
+
+    if (counts.touch_move_count != 1)
+        return fail("the release must flush exactly one parked move");
+    if (strcmp(counts.log, "SIMEOP") != 0)
+        return fail("a parked move must dispatch before the release that overtook it");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks a move that repeats the last dispatched position is dropped entirely.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_drops_repeat_position(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    /* A finger resting on a panel that keeps reporting: same point, frame after frame. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    for (int frame = 0; frame < 3; frame++)
+    {
+        embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 30);
+        embedded_renderer_flush_touch();
+    }
+    if (counts.touch_move_count != 0)
+        return fail("a move onto the last dispatched position must be dropped");
+
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 31, 30);
+    embedded_renderer_flush_touch();
+    if (counts.touch_move_count != 1)
+        return fail("a move to a new position must still dispatch");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 31, 30);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks each finger coalesces independently and both flush together.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_is_per_finger(void)
+{
+    ERNode* root = create_root();
+    EventCounts left_counts = {0};
+    EventCounts right_counts = {0};
+    ERNode* left = create_pressable(0, 0, 80, 80, &left_counts);
+    ERNode* right = create_pressable(120, 0, 80, 80, &right_counts);
+    er_tree_append_child(root, left);
+    er_tree_append_child(root, right);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(1, ER_TOUCH_DOWN, 130, 10);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 20, 20);
+    embedded_renderer_touch(1, ER_TOUCH_MOVE, 140, 20);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 30);
+    embedded_renderer_touch(1, ER_TOUCH_MOVE, 150, 30);
+    embedded_renderer_flush_touch();
+
+    if (left_counts.touch_move_count != 1 || right_counts.touch_move_count != 1)
+        return fail("each finger must flush its own single coalesced move");
+    if (left_counts.last_x != 30 || right_counts.last_x != 150)
+        return fail("a finger's coalesced move must carry that finger's newest position");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 30, 30);
+    embedded_renderer_touch(1, ER_TOUCH_UP, 150, 30);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks er_commit() is itself a frame boundary, so a plain host loop needs no flush call.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_flushed_by_commit(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 45, 45);
+    if (counts.touch_move_count != 0)
+        return fail("a move must stay parked until the frame boundary");
+
+    er_commit();
+    if (counts.touch_move_count != 1)
+        return fail("er_commit must dispatch parked moves before it lays out");
+    if (counts.last_x != 45 || counts.last_y != 45)
+        return fail("the move dispatched by er_commit carried the wrong position");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 45, 45);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks coalescing can be turned off, restoring dispatch-per-sample.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_move_coalescing_can_be_disabled(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_set_touch_coalescing(false);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 50, 34);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 60, 40);
+    const int moves = counts.touch_move_count;
+    embedded_renderer_touch(0, ER_TOUCH_UP, 60, 40);
+
+    embedded_renderer_set_touch_coalescing(true); /* restore the default for the tests that follow */
+
+    if (moves != 3)
+        return fail("with coalescing off every move must dispatch as it arrives");
 
     return EXIT_SUCCESS;
 }
@@ -683,8 +885,8 @@ static int test_long_press_cancelled_by_exit(void)
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
     embedded_renderer_tick(250U);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 100, 100);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 10, 10);
+    touch_move(100, 100);
+    touch_move(10, 10);
     embedded_renderer_tick(500U);
     embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
 
@@ -747,7 +949,7 @@ static int test_raw_touch_bubbling(void)
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 15, 15);
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 16, 16);
+    touch_move(16, 16);
     embedded_renderer_touch(0, ER_TOUCH_UP, 16, 16);
 
     if (counts.touch_start_count != 2 || counts.touch_move_count != 2 || counts.touch_end_count != 2)
@@ -915,7 +1117,7 @@ static int test_responder_start_should_set(void)
     if (rec.grant_count != 1)
         return fail("responder not granted on start-should-set");
 
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 10);
+    touch_move(30, 10);
 
     if (rec.move_count != 1)
         return fail("responder did not receive move event");
@@ -965,19 +1167,19 @@ static int test_responder_move_should_set(void)
         return fail("responder granted at touch-down without start-should-set");
 
     /* Small move — below threshold, no grant */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 20, 10);
+    touch_move(20, 10);
 
     if (rec.grant_count != 0)
         return fail("responder granted before reaching displacement threshold");
 
     /* Large move — crosses threshold, grant fires */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 35, 10);
+    touch_move(35, 10);
 
     if (rec.grant_count != 1)
         return fail("responder not granted after reaching displacement threshold");
 
     /* Subsequent move fires responder-move */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 50, 10);
+    touch_move(50, 10);
 
     if (rec.move_count != 1)
         return fail("responder did not receive move after being granted");
@@ -1108,7 +1310,7 @@ static int test_responder_termination_accepted(void)
         return fail("child did not become responder on touch-down");
 
     /* Move: parent capture fires → child asked to yield → child yields → transfer */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 20);
+    touch_move(30, 20);
 
     if (child_rec.termination_request_count != 1)
         return fail("termination request was not sent to the current responder");
@@ -1178,7 +1380,7 @@ static int test_responder_termination_rejected(void)
         return fail("child did not become responder on touch-down");
 
     /* Move: parent capture fires → child refuses to yield → parent gets reject */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 20);
+    touch_move(30, 20);
 
     if (child_rec.termination_request_count != 1)
         return fail("termination request was not sent to the current responder");
@@ -1190,7 +1392,7 @@ static int test_responder_termination_rejected(void)
         return fail("rejected claimant incorrectly received grant");
 
     /* Child must still receive the next move */
-    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 20);
+    touch_move(40, 20);
 
     if (child_rec.move_count < 1)
         return fail("original responder stopped receiving moves after rejection");
@@ -1580,6 +1782,18 @@ int main(void)
     if (test_press_order() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_move_out_and_back_in() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_collapses_to_latest() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_flushes_before_up() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_drops_repeat_position() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_is_per_finger() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_flushed_by_commit() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_move_coalescing_can_be_disabled() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_cancel() != EXIT_SUCCESS)
         return EXIT_FAILURE;

@@ -272,9 +272,12 @@ void er_runtime_free(void* p);
 bool er_runtime_load_source(const char* src, size_t len, const char* name);
 
 /**
- * @brief Drains the QuickJS job queue (Promises/microtasks) and fires due timers.
+ * @brief Dispatches pending touch-moves, drains the QuickJS job queue (Promises/microtasks), and fires due timers.
  *
- * Call once per frame before committing so async/timer-driven state lands in the frame.
+ * Call once per frame before committing so async/timer-driven state lands in the frame. The touch-move
+ * flush leads: the engine coalesces a drag's moves to the newest one per frame (see
+ * embedded_renderer_touch), and dispatching it here rather than at er_commit() lets whatever the
+ * handler schedules settle inside this same pump.
  */
 void er_runtime_pump(void);
 

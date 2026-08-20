@@ -353,6 +353,41 @@ void er_input_tick(uint32_t delta_ms);
 void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
 
 /**
+ * @brief Accepts a touch event from the host, coalescing moves to one dispatch per frame.
+ *
+ * The entry point behind embedded_renderer_touch(). Down, up and cancel go straight through to
+ * er_dispatch_touch(); a move is parked (replacing any earlier parked move for that finger) and
+ * dispatched by the next er_input_flush_moves().
+ *
+ * @param[in] finger_id  Finger index (0 for single-touch devices).
+ * @param[in] phase      Phase of the touch event.
+ * @param[in] x          X coordinate of the touch point in framebuffer pixels.
+ * @param[in] y          Y coordinate of the touch point in framebuffer pixels.
+ */
+void er_input_queue_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
+
+/**
+ * @brief Dispatches every finger's parked touch-move (the frame boundary for input).
+ *
+ * Called at the top of er_commit(), and by the QuickJS bridge at the top of its frame pump so a
+ * drag's state updates are already in the scene graph when that frame lays out. Idempotent: a
+ * second call in the same frame, or a call with nothing parked, does nothing. A parked move whose
+ * position equals the last dispatched one is dropped rather than dispatched.
+ */
+void er_input_flush_moves(void);
+
+/**
+ * @brief Enables or disables touch-move coalescing (enabled by default).
+ *
+ * With coalescing off, every move is dispatched as it arrives — the pre-coalescing behaviour, for a
+ * host that needs every sample (freehand capture) and can pay for it. Disabling flushes anything
+ * already parked.
+ *
+ * @param[in] enabled  true to coalesce moves to one dispatch per frame, false to dispatch each one.
+ */
+void er_input_set_move_coalescing(bool enabled);
+
+/**
  * @brief Delivers a keyboard event to the currently focused TextInput node.
  *
  * Called by embedded_renderer_key(). Inserts utf8_char into the focused node's text

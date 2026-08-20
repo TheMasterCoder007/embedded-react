@@ -17,6 +17,7 @@
 #ifndef EMBEDDED_REACT_NATIVE_RENDERER_H
 #define EMBEDDED_REACT_NATIVE_RENDERER_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -192,12 +193,41 @@ extern "C"
     /**
      * @brief Delivers a touch event to the renderer's input subsystem.
      *
+     * Down, up and cancel are dispatched immediately. Moves are COALESCED: the renderer keeps only the
+     * newest one per finger and dispatches it once per frame, at the top of er_commit() (and, on hosts
+     * running the QuickJS bridge, at the top of the frame pump, which comes first). Call this as often
+     * as the panel or window system reports — a drag then costs one handler run per frame instead of
+     * one per sample, and the sample that survives is the newest, which is the one the frame paints.
+     * A move that repeats the last dispatched position is dropped entirely, so a finger held still
+     * costs nothing. Use embedded_renderer_set_touch_coalescing() to opt out.
+     *
      * @param[in] finger_id  Finger index (0 for single-touch devices).
      * @param[in] phase      Phase of the touch event.
      * @param[in] x          X coordinate of the touch point in framebuffer pixels.
      * @param[in] y          Y coordinate of the touch point in framebuffer pixels.
      */
     void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
+
+    /**
+     * @brief Dispatches the newest pending touch-move for every finger right now.
+     *
+     * er_commit() already does this at the top of each frame, so a normal host loop never needs to
+     * call it. Reach for it when input must land at a different point than the commit — a host that
+     * runs its own logic between polling the panel and committing, or a test driving a drag one
+     * synthetic frame at a time. Doing nothing when nothing is pending, it is safe to call anywhere.
+     */
+    void embedded_renderer_flush_touch(void);
+
+    /**
+     * @brief Turns touch-move coalescing on or off (on by default).
+     *
+     * Off restores the pre-coalescing behaviour: every move passed to embedded_renderer_touch() is
+     * dispatched as it arrives. That is what a host capturing freehand input wants, and it costs a
+     * full handler run (and React render) per sample. Anything already pending is flushed first.
+     *
+     * @param[in] enabled  true to coalesce moves to one per frame, false to dispatch every move.
+     */
+    void embedded_renderer_set_touch_coalescing(bool enabled);
 
 /** @brief Keycode for the Backspace key. */
 #define ER_KEY_BACKSPACE 8U

@@ -639,7 +639,17 @@ void embedded_renderer_tick(uint32_t delta_ms)
 
 void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 {
-    er_dispatch_touch(finger_id, phase, x, y);
+    er_input_queue_touch(finger_id, phase, x, y);
+}
+
+void embedded_renderer_flush_touch(void)
+{
+    er_input_flush_moves();
+}
+
+void embedded_renderer_set_touch_coalescing(bool enabled)
+{
+    er_input_set_move_coalescing(enabled);
 }
 
 void embedded_renderer_key(uint32_t keycode, const char* utf8_char)
