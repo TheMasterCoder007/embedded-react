@@ -338,94 +338,56 @@ void er_arc_render(ERNode* n, int px, int py, int w, int h)
     n->arc_painted_value = n->arc_value;
 }
 
-static bool arc_apply_end(ERNode* n, bool low, float v);
-
 /**
- * @brief Applies a new value to ONE end of the arc and records the damage it implies.
+ * @brief Writes ONE end of the arc and records the damage that move implies.
+ *
+ * Assignment only — the caller has already resolved every constraint, so this never moves the other end
+ * and never re-enters. Keeping the write separate from the constraint solving is what makes the push in
+ * arc_apply_end() terminate: an earlier version pushed by calling itself, and because the slot was not
+ * assigned until the recursion unwound, each level re-read the stale endpoint and bounced back — a
+ * min_span wide enough to move BOTH ends recursed until the stack ran out.
  *
  * @param[in,out] n    Arc node.
- * @param[in]     low  true to move the RANGE band's low end (arc_value_start), false for the value end.
- * @param[in]     v    New value; clamped to the node's range and, in RANGE mode, to the other end.
+ * @param[in]     low  true for the RANGE band's low end (arc_value_start), false for the value end.
+ * @param[in]     v    Final value for that end.
  *
  * @return true when the stored value actually changed.
  */
-static bool arc_apply_end(ERNode* n, bool low, float v)
+static bool arc_set_end(ERNode* n, bool low, float v)
 {
-    if (!n || n->type != ER_NODE_ARC)
-        return false;
-    ERArcGeom g;
-    const int w = (int)n->computed.w, h = (int)n->computed.h;
-    er_arc_geom(n, 0, 0, w, h, &g);
-    v = clampf(v, g.min, g.max);
-    /* RANGE mode: the ends bound each other, so a drag can never invert the band (which would paint a
-     * sector running the wrong way round the dial).
-     *
-     * With no min_span they may meet and a drag simply stops at its neighbour. With one set, the pair
-     * keeps that separation and a drag that closes the gap PUSHES the far end along rather than stopping
-     * dead — the behaviour a dual-setpoint control wants (a thermostat's minimum heat/cool spread), and
-     * the one its +/- steppers already have. The push runs through this same function, so it clamps and
-     * damages exactly like a direct move; it cannot recurse past one level, because after it the ends sit
-     * exactly min_span apart and the second call finds nothing left to push. */
-    if (n->props.arc.range)
-    {
-        const float ms = (n->props.arc.min_span > 0.0f) ? n->props.arc.min_span : 0.0f;
-        if (ms > 0.0f)
-        {
-            /* Neither end may sit closer than min_span to the far end of the RANGE, or there would be no
-             * room left for its partner. */
-            if (low)
-            {
-                if (v > g.max - ms)
-                    v = g.max - ms;
-                if (n->arc_value < v + ms)
-                    (void)arc_apply_end(n, false, v + ms);
-            }
-            else
-            {
-                if (v < g.min + ms)
-                    v = g.min + ms;
-                if (n->arc_value_start > v - ms)
-                    (void)arc_apply_end(n, true, v - ms);
-            }
-        }
-        else if (low && v > n->arc_value)
-        {
-            v = n->arc_value;
-        }
-        else if (!low && v < n->arc_value_start)
-        {
-            v = n->arc_value_start;
-        }
-    }
     float* const slot = low ? &n->arc_value_start : &n->arc_value;
     const float old = *slot;
     if (v == old)
         return false;
     *slot = v;
 
+    const int w = (int)n->computed.w, h = (int)n->computed.h;
     if (w <= 0 || h <= 0)
         return true; /* not laid out yet: the first paint covers everything */
+    ERArcGeom g;
+    er_arc_geom(n, 0, 0, w, h, &g);
 
     /* Damage: normally just the sub-arc this end swept (padded for the AA fringe and a round cap), plus
      * that end's knob in its old and new spots. Both radii of the WIDEST ring, so a band under the
-     * indicator is repainted where the track/indicator fringe lands on it. The other end did not move
-     * and is not damaged. */
+     * indicator is repainted where the track/indicator fringe lands on it. The other end is damaged by
+     * its own arc_set_end call when a push moves it too. */
     float a_old = er_arc_value_angle(&g, old);
     float a_new = er_arc_value_angle(&g, v);
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
     const float pad = 1.5f + ((n->props.arc.cap == ER_ARC_CAP_ROUND) ? g.width * 0.5f : 0.0f);
 
-    /* EXCEPTION: a conic ramp in RANGE mode is anchored to the BAND, so moving either end re-maps the
+    /* EXCEPTION: a BAND-anchored conic ramp moves with the indicator, so shifting either end re-maps the
      * colour of every pixel between them — the swept sliver is NOT all that changed. Widen to cover the
      * old band and the new band (they share the end that did not move, so their union runs from it to
      * whichever of the moved end's two positions is further). Without this the rest of the band keeps the
      * previous frame's colours until something forces a full repaint, which on a panel reads as a
      * gradient that only catches up when the finger lifts. A solid, radial, or SWEEP-anchored paint
-     * re-maps nothing, so those keep the tight sliver — exactly the cost the anchor choice trades. */
+     * re-maps nothing, so those keep the tight sliver. */
     if (arc_grad_band_anchored(&n->props.arc))
     {
-        /* The end that did NOT move; the two bands share it, so their union runs from there. On a
-         * single-ended arc the indicator starts at the sweep start, which never moves. */
+        /* The other end. On a single-ended arc the indicator starts at the sweep start, which never
+         * moves. When a push moves BOTH ends, each call reads the other's already-final value, so the
+         * two damage rects together still cover the old band and the new one. */
         const float a_fix = n->props.arc.range ? er_arc_value_angle(&g, low ? n->arc_value : n->arc_value_start) : g.a0;
         /* Span the extremes of all three angles, so this is right whichever direction the end moved. */
         float lo_a = a_old, hi_a = a_old;
@@ -466,6 +428,79 @@ static bool arc_apply_end(ERNode* n, bool low, float v)
     if (n->props.arc.knob == ER_ARC_KNOB_CHILD)
         er_request_layout_pass();
     return true;
+}
+
+/**
+ * @brief Resolves the range constraints for a requested endpoint value, then writes what they allow.
+ *
+ * RANGE mode: the ends bound each other, so a drag can never invert the band (which would paint a sector
+ * running the wrong way round the dial). With no min_span they may meet and a drag stops at its
+ * neighbour. With one set, the pair keeps that separation and a drag that closes the gap PUSHES the far
+ * end along rather than stopping dead — what a dual-setpoint control wants (a thermostat's minimum
+ * heat/cool spread), and what its +/- steppers already do.
+ *
+ * Both final values are computed here and written by arc_set_end() below, so at most two writes happen
+ * and neither can trigger another: no recursion, and nothing reads a half-updated endpoint.
+ *
+ * @param[in,out] n    Arc node.
+ * @param[in]     low  true to move the band's low end (arc_value_start), false for the value end.
+ * @param[in]     v    Requested value; clamped to the range and to what min_span leaves free.
+ *
+ * @return true when either end actually changed.
+ */
+static bool arc_apply_end(ERNode* n, bool low, float v)
+{
+    if (!n || n->type != ER_NODE_ARC)
+        return false;
+    ERArcGeom g;
+    er_arc_geom(n, 0, 0, (int)n->computed.w, (int)n->computed.h, &g);
+    v = clampf(v, g.min, g.max);
+
+    bool changed = false;
+    if (n->props.arc.range)
+    {
+        /* A min_span wider than the range itself cannot be honoured — clamping it here (rather than
+         * letting the endpoint arithmetic below run with it) is what keeps both ends inside [min, max].
+         * Left unclamped, a min_span of 200 on a 0..100 arc stored 200 in the high end and -100 in the
+         * low one, which then reached onChange and the animation driver as out-of-range values. */
+        float ms = n->props.arc.min_span;
+        if (ms < 0.0f)
+            ms = 0.0f;
+        const float span = g.max - g.min;
+        if (ms > span)
+            ms = span;
+
+        if (ms > 0.0f)
+        {
+            /* Neither end may sit closer than min_span to the far end of the RANGE, or there would be no
+             * room left for its partner. Push the other end first, so this end's damage sees it settled. */
+            if (low)
+            {
+                if (v > g.max - ms)
+                    v = g.max - ms;
+                if (n->arc_value < v + ms)
+                    changed |= arc_set_end(n, false, v + ms);
+            }
+            else
+            {
+                if (v < g.min + ms)
+                    v = g.min + ms;
+                if (n->arc_value_start > v - ms)
+                    changed |= arc_set_end(n, true, v - ms);
+            }
+        }
+        else if (low && v > n->arc_value)
+        {
+            v = n->arc_value;
+        }
+        else if (!low && v < n->arc_value_start)
+        {
+            v = n->arc_value_start;
+        }
+    }
+
+    changed |= arc_set_end(n, low, v);
+    return changed;
 }
 
 bool er_arc_apply_value(ERNode* n, float value)
@@ -563,6 +598,50 @@ bool er_arc_grab_low(const ERNode* n, int x, int y)
     return fabsf(f - f_lo) < fabsf(f - f_hi);
 }
 
+/**
+ * @brief Shifts a whole subtree by (ddx, ddy) — the knob child and everything laid out under it.
+ *
+ * Walks pre-order through the parent/sibling links rather than an explicit stack, so it has no depth or
+ * breadth cap. An earlier version pushed pending children onto a fixed 64-slot array and simply stopped
+ * pushing once it filled: a knob subtree bigger than that was left half-moved, split between the value's
+ * old and new positions.
+ *
+ * @param[in,out] root  Subtree root (moved along with its descendants).
+ * @param[in]     ddx   X delta in pixels.
+ * @param[in]     ddy   Y delta in pixels.
+ */
+static void arc_shift_subtree(ERNode* root, int16_t ddx, int16_t ddy)
+{
+    ERNode* m = root;
+    while (m)
+    {
+        m->computed.x = (int16_t)(m->computed.x + ddx);
+        m->computed.y = (int16_t)(m->computed.y + ddy);
+        m->animated.x = (int16_t)(m->animated.x + ddx);
+        m->animated.y = (int16_t)(m->animated.y + ddy);
+
+        ERNode* next = er_get_node(m->first_child_tag);
+        if (next)
+        {
+            m = next;
+            continue;
+        }
+        /* Leaf: move to the next sibling, climbing out of finished branches — but never past the root,
+         * whose own siblings are not part of this subtree. */
+        while (m != root)
+        {
+            if (er_get_node(m->next_sibling_tag))
+                break;
+            m = er_get_node(m->parent_tag);
+            if (!m)
+                return; /* broken parent link: stop rather than walk off the tree */
+        }
+        if (m == root)
+            return;
+        m = er_get_node(m->next_sibling_tag);
+    }
+}
+
 void er_arc_anchor_child(ERNode* n)
 {
     if (!n || n->type != ER_NODE_ARC || n->props.arc.knob != ER_ARC_KNOB_CHILD)
@@ -580,26 +659,5 @@ void er_arc_anchor_child(ERNode* n)
     const int16_t ddy = (int16_t)(ny - c->computed.y);
     if (ddx == 0 && ddy == 0)
         return;
-    /* Shift the whole subtree: descendants were laid out relative to the child's flex position. */
-    uint16_t stack[64];
-    int sp = 0;
-    stack[sp++] = c->tag;
-    while (sp > 0)
-    {
-        ERNode* m = er_get_node(stack[--sp]);
-        if (!m)
-            continue;
-        m->computed.x = (int16_t)(m->computed.x + ddx);
-        m->computed.y = (int16_t)(m->computed.y + ddy);
-        m->animated.x = (int16_t)(m->animated.x + ddx);
-        m->animated.y = (int16_t)(m->animated.y + ddy);
-        for (uint16_t t = m->first_child_tag; t != ER_INVALID_TAG && sp < 64;)
-        {
-            ERNode* ch = er_get_node(t);
-            if (!ch)
-                break;
-            stack[sp++] = t;
-            t = ch->next_sibling_tag;
-        }
-    }
+    arc_shift_subtree(c, ddx, ddy);
 }

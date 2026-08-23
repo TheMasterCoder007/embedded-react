@@ -2004,6 +2004,10 @@ ERNode* er_node_create(ERNodeType type)
     if (type == ER_NODE_VECTOR || type == ER_NODE_ARC)
         s_parallel_unsafe++; /* vector rasterizer / arc span cache use shared scratch — see s_parallel_unsafe */
 
+    /* No finger owns a fresh arc. memset left this 0, which would read as "finger 0 is dragging". */
+    if (type == ER_NODE_ARC)
+        n->arc_drag_finger = -1;
+
     init_layout_defaults(&n->layout);
 
     /* View-type nodes default to fully opaque. */
@@ -2406,7 +2410,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             const bool shape_changed = (memcmp(&before, a, sizeof(before)) != 0);
             /* A native drag owns the value while the finger is down: a React re-render mid-drag (e.g. the
              * readout updating from onChange) must not snap the knob back to the value it rendered with. */
-            if (!node->arc_drag_active)
+            if (node->arc_drag_finger < 0)
             {
                 /* Order matters in RANGE mode: each end clamps against the other, so widening the band
                  * needs the far end moved first or it would clamp itself to the stale neighbour. */

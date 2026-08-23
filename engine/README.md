@@ -147,7 +147,10 @@ The value is an animatable property (`ER_PROP_ARC_VALUE`) so a ramp runs on the 
 zero host involvement, and a value change damages only the **swept sub-arc plus the knob's old and new
 footprints** (the node's `vec_dirty` sub-rect, the same channel the vector diff uses) — not the node
 box. A knob wider than the ring paints past the box; its overhang is folded into the paint bounds,
-the damage, the last-paint trail, and the hit zone. Hit-testing is ring-only (plus slop and the knob):
+the damage, the last-paint trail, and the hit zone. One exception: a **transformed** arc (rotated or
+scaled — a plain translate is fine) renders through the transform scratch, which is captured at exactly
+the node's `w × h`, so an overhanging knob is clipped there and its transformed damage bounds omit the
+overhang. Size the box to include the knob if you need to transform such a dial. Hit-testing is ring-only (plus slop and the knob):
 the hole and the unswept gap fall through to whatever is behind. With `arc_adjustable` the node owns
 the drag natively — it claims the gesture responder on touch-down ahead of any ScrollView, quantizes
 to `arc_step`, pins to the nearer end in the gap without wrapping, and fires `ER_EVENT_VALUE_CHANGE`

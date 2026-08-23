@@ -51,6 +51,8 @@ See the README for the release process.
 - A dial's conic gradient didn't re-color until you released the drag.
 - A dial with a center readout couldn't be dragged; the readout swallowed the touch.
 - A fast drag could jump to the wrong end of the dial.
+- A press handler that unmounted its own node left the following `onPress` dispatch working from a stale
+  node slot. The press chain now re-checks the node between callbacks.
 
 ## [0.12.0] - 2026-08-19
 ### Added

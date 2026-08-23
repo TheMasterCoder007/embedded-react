@@ -308,11 +308,15 @@ struct ERNode
     float arc_value;
     float arc_value_start;
     float arc_painted_value;
-    bool arc_drag_active; /**< A native drag (arc_adjustable) currently owns this node's value. */
-    bool arc_drag_low;    /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
-                             Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
-                             drag never swaps ends when the two values cross. */
-    float arc_drag_frac;  /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
+    int8_t arc_drag_finger; /**< Finger id currently dragging this arc natively, or -1 when idle.
+                                 Ownership is explicit because touches are PER FINGER while this state is
+                                 per node: a second finger landing on the same dial must not re-latch the
+                                 end or take the value, and releasing a finger that never owned the drag
+                                 must not end it. First finger down wins until it lifts. */
+    bool arc_drag_low;      /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
+                               Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
+                               drag never swaps ends when the two values cross. */
+    float arc_drag_frac;    /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
     /* Arc: pixels the drawn knob reaches past the layout box on each side (0 when it fits). Folded into
      * the paint bounds, the damage rects and the hit zone, so a knob larger than the ring is never clipped
      * or left unerased. */

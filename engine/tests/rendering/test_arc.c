@@ -522,7 +522,7 @@ static void test_drag(void)
     er_input_flush_moves();
     CHECK(arc->arc_value == 100.0f, "crossing the gap does not wrap to min");
     embedded_renderer_touch(0, ER_TOUCH_UP, 120 - 30, 120 + 92);
-    CHECK(!arc->arc_drag_active, "drag released");
+    CHECK(arc->arc_drag_finger < 0, "drag released");
 
     /* After release, props own the value again. */
     p.arc_value = 10.0f;
@@ -557,6 +557,22 @@ static void test_drag(void)
         er_commit();
     }
 
+    /* Multi-touch: a dial has ONE value, so the first finger down owns it. A second finger must not
+     * re-latch the end, and lifting it must not end the first finger's drag. */
+    s_change_count = 0;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty); /* finger 0 grabs the ring */
+    CHECK(arc->arc_drag_finger == 0, "finger 0 owns the drag");
+    {
+        const float a = 200.0f * 0.017453292519943295f; /* a different point on the ring */
+        const int bx = (int)(120.0f + 92.0f * cosf(a)), by = (int)(120.0f + 92.0f * sinf(a));
+        embedded_renderer_touch(1, ER_TOUCH_DOWN, bx, by); /* finger 1 lands on the same dial */
+        CHECK(arc->arc_drag_finger == 0, "a second finger does not take over the drag");
+        embedded_renderer_touch(1, ER_TOUCH_UP, bx, by);
+        CHECK(arc->arc_drag_finger == 0, "lifting the second finger does not end the first's drag");
+    }
+    embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+    CHECK(arc->arc_drag_finger < 0, "the owning finger ends it");
+
     /* The hole is transparent: a tap at the centre reaches the Pressable behind the ring. */
     s_press_count = 0;
     s_change_count = 0;
@@ -577,6 +593,63 @@ static void test_drag(void)
     embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
     embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
     CHECK(s_change_count == 0, "non-adjustable arc ignores ring touches");
+}
+
+/** @brief pointer-events and transforms must be honoured by the NATIVE drag, not just the hit test. */
+static void test_drag_pointer_events_and_transform(void)
+{
+    /* box-none declares the node touch-transparent. The drag walk reaches an Arc by climbing from a
+     * non-interactive descendant, so it has to re-check that itself — the hit test's own box-none
+     * handling never applies to the node the walk lands on. */
+    reset_scene();
+    ERNode* root = make_root(0xFF000000U);
+    ERNode* arc = er_node_create(ER_NODE_ARC);
+    ERProps p = arc_props();
+    p.arc_adjustable = 1;
+    p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+    er_node_set_props(arc, &p);
+    er_tree_append_child(root, arc);
+    er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
+    er_commit();
+    s_change_count = 0;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 120, 120 - 92);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120 - 92);
+    CHECK(s_change_count == 0, "a box-none arc does not take the gesture");
+
+    p.pointer_events = ER_POINTER_EVENTS_AUTO;
+    er_node_set_props(arc, &p);
+    er_commit();
+    s_change_count = 0;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 120, 120 - 92);
+    CHECK(s_change_count == 1, "the same arc drags once pointer-events allows it");
+    embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120 - 92);
+
+    /* A TRANSLATED arc: the ordinary hit test inverse-maps the transform, so the native drag has to use
+     * the same conversion or the dial is visibly under the finger and never becomes the drag target. */
+    reset_scene();
+    root = make_root(0xFF000000U);
+    arc = er_node_create(ER_NODE_ARC);
+    p = arc_props();
+    p.arc_adjustable = 1;
+    /* Bigger than the ring's touch slop, so "where it would be" and "where it is" are unambiguously
+     * different points — a small offset lands inside the slop and proves nothing. */
+    p.transform_translate_x = 70.0f;
+    p.transform_translate_y = 0.0f;
+    er_node_set_props(arc, &p);
+    er_tree_append_child(root, arc);
+    er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
+    er_commit();
+
+    s_change_count = 0;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 120, 120 - 92); /* where it WOULD be untransformed */
+    embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120 - 92);
+    CHECK(s_change_count == 0, "a translated arc ignores a touch at its untransformed position");
+
+    s_change_count = 0;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 190, 120 - 92); /* where it is actually drawn */
+    CHECK(s_change_count == 1, "a translated arc drags from where it is drawn");
+    CHECK(s_change_last == 50.0f, "and resolves the same value as an untransformed one");
+    embedded_renderer_touch(0, ER_TOUCH_UP, 190, 120 - 92);
 }
 
 /** @brief ER_ARC_KNOB_CHILD: the first child is centred on the value point, and follows the value. */
@@ -625,6 +698,57 @@ static void test_child_knob(void)
                 knob->last_paint_rect.h,
                 px(120, 28));
     CHECK(near_color(px(120, 28), 0x404040U, 2), "old knob spot erased (the track shows through)");
+
+    /* A knob subtree LARGER than any fixed traversal budget must move as one piece. The walk used to
+     * push pending children onto a 64-slot stack and stop when it filled, leaving the tail behind at the
+     * old position — a subtree visually split across the value's two spots. */
+    {
+        enum
+        {
+            FAN = 80
+        };
+        ERNode* kids[FAN];
+        ERProps gp;
+        er_props_default(&gp);
+        gp.width = 2;
+        gp.height = 2;
+        for (int i = 0; i < FAN; i++)
+        {
+            kids[i] = er_node_create(ER_NODE_VIEW);
+            er_node_set_props(kids[i], &gp);
+            er_tree_append_child(knob, kids[i]);
+        }
+        p.arc_value = 50.0f;
+        er_node_set_props(arc, &p);
+        er_commit();
+        int16_t before_x[FAN], before_y[FAN];
+        for (int i = 0; i < FAN; i++)
+        {
+            before_x[i] = kids[i]->computed.x;
+            before_y[i] = kids[i]->computed.y;
+        }
+        const int16_t knob_x0 = knob->computed.x, knob_y0 = knob->computed.y;
+
+        p.arc_value = 0.0f;
+        er_node_set_props(arc, &p);
+        er_commit();
+        const int16_t ddx = (int16_t)(knob->computed.x - knob_x0);
+        const int16_t ddy = (int16_t)(knob->computed.y - knob_y0);
+        CHECK(ddx != 0 || ddy != 0, "the knob child actually moved");
+        int moved_with = 0;
+        for (int i = 0; i < FAN; i++)
+        {
+            if (kids[i]->computed.x - before_x[i] == ddx && kids[i]->computed.y - before_y[i] == ddy)
+                moved_with++;
+        }
+        CHECK(moved_with == FAN, "every descendant of a large knob subtree moves with it");
+        for (int i = 0; i < FAN; i++)
+        {
+            er_tree_remove_child(knob, kids[i]);
+            er_node_destroy(kids[i]);
+        }
+        er_commit();
+    }
     CHECK(near_color(px(55, 185), 0xFF0000U, 2), "new knob spot painted");
 }
 
@@ -1113,6 +1237,38 @@ static void test_range_min_span(void)
     er_commit();
     CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "a pushed far end is fully repainted (both knobs move)");
 
+    /* A min_span WIDER than the range cannot be honoured. It must clamp to the range instead of running
+     * the endpoint arithmetic with it — which used to store out-of-range values and, because the push
+     * re-read a not-yet-assigned endpoint, recurse until the stack died. */
+    p.arc_min_span = 200.0f; /* range is 0..100 */
+    p.arc_value_start = 30.0f;
+    p.arc_value = 70.0f;
+    er_node_set_props(arc, &p);
+    CHECK(arc->arc_value_start >= 0.0f && arc->arc_value_start <= 100.0f, "over-wide min_span keeps low in range");
+    CHECK(arc->arc_value >= 0.0f && arc->arc_value <= 100.0f, "over-wide min_span keeps high in range");
+    CHECK(arc->arc_value_start == 0.0f && arc->arc_value == 100.0f, "over-wide min_span opens the band fully");
+
+    /* Raising min_span past what the LIVE endpoints allow: the same recursion trigger, via setProps. */
+    p.arc_min_span = 0.0f;
+    p.arc_value_start = 30.0f;
+    p.arc_value = 70.0f;
+    er_node_set_props(arc, &p);
+    CHECK(arc->arc_value_start == 30.0f && arc->arc_value == 70.0f, "band reset for the widening check");
+    p.arc_min_span = 99.0f;
+    er_node_set_props(arc, &p);
+    CHECK(arc->arc_value - arc->arc_value_start >= 98.9f, "widening min_span opens the live band to the new span");
+    CHECK(arc->arc_value_start >= 0.0f && arc->arc_value <= 100.0f, "and both ends stay inside the range");
+    /* And a drag on top of that settles rather than recursing. */
+    (void)er_arc_apply_value_start(arc, 50.0f);
+    CHECK(arc->arc_value_start >= 0.0f && arc->arc_value <= 100.0f, "a drag under an over-wide span stays in range");
+
+    /* A negative min_span is meaningless; treat it as none. */
+    p.arc_min_span = -5.0f;
+    p.arc_value_start = 30.0f;
+    p.arc_value = 70.0f;
+    er_node_set_props(arc, &p);
+    CHECK(arc->arc_value_start == 30.0f && arc->arc_value == 70.0f, "a negative min_span behaves as none");
+
     /* min_span 0 keeps the old clamp-at-neighbour behaviour. */
     p.arc_min_span = 0.0f;
     p.arc_value_start = 30.0f;
@@ -1139,6 +1295,7 @@ int main(void)
     test_value_damage();
     test_native_animation();
     test_drag();
+    test_drag_pointer_events_and_transform();
     test_child_knob();
     test_overhang();
     test_span_cache();

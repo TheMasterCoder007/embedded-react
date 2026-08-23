@@ -75,6 +75,11 @@ void er_arc_render(ERNode* n, int px, int py, int w, int h);
 /**
  * @brief Recomputes and stores ERNode::arc_overhang from the current props and computed size.
  *
+ * Folded into the paint bounds, the damage rects, the last-paint trail and the hit zone, so a knob wider
+ * than the ring is not clipped and leaves no trail. NOT honoured on a rotated/scaled arc: that path
+ * renders through a `w × h` transform scratch and bounds its damage by the transformed layout box, so an
+ * overhanging knob is clipped there (see the Arc section of engine/README.md).
+ *
  * @return The new overhang in pixels (>= 0).
  */
 int er_arc_refresh_overhang(ERNode* n);
