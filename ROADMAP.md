@@ -35,10 +35,13 @@ re-architecture.
   cap on fades — and the transform source has its own dims (`ERUI_XFORM_W/H`). Tune these
   plus `ERUI_MAX_OPACITY_DEPTH` and shadows/transforms per board — the defaults are not
   board defaults.
-- **Performance ceiling on JS-driven drag (Flow A).** Continuous drag (e.g., the
-  thermostat dial) tops out around ~24 fps on PSRAM-QuickJS hardware; the bottleneck is
-  per-event JS dispatch, not rendering. 30 fps needs a native-side drag path or the AOT
-  flow. Native-driver animations are unaffected (they never enter JS per frame).
+- **Performance ceiling on JS-driven drag (Flow A).** A drag whose handler runs in JS
+  still costs a React render per frame — around ~24 fps on PSRAM-QuickJS hardware,
+  bounded by per-event dispatch rather than rendering. The common cases are now covered:
+  touch-move coalescing collapses a frame's samples into one dispatch, and `<Dial>` drags
+  natively without entering JS at all (the thermostat dial measures ~47 fps on an
+  ESP32-S3). Anything still driven from `onTouchMove` keeps the old ceiling; the AOT flow
+  avoids it entirely. Native-driver animations were never affected.
 
 ---
 
