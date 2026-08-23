@@ -836,7 +836,39 @@ static ERNodeType map_node_type(const char* s)
     {
         return ER_NODE_VECTOR;
     }
+    if (strcmp(s, "Dial") == 0)
+    {
+        return ER_NODE_ARC;
+    }
     return ER_NODE_VIEW;
+}
+
+/** @brief Maps a Dial `cap` token to ERArcCap. @param[in] s String. @return Enum value (default butt). */
+static uint8_t map_arc_cap(const char* s)
+{
+    if (strcmp(s, "round") == 0)
+    {
+        return ER_ARC_CAP_ROUND;
+    }
+    return ER_ARC_CAP_BUTT;
+}
+
+/** @brief Maps a Dial `knob` token to ERArcKnob. @param[in] s String. @return Enum value (default none). */
+static uint8_t map_arc_knob(const char* s)
+{
+    if (strcmp(s, "circle") == 0)
+    {
+        return ER_ARC_KNOB_CIRCLE;
+    }
+    if (strcmp(s, "image") == 0)
+    {
+        return ER_ARC_KNOB_IMAGE;
+    }
+    if (strcmp(s, "child") == 0)
+    {
+        return ER_ARC_KNOB_CHILD;
+    }
+    return ER_ARC_KNOB_NONE;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -960,6 +992,29 @@ typedef enum
     PROP_EDITABLE,
     PROP_VISIBLE,
     PROP_BACKDROP_COLOR,
+    PROP_MIN,
+    PROP_MAX,
+    PROP_START_ANGLE,
+    PROP_SWEEP_ANGLE,
+    PROP_STEP,
+    PROP_GAP_ANGLE,
+    PROP_THICKNESS,
+    PROP_BAND_THICKNESS,
+    PROP_KNOB_SIZE,
+    PROP_KNOB_BORDER_WIDTH,
+    PROP_INDICATOR_COLOR,
+    PROP_BAND_COLOR,
+    PROP_KNOB_COLOR,
+    PROP_KNOB_BORDER_COLOR,
+    PROP_SEGMENTS,
+    PROP_CAP,
+    PROP_KNOB,
+    PROP_KNOB_IMAGE,
+    PROP_ADJUSTABLE,
+    PROP_RANGE,
+    PROP_VALUE_START,
+    PROP_MIN_SPAN,
+    PROP_INDICATOR_GRADIENT,
     PROP_COUNT_,
 } PropId;
 
@@ -1058,6 +1113,29 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_EDITABLE] = "editable",
     [PROP_VISIBLE] = "visible",
     [PROP_BACKDROP_COLOR] = "backdropColor",
+    [PROP_MIN] = "min",
+    [PROP_MAX] = "max",
+    [PROP_START_ANGLE] = "startAngle",
+    [PROP_SWEEP_ANGLE] = "sweepAngle",
+    [PROP_STEP] = "step",
+    [PROP_GAP_ANGLE] = "gapAngle",
+    [PROP_THICKNESS] = "thickness",
+    [PROP_BAND_THICKNESS] = "bandThickness",
+    [PROP_KNOB_SIZE] = "knobSize",
+    [PROP_KNOB_BORDER_WIDTH] = "knobBorderWidth",
+    [PROP_INDICATOR_COLOR] = "indicatorColor",
+    [PROP_BAND_COLOR] = "bandColor",
+    [PROP_KNOB_COLOR] = "knobColor",
+    [PROP_KNOB_BORDER_COLOR] = "knobBorderColor",
+    [PROP_SEGMENTS] = "segments",
+    [PROP_CAP] = "cap",
+    [PROP_KNOB] = "knob",
+    [PROP_KNOB_IMAGE] = "knobImage",
+    [PROP_ADJUSTABLE] = "adjustable",
+    [PROP_RANGE] = "range",
+    [PROP_VALUE_START] = "valueStart",
+    [PROP_MIN_SPAN] = "minSpan",
+    [PROP_INDICATOR_GRADIENT] = "indicatorGradient",
 };
 
 /** @brief (atom, id) pair; s_prop_atoms is sorted by atom value once, for prop_id_from_atom()'s bsearch. */
@@ -1184,6 +1262,20 @@ static JSValue s_prop_slots[PROP_COUNT_];
             if (JS_ToInt32(ctx, &_n, _v) == 0)                                                                         \
             {                                                                                                          \
                 p.field = (uint8_t)clamp_u8(_n);                                                                       \
+            }                                                                                                          \
+        }                                                                                                              \
+    } while (0)
+
+#define ER_F32(id, field)                                                                                              \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        JSValueConst _v = s_prop_slots[id];                                                                            \
+        if (!JS_IsUndefined(_v))                                                                                       \
+        {                                                                                                              \
+            double _d;                                                                                                 \
+            if (JS_ToFloat64(ctx, &_d, _v) == 0)                                                                       \
+            {                                                                                                          \
+                p.field = (float)_d;                                                                                   \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1576,6 +1668,16 @@ static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
     {
         return;
     }
+    if (!JS_IsObject(v))
+    {
+        /* A plain colour is the Dial's single-colour track (the Switch form is the {false, true} pair). */
+        uint32_t c;
+        if (to_color(ctx, v, &c))
+        {
+            p->arc_track_color = c;
+        }
+        return;
+    }
     if (JS_IsObject(v))
     {
         JSValue f = JS_GetPropertyStr(ctx, v, "false");
@@ -1592,6 +1694,67 @@ static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
         JS_FreeValue(ctx, f);
         JS_FreeValue(ctx, t);
     }
+}
+
+/**
+ * @brief Reads a Dial `indicatorGradient` ({type: 'conic'|'radial', stops: [{color, offset}]}) into the
+ *        View-gradient fields, which ER_NODE_ARC reads as its indicator paint.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     v    Pre-fetched value (JS_UNDEFINED if absent).
+ * @param[in,out] p    Props to update.
+ */
+static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+{
+    if (JS_IsUndefined(v) || JS_IsNull(v) || !JS_IsObject(v))
+    {
+        return;
+    }
+    JSValue t = JS_GetPropertyStr(ctx, v, "type");
+    const char* ts = JS_ToCString(ctx, t);
+    if (ts)
+    {
+        p->gradient_type = (strcmp(ts, "radial") == 0) ? ER_GRADIENT_RADIAL : ER_GRADIENT_CONIC;
+        JS_FreeCString(ctx, ts);
+    }
+    JS_FreeValue(ctx, t);
+
+    JSValue stops = JS_GetPropertyStr(ctx, v, "stops");
+    if (JS_IsArray(stops))
+    {
+        JSValue lenv = JS_GetPropertyStr(ctx, stops, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenv);
+        JS_FreeValue(ctx, lenv);
+        if (len > ER_GRADIENT_MAX_STOPS)
+        {
+            len = ER_GRADIENT_MAX_STOPS;
+        }
+        uint8_t n = 0;
+        for (int32_t i = 0; i < len; i++)
+        {
+            JSValue st = JS_GetPropertyUint32(ctx, stops, (uint32_t)i);
+            JSValue cv = JS_GetPropertyStr(ctx, st, "color");
+            JSValue ov = JS_GetPropertyStr(ctx, st, "offset");
+            uint32_t c;
+            double o = (len > 1) ? (double)i / (double)(len - 1) : 0.0;
+            if (!JS_IsUndefined(ov))
+            {
+                JS_ToFloat64(ctx, &o, ov);
+            }
+            if (to_color(ctx, cv, &c))
+            {
+                p->gradient_stops[n].color = c;
+                p->gradient_stops[n].position = (float)o;
+                n++;
+            }
+            JS_FreeValue(ctx, ov);
+            JS_FreeValue(ctx, cv);
+            JS_FreeValue(ctx, st);
+        }
+        p->gradient_stop_count = n;
+    }
+    JS_FreeValue(ctx, stops);
 }
 
 /**
@@ -1786,6 +1949,33 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     apply_track_color(ctx, s_prop_slots[PROP_TRACK_COLOR], &p);
     ER_COL(PROP_THUMB_COLOR, thumb_color);
 
+    /* Dial (ER_NODE_ARC). `value` and `trackColor` are shared with Switch above; the engine reads the
+     * fields that match the node type. */
+    ER_F32(PROP_VALUE, arc_value);
+    ER_F32(PROP_MIN, arc_min);
+    ER_F32(PROP_MAX, arc_max);
+    ER_F32(PROP_START_ANGLE, arc_start_angle);
+    ER_F32(PROP_SWEEP_ANGLE, arc_sweep_angle);
+    ER_F32(PROP_STEP, arc_step);
+    ER_F32(PROP_GAP_ANGLE, arc_gap_angle);
+    ER_DIM(PROP_THICKNESS, arc_width);
+    ER_DIM(PROP_BAND_THICKNESS, arc_band_width);
+    ER_DIM(PROP_KNOB_SIZE, arc_knob_size);
+    ER_DIM(PROP_KNOB_BORDER_WIDTH, arc_knob_border_width);
+    ER_COL(PROP_INDICATOR_COLOR, arc_indicator_color);
+    ER_COL(PROP_BAND_COLOR, arc_band_color);
+    ER_COL(PROP_KNOB_COLOR, arc_knob_color);
+    ER_COL(PROP_KNOB_BORDER_COLOR, arc_knob_border_color);
+    ER_U8(PROP_SEGMENTS, arc_segments);
+    ER_ENUM(PROP_CAP, arc_cap, map_arc_cap);
+    ER_ENUM(PROP_KNOB, arc_knob, map_arc_knob);
+    ER_STR(PROP_KNOB_IMAGE, image_name, ER_IMAGE_NAME_MAX);
+    ER_U8(PROP_ADJUSTABLE, arc_adjustable);
+    ER_U8(PROP_RANGE, arc_range);
+    ER_F32(PROP_VALUE_START, arc_value_start);
+    ER_F32(PROP_MIN_SPAN, arc_min_span);
+    apply_indicator_gradient(ctx, s_prop_slots[PROP_INDICATOR_GRADIENT], &p);
+
     /* TextInput. */
     ER_STR(PROP_PLACEHOLDER, placeholder, ER_PLACEHOLDER_MAX);
     ER_COL(PROP_PLACEHOLDER_TEXT_COLOR, placeholder_color);
@@ -1836,6 +2026,7 @@ static const char* const k_event_names[ER_EVENT_TYPE_COUNT_] = {
     "submitEditing",
     "focus",
     "blur",
+    "valueChange",
 };
 
 /**
@@ -1867,6 +2058,8 @@ static bool event_type_from_name(const char* name, EREventType* out)
         {"onFocus", ER_EVENT_FOCUS},
         {"onBlur", ER_EVENT_BLUR},
         {"onLayout", ER_EVENT_LAYOUT},
+        {"onChange", ER_EVENT_VALUE_CHANGE},      /* Dial: the new value */
+        {"onValueChange", ER_EVENT_VALUE_CHANGE}, /* Switch: the new boolean; Dial: the new value */
     };
     for (size_t i = 0; i < sizeof(k_map) / sizeof(k_map[0]); i++)
     {
@@ -1918,6 +2111,11 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
     {
         JS_SetPropertyStr(ctx, ev, "text", JS_NewString(ctx, data->changed_text));
     }
+    else if (type == ER_EVENT_VALUE_CHANGE)
+    {
+        JS_SetPropertyStr(ctx, ev, "value", JS_NewFloat64(ctx, (double)data->value));
+        JS_SetPropertyStr(ctx, ev, "valueStart", JS_NewFloat64(ctx, (double)data->value_start));
+    }
     return ev;
 }
 
@@ -1934,7 +2132,6 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
  */
 static void bridge_event_trampoline(ERNode* node, const EREventData* data, void* user_data)
 {
-    (void)node;
     if (!s_bridge_ctx)
     {
         return;
@@ -1946,11 +2143,32 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
     JSValue cb = JS_GetPropertyUint32(ctx, s_event_handlers, key);
     if (JS_IsFunction(ctx, cb))
     {
+        JSValue ev2 = JS_UNDEFINED;
+        int argc2 = 1;
         /* onChangeText receives the new TEXT directly (RN convention, matching Flow B's AOT lowering);
          * every other event gets the event object. */
-        JSValue ev = (type == ER_EVENT_CHANGE_TEXT) ? JS_NewString(ctx, data->changed_text ? data->changed_text : "")
-                                                    : build_event_object(ctx, type, data);
-        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
+        JSValue ev;
+        if (type == ER_EVENT_CHANGE_TEXT)
+        {
+            ev = JS_NewString(ctx, data->changed_text ? data->changed_text : "");
+        }
+        else if (type == ER_EVENT_VALUE_CHANGE)
+        {
+            /* onValueChange / onChange receive the new VALUE directly: a boolean for Switch (RN's
+             * onValueChange(boolean)), a number for Dial. A RANGE Dial passes the band's low end as a
+             * SECOND argument — two plain numbers rather than an object, so the AOT can lower the same
+             * handler shape to `data->value` / `data->value_start` with no allocation on device. */
+            ev = (er_node_get_type(node) == ER_NODE_SWITCH) ? JS_NewBool(ctx, data->value != 0.0f)
+                                                            : JS_NewFloat64(ctx, (double)data->value);
+            ev2 = JS_NewFloat64(ctx, (double)data->value_start);
+            argc2 = 2;
+        }
+        else
+        {
+            ev = build_event_object(ctx, type, data);
+        }
+        JSValue argv2[2] = {ev, ev2};
+        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, argc2, argv2);
         if (JS_IsException(ret))
         {
             JSValue exc = JS_GetException(ctx);
@@ -1964,6 +2182,7 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
         }
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, ev2);
     }
     JS_FreeValue(ctx, cb);
 }
@@ -3168,6 +3387,8 @@ static bool anim_prop_from_name(const char* s, ERAnimProp* out)
         {"rotateY", ER_PROP_ROTATE_Y},
         {"backgroundColor", ER_PROP_BACKGROUND_COLOR},
         {"color", ER_PROP_COLOR},
+        {"value", ER_PROP_ARC_VALUE},            /* Dial value (ER_NODE_ARC) */
+        {"valueStart", ER_PROP_ARC_VALUE_START}, /* Dial RANGE low end */
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
     {

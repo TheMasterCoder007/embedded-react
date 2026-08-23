@@ -73,3 +73,9 @@ add_test(NAME rendering_vector COMMAND test_vector)
 add_executable(test_display_none test_display_none.c)
 target_link_libraries(test_display_none PRIVATE embedded-react)
 add_test(NAME rendering_display_none COMMAND test_display_none)
+
+add_executable(test_arc test_arc.c)
+target_link_libraries(test_arc PRIVATE embedded-react)
+# test_arc needs engine/rendering (arc.h), engine/scene (er_node_internal.h) and engine/core (er_force_full_repaint).
+target_include_directories(test_arc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_arc COMMAND test_arc)

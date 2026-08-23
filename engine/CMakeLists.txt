@@ -8,6 +8,7 @@ set(EMBEDDED_REACT_SOURCES
         core/er_parallel.c
 
         # scene: node pool, tree, render pass, hit-testing, disjoint damage set
+        scene/arc_widget.c
         scene/compositor.c
         scene/damage.c
         scene/hit_test.c
@@ -16,6 +17,7 @@ set(EMBEDDED_REACT_SOURCES
         layout/layout_engine.c
 
         # rendering: primitives (rounded rects, shadows, transforms, image, gradient, canvas)
+        rendering/arc.c
         rendering/canvas_bindings.c
         rendering/gradient.c
         rendering/image_registry.c
@@ -125,6 +127,10 @@ set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per n
 set(ERUI_VECTOR_GRADS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
 set(ERUI_VECTOR_GRAD_LUT "256" CACHE STRING "Vector: gradient colour-LUT entries (ERUI_GRADIENT; 1KB internal at 256)")
 
+# Arc widget (ER_NODE_ARC) row-span cache — see engine/README.md "Arc widget". Private to rendering/arc.c.
+set(ERUI_ARC_SPAN_CACHE "8" CACHE STRING "Arc: per-radius row-span cache entries (~2 B per px of radius each)")
+set(ERUI_ARC_MAX_RADIUS "255" CACHE STRING "Arc: largest radius (px) the row-span cache serves; larger falls back to sqrt")
+
 add_library(embedded-react STATIC ${EMBEDDED_REACT_SOURCES})
 
 target_include_directories(embedded-react
@@ -187,6 +193,8 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
         ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
         ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
+        ERUI_ARC_SPAN_CACHE=${ERUI_ARC_SPAN_CACHE}
+        ERUI_ARC_MAX_RADIUS=${ERUI_ARC_MAX_RADIUS}
 )
 
 target_link_libraries(embedded-react PUBLIC m)

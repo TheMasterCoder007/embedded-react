@@ -111,6 +111,7 @@ extern "C"
         ER_NODE_SWITCH,             /**< Boolean toggle switch. */
         ER_NODE_MODAL,              /**< Full-screen modal overlay. */
         ER_NODE_VECTOR,             /**< Vector graphics surface (Svg): rasterized path op-tape. */
+        ER_NODE_ARC,                /**< Native arc widget (Arc): analytic track + value indicator + knob. */
     } ERNodeType;
 
     /*
@@ -330,6 +331,27 @@ extern "C"
         ER_BORDER_DOTTED = 2, /**< Small filled dots at regular intervals (3 px on, 3 px off). */
     } ERBorderStyle;
 
+    /**
+     * @brief Knob drawn at the value end of an Arc node's indicator (ER_NODE_ARC).
+     */
+    typedef enum
+    {
+        ER_ARC_KNOB_NONE = 0,   /**< No knob (default). */
+        ER_ARC_KNOB_CIRCLE = 1, /**< Filled circle with an optional border (the Switch-thumb pattern). */
+        ER_ARC_KNOB_IMAGE = 2,  /**< Registered image (ERProps::image_name) centred on the value point. */
+        ER_ARC_KNOB_CHILD = 3,  /**< The node's FIRST child is positioned by the engine so its centre sits on
+                                     the value point — an escape hatch for arbitrary knob content. */
+    } ERArcKnob;
+
+    /**
+     * @brief Stroke cap shape at both ends of an Arc node's track and indicator (ER_NODE_ARC).
+     */
+    typedef enum
+    {
+        ER_ARC_CAP_BUTT = 0,  /**< Flat ends on the boundary rays (default). */
+        ER_ARC_CAP_ROUND = 1, /**< Semicircular ends extending half the width past each boundary ray. */
+    } ERArcCap;
+
 /** @brief Maximum number of color stops in a View-background gradient (stored in every node's props). */
 #define ER_GRADIENT_MAX_STOPS 4
 
@@ -427,6 +449,8 @@ extern "C"
         ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
         ER_PROP_COLOR,            /**< Foreground ARGB8888 color packed as float bits. */
         ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
+        ER_PROP_ARC_VALUE,        /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
+        ER_PROP_ARC_VALUE_START,  /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
     } ERAnimProp;
 
     /**
@@ -523,6 +547,7 @@ extern "C"
         ER_EVENT_SUBMIT_EDITING,      /**< TextInput Return/Enter key pressed. */
         ER_EVENT_FOCUS,               /**< TextInput gained keyboard focus. */
         ER_EVENT_BLUR,                /**< TextInput lost keyboard focus. */
+        ER_EVENT_VALUE_CHANGE,        /**< Arc value changed by a native drag; data->value holds the new value. */
         ER_EVENT_TYPE_COUNT_,         /**< Sentinel — not a real event; used for array sizing. */
     } EREventType;
 
@@ -696,6 +721,42 @@ extern "C"
         uint8_t modal_visible;   /**< 1 = shown, 0 = hidden (default). */
         uint32_t backdrop_color; /**< Full-screen backdrop ARGB8888; 0 = 0x99000000. */
 
+        /* --- Arc (ER_NODE_ARC) ---
+         * Angles are degrees, clockwise from +X (3 o'clock), the SVG / LVGL convention. The arc is centred in
+         * the layout box; its outer radius is half the smaller box side. The indicator sweeps from
+         * arc_start_angle toward arc_start_angle + arc_sweep_angle by (value - min) / (max - min). The
+         * indicator's paint is taken from gradient_type + gradient_stops: ER_GRADIENT_CONIC sweeps the
+         * stops along the angle, ER_GRADIENT_RADIAL across the thickness, anything else = arc_indicator_color.
+         * image_name names the ER_ARC_KNOB_IMAGE asset. */
+        float arc_value;                /**< Current value; clamped to [arc_min, arc_max]. */
+        float arc_value_start;          /**< RANGE mode: the band's low end; clamped to [arc_min, arc_value]. */
+        float arc_min_span;             /**< RANGE mode: minimum separation the two ends keep, in value units.
+                                             0 (default) lets them meet — a drag simply stops at its neighbour.
+                                             Above 0, a drag that would close the gap PUSHES the far end along
+                                             instead of stopping dead, and stops only when that end reaches the
+                                             range bound (a thermostat's minimum heat/cool spread). */
+        float arc_min;                  /**< Range start (default 0). */
+        float arc_max;                  /**< Range end; arc_max <= arc_min => 100 (or min + 100). */
+        float arc_start_angle;          /**< Sweep start in degrees (default 135 when arc_sweep_angle is 0). */
+        float arc_sweep_angle;          /**< Sweep extent in degrees; 0 => default 270; clamped to [0, 360]. */
+        float arc_step;                 /**< Drag quantisation step in value units; <= 0 => 1. */
+        float arc_gap_angle;            /**< Gap between segments in degrees; 0 => 2 (when arc_segments > 1). */
+        int16_t arc_width;              /**< Track + indicator thickness in px; 0 => 1/10 of the smaller side. */
+        int16_t arc_band_width;         /**< Backing band thickness centred on the track; 0 => no band. */
+        int16_t arc_knob_size;          /**< Knob diameter in px; 0 => arc_width + 8. */
+        int16_t arc_knob_border_width;  /**< Knob border ring thickness in px (ER_ARC_KNOB_CIRCLE). */
+        uint32_t arc_track_color;       /**< Track ARGB8888; 0 => 0xFF3A3A3C. */
+        uint32_t arc_indicator_color;   /**< Indicator ARGB8888; 0 => 0xFF0A84FF. */
+        uint32_t arc_band_color;        /**< Backing band ARGB8888; 0 => 0x33000000. */
+        uint32_t arc_knob_color;        /**< Knob fill ARGB8888; 0 => 0xFFFFFFFF. */
+        uint32_t arc_knob_border_color; /**< Knob border ARGB8888; 0 => arc_indicator_color. */
+        uint8_t arc_segments;           /**< Segment count; 0 or 1 => one continuous arc. */
+        uint8_t arc_cap;                /**< ERArcCap — default ER_ARC_CAP_BUTT. */
+        uint8_t arc_knob;               /**< ERArcKnob — default ER_ARC_KNOB_NONE. */
+        uint8_t arc_adjustable;         /**< 1 => built-in drag-to-set; emits ER_EVENT_VALUE_CHANGE. */
+        uint8_t arc_range;              /**< 1 => the indicator spans [arc_value_start, arc_value] and carries a knob
+                                             at EACH end (a dual-setpoint dial); 0 => it spans [start, arc_value]. */
+
         /* --- Gradient (View-family; requires ERUI_GRADIENT at build time) --- */
         uint8_t gradient_type;       /**< ERGradientType — default ER_GRADIENT_NONE. */
         float gradient_angle;        /**< Angle in degrees: 0 = top→bottom, 90 = left→right. */
@@ -782,6 +843,8 @@ extern "C"
         float scroll_y;           /**< Scroll offset Y (ER_EVENT_SCROLL). */
         ERRect layout_rect;       /**< New computed rectangle (ER_EVENT_LAYOUT). */
         const char* changed_text; /**< Points into node's text buffer (ER_EVENT_CHANGE_TEXT). */
+        float value;              /**< New widget value (ER_EVENT_VALUE_CHANGE). */
+        float value_start;        /**< New low end of a RANGE Arc (ER_EVENT_VALUE_CHANGE; = value otherwise). */
     } EREventData;
 
     /**
@@ -849,6 +912,25 @@ extern "C"
      * @return The next sibling, or NULL.
      */
     ERNode* er_node_next_sibling(const ERNode* node);
+
+    /**
+     * @brief Returns a node's type.
+     *
+     * Lets a host dispatch on the kind of node behind a handle — e.g. the bridge delivering
+     * ER_EVENT_VALUE_CHANGE as a boolean for a Switch and a number for an Arc.
+     *
+     * @param[in] node  Node to query (NULL → ER_NODE_VIEW).
+     * @return The ERNodeType it was created with.
+     */
+    ERNodeType er_node_get_type(const ERNode* node);
+
+    /**
+     * @brief Returns an Arc node's current value (props, native animation, or drag — whichever wrote last).
+     *
+     * @param[in] node  Arc node (any other node, or NULL → 0).
+     * @return The value in [arc_min, arc_max] units.
+     */
+    float er_arc_get_value(const ERNode* node);
 
     /**
      * @brief Returns the number of nodes currently in use (live scene nodes).

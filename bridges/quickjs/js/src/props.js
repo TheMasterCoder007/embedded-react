@@ -31,6 +31,33 @@ export const PASSTHROUGH = [
   'resizeMode',
   'tintColor',
   'imageName',
+  // Switch colours.
+  'trackColor',
+  'thumbColor',
+  // <Dial> (the native arc widget, ER_NODE_ARC).
+  'min',
+  'max',
+  'startAngle',
+  'sweepAngle',
+  'step',
+  'gapAngle',
+  'thickness',
+  'bandThickness',
+  'knobSize',
+  'knobBorderWidth',
+  'indicatorColor',
+  'bandColor',
+  'knobColor',
+  'knobBorderColor',
+  'segments',
+  'cap',
+  'knob',
+  'knobImage',
+  'adjustable',
+  'range',
+  'valueStart',
+  'minSpan',
+  'indicatorGradient',
 ];
 
 /**
@@ -167,6 +194,16 @@ export function buildProps(type, props, flatStyle) {
   if (flat.imageName === undefined && props.source != null) {
     const name = resolveImageSource(props.source);
     if (name != null) flat.imageName = name;
+  }
+  // <Dial knobImage={require(...)}> takes an asset source like <Image source>; a plain string is an
+  // asset name already.
+  if (
+    type === 'Dial' &&
+    props.knobImage != null &&
+    typeof props.knobImage !== 'string'
+  ) {
+    const name = resolveImageSource(props.knobImage);
+    flat.knobImage = name != null ? name : undefined;
   }
   // `visible` is the Modal's own show/hide prop (it maps to ERProps.modal_visible). On every other
   // component it used to be silently inert; it now means the same thing as `display`, so a subtree can

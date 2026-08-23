@@ -167,6 +167,40 @@ typedef struct
 } ERSwitchProps;
 
 /**
+ * @brief Visual properties for an Arc node (ER_NODE_ARC). Mirrors the arc_* ERProps fields; see er_scene.h
+ *        for the defaults each zero value resolves to.
+ */
+typedef struct
+{
+    float min;
+    float max;
+    float value_start; /**< RANGE mode low end (see ERProps::arc_value_start). */
+    float min_span;    /**< RANGE mode minimum separation (see ERProps::arc_min_span). */
+    float start_angle; /**< Degrees, clockwise from +X. */
+    float sweep_angle; /**< Degrees, (0, 360]. */
+    float step;
+    float gap_angle;
+    int16_t width;
+    int16_t band_width;
+    int16_t knob_size;
+    int16_t knob_border_width;
+    uint32_t track_color;
+    uint32_t indicator_color;
+    uint32_t band_color;
+    uint32_t knob_color;
+    uint32_t knob_border_color;
+    uint8_t segments;
+    uint8_t cap;                                          /**< ERArcCap */
+    uint8_t knob;                                         /**< ERArcKnob */
+    uint8_t adjustable;                                   /**< Built-in drag-to-set. */
+    uint8_t range;                                        /**< Two-ended band + a knob per end. */
+    uint8_t gradient_type;                                /**< ERGradientType applied to the INDICATOR. */
+    uint8_t gradient_stop_count;                          /**< Stops in gradient_stops [0–ER_GRADIENT_MAX_STOPS]. */
+    ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Indicator colour ramp. */
+    char image_name[ER_IMAGE_NAME_MAX + 1];               /**< ER_ARC_KNOB_IMAGE asset. */
+} ERArcProps;
+
+/**
  * @brief Visual properties for a TextInput node.
  */
 typedef struct
@@ -269,6 +303,24 @@ struct ERNode
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     /* Switch: animated thumb position 0.0 (off) → 1.0 (on). */
     float switch_thumb_t;
+    /* Arc: the live value (props or ER_PROP_ARC_VALUE animation), and the value the last paint used — the
+     * pair bounds a value change's damage to the swept sub-arc + the knob's old and new spots. */
+    float arc_value;
+    float arc_value_start;
+    float arc_painted_value;
+    int8_t arc_drag_finger; /**< Finger id currently dragging this arc natively, or -1 when idle.
+                                 Ownership is explicit because touches are PER FINGER while this state is
+                                 per node: a second finger landing on the same dial must not re-latch the
+                                 end or take the value, and releasing a finger that never owned the drag
+                                 must not end it. First finger down wins until it lifts. */
+    bool arc_drag_low;      /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
+                               Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
+                               drag never swaps ends when the two values cross. */
+    float arc_drag_frac;    /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
+    /* Arc: pixels the drawn knob reaches past the layout box on each side (0 when it fits). Folded into
+     * the paint bounds, the damage rects and the hit zone, so a knob larger than the ring is never clipped
+     * or left unerased. */
+    int16_t arc_overhang;
     /* TextInput: current text content and focus state. */
     char input_text[ER_TEXT_MAX + 1];
     bool is_focused;
@@ -299,6 +351,7 @@ struct ERNode
         ERImageProps image;
         ERActivityIndicatorProps act;
         ERSwitchProps sw;
+        ERArcProps arc;
         ERTextInputProps text_input;
     } props;
 };
@@ -343,5 +396,13 @@ void er_mark_dirty_upward(ERNode* node);
  * @param[in,out] node  Node whose ancestor chain should be invalidated.
  */
 void er_mark_dirty_upward_visual(ERNode* node);
+
+/**
+ * @brief Requests a layout pass on the next er_commit() (the compositor's private layout-dirty flag).
+ *
+ * For subsystems outside the compositor whose state change moves a computed rect — e.g. an Arc value
+ * animation repositioning its anchored knob child.
+ */
+void er_request_layout_pass(void);
 
 #endif

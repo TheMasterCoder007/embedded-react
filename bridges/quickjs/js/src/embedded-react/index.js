@@ -33,6 +33,7 @@ export {
   Switch,
   ActivityIndicator,
   Modal,
+  Dial,
   Svg,
   Path,
   Circle,

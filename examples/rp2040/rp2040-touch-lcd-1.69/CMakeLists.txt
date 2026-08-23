@@ -58,10 +58,12 @@ set(E "${EMBEDDED_REACT_SRC_DIR}/engine")
 add_library(er_engine STATIC
     "${E}/core/native_renderer.c"
     "${E}/core/er_parallel.c"
+    "${E}/scene/arc_widget.c"
     "${E}/scene/compositor.c"
     "${E}/scene/damage.c"
     "${E}/scene/hit_test.c"
     "${E}/layout/layout_engine.c"
+    "${E}/rendering/arc.c"
     "${E}/rendering/canvas_bindings.c"
     "${E}/rendering/gradient.c"
     "${E}/rendering/image_registry.c"

@@ -53,9 +53,10 @@ describe('AOT demo compile smoke', () => {
       svgArtifacts,
     });
     expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
-    expect(r.c).toMatch(/build_svg\d+\(/); // the state-driven dial (track + progress arc + handle)
-    expect(r.c).toContain('cosf('); // handle geometry lowered to trig, not a state-driven <Path d>
-    expect(r.c).toContain('er_cb_onDrag'); // touch-drag handler
+    expect(r.c).toContain('er_node_create(ER_NODE_ARC)');
+    expect(r.c).not.toMatch(/build_svg\d+\(/);
+    expect(r.c).toContain('p.arc_range ='); // AUTO's two-setpoint band is state-driven
+    expect(r.c).toContain('ER_EVENT_VALUE_CHANGE'); // the drag is native; JS only stores what it reports
     expect(r.handlers).toBeGreaterThan(0);
   });
 });

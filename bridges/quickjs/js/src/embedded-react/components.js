@@ -28,6 +28,7 @@ export const TextInput = 'TextInput';
 export const Switch = 'Switch';
 export const ActivityIndicator = 'ActivityIndicator';
 export const Modal = 'Modal';
+export const Dial = 'Dial';
 
 // SVG surface. <Svg> is the only host node (→ ER_NODE_VECTOR); the shape tags below are descriptive
 // children that the host config flattens into the Svg node's op-tape (they are never mounted on their

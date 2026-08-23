@@ -217,3 +217,26 @@ describe('isEventProp', () => {
     expect(isEventProp('on', () => {})).toBe(false);
   });
 });
+
+describe('<Dial> props', () => {
+  it('passes the arc widget props through and resolves a knobImage asset source', () => {
+    const out = buildProps('Dial', {
+      value: 7,
+      startAngle: 90,
+      sweepAngle: 180,
+      segments: 4,
+      cap: 'round',
+      knob: 'image',
+      knobImage: 'knob.png',
+    });
+    expect(out).toEqual({
+      value: 7,
+      startAngle: 90,
+      sweepAngle: 180,
+      segments: 4,
+      cap: 'round',
+      knob: 'image',
+      knobImage: 'knob.png',
+    });
+  });
+});

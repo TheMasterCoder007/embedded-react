@@ -14,6 +14,11 @@
 # made a dial re-rasterize ~290 ms (measured); internal DRAM is ~20x faster. A more specific object entry
 # overrides the archive wildcard, so vector.o stays internal.
 #
+# arc.o is INTERNAL for the same reason: the arc widget's row-span cache, per-worker row chunk and colour
+# LUT (arc.c) are the analytic rasterizer's inner loop, read per pixel across every dial on screen. It is
+# only ~5 KB, so keeping it internal costs almost nothing and putting it in PSRAM would undo exactly the
+# speedup the analytic path exists for.
+#
 # vector_store.o (the per-node op-tape/paint pool, vector_store.c) is COLD — read once per node when it
 # re-rasterizes, NOT in the scanline loop — so it goes to PSRAM with everything else. That is what lets
 # ERUI_MAX_VECTOR_NODES be raised well past the internal-RAM-bound default: the per-node storage no longer
@@ -28,6 +33,7 @@
 archive: libengine.a
 entries:
     vector (default)
+    arc (default)
     scratch_pool (default)
     native_renderer (default)
     vector_store (extram_bss)

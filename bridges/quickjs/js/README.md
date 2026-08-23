@@ -287,6 +287,13 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   it's just `useState`, so the same app code runs everywhere. `usePersistentState` is the underlying
   helper, also exported for explicit use. See
   [tools/simulator in the repo](https://github.com/TheMasterCoder007/embedded-react/blob/master/tools/simulator/README.md).
+- ✅ **`<Dial>` — the native arc widget.** Dials, gauges and progress rings as ONE engine node
+  (`ER_NODE_ARC`) instead of a re-tessellated `<Svg>`: track + value indicator, optional backing band,
+  segment gaps, round caps, a circle / image / child-anchored knob, solid / conic / radial indicator paint.
+  `value` accepts an `Animated.Value` (bound natively — no JS per frame; each tick repaints only the swept
+  sliver), and `adjustable` gives built-in drag-to-set with the quantized value delivered to `onChange(v)`.
+  `<Switch onValueChange>` now also fires in Flow A (it was AOT-only). Covered by `dial.runtime.test.jsx`
+  and the engine's `test_arc`.
 - ✅ **`npx embedded-react dev`** — the WASM simulator runs your app in a browser with hot reload, from your
   own project directory, with the engine `.wasm` shipped prebuilt (no Emscripten for consumers). See above.
 - ✅ **`npm create embedded-react@latest my-app`** — scaffolds a fresh standalone project (a styled card with a

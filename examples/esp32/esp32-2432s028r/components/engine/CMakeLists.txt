@@ -15,10 +15,12 @@ idf_component_register(
     SRCS
         "${E}/core/native_renderer.c"
         "${E}/core/er_parallel.c"
+        "${E}/scene/arc_widget.c"
         "${E}/scene/compositor.c"
         "${E}/scene/damage.c"
         "${E}/scene/hit_test.c"
         "${E}/layout/layout_engine.c"
+        "${E}/rendering/arc.c"
         "${E}/rendering/canvas_bindings.c"
         "${E}/rendering/gradient.c"
         "${E}/rendering/image_registry.c"
@@ -80,7 +82,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
                                  # tessellates to >600, and 600 truncated on HW (ERUI_VECTOR_MAX_EDGES
                                  # exhausted warning), so keep this well clear of the arc's edge count.
     ERUI_VECTOR_MAX_ROW=224      # coverage row buffer in px. MUST be >= the widest vector node.
-    ERUI_MAX_VECTOR_NODES=2      # the solo dial is ONE <Svg>; 2 leaves a spare
+    ERUI_MAX_VECTOR_NODES=2      # the dial is a native <Dial> now and uses NO vector node; this whole
+                                 # pool is spare headroom for an app that adds an <Svg>
     ERUI_VECTOR_TAPE_MAX=256     # op-tape floats per node (the dial is ~45)
     ERUI_VECTOR_PAINTS_MAX=16    # paints per node (the dial uses 4)
     ERUI_VECTOR_GRADS_MAX=2      # gradient entries per node (the dial uses none; default 8 → trim RAM)

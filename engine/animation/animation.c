@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "arc_widget.h"
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include <math.h>
@@ -300,6 +301,16 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
                 return false;
             *value = node->switch_thumb_t;
             return true;
+        case ER_PROP_ARC_VALUE:
+            if (node->type != ER_NODE_ARC)
+                return false;
+            *value = node->arc_value;
+            return true;
+        case ER_PROP_ARC_VALUE_START:
+            if (node->type != ER_NODE_ARC)
+                return false;
+            *value = node->arc_value_start;
+            return true;
         default:
             return false;
     }
@@ -439,6 +450,10 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
             node->switch_thumb_t = value;
             return true;
         }
+        case ER_PROP_ARC_VALUE:
+            return er_arc_apply_value(node, value);
+        case ER_PROP_ARC_VALUE_START:
+            return er_arc_apply_value_start(node, value);
         default:
             return false;
     }
