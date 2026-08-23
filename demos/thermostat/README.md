@@ -21,9 +21,9 @@ there, and a button row would spend it. Both fold at compile time, so an AOT bui
 Every dimension derives from the host-injected `screen` global, so one source flexes from a 1280×800 wall
 tablet down to the 240×320 panel on a no-PSRAM ESP32.
 
-It exercises four engine features: the **vector** dial (stroked `<Arc>` ring and `<Line>` handles, moved
-imperatively during a drag), **baked images** (the weather icons — imported PNGs, baked at build time), a
-**`<Modal>`** settings sheet, and the **responsive layout**.
+It exercises four engine features: the native **`<Dial>`** arc widget (a two-setpoint band with built-in
+drag-to-set and a conic gradient), **baked images** (the weather icons — imported PNGs, baked at build
+time), a **`<Modal>`** settings sheet, and the **responsive layout**.
 
 This is a complete `embedded-react` app — the same JSX you'd write as a downstream user. It imports from
 `react` (hooks) and `'embedded-react'` (everything else), exactly like a React Native screen.
@@ -69,11 +69,12 @@ on-device examples.
 - **`App.jsx`** picks the layout, owns the model, and contains the whole `solo` branch inline. COOL and
   HEAT each keep their own setpoint, so switching between them restores what you last set; AUTO has its
   own low/high pair, held 4 °F apart by pushing the far end along rather than blocking.
-- **`components/dial.jsx`** is the rich Flow A dial. A drag repaints the arc, the handles, and the centre
-  number _imperatively_ (`updateVector` / `updateText`) and commits to React state only on release, so the
-  app never reconciles mid-drag. The ring is a static full-sweep track plus ONE stroked arc — AUTO's
-  amber→cool blend is a conic gradient on that single stroke rather than a row of segments, which is what
-  keeps the junction artifacts out — and a move repaints just the sector the arc swept.
+- **`components/dial.jsx`** is the Flow A dial: one native `<Dial>` node (`ER_NODE_ARC`). The engine owns
+  the whole drag — it tracks the finger, quantizes to `step`, and in AUTO latches whichever setpoint the
+  gesture started nearest and keeps the pair 4 °F apart by carrying the far one along — and repaints only the sliver the band swept
+  plus the knob's old and new spots. AUTO's amber→cool blend is a conic gradient anchored to the band, so
+  it always ramps across exactly what is lit. The only thing still done imperatively here is the center
+  number (`updateText`), so a move costs no React work at all; state is committed once, on release.
 - **`components/weather.jsx`** is the current conditions plus a scrolling 14-day outlook, each row a baked
   `<Image>` icon and a hi/lo range bar. Static, so it never re-renders during a drag.
 
@@ -88,18 +89,20 @@ JS runtime (Flow B), which constrains it to the AOT subset. That branch is there
   `<Text>`'s children to a single `snprintf`, so that is one node against four — and the branch has
   little node headroom (40 of 44 on the CYD). Which end the steppers move is set by the last drag
   instead of by tapping a number.
-- The dial is state-driven rather than imperative: a drag re-renders instead of calling `updateVector`.
+- The dial's center readout is state-driven rather than imperative: a drag re-renders that `<Text>`
+  instead of calling `updateText`. The DRAG itself is native in both flows, so neither re-renders to move
+  the band.
 
-The arc and AUTO's conic gradient are _not_ differences — both work on inline `<Svg>` shapes in the AOT.
+The dial, its two-setpoint band, and AUTO's conic gradient are _not_ differences — `<Dial>` lowers to the
+same `ER_NODE_ARC` node in both flows.
 
 A few constraints that are worth knowing if you edit this demo:
 
 - Module constants in the `solo` path must fold with `+ - * /` and `?:` only — the AOT's static evaluator
   has no `Math.min/max/floor`.
-- `<Svg>` flattens its children **one level deep**. Two sibling `.map()` calls produce an array of arrays
-  and every shape is silently dropped; build one flat array instead.
-- The center readout is bounded on both axes, so it never lies across the ring — it sits above the dial in
-  hit-test order, so anywhere it covers is a place the drag cannot start.
+- The center readout is bounded on both axes so it stays inside the ring's hole. The engine's ring-only
+  hit test walks up from whatever the finger landed on, so content parked in the hole is inert while the
+  surrounding ring still drags — but content reaching ACROSS the band takes the ring's own touches back.
 - Text can only use glyphs the built-in font bakes (printable ASCII plus a fixed symbol set), which is why
   the close button is `×` and the status separator is `•`.
 

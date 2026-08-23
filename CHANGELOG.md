@@ -12,38 +12,45 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
-- The perf instrumentation splits the RASTER phase into its four sub-steps, so "raster is slow" now
-  names a culprit instead of a phase (`ERPerfFrame.raster_us`, indexed by `ERPerfRasterSub`):
-  the damage **pre-pass** (the full node-pool walk — an `ERUI_MAX_NODES`-proportional floor paid
-  even by an idle commit, together with the multi-buffer debt fold/replay), the **composite**
-  passes (tree walk + software raster, scaling with the damage area), the backend **blits** (the
-  actual framebuffer writes — fill/copy/blend callbacks plus banded `band_begin`/`band_flush`,
-  scaling with write bandwidth), and the post-paint dirty-flag **sweep** (the other node-pool
-  floor). The buckets are disjoint and sum to at most the RASTER phase. Alongside them, `blit_px`
-  counts the pixels actually handed to the backend each frame; read against `dirty_px` it is the
-  frame's write amplification (overlapping layers, erase-then-repaint, and multi-buffer debt
-  replay all push it above the damage area). The overlay grows two lines for it — `RST …` (last
-  frame, the line to watch during a steady drag) and `PKR …` (the retained worst frame) — and
-  `ER_PERF_OVERLAY_LINES` is now 7. All of it compiles out with `ER_PERF_STATS=0` as before.
+- Added `<Dial>`, a native arc widget. Dials, gauges, and progress rings are now one engine node
+  instead of a hand-built `<Svg>`. It draws a track, a value indicator, an optional backing band and
+  segment gaps, and a knob — a circle, an image, or any child you want anchored to the value. The value
+  is animatable, so a ramp runs in the engine with no JS per frame, and `adjustable` gives you
+  drag-to-set handled entirely in C. Available in both flows.
+- Dual-setpoint dials. `range` gives a dial two ends with a knob on each, for something like a
+  thermostat's AUTO band. `minSpan` keeps the pair a set distance apart, pushing the far end along
+  instead of stopping dead. `onChange` reports both values.
+- `onValueChange` on `<Switch>` now works in Flow A. It had only ever fired in AOT builds.
+- Per-phase raster timings. The perf overlay's RASTER number now splits into the four things it's
+  made of — damage pre-pass, compositing, backend blits, and the dirty-flag sweep — so a slow frame
+  names a culprit instead of a phase. A new `blit_px` counter shows how many pixels actually reached
+  the backend, which against `dirty_px` gives you the frame's write amplification. Two new overlay
+  lines (`RST` for the last frame, `PKR` for the worst), so `ER_PERF_OVERLAY_LINES` is now 7. All of it
+  still compiles out with `ER_PERF_STATS=0`.
 
 ### Changed
 
-- Touch-move dispatch is coalesced to one per frame. A host reports moves as fast as its panel or
-  window system produces them — several per frame on a desktop or browser host, one per poll on a
-  device — and each one used to run the full handler chain, which under Flow A means a React render
-  for a position that is already stale by the time the frame is painted. The engine now keeps only
-  the newest move per finger and dispatches it at the frame boundary: at the top of `er_commit()`,
-  and (first) at the top of the QuickJS frame pump, so whatever the handler schedules still settles
-  in the same frame. Down, up, and cancel are never coalesced, and a move parked behind one is
-  dispatched ahead of it, so gesture structure and ordering are unchanged. A move that repeats the
-  last dispatched position is dropped outright, so a finger held still on a panel that keeps
-  reporting now costs nothing at all instead of one full dispatch per frame.
+- `<Svg>` arcs are much faster now. A plain `<Arc>` or `<Circle>` now goes through the same analytic
+  rasterizer `<Dial>` uses rather than being tessellated, so the two render identically at a fraction of
+  the cost. Shapes the fast path can't express exactly — a filled partial arc, a square cap, a gradient
+  stroke, an arc joined to another segment — still take the old route, so nothing renders differently
+  than it describes.
+- Touch moves are coalesced to one per frame. Host report moves faster than frames, and under Flow A
+  each one used to trigger a React render for a position already stale by the time it painted. The engine
+  now dispatches only the newest move per finger, at the frame boundary. Down, up, and cancel are never
+  coalesced, and a move that repeats the last position is dropped entirely, so a finger held still costs
+  nothing. Nothing changes for a host — keep calling `embedded_renderer_touch()` for every sample. Two new
+  entry points come with it: `embedded_renderer_flush_touch()` to dispatch pending moves immediately, and
+  `embedded_renderer_set_touch_coalescing(false)` to get every point back for something like freehand
+  drawing.
+- The thermostat demo's dial is a `<Dial>` now, in both flows. That removed about 800 lines of op-tape
+  building, per-touch repainting, and hand-expanded trig.
 
-  Nothing changes for a host: keep calling `embedded_renderer_touch()` for every sample. Two new
-  entry points come with it — `embedded_renderer_flush_touch()` dispatches the pending moves right
-  now (for a host that wants input to land somewhere other than its commit, or a test-driving a drag
-  one frame at a time), and `embedded_renderer_set_touch_coalescing(false)` restores dispatch-per-
-  sample for a host that needs every point, such as freehand capture.
+### Fixed
+
+- A dial's conic gradient didn't re-color until you released the drag.
+- A dial with a center readout couldn't be dragged; the readout swallowed the touch.
+- A fast drag could jump to the wrong end of the dial.
 
 ## [0.12.0] - 2026-08-19
 ### Added

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "arc.h"
+#include "arc_widget.h"
 #include "er_damage_internal.h"
 #include "er_node_internal.h"
 #include "er_perf.h"
@@ -474,6 +476,11 @@ static void mark_layout_dirty(void)
     s_layout_dirty = true;
 }
 
+void er_request_layout_pass(void)
+{
+    mark_layout_dirty();
+}
+
 /**
  * @brief Renders the background and border of a View-family node.
  *
@@ -877,6 +884,15 @@ static void compute_subtree_bounds(ERNode* n)
     int x1 = x0 + n->computed.w;
     int y1 = y0 + n->computed.h;
     bool prunable = !n->has_transform;
+    if (n->type == ER_NODE_ARC)
+    {
+        /* A knob wider than the ring paints past the box: widen the prune bounds by its reach. */
+        const int over = er_arc_refresh_overhang(n);
+        x0 -= over;
+        y0 -= over;
+        x1 += over;
+        y1 += over;
+    }
 
     const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
                         || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
@@ -961,11 +977,11 @@ static void fade_cache_invalidate(void)
 /* TEMP on-device profiling: phase accumulators printed every 30 commits (host provides the clock). */
 #include <stdio.h>
 extern uint32_t er_prof_now_us(void);
-static uint32_t s_prof_content_us = 0;  /* subtree render time inside composites */
-static uint32_t s_prof_blend_us = 0;    /* strip pop_blend time */
-static uint32_t s_prof_push_us = 0;     /* strip push (clear) time */
-static uint32_t s_prof_passes = 0;      /* band passes */
-static uint32_t s_prof_composites = 0;  /* composite_with_opacity calls that composited */
+static uint32_t s_prof_content_us = 0; /* subtree render time inside composites */
+static uint32_t s_prof_blend_us = 0;   /* strip pop_blend time */
+static uint32_t s_prof_push_us = 0;    /* strip push (clear) time */
+static uint32_t s_prof_passes = 0;     /* band passes */
+static uint32_t s_prof_composites = 0; /* composite_with_opacity calls that composited */
 #define ER_PROF_MARK(var) const uint32_t var = er_prof_now_us()
 #define ER_PROF_ACC(acc, from) (acc += er_prof_now_us() - (from))
 #else
@@ -1023,8 +1039,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
  * @param[in] translate_x    Accumulated horizontal scroll offset for children.
  * @param[in] translate_y    Accumulated vertical scroll offset for children.
  */
-static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
-                                int translate_y);
+static void
+render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x, int translate_y);
 
 /**
  * @brief Composites a translucent subtree through the persistent fade cache when possible.
@@ -1040,8 +1056,8 @@ static void render_node_content(ERNode* n, bool should_render, int px, int py, i
  *
  * @return true when the subtree was composited via the cache; false → use the strip pool.
  */
-static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
-                                 int translate_y)
+static bool
+composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x, int translate_y)
 {
 #if ER_FADE_CACHE_ENABLED
     if (cc()->tile_active || !er_scratch_idle() || er_get_draw_alpha() != 255U)
@@ -1053,8 +1069,7 @@ static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w
      * (a partial repaint blends just the damaged part) and from any render worker (slices blend
      * disjoint rows of the same cached content). Checked before the full-coverage gate below,
      * which only capture needs. */
-    if (s_fade_cache_tag == n->tag && s_fade_cache_gen == s_content_gen && s_fade_cache_w == w
-        && s_fade_cache_h == h)
+    if (s_fade_cache_tag == n->tag && s_fade_cache_gen == s_content_gen && s_fade_cache_w == w && s_fade_cache_h == h)
     {
         er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, px, py, w, h);
         return true;
@@ -1131,8 +1146,8 @@ static bool composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w
  * @return true when the subtree was composited; false when no slot was available or the
  *         region is empty (caller falls back to a direct render).
  */
-static bool composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x,
-                                   int translate_y)
+static bool
+composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int translate_x, int translate_y)
 {
     if (!er_scratch_avail())
         return false;
@@ -1316,7 +1331,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         /* Banded opacity compositing: skip subtrees entirely outside the strip tile currently being
          * composited (same never-prune-transformed rule as above). */
         if (cc()->tile_active
-            && (bx1 <= cc()->tile_x || by1 <= cc()->tile_y || bx0 >= cc()->tile_x + cc()->tile_w || by0 >= cc()->tile_y + cc()->tile_h))
+            && (bx1 <= cc()->tile_x || by1 <= cc()->tile_y || bx0 >= cc()->tile_x + cc()->tile_w
+                || by0 >= cc()->tile_y + cc()->tile_h))
             return;
     }
 
@@ -1436,6 +1452,15 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         n->last_paint_rect.y = (int16_t)(doing_affine ? dst_y : py);
         n->last_paint_rect.w = (int16_t)(doing_affine ? dst_w : w);
         n->last_paint_rect.h = (int16_t)(doing_affine ? dst_h : h);
+        if (n->type == ER_NODE_ARC && !doing_affine)
+        {
+            /* The footprint must include the knob's reach past the box, or a move / removal leaves it. */
+            const int over = er_arc_refresh_overhang(n);
+            n->last_paint_rect.x = (int16_t)(px - over);
+            n->last_paint_rect.y = (int16_t)(py - over);
+            n->last_paint_rect.w = (int16_t)(w + 2 * over);
+            n->last_paint_rect.h = (int16_t)(h + 2 * over);
+        }
         n->has_last_paint = true;
     }
 
@@ -1487,13 +1512,21 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
                     uh = rt->computed.h;
                 }
             }
-            if (n->type == ER_NODE_VECTOR && n->vec_has_dirty)
+            if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty)
             {
                 /* Match the sub-region damage so the engine's dirty-rect tracker stays tight too. */
                 ux = px + (int)n->vec_dirty_x;
                 uy = py + (int)n->vec_dirty_y;
                 uw = (int)n->vec_dirty_w;
                 uh = (int)n->vec_dirty_h;
+            }
+            else if (n->type == ER_NODE_ARC)
+            {
+                const int over = (int)n->arc_overhang;
+                ux -= over;
+                uy -= over;
+                uw += 2 * over;
+                uh += 2 * over;
             }
 #if ERUI_SHADOWS
             /* Expand conservatively for shadow bleed outside the node layout rect. */
@@ -1564,8 +1597,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     }
 }
 
-static void render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x,
-                                int translate_y)
+static void
+render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x, int translate_y)
 {
     if (should_render)
     {
@@ -1662,6 +1695,10 @@ static void render_node_content(ERNode* n, bool should_render, int px, int py, i
                 break;
             case ER_NODE_ACTIVITY_INDICATOR:
                 render_activity_indicator(n, px, py, w, h);
+                break;
+            case ER_NODE_ARC:
+                er_arc_render(n, px, py, w, h);
+                n->vec_has_dirty = false; /* one-shot, like the vector sub-rect */
                 break;
             case ER_NODE_SWITCH:
             {
@@ -1803,6 +1840,30 @@ static void update_scroll_content_size(ERNode* node)
 }
 
 /**
+ * @brief Walks the subtree and moves every knob-child Arc's first child onto its value point.
+ *
+ * Runs right after the flex pass, before layout animations and onLayout dispatch see the rects.
+ *
+ * @param[in] node  Subtree root to walk.
+ */
+static void anchor_arc_children(ERNode* node)
+{
+    if (!node)
+        return;
+    if (node->type == ER_NODE_ARC)
+        er_arc_anchor_child(node);
+    uint16_t child_tag = node->first_child_tag;
+    while (child_tag != ER_INVALID_TAG)
+    {
+        ERNode* child = er_get_node(child_tag);
+        if (!child)
+            break;
+        anchor_arc_children(child);
+        child_tag = child->next_sibling_tag;
+    }
+}
+
+/**
  * @brief Walks the subtree and updates scroll_content_w / scroll_content_h on all ScrollViews.
  *
  * Called after the layout pass so content-size clamping is based on freshly-computed rects.
@@ -1904,6 +1965,16 @@ ERNode* er_node_next_sibling(const ERNode* node)
     return node ? er_get_node(node->next_sibling_tag) : NULL;
 }
 
+ERNodeType er_node_get_type(const ERNode* node)
+{
+    return node ? node->type : ER_NODE_VIEW;
+}
+
+float er_arc_get_value(const ERNode* node)
+{
+    return (node && node->type == ER_NODE_ARC) ? node->arc_value : 0.0f;
+}
+
 ERNode* er_node_create(ERNodeType type)
 {
     uint16_t tag;
@@ -1930,8 +2001,8 @@ ERNode* er_node_create(ERNodeType type)
     n->dirty = true;
     n->vector_slot = -1; /* memset cleared it to 0, which is a valid slot; -1 = "no geometry". */
 
-    if (type == ER_NODE_VECTOR)
-        s_parallel_unsafe++; /* vector rasterizer uses shared scratch — see s_parallel_unsafe */
+    if (type == ER_NODE_VECTOR || type == ER_NODE_ARC)
+        s_parallel_unsafe++; /* vector rasterizer / arc span cache use shared scratch — see s_parallel_unsafe */
 
     init_layout_defaults(&n->layout);
 
@@ -1976,7 +2047,7 @@ void er_node_destroy(ERNode* node)
 
     node->in_use = false;
     node->dirty = false;
-    if (node->type == ER_NODE_VECTOR)
+    if (node->type == ER_NODE_VECTOR || node->type == ER_NODE_ARC)
         s_parallel_unsafe--;
 #if ERUI_SHADOWS
     if (node->casts_shadow)
@@ -2296,6 +2367,67 @@ void er_node_set_props(ERNode* node, const ERProps* props)
                 cfg.easing = ER_EASE_EASE_IN_OUT;
                 cfg.duration_ms = 200U;
                 er_anim_start(node, ER_PROP_SWITCH_THUMB, props->switch_value ? 1.0f : 0.0f, &cfg);
+            }
+            break;
+        }
+        case ER_NODE_ARC:
+        {
+            ERArcProps* a = &node->props.arc;
+            ERArcProps before;
+            memcpy(&before, a, sizeof(before));
+            a->min = props->arc_min;
+            a->max = props->arc_max;
+            a->start_angle = props->arc_start_angle;
+            a->sweep_angle = props->arc_sweep_angle;
+            a->step = props->arc_step;
+            a->gap_angle = props->arc_gap_angle;
+            a->width = props->arc_width;
+            a->band_width = props->arc_band_width;
+            a->knob_size = props->arc_knob_size;
+            a->knob_border_width = props->arc_knob_border_width;
+            a->track_color = props->arc_track_color;
+            a->indicator_color = props->arc_indicator_color;
+            a->band_color = props->arc_band_color;
+            a->knob_color = props->arc_knob_color;
+            a->knob_border_color = props->arc_knob_border_color;
+            a->segments = props->arc_segments;
+            a->cap = props->arc_cap;
+            a->knob = props->arc_knob;
+            a->adjustable = props->arc_adjustable;
+            a->range = props->arc_range;
+            a->value_start = props->arc_value_start;
+            a->min_span = props->arc_min_span;
+            a->gradient_type = props->gradient_type;
+            a->gradient_stop_count = props->gradient_stop_count;
+            for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
+                a->gradient_stops[gi] = props->gradient_stops[gi];
+            strncpy(a->image_name, props->image_name, ER_IMAGE_NAME_MAX);
+            a->image_name[ER_IMAGE_NAME_MAX] = '\0';
+            const bool shape_changed = (memcmp(&before, a, sizeof(before)) != 0);
+            /* A native drag owns the value while the finger is down: a React re-render mid-drag (e.g. the
+             * readout updating from onChange) must not snap the knob back to the value it rendered with. */
+            if (!node->arc_drag_active)
+            {
+                /* Order matters in RANGE mode: each end clamps against the other, so widening the band
+                 * needs the far end moved first or it would clamp itself to the stale neighbour. */
+                if (props->arc_value >= node->arc_value)
+                {
+                    (void)er_arc_apply_value(node, props->arc_value);
+                    if (a->range)
+                        (void)er_arc_apply_value_start(node, props->arc_value_start);
+                }
+                else
+                {
+                    if (a->range)
+                        (void)er_arc_apply_value_start(node, props->arc_value_start);
+                    (void)er_arc_apply_value(node, props->arc_value);
+                }
+            }
+            if (shape_changed)
+            {
+                /* Anything but the value changed → every pixel may differ: repaint the whole box. */
+                node->vec_has_dirty = false;
+                er_arc_refresh_overhang(node);
             }
             break;
         }
@@ -3481,6 +3613,7 @@ void er_commit(void)
         const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
 
         er_layout_compute(s_root_tag, rw, rh);
+        anchor_arc_children(root);
         refresh_scroll_content_sizes(root);
         er_layout_anim_post_layout(root);
         dispatch_layout_events(root);
@@ -3599,7 +3732,8 @@ void er_commit(void)
                 }
                 /*
                  * Could not bound it (3D / oversized): only forces a full repaint if actually changing.
-                 * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still missed — that needs the 3D AABB path ().
+                 * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still
+                 * missed — that needs the 3D AABB path ().
                  */
                 if (n->source_dirty)
                 {
@@ -3607,6 +3741,17 @@ void er_commit(void)
                     break;
                 }
                 continue;
+            }
+            const int box_rx = rx, box_ry = ry; /* the layout box, before any arc inflation */
+            if (n->type == ER_NODE_ARC)
+            {
+                /* Measure the arc by its painted footprint — the box plus the knob's reach past it — which is
+                 * what last_paint_rect records, so a steady arc is not read as "moved" every commit. */
+                const int over = er_arc_refresh_overhang(n);
+                rx -= over;
+                ry -= over;
+                rw += 2 * over;
+                rh += 2 * over;
             }
             const bool moved = n->has_last_paint
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
@@ -3633,14 +3778,14 @@ void er_commit(void)
                     n->modal_scrim_shown = 0U;
                 continue;
             }
-            if (n->type == ER_NODE_VECTOR && n->vec_has_dirty && !moved)
+            if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty && !moved)
             {
                 /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
                  * screen), not the whole box. The caller's rect already covers old+new content, so the
                  * full last_paint_rect is intentionally NOT added (it would balloon back to the box). */
                 add_damage(&dmg,
-                           rx + (int)n->vec_dirty_x,
-                           ry + (int)n->vec_dirty_y,
+                           box_rx + (int)n->vec_dirty_x,
+                           box_ry + (int)n->vec_dirty_y,
                            (int)n->vec_dirty_w,
                            (int)n->vec_dirty_h,
                            rb_x0,

@@ -131,6 +131,56 @@ rect re-damaged on every commit forever, which matters because React keeps rende
 page while it is off screen. The result is that a hidden page costs nothing per frame and reports no
 dirty rect.
 
+### Arc widget (`ER_NODE_ARC`)
+
+Dials, gauges, and progress rings used to be `<Svg>` arcs: every value change re-uploaded an op-tape
+and re-tessellated a stroked arc (flatten → stroke outline → scanline coverage). `ER_NODE_ARC` draws
+the same thing in closed form (`rendering/arc.c` + `scene/arc_widget.c`): one node is an optional
+wide **backing band**, the **track** over the sweep, the **value indicator** over `[start, value]`,
+optional **segment gaps**, and a **knob** at the value end. Per scanline the ring resolves to four
+half-chords (outer and inner radius, each ± half a pixel) — the rounded-rect row-span idea (`rrect.c`,
+`er_rrect_fill_ring` being the 360° case) applied to a circle — so only the one-pixel fringe at each
+radius costs a distance, the sweep is two half-plane cross-products per pixel (whose magnitudes *are*
+the antialiasing distances), and a conic paint is the pixel's angle indexed into a color LUT.
+
+The value is an animatable property (`ER_PROP_ARC_VALUE`) so a ramp runs on the native driver with
+zero host involvement, and a value change damages only the **swept sub-arc plus the knob's old and new
+footprints** (the node's `vec_dirty` sub-rect, the same channel the vector diff uses) — not the node
+box. A knob wider than the ring paints past the box; its overhang is folded into the paint bounds,
+the damage, the last-paint trail, and the hit zone. Hit-testing is ring-only (plus slop and the knob):
+the hole and the unswept gap fall through to whatever is behind. With `arc_adjustable` the node owns
+the drag natively — it claims the gesture responder on touch-down ahead of any ScrollView, quantizes
+to `arc_step`, pins to the nearer end in the gap without wrapping, and fires `ER_EVENT_VALUE_CHANGE`
+(`EREventData::value`) only when the quantized value moves. `ER_ARC_KNOB_CHILD` positions the node's
+first child on the value point after each layout pass (multi-knob dials, arbitrary knob content).
+
+**Range mode.** `arc_range` makes the indicator span `[arc_value_start, arc_value]` with a knob at each
+end — a dual-setpoint dial (a thermostat's AUTO band). A drag latches whichever end it started nearest and
+holds it for the whole gesture, so pushing one setpoint past the other never hands the finger to its
+neighbour; `ER_EVENT_VALUE_CHANGE` carries both ends. `arc_min_span` keeps the two a minimum distance
+apart: at 0 they may meet and a drag stops at its neighbour, above 0 the far end is carried along and the
+pair travels together until it reaches the range bound. A conic indicator ramp follows the BAND on a range arc (so it always
+covers exactly what is lit, however wide that is) and the whole SWEEP on a single-ended one. (So a color
+belongs to a position on the dial and does not shift as the value grows.) A band-anchored ramp re-anchors
+whenever either end moves, so such a band damages its whole span rather than just the swept sliver — the
+one case where the tight damage would leave stale pixels. A conic indicator paint is anchored to the
+BAND in range mode (so it always ramps across exactly what is lit) and to the full sweep otherwise. (So a
+progress ring's colors belong to positions on the dial and don't shift as the value grows.)
+
+**`<Svg>` arcs share this core.** `ER_VOP_ARC` is not tessellated when the shape is *just* an arc: the
+rasterizer matches the tape both flows emit for `<Arc>` (a bare `ARC`) and `<Circle>` (`MOVE, ARC 0..2π,
+CLOSE`) and routes it to `er_arc_fill_sector`, so an `<Svg>` arc and a native arc node are pixel-identical
+(`tests/rendering/test_arc.c` asserts exactly that) at a fraction of the cost. Only shapes that map
+EXACTLY are routed — a filled partial arc closes on a chord rather than a sector, a square cap and a
+gradient paint have no sector equivalent, and an arc joined to another segment has joins — so everything
+else keeps the general path and nothing renders differently than it describes. `er_vector_analytic_arc_count()`
+reports which route shapes took; `ERUI_VECTOR_ANALYTIC_ARC=0` restores the all-tessellated behavior.
+
+The half-chords are cached per radius and row phase across nodes and frames (`ERUI_ARC_SPAN_CACHE`
+entries of `ERUI_ARC_MAX_RADIUS` rows, ~2 B per px of radius — ~4 KB at the defaults); a radius past
+the cap just falls back to a per-row `sqrt`. The shared cache makes arc nodes parallel-unsafe, like
+vector nodes.
+
 ### Banded rendering (low-RAM panels)
 
 A backend can opt into banded RGB565 (`ER_LCD_BANDED`): it sets a band height and
@@ -300,6 +350,10 @@ into transient rasterize scratch (reused per shape) and persistent per-node stor
 gradient shape) instead of interpolating the stops each pixel — the bulk of an interactive gradient drag's
 cost. 256 matches 8-bit color resolution; a RAM-tight board can lower it (e.g., 64–128) for coarser steps,
 and there's little benefit above 256.
+
+The Arc widget (`rendering/arc.c`) has two more: `ERUI_ARC_SPAN_CACHE` (default 8) row-span cache entries
+of `ERUI_ARC_MAX_RADIUS` (default 255) rows — `ENTRIES × (RADIUS + 2) × 2` B ≈ 4 KB, plus a 1 KB
+premultiplied row chunk and a 512 B color LUT per render worker.
 
 At the defaults that's ~122 KB. The fastest-growing terms are `MAX_EDGES` (~32 B each, across
 three lists) and the **per-node op-tape**: persistent storage is `MAX_VECTOR_NODES ×

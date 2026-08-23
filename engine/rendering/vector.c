@@ -34,6 +34,7 @@
 
 #include "vector.h"
 
+#include "arc.h"               /* er_arc_fill_sector — the shared analytic core (ERUI_VECTOR_ANALYTIC_ARC) */
 #include "renderer_internal.h" /* er_blit_fill */
 
 #include <math.h>
@@ -71,6 +72,17 @@
              the rasterize cost is clip-area bound, not edge-count bound, and a coarse                                 \
              value visibly facets small curves (the knob most of all). */
 #define VEC_PI 3.14159265358979323846f
+#define VEC_RAD2DEG 57.29577951308232f
+
+/* Route a shape that IS just a circular arc at the shared analytic core (rendering/arc.c) instead of
+ * flattening + stroking it — so an <Arc> or <Circle> in an <Svg> rasterizes through exactly the same
+ * code (and anti-aliases identically to) a native ER_NODE_ARC widget, at a fraction of the cost. Only
+ * shapes that map EXACTLY are routed (see arc_run_match / arc_paint_ok); everything else keeps the
+ * general path, so this can never change a shape it does not fully describe. Set to 0 to restore the
+ * pre-#87 all-tessellated behaviour. */
+#ifndef ERUI_VECTOR_ANALYTIC_ARC
+#define ERUI_VECTOR_ANALYTIC_ARC 1
+#endif
 
 /* ERUI_VECTOR_DIAGNOSTICS + ERUI_VEC_WARN_ONCE live in vector.h (shared with vector_store.c). */
 
@@ -861,6 +873,198 @@ static void stroke_shape(uint32_t color,
  - Public entry
  ---------------------------------------------------------------------------------------------------------------------*/
 
+#if ERUI_VECTOR_ANALYTIC_ARC
+
+/**
+ * @brief A shape's op-run recognised as one plain circular arc — the tape both flows emit for
+ *        `<Arc>` (a bare ARC) and `<Circle>` (MOVE, ARC 0..2PI, CLOSE).
+ */
+typedef struct
+{
+    float cx, cy;    /**< Centre in framebuffer pixels (the node origin already folded in). */
+    float r;         /**< Radius in pixels. */
+    float a0_deg;    /**< Sweep start, degrees clockwise from +X. */
+    float sweep_deg; /**< Sweep extent, (0, 360]. */
+    bool full;       /**< Sweep covers the whole circle. */
+    int end;         /**< Tape index just past this shape's op run. */
+} VecArcRun;
+
+/**
+ * @brief Matches a shape's op run against the single-arc pattern.
+ *
+ * Accepts, in order: an optional MOVE, exactly one ARC, an optional CLOSE — and nothing else before the
+ * next SHAPE / the end of the tape. A leading MOVE must land on the arc's own start point (the redundant
+ * MOVE `<Circle>` emits); one that does NOT would make the general path draw a connecting line into the
+ * arc, which no sector can express, so it falls back. The epsilon also absorbs the ULP-level mismatch a
+ * float-rounded MOVE can carry, which the general path's exact-equality vertex dedupe misses.
+ *
+ * @param[in]  ops    Op-tape.
+ * @param[in]  i      Index of the run's first op (just past SHAPE + its paint index).
+ * @param[in]  n_ops  Tape length.
+ * @param[in]  px,py  Node origin added to tape coordinates.
+ * @param[out] out    Receives the arc on a match.
+ *
+ * @return true when the run is exactly one arc.
+ */
+static bool arc_run_match(const float* ops, int i, int n_ops, int px, int py, VecArcRun* out)
+{
+    bool have_move = false, have_arc = false;
+    float mx = 0.0f, my = 0.0f, sx = 0.0f, sy = 0.0f;
+
+    while (i < n_ops && ops[i] != ER_VOP_SHAPE)
+    {
+        const float op = ops[i];
+        if (op == ER_VOP_MOVE)
+        {
+            if (have_move || have_arc || i + 3 > n_ops)
+                return false; /* a second subpath, or a MOVE after the arc: not a lone arc */
+            mx = (float)px + ops[i + 1];
+            my = (float)py + ops[i + 2];
+            have_move = true;
+            i += 3;
+        }
+        else if (op == ER_VOP_ARC)
+        {
+            if (have_arc || i + 7 > n_ops)
+                return false;
+            const float acx = (float)px + ops[i + 1];
+            const float acy = (float)py + ops[i + 2];
+            float ar = ops[i + 3];
+            const float a0 = ops[i + 4];
+            const float a1 = ops[i + 5];
+            const bool ccw = (ops[i + 6] != 0.0f);
+            if (ar < 0.0f)
+                ar = -ar;
+
+            /* Normalise to a forward (clockwise, increasing-angle) sweep, matching append_arc's wrap. */
+            float da = a1 - a0;
+            if (ccw)
+            {
+                while (da > 0.0f)
+                    da -= 2.0f * VEC_PI;
+            }
+            else
+            {
+                while (da < 0.0f)
+                    da += 2.0f * VEC_PI;
+            }
+            const float sweep = (da < 0.0f) ? -da : da;
+            if (!(sweep > 0.0f))
+                return false; /* degenerate: nothing to draw analytically */
+            out->cx = acx;
+            out->cy = acy;
+            out->r = ar;
+            out->a0_deg = ((da < 0.0f) ? (a0 + da) : a0) * VEC_RAD2DEG;
+            out->sweep_deg = sweep * VEC_RAD2DEG;
+            out->full = (sweep >= 2.0f * VEC_PI - 1e-4f);
+            sx = acx + ar * cosf(a0);
+            sy = acy + ar * sinf(a0);
+            have_arc = true;
+            i += 7;
+        }
+        else if (op == ER_VOP_CLOSE)
+        {
+            if (!have_arc)
+                return false;
+            i += 1;
+        }
+        else
+        {
+            return false; /* a line/curve joins the arc — the general path owns joins and end caps */
+        }
+    }
+
+    if (!have_arc)
+        return false;
+    if (have_move && (fabsf(mx - sx) > 0.01f || fabsf(my - sy) > 0.01f))
+        return false;
+    out->end = i;
+    return true;
+}
+
+/**
+ * @brief Whether a paint on a matched arc run maps exactly onto the analytic core.
+ *
+ * @param[in] pt  The shape's paint.
+ * @param[in] a   The matched arc.
+ *
+ * @return true when both the fill and the stroke (whichever are present) can be drawn as sectors.
+ */
+static bool arc_paint_ok(const ERVectorPaint* pt, const VecArcRun* a)
+{
+    if (!pt || a->r <= 0.0f)
+        return false;
+    const bool has_fill = ((pt->fill >> 24) & 0xFFU) != 0U;
+    const bool has_stroke = ((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f;
+    if (!has_fill && !has_stroke)
+        return false; /* nothing to draw; let the general path no-op */
+    /* A filled PARTIAL arc closes on a CHORD (a circular segment), while the analytic core draws a
+     * SECTOR — different shapes. Only a full circle's fill (a plain disc) maps. */
+    if (has_fill && !a->full)
+        return false;
+    if (has_stroke)
+    {
+        if (pt->cap == ER_VCAP_SQUARE)
+            return false; /* the analytic core has butt and round caps only */
+        if (pt->stroke_w * 0.5f >= a->r)
+            return false; /* the band swallows the centre and self-intersects — keep the outline path */
+    }
+    return true;
+}
+
+/** @brief Paints a matched arc run through the analytic core: fill (disc) then stroke (ring). */
+static void arc_run_draw(const VecArcRun* a, const ERVectorPaint* pt, int cx0, int cy0, int cx1, int cy1)
+{
+    ERArcSector s;
+    memset(&s, 0, sizeof(s));
+    s.cx = a->cx;
+    s.cy = a->cy;
+    s.a0 = a->a0_deg;
+    s.a1 = a->a0_deg + a->sweep_deg;
+    s.clip_x0 = cx0;
+    s.clip_y0 = cy0;
+    s.clip_x1 = cx1;
+    s.clip_y1 = cy1;
+
+    if (((pt->fill >> 24) & 0xFFU) != 0U)
+    {
+        s.r_outer = a->r; /* reached only when full (arc_paint_ok) → a disc */
+        s.r_inner = 0.0f;
+        s.cap = ER_ARC_CAP_BUTT;
+        s.color = pt->fill;
+        er_arc_fill_sector(&s);
+    }
+    if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
+    {
+        const float hw = pt->stroke_w * 0.5f;
+        s.r_outer = a->r + hw;
+        s.r_inner = a->r - hw;
+        s.cap = (pt->cap == ER_VCAP_ROUND) ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT;
+        s.color = pt->stroke;
+        er_arc_fill_sector(&s);
+    }
+}
+
+static uint32_t s_analytic_arcs = 0U;
+
+#endif /* ERUI_VECTOR_ANALYTIC_ARC */
+
+uint32_t er_vector_analytic_arc_count(void)
+{
+#if ERUI_VECTOR_ANALYTIC_ARC
+    return s_analytic_arcs;
+#else
+    return 0U;
+#endif
+}
+
+void er_vector_analytic_arc_count_reset(void)
+{
+#if ERUI_VECTOR_ANALYTIC_ARC
+    s_analytic_arcs = 0U;
+#endif
+}
+
 void er_vector_render(const float* ops,
                       int n_ops,
                       const ERVectorPaint* paints,
@@ -894,6 +1098,25 @@ void er_vector_render(const float* ops,
         }
         i++; /* consume SHAPE opcode */
         const int pidx = (i < n_ops) ? (int)ops[i++] : 0;
+        const ERVectorPaint* shape_paint = (pidx >= 0 && pidx < n_paints) ? &paints[pidx] : 0;
+
+#if ERUI_VECTOR_ANALYTIC_ARC
+        /* Analytic fast path: a shape that is just a circular arc goes straight to the shared sector
+         * core, skipping flatten + stroke-outline + scanline coverage entirely. A gradient paint keeps
+         * the general path — vector gradients carry SVG axis geometry, which the sector core's
+         * angle/thickness ramps do not express. */
+        if (shape_paint && shape_paint->fill_grad == 0 && shape_paint->stroke_grad == 0)
+        {
+            VecArcRun arun;
+            if (arc_run_match(ops, i, n_ops, px, py, &arun) && arc_paint_ok(shape_paint, &arun))
+            {
+                arc_run_draw(&arun, shape_paint, cx0, cy0, cx1, cy1);
+                s_analytic_arcs++;
+                i = arun.end;
+                continue;
+            }
+        }
+#endif
 
         /* Build this shape's subpaths until the next SHAPE or end of tape. */
         s_npts = 0;
@@ -982,7 +1205,7 @@ void er_vector_render(const float* ops,
         }
 
         /* Apply the shape's paint: fill first, then stroke (SVG paint order). */
-        const ERVectorPaint* pt = (pidx >= 0 && pidx < n_paints) ? &paints[pidx] : 0;
+        const ERVectorPaint* pt = shape_paint;
         if (pt)
         {
             const ERVectorGradient* fg = NULL;

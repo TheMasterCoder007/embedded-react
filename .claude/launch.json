@@ -4,7 +4,11 @@
     {
       "name": "wasm-sim",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["tools/web-sim/serve.mjs", "--port", "3333"],
+      "runtimeArgs": [
+        "tools/web-sim/serve.mjs",
+        "--port",
+        "3333"
+      ],
       "port": 3333
     },
     {
@@ -15,6 +19,17 @@
         "cd demos/thermostat && exec node ../../bridges/quickjs/js/cli.mjs dev --port 3334"
       ],
       "port": 3334
+    },
+    {
+      "name": "thermostat-websim",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/web-sim/dev.mjs",
+        "thermostat",
+        "--port",
+        "3336"
+      ],
+      "port": 3336
     }
   ]
 }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "arc_widget.h"
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include "transform.h"
@@ -436,8 +437,17 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
         }
     }
 
-    /* Gate entry on the slop-extended bounds (using the transform-adjusted query). */
-    if (!point_inside_node_with_slop(node, qx, qy))
+    /* Gate entry on the slop-extended bounds (using the transform-adjusted query). An Arc's knob and touch
+     * slop reach past its box, so it gates on a wider rect and decides precisely below. */
+    if (node->type == ER_NODE_ARC)
+    {
+        const int ext = (int)node->arc_overhang + 16;
+        if (qx < (int)node->computed.x - ext || qy < (int)node->computed.y - ext
+            || qx >= (int)node->computed.x + (int)node->computed.w + ext
+            || qy >= (int)node->computed.y + (int)node->computed.h + ext)
+            return NULL;
+    }
+    else if (!point_inside_node_with_slop(node, qx, qy))
         return NULL;
 
     /* Recurse into children unless box-only. */
@@ -473,6 +483,11 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
 
     /* pointer_events:box-none — this node is not hittable itself; children are. */
     if (pe == ER_POINTER_EVENTS_BOX_NONE)
+        return NULL;
+
+    /* An Arc is hittable only on its ring (plus slop) and knob — the hole and the unswept gap fall through
+     * to whatever is behind, so a centre readout or a sibling under the dial still gets its taps. */
+    if (node->type == ER_NODE_ARC && !er_arc_hit(node, qx, qy))
         return NULL;
 
     return node;
@@ -697,6 +712,8 @@ static void reject_responder(ERNode* node, const EREventData* data)
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_REJECT, data);
 }
 
+static void arc_drag_end(const ERTouchState* touch);
+
 /**
  * @brief Cancels an active touch sequence.
  *
@@ -721,9 +738,99 @@ static void cancel_touch(ERTouchState* touch, int x, int y)
     rdata.y = y;
     rdata.dx = x - touch->start_x;
     rdata.dy = y - touch->start_y;
+    arc_drag_end(touch);
     terminate_responder_if_active(touch, &rdata);
 
     reset_touch(touch);
+}
+
+/**
+ * @brief Finds the adjustable Arc a touch should drag, walking up from the hit node.
+ *
+ * A dial almost always has content inside it — a centre readout, a label — and that content is a real
+ * node, so the hit lands on IT rather than on the arc and a naive check would silently kill the drag.
+ * Walking up finds the arc anyway, and er_arc_hit() then applies the usual ring-only rule, so a readout
+ * parked in the hole stays inert while a decorative overlay that reaches across the band does not block
+ * it. Any node between the touch and the arc that does its own press/touch handling keeps the gesture —
+ * a real control on top of a dial is still a control.
+ *
+ * @param[in] hit   Deepest hit node (may be NULL).
+ * @param[in] x,y   Touch point in framebuffer pixels.
+ *
+ * @return The Arc to drag, or NULL.
+ */
+static ERNode* nearest_arc_drag_target(ERNode* hit, int x, int y)
+{
+    ERNode* n = hit;
+    while (n)
+    {
+        if (n->type == ER_NODE_ARC)
+        {
+            if (!n->props.arc.adjustable)
+                return NULL;
+            int sx = 0, sy = 0;
+            accumulate_scroll_offsets(n, &sx, &sy);
+            return er_arc_hit(n, x + sx, y + sy) ? n : NULL;
+        }
+        if (has_handler(n, ER_EVENT_PRESS) || has_handler(n, ER_EVENT_LONG_PRESS)
+            || has_handler(n, ER_EVENT_TOUCH_START) || has_handler(n, ER_EVENT_TOUCH_MOVE))
+            return NULL; /* an interactive node above the dial owns this touch */
+        n = er_get_node(n->parent_tag);
+    }
+    return NULL;
+}
+
+/**
+ * @brief Returns the Arc node a touch slot is natively dragging, or NULL.
+ */
+static ERNode* active_arc_drag(const ERTouchState* touch)
+{
+    ERNode* r = er_get_node(touch->responder_tag);
+    return (r && r->type == ER_NODE_ARC && r->arc_drag_active) ? r : NULL;
+}
+
+/**
+ * @brief Applies the value under a touch point to an adjustable Arc and fires ER_EVENT_VALUE_CHANGE when
+ *        the quantized value moved.
+ *
+ * @param[in,out] arc        Arc node (responder of the drag).
+ * @param[in]     x,y        Touch point in framebuffer pixels (keyboard offset already applied).
+ * @param[in]     anti_wrap  false on touch-down (jump straight to the point), true on moves.
+ */
+static void arc_drag_to(ERNode* arc, int x, int y, bool anti_wrap)
+{
+    int sx = 0, sy = 0;
+    accumulate_scroll_offsets(arc, &sx, &sy);
+    const float v = er_arc_value_at(arc, x + sx, y + sy, anti_wrap);
+    /* RANGE mode moves only the end the gesture latched onto on touch-down. */
+    const bool changed = arc->arc_drag_low ? er_arc_apply_value_start(arc, v) : er_arc_apply_value(arc, v);
+    if (changed)
+    {
+        er_mark_dirty_upward(arc);
+        const EREventHandler* h = &arc->events[ER_EVENT_VALUE_CHANGE];
+        if (h->fn)
+        {
+            EREventData d = {0};
+            d.x = x;
+            d.y = y;
+            d.value = arc->arc_value;
+            d.value_start = arc->props.arc.range ? arc->arc_value_start : arc->arc_value;
+            h->fn(arc, &d, h->user_data);
+        }
+    }
+}
+
+/**
+ * @brief Ends a native Arc drag (touch up or cancel): releases the node's ownership of its value.
+ */
+static void arc_drag_end(const ERTouchState* touch)
+{
+    ERNode* arc = active_arc_drag(touch);
+    if (arc)
+    {
+        arc->arc_drag_active = false;
+        arc->arc_drag_low = false;
+    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -935,6 +1042,28 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     chain, chain_len, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &data);
                 if (claimant)
                     grant_responder(touch, claimant, &data);
+
+                /* Built-in Arc drag-to-set: an adjustable Arc under the finger takes the gesture natively —
+                 * over a JS claimant and ahead of any ScrollView's auto-scroll — and jumps to the touched
+                 * point. The responder stays with it until release, so a scroller never steals the drag. */
+                ERNode* arc = nearest_arc_drag_target(hit, x, y);
+                if (arc)
+                {
+                    if (touch->responder_tag != arc->tag)
+                    {
+                        terminate_responder_if_active(touch, &data);
+                        grant_responder(touch, arc, &data);
+                    }
+                    arc->arc_drag_active = true;
+                    /* Latch which end of a RANGE band this gesture owns, ONCE, at the point it started —
+                     * so dragging one setpoint past the other does not hand the finger to its neighbour. */
+                    {
+                        int sx = 0, sy = 0;
+                        accumulate_scroll_offsets(arc, &sx, &sy);
+                        arc->arc_drag_low = er_arc_grab_low(arc, x + sx, y + sy);
+                    }
+                    arc_drag_to(arc, x, y, false);
+                }
             }
             break;
         }
@@ -976,6 +1105,16 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* responder = er_get_node(touch->responder_tag);
             if (responder)
                 dispatch_to_node_data(responder, ER_EVENT_RESPONDER_MOVE, &rdata);
+
+            /* Native Arc drag: track the finger; nobody else may negotiate the responder away mid-drag. */
+            {
+                ERNode* arc = active_arc_drag(touch);
+                if (arc)
+                {
+                    arc_drag_to(arc, x, y, true);
+                    break;
+                }
+            }
 
             /* Move-should-set negotiation: any node in the chain may claim the responder */
             if (touch_target)
@@ -1083,12 +1222,24 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                         cfg.duration_ms = 200U;
                         er_anim_start(press_target, ER_PROP_SWITCH_THUMB, new_val ? 1.0f : 0.0f, &cfg);
                         er_mark_dirty_upward(press_target);
+                        /* onValueChange: the new value, so a host needs no PRESS-then-guess round-trip. */
+                        const EREventHandler* vh = &press_target->events[ER_EVENT_VALUE_CHANGE];
+                        if (vh->fn)
+                        {
+                            EREventData vd = {0};
+                            vd.x = x;
+                            vd.y = y;
+                            vd.value = new_val ? 1.0f : 0.0f;
+                            vd.value_start = vd.value;
+                            vh->fn(press_target, &vd, vh->user_data);
+                        }
                     }
                     dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
                 }
             }
 
             /* Release the gesture responder */
+            arc_drag_end(touch);
             ERNode* responder = er_get_node(touch->responder_tag);
             if (responder)
             {

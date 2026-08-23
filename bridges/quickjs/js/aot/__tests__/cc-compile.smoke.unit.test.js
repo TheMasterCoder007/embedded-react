@@ -64,11 +64,33 @@ function findCC() {
 const CC = findCC();
 
 describe('AOT generated C compiles', () => {
-  it('emits the thermostat solo dial (a state-driven vector node rebuilt from trig)', async () => {
+  it('emits the thermostat solo dial as a native, state-driven arc node', async () => {
     const r = await emitThermostat();
-    expect(r.c).toMatch(/static void build_svg\d+\(void\)/);
-    expect(r.c).toMatch(/s_svg\d+_ops\[\d+\] = ER_VOP_ARC;/);
-    expect(r.c).toContain('cosf(');
+    expect(r.c).toContain('er_node_create(ER_NODE_ARC)');
+    expect(r.c).toContain('p.arc_range ='); // AUTO's two-setpoint band
+    expect(r.c).toContain('p.arc_value ='); // the setpoint drives it directly
+    expect(r.c).toContain('ER_EVENT_VALUE_CHANGE');
+    expect(r.c).not.toMatch(/static void build_svg\d+\(void\)/); // no hand-built op-tape any more
+  });
+
+  // The dial moved off <Svg>, so keep an explicit vector fixture: this is what catches a generated call
+  // that no longer matches an engine signature (e.g. a stale er_node_set_vector_ops arity).
+  it('still emits a valid vector op-tape for an <Svg> app', () => {
+    const r = compileSource(
+      `import { View, Svg, Path, Circle } from 'embedded-react';
+       export function App() {
+         return (
+           <View style={{ flex: 1 }}>
+             <Svg width={100} height={100}>
+               <Path d="M 10 90 A 40 40 0 1 1 90 90" stroke="#f4a261" strokeWidth={8} fill="none" />
+               <Circle cx={50} cy={50} r={12} fill="#16202f" stroke="#f4a261" strokeWidth={3} />
+             </Svg>
+           </View>
+         );
+       }`,
+      'svg',
+    );
+    expect(r.c).toMatch(/static const float s_svg\d+_ops\[\]/); // baked tape (a fully static <Svg>)
     expect(r.c).toMatch(
       /er_node_set_vector_ops\(n\d+, s_svg\d+_ops, \d+, s_svg\d+_paints, \d+/,
     );
@@ -97,6 +119,51 @@ describe('AOT generated C compiles', () => {
           {
             encoding: 'utf8',
           },
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a <Dial> app (state + animated value + onChange) passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      const r = compileSource(
+        `import { useState } from 'react';
+         import { View, Dial, useAnimatedValue } from 'embedded-react';
+         export function App() {
+           const [temp, setTemp] = useState(21);
+           const level = useAnimatedValue(0);
+           return (
+             <View style={{ flex: 1 }}>
+               <Dial value={temp} min={10} max={30} step={0.5} cap="round" knob="circle" adjustable
+                     indicatorColor={temp > 25 ? '#ff4040' : '#ff8800'} onChange={(v) => setTemp(v)}
+                     style={{ width: 200, height: 200 }} />
+               <Dial value={level} max={100} segments={8} gapAngle={3}
+                     indicatorGradient={{ type: 'conic', stops: [{ color: '#0000ff' }, { color: '#ff0000' }] }} />
+             </View>
+           );
+         }`,
+        'dial',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-dial-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
         );
         expect(res.stderr || '').toBe('');
         expect(res.status).toBe(0);

@@ -48,6 +48,18 @@ import {splitAnimatedStyle} from './embedded-react/split-style.js';
  */
 function applyProps(type, handle, props) {
   const {staticStyle, bindings} = splitAnimatedStyle(props.style);
+  // <Dial value={animatedValue}>: the value is a native-driver binding (ER_PROP_ARC_VALUE), not a prop —
+  // the engine ramps it with no JS per frame and damages only the swept sliver.
+  if (type === 'Dial') {
+    if (props.value && props.value.__animated) {
+      bindings.push({prop: 'value', value: props.value});
+      props = {...props, value: undefined};
+    }
+    if (props.valueStart && props.valueStart.__animated) {
+      bindings.push({prop: 'valueStart', value: props.valueStart});
+      props = {...props, valueStart: undefined};
+    }
+  }
   NativeUI.setProps(handle, buildProps(type, props, staticStyle));
   for (const b of bindings) b.value.__bind(handle, b.prop);
   return staticStyle;

@@ -306,3 +306,48 @@ describe('prepareUpdate diffing: Animated.Value binding stays correct', () => {
     expect(v2.bound).toHaveLength(1);
   });
 });
+
+describe('<Dial>: the native arc widget marshals its props and binds an animated value', () => {
+  it('passes the widget props through and registers onChange', () => {
+    const onChange = () => {};
+    mount(
+      el('Dial', {
+        style: {width: 200, height: 200},
+        value: 42,
+        min: 0,
+        max: 100,
+        thickness: 14,
+        knob: 'circle',
+        adjustable: true,
+        indicatorGradient: {
+          type: 'conic',
+          stops: [{color: '#0000ff'}, {color: '#ff0000'}],
+        },
+        onChange,
+      }),
+    );
+    const p = calls.setProps.find(c => c.p.thickness === 14).p;
+    expect(p.value).toBe(42);
+    expect(p.max).toBe(100);
+    expect(p.knob).toBe('circle');
+    expect(p.adjustable).toBe(true);
+    expect(p.indicatorGradient.type).toBe('conic');
+    expect(
+      calls.setEvent.some(e => e.key === 'onChange' && e.fn === onChange),
+    ).toBe(true);
+  });
+
+  it('an Animated.Value as `value` is bound to the node, not marshalled as a prop', () => {
+    const v = new FakeAnimatedValue();
+    const update = mount(
+      el('Dial', {style: {width: 100, height: 100}, value: v}),
+    );
+    expect(v.bound).toHaveLength(1);
+    expect(v.bound[0].prop).toBe('value');
+    const p = calls.setProps.find(c => c.p.width === 100).p;
+    expect(p.value).toBeUndefined();
+    Object.values(calls).forEach(a => (a.length = 0));
+    update(el('Dial', {style: {width: 100, height: 100}, value: v}));
+    expect(counts()).toEqual(NOTHING); // same instance: nothing to re-send or re-bind
+  });
+});

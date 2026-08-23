@@ -906,9 +906,8 @@ export async function bakeSvgArtifacts(src, baseDir) {
   }).program;
   const imports = collectSvgImports(program);
   if (imports.size === 0) return {};
-  const {svgToVector, svgToRaster, writeRasterPng} = await import(
-    '../assets/bake-svg.mjs'
-  );
+  const {svgToVector, svgToRaster, writeRasterPng} =
+    await import('../assets/bake-svg.mjs');
   const artifacts = {};
   for (const [, imp] of imports) {
     const p = resolve(baseDir, imp.importPath);
@@ -3583,11 +3582,17 @@ function compileValueHandler(
   state,
   out,
   cType = 'int',
+  valueCode2 = null,
 ) {
   const param =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
   const locals = new Map(env.locals);
   if (param) locals.set(param, {code: valueCode, cType});
+  // A second parameter (a RANGE <Dial>'s low end) binds the same way, so `onChange={(hi, lo) => …}`
+  // lowers to data->value / data->value_start with no object allocated on device.
+  const param2 =
+    fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
+  if (param2 && valueCode2) locals.set(param2, {code: valueCode2, cType});
   const ctx = {stateChanged: false, animIdx: 0, out};
   const body = fnNode.body;
   const list =
@@ -3597,6 +3602,297 @@ function compileValueHandler(
   const stmts = compileStmts(list, {...env, locals}, state, ctx, '    ');
   if (ctx.stateChanged) stmts.push('    app_update();');
   return stmts;
+}
+
+/** <Dial> prop → ERProps field tables (see emitDial). */
+const DIAL_FLOAT_PROPS = {
+  value: 'arc_value',
+  valueStart: 'arc_value_start',
+  minSpan: 'arc_min_span',
+  min: 'arc_min',
+  max: 'arc_max',
+  startAngle: 'arc_start_angle',
+  sweepAngle: 'arc_sweep_angle',
+  step: 'arc_step',
+  gapAngle: 'arc_gap_angle',
+};
+const DIAL_INT_PROPS = {
+  thickness: 'arc_width',
+  bandThickness: 'arc_band_width',
+  knobSize: 'arc_knob_size',
+  knobBorderWidth: 'arc_knob_border_width',
+  segments: 'arc_segments',
+};
+const DIAL_COLOR_PROPS = {
+  trackColor: 'arc_track_color',
+  indicatorColor: 'arc_indicator_color',
+  bandColor: 'arc_band_color',
+  knobColor: 'arc_knob_color',
+  knobBorderColor: 'arc_knob_border_color',
+};
+const DIAL_ENUM_PROPS = {
+  cap: {
+    field: 'arc_cap',
+    table: {butt: 'ER_ARC_CAP_BUTT', round: 'ER_ARC_CAP_ROUND'},
+  },
+  knob: {
+    field: 'arc_knob',
+    table: {
+      none: 'ER_ARC_KNOB_NONE',
+      circle: 'ER_ARC_KNOB_CIRCLE',
+      image: 'ER_ARC_KNOB_IMAGE',
+      child: 'ER_ARC_KNOB_CHILD',
+    },
+  },
+};
+
+/**
+ * <Dial value={v} min max startAngle sweepAngle step thickness bandThickness trackColor indicatorColor
+ *       indicatorGradient bandColor cap segments gapAngle knob knobSize knobColor knobBorderColor
+ *       knobBorderWidth knobImage adjustable onChange={(v) => setV(v)} style=… />
+ * → ER_NODE_ARC, the engine's native arc widget. Numbers and colours are static literals or state-driven
+ * (recomputed in app_update); `value` may also be a useAnimatedValue handle, which binds ER_PROP_ARC_VALUE
+ * natively so a ramp costs no app_update at all. onChange lowers to ER_EVENT_VALUE_CHANGE with its param
+ * bound to data->value (the quantized value the built-in drag produced). Default 120x120 box.
+ */
+function emitDial(el, scope, out, env, state) {
+  const v = `n${out.n++}`;
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+    el.openingElement,
+    scope,
+    env,
+  );
+  const hasField = f =>
+    staticAssigns.some(a => a.field === f) ||
+    dynAssigns.some(a => a.field === f);
+  if (!hasField('width')) staticAssigns.push({field: 'width', expr: '120'});
+  if (!hasField('height')) staticAssigns.push({field: 'height', expr: '120'});
+
+  const SUPPORTED =
+    'supported props: value, min, max, startAngle, sweepAngle, step, thickness, bandThickness, ' +
+    'trackColor, indicatorColor, indicatorGradient, bandColor, cap, segments, gapAngle, knob, knobSize, ' +
+    'minSpan, ' +
+    'knobColor, knobBorderColor, knobBorderWidth, knobImage, adjustable, range, valueStart, onChange, style.';
+  const numeric = (field, node, isFloat) => {
+    try {
+      const n = evalStatic(node, scope);
+      if (typeof n !== 'number') throw new Error('not a number');
+      staticAssigns.push({
+        field,
+        expr: isFloat ? floatLit(n) : String(Math.round(n)),
+      });
+    } catch {
+      const e = emitExpr(node, env);
+      dynAssigns.push({
+        field,
+        code: isFloat ? `(float)(${e.code})` : `(int16_t)(${e.code})`,
+      });
+    }
+  };
+  const colour = (field, node) => {
+    try {
+      const c = evalStatic(node, scope);
+      if (typeof c !== 'string') throw new Error('not a colour');
+      staticAssigns.push({field, expr: colorLiteral(c)});
+    } catch {
+      dynAssigns.push({field, code: emitColorExpr(node, env)});
+    }
+  };
+
+  let onChangeFn = null;
+  let knobImage = null; // static asset name
+  for (const attr of el.openingElement.attributes) {
+    if (attr.type !== 'JSXAttribute')
+      throw aotError('AOT: spread props on <Dial> are not supported');
+    const name = attr.name.name;
+    if (name === 'style' || name === 'ref' || name === 'key') continue;
+    const node = attrExpr(attr);
+    if (
+      (name === 'value' || name === 'valueStart') &&
+      node?.type === 'Identifier' &&
+      env.anims?.has(node.name)
+    ) {
+      binds.push({
+        cVar: env.anims.get(node.name).cVar,
+        prop:
+          name === 'value' ? 'ER_PROP_ARC_VALUE' : 'ER_PROP_ARC_VALUE_START',
+      });
+    } else if (DIAL_FLOAT_PROPS[name])
+      numeric(DIAL_FLOAT_PROPS[name], node, true);
+    else if (DIAL_INT_PROPS[name]) numeric(DIAL_INT_PROPS[name], node, false);
+    else if (DIAL_COLOR_PROPS[name]) colour(DIAL_COLOR_PROPS[name], node);
+    else if (DIAL_ENUM_PROPS[name]) {
+      const {field, table} = DIAL_ENUM_PROPS[name];
+      let tok = null;
+      try {
+        tok = evalStatic(node, scope);
+      } catch {
+        /* state-driven — handled below */
+      }
+      if (typeof tok === 'string') {
+        if (!table[tok])
+          throw aotError(
+            `AOT: unsupported <Dial ${name}> "${tok}"`,
+            `${name} must be one of: ${Object.keys(table).join(' / ')}.`,
+          );
+        staticAssigns.push({field, expr: table[tok]});
+      } else {
+        dynAssigns.push({
+          field,
+          code: `(uint8_t)(${emitEnumExpr(node, table, env)})`,
+        });
+      }
+    } else if (name === 'adjustable' || name === 'range') {
+      const field = name === 'range' ? 'arc_range' : 'arc_adjustable';
+      try {
+        staticAssigns.push({field, expr: evalStatic(node, scope) ? '1' : '0'});
+      } catch {
+        dynAssigns.push({
+          field,
+          code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+        });
+      }
+    } else if (name === 'knobImage') {
+      knobImage = imageNameFromSource(node, env);
+      if (knobImage == null)
+        throw aotError(
+          'AOT: <Dial knobImage> must resolve to a static asset name',
+          "use an imported image (`import knob from './knob.png'` → knobImage={knob}) or a string asset name.",
+        );
+      const path = env.imageNames?.get(knobImage);
+      if (path) out.images.set(knobImage, path);
+    } else if (name === 'indicatorGradient') {
+      // A gradient is usually applied only in SOME state (a thermostat ramps its band in AUTO and paints
+      // it solid otherwise), so `cond ? {…} : null` is the common shape. The stops themselves are still
+      // constant — only WHETHER they apply varies — so bake them and switch the stop COUNT at runtime:
+      // the engine ignores a gradient with fewer than two stops and falls back to indicatorColor.
+      let gradNode = node;
+      let gradCond = null;
+      if (node?.type === 'ConditionalExpression') {
+        const nullish = n =>
+          n?.type === 'NullLiteral' ||
+          (n?.type === 'Identifier' && n.name === 'undefined');
+        if (nullish(node.alternate)) {
+          gradNode = node.consequent;
+          gradCond = emitExpr(node.test, env).code;
+        } else if (nullish(node.consequent)) {
+          gradNode = node.alternate;
+          gradCond = `!(${emitExpr(node.test, env).code})`;
+        }
+      }
+      const g = evalStaticOrThrow(
+        gradNode,
+        scope,
+        'AOT: <Dial indicatorGradient> must be a static object (optionally behind a ternary against null)',
+        "indicatorGradient={{ type: 'conic', stops: [{ color: '#00f' }, { color: '#f00' }] }}, or " +
+          'indicatorGradient={on ? {…} : null}',
+      );
+      const stops = Array.isArray(g?.stops) ? g.stops.slice(0, 4) : [];
+      if (stops.length < 2)
+        throw aotError(
+          'AOT: <Dial indicatorGradient> needs at least 2 stops (max 4)',
+        );
+      staticAssigns.push({
+        field: 'gradient_type',
+        expr: g.type === 'radial' ? 'ER_GRADIENT_RADIAL' : 'ER_GRADIENT_CONIC',
+      });
+      if (gradCond)
+        dynAssigns.push({
+          field: 'gradient_stop_count',
+          code: `(uint8_t)((${gradCond}) ? ${stops.length} : 0)`,
+        });
+      else
+        staticAssigns.push({
+          field: 'gradient_stop_count',
+          expr: String(stops.length),
+        });
+      stops.forEach((st, i) => {
+        const off =
+          typeof st.offset === 'number' ? st.offset : i / (stops.length - 1);
+        staticAssigns.push({
+          field: `gradient_stops[${i}].color`,
+          expr: colorLiteral(String(st.color)),
+        });
+        staticAssigns.push({
+          field: `gradient_stops[${i}].position`,
+          expr: floatLit(off),
+        });
+      });
+    } else if (name === 'onChange') onChangeFn = node;
+    else
+      throw aotError(`AOT: <Dial> prop "${name}" is not supported`, SUPPORTED);
+  }
+
+  const isDynamic = dynAssigns.length > 0;
+  out.build.push(`    ${v} = er_node_create(ER_NODE_ARC);`);
+  if (isDynamic) {
+    out.build.push(`    s_${v} = ${v};`);
+    out.handles.push(v);
+    out.updates.push({
+      v,
+      styleAssigns: staticAssigns,
+      text: null,
+      dynAssigns,
+      imageName: knobImage != null ? cstr(knobImage) : null,
+    });
+  } else {
+    out.build.push(`    er_props_default(&p);`);
+    for (const a of staticAssigns)
+      out.build.push(`    p.${a.field} = ${a.expr};`);
+    if (knobImage != null)
+      out.build.push(
+        `    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(knobImage)});`,
+      );
+    out.build.push(`    er_node_set_props(${v}, &p);`);
+  }
+
+  // Animated bindings: style props plus an animated `value` (ER_PROP_ARC_VALUE).
+  binds.forEach((b, i) => {
+    if (b.interp) {
+      const it = b.interp;
+      out.build.push(
+        `    {`,
+        `        static const ERInterpolation interp_${v}_${i} = { { ${it.input.map(floatLit).join(', ')} }, { ${it.output.map(floatLit).join(', ')} }, ${it.input.length}, ${it.exLeft}, ${it.exRight} };`,
+        `        er_anim_value_bind_interpolated(${b.cVar}, ${v}, ${b.prop}, &interp_${v}_${i});`,
+        `    }`,
+      );
+    } else {
+      out.build.push(`    er_anim_value_bind(${b.cVar}, ${v}, ${b.prop});`);
+    }
+  });
+
+  if (onChangeFn) {
+    // A useCallback identifier resolves to its arrow, the same way the generic host-node event path does —
+    // a dial's change handler is exactly the kind of thing an app wraps in useCallback.
+    if (onChangeFn.type === 'Identifier' && env.callbacks?.has(onChangeFn.name))
+      onChangeFn = env.callbacks.get(onChangeFn.name);
+    if (!isFn(onChangeFn))
+      throw aotError(
+        'AOT: <Dial onChange> must be an inline function or a useCallback',
+        'onChange={(v) => setValue(v)}',
+      );
+    const handlerName = `er_handler_${out.handlers.length}`;
+    out.handlers.push({
+      name: handlerName,
+      body: compileValueHandler(
+        onChangeFn,
+        'data->value',
+        env,
+        state,
+        out,
+        'float',
+        'data->value_start',
+      ),
+    });
+    out.build.push(
+      `    er_event_set(${v}, ER_EVENT_VALUE_CHANGE, ${handlerName}, NULL);`,
+    );
+  }
+  emitRefBind(v, el.openingElement, out, env);
+  // Children lay out inside the dial's box like any View's (a centre readout), and with knob="child" the
+  // engine moves the first one onto the value point.
+  emitChildren(el.children, v, scope, out, env, state);
+  return v;
 }
 
 /**
@@ -4222,6 +4518,7 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
+  if (tag === 'Dial') return emitDial(el, scope, out, env, state);
   if (tag === 'TextInput') return emitTextInput(el, scope, out, env, state);
   if (tag === 'ActivityIndicator')
     return emitActivityIndicator(el, scope, out, env);

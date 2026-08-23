@@ -119,6 +119,23 @@ void er_vector_render(const float* ops,
                       int clipx1,
                       int clipy1);
 
+/**
+ * @brief Number of shapes er_vector_render() has routed to the shared analytic arc core since the last
+ *        reset (ERUI_VECTOR_ANALYTIC_ARC; always 0 when that is compiled out).
+ *
+ * A diagnostic for WHICH route a shape took, which is otherwise invisible: an `<Arc>` / `<Circle>` whose
+ * paint the sector core cannot express (a gradient, a square cap, a filled partial arc) silently falls
+ * back to the general tessellated path. Tests assert the routing decision with it.
+ *
+ * @return Monotonic count since er_vector_analytic_arc_count_reset().
+ */
+uint32_t er_vector_analytic_arc_count(void);
+
+/**
+ * @brief Zeroes the analytic-arc routing counter.
+ */
+void er_vector_analytic_arc_count_reset(void);
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Per-node storage pool (a fixed set of slots; a vector node references one by index)
  ---------------------------------------------------------------------------------------------------------------------*/

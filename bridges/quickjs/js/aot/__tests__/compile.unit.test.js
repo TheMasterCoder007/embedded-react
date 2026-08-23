@@ -1168,6 +1168,109 @@ describe('AOT Switch', () => {
   });
 });
 
+describe('AOT Dial', () => {
+  it('lowers a controlled <Dial> to ER_NODE_ARC; onChange binds its param to data->value', () => {
+    const c = gen(`${PRE}
+      import { Dial } from 'embedded-react';
+      export function App() {
+        const [temp, setTemp] = useState(21);
+        return (<Dial value={temp} min={10} max={30} step={0.5} thickness={14} cap="round"
+                      knob="circle" adjustable trackColor="#30343a" indicatorColor="#ff8800"
+                      onChange={(v) => setTemp(v)} style={{ width: 200, height: 200 }} />);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_ARC)');
+    expect(c).toContain('p.arc_value = (float)(s_state.temp);'); // state-driven value (app_update)
+    expect(c).toContain('p.arc_min = 10.0f;');
+    expect(c).toContain('p.arc_max = 30.0f;');
+    expect(c).toContain('p.arc_step = 0.5f;');
+    expect(c).toContain('p.arc_width = 14;');
+    expect(c).toContain('p.arc_cap = ER_ARC_CAP_ROUND;');
+    expect(c).toContain('p.arc_knob = ER_ARC_KNOB_CIRCLE;');
+    expect(c).toContain('p.arc_adjustable = 1;');
+    expect(c).toContain('p.arc_track_color = 0xFF30343Au;');
+    expect(c).toContain('p.arc_indicator_color = 0xFFFF8800u;');
+    expect(c).toMatch(/er_event_set\(n\d+, ER_EVENT_VALUE_CHANGE,/);
+    expect(c).toContain('s_state.temp = data->value;'); // onChange's v param = the engine's new value
+    expect(c).toContain('p.width = 200;');
+  });
+
+  it('binds an animated value natively and bakes a conic indicator gradient', () => {
+    const c = gen(`${PRE}
+      import { Dial } from 'embedded-react';
+      export function App() {
+        const level = useAnimatedValue(0);
+        return (<Dial value={level} max={100}
+                      indicatorGradient={{ type: 'conic', stops: [{ color: '#0000ff' }, { color: '#ff0000' }] }} />);
+      }`);
+    expect(c).toMatch(/er_anim_value_bind\(\w+, n\d+, ER_PROP_ARC_VALUE\);/);
+    expect(c).not.toContain('arc_value ='); // the value is the binding, never a marshalled prop
+    expect(c).toContain('p.gradient_type = ER_GRADIENT_CONIC;');
+    expect(c).toContain('p.gradient_stop_count = 2;');
+    expect(c).toContain('p.gradient_stops[1].color = 0xFFFF0000u;');
+    expect(c).toContain('p.gradient_stops[1].position = 1.0f;');
+    expect(c).toContain('p.width = 120;'); // default box
+  });
+
+  it('lowers RANGE mode: two ends, a state-driven knob/range, and a two-arg onChange', () => {
+    const c = gen(`${PRE}
+      import { Dial } from 'embedded-react';
+      export function App() {
+        const [lo, setLo] = useState(60);
+        const [hi, setHi] = useState(76);
+        const [mode, setMode] = useState('auto');
+        return (<Dial range={mode === 'auto'} valueStart={lo} value={hi} min={50} max={90} minSpan={4}
+                      knob={mode === 'off' ? 'none' : 'circle'} adjustable={mode !== 'off'}
+                      indicatorGradient={mode === 'auto' ? {type: 'conic', stops: [{color: '#f2a64b'}, {color: '#4fa9f5'}]} : null}
+                      onChange={(v, vLo) => { setHi(v); setLo(vLo); }} />);
+      }`);
+    expect(c).toContain('p.arc_value_start = (float)(s_state.lo);');
+    expect(c).toContain('p.arc_min_span = 4.0f;'); // the pair keeps a minimum separation
+    expect(c).toContain('p.arc_value = (float)(s_state.hi);');
+    // range / adjustable / knob are all state-driven here, so they re-apply in app_update.
+    expect(c).toMatch(/p\.arc_range = \(uint8_t\)\(\(.*\) \? 1 : 0\);/);
+    expect(c).toMatch(/p\.arc_adjustable = \(uint8_t\)\(\(.*\) \? 1 : 0\);/);
+    expect(c).toContain('ER_ARC_KNOB_NONE');
+    expect(c).toContain('ER_ARC_KNOB_CIRCLE');
+    // A conditional gradient bakes its stops and switches the COUNT (0 = no gradient).
+    expect(c).toMatch(
+      /p\.gradient_stop_count = \(uint8_t\)\(\(.*\) \? 2 : 0\);/,
+    );
+    // Both handler params bind to the event payload — no object allocated on device.
+    expect(c).toContain('s_state.hi = data->value;');
+    expect(c).toContain('s_state.lo = data->value_start;');
+  });
+
+  it('accepts a useCallback onChange and binds an animated valueStart', () => {
+    const c = gen(`${PRE}
+      import { useCallback } from 'react';
+      import { Dial } from 'embedded-react';
+      export function App() {
+        const [v, setV] = useState(1);
+        const lo = useAnimatedValue(0);
+        const onChange = useCallback((n) => setV(n), []);
+        return (<Dial range valueStart={lo} value={v} onChange={onChange} />);
+      }`);
+    expect(c).toContain('p.arc_range = 1;');
+    expect(c).toMatch(
+      /er_anim_value_bind\(\w+, n\d+, ER_PROP_ARC_VALUE_START\);/,
+    );
+    expect(c).toContain('s_state.v = data->value;');
+  });
+
+  it('rejects an unsupported prop and a bad enum token', () => {
+    expect(() =>
+      gen(`${PRE}
+        import { Dial } from 'embedded-react';
+        export function App() { return (<Dial value={1} bogus={2} />); }`),
+    ).toThrow(/prop "bogus" is not supported/);
+    expect(() =>
+      gen(`${PRE}
+        import { Dial } from 'embedded-react';
+        export function App() { return (<Dial value={1} knob="triangle" />); }`),
+    ).toThrow(/unsupported <Dial knob>/);
+  });
+});
+
 describe('AOT ActivityIndicator', () => {
   it('lowers <ActivityIndicator> to ER_NODE_ACTIVITY_INDICATOR with color + a size-derived box', () => {
     const c = gen(`${PRE}

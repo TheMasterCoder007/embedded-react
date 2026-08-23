@@ -15,19 +15,9 @@
  */
 
 import {useState, useRef, useCallback, memo} from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  Image,
-  Modal,
-  Svg,
-  Arc,
-  Circle,
-  Line,
-} from 'embedded-react';
+import {View, Text, Pressable, Image, Modal, Dial} from 'embedded-react';
 import cogIcon from './assets/cog.png';
-import {Dial} from './components/dial.jsx';
+import {ThermoDial} from './components/dial.jsx';
 import {WeatherPanel} from './components/weather.jsx';
 
 // Thermostat — one app, three layouts chosen from the panel size:
@@ -44,7 +34,7 @@ import {WeatherPanel} from './components/weather.jsx';
 //
 // Flow A (split / stack) runs the real JS engine and gets the rich <Dial> with an imperative drag. Flow B
 // (solo) compiles to C for boards with no JS runtime, so that branch stays inside the AOT subset: hex
-// color literals, no cross-module identifiers, and dynamic geometry expressed with <Arc>/<Line> rather
+// color literals, no cross-module identifiers, and dynamic shapes expressed with <Dial>/<Arc> rather
 // than a state-driven <Path d>. See the README for the full list of what differs.
 
 // ----------------------------------------------------------------------------------------------------
@@ -116,7 +106,8 @@ const D_RRING = 116 * S;
 const D_RINGW = 20 * S;
 const D_RHAND_IN = 97 * S;
 const D_RHAND_OUT = 135 * S;
-const D_RCORE = 86 * S; // the solid centre disc — 20 units of clearance to the blocks' 106 inner edge
+const D_RCORE = 86 * S; // the solid center disc — 20 units of clearance to the blocks' 106 inner edge
+const D_DIAL = 2 * (116 + 10) * S;
 
 const GEO = {
   S,
@@ -147,6 +138,8 @@ const INSIDE_F = 69; // the live room reading (static in this demo)
 // Engine angles: 0° at 12 o'clock, growing clockwise. The design's SVG angles (0° at 3 o'clock) are +90.
 const A0 = 240;
 const SWEEP = 240;
+// <Dial> measures its own angles clockwise from 3 o'clock, so the design's A0 shifts by a quarter turn.
+const D_A0 = A0 - 90;
 const GRAD_CONIC = 3; // ERGradientType: center (ax,ay) + start angle r, sweeping clockwise from the top
 
 const MODES = [
@@ -455,7 +448,7 @@ export function App() {
   const value = mode === 'heat' ? heatSp : coolSp;
 
   // ---- Solo layout (small panels, e.g., the 240×320 CYD) ------------------------------------------
-  // Self-contained and inside the Flow B (AOT) subset: a state-driven dial built from <Arc>/<Line> with
+  // Self-contained and inside the Flow B (AOT) subset: a state-driven native <Dial> with
   // hex-literal paints, integer steppers, and the mode row as an inlined MODES.map. This is the ONLY
   // branch the AOT compiles on a small board, so nothing below it (the drag dial, the weather panel, the
   // theme switch) is ever reached — which is why those may use the full Flow A feature set.
@@ -467,78 +460,22 @@ export function App() {
   //     snprintf, so that costs one node where two tappable numbers would cost four, and this branch has
   //     little node headroom (40 of 44 on the CYD).
   //   - which AUTO end the steppers move is set by the last drag rather than by tapping a number.
-  //   - the dial is state-driven, not imperative: a move re-renders rather than calling updateVector.
-  // What does NOT differ anymore: the arc is a single stroke, and AUTO carries the same conic gradient,
-  // both now supported on inline <Svg> shapes in the AOT.
-  const cxRef = useRef(0);
-  const cyRef = useRef(0);
-  // A handler in the AOT subset may only bind `const`s and call a setter, so the angle normalization is a
-  // chain of ternaries rather than reassignment. The deadband stops a resistive panel's few pixels of
-  // idle noise from wiggling the handle under a held finger.
-  const onDrag = useCallback(
-    e => {
-      const raw =
-        (Math.atan2(e.x - cxRef.current, cyRef.current - e.y) * 180) / Math.PI;
-      const a0 = raw < 0 ? raw + 360 : raw;
-      const a1 = a0 < A0 ? a0 + 360 : a0;
-      const a =
-        a1 > A0 + SWEEP
-          ? a1 - (A0 + SWEEP) < A0 + 360 - a1
-            ? A0 + SWEEP
-            : A0
-          : a1;
-      const t = MINF + ((a - A0) / SWEEP) * (MAXF - MINF);
-      // AUTO carries a low/high pair instead of one setpoint: grabs whichever end is nearer the finger
-      // and drags it, carrying the far end along once they close to RGAP rather than stopping dead. Each
-      // end is pre-clamped so it can never be pushed outside the range. Flat `if`s with the whole
-      // condition spelled out because an AOT handler may only bind consts and call setters.
-      // Which end this gesture owns is decided ONCE, at touch-down (onGrab below), and held in
-      // `active` for the rest of the drag. Re-deciding per move would hand the finger over to the other
-      // handle the moment it dragged past it, so a handle could never push its neighbor — it would
-      // swap instead. The far end is carried along at RGAP rather than stopping dead.
-      const isLo = active === 'lo';
-      const nLo = t < MINF ? MINF : t > MAXF - RGAP ? MAXF - RGAP : t;
-      const nHi = t > MAXF ? MAXF : t < MINF + RGAP ? MINF + RGAP : t;
-      if (mode === 'auto' && isLo) setLo(nLo);
-      if (mode === 'auto' && isLo && hi < nLo + RGAP) setHi(nLo + RGAP);
-      if (mode === 'auto' && !isLo) setHi(nHi);
-      if (mode === 'auto' && !isLo && lo > nHi - RGAP) setLo(nHi - RGAP);
-      if (mode === 'heat' && Math.abs(t - heatSp) > 0.5) setHeatSp(t);
-      // COOL only — OFF draws no arc and no handle, so it must not be draggable either.
-      if (mode === 'cool' && Math.abs(t - coolSp) > 0.5) setCoolSp(t);
+  //   - the center readout is state-driven, not imperative: a move re-renders that Text rather than
+  //     calling updateText. The DRAG itself is native here too — the engine owns it in both flows.
+  // What does NOT differ anymore: both flows mount the same native <Dial> node, with the same two-setpoint
+  // AUTO band, the same conic gradient, and the same engine-side drag.
+  // The dial drives itself: <Dial adjustable> tracks the finger in C (quantized to `step`, latching
+  // whichever RANGE end the gesture started nearest and clamping the two so they cannot cross), and
+  // reports through onChange. All that is left here is storing what it reports — the ~70 lines of angle
+  // normalization, end-latching and per-mode clamping this replaced now live in the engine.
+  const onDialChange = useCallback(
+    (v, vLo) => {
+      if (mode === 'auto') setLo(vLo);
+      if (mode === 'auto') setHi(v);
+      if (mode === 'heat') setHeatSp(v);
+      if (mode === 'cool') setCoolSp(v);
     },
-    [active, mode, hi, lo, heatSp, coolSp],
-  );
-
-  // Touch-down: latch whichever AUTO end is nearer the finger, so the drag above knows what it owns.
-  const onGrab = useCallback(
-    e => {
-      const raw =
-        (Math.atan2(e.x - cxRef.current, cyRef.current - e.y) * 180) / Math.PI;
-      const a0 = raw < 0 ? raw + 360 : raw;
-      const a1 = a0 < A0 ? a0 + 360 : a0;
-      const a =
-        a1 > A0 + SWEEP
-          ? a1 - (A0 + SWEEP) < A0 + 360 - a1
-            ? A0 + SWEEP
-            : A0
-          : a1;
-      const t = MINF + ((a - A0) / SWEEP) * (MAXF - MINF);
-      // Same maths as the drag, but decided from the TOUCH POINT rather than from `active` — this is
-      // the one moment the choice is made. It applies the move as well, so a tap on the ring lands the
-      // nearer handle there instead of only arming the next move.
-      const nearLo = Math.abs(t - lo) <= Math.abs(t - hi);
-      const nLo = t < MINF ? MINF : t > MAXF - RGAP ? MAXF - RGAP : t;
-      const nHi = t > MAXF ? MAXF : t < MINF + RGAP ? MINF + RGAP : t;
-      if (mode === 'auto') setActive(nearLo ? 'lo' : 'hi');
-      if (mode === 'auto' && nearLo) setLo(nLo);
-      if (mode === 'auto' && nearLo && hi < nLo + RGAP) setHi(nLo + RGAP);
-      if (mode === 'auto' && !nearLo) setHi(nHi);
-      if (mode === 'auto' && !nearLo && lo > nHi - RGAP) setLo(nHi - RGAP);
-      if (mode === 'heat' && Math.abs(t - heatSp) > 0.5) setHeatSp(t);
-      if (mode === 'cool' && Math.abs(t - coolSp) > 0.5) setCoolSp(t);
-    },
-    [value],
+    [mode],
   );
 
   if (SOLO) {
@@ -602,234 +539,83 @@ export function App() {
               touches instead of registering as a drag on the ring — the same arrangement Flow A uses.
               onLayout records the box's centre on screen; a touch anywhere inside sets that angle. */}
             <View style={{width: BOX_W, height: BOX_H, alignSelf: 'center'}}>
-              <View
+              <Dial
                 style={{
                   position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  width: BOX_W,
-                  height: BOX_H,
+                  left: D_CX - D_DIAL / 2,
+                  top: D_CY - D_DIAL / 2,
+                  width: D_DIAL,
+                  height: D_DIAL,
                 }}
-                onLayout={e => {
-                  cxRef.current = e.layout.x + D_CX;
-                  cyRef.current = e.layout.y + D_CY;
-                }}
-                onTouchStart={onGrab}
-                onTouchMove={onDrag}>
-                <Svg width={BOX_W} height={BOX_H}>
-                  {/* One solid accent-tinted centre disc (pre-mixed surface + accent @ 0.14 — a dynamic colour
-                  must be a literal or a ternary of them here). */}
-                  <Circle
-                    cx={D_CX}
-                    cy={D_CY}
-                    r={D_RCORE}
-                    fill={
+                min={MINF}
+                max={MAXF}
+                step={0.5}
+                startAngle={D_A0}
+                sweepAngle={SWEEP}
+                thickness={D_RINGW}
+                trackColor="#26282a"
+                cap="butt"
+                range={mode === 'auto'}
+                valueStart={mode === 'auto' ? lo : MINF}
+                minSpan={RGAP}
+                value={
+                  mode === 'off'
+                    ? MINF
+                    : mode === 'auto'
+                      ? hi
+                      : mode === 'heat'
+                        ? heatSp
+                        : coolSp
+                }
+                indicatorColor={
+                  mode === 'heat'
+                    ? '#F2A64B'
+                    : mode === 'auto'
+                      ? '#46C4A8'
+                      : '#4FA9F5'
+                }
+                indicatorGradient={
+                  mode === 'auto'
+                    ? {
+                        type: 'conic',
+                        stops: [{color: '#F2A64B'}, {color: '#4FA9F5'}],
+                      }
+                    : null
+                }
+                knob={mode === 'off' ? 'none' : 'circle'}
+                knobSize={26 * S}
+                knobColor="#f2f3f4"
+                adjustable={mode !== 'off'}
+                onChange={onDialChange}>
+                <View
+                  style={{
+                    position: 'absolute',
+                    left: D_DIAL / 2 - D_RCORE,
+                    top: D_DIAL / 2 - D_RCORE,
+                    width: 2 * D_RCORE,
+                    height: 2 * D_RCORE,
+                    borderRadius: D_RCORE,
+                    backgroundColor:
                       mode === 'off'
                         ? '#242629'
                         : mode === 'heat'
                           ? '#32291e'
                           : mode === 'auto'
                             ? '#1a2e2b'
-                            : '#1b2a36'
-                    }
-                  />
-                  <Arc
-                    cx={D_CX}
-                    cy={D_CY}
-                    r={D_RRING}
-                    startAngle={A0}
-                    endAngle={A0 + SWEEP}
-                    fill="none"
-                    stroke="#26282a"
-                    strokeWidth={D_RINGW}
-                  />
-                  <Arc
-                    cx={D_CX}
-                    cy={D_CY}
-                    r={D_RRING}
-                    /* AUTO lights only the band BETWEEN its two setpoints, so its arc starts at the low
-                   end rather than at the bottom of the range. */
-                    startAngle={
-                      mode === 'auto'
-                        ? A0 + ((lo - MINF) / (MAXF - MINF)) * SWEEP
-                        : A0
-                    }
-                    /* OFF collapses this onto the track's start so only the empty track shows. The setpoint
-                   is still held — it is what COOL comes back to — just not drawn. */
-                    endAngle={
-                      mode === 'off'
-                        ? A0
-                        : mode === 'auto'
-                          ? A0 + ((hi - MINF) / (MAXF - MINF)) * SWEEP
-                          : A0 +
-                            (((mode === 'heat' ? heatSp : coolSp) - MINF) /
-                              (MAXF - MINF)) *
-                              SWEEP
-                    }
-                    fill="none"
-                    stroke={
-                      mode === 'heat'
-                        ? '#F2A64B'
-                        : mode === 'auto'
-                          ? '#46C4A8'
-                          : '#4FA9F5'
-                    }
-                    /* AUTO ramps warm→cool across the band, the same conic gradient Flow A uses. The
-                     sweep starts at the LOW end and `t` runs the full turn from there, so the cool stop
-                     sits at span/360, and the engine clamps past it — the ramp therefore always spans
-                     exactly lo..hi however wide the band is.
-                     CONDITIONAL on purpose: a gradient attached unconditionally still paints in the
-                     other modes, where it is anchored to `lo` and so bleeds into COOL/HEAT as their arc
-                     grows past that angle. Null outside AUTO leaves the solid `stroke` above. */
-                    strokeGrad={
-                      mode === 'auto'
-                        ? {
-                            type: GRAD_CONIC,
-                            ax: D_CX,
-                            ay: D_CY,
-                            r:
-                              ((A0 + ((lo - MINF) / (MAXF - MINF)) * SWEEP) *
-                                Math.PI) /
-                              180,
-                            stops: [
-                              {color: '#F2A64B', offset: 0},
-                              {
-                                color: '#4FA9F5',
-                                offset:
-                                  (((hi - lo) / (MAXF - MINF)) * SWEEP) / 360,
-                              },
-                            ],
-                          }
-                        : null
-                    }
-                    strokeWidth={D_RINGW}
-                  />
-                  <Line
-                    x1={
-                      D_CX +
-                      D_RHAND_IN *
-                        Math.sin(
-                          ((A0 +
-                            (((mode === 'auto'
-                              ? lo
-                              : mode === 'heat'
-                                ? heatSp
-                                : coolSp) -
-                              MINF) /
-                              (MAXF - MINF)) *
-                              SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    y1={
-                      D_CY -
-                      D_RHAND_IN *
-                        Math.cos(
-                          ((A0 +
-                            (((mode === 'auto'
-                              ? lo
-                              : mode === 'heat'
-                                ? heatSp
-                                : coolSp) -
-                              MINF) /
-                              (MAXF - MINF)) *
-                              SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    x2={
-                      D_CX +
-                      (mode === 'off' ? D_RHAND_IN : D_RHAND_OUT) *
-                        Math.sin(
-                          ((A0 +
-                            (((mode === 'auto'
-                              ? lo
-                              : mode === 'heat'
-                                ? heatSp
-                                : coolSp) -
-                              MINF) /
-                              (MAXF - MINF)) *
-                              SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    y2={
-                      D_CY -
-                      (mode === 'off' ? D_RHAND_IN : D_RHAND_OUT) *
-                        Math.cos(
-                          ((A0 +
-                            (((mode === 'auto'
-                              ? lo
-                              : mode === 'heat'
-                                ? heatSp
-                                : coolSp) -
-                              MINF) /
-                              (MAXF - MINF)) *
-                              SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    fill="none"
-                    stroke="#f2f3f4"
-                    strokeWidth={4 * S}
-                  />
-                  {/* AUTO's HIGH handle. Zero-length (both ends on the inner radius) in every other mode,
-                    the same way OFF collapses the handle above — a collapsed stroke draws nothing. */}
-                  <Line
-                    x1={
-                      D_CX +
-                      D_RHAND_IN *
-                        Math.sin(
-                          ((A0 + ((hi - MINF) / (MAXF - MINF)) * SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    y1={
-                      D_CY -
-                      D_RHAND_IN *
-                        Math.cos(
-                          ((A0 + ((hi - MINF) / (MAXF - MINF)) * SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    x2={
-                      D_CX +
-                      (mode === 'auto' ? D_RHAND_OUT : D_RHAND_IN) *
-                        Math.sin(
-                          ((A0 + ((hi - MINF) / (MAXF - MINF)) * SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    y2={
-                      D_CY -
-                      (mode === 'auto' ? D_RHAND_OUT : D_RHAND_IN) *
-                        Math.cos(
-                          ((A0 + ((hi - MINF) / (MAXF - MINF)) * SWEEP) *
-                            Math.PI) /
-                            180,
-                        )
-                    }
-                    fill="none"
-                    stroke="#f2f3f4"
-                    strokeWidth={4 * S}
-                  />
-                </Svg>
+                            : '#1b2a36',
+                  }}
+                />
 
-                {/* Centre readout — bounded on BOTH axes, so it never lies across the ring band and swallow
-                the touches that drive the drag (its farthest corner is ~102 units out; the band starts
-                at 106). A full-height overlay silently kills the drag at the top and bottom of the dial. */}
+                {/* Center readout: a CHILD of the dial (so its coordinates are relative to the dial box).
+                  Bounded on both axes to sit inside the hole: the engine's ring-only hit test walks up
+                  from whatever the finger landed on, so content parked in the hole stays inert while the
+                  surrounding ring still drags — but content that reaches ACROSS the band would take the
+                  ring's own touches back. Its farthest corner is ~102 units out; the band starts at 106. */}
                 <View
                   style={{
                     position: 'absolute',
-                    left: D_CX - 83 * S,
-                    top: D_CY - 60 * S,
+                    left: D_DIAL / 2 - 83 * S,
+                    top: D_DIAL / 2 - 60 * S,
                     width: 166 * S,
                     height: 120 * S,
                     alignItems: 'center',
@@ -894,7 +680,7 @@ export function App() {
                     </Text>
                   )}
                 </View>
-              </View>
+              </Dial>
 
               {/* Step down. Parked in the dial's empty bottom: the sweep runs 8 o'clock to 4 o'clock, so
                 nothing is ever drawn below y=139 here and a 44 px target clears the arc's end by 6 px. */}
@@ -1210,7 +996,7 @@ export function App() {
         {/* The dial fills this box; the two corner steppers render after it, so they sit on top and take
             their own touches instead of starting a drag. */}
         <View style={{width: BOX_W, height: BOX_H}}>
-          <Dial
+          <ThermoDial
             geo={GEO}
             theme={theme}
             accent={accent}
