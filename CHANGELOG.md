@@ -60,6 +60,9 @@ See the README for the release process.
 - A fast drag could jump to the wrong end of the dial.
 - A press handler that unmounted its own node left the following `onPress` dispatch working from a stale
   node slot. The press chain now re-checks the node between callbacks.
+- The Flow B AOT compiler no longer declares a C slot for a `useRef` the generated code never
+  touches, so a ref that only holds a JS value (a callback, say) stops producing an
+  `unused variable` warning in every consumer build.
 
 ## [0.12.0] - 2026-08-19
 ### Added

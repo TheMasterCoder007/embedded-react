@@ -498,6 +498,23 @@ describe('AOT baseline (regression)', () => {
     );
   });
 
+  it('declares nothing for a ref the generated C never touches', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const stepRef = useRef(null);   // holds a JS value only — never bound, never read in C
+        const usedRef = useRef(0);
+        return (
+          <Pressable onPress={() => { usedRef.current = n; }}>
+            <Text>{usedRef.current}</Text>
+          </Pressable>
+        );
+      }`);
+    expect(c).not.toContain('s_ref_stepRef');
+    expect(c).toContain('static int s_ref_usedRef = 0;');
+  });
+
   it('recognizes a memo()-wrapped component', () => {
     const c = gen(`${PRE}
       import { memo } from 'react';
