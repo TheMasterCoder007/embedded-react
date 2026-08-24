@@ -281,12 +281,13 @@ static void test_pool_exhaustion_and_recovery(void)
 }
 
 /**
- * @brief Verifies that er_get_dirty_rect returns false when the scene is clean.
+ * @brief Verifies that a commit which paints nothing does not erase the reported dirty rect.
  *
- * Sets up a minimal scene, commits twice, and checks that the second commit
- * (no changes) reports no dirty rect.
+ * Sets up a minimal scene, commits twice, and checks that the second commit (no changes) still
+ * reports the first commit's rect. Flow A relies on this: React commits inside er_runtime_pump(),
+ * so the host's own er_commit() is a no-op one and would otherwise clear the answer.
  */
-static void test_dirty_rect_clean_frame(void)
+static void test_dirty_rect_noop_commit(void)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
@@ -303,14 +304,17 @@ static void test_dirty_rect_clean_frame(void)
     assert(er_get_dirty_rect(&dr) && "first commit on a dirty scene must report a dirty rect");
     assert(dr.w > 0 && dr.h > 0 && "dirty rect must be non-empty after first commit");
 
-    /* Second commit: nothing changed, scene should be clean. */
+    /* Second commit: nothing changed, so the first commit's rect must survive unchanged. */
     er_commit();
-    assert(!er_get_dirty_rect(NULL) && "second commit with no changes must report a clean frame");
+    ERRect dr2;
+    assert(er_get_dirty_rect(&dr2) && "a commit with no changes must keep the last painted rect");
+    assert(dr2.x == dr.x && dr2.y == dr.y && dr2.w == dr.w && dr2.h == dr.h
+           && "a commit with no changes must not alter the reported rect");
 
     er_tree_set_root(NULL);
     er_node_destroy(root);
 
-    printf("test_dirty_rect_clean_frame PASSED\n");
+    printf("test_dirty_rect_noop_commit PASSED\n");
 }
 
 /**
@@ -468,7 +472,7 @@ int main(void)
     test_freelist_lifo_reuse();
     test_freelist_multi_reuse();
     test_double_free_is_noop();
-    test_dirty_rect_clean_frame();
+    test_dirty_rect_noop_commit();
     test_dirty_rect_union_coverage();
     /* Run last: exhausts the pool, then verifies recovery. */
     test_pool_exhaustion_and_recovery();

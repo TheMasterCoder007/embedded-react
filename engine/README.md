@@ -109,7 +109,10 @@ twice); when the budget is exceeded, the least-wasteful pair merges, degrading g
 the old single-box behavior without ever dropping coverage. The multi-buffer page-flip debt
 (`er_set_display_buffer_count`) replays disjoint history the same way. Hosts read the rects with
 `er_get_dirty_rects()` — one transfer window per region on capable display drivers — while
-`er_get_dirty_rect()` still returns the covering box.
+`er_get_dirty_rect()` still returns the covering box. Both report the last commit that *painted*: a
+commit finding nothing dirty leaves the previous answer in place, so a Flow A host — where React
+already committed inside `er_runtime_pump()` and the host's own `er_commit()` is the no-op one —
+reads the frame's real damage rather than an empty set.
 
 The budget matters most on **screens full of small independent updaters** — a grid of dials, a row
 of meters. Saturation there does more than coarsen the reported rect: a vector or arc node

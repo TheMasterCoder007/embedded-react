@@ -516,9 +516,12 @@ static int check_api_contract(void)
     if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
         return fail("a full repaint did not report one root-sized rect");
 
-    frame(); /* clean: zero rects */
-    if (er_get_dirty_rects(NULL, 0) != 0)
-        return fail("a clean frame did not report zero rects");
+    /* A commit that paints nothing is non-destructive: the last commit that DID paint stays readable.
+     * (Flow A commits inside er_runtime_pump(), so the host's own er_commit() is the no-op one — it
+     * must not be the one that answers.) */
+    frame();
+    if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
+        return fail("a clean frame erased the last painting commit's rect");
 
     recolour(a, 10, 10, 0xFF112233U);
     recolour(b, 160, 120, 0xFF445566U);
@@ -526,11 +529,28 @@ static int check_api_contract(void)
     if (er_get_dirty_rects(NULL, 0) != 2)
         return fail("NULL/0 did not query the rect count");
 
+    frame(); /* still two: the no-op commit leaves the multi-rect set alone as well */
+    if (er_get_dirty_rects(NULL, 0) != 2)
+        return fail("a clean frame erased the last painting commit's rect set");
+
     /* Capacity 1 for 2 rects: collapse to the covering bbox (coverage must hold at any capacity). */
     if (er_get_dirty_rects(&r, 1) != 1)
         return fail("a too-small buffer did not collapse to one rect");
     if (!point_in(&r, 10, 10) || !point_in(&r, 189, 189))
         return fail("the collapsed bbox does not cover both corners");
+
+    /* A forced full repaint on an otherwise-settled scene (a host re-installing its framebuffer, say)
+     * paints every pixel with NO node source-dirty, so nothing feeds the render walk's accumulator.
+     * Both accessors must still report the truth — and the same truth. */
+    er_force_full_repaint();
+    frame();
+    ERRect fr;
+    if (!er_get_dirty_rect(&fr))
+        return fail("a forced full repaint reported no dirty rect");
+    if (fr.w != SCREEN || fr.h != SCREEN)
+        return fail("a forced full repaint did not report the whole root as dirty");
+    if (er_get_dirty_rects(&r, 1) != 1 || r.x != fr.x || r.y != fr.y || r.w != fr.w || r.h != fr.h)
+        return fail("er_get_dirty_rect() and er_get_dirty_rects() disagree on a forced full repaint");
 
     er_node_destroy(root);
     printf("PASS: er_get_dirty_rects contract — count query + bbox collapse\n");
