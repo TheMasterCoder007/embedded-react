@@ -460,6 +460,44 @@ int main(void)
             return fail("clip reject: a shape outside the clip painted anyway");
     }
 
+#if ERUI_GRADIENT
+    /* --- clip rejection sizes its margin for a GRADIENT stroke too --- */
+    /* A gradient stroke paints from the gradient table and leaves the solid stroke colour transparent.
+     * Sizing the margin off that colour hands back a bare 1 px for a stroke of any width, and the shape
+     * gets dropped while its ink is still well inside the clip. */
+    {
+        reset(&tc);
+        /* A vertical line at x=20, 20 px wide -> ink covers x=10..30. The clip starts at x=25. */
+        const float ops[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 20, 10, ER_VOP_LINE, 20, 60};
+        ERVectorPaint p;
+        memset(&p, 0, sizeof(p));
+        p.stroke = 0x00000000u; /* transparent: only the gradient paints */
+        p.stroke_w = 20.0f;
+        p.miter = 4.0f;
+        p.cap = ER_VCAP_BUTT;
+        p.join = ER_VJOIN_MITER;
+        p.stroke_grad = 1;
+        ERVectorGradient g;
+        memset(&g, 0, sizeof(g));
+        g.type = ER_GRADIENT_LINEAR;
+        g.stop_count = 2;
+        g.stops[0].color = 0xFFFF0000u;
+        g.stops[0].position = 0.0f;
+        g.stops[1].color = 0xFF0000FFu;
+        g.stops[1].position = 1.0f;
+        g.ax = 10.0f;
+        g.ay = 10.0f;
+        g.bx = 30.0f;
+        g.by = 10.0f;
+        er_vector_render(ops, (int)(sizeof(ops) / sizeof(ops[0])), &p, 1, &g, 1, 0, 0, 25, 0, FB_W, FB_H);
+        const uint32_t q = px(&tc, 28, 35);
+        if (((q >> 24) & 0xFFu) == 0u)
+            return fail("clip reject: a gradient stroke reaching into the clip was dropped");
+        if (!(bluOf(q) > redOf(q)))
+            return fail("clip reject: the gradient stroke painted the wrong colour");
+    }
+#endif
+
     /* --- a shallow polyline stroke has no notch at its corners --- */
     /* Corners are covered either by join geometry or by mitering the two segment quads together;
      * neither may leave a gap. A flattened curve is exactly this shape, so a bite here shows up as a

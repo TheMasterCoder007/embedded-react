@@ -1079,13 +1079,20 @@ static void stroke_shape(uint32_t color,
  *
  * Half the stroke width, extended for the join style (a miter runs out to miter*half-width) and for
  * square caps, plus a pixel of anti-aliasing slack.
+ *
+ * The stroke counts whenever one will be DRAWN, which is not the same as the stroke colour being
+ * visible: a gradient stroke paints from the gradient table and leaves the solid colour transparent
+ * (see the stroke_shape call in er_vector_render). Reading only the colour there would hand back a
+ * 1 px margin for a wide gradient stroke and let clip rejection drop a shape whose ink reaches well
+ * inside the clip.
  */
 static float paint_margin(const ERVectorPaint* pt)
 {
     if (!pt)
         return 1.0f;
     float m = 1.0f;
-    if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
+    const bool has_stroke = pt->stroke_w > 0.0f && (((pt->stroke >> 24) & 0xFFU) != 0U || pt->stroke_grad != 0);
+    if (has_stroke)
     {
         const float hw = pt->stroke_w * 0.5f;
         float k = 1.5f; /* round/butt/square caps and bevel joins all stay inside 1.5 * half-width */
