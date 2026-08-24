@@ -1416,27 +1416,31 @@ extern "C"
                                          const ERInterpolation* interp);
 
     /**
-     * @brief Returns the axis-aligned bounding rectangle of all pixels repainted during the last er_commit().
+     * @brief Returns the axis-aligned bounding rectangle of all pixels repainted by the last er_commit()
+     *        that painted anything.
      *
      * Useful for partial-update display drivers (SPI DMA, etc.) that can restrict
      * their transfer to only the changed region each frame.  The rect is in framebuffer
-     * pixels and is guaranteed to cover every pixel modified by the last er_commit().
+     * pixels and is guaranteed to cover every pixel modified by that commit.
      * It may be slightly conservative (e.g. shadows expand it by their blur radius).
      *
-     * The value is invalidated on the next er_commit() call, so read it immediately
-     * after er_commit() returns and before the next one starts.
+     * A commit that finds nothing dirty does NOT clear the value -- it keeps reporting the last commit
+     * that did paint, so it stays readable anywhere in the frame. This matters on Flow A (QuickJS),
+     * where React commits inside er_runtime_pump() and the host's own er_commit() is the no-op one;
+     * a host that consumed the rect must therefore track that itself (e.g. by frame counter) rather
+     * than relying on the next commit to reset it. er_reset() clears it.
      *
      * @param[out] out  Populated with the dirty rectangle; set to {0,0,0,0} when
-     *                  nothing was repainted.  May be NULL if only the return value
-     *                  is needed.
+     *                  nothing has been repainted since the last er_reset().  May be NULL if only the
+     *                  return value is needed.
      *
      * @return true when at least one node was repainted and @p out contains a valid
-     *         non-empty rectangle; false when the scene was already clean this frame.
+     *         non-empty rectangle; false when nothing has painted since the last er_reset().
      */
     bool er_get_dirty_rect(ERRect* out);
 
     /**
-     * @brief Returns the disjoint rectangles actually repainted by the last er_commit().
+     * @brief Returns the disjoint rectangles actually repainted by the last er_commit() that painted.
      *
      * The engine tracks damage as a small set of pairwise-disjoint rects rather than one bounding
      * box, so a change in one screen corner and another in the opposite corner repaint (and can be
@@ -1445,16 +1449,16 @@ extern "C"
      * region.
      *
      * Guarantees: the returned rects are pairwise disjoint, screen-bounded, and together cover every
-     * pixel modified by the last er_commit() (a full repaint reports one root-sized rect; a clean
-     * frame reports none). When @p max_rects is too small to hold them all, the covering bounding box
-     * is written to out[0] and 1 is returned, so coverage holds for any capacity. Like
-     * er_get_dirty_rect(), the value is invalidated by the next er_commit().
+     * pixel modified by that commit (a full repaint reports one root-sized rect). When @p max_rects is
+     * too small to hold them all, the covering bounding box is written to out[0] and 1 is returned, so
+     * coverage holds for any capacity. Like er_get_dirty_rect(), a commit that paints nothing leaves
+     * the previous answer in place rather than clearing it; er_reset() clears it.
      *
      * @param[in,out] out        Receives up to @p max_rects rectangles. Pass NULL to query the count.
      * @param[in]     max_rects  Capacity of @p out. At most ER_DAMAGE_RECTS_MAX rects exist.
      *
-     * @return Number of rects written (0 when nothing was repainted); with @p out NULL or
-     *         @p max_rects <= 0, the number of rects available.
+     * @return Number of rects written (0 when nothing has been repainted since the last er_reset());
+     *         with @p out NULL or @p max_rects <= 0, the number of rects available.
      */
     int er_get_dirty_rects(ERRect* out, int max_rects);
 

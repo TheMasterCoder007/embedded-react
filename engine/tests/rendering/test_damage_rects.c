@@ -516,15 +516,22 @@ static int check_api_contract(void)
     if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
         return fail("a full repaint did not report one root-sized rect");
 
-    frame(); /* clean: zero rects */
-    if (er_get_dirty_rects(NULL, 0) != 0)
-        return fail("a clean frame did not report zero rects");
+    /* A commit that paints nothing is non-destructive: the last commit that DID paint stays readable.
+     * (Flow A commits inside er_runtime_pump(), so the host's own er_commit() is the no-op one — it
+     * must not be the one that answers.) */
+    frame();
+    if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
+        return fail("a clean frame erased the last painting commit's rect");
 
     recolour(a, 10, 10, 0xFF112233U);
     recolour(b, 160, 120, 0xFF445566U);
     frame();
     if (er_get_dirty_rects(NULL, 0) != 2)
         return fail("NULL/0 did not query the rect count");
+
+    frame(); /* still two: the no-op commit leaves the multi-rect set alone as well */
+    if (er_get_dirty_rects(NULL, 0) != 2)
+        return fail("a clean frame erased the last painting commit's rect set");
 
     /* Capacity 1 for 2 rects: collapse to the covering bbox (coverage must hold at any capacity). */
     if (er_get_dirty_rects(&r, 1) != 1)

@@ -57,12 +57,15 @@ static int s_kbd_avoid_y = 0;   /**< Pixels the whole scene is shifted UP so a f
                                      (0 when no keyboard / input already visible). Applied in render_tree +
                                      node_screen_rect so render and damage stay in sync. */
 
-/* Dirty-rect tracking: union of all screen rects repainted during the current er_commit(). */
+/* Dirty-rect tracking: union of all screen rects repainted by the last er_commit() that PAINTED.
+ * A commit that finds nothing dirty leaves these alone (er_reset() clears them), so a Flow A host —
+ * whose own er_commit() runs after the reconciler already committed inside er_runtime_pump() — still
+ * reads the frame's damage instead of the empty no-op commit. */
 static ERRect s_dirty_rect;
 static bool s_has_dirty = false;
 
-/* The disjoint repaint rects of the last er_commit() (post-replay, exactly what was scissored and
- * painted). Backs er_get_dirty_rects(); a full repaint records one root-sized rect. */
+/* The disjoint repaint rects of the last er_commit() that painted (post-replay, exactly what was
+ * scissored and painted). Backs er_get_dirty_rects(); a full repaint records one root-sized rect. */
 static ERDamageSet s_last_paint_set;
 
 /* Damage-clipped rendering: when true the next commit repaints the whole screen (first frame, an
@@ -3551,8 +3554,9 @@ void er_commit(void)
 
     s_commit_seq++; /* per-commit sequence for the fade cache's one-capture-per-commit gate */
 
-    /* Reset the dirty-rect accumulators (global + every worker's) for this commit. */
-    s_has_dirty = false;
+    /* Reset every worker's dirty-rect accumulator for this commit. The PUBLISHED results
+     * (s_dirty_rect / s_has_dirty / s_last_paint_set) are deliberately not touched here: a commit that
+     * paints nothing leaves the last painting commit's rects readable — see er_get_dirty_rect(). */
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
         s_comp_ctx[i].has_dirty = false;
 
@@ -3945,13 +3949,14 @@ void er_commit(void)
      * this frame's repaint rects — exactly what the passes below scissor to and what the backend
      * flushes, so the summed area is the number both the raster and present phases scale with.
      * Exposed via er_get_dirty_rects() and the perf counters. */
-    er_damage_set_clear(&s_last_paint_set);
     if (nothing_dirty)
     {
-        /* nothing painted: empty set, no perf contribution (frame counters were reset at frame begin) */
+        /* Nothing painted: no perf contribution (frame counters were reset at frame begin), and the set
+         * is left holding the last commit that DID paint. */
     }
     else if (render_full)
     {
+        er_damage_set_clear(&s_last_paint_set);
         er_damage_set_add(&s_last_paint_set, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
         ER_PERF_REPAINT(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
     }
@@ -4170,31 +4175,35 @@ void er_commit(void)
     ER_PERF_BLIT_COLLECT();
     ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_SWEEP);
 
-    /* Merge every worker's dirty-rect accumulator into the global (single worker: a copy). */
+    /* Merge every worker's dirty-rect accumulator into this commit's union (single worker: a copy).
+     * Kept local and published below, so a commit that paints nothing leaves the previous one's union
+     * in place instead of clearing it. */
+    ERRect painted_rect = {0, 0, 0, 0};
+    bool painted_has = false;
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
     {
         const CompCtx* wc = &s_comp_ctx[i];
         if (!wc->has_dirty)
             continue;
-        if (!s_has_dirty)
+        if (!painted_has)
         {
-            s_dirty_rect = wc->dirty_rect;
-            s_has_dirty = true;
+            painted_rect = wc->dirty_rect;
+            painted_has = true;
         }
         else
         {
-            const int x2 = s_dirty_rect.x + s_dirty_rect.w > wc->dirty_rect.x + wc->dirty_rect.w
-                               ? s_dirty_rect.x + s_dirty_rect.w
+            const int x2 = painted_rect.x + painted_rect.w > wc->dirty_rect.x + wc->dirty_rect.w
+                               ? painted_rect.x + painted_rect.w
                                : wc->dirty_rect.x + wc->dirty_rect.w;
-            const int y2 = s_dirty_rect.y + s_dirty_rect.h > wc->dirty_rect.y + wc->dirty_rect.h
-                               ? s_dirty_rect.y + s_dirty_rect.h
+            const int y2 = painted_rect.y + painted_rect.h > wc->dirty_rect.y + wc->dirty_rect.h
+                               ? painted_rect.y + painted_rect.h
                                : wc->dirty_rect.y + wc->dirty_rect.h;
-            if (wc->dirty_rect.x < s_dirty_rect.x)
-                s_dirty_rect.x = wc->dirty_rect.x;
-            if (wc->dirty_rect.y < s_dirty_rect.y)
-                s_dirty_rect.y = wc->dirty_rect.y;
-            s_dirty_rect.w = x2 - s_dirty_rect.x;
-            s_dirty_rect.h = y2 - s_dirty_rect.y;
+            if (wc->dirty_rect.x < painted_rect.x)
+                painted_rect.x = wc->dirty_rect.x;
+            if (wc->dirty_rect.y < painted_rect.y)
+                painted_rect.y = wc->dirty_rect.y;
+            painted_rect.w = x2 - painted_rect.x;
+            painted_rect.h = y2 - painted_rect.y;
         }
     }
 
@@ -4215,28 +4224,32 @@ void er_commit(void)
     /* Multi-buffer: er_get_dirty_rect() must report the region actually painted (the replayed union), not
      * just this frame's source-dirty nodes, so a host using it for a secondary transfer sees the truth.
      * (Single buffer keeps the tight source_dirty union accumulated by render_tree.) */
-    if (s_display_buffer_count > 1)
+    if (s_display_buffer_count > 1 && !nothing_dirty)
     {
         if (render_full)
         {
-            s_dirty_rect.x = root->computed.x;
-            s_dirty_rect.y = root->computed.y;
-            s_dirty_rect.w = root->computed.w;
-            s_dirty_rect.h = root->computed.h;
-            s_has_dirty = (root->computed.w > 0 && root->computed.h > 0);
-        }
-        else if (!nothing_dirty)
-        {
-            s_dirty_rect.x = rb_x0;
-            s_dirty_rect.y = rb_y0;
-            s_dirty_rect.w = rb_x1 - rb_x0;
-            s_dirty_rect.h = rb_y1 - rb_y0;
-            s_has_dirty = true;
+            painted_rect.x = root->computed.x;
+            painted_rect.y = root->computed.y;
+            painted_rect.w = root->computed.w;
+            painted_rect.h = root->computed.h;
+            painted_has = (root->computed.w > 0 && root->computed.h > 0);
         }
         else
         {
-            s_has_dirty = false;
+            painted_rect.x = rb_x0;
+            painted_rect.y = rb_y0;
+            painted_rect.w = rb_x1 - rb_x0;
+            painted_rect.h = rb_y1 - rb_y0;
+            painted_has = true;
         }
+    }
+
+    /* Publish only when this commit painted, so the accessors keep reporting the last commit that did
+     * (both stay in step with s_last_paint_set above). */
+    if (!nothing_dirty)
+    {
+        s_dirty_rect = painted_rect;
+        s_has_dirty = painted_has;
     }
 
     s_force_full_repaint = false;

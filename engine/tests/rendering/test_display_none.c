@@ -302,7 +302,10 @@ int main(void)
     if (at(SIBLING_X + 1, SIBLING_Y + 1) != 0xFF8800u)
         return fail("hiding one page erased a sibling page");
 
-    /* --- while hidden: free, and reported as such --- */
+    /* --- while hidden: free, and reported as such ---
+     * A commit that paints nothing leaves the last painting commit's rect in place (the hide frame's,
+     * here), so the invariant is that idle frames add no NEW damage: the reported rect never changes. */
+    const long hidden_area = reported_dirty_area();
     for (int i = 0; i < 8; i++)
     {
         const long px = frame_distinct();
@@ -311,8 +314,8 @@ int main(void)
             fprintf(stderr, "  idle frame with a hidden page painted %ld px\n", px);
             return fail("a hidden page is not free per frame");
         }
-        if (reported_dirty_area() != 0)
-            return fail("a hidden page reported a dirty rect on an idle frame");
+        if (reported_dirty_area() != hidden_area)
+            return fail("a hidden page reported new damage on an idle frame");
     }
 
     /* --- ...and still free while React keeps re-rendering it ---
@@ -335,8 +338,8 @@ int main(void)
             fprintf(stderr, "  frame painted %ld px while updating a hidden page\n", px);
             return fail("updating props inside a hidden page repainted the screen");
         }
-        if (reported_dirty_area() != 0)
-            return fail("updating props inside a hidden page reported a dirty rect");
+        if (reported_dirty_area() != hidden_area)
+            return fail("updating props inside a hidden page reported new damage");
     }
 
     /* One last prop set while hidden, with a value the page has never rendered: showing the page
