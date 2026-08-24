@@ -858,6 +858,14 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
  * animation interpolating positions), so render_tree() may use them to skip untouched subtrees. */
 static bool s_prune_ok = false;
 
+/* Damage-rect budget used for the render passes when subtree pruning is off. Without pruning every
+ * clipped pass walks the whole tree, so the fixed per-pass cost — not the damage area — dominates and
+ * the full ER_DAMAGE_RECTS_MAX budget would multiply it. Coarser rects repaint a little extra area
+ * instead, which is the cheaper half of that trade during a layout animation (where the whole scene
+ * is moving anyway, so the damage is already broad). Trimming only ever lowers the count, and the
+ * coarsened rects still cover every changed pixel. */
+#define UNPRUNED_PASS_RECTS_MAX 4U
+
 /**
  * @brief Recomputes cached subtree paint bounds for the whole tree (post-order).
  *
@@ -3920,6 +3928,19 @@ void er_commit(void)
         er_damage_set_clear(&d->set);
     }
 
+    /* Enable subtree pruning only when no layout animation is interpolating positions (which would
+     * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
+     * pruning self-disables there regardless. */
+    s_prune_ok = !er_layout_anim_has_pending() && !er_layout_anim_is_active();
+
+    /* Rect count is a trade: each rect is a separate clipped pass, and a pass costs a tree walk plus
+     * the pixels it touches. With pruning on, the walk is O(nodes near that rect), so many small rects
+     * are close to free and the tight clips are what keep a vector node rasterizing only its own
+     * changed sub-region. With pruning off the walk visits EVERY node, so the per-pass cost is fixed
+     * and the full budget would multiply it — trim back to a handful of coarser rects there. */
+    if (!render_full && !nothing_dirty && !s_prune_ok)
+        er_damage_set_limit(&dmg, UNPRUNED_PASS_RECTS_MAX);
+
     /* The render set is final here (damage pre-pass + any multi-buffer debt replay): record it as
      * this frame's repaint rects — exactly what the passes below scissor to and what the backend
      * flushes, so the summed area is the number both the raster and present phases scale with.
@@ -3943,11 +3964,6 @@ void er_commit(void)
 
     ER_PERF_RASTER_END(ER_PERF_RASTER_PREPASS);
     ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_RENDER);
-
-    /* Enable subtree pruning only when no layout animation is interpolating positions (which would
-     * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
-     * pruning self-disables there regardless. */
-    s_prune_ok = !er_layout_anim_has_pending() && !er_layout_anim_is_active();
 
     const EmbeddedRenderBackend* backend = er_backend();
     if (backend && backend->band_height > 0)
@@ -3980,8 +3996,9 @@ void er_commit(void)
             }
             else
             {
-                /* Collect each rect's row interval (insertion sort by y0 — count <= 4), then merge
-                 * overlapping/adjacent intervals: disjoint rects can still share rows (side by side). */
+                /* Collect each rect's row interval (insertion sort by y0 — count <= ER_DAMAGE_RECTS_MAX),
+                 * then merge overlapping/adjacent intervals: disjoint rects can still share rows (side by
+                 * side). */
                 for (uint8_t ri = 0U; ri < dmg.count; ri++)
                 {
                     const int y0 = dmg.r[ri].y;

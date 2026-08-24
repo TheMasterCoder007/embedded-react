@@ -70,11 +70,16 @@ extern "C"
  * @brief Maximum disjoint dirty rectangles the engine tracks per commit (see er_get_dirty_rects()).
  *
  * Damage beyond this budget is merged into whichever tracked rect wastes the least area, degrading
- * gracefully toward a single bounding box — coverage is never dropped. 4 covers the common "a few
- * independent widgets updated" case; raise it for screens with many spatially-scattered updaters.
+ * gracefully toward a single bounding box — coverage is never dropped. Saturation is what turns a
+ * screen of small scattered updates (a grid of dials, each damaging only its swept sub-arc) into a
+ * near-full repaint, because the merged box then also becomes the clip a vector node rasterizes
+ * against. The current default is 16, but raise it if your project is even more demanding (many small
+ * independent widgets that could each draw at the same time). For projects that have very tight
+ * resources, lower it — the engine keeps 2 + ER_DISPLAY_BUFFERS_MAX sets, so each rect of budget costs
+ * 6 * sizeof(ERRect) of .bss.
  */
 #ifndef ER_DAMAGE_RECTS_MAX
-#define ER_DAMAGE_RECTS_MAX 4
+#define ER_DAMAGE_RECTS_MAX 16
 #endif
 
     /*----------------------------------------------------------------------------------------------------------------------

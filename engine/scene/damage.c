@@ -79,6 +79,32 @@ static void absorb_touching(ERDamageSet* s, ERRect* acc)
     }
 }
 
+/**
+ * @brief Index of the stored rect whose bbox union with @p acc drags in the fewest clean pixels.
+ *
+ * @p acc must be disjoint from every stored rect (run absorb_touching first), so
+ * waste = area(union) − area(acc) − area(rect) is exactly the untouched area the merge would repaint.
+ * The rect stays in the set; unioning it into @p acc and re-absorbing is what removes it. Requires a
+ * non-empty set.
+ */
+static uint8_t least_waste_partner(const ERDamageSet* s, const ERRect* acc)
+{
+    uint8_t best = 0U;
+    uint32_t best_waste = UINT32_MAX;
+    for (uint8_t i = 0; i < s->count; i++)
+    {
+        ERRect u = *acc;
+        bbox_union(&u, &s->r[i]);
+        const uint32_t waste = rect_area(&u) - rect_area(acc) - rect_area(&s->r[i]);
+        if (waste < best_waste)
+        {
+            best_waste = waste;
+            best = i;
+        }
+    }
+    return best;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private (engine-internal)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -112,25 +138,51 @@ void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h)
 
     /* Saturated: merge with the stored rect that wastes the least area. `acc` is disjoint from every
      * stored rect here (absorb_touching just ran), so waste = union − acc − rect is >= 0 and measures
-     * exactly the clean pixels the merge drags into the repaint. The merged box can newly touch other
-     * rects, so absorb again — that only shrinks count, guaranteeing the final append fits. */
-    uint8_t best = 0U;
-    uint32_t best_waste = UINT32_MAX;
-    for (uint8_t i = 0; i < s->count; i++)
-    {
-        ERRect u = acc;
-        bbox_union(&u, &s->r[i]);
-        const uint32_t waste = rect_area(&u) - rect_area(&acc) - rect_area(&s->r[i]);
-        if (waste < best_waste)
-        {
-            best_waste = waste;
-            best = i;
-        }
-    }
-    bbox_union(&acc, &s->r[best]);
-    s->r[best] = s->r[--s->count];
+     * exactly the clean pixels the merge drags into the repaint. The second absorb then swallows that
+     * partner (acc now contains it) plus anything the grown box newly touches, so count drops by at
+     * least one and the final append always fits. */
+    bbox_union(&acc, &s->r[least_waste_partner(s, &acc)]);
     absorb_touching(s, &acc);
     s->r[s->count++] = acc;
+}
+
+void er_damage_set_limit(ERDamageSet* s, uint8_t max_rects)
+{
+    if (max_rects == 0U)
+    {
+        s->count = 0U;
+        return;
+    }
+
+    /* Repeatedly fuse the globally cheapest PAIR until the set fits — the same waste measure the
+     * saturating add uses, but over every pair rather than one fixed incoming rect, because here no
+     * rect is more "incoming" than another and fusing an arbitrary one would happily pair two far
+     * corners. The union swallows both members, so absorb_touching removes them (plus anything the
+     * grown box newly touches) and the append nets at least one rect gone — hence this terminates. */
+    while (s->count > max_rects)
+    {
+        uint8_t bi = 0U, bj = 1U;
+        uint32_t best_waste = UINT32_MAX;
+        for (uint8_t i = 0U; i < s->count; i++)
+        {
+            for (uint8_t j = (uint8_t)(i + 1U); j < s->count; j++)
+            {
+                ERRect u = s->r[i];
+                bbox_union(&u, &s->r[j]);
+                const uint32_t waste = rect_area(&u) - rect_area(&s->r[i]) - rect_area(&s->r[j]);
+                if (waste < best_waste)
+                {
+                    best_waste = waste;
+                    bi = i;
+                    bj = j;
+                }
+            }
+        }
+        ERRect acc = s->r[bi];
+        bbox_union(&acc, &s->r[bj]);
+        absorb_touching(s, &acc);
+        s->r[s->count++] = acc;
+    }
 }
 
 bool er_damage_set_bounds(const ERDamageSet* s, ERRect* out)

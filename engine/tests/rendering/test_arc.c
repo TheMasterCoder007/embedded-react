@@ -20,7 +20,9 @@
  *   - geometry: track pixels land on the ring inside the sweep, the hole and the unswept gap stay
  *     untouched, the indicator covers [start, value] and nothing past it, round caps and the knob paint,
  *   - tight damage: a value change repaints only the swept sub-arc + knob footprints, and the incremental
- *     result is byte-identical to a forced full repaint (the catch-all for clip / double-blend bugs),
+ *     result is byte-identical to a forced full repaint (the catch-all for clip / double-blend bugs) —
+ *     including when a whole GRID of dials moves at once, where the damage budget used to saturate and
+ *     hand every dial a merged clip to rasterize against,
  *   - native animation: ER_PROP_ARC_VALUE ramps with zero host involvement and damages per tick,
  *   - drag-to-set: a touch on the ring jumps the value (quantized, ER_EVENT_VALUE_CHANGE fired), a move
  *     tracks it, the hole is transparent to touches, and crossing the unswept gap does not wrap,
@@ -1280,6 +1282,103 @@ static void test_range_min_span(void)
           "with no min_span the ends meet and the far end stays put");
 }
 
+/**
+ * @brief A GRID of dials all changing at once keeps a per-dial sliver of damage.
+ *
+ * The rect budget is what makes this work: once the damage set saturates, the scattered slivers
+ * cascade-merge toward one box, and since a vector node rasterizes against the ACTIVE CLIP (the
+ * background under it was erased across that whole clip, so it must repaint there), every dial then
+ * re-rasterizes its full ring. With a rect per dial each clip stays a sliver and so does each raster.
+ */
+static void test_grid_damage(void)
+{
+    enum
+    {
+        GRID = 3,
+        BOX = 70,
+        PITCH = 80
+    };
+    reset_scene();
+    ERNode* root = make_root(0xFF202020U);
+    ERNode* arcs[GRID * GRID];
+    ERProps p;
+    for (int r = 0; r < GRID; r++)
+        for (int c = 0; c < GRID; c++)
+        {
+            p = arc_props();
+            p.width = BOX;
+            p.height = BOX;
+            p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
+            p.position = ER_POS_ABSOLUTE;
+            p.left = (float)(5 + c * PITCH);
+            p.top = (float)(5 + r * PITCH);
+            p.arc_width = 8;
+            ERNode* a = er_node_create(ER_NODE_ARC);
+            er_node_set_props(a, &p);
+            er_tree_append_child(root, a);
+            arcs[r * GRID + c] = a;
+        }
+    er_commit(); /* mount: full repaint */
+
+    /* Nudge every dial in ONE commit — the scattered-update frame. */
+    memset(s_touched, 0, sizeof(s_touched));
+    for (int r = 0; r < GRID; r++)
+        for (int c = 0; c < GRID; c++)
+        {
+            p = arc_props();
+            p.width = BOX;
+            p.height = BOX;
+            p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
+            p.position = ER_POS_ABSOLUTE;
+            p.left = (float)(5 + c * PITCH);
+            p.top = (float)(5 + r * PITCH);
+            p.arc_width = 8;
+            p.arc_value = 35.0f;
+            er_node_set_props(arcs[r * GRID + c], &p);
+        }
+    er_commit();
+
+    /* ER_DAMAGE_RECTS_MAX is a build-time budget constrained targets legitimately lower (the CYD and
+     * RP2040 examples pin it to 4). Under one rect per dial the engine is SUPPOSED to saturate and
+     * merge, so the per-dial claims below are gated on a full budget; the coverage and full-repaint
+     * equivalence checks run at any budget. */
+    const bool full_budget = (ER_DAMAGE_RECTS_MAX >= GRID * GRID);
+
+    ERRect rects[ER_DAMAGE_RECTS_MAX];
+    const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    if (full_budget)
+        CHECK(n == GRID * GRID, "every dial in the grid keeps its own damage rect");
+    else
+        CHECK(n >= 1 && n <= ER_DAMAGE_RECTS_MAX, "the saturated grid stays within the configured budget");
+    uint32_t damage = 0U;
+    for (int i = 0; i < n; i++)
+        damage += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
+
+    /* The raster is what the clip really governs: count the pixels the backend wrote. Repainting all
+     * nine rings in full would be an order of magnitude more than the nine slivers. */
+    uint32_t touched = 0U;
+    for (int i = 0; i < SCREEN * SCREEN; i++)
+        touched += s_touched[i] ? 1U : 0U;
+    if (getenv("ER_ARC_DEBUG"))
+        fprintf(stderr,
+                "grid: %d rects (budget %d), damage %u px, touched %u px\n",
+                n,
+                (int)ER_DAMAGE_RECTS_MAX,
+                damage,
+                touched);
+    if (full_budget)
+        CHECK(damage < (uint32_t)(GRID * GRID * BOX * BOX) / 4U, "grid damage stays a fraction of the dial boxes");
+    CHECK(touched <= damage, "no pixel written outside the reported damage");
+
+    /* Nine clipped passes must still composite exactly like one unclipped repaint. */
+    uint32_t snap[SCREEN * SCREEN];
+    memcpy(snap, s_fb, sizeof(snap));
+    memset(s_fb, 0, sizeof(s_fb));
+    er_force_full_repaint();
+    er_commit();
+    CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "the grid's incremental frame is byte-identical to a full repaint");
+}
+
 int main(void)
 {
     EmbeddedRenderBackend be;
@@ -1293,6 +1392,7 @@ int main(void)
     test_showcase();
     test_segments();
     test_value_damage();
+    test_grid_damage();
     test_native_animation();
     test_drag();
     test_drag_pointer_events_and_transform();

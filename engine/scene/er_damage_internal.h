@@ -84,6 +84,19 @@ void er_damage_set_clear(ERDamageSet* s);
 void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h);
 
 /**
+ * @brief Merges the set down to at most @p max_rects rects, preserving coverage and disjointness.
+ *
+ * Fuses the pair whose bounding box drags in the fewest clean pixels (the waste measure
+ * er_damage_set_add() uses when saturated), repeatedly, until the set fits. A no-op when it already
+ * does; @p max_rects of 0 empties it; 1 collapses to the covering bounding box. Used to trade rect
+ * count for render passes when a pass is expensive — see the compositor's unprunable-walk case.
+ *
+ * @param[in,out] s          Set to trim.
+ * @param[in]     max_rects  Maximum rects to keep.
+ */
+void er_damage_set_limit(ERDamageSet* s, uint8_t max_rects);
+
+/**
  * @brief Computes the bounding box of the whole set.
  *
  * @param[in]  s    Set to measure.
