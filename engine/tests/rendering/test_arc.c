@@ -1338,9 +1338,18 @@ static void test_grid_damage(void)
         }
     er_commit();
 
+    /* ER_DAMAGE_RECTS_MAX is a build-time budget constrained targets legitimately lower (the CYD and
+     * RP2040 examples pin it to 4). Under one rect per dial the engine is SUPPOSED to saturate and
+     * merge, so the per-dial claims below are gated on a full budget; the coverage and full-repaint
+     * equivalence checks run at any budget. */
+    const bool full_budget = (ER_DAMAGE_RECTS_MAX >= GRID * GRID);
+
     ERRect rects[ER_DAMAGE_RECTS_MAX];
     const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
-    CHECK(n == GRID * GRID, "every dial in the grid keeps its own damage rect");
+    if (full_budget)
+        CHECK(n == GRID * GRID, "every dial in the grid keeps its own damage rect");
+    else
+        CHECK(n >= 1 && n <= ER_DAMAGE_RECTS_MAX, "the saturated grid stays within the configured budget");
     uint32_t damage = 0U;
     for (int i = 0; i < n; i++)
         damage += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
@@ -1351,8 +1360,14 @@ static void test_grid_damage(void)
     for (int i = 0; i < SCREEN * SCREEN; i++)
         touched += s_touched[i] ? 1U : 0U;
     if (getenv("ER_ARC_DEBUG"))
-        fprintf(stderr, "grid: %d rects, damage %u px, touched %u px\n", n, damage, touched);
-    CHECK(damage < (uint32_t)(GRID * GRID * BOX * BOX) / 4U, "grid damage stays a fraction of the dial boxes");
+        fprintf(stderr,
+                "grid: %d rects (budget %d), damage %u px, touched %u px\n",
+                n,
+                (int)ER_DAMAGE_RECTS_MAX,
+                damage,
+                touched);
+    if (full_budget)
+        CHECK(damage < (uint32_t)(GRID * GRID * BOX * BOX) / 4U, "grid damage stays a fraction of the dial boxes");
     CHECK(touched <= damage, "no pixel written outside the reported damage");
 
     /* Nine clipped passes must still composite exactly like one unclipped repaint. */

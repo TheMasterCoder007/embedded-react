@@ -438,15 +438,29 @@ static int check_scattered_grid(void)
     touched_reset();
     frame();
 
+    /* ER_DAMAGE_RECTS_MAX is a build-time budget that constrained targets legitimately lower (the CYD
+     * and RP2040 examples pin it to 4). Below one rect per cell the engine is SUPPOSED to saturate and
+     * merge, so only the tightness claims are gated on a full budget — every correctness check below
+     * (coverage, containment, full-repaint equivalence) runs at any budget. */
+    const int cells = GRID_ROWS * GRID_COLS;
+    const bool full_budget = (ER_DAMAGE_RECTS_MAX >= cells);
+
     ERRect rects[ER_DAMAGE_RECTS_MAX];
     const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
-    printf("scattered grid: %d dirty rects for %d cells\n", n, GRID_ROWS * GRID_COLS);
+    printf("scattered grid: %d dirty rects for %d cells (budget %d)\n", n, cells, ER_DAMAGE_RECTS_MAX);
     for (int i = 0; i < n; i++)
         printf("  rect[%d] = (%d,%d %dx%d)\n", i, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
-    if (n != GRID_ROWS * GRID_COLS)
-        return fail("the scattered grid did not report one rect per cell");
+    if (full_budget)
+    {
+        if (n != cells)
+            return fail("the scattered grid did not report one rect per cell");
+    }
+    else if (n < 1 || n > ER_DAMAGE_RECTS_MAX)
+    {
+        /* Saturated: merging is expected, but never past the budget and never down to nothing. */
+        return fail("the saturated grid reported a rect count outside the configured budget");
+    }
 
-    /* The damage must stay a small fraction of the bounding box it used to collapse into. */
     uint32_t area = 0U;
     for (int i = 0; i < n; i++)
         area += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
@@ -455,7 +469,9 @@ static int check_scattered_grid(void)
         return fail("no covering dirty rect after the grid update");
     const uint32_t bbox_area = (uint32_t)bbox.w * (uint32_t)bbox.h;
     printf("  damage %u px vs bbox %u px (%u%%)\n", area, bbox_area, 100U * area / bbox_area);
-    if (area * 4U >= bbox_area)
+    /* The damage must stay a small fraction of the bounding box it used to collapse into — the whole
+     * point of the budget, and therefore only claimable when the budget covers the cells. */
+    if (full_budget && area * 4U >= bbox_area)
         return fail("the grid damage ballooned past a quarter of its bounding box");
 
     /* The lanes between the cells are clean pixels: nothing may write there. */
@@ -471,7 +487,7 @@ static int check_scattered_grid(void)
             if (!inside)
                 return fail("a grid op touched pixels outside every reported dirty rect");
         }
-    if (s_touched[45 * SCREEN + 40] || s_touched[140 * SCREEN + 90])
+    if (full_budget && (s_touched[45 * SCREEN + 40] || s_touched[140 * SCREEN + 90]))
         return fail("the lanes between the grid cells were repainted (cascade-merge is back)");
 
     /* Twelve clipped passes must still composite exactly like one unclipped repaint. */
@@ -483,7 +499,8 @@ static int check_scattered_grid(void)
         return fail("the grid's incremental result differs from a full repaint (compositing bug)");
 
     er_node_destroy(root);
-    printf("PASS: scattered grid — one rect per cell, lanes untouched, pixels match full repaint\n");
+    printf("PASS: scattered grid — %s, pixels match full repaint\n",
+           full_budget ? "one rect per cell, lanes untouched" : "saturated within budget, coverage held");
     return EXIT_SUCCESS;
 }
 

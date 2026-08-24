@@ -73,9 +73,10 @@ extern "C"
  * gracefully toward a single bounding box — coverage is never dropped. Saturation is what turns a
  * screen of small scattered updates (a grid of dials, each damaging only its swept sub-arc) into a
  * near-full repaint, because the merged box then also becomes the clip a vector node rasterizes
- * against. The current default is 16 but should be raised if your project is even more demanding
- * (many small independant widgets that each could draw at the same time.) For projects that have very
- * tight resources, lower this number.
+ * against. The current default is 16, but raise it if your project is even more demanding (many small
+ * independent widgets that could each draw at the same time). For projects that have very tight
+ * resources, lower it — the engine keeps 2 + ER_DISPLAY_BUFFERS_MAX sets, so each rect of budget costs
+ * 6 * sizeof(ERRect) of .bss.
  */
 #ifndef ER_DAMAGE_RECTS_MAX
 #define ER_DAMAGE_RECTS_MAX 16
