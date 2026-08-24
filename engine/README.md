@@ -342,12 +342,17 @@ into transient rasterize scratch (reused per shape) and persistent per-node stor
 |---|---|---|---|
 | `ERUI_VECTOR_MAX_PTS` | 2048 | flattened vertices in one shape | `2 × PTS × 4` B |
 | `ERUI_VECTOR_MAX_SUBPATHS` | 256 | contours / holes in one shape | `SUBPATHS × 12` B |
-| `ERUI_VECTOR_MAX_EDGES` | 2048 | edges in one rasterise pass | `EDGES × 32` B (edge + crossing + active lists) |
+| `ERUI_VECTOR_MAX_EDGES` | 2048 | edges in one rasterise pass | `EDGES × 34` B (edge + crossing + active + sort lists) |
 | `ERUI_VECTOR_MAX_ROW` | 1024 | max vector-node **width** in px | `ROW × 4` B |
+| `ERUI_VECTOR_SORT_BUCKETS` | 256 | buckets in the edge sort | `BUCKETS × 2` B |
 | `ERUI_MAX_VECTOR_NODES` | 8 | concurrent `<Svg>` nodes with geometry | `NODES × (TAPE_MAX×4 + PAINTS_MAX×20)` B |
 | `ERUI_VECTOR_TAPE_MAX` | 1024 | op-tape floats stored per node | (in the per-node cost) |
 | `ERUI_VECTOR_PAINTS_MAX` | 16 | paint entries (shapes) per node | (in the per-node cost) |
 | `ERUI_VECTOR_GRAD_LUT` | 256 | gradient colour-LUT entries (`ERUI_GRADIENT` only) | `LUT × 4` B internal |
+
+`ERUI_VECTOR_SORT_BUCKETS` sizes the counting sort that orders edges for the active-edge table. One bucket
+per clip row until the clip is taller than the table, then one bucket covers 2/4/… rows — which only means a
+few edges activate a row or two early, so it is a memory knob and never a correctness one.
 
 `ERUI_VECTOR_GRAD_LUT` sizes the per-gradient color ramp the rasteriser samples per pixel (built once per
 gradient shape) instead of interpolating the stops each pixel — the bulk of an interactive gradient drag's
