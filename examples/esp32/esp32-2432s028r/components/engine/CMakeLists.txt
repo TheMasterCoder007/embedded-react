@@ -72,6 +72,9 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_MAX_IMG_ROW_PIXELS=240
     ERUI_IMAGE_REGISTRY_MAX=16  # the engine default (128) is sized for icon-heavy apps at ~80 B/slot;
                                 # ~10 KB of .bss does not fit beside the 150 KB framebuffer here
+    ER_DAMAGE_RECTS_MAX=4       # the engine default (16) buys tight clips on screens full of scattered
+                                # updaters; this one is a single dial, so it would spend ~1.2 KB of .bss
+                                # (6 rect sets) on rects it can never fill. DRAM here is 94% full.
 )
 
 # The SVG/vector rasterizer's static pools

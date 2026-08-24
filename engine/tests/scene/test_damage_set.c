@@ -289,6 +289,77 @@ static int check_saturation(void)
     return EXIT_SUCCESS;
 }
 
+static int check_limit(void)
+{
+    ERDamageSet s = {0};
+    history_reset();
+
+    /* A widely-spread row of rects, one per slot. */
+    const int fill = (ER_DAMAGE_RECTS_MAX < 8) ? ER_DAMAGE_RECTS_MAX : 8;
+    for (int i = 0; i < fill; i++)
+    {
+        if (!add_checked(&s, i * 100, i * 100, 20, 20))
+            return fail("invariant while filling for the limit test");
+    }
+
+    /* Above the current count: nothing moves. */
+    const uint8_t before = s.count;
+    er_damage_set_limit(&s, (uint8_t)(before + 3U));
+    if (s.count != before)
+        return fail("limit above the count changed the set");
+
+    /* Trim to 2: coverage of every input must survive, and the set must stay disjoint. */
+    er_damage_set_limit(&s, 2U);
+    if (s.count > 2U)
+        return fail("limit did not trim to the requested count");
+    if (!check_disjoint(&s))
+        return fail("limit broke the disjointness invariant");
+    for (int i = 0; i < g_history_count; i++)
+    {
+        if (!covers_rect(&s, &g_history[i]))
+            return fail("limit dropped coverage of an earlier rect");
+    }
+
+    /* Trimming to 1 is the old single-bounding-box behaviour. */
+    ERRect bounds;
+    er_damage_set_bounds(&s, &bounds);
+    er_damage_set_limit(&s, 1U);
+    if (s.count != 1U)
+        return fail("limit to 1 did not collapse to a single rect");
+    if (s.r[0].x != bounds.x || s.r[0].y != bounds.y || s.r[0].w != bounds.w || s.r[0].h != bounds.h)
+        return fail("the collapsed rect is not the covering bounding box");
+
+    /* Zero empties it; a limit on an empty set is a no-op. */
+    er_damage_set_limit(&s, 0U);
+    if (s.count != 0U)
+        return fail("limit to 0 did not empty the set");
+    er_damage_set_limit(&s, 4U);
+    if (s.count != 0U)
+        return fail("limit on an empty set produced rects");
+
+    /* The trim rule matches the saturating add's: an adjacent pair is the cheapest fuse. */
+    er_damage_set_clear(&s);
+    history_reset();
+    if (!add_checked(&s, 0, 0, 20, 20) || !add_checked(&s, 22, 0, 20, 20) || !add_checked(&s, 500, 500, 20, 20))
+        return fail("invariant while building the min-waste trim case");
+    er_damage_set_limit(&s, 2U);
+    if (s.count != 2U)
+        return fail("min-waste trim did not land on 2 rects");
+    bool fused = false, far_kept = false;
+    for (uint8_t i = 0; i < s.count; i++)
+    {
+        if (s.r[i].x == 0 && s.r[i].w == 42)
+            fused = true;
+        if (s.r[i].x == 500 && s.r[i].w == 20)
+            far_kept = true;
+    }
+    if (!fused || !far_kept)
+        return fail("min-waste trim fused the wrong pair");
+
+    printf("PASS: limit — trims to budget, keeps coverage + disjointness, fuses the cheapest pair\n");
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     int rc = check_basics();
@@ -298,6 +369,9 @@ int main(void)
     if (rc != EXIT_SUCCESS)
         return rc;
     rc = check_saturation();
+    if (rc != EXIT_SUCCESS)
+        return rc;
+    rc = check_limit();
     if (rc != EXIT_SUCCESS)
         return rc;
     return EXIT_SUCCESS;

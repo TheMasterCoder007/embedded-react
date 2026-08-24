@@ -105,6 +105,10 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_SCRATCH_H=8
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=240
+    ER_DAMAGE_RECTS_MAX=4      # the engine default (16) pays ~1.2 KB of .bss (6 rect sets) to keep clips
+                               # tight on screens full of scattered updaters. A watch face has a handful
+                               # of updaters, and this board has ~15 KB of heap left after the
+                               # 240x280 framebuffer, so it takes the smaller budget.
     ERUI_IMAGE_REGISTRY_MAX=8  # the watch face registers none; the engine default (128) is sized for
                                # icon-heavy apps and would cost ~10 KB of .bss this board cannot spare
 )

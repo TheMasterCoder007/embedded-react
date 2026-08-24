@@ -30,6 +30,13 @@ See the README for the release process.
 
 ### Changed
 
+- Screens with many small independent updaters repaint far less. Damage tracking kept only four
+  disjoint rects per frame, so a grid of dials cascade-merged toward one big box — and since a vector
+  or arc node repaints wherever its background was erased, every dial then re-rasterized in full. The
+  budget is now 16 (`ER_DAMAGE_RECTS_MAX`). Measured on an 800x480 ESP32-S3 with twelve dials all
+  stepping at once: 12x fewer pixels repainted and 4.5x less rasterizing per frame. The two smallest
+  no-PSRAM boards (CYD, RP2040) keep the old budget — they have a handful of updaters and no RAM to
+  spare — so their builds are byte-for-byte unchanged.
 - `<Svg>` shapes repaint much faster. Every render pass used to flatten, stroke, and sort a node's whole
   op-tape before the clip was applied — once per damage rect it straddled. Shapes now drop out against the
   clip before any of that, edges outside it never enter the list, the edge sort is a counting sort, and a

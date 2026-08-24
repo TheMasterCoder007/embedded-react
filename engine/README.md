@@ -100,7 +100,7 @@ wherever siblings don't overlap.
 
 ### Disjoint dirty rects (damage tracking)
 
-Each commit's damage is tracked as up to `ER_DAMAGE_RECTS_MAX` (default 4, an `#ifndef` override
+Each commit's damage is tracked as up to `ER_DAMAGE_RECTS_MAX` (default 16, an `#ifndef` override
 in `er_scene.h` like `ER_DISPLAY_BUFFERS_MAX`) **pairwise-disjoint rects** rather than one
 bounding box, so a widget updating top-left and another bottom-right
 repaint two small areas — not the span between them. Overlapping or touching damage merges on
@@ -110,6 +110,20 @@ the old single-box behavior without ever dropping coverage. The multi-buffer pag
 (`er_set_display_buffer_count`) replays disjoint history the same way. Hosts read the rects with
 `er_get_dirty_rects()` — one transfer window per region on capable display drivers — while
 `er_get_dirty_rect()` still returns the covering box.
+
+The budget matters most on **screens full of small independent updaters** — a grid of dials, a row
+of meters. Saturation there does more than coarsen the reported rect: a vector or arc node
+rasterizes against the *active clip*, because the background under it was erased across that whole
+clip and must be repainted, so a merged clip makes every dial re-rasterize its full ring.
+
+The trade is memory — `ER_DAMAGE_RECTS_MAX * sizeof(ERRect)` per set, and the engine keeps
+`2 + ER_DISPLAY_BUFFERS_MAX` of them, so 4 → 16 costs **1,152 bytes of .bss** — plus one clipped
+render pass per rect. Passes are cheap because each prunes to its own rect; the exception is while a
+layout animation is running, where the cached subtree bounds are stale and pruning is off, so the
+compositor first merges the set back down to a handful of coarser rects for that frame.
+
+Boards that are tight on RAM and have only a few updaters should turn it back down — the CYD and
+RP2040 examples set `ER_DAMAGE_RECTS_MAX=4` for exactly that reason.
 
 ### Hidden subtrees (`display: none`)
 

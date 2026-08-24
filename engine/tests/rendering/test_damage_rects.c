@@ -28,7 +28,9 @@
  *   - multi-buffer replay: with 2 page-flip buffers, the frame after a two-corner change replays
  *     both corners into the stale buffer and still leaves the centre untouched,
  *   - er_get_dirty_rects() contract: disjoint, covering, bbox-collapse when the caller's buffer is
- *     too small, count query with NULL.
+ *     too small, count query with NULL,
+ *   - scattered grid: a dozen small widgets updating at once stay a dozen small rects instead of
+ *     cascade-merging toward the whole-grid bounding box (the saturation the rect budget bounds).
  */
 
 #include "er_scene.h"
@@ -376,6 +378,115 @@ static int check_multibuffer_replay(void)
     return EXIT_SUCCESS;
 }
 
+/*
+ * Scattered updates: a GRID of small widgets all changing in one commit — the case that saturated the
+ * old 4-rect budget and cascade-merged into (near) the whole-grid bounding box. Each cell must keep
+ * its own rect, the lanes between them must stay untouched, and the pixels must still match a full
+ * repaint (translucent cells, so a double blend would show).
+ */
+#define GRID_COLS 4
+#define GRID_ROWS 3
+#define GRID_CELL 20
+static const int k_grid_x[GRID_COLS] = {5, 55, 105, 155};
+static const int k_grid_y[GRID_ROWS] = {5, 90, 175};
+
+static int check_scattered_grid(void)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = SCREEN;
+    rp.height = SCREEN;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    ERNode* cell[GRID_ROWS * GRID_COLS];
+    for (int r = 0; r < GRID_ROWS; r++)
+        for (int c = 0; c < GRID_COLS; c++)
+        {
+            ERProps cp = props_default();
+            cp.width = GRID_CELL;
+            cp.height = GRID_CELL;
+            cp.position = ER_POS_ABSOLUTE;
+            cp.left = (float)k_grid_x[c];
+            cp.top = (float)k_grid_y[r];
+            cp.background_color = 0x80336699U;
+            ERNode* n = er_node_create(ER_NODE_VIEW);
+            er_node_set_props(n, &cp);
+            er_tree_append_child(root, n);
+            cell[r * GRID_COLS + c] = n;
+        }
+    er_tree_set_root(root);
+    frame(); /* mount: full repaint */
+    frame(); /* settle */
+
+    /* Recolour every cell in ONE commit — the scattered-update frame. */
+    for (int r = 0; r < GRID_ROWS; r++)
+        for (int c = 0; c < GRID_COLS; c++)
+        {
+            ERProps cp = props_default();
+            cp.width = GRID_CELL;
+            cp.height = GRID_CELL;
+            cp.position = ER_POS_ABSOLUTE;
+            cp.left = (float)k_grid_x[c];
+            cp.top = (float)k_grid_y[r];
+            /* Every cell gets a colour distinct from the 0x80336699 it mounted with (a cell whose
+             * props do not actually change is not dirty, and would contribute no rect). */
+            const uint32_t rgb = ((uint32_t)(r * GRID_COLS + c) * 0x1F3A5CU + 0x040506U) & 0x00FFFFFFU;
+            cp.background_color = 0x80000000U | rgb;
+            er_node_set_props(cell[r * GRID_COLS + c], &cp);
+        }
+    touched_reset();
+    frame();
+
+    ERRect rects[ER_DAMAGE_RECTS_MAX];
+    const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    printf("scattered grid: %d dirty rects for %d cells\n", n, GRID_ROWS * GRID_COLS);
+    for (int i = 0; i < n; i++)
+        printf("  rect[%d] = (%d,%d %dx%d)\n", i, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
+    if (n != GRID_ROWS * GRID_COLS)
+        return fail("the scattered grid did not report one rect per cell");
+
+    /* The damage must stay a small fraction of the bounding box it used to collapse into. */
+    uint32_t area = 0U;
+    for (int i = 0; i < n; i++)
+        area += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
+    ERRect bbox;
+    if (!er_get_dirty_rect(&bbox))
+        return fail("no covering dirty rect after the grid update");
+    const uint32_t bbox_area = (uint32_t)bbox.w * (uint32_t)bbox.h;
+    printf("  damage %u px vs bbox %u px (%u%%)\n", area, bbox_area, 100U * area / bbox_area);
+    if (area * 4U >= bbox_area)
+        return fail("the grid damage ballooned past a quarter of its bounding box");
+
+    /* The lanes between the cells are clean pixels: nothing may write there. */
+    for (int y = 0; y < SCREEN; y++)
+        for (int x = 0; x < SCREEN; x++)
+        {
+            if (!s_touched[y * SCREEN + x])
+                continue;
+            bool inside = false;
+            for (int i = 0; i < n; i++)
+                if (point_in(&rects[i], x, y))
+                    inside = true;
+            if (!inside)
+                return fail("a grid op touched pixels outside every reported dirty rect");
+        }
+    if (s_touched[45 * SCREEN + 40] || s_touched[140 * SCREEN + 90])
+        return fail("the lanes between the grid cells were repainted (cascade-merge is back)");
+
+    /* Twelve clipped passes must still composite exactly like one unclipped repaint. */
+    uint32_t incremental[SCREEN * SCREEN];
+    memcpy(incremental, s_fb, sizeof(incremental));
+    er_force_full_repaint();
+    frame();
+    if (memcmp(incremental, s_fb, sizeof(incremental)) != 0)
+        return fail("the grid's incremental result differs from a full repaint (compositing bug)");
+
+    er_node_destroy(root);
+    printf("PASS: scattered grid — one rect per cell, lanes untouched, pixels match full repaint\n");
+    return EXIT_SUCCESS;
+}
+
 /* er_get_dirty_rects() contract edges: count query, bbox collapse on a too-small buffer. */
 static int check_api_contract(void)
 {
@@ -436,6 +547,11 @@ int main(void)
     er_reset();
 
     rc = check_api_contract();
+    if (rc != EXIT_SUCCESS)
+        return rc;
+    er_reset();
+
+    rc = check_scattered_grid();
     if (rc != EXIT_SUCCESS)
         return rc;
 
