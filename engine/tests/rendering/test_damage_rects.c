@@ -539,6 +539,19 @@ static int check_api_contract(void)
     if (!point_in(&r, 10, 10) || !point_in(&r, 189, 189))
         return fail("the collapsed bbox does not cover both corners");
 
+    /* A forced full repaint on an otherwise-settled scene (a host re-installing its framebuffer, say)
+     * paints every pixel with NO node source-dirty, so nothing feeds the render walk's accumulator.
+     * Both accessors must still report the truth — and the same truth. */
+    er_force_full_repaint();
+    frame();
+    ERRect fr;
+    if (!er_get_dirty_rect(&fr))
+        return fail("a forced full repaint reported no dirty rect");
+    if (fr.w != SCREEN || fr.h != SCREEN)
+        return fail("a forced full repaint did not report the whole root as dirty");
+    if (er_get_dirty_rects(&r, 1) != 1 || r.x != fr.x || r.y != fr.y || r.w != fr.w || r.h != fr.h)
+        return fail("er_get_dirty_rect() and er_get_dirty_rects() disagree on a forced full repaint");
+
     er_node_destroy(root);
     printf("PASS: er_get_dirty_rects contract — count query + bbox collapse\n");
     return EXIT_SUCCESS;

@@ -73,6 +73,8 @@ See the README for the release process.
 - `er_get_dirty_rects()` / `er_get_dirty_rect()` reported nothing on Flow A. React commits inside
   `er_runtime_pump()`, so the host's own `er_commit()` — a no-op — was wiping the answer before the
   host could read it. A commit that paints nothing now leaves the last painted rects in place.
+- `er_get_dirty_rect()` reported nothing on a full repaint that no node had dirtied while `er_get_dirty_rects()` 
+  reported the whole screen. Both now report the region actually painted.
 
 ## [0.12.0] - 2026-08-19
 ### Added

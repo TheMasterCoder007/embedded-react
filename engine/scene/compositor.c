@@ -4221,33 +4221,27 @@ void er_commit(void)
         }
     }
 
-    /* Multi-buffer: er_get_dirty_rect() must report the region actually painted (the replayed union), not
-     * just this frame's source-dirty nodes, so a host using it for a secondary transfer sees the truth.
-     * (Single buffer keeps the tight source_dirty union accumulated by render_tree.) */
-    if (s_display_buffer_count > 1 && !nothing_dirty)
+    /* Publish only when this commit painted, so the accessors keep reporting the last commit that did
+     * (both stay in step with s_last_paint_set above).
+     *
+     * Two cases report the painted region rather than render_tree's accumulator, because that
+     * accumulator only unions SOURCE-dirty nodes:
+     *   - a full repaint, which may have no source-dirty node at all (a re-installed framebuffer, a
+     *     reset) yet still paints every pixel of the root — it would otherwise report nothing;
+     *   - multi-buffer, where the buffer is brought current over its whole replayed debt, so a host
+     *     using the rect for a secondary transfer must see that, not just this frame's changes.
+     * rb_* is exactly what s_last_paint_set recorded above, so the two accessors agree by construction.
+     * A damage-clipped single-buffer commit keeps the tight source_dirty union. */
+    if (!nothing_dirty)
     {
-        if (render_full)
-        {
-            painted_rect.x = root->computed.x;
-            painted_rect.y = root->computed.y;
-            painted_rect.w = root->computed.w;
-            painted_rect.h = root->computed.h;
-            painted_has = (root->computed.w > 0 && root->computed.h > 0);
-        }
-        else
+        if (render_full || s_display_buffer_count > 1)
         {
             painted_rect.x = rb_x0;
             painted_rect.y = rb_y0;
             painted_rect.w = rb_x1 - rb_x0;
             painted_rect.h = rb_y1 - rb_y0;
-            painted_has = true;
+            painted_has = (painted_rect.w > 0 && painted_rect.h > 0);
         }
-    }
-
-    /* Publish only when this commit painted, so the accessors keep reporting the last commit that did
-     * (both stay in step with s_last_paint_set above). */
-    if (!nothing_dirty)
-    {
         s_dirty_rect = painted_rect;
         s_has_dirty = painted_has;
     }
