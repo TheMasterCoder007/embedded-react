@@ -17,6 +17,7 @@
 #include "native_renderer.h"
 #include "vector.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -436,6 +437,117 @@ int main(void)
             return fail("conic gradient: bottom (t=0.5) should be ~green");
     }
 #endif
+
+    /* --- clip rejection keeps a shape whose STROKE reaches the clip, drops one that cannot --- */
+    /* The rasterizer skips a whole shape when its bounds cannot touch the clip. The bounds have to
+     * carry the paint's reach: a path outside the clip whose fat stroke crosses into it must still
+     * paint, or wide strokes lose their edges at every damage-rect seam. */
+    {
+        reset(&tc);
+        /* Shape 0: a vertical line at x=20, 20px wide -> covers x=10..30. Clip starts at x=25.
+         * Shape 1: a filled rect at x=90..110, nowhere near the clip. */
+        const float ops[] = {ER_VOP_SHAPE, 0,   ER_VOP_MOVE, 20,          10, ER_VOP_LINE, 20,          60,
+                             ER_VOP_SHAPE, 1,   ER_VOP_MOVE, 90,          10, ER_VOP_LINE, 110,         10,
+                             ER_VOP_LINE,  110, 60,          ER_VOP_LINE, 90, 60,          ER_VOP_CLOSE};
+        const ERVectorPaint p[2] = {
+            {0, 0xFF3366CCu, 20.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO},
+            {0xFFCC3366u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO},
+        };
+        er_vector_render(ops, (int)(sizeof(ops) / sizeof(ops[0])), p, 2, NULL, 0, 0, 0, 25, 0, 60, FB_H);
+        if (!is_solid(px(&tc, 28, 35), 0x3366CCu))
+            return fail("clip reject: a stroke reaching into the clip from outside was dropped");
+        if (px(&tc, 100, 35) != 0)
+            return fail("clip reject: a shape outside the clip painted anyway");
+    }
+
+    /* --- a shallow polyline stroke has no notch at its corners --- */
+    /* Corners are covered either by join geometry or by mitering the two segment quads together;
+     * neither may leave a gap. A flattened curve is exactly this shape, so a bite here shows up as a
+     * dotted seam running along every stroked arc. */
+    {
+        reset(&tc);
+        /* A 12px-wide stroke along a gently bending polyline (about 8 degrees per vertex). */
+        float ops[2 + 3 + 3 * 12];
+        int n = 0;
+        ops[n++] = ER_VOP_SHAPE;
+        ops[n++] = 0;
+        ops[n++] = ER_VOP_MOVE;
+        ops[n++] = 10.0f;
+        ops[n++] = 64.0f;
+        for (int i = 1; i <= 12; i++)
+        {
+            const float t = (float)i * 0.14f;
+            ops[n++] = ER_VOP_LINE;
+            ops[n++] = 10.0f + (float)i * 8.0f;
+            ops[n++] = 64.0f - 30.0f * (1.0f - cosf(t));
+        }
+        const ERVectorPaint p = {0, 0xFF22DD88u, 12.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        er_vector_render(ops, n, &p, 1, NULL, 0, 0, 0, 0, 0, FB_W, FB_H);
+        for (int i = 1; i <= 11; i++)
+        {
+            const float t = (float)i * 0.14f;
+            const int cx = (int)(10.0f + (float)i * 8.0f);
+            const int cy = (int)(64.0f - 30.0f * (1.0f - cosf(t)));
+            if (!is_solid(px(&tc, cx, cy), 0x22DD88u))
+                return fail("stroke corner: the band is not solid at a vertex (a join left a gap)");
+        }
+    }
+
+    /* --- a closed polygon's wrap vertex is stroked like every other corner --- */
+    /* The corner where a closed subpath's last segment meets its first is shared between two quads
+     * that are built at opposite ends of the loop; if only one of them knows about it, the seam opens
+     * at exactly one point of the ring — the point most likely to be dismissed as an artefact. */
+    {
+        reset(&tc);
+        float ops[2 + 3 + 3 * 24 + 1];
+        int n = 0;
+        ops[n++] = ER_VOP_SHAPE;
+        ops[n++] = 0;
+        for (int i = 0; i <= 24; i++)
+        {
+            const float t = (float)i * (2.0f * 3.14159265f / 24.0f);
+            ops[n++] = (i == 0) ? ER_VOP_MOVE : ER_VOP_LINE;
+            ops[n++] = 64.0f + 45.0f * cosf(t);
+            ops[n++] = 64.0f + 45.0f * sinf(t);
+        }
+        ops[n++] = ER_VOP_CLOSE;
+        const ERVectorPaint p = {0, 0xFFEEBB33u, 6.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        er_vector_render(ops, n, &p, 1, NULL, 0, 0, 0, 0, 0, FB_W, FB_H);
+        for (int i = 0; i < 24; i++)
+        {
+            const float t = (float)i * (2.0f * 3.14159265f / 24.0f);
+            const int cx = (int)(64.0f + 45.0f * cosf(t) + 0.5f);
+            const int cy = (int)(64.0f + 45.0f * sinf(t) + 0.5f);
+            if (!is_solid(px(&tc, cx, cy), 0xEEBB33u))
+                return fail("closed stroke: a corner of the ring is not solid (the wrap seam opened)");
+        }
+    }
+
+    /* --- a CLOSE that misses its start point still strokes the closing edge --- */
+    /* A ring sector: out along the outer arc, in on a radial line, back along the inner arc, CLOSE.
+     * The second radial edge exists only because of the CLOSE. The fill closes every subpath
+     * implicitly, so when the stroke did not, that one side came out bare. */
+    {
+        reset(&tc);
+        const float cx = 64.0f, cy = 64.0f, r_out = 50.0f, r_in = 30.0f;
+        const float a0 = 2.4f, a1 = a0 + 4.5f;
+        const float ops[] = {
+            ER_VOP_SHAPE, 0, ER_VOP_MOVE, cx + r_out * cosf(a0), cy + r_out * sinf(a0), ER_VOP_ARC, cx, cy, r_out, a0,
+            a1,           0, ER_VOP_LINE, cx + r_in * cosf(a1),  cy + r_in * sinf(a1),  ER_VOP_ARC, cx, cy, r_in,  a1,
+            a0,           1, ER_VOP_CLOSE};
+        const ERVectorPaint p = {0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO};
+        er_vector_render(ops, (int)(sizeof(ops) / sizeof(ops[0])), &p, 1, NULL, 0, 0, 0, 0, 0, FB_W, FB_H);
+        /* Walk the closing edge from the inner arc's end back to the MOVE point, ends included. */
+        for (int i = 0; i <= 8; i++)
+        {
+            const float t = (float)i / 8.0f;
+            const float rr = r_in + (r_out - r_in) * t;
+            const int sx = (int)(cx + rr * cosf(a0) + 0.5f);
+            const int sy = (int)(cy + rr * sinf(a0) + 0.5f);
+            if (!is_solid(px(&tc, sx, sy), 0x66CCFFu))
+                return fail("closed stroke: the closing edge of a CLOSE'd subpath was not stroked");
+        }
+    }
 
     /* --- storage pool exhaustion is flagged, not silent --- */
     {

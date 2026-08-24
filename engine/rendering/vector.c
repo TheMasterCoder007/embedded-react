@@ -39,7 +39,6 @@
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -61,6 +60,12 @@
 #ifndef ERUI_VECTOR_MAX_ROW
 #define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in px (coverage row buffer). */
 #endif
+#ifndef ERUI_VECTOR_SORT_BUCKETS
+#define ERUI_VECTOR_SORT_BUCKETS                                                                                       \
+    256 /**< Buckets in the edge counting sort. One per clip row until the clip is taller                              \
+           than this, then one bucket covers 2/4/... rows — which only activates a few edges                         \
+           early, so this is a memory knob, not a correctness one. */
+#endif
 
 /* The per-node STORAGE pools (ERUI_MAX_VECTOR_NODES / ERUI_VECTOR_TAPE_MAX / ERUI_VECTOR_PAINTS_MAX) live
  * with that pool in vector_store.c so it can be placed in PSRAM independently of this file's hot scratch. */
@@ -70,7 +75,10 @@
 #define VEC_ARC_TOL                                                                                                    \
     0.10f /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:                              \
              the rasterize cost is clip-area bound, not edge-count bound, and a coarse                                 \
-             value visibly facets small curves (the knob most of all). */
+             value visibly facets small curves (0.25f measures ~13% faster on a stroked                                \
+             ring and shifts its edge by a visible quarter pixel — not worth it). */
+#define VEC_JOIN_TOL 0.05f  /**< How far (px) a merged stroke corner may stray from the join it replaces. */
+#define VEC_CLOSE_EPS 0.05f /**< Under this gap, a CLOSE that misses its start point counts as landing on it. */
 #define VEC_PI 3.14159265358979323846f
 #define VEC_RAD2DEG 57.29577951308232f
 
@@ -111,6 +119,18 @@ static int s_nsub;
 
 static VecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_nedges;
+static float s_edge_ytop, s_edge_ybot; /**< Clip rows for the current pass; edge_add drops edges outside them. */
+
+/* Edge ordering for the active-edge table: a counting sort writes indices into s_order, and s_bkt ends
+ * up holding each bucket's END offset (see rasterize). Indices, not edges, so the sort moves 2 bytes
+ * per edge instead of 20 — this is hot per-frame internal RAM. */
+#if ERUI_VECTOR_MAX_EDGES <= 65535
+typedef uint16_t VecIdx;
+#else
+typedef uint32_t VecIdx;
+#endif
+static VecIdx s_order[ERUI_VECTOR_MAX_EDGES];
+static VecIdx s_bkt[ERUI_VECTOR_SORT_BUCKETS];
 
 static float s_cover[ERUI_VECTOR_MAX_ROW]; /**< Per-pixel coverage accumulator for the current row. */
 static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo,hi)) in s_cover for the current row. */
@@ -231,6 +251,9 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
 static void edge_add(float x0, float y0, float x1, float y1)
 {
     if (y0 == y1)
+        return;
+
+    if ((y0 <= s_edge_ytop && y1 <= s_edge_ytop) || (y0 >= s_edge_ybot && y1 >= s_edge_ybot))
         return;
     if (s_nedges >= ERUI_VECTOR_MAX_EDGES)
     {
@@ -520,14 +543,6 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
     }
 }
 
-/** @brief qsort comparator: orders edges top-to-bottom by their (normalized) top y. */
-static int edge_cmp_y0(const void* pa, const void* pb)
-{
-    const float ya = ((const VecEdge*)pa)->y0;
-    const float yb = ((const VecEdge*)pb)->y0;
-    return (ya < yb) ? -1 : (ya > yb) ? 1 : 0;
-}
-
 /* Indices of edges crossing the current scanline (the active-edge table). */
 static int s_active[ERUI_VECTOR_MAX_EDGES];
 
@@ -553,32 +568,78 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
         build_grad_lut(grad);
 #endif
 
-    /* Sort edges top-to-bottom so each scanline only tests the few edges actually crossing it (an
-     * active-edge table) instead of all of them — the difference between O(edges*rows) and ~O(rows),
-     * which is what makes a long arc stroke cheap to rasterize. */
-    qsort(s_edges, (size_t)s_nedges, sizeof(VecEdge), edge_cmp_y0);
-
-    float fy1 = -1e30f;
+    float fy0 = 1e30f, fy1 = -1e30f;
     for (int i = 0; i < s_nedges; i++)
+    {
+        if (s_edges[i].y0 < fy0)
+            fy0 = s_edges[i].y0;
         if (s_edges[i].y1 > fy1)
             fy1 = s_edges[i].y1;
-    int ymin = (int)floorf(s_edges[0].y0); /* sorted: edge 0 has the smallest y0 */
+    }
+    int ymin = (int)floorf(fy0);
     int ymax = (int)ceilf(fy1);
     if (ymin < clipy0)
         ymin = clipy0;
     if (ymax > clipy1)
         ymax = clipy1;
+    if (ymax <= ymin)
+        return;
+
+    /* Order edges top-to-bottom so each scanline only tests the few edges actually crossing it (an
+     * active-edge table) instead of all of them — the difference between O(edges*rows) and ~O(rows),
+     * which is what makes a long arc stroke cheap to rasterize.
+     *
+     * The ordering is a counting sort on the edge's integer START ROW: one linear pass to histogram,
+     * one to place, no comparator calls and no data movement beyond a 2-byte index — where the qsort
+     * this replaces cost O(n log n) indirect calls, repeated for every fill, every stroke and every
+     * damage rect the node straddles. Rows map to buckets through a shift, so a clip taller than the
+     * bucket table just puts a few rows in each bucket. Buckets are activated WHOLE, in row order, so
+     * edges need no ordering within one: activating an edge a row or two early is harmless — the
+     * crossing test below ignores it until its own y0, and the retire pass drops it once it ends. */
+    const int nrows = ymax - ymin;
+    int shift = 0;
+    while ((nrows >> shift) >= ERUI_VECTOR_SORT_BUCKETS)
+        shift++;
+    const int nb = ((nrows - 1) >> shift) + 1;
+    memset(s_bkt, 0, sizeof(VecIdx) * (size_t)nb);
+    for (int i = 0; i < s_nedges; i++)
+    {
+        int row = (int)floorf(s_edges[i].y0) - ymin;
+        if (row < 0)
+            row = 0; /* starts above the clip: activate it on the first row */
+        else if (row >= nrows)
+            continue; /* starts below the last row scanned: it can never cross one */
+        s_bkt[row >> shift]++;
+    }
+    int acc = 0;
+    for (int b = 0; b < nb; b++)
+    {
+        const int c = (int)s_bkt[b];
+        s_bkt[b] = (VecIdx)acc; /* bucket start; the placement pass advances it to the bucket END */
+        acc += c;
+    }
+    if (acc == 0)
+        return;
+    for (int i = 0; i < s_nedges; i++)
+    {
+        int row = (int)floorf(s_edges[i].y0) - ymin;
+        if (row < 0)
+            row = 0;
+        else if (row >= nrows)
+            continue;
+        s_order[s_bkt[row >> shift]++] = (VecIdx)i;
+    }
 
     const float w = 1.0f / (float)VEC_SUBSAMPLES;
-    int next = 0;     /* next edge (in y0 order) not yet activated */
+    int next = 0;     /* next edge (in bucket order) not yet activated */
     int n_active = 0; /* count in s_active */
 
     for (int iy = ymin; iy < ymax; iy++)
     {
-        /* Activate edges whose top is within/above this row; retire edges that ended above it. */
-        const float row_bottom = (float)(iy + 1);
-        while (next < s_nedges && s_edges[next].y0 < row_bottom)
-            s_active[n_active++] = next++;
+        /* Activate this row's bucket (and any before it); retire edges that ended above the row. */
+        const int upto = (int)s_bkt[(iy - ymin) >> shift];
+        while (next < upto)
+            s_active[n_active++] = (int)s_order[next++];
         for (int a = 0; a < n_active;)
         {
             if (s_edges[s_active[a]].y1 <= (float)iy)
@@ -645,6 +706,8 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
 static void fill_shape(uint32_t color, const ERVectorGradient* grad, int evenodd, int cx0, int cy0, int cx1, int cy1)
 {
     s_nedges = 0;
+    s_edge_ytop = (float)cy0;
+    s_edge_ybot = (float)cy1;
     for (int si = 0; si < s_nsub; si++)
     {
         const VecSub* sp = &s_sub[si];
@@ -704,13 +767,151 @@ static void add_tri(float ax, float ay, float bx, float by, float cx, float cy)
     edge_add(cx, cy, ax, ay);
 }
 
+/** @brief Unit direction + length of a segment; false when it is degenerate (nothing to stroke). */
+static bool seg_dir(float x0, float y0, float x1, float y1, float* ux, float* uy, float* len)
+{
+    const float dx = x1 - x0, dy = y1 - y0;
+    const float l = sqrtf(dx * dx + dy * dy);
+    if (l < 1e-6f)
+        return false;
+    *ux = dx / l;
+    *uy = dy / l;
+    *len = l;
+    return true;
+}
+
+/**
+ * @brief Decides whether a vertex's join can be folded into its two segment quads instead of drawn.
+ *
+ * Two quads butted at a vertex leave the whole pie slice between them uncovered — the join's job is to
+ * fill it, and dropping one notches the stroke by the slice's width (~r * turn angle), which is why a
+ * near-collinear test alone cannot skip it without leaving a visible bite. Mitering BOTH sides of the
+ * shared corner instead closes the slice exactly: the two quads then meet along the angle bisector,
+ * with the corner pushed out to r/cos(t/2) — and when that is within VEC_JOIN_TOL of r, the result is
+ * within a sub-pixel of the round/bevel join it replaces, whichever style is set. That makes it free
+ * to apply on smooth flattened curves, where it drops the per-vertex join geometry (and its trig)
+ * entirely: an arc's every vertex used to pay for a triangle fan covering a gap thinner than a pixel.
+ *
+ * @param[in]  u0x,u0y,l0  Incoming segment direction (unit) and length.
+ * @param[in]  u1x,u1y,l1  Outgoing segment direction (unit) and length.
+ * @param[in]  r           Stroke half-width.
+ * @param[in]  merge_dot   Minimum dot product for the miter to stay within tolerance (see caller).
+ * @param[out] ox,oy       Corner offset vector: the shared corners are vertex +/- (ox,oy).
+ *
+ * @return true when the join merged, in which case NO join geometry is needed at this vertex.
+ */
+static bool join_merge(
+    float u0x, float u0y, float l0, float u1x, float u1y, float l1, float r, float merge_dot, float* ox, float* oy)
+{
+    const float dot = u0x * u1x + u0y * u1y;
+    if (dot <= 0.0f || dot < merge_dot)
+        return false;
+    const float cross = u0x * u1y - u0y * u1x;
+    float ex = 0.0f; /* how far the corner slides ALONG the incoming segment; 0 when collinear */
+    if (fabsf(cross) > 1e-6f)
+    {
+        ex = r * (dot - 1.0f) / cross; /* = -/+ r * tan(t/2) */
+        /* Never eat more than a quarter of either segment. Both ends of a segment slide, and on a
+         * zigzag they slide OPPOSITE ways (the turn flips sign), so anything looser lets a quad pinch
+         * shut at one corner and drop the sliver of coverage the join used to hold. Past the limit the
+         * corner simply does not merge and the join is drawn as before. */
+        const float lim = 0.25f * ((l0 < l1) ? l0 : l1);
+        if (ex > lim || ex < -lim)
+            return false;
+    }
+    *ox = -u0y * r + u0x * ex;
+    *oy = u0x * r + u0y * ex;
+    return true;
+}
+
+/**
+ * @brief Adds the join geometry at a vertex whose corner could not be merged (a real corner).
+ *
+ * Round joins fan the outer gap with triangles back to the vertex, bevel uses one triangle, and miter
+ * extends to the intersection of the outer offset lines (falling back to bevel past the miter limit).
+ *
+ * @param[in] vx,vy    Vertex position.
+ * @param[in] u0x,u0y  Incoming segment direction (unit).
+ * @param[in] u1x,u1y  Outgoing segment direction (unit).
+ * @param[in] r        Stroke half-width.
+ * @param[in] join     ER_VJOIN_* style.
+ * @param[in] miter    Miter limit (multiples of the half-width).
+ */
+static void add_join(float vx, float vy, float u0x, float u0y, float u1x, float u1y, float r, int join, float miter)
+{
+    /* Outer side normals + which side carries the gap. */
+    const float n0x = -u0y * r, n0y = u0x * r;
+    const float n1x = -u1y * r, n1y = u1x * r;
+    const float cross = u0x * u1y - u0y * u1x;
+    const float s = (cross < 0.0f) ? 1.0f : -1.0f; /* pick the outer offsets */
+    const float p0x = vx + s * n0x, p0y = vy + s * n0y;
+    const float p1x = vx + s * n1x, p1y = vy + s * n1y;
+
+    if (join == ER_VJOIN_ROUND)
+    {
+        /* Fan the outer gap with triangles back to the vertex — a true round join in a handful of
+         * edges (one triangle for a gentle bend), not a full disc per vertex. */
+        const float a0 = atan2f(p0y - vy, p0x - vx);
+        const float a1 = atan2f(p1y - vy, p1x - vx);
+        float da = a1 - a0;
+        while (da > VEC_PI)
+            da -= 2.0f * VEC_PI;
+        while (da < -VEC_PI)
+            da += 2.0f * VEC_PI;
+        int steps = (int)ceilf(fabsf(da) / 0.4f); /* ~23 degrees per step */
+        if (steps < 1)
+            steps = 1;
+        float pax = p0x, pay = p0y;
+        for (int k = 1; k <= steps; k++)
+        {
+            const float t = a0 + da * ((float)k / (float)steps);
+            const float pbx = vx + r * cosf(t);
+            const float pby = vy + r * sinf(t);
+            add_tri(vx, vy, pax, pay, pbx, pby);
+            pax = pbx;
+            pay = pby;
+        }
+        return;
+    }
+    if (join == ER_VJOIN_MITER)
+    {
+        /* Miter point = intersection of the two outer offset lines. */
+        const float denom = cross;
+        if (fabsf(denom) > 1e-6f)
+        {
+            const float t = ((p1x - p0x) * u1y - (p1y - p0y) * u1x) / denom;
+            const float mx = p0x + u0x * t;
+            const float my = p0y + u0y * t;
+            const float mdx = mx - vx, mdy = my - vy;
+            const float mlen = sqrtf(mdx * mdx + mdy * mdy);
+            if (mlen <= miter * r)
+            {
+                add_tri(vx, vy, p0x, p0y, mx, my);
+                add_tri(vx, vy, mx, my, p1x, p1y);
+                return;
+            }
+        }
+        /* Too sharp -> fall through to bevel. */
+    }
+    add_tri(vx, vy, p0x, p0y, p1x, p1y); /* bevel */
+}
+
+/** @brief Vertex a segment ends at. Only a closing segment (k == n-1) wraps back to the start. */
+static inline int seg_end_index(int k, int n)
+{
+    return (k + 1 == n) ? 0 : k + 1;
+}
+
 /**
  * @brief Builds stroke outline geometry for one subpath and adds it to the edge list.
  *
- * Each segment becomes a quad of width @p sw; interior vertices get a join and open endpoints get a
- * cap. Round joins/caps use discs, bevel uses a triangle, miter extends to the intersection (bounded
- * by the miter limit, else falls back to bevel). The pieces overlap and are unioned by the nonzero
- * fill rule, so no single clean outline polygon is needed.
+ * Each segment becomes a quad of width @p sw and open endpoints get a cap. At an interior vertex the
+ * two quads either share a mitered corner (join_merge, the common case on a flattened curve) or butt
+ * against each other and the gap between them is filled by join geometry (add_join). The pieces
+ * overlap and are unioned by the nonzero fill rule, so no single clean outline polygon is needed.
+ *
+ * A closed subpath whose CLOSE does not land back on its start point gets one extra segment for that
+ * closing edge, so the segment list wraps and its two ends are corners like any other.
  */
 static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float miter)
 {
@@ -730,114 +931,112 @@ static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float 
 
     const int closed = sp->closed;
 
-    /* Segment quads. */
-    for (int i = 0; i < n - 1; i++)
+    /* Merge a corner while the miter it produces stays within VEC_JOIN_TOL of the half-width:
+     * |corner| = r / cos(t/2), so the bound is cos(t/2) >= r / (r + tol), and dot = 2cos²(t/2) - 1. */
+    const float mk = r / (r + VEC_JOIN_TOL);
+    const float merge_dot = 2.0f * mk * mk - 1.0f;
+
+    /* A CLOSE does not have to bring the path back to where it started, and when it does not there is
+     * still an edge from the last vertex to the first. The fill closes every subpath implicitly, so
+     * leaving that edge out of the stroke shows up as one unstroked side — a ring sector's radial edge
+     * is the usual way to hit it. Give it a segment of its own; the list then wraps, and the vertices
+     * at both of its ends become ordinary corners. */
+    const float gapx = X[n - 1] - X[0], gapy = Y[n - 1] - Y[0];
+    const bool close_seg = closed && (gapx * gapx + gapy * gapy > VEC_CLOSE_EPS * VEC_CLOSE_EPS);
+    const int nseg = closed ? (close_seg ? n : n - 1) : (n - 1);
+
+    /* The corner where the LAST segment meets segment 0 is shared by two quads built at opposite ends
+     * of the loop, so it has to be decided before segment 0 is emitted. */
+    bool wrap_merged = false;
+    float wrap_ox = 0.0f, wrap_oy = 0.0f;
+    float wrap_u1x = 0.0f, wrap_u1y = 0.0f;
+    bool wrap_join = false; /* the wrap corner did not merge: its join is emitted with the last quad */
+    const int wrapv = close_seg ? 0 : (n - 1); /* the shared vertex: P[0] once the list wraps */
+    if (closed && nseg >= 2)
     {
-        float ux = X[i + 1] - X[i];
-        float uy = Y[i + 1] - Y[i];
-        const float len = sqrtf(ux * ux + uy * uy);
-        if (len < 1e-6f)
+        /* The outgoing direction leaves the shared vertex toward P[1]. With a closing segment that
+         * vertex IS P[0], so this is segment 0's own direction; without one it is P[n-1], which sits on
+         * top of P[0] — and reading it from there is what the per-vertex join has always done. */
+        const int la = nseg - 1;
+        const int lb = seg_end_index(la, n);
+        float u0x, u0y, l0, u1x, u1y, l1;
+        if (seg_dir(X[la], Y[la], X[lb], Y[lb], &u0x, &u0y, &l0)
+            && seg_dir(X[wrapv], Y[wrapv], X[1], Y[1], &u1x, &u1y, &l1))
+        {
+            wrap_u1x = u1x;
+            wrap_u1y = u1y;
+            wrap_merged = join_merge(u0x, u0y, l0, u1x, u1y, l1, r, merge_dot, &wrap_ox, &wrap_oy);
+            wrap_join = !wrap_merged;
+        }
+    }
+
+    /* Corner carried from the previous vertex; segment 0 of a closed subpath inherits the wrap corner
+     * so both quads meeting there use the same one. */
+    bool pmerged = wrap_merged;
+    float pox = wrap_ox, poy = wrap_oy;
+
+    for (int k = 0; k < nseg; k++)
+    {
+        const int ia = k, ib = seg_end_index(k, n);
+        float ux, uy, len;
+        if (!seg_dir(X[ia], Y[ia], X[ib], Y[ib], &ux, &uy, &len))
+        {
+            pmerged = false; /* nothing was emitted here, so the next vertex starts clean */
             continue;
-        ux /= len;
-        uy /= len;
+        }
         const float nx = -uy * r, ny = ux * r; /* left normal * r */
-        float ax = X[i], ay = Y[i], bx = X[i + 1], by = Y[i + 1];
+        float ax = X[ia], ay = Y[ia], bx = X[ib], by = Y[ib];
         /* Square cap: extend the open ends by r along the segment direction. */
         if (cap == ER_VCAP_SQUARE && !closed)
         {
-            if (i == 0)
+            if (k == 0)
             {
                 ax -= ux * r;
                 ay -= uy * r;
             }
-            if (i == n - 2)
+            if (k == nseg - 1)
             {
                 bx += ux * r;
                 by += uy * r;
             }
         }
-        add_quad(ax + nx, ay + ny, bx + nx, by + ny, bx - nx, by - ny, ax - nx, ay - ny);
-    }
 
-    /* Joins at interior vertices (and the wrap vertex for closed paths). */
-    const int jlast = closed ? n - 1 : n - 2;
-    for (int i = 1; i <= jlast; i++)
-    {
-        const int ip = i;
-        const int prev = i - 1;
-        const int next = (i == n - 1) ? 1 : i + 1; /* for closed wrap, segment after P[0] */
-        float u0x = X[ip] - X[prev], u0y = Y[ip] - Y[prev];
-        float u1x = X[next] - X[ip], u1y = Y[next] - Y[ip];
-        float l0 = sqrtf(u0x * u0x + u0y * u0y);
-        float l1 = sqrtf(u1x * u1x + u1y * u1y);
-        if (l0 < 1e-6f || l1 < 1e-6f)
-            continue;
-        u0x /= l0;
-        u0y /= l0;
-        u1x /= l1;
-        u1y /= l1;
-
-        /* Skip joins between near-collinear segments: the adjacent segment quads already cover the
-         * seam (their sub-pixel gap is hidden by AA). THIS IS THE BIG PERF WIN on smooth flattened
-         * curves — an arc has many vertices that would otherwise each emit join geometry. */
-        if (u0x * u1x + u0y * u1y > 0.9995f)
-            continue;
-
-        /* Outer side normals + which side carries the gap. */
-        const float n0x = -u0y * r, n0y = u0x * r;
-        const float n1x = -u1y * r, n1y = u1x * r;
-        const float cross = u0x * u1y - u0y * u1x;
-        const float s = (cross < 0.0f) ? 1.0f : -1.0f; /* pick the outer offsets */
-        const float p0x = X[ip] + s * n0x, p0y = Y[ip] + s * n0y;
-        const float p1x = X[ip] + s * n1x, p1y = Y[ip] + s * n1y;
-
-        if (join == ER_VJOIN_ROUND)
+        /* The corner at this segment's END: shared with the next segment (or, on a closed subpath's
+         * last segment, with segment 0 — decided up front so both agree). */
+        bool merged = false;
+        float ox = 0.0f, oy = 0.0f;
+        if (closed && k == nseg - 1)
         {
-            /* Fan the outer gap with triangles back to the vertex — a true round join in a handful of
-             * edges (one triangle for a gentle bend), not a full disc per vertex. */
-            const float a0 = atan2f(p0y - Y[ip], p0x - X[ip]);
-            const float a1 = atan2f(p1y - Y[ip], p1x - X[ip]);
-            float da = a1 - a0;
-            while (da > VEC_PI)
-                da -= 2.0f * VEC_PI;
-            while (da < -VEC_PI)
-                da += 2.0f * VEC_PI;
-            int steps = (int)ceilf(fabsf(da) / 0.4f); /* ~23 degrees per step */
-            if (steps < 1)
-                steps = 1;
-            float pax = p0x, pay = p0y;
-            for (int k = 1; k <= steps; k++)
-            {
-                const float t = a0 + da * ((float)k / (float)steps);
-                const float pbx = X[ip] + r * cosf(t);
-                const float pby = Y[ip] + r * sinf(t);
-                add_tri(X[ip], Y[ip], pax, pay, pbx, pby);
-                pax = pbx;
-                pay = pby;
-            }
-            continue;
+            merged = wrap_merged;
+            ox = wrap_ox;
+            oy = wrap_oy;
+            if (wrap_join)
+                add_join(X[ib], Y[ib], ux, uy, wrap_u1x, wrap_u1y, r, join, miter);
         }
-        if (join == ER_VJOIN_MITER)
+        else if (k < nseg - 1)
         {
-            /* Miter point = intersection of the two outer offset lines. */
-            const float denom = u0x * u1y - u0y * u1x;
-            if (fabsf(denom) > 1e-6f)
+            const int ic = seg_end_index(k + 1, n);
+            float vx, vy, vlen;
+            if (seg_dir(X[ib], Y[ib], X[ic], Y[ic], &vx, &vy, &vlen))
             {
-                const float t = ((p1x - p0x) * u1y - (p1y - p0y) * u1x) / denom;
-                const float mx = p0x + u0x * t;
-                const float my = p0y + u0y * t;
-                const float mdx = mx - X[ip], mdy = my - Y[ip];
-                const float mlen = sqrtf(mdx * mdx + mdy * mdy);
-                if (mlen <= miter * r)
-                {
-                    add_tri(X[ip], Y[ip], p0x, p0y, mx, my);
-                    add_tri(X[ip], Y[ip], mx, my, p1x, p1y);
-                    continue;
-                }
+                merged = join_merge(ux, uy, len, vx, vy, vlen, r, merge_dot, &ox, &oy);
+                if (!merged)
+                    add_join(X[ib], Y[ib], ux, uy, vx, vy, r, join, miter);
             }
-            /* Too sharp -> fall through to bevel. */
         }
-        add_tri(X[ip], Y[ip], p0x, p0y, p1x, p1y); /* bevel */
+
+        add_quad(pmerged ? ax + pox : ax + nx,
+                 pmerged ? ay + poy : ay + ny,
+                 merged ? bx + ox : bx + nx,
+                 merged ? by + oy : by + ny,
+                 merged ? bx - ox : bx - nx,
+                 merged ? by - oy : by - ny,
+                 pmerged ? ax - pox : ax - nx,
+                 pmerged ? ay - poy : ay - ny);
+
+        pmerged = merged;
+        pox = ox;
+        poy = oy;
     }
 
     /* Caps at open endpoints. */
@@ -863,10 +1062,123 @@ static void stroke_shape(uint32_t color,
     if (sw <= 0.0f)
         return;
     s_nedges = 0;
+    s_edge_ytop = (float)cy0;
+    s_edge_ybot = (float)cy1;
     for (int si = 0; si < s_nsub; si++)
         if (s_sub[si].count >= 1)
             stroke_subpath(&s_sub[si], sw, cap, join, miter);
     rasterize(color, grad, 0, cx0, cy0, cx1, cy1);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Clip rejection
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief How far a paint's ink can reach outside the path itself, in pixels.
+ *
+ * Half the stroke width, extended for the join style (a miter runs out to miter*half-width) and for
+ * square caps, plus a pixel of anti-aliasing slack.
+ */
+static float paint_margin(const ERVectorPaint* pt)
+{
+    if (!pt)
+        return 1.0f;
+    float m = 1.0f;
+    if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
+    {
+        const float hw = pt->stroke_w * 0.5f;
+        float k = 1.5f; /* round/butt/square caps and bevel joins all stay inside 1.5 * half-width */
+        if (pt->join == ER_VJOIN_MITER)
+        {
+            const float ml = (pt->miter > 0.0f) ? pt->miter : 4.0f;
+            if (ml > k)
+                k = ml;
+        }
+        m += hw * k;
+    }
+    return m;
+}
+
+/**
+ * @brief Decides whether a shape's ink cannot reach the clip box, reading only its op run.
+ *
+ * Bounds the run as it walks it — curves by their control points (a bezier stays inside its control
+ * hull), arcs by the centre square — so it needs no flattening and no trig, just a few compares per
+ * op. The bound only ever grows, so the moment it reaches the clip the answer is settled and the walk
+ * stops: a shape that IS on screen costs a couple of ops, and only one being skipped is walked whole.
+ *
+ * @param[in]  ops    Op-tape.
+ * @param[in]  i      Index of the run's first op (just past SHAPE + its paint index).
+ * @param[in]  n_ops  Tape length.
+ * @param[in]  px,py  Node origin added to tape coordinates.
+ * @param[in]  m      Margin the paint adds around the path (paint_margin).
+ * @param[in]  cx0,cy0,cx1,cy1  Clip box.
+ * @param[out] end    Receives the tape index just past the run (only meaningful when skipping).
+ *
+ * @return true when the shape cannot touch the clip and may be skipped whole. False is always safe:
+ *         it is also the answer for a truncated or unknown op, which the general parser then handles.
+ */
+static bool shape_clipped_out(
+    const float* ops, int i, int n_ops, int px, int py, float m, int cx0, int cy0, int cx1, int cy1, int* end)
+{
+    const float fx0 = (float)cx0 - m, fy0 = (float)cy0 - m;
+    const float fx1 = (float)cx1 + m, fy1 = (float)cy1 + m;
+    bool any = false;
+    float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+
+    while (i < n_ops && ops[i] != ER_VOP_SHAPE)
+    {
+        const float op = ops[i++];
+        const int op_args = (op == ER_VOP_MOVE || op == ER_VOP_LINE)   ? 2
+                            : (op == ER_VOP_QUAD)                      ? 4
+                            : (op == ER_VOP_CUBIC || op == ER_VOP_ARC) ? 6
+                            : (op == ER_VOP_CLOSE)                     ? 0
+                                                                       : -1;
+        if (op_args < 0 || i + op_args > n_ops)
+            return false; /* unknown or truncated: let the general parser deal with it */
+        if (op == ER_VOP_ARC)
+        {
+            /* Bound the whole circle: cheaper than working out which quadrants the sweep touches, and
+             * a partial arc is only ever a sub-box of it. */
+            const float acx = (float)px + ops[i];
+            const float acy = (float)py + ops[i + 1];
+            const float ar = fabsf(ops[i + 2]);
+            if (acx - ar < bx0)
+                bx0 = acx - ar;
+            if (acy - ar < by0)
+                by0 = acy - ar;
+            if (acx + ar > bx1)
+                bx1 = acx + ar;
+            if (acy + ar > by1)
+                by1 = acy + ar;
+            any = true;
+        }
+        else
+        {
+            for (int k = 0; k < op_args; k += 2)
+            {
+                const float x = (float)px + ops[i + k];
+                const float y = (float)py + ops[i + k + 1];
+                if (x < bx0)
+                    bx0 = x;
+                if (y < by0)
+                    by0 = y;
+                if (x > bx1)
+                    bx1 = x;
+                if (y > by1)
+                    by1 = y;
+                any = true;
+            }
+        }
+        i += op_args;
+        /* The box only grows: once it overlaps the clip, no later op can make this shape skippable. */
+        if (any && bx1 > fx0 && bx0 < fx1 && by1 > fy0 && by0 < fy1)
+            return false;
+    }
+
+    *end = i;
+    return any;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1099,6 +1411,20 @@ void er_vector_render(const float* ops,
         i++; /* consume SHAPE opcode */
         const int pidx = (i < n_ops) ? (int)ops[i++] : 0;
         const ERVectorPaint* shape_paint = (pidx >= 0 && pidx < n_paints) ? &paints[pidx] : 0;
+
+        /* Clip reject: bound the shape off the tape and drop it whole when its ink cannot reach the
+         * clip box. A few compares per op replaces flattening it, expanding its stroke outline, sorting
+         * the edges and walking every row — all of which the rasterizer would otherwise do before the
+         * clip threw the result away. This is what makes a tape of many small shapes (tick marks,
+         * segments, a legend) cheap to repaint for a damage rect covering only one of them. */
+        {
+            int bend = 0;
+            if (shape_clipped_out(ops, i, n_ops, px, py, paint_margin(shape_paint), cx0, cy0, cx1, cy1, &bend))
+            {
+                i = bend;
+                continue;
+            }
+        }
 
 #if ERUI_VECTOR_ANALYTIC_ARC
         /* Analytic fast path: a shape that is just a circular arc goes straight to the shared sector

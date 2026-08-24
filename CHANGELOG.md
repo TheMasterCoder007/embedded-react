@@ -30,6 +30,11 @@ See the README for the release process.
 
 ### Changed
 
+- `<Svg>` shapes repaint much faster. Every render pass used to flatten, stroke, and sort a node's whole
+  op-tape before the clip was applied — once per damage rect it straddled. Shapes now drop out against the
+  clip before any of that, edges outside it never enter the list, the edge sort is a counting sort, and a
+  stroke's smooth corners fold into the segments instead of each drawing its own join. Measured 17–35%
+  faster on a full repaint and 35–85% on a damage-rect one, with output unchanged bar a subpixel corner.
 - `<Svg>` arcs are much faster now. A plain `<Arc>` or `<Circle>` now goes through the same analytic
   rasterizer `<Dial>` uses rather than being tessellated, so the two render identically at a fraction of
   the cost. Shapes the fast path can't express exactly — a filled partial arc, a square cap, a gradient
@@ -48,6 +53,8 @@ See the README for the release process.
 
 ### Fixed
 
+- An `<Svg>` path that closes without returning to its start left that closing side unstroked. The fill
+  closed the shape, so a ring sector came out with one bare radial edge and a notch at the corner.
 - A dial's conic gradient didn't re-color until you released the drag.
 - A dial with a center readout couldn't be dragged; the readout swallowed the touch.
 - A fast drag could jump to the wrong end of the dial.
