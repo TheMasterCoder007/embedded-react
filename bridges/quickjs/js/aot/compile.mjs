@@ -426,6 +426,7 @@ function emitExprImpl(node, env) {
         prop === 'current'
       ) {
         const r = env.refs.get(obj.name);
+        r.used = true;
         return {code: r.cVar, cType: r.cType};
       }
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
@@ -1091,6 +1092,7 @@ function collectRefs(fnBody, scope, prefix = '') {
             cType: 'ERNode*',
             initCode: 'NULL',
             kind: 'node',
+            used: false,
           });
           continue;
         }
@@ -1105,6 +1107,7 @@ function collectRefs(fnBody, scope, prefix = '') {
           cType,
           initCode: cType === 'float' ? `${v}f` : String(v),
           kind: 'value',
+          used: false,
         });
       }
     }
@@ -2001,7 +2004,9 @@ function refTarget(node, env) {
     node.property.name === 'current' &&
     env.refs?.has(node.object.name)
   ) {
-    return env.refs.get(node.object.name);
+    const r = env.refs.get(node.object.name);
+    r.used = true;
+    return r;
   }
   return null;
 }
@@ -2070,6 +2075,7 @@ function compileUpdateVector(expr, env, ctx, indent) {
     throw new Error(
       'AOT: updateVector(ref, …) first arg must be a node ref (const r = useRef())',
     );
+  ref.used = true;
   if (shapesArg?.type !== 'ArrayExpression')
     throw new Error(
       'AOT: updateVector(ref, shapes, …) shapes must be an array literal',
@@ -3565,9 +3571,11 @@ function emitRefBind(v, openingElement, out, env) {
       attr.value?.type === 'JSXExpressionContainer'
         ? attr.value.expression
         : null;
-    if (e?.type === 'Identifier' && env.refs?.get(e.name)?.kind === 'node')
-      out.build.push(`    ${env.refs.get(e.name).cVar} = ${v};`);
-    else
+    if (e?.type === 'Identifier' && env.refs?.get(e.name)?.kind === 'node') {
+      const r = env.refs.get(e.name);
+      r.used = true;
+      out.build.push(`    ${r.cVar} = ${v};`);
+    } else
       throw new Error(
         'AOT: ref={…} must reference a node ref declared with useRef()',
       );
@@ -5110,7 +5118,10 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
   const handleDecls = out.handles.map(v => `static ERNode* s_${v};`).join('\n');
 
   // Value refs — a plain mutable static each (escape-hatch state that does not trigger a re-render).
+  // Refs the emitted C never touches (e.g. a `useRef(null)` that only holds a JS value) declare nothing,
+  // so consumer builds don't warn about an unused static.
   const refDecls = [...refs.values(), ...out.childRefs]
+    .filter(r => r.used)
     .map(r => `static ${r.cType} ${r.cVar} = ${r.initCode};`)
     .join('\n');
 
