@@ -311,6 +311,7 @@ level). The defaults are desktop-sized — tune them down for a board.
 |---|---|---|
 | `ERUI_SHADOWS` | 0 | Box-shadow rasteriser (two-pass box blur) |
 | `ERUI_BORDER_AA` | 1 | Anti-aliased border-radius edges |
+| `ERUI_OCCLUSION_CULLING` | 1 | Skip layers a fully opaque node covers (off = draw everything) |
 | `ERUI_3D_TRANSFORMS` | 0 | `rotateX` / `rotateY` / `perspective` |
 | `ERUI_BILINEAR_SCALE` | 0 | Bilinear image scaling (vs. nearest-neighbour) |
 | `ERUI_GRADIENT` | 1 | Linear gradient rasteriser |

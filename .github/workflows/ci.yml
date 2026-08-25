@@ -73,6 +73,16 @@ jobs:
         run: cmake --build engine/build-ci-mt
       - name: Test (2 render workers)
         run: ctest --test-dir engine/build-ci-mt --output-on-failure
+      # Fourth pass with occlusion culling compiled out. tests/rendering/test_occlusion.c guards its
+      # "this layer WAS skipped" assertions on ERUI_OCCLUSION_CULLING and leaves every "must still
+      # paint" and "must look identical" check unguarded — but the flag defaults ON, so without this
+      # pass the fallback build is never actually compiled and the guards protect nothing.
+      - name: Configure (occlusion culling off)
+        run: cmake -S engine -B engine/build-ci-noocc -DERUI_OCCLUSION_CULLING=OFF
+      - name: Build (occlusion culling off)
+        run: cmake --build engine/build-ci-noocc
+      - name: Test (occlusion culling off)
+        run: ctest --test-dir engine/build-ci-noocc --output-on-failure
 
   bridge:
     name: QuickJS bridge build + heap-accounting test

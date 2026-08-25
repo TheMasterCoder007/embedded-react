@@ -279,14 +279,15 @@ struct ERNode
     ERLayoutRect animated;        /**< Current display rect; updated by layout animations; equals computed when idle. */
     ERLayoutRect last_paint_rect; /**< Screen rect this node was last painted at (damage-clip trail erase). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
-    uint64_t props_hash;          /**< Hash of the last applied ERProps; skips re-dirtying on identical setProps. */
-    bool has_props_hash;          /**< Whether props_hash has been set yet. */
-    float scroll_offset_x;        /**< Horizontal scroll position in pixels (ScrollView only). */
-    float scroll_offset_y;        /**< Vertical scroll position in pixels (ScrollView only). */
-    float scroll_vel_x;           /**< Momentum velocity X in px/ms (positive = content moving right). */
-    float scroll_vel_y;           /**< Momentum velocity Y in px/ms (positive = content moving down). */
-    int16_t scroll_content_w;     /**< Bounding width of all children; computed after layout (ScrollView only). */
-    int16_t scroll_content_h;     /**< Bounding height of all children; computed after layout (ScrollView only). */
+    uint32_t layout_props_hash; /**< Hash of the layout (Yoga) block of the last applied ERProps. */
+    uint32_t visual_props_hash; /**< Hash of everything after it — appearance, text, image, transform. */
+    bool has_props_hash;        /**< Whether the two hashes above hold a previous update yet. */
+    float scroll_offset_x;      /**< Horizontal scroll position in pixels (ScrollView only). */
+    float scroll_offset_y;      /**< Vertical scroll position in pixels (ScrollView only). */
+    float scroll_vel_x;         /**< Momentum velocity X in px/ms (positive = content moving right). */
+    float scroll_vel_y;         /**< Momentum velocity Y in px/ms (positive = content moving down). */
+    int16_t scroll_content_w;   /**< Bounding width of all children; computed after layout (ScrollView only). */
+    int16_t scroll_content_h;   /**< Bounding height of all children; computed after layout (ScrollView only). */
     /* Transform props: raw values copied from ERProps */
     float tp_translate_x; /**< X translation in pixels. */
     float tp_translate_y; /**< Y translation in pixels. */

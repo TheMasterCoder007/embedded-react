@@ -32,10 +32,18 @@
 #include "transform.h"
 #include "vector.h"
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 #ifndef ERUI_MAX_NODES
 #define ERUI_MAX_NODES 512
+#endif
+
+/* Occlusion culling: skip layers that a fully opaque node painted on top of them completely covers.
+ * On by default (the engine CMake plumbs the option through); the fallback keeps consumers that
+ * compile the sources directly — the ESP-IDF / Pico components — from having to know about it. */
+#ifndef ERUI_OCCLUSION_CULLING
+#define ERUI_OCCLUSION_CULLING 1
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -467,6 +475,28 @@ void er_mark_dirty_upward(ERNode* node)
 }
 
 /**
+ * @brief Marks the chain for repaint WITHOUT claiming any damage for the node itself.
+ *
+ * The reflow case: the node's own appearance is unchanged and only its layout inputs moved, so it
+ * has no pixels of its own to report. Skipping source_dirty is the whole point — the damage
+ * pre-pass then bounds the repaint to whatever the layout pass actually moved (each node's new
+ * screen rect versus where it was last painted) instead of the node's entire box.
+ *
+ * @param[in,out] node  Node whose ancestor chain should be invalidated.
+ */
+static void mark_reflow_upward(ERNode* node)
+{
+    s_content_gen++; /* a reflow does change rendered content, so the fade cache must drop */
+    if (node && node->subtree_hidden)
+        return; /* same reasoning as er_mark_dirty_upward_visual: a hidden node can never clear it */
+    while (node)
+    {
+        node->dirty = true;
+        node = er_get_node(node->parent_tag);
+    }
+}
+
+/**
  * @brief Flags the scene as needing a layout pass on the next er_commit().
  *
  * Called from every mutation that can change a node's computed rect: prop sets, text-span
@@ -857,6 +887,49 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
     *rh = (y1 > y0) ? (y1 - y0) : 0;
 }
 
+#if ERUI_SHADOWS
+/**
+ * @brief Grows a rect by however far this node's shadow bleeds past its layout box.
+ *
+ * A shadow is painted outside the box, so any rect meant to bound what the node PUTS ON SCREEN — its
+ * damage, its erase trail, its reported repaint — has to include the bleed or the old shadow is never
+ * erased and the new one is clipped at the damage edge. No-op for a node that casts none.
+ */
+static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
+{
+    if (!(n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+          || (n->type == ER_NODE_MODAL && n->modal_visible)))
+        return;
+    if (!(n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
+        return;
+    const int r = (int)n->props.view.shadow_radius;
+    const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
+    const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
+    const int exp = r + (ox > oy ? ox : oy);
+    *x -= exp;
+    *y -= exp;
+    *w += 2 * exp;
+    *h += 2 * exp;
+}
+#endif
+
+/**
+ * @brief Reports a rect as repainted, clamped to the root the way add_damage clamps its insert.
+ *
+ * For the contributions render_tree's own accumulator cannot make. That accumulator unions only
+ * SOURCE-dirty nodes, so anything repainted for a reason other than its own content changing —
+ * pixels a removed node vacated, a modal scrim, a node that merely MOVED — has to report itself
+ * here, or a host that transfers only er_get_dirty_rect() leaves those pixels stale on the panel.
+ */
+static void report_repaint_clamped(int x, int y, int w, int h, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+{
+    const int cx0 = (x > rb_x0) ? x : rb_x0;
+    const int cy0 = (y > rb_y0) ? y : rb_y0;
+    const int cx1 = (x + w < rb_x1) ? (x + w) : rb_x1;
+    const int cy1 = (y + h < rb_y1) ? (y + h) : rb_y1;
+    union_dirty_rect(cx0, cy0, cx1 - cx0, cy1 - cy0);
+}
+
 /* Set per-commit: true when the cached subtree bounds are trustworthy this frame (no layout
  * animation interpolating positions), so render_tree() may use them to skip untouched subtrees. */
 static bool s_prune_ok = false;
@@ -1031,7 +1104,7 @@ static uint32_t s_prof_composites = 0; /* composite_with_opacity calls that comp
 #define ER_PERF_BLIT_COLLECT() ((void)0)
 #endif
 
-static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y);
+static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int translate_x, int translate_y);
 
 /**
  * @brief Renders a node's own content and recurses into its children.
@@ -1042,7 +1115,10 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
  * banded opacity compositor can invoke it once per strip tile.
  *
  * @param[in] n              Node to render.
- * @param[in] should_render  true when the node itself (not only descendants) must repaint.
+ * @param[in] needs_paint    true when the node itself (not only descendants) must repaint.
+ * @param[in] occluded       true when an opaque node painted later already covers this whole
+ *                           region, so nothing here can be seen. The subtree is still walked (its
+ *                           paint bookkeeping has to stay in step) but emits no pixels.
  * @param[in] px             Screen-space left edge (scroll translation applied).
  * @param[in] py             Screen-space top edge.
  * @param[in] w              Node width in pixels.
@@ -1050,8 +1126,8 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
  * @param[in] translate_x    Accumulated horizontal scroll offset for children.
  * @param[in] translate_y    Accumulated vertical scroll offset for children.
  */
-static void
-render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x, int translate_y);
+static void render_node_content(
+    ERNode* n, bool needs_paint, bool occluded, int px, int py, int w, int h, int translate_x, int translate_y);
 
 /**
  * @brief Composites a translucent subtree through the persistent fade cache when possible.
@@ -1113,7 +1189,7 @@ composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int
     for (int row = 0; row < h; row++)
         memset(s_fade_cache + (size_t)row * ERUI_FADE_CACHE_W, 0, (size_t)w * sizeof(uint32_t));
     er_scratch_push_base(s_fade_cache, ERUI_FADE_CACHE_W, ERUI_FADE_CACHE_H, px, py);
-    render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+    render_node_content(n, true, false, px, py, w, h, translate_x, translate_y);
     er_scratch_pop_base();
 
     s_fade_cache_tag = n->tag;
@@ -1204,7 +1280,7 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
         /* Scissor to the composite region so rasterisers do region-sized work, not node-sized. */
         er_push_clip_rect(rx, ry, rw, rh);
         ER_PROF_MARK(t_content);
-        render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+        render_node_content(n, true, false, px, py, w, h, translate_x, translate_y);
         ER_PROF_ACC(s_prof_content_us, t_content);
         er_pop_clip_rect();
         ER_PROF_MARK(t_blend);
@@ -1247,7 +1323,7 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
                 cc()->tile_h = bh;
                 cc()->tile_first = first;
                 er_push_clip_rect(bx, by, bw, bh);
-                render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+                render_node_content(n, true, false, px, py, w, h, translate_x, translate_y);
                 er_pop_clip_rect();
 
                 cc()->tile_active = outer_active;
@@ -1269,7 +1345,7 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
             cc()->tile_first = first;
             er_push_clip_rect(bx, by, bw, bh);
             ER_PROF_MARK(t_content);
-            render_node_content(n, true, px, py, w, h, translate_x, translate_y);
+            render_node_content(n, true, false, px, py, w, h, translate_x, translate_y);
             ER_PROF_ACC(s_prof_content_us, t_content);
             er_pop_clip_rect();
             cc()->tile_active = outer_active;
@@ -1294,6 +1370,110 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
     return true;
 }
 
+/** @brief How far one edge's opaque fill is set in: the corner radius, or a partly opaque border band. */
+static int edge_opaque_inset(int border_w, uint32_t border_c, int radius)
+{
+    const uint32_t a = border_c >> 24;
+    const int band = (border_w > 0 && a != 0U && a != 0xFFU) ? border_w : 0;
+    return band > radius ? band : radius;
+}
+
+/**
+ * @brief Whether a node's own background paints every pixel of a screen rect at full alpha.
+ *
+ * The test the occlusion cull is built on: when this holds for a node painted LATER, everything
+ * painted earlier inside that rect is overwritten and never needs to be drawn at all. It is
+ * deliberately conservative — only the case it can prove pixel-for-pixel counts:
+ *
+ *   - a View-family box (the only node types that flat-fill their whole rect),
+ *   - untransformed, since a scaled/rotated box lands somewhere this rect arithmetic cannot describe,
+ *   - fully opaque: node opacity 255 and a background colour with alpha 255 and no active gradient
+ *     (a gradient replaces the flat fill and may carry translucent stops),
+ *   - inset by the largest corner radius, because rounded corners — and the anti-aliased pixels along
+ *     them — leave the corner squares showing whatever is underneath,
+ *   - inset again, per edge, by the width of any border whose colour is only PARTLY opaque. An opaque
+ *     background does not imply an opaque box: for a uniform solid border, render_view_bg fills the
+ *     whole shape in the BORDER colour and paints the background back over the inset (see
+ *     er_rrect_fill_bordered), so a translucent border leaves a blended ring around an opaque middle.
+ *     A fully opaque or fully transparent border needs no inset — the first covers the ring itself,
+ *     the second routes to the path that fills the background across the whole shape.
+ *
+ * @param[in] c            Candidate occluder.
+ * @param[in] translate_x  Scroll translation in effect for c (its parent's child translation).
+ * @param[in] translate_y  Vertical counterpart.
+ * @param[in] rx           Screen rect to test coverage of.
+ * @param[in] ry           Screen rect top.
+ * @param[in] rw           Screen rect width.
+ * @param[in] rh           Screen rect height.
+ *
+ * @return true when the rect lies entirely inside c's opaque fill.
+ */
+static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y, int rx, int ry, int rw, int rh)
+{
+    if (!c || rw <= 0 || rh <= 0)
+        return false;
+    if (c->layout.display == ER_DISPLAY_NONE || c->subtree_hidden || c->has_transform)
+        return false;
+
+    switch (c->type)
+    {
+        case ER_NODE_VIEW:
+        case ER_NODE_SCROLL_VIEW:
+        case ER_NODE_PRESSABLE:
+        case ER_NODE_FLAT_LIST:
+            break;
+        default:
+            return false; /* Text/Image/Vector/Arc/Switch leave gaps; Modal paints past its own box. */
+    }
+
+    const ERViewProps* vp = &c->props.view;
+    if (vp->opacity != 255U)
+        return false;
+    if ((vp->background_color >> 24) != 0xFFU)
+        return false;
+#if ERUI_GRADIENT
+    if (vp->gradient_type != ER_GRADIENT_NONE && vp->gradient_stop_count >= 2U)
+        return false;
+#endif
+
+    /* Largest corner radius, starting from 0 so a negative value can never widen the tested area —
+     * the rasteriser clamps a negative radius to a square corner, and reading it literally here would
+     * push x1/y1 past the node's actual box. */
+    int r = 0;
+    if ((int)vp->border_radius > r)
+        r = (int)vp->border_radius;
+    if ((int)vp->border_tl_radius > r)
+        r = (int)vp->border_tl_radius;
+    if ((int)vp->border_tr_radius > r)
+        r = (int)vp->border_tr_radius;
+    if ((int)vp->border_br_radius > r)
+        r = (int)vp->border_br_radius;
+    if ((int)vp->border_bl_radius > r)
+        r = (int)vp->border_bl_radius;
+
+    /* Per-edge border inset (see the note above): only a PARTLY opaque band hides nothing. */
+    const int bw_l = vp->border_left_width > 0 ? (int)vp->border_left_width : (int)vp->border_width;
+    const int bw_t = vp->border_top_width > 0 ? (int)vp->border_top_width : (int)vp->border_width;
+    const int bw_r = vp->border_right_width > 0 ? (int)vp->border_right_width : (int)vp->border_width;
+    const int bw_b = vp->border_bottom_width > 0 ? (int)vp->border_bottom_width : (int)vp->border_width;
+    const uint32_t bc_l = vp->border_left_color ? vp->border_left_color : vp->border_color;
+    const uint32_t bc_t = vp->border_top_color ? vp->border_top_color : vp->border_color;
+    const uint32_t bc_r = vp->border_right_color ? vp->border_right_color : vp->border_color;
+    const uint32_t bc_b = vp->border_bottom_color ? vp->border_bottom_color : vp->border_color;
+
+    const int in_l = edge_opaque_inset(bw_l, bc_l, r);
+    const int in_t = edge_opaque_inset(bw_t, bc_t, r);
+    const int in_r = edge_opaque_inset(bw_r, bc_r, r);
+    const int in_b = edge_opaque_inset(bw_b, bc_b, r);
+
+    const int x0 = c->animated.x - translate_x + in_l;
+    const int y0 = c->animated.y - translate_y + in_t;
+    const int x1 = c->animated.x - translate_x + c->animated.w - in_r;
+    const int y1 = c->animated.y - translate_y + c->animated.h - in_b;
+
+    return rx >= x0 && ry >= y0 && (rx + rw) <= x1 && (ry + rh) <= y1;
+}
+
 /**
  * @brief Recursively renders a node and its children depth-first.
  *
@@ -1307,10 +1487,14 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
  *
  * @param[in] n             Node to render.
  * @param[in] parent_dirty  true when an ancestor was dirty this frame.
+ * @param[in] occluded      true when an opaque node painted later already covers this whole region.
+ *                          The subtree is still walked — its paint bookkeeping (painted_seq,
+ *                          last_paint_rect) has to stay in step or a hidden node damages the same
+ *                          pixels forever — but it emits nothing.
  * @param[in] translate_x   Accumulated horizontal scroll offset from ancestor ScrollViews.
  * @param[in] translate_y   Accumulated vertical scroll offset from ancestor ScrollViews.
  */
-static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int translate_y)
+static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int translate_x, int translate_y)
 {
     if (n->layout.display == ER_DISPLAY_NONE)
         return;
@@ -1347,7 +1531,14 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             return;
     }
 
-    const bool should_render = n->dirty || parent_dirty;
+    /* needs_paint is the classic painter's-algorithm answer: this node's pixels are part of the
+     * region being recomposited. should_render additionally asks whether they would be VISIBLE —
+     * an occluded node is walked for its bookkeeping but draws nothing (see the cull in
+     * render_node_content). needs_paint, not should_render, is what children inherit and what
+     * refreshes last_paint_rect, so an occluded subtree stays exactly as damage-tracked as a
+     * painted one. */
+    const bool needs_paint = n->dirty || parent_dirty;
+    const bool should_render = needs_paint && !occluded;
 
     /* Actual screen position after applying all ancestor scroll offsets.
      * Use node->animated rather than node->computed so that LayoutAnimation
@@ -1369,7 +1560,9 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
 
     /* ActivityIndicator uses tp_rotate_z as its internal spin angle — skip the affine
      * transform path which would rasterize the whole node into a scratch buffer. */
-    if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR)
+    /* An occluded node never captures a transform source: the scratch render would be thrown away,
+     * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
+    if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR && !occluded)
     {
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
         if (er_transform_is_3d(n))
@@ -1456,8 +1649,11 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         cc()->tile_active = false;
 
     /* Record where this node is painted so the next commit can damage-clip a move: the old rect
-     * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint. */
-    if (should_render)
+     * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint.
+     * Keyed off needs_paint rather than should_render so an OCCLUDED node still retires its move:
+     * leaving last_paint_rect stale would make the damage pre-pass read it as moved on every
+     * subsequent commit, re-damaging the same pixels for as long as it stays hidden. */
+    if (needs_paint)
     {
         n->last_paint_rect.x = (int16_t)(doing_affine ? dst_x : px);
         n->last_paint_rect.y = (int16_t)(doing_affine ? dst_y : py);
@@ -1541,19 +1737,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
             }
 #if ERUI_SHADOWS
             /* Expand conservatively for shadow bleed outside the node layout rect. */
-            if ((n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
-                 || (n->type == ER_NODE_MODAL && n->modal_visible))
-                && (n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
-            {
-                const int r = (int)n->props.view.shadow_radius;
-                const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
-                const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
-                const int exp = r + (ox > oy ? ox : oy);
-                ux -= exp;
-                uy -= exp;
-                uw += 2 * exp;
-                uh += 2 * exp;
-            }
+            expand_for_shadow(n, &ux, &uy, &uw, &uh);
 #endif
             union_dirty_rect(ux, uy, uw, uh);
         }
@@ -1588,7 +1772,7 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
         const uint8_t saved_alpha = er_get_draw_alpha();
         if (node_opacity < 255U && should_render)
             er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / 255U));
-        render_node_content(n, should_render, px, py, w, h, translate_x, translate_y);
+        render_node_content(n, needs_paint, occluded, px, py, w, h, translate_x, translate_y);
         er_set_draw_alpha(saved_alpha);
     }
 
@@ -1608,9 +1792,90 @@ static void render_tree(ERNode* n, bool parent_dirty, int translate_x, int trans
     }
 }
 
-static void
-render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h, int translate_x, int translate_y)
+static void render_node_content(
+    ERNode* n, bool needs_paint, bool occluded, int px, int py, int w, int h, int translate_x, int translate_y)
 {
+    /* Overflow clipping: children cannot draw outside this node. A scroller (ScrollView / FlatList)
+     * ALWAYS clips to its viewport — that is its defining behaviour — regardless of an explicit
+     * overflow style, so scrolled children can't escape past the top or bottom edge. */
+    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
+                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+
+    /* Scroll offset translation: ScrollView and FlatList children are shifted by the current offset. */
+    const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+    const int child_tx = is_scroller ? translate_x + (int)n->scroll_offset_x : translate_x;
+    const int child_ty = is_scroller ? translate_y + (int)n->scroll_offset_y : translate_y;
+
+    uint16_t child_tags[ERUI_MAX_NODES];
+    const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
+    sort_children_by_z_index(child_tags, child_count);
+
+    /* --- Occlusion cull -------------------------------------------------------------------------
+     * Painting is bottom-up, so everything inside the repaint region is drawn even where a later,
+     * opaque layer is about to bury it. Find the LAST child (in paint order) that fills the whole
+     * region with opaque pixels: this node's own background and every child before that one cannot
+     * contribute a single visible pixel, so none of them draws.
+     *
+     * The region tested is the active scissor — the damage rect being repainted, or the root when
+     * there is none. Over-estimating it is always safe (it only makes the coverage test stricter),
+     * which is what keeps this correct under banded rendering, where the clip is the whole repaint
+     * bbox while each pass emits only one strip.
+     *
+     * Culled subtrees are still WALKED, with occluded = true, so their paint bookkeeping stays in
+     * step; they just emit nothing. Only transform-free subtrees (subtree_prunable) are buried: a
+     * transformed node records last_paint_rect as its TRANSFORMED AABB, which the occluded path —
+     * which deliberately skips the scratch capture — cannot compute. Storing the raw box instead
+     * would leave the damage pre-pass comparing a box against an AABB, reading `moved` on every
+     * subsequent commit and re-damaging a subtree nobody can see, forever. Such a sibling simply
+     * paints as usual and the occluder covers it a moment later. */
+    int occ_idx = -1;
+#if ERUI_OCCLUSION_CULLING
+    if (!occluded && child_count > 0 && er_get_draw_alpha() == 255U)
+    {
+        int rx, ry, rw, rh;
+        if (!er_get_clip_rect(&rx, &ry, &rw, &rh))
+        {
+            const ERNode* rt = er_get_root_node(); /* unclipped full repaint: the region is the screen */
+            if (!rt)
+                rw = rh = 0;
+            else
+            {
+                rx = rt->computed.x;
+                ry = rt->computed.y;
+                rw = rt->computed.w;
+                rh = rt->computed.h;
+            }
+        }
+        if (clips)
+        {
+            /* Children are about to be scissored to this node's box; the node's own background fills
+             * exactly the same area, so one region covers both decisions. */
+            const int cx1 = (rx + rw < px + w) ? rx + rw : px + w;
+            const int cy1 = (ry + rh < py + h) ? ry + rh : py + h;
+            if (px > rx)
+                rx = px;
+            if (py > ry)
+                ry = py;
+            rw = cx1 - rx;
+            rh = cy1 - ry;
+        }
+        for (int i = child_count - 1; i >= 0; i--)
+        {
+            const ERNode* c = er_get_node(child_tags[i]);
+            if (node_covers_opaque(c, child_tx, child_ty, rx, ry, rw, rh))
+            {
+                occ_idx = i;
+                break;
+            }
+        }
+    }
+#endif
+
+    /* A Modal's backdrop covers the whole root rather than this node's box, so a child covering the
+     * box proves nothing about the pixels the scrim owns — never skip its own draw. */
+    const bool self_covered = (occ_idx >= 0) && (n->type != ER_NODE_MODAL);
+    const bool should_render = needs_paint && !occluded && !self_covered;
+
     if (should_render)
     {
         switch (n->type)
@@ -1787,29 +2052,23 @@ render_node_content(ERNode* n, bool should_render, int px, int py, int w, int h,
         }
     }
 
-    /* Overflow clipping: push a scissor rect so children cannot draw outside this node. A scroller
-     * (ScrollView / FlatList) ALWAYS clips to its viewport — that is its defining behaviour — regardless
-     * of an explicit overflow style, so scrolled children can't escape past the top or bottom edge. */
-    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
-                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+    /* A one-shot sub-region damage rect that was never consumed (the node is buried this commit)
+     * must still be retired, or the next commit would narrow that node's repaint to a stale rect. */
+    if (needs_paint && !should_render && (n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC))
+        n->vec_has_dirty = false;
+
     if (clips)
         er_push_clip_rect(px, py, w, h);
-
-    /* Scroll offset translation: ScrollView and FlatList children are shifted by the current offset. */
-    const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
-    const int child_tx = is_scroller ? translate_x + (int)n->scroll_offset_x : translate_x;
-    const int child_ty = is_scroller ? translate_y + (int)n->scroll_offset_y : translate_y;
-
-    uint16_t child_tags[ERUI_MAX_NODES];
-    const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
-    sort_children_by_z_index(child_tags, child_count);
 
     for (int i = 0; i < child_count; i++)
     {
         ERNode* child = er_get_node(child_tags[i]);
         if (!child)
             continue;
-        render_tree(child, should_render, child_tx, child_ty);
+        /* Children before the occluder are buried by it; children from the occluder on still paint.
+         * A subtree carrying a transform is never buried — see the note on the cull above. */
+        const bool buried = (i < occ_idx) && child->subtree_prunable;
+        render_tree(child, needs_paint, occluded || buried, child_tx, child_ty);
     }
 
     if (clips)
@@ -2087,18 +2346,24 @@ void er_node_destroy(ERNode* node)
         s_free_list[s_free_count++] = node->tag;
 }
 
-/** @brief 64-bit FNV-1a hash of an ERProps (zero-initialised by the bridge, so identical props hash equal). */
-static uint64_t props_hash(const ERProps* p)
+/** @brief 32-bit FNV-1a over a byte range (ERProps is zero-initialised by the bridge, so equal props hash equal). */
+static uint32_t fnv1a32(const void* data, size_t len)
 {
-    const uint8_t* b = (const uint8_t*)p;
-    uint64_t h = 1469598103934665603ULL;
-    for (size_t i = 0; i < sizeof(ERProps); i++)
+    const uint8_t* b = (const uint8_t*)data;
+    uint32_t h = 2166136261U;
+    for (size_t i = 0; i < len; i++)
     {
         h ^= b[i];
-        h *= 1099511628211ULL;
+        h *= 16777619U;
     }
     return h;
 }
+
+/* ERProps is laid out as one contiguous Yoga layout block followed by everything else, so the
+ * boundary is a single offset: background_color is the first field past it. Hashing the two sides
+ * separately costs exactly what hashing the whole struct did, and answers the question the damage
+ * pre-pass actually needs — did this update change how the node LOOKS, or only where things sit? */
+#define ER_PROPS_LAYOUT_BYTES offsetof(ERProps, background_color)
 
 void er_props_default(ERProps* props)
 {
@@ -2165,9 +2430,15 @@ void er_node_set_props(ERNode* node, const ERProps* props)
      * applied (e.g. React re-running a render with freshly-allocated but equal inline-style objects).
      * The field copies below still run so all derived state stays correct; only the expensive dirty
      * marking is gated, so an unchanged node doesn't drag the whole screen into a repaint. */
-    const uint64_t h = props_hash(props);
-    const bool props_changed = !node->has_props_hash || h != node->props_hash;
-    node->props_hash = h;
+    const uint32_t lay_h = fnv1a32(props, ER_PROPS_LAYOUT_BYTES);
+    const uint32_t vis_h =
+        fnv1a32((const uint8_t*)props + ER_PROPS_LAYOUT_BYTES, sizeof(ERProps) - ER_PROPS_LAYOUT_BYTES);
+    const bool first_update = !node->has_props_hash;
+    const bool layout_changed = first_update || lay_h != node->layout_props_hash;
+    const bool visual_changed = first_update || vis_h != node->visual_props_hash;
+    const bool props_changed = layout_changed || visual_changed;
+    node->layout_props_hash = lay_h;
+    node->visual_props_hash = vis_h;
     node->has_props_hash = true;
 
     /* Remembered across the layout copy below so a display:none toggle can be detected and the
@@ -2508,12 +2779,30 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     er_anim_reapply_bound(node);
 
     /* Props may change layout inputs (size, flex, margins, text content/font). Conservatively
-     * request a layout pass; only when something actually changed (see the props_hash gate above) —
-     * an identical setProps invalidates nothing. */
+     * request a layout pass; only when something actually changed (see the hash gate above) —
+     * an identical setProps invalidates nothing.
+     *
+     * How the node is DAMAGED, though, splits on which half of the props moved:
+     *
+     *   - appearance changed (colour, text, border, transform, …): the node's own pixels are
+     *     different, so it damages its box, as always.
+     *   - ONLY the layout inputs changed: the node still looks exactly the same. Whether any pixel
+     *     moves is a question for the layout pass, and the damage pre-pass already answers it by
+     *     comparing every node's new screen rect against where it was last painted. So mark the
+     *     chain for repaint but claim no damage of its own — repaint what moved, not what was
+     *     measured. A padding tweak on a big container then costs its children's old and new spots
+     *     instead of the container's whole box, and a re-layout that lands everything back where it
+     *     was costs nothing at all.
+     *
+     * A node that has never painted is always treated as a visual change: nothing can be "moved"
+     * relative to a paint that never happened, so its box is the only thing that can put it on screen. */
     if (props_changed)
     {
         mark_layout_dirty();
-        er_mark_dirty_upward(node);
+        if (visual_changed || !node->has_last_paint)
+            er_mark_dirty_upward(node);
+        else
+            mark_reflow_upward(node);
     }
 
     /* display:none show/hide. Runs AFTER the dirty marking above so that hiding retires this node's
@@ -3537,7 +3826,7 @@ static void render_slice_job(int worker, void* arg)
     if (sy0 >= sy1)
         return;
     er_push_clip_rect(j->x0, sy0, j->x1 - j->x0, sy1 - sy0);
-    render_tree(j->root, j->full_recomposite, 0, j->kbd_y);
+    render_tree(j->root, j->full_recomposite, false, 0, j->kbd_y);
     er_pop_clip_rect();
 }
 
@@ -3695,11 +3984,7 @@ void er_commit(void)
             add_damage(&dmg, v->x, v->y, v->w, v->h, rb_x0, rb_y0, rb_x1, rb_y1);
             /* Clamped to the root the same way add_damage clamps its insert, so a footprint that lies
              * (partly) off-screen is never reported as repainted when it was not. */
-            const int vx0 = (v->x > rb_x0) ? v->x : rb_x0;
-            const int vy0 = (v->y > rb_y0) ? v->y : rb_y0;
-            const int vx1 = (v->x + v->w < rb_x1) ? (v->x + v->w) : rb_x1;
-            const int vy1 = (v->y + v->h < rb_y1) ? (v->y + v->h) : rb_y1;
-            union_dirty_rect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+            report_repaint_clamped(v->x, v->y, v->w, v->h, rb_x0, rb_y0, rb_x1, rb_y1);
         }
 #if ERUI_ONSCREEN_KEYBOARD
         /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
@@ -3736,12 +4021,15 @@ void er_commit(void)
                         int nx = tx, ny = ty, nw = tw, nh = th;
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
                         add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new transformed footprint */
+                        if (!n->source_dirty)
+                            report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
                         if (n->has_last_paint)
                         {
                             int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
                                 ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
                             clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                             add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
+                            report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
                         }
                     }
                     continue;
@@ -3814,14 +4102,31 @@ void er_commit(void)
              * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
              * repaint, where it would be cleared but not restored for a frame. */
             int nx = rx, ny = ry, nw = rw, nh = rh;
+#if ERUI_SHADOWS
+            /* The shadow is part of this node's footprint: a move that ignores it leaves the old
+             * shadow on screen and clips the new one at the damage edge. */
+            expand_for_shadow(n, &nx, &ny, &nw, &nh);
+#endif
             clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
             add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
+            /* A node here that is NOT source_dirty is contributing purely because it MOVED, and
+             * render_tree's accumulator only ever unions source-dirty nodes — so it reports itself,
+             * exactly like the vacated footprints above. Without this a pure reflow repaints the
+             * framebuffer correctly and then tells a partial-update host that nothing changed. */
+            if (!n->source_dirty)
+                report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
             if (n->has_last_paint)
             {
                 int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
                     oh = (int)n->last_paint_rect.h;
+#if ERUI_SHADOWS
+                expand_for_shadow(n, &ox, &oy, &ow, &oh);
+#endif
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
+                /* Reported unconditionally, unlike the new position: render_tree's accumulator only
+                 * ever sees where a node is NOW, so nothing else can report the trail it vacated. */
+                report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
 
                 /* A node with NO visible current position (scrolled out of its clipper, or otherwise
                  * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
@@ -4055,8 +4360,8 @@ void er_commit(void)
                         ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
                     }
                     er_set_band(sy, sh);
-                    render_tree(root, true, 0, s_kbd_avoid_y);   /* whole scene shifted up to clear the keyboard */
-                    er_keyboard_draw(fw, (int)root->computed.h); /* overlay (no-op for bands above the strip) */
+                    render_tree(root, true, false, 0, s_kbd_avoid_y); /* whole scene shifted up to clear the keyboard */
+                    er_keyboard_draw(fw, (int)root->computed.h);      /* overlay (no-op for bands above the strip) */
                     if (backend->band_flush)
                     {
                         ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
@@ -4087,11 +4392,12 @@ void er_commit(void)
 
         if (nothing_dirty)
         {
-            /* Nothing to paint — but still walk once, unclipped, with parent_dirty = false: no node
-             * emits pixels, while any node whose damage clamped off-screen (e.g. dirtied while
-             * scrolled out of view) is reached, stamped, and has its stale flags cleared in the
-             * post-pass — matching the pre-rect-set behaviour. */
-            render_tree(root, false, 0, s_kbd_avoid_y);
+            /* Nothing to paint — but still walk once, unclipped, so any node whose damage clamped
+             * off-screen (e.g. dirtied while scrolled out of view) is reached, stamped, and has its
+             * stale flags cleared in the post-pass. The walk is marked occluded, which is exactly
+             * "do the bookkeeping, emit nothing": parent_dirty = false alone would not do it, since
+             * the dirty chain reaches the ROOT and its background would repaint the whole screen. */
+            render_tree(root, false, true, 0, s_kbd_avoid_y);
             er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
         }
         else if (render_full)
@@ -4119,7 +4425,7 @@ void er_commit(void)
             }
             else
             {
-                render_tree(root, full_recomposite, 0, s_kbd_avoid_y);
+                render_tree(root, full_recomposite, false, 0, s_kbd_avoid_y);
                 er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
             }
         }
@@ -4156,7 +4462,7 @@ void er_commit(void)
                 else
                 {
                     er_push_clip_rect(R->x, R->y, R->w, R->h);
-                    render_tree(root, full_recomposite, 0, s_kbd_avoid_y); /* scene shifted up for keyboard */
+                    render_tree(root, full_recomposite, false, 0, s_kbd_avoid_y); /* scene shifted up for keyboard */
                     er_pop_clip_rect();
                 }
                 er_push_clip_rect(R->x, R->y, R->w, R->h);
