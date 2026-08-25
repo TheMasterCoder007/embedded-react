@@ -345,6 +345,11 @@ struct ERNode
      * false when the bounds may be unreliable (a transform in the subtree), disabling the skip there. */
     int16_t sub_x, sub_y, sub_w, sub_h;
     bool subtree_prunable;
+    /* Set for the one commit that follows an overflow clip/unclip on this node. What the toggle
+     * changes is whether DESCENDANTS may paint outside this box, which the damage pre-pass — which
+     * measures every node by its own rect — cannot otherwise see, so the pre-pass damages the
+     * post-layout subtree bounds as well (the pre-change ones were banked when the prop was set). */
+    bool overflow_toggled;
     union
     {
         ERViewProps view;

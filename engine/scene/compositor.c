@@ -747,6 +747,20 @@ static bool parent_hidden(const ERNode* n)
 }
 
 /**
+ * @brief True when @p n confines its descendants' paint to its own box.
+ *
+ * Either an explicit clipping overflow, or a node type that always scrolls its content behind a
+ * viewport. The distinction drives three separate things — the scissor render_tree pushes, the
+ * subtree paint bounds, and how far a descendant's damage may reach — which must agree exactly, so
+ * they all ask here rather than each spelling the predicate out.
+ */
+static bool node_clips_children(const ERNode* n)
+{
+    return n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
+           || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST;
+}
+
+/**
  * @brief Computes a node's current screen rect for damage tracking.
  *
  * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
@@ -851,6 +865,30 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
 }
 
 /**
+ * @brief Computes the screen rect of a node's cached subtree paint bounds (sub_x/y/w/h).
+ *
+ * The bounds are kept in computed space by compute_subtree_bounds(), so they are re-anchored here by
+ * the same offset that separates the node's own computed box from its screen box — ancestor scroll,
+ * the translate transform and the keyboard shift, all of which apply to the descendants too.
+ *
+ * @param[in]  n             Node whose subtree bounds to measure.
+ * @param[out] rx,ry,rw,rh   Receive the subtree's screen rectangle.
+ *
+ * @return true if the rect was computed; false for a transform node_screen_rect() cannot bound.
+ */
+static bool node_subtree_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
+{
+    int bx, by, bw, bh;
+    if (!node_screen_rect(n, &bx, &by, &bw, &bh))
+        return false;
+    *rx = (int)n->sub_x + (bx - (int)n->computed.x);
+    *ry = (int)n->sub_y + (by - (int)n->computed.y);
+    *rw = (int)n->sub_w;
+    *rh = (int)n->sub_h;
+    return true;
+}
+
+/**
  * @brief Intersects a node's screen rect with every clipping ancestor's box (ScrollView / overflow:hidden).
  *
  * A scrolled child's screen rect (node_screen_rect) is the UN-clipped position, so a row scrolled near a
@@ -865,8 +903,7 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
     const ERNode* a = er_get_node(n->parent_tag);
     while (a)
     {
-        const bool clips = (a->layout.overflow == ER_OVERFLOW_HIDDEN || a->layout.overflow == ER_OVERFLOW_SCROLL
-                            || a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST);
+        const bool clips = node_clips_children(a);
         int ax, ay, aw, ah;
         if (clips && node_screen_rect(a, &ax, &ay, &aw, &ah))
         {
@@ -978,8 +1015,7 @@ static void compute_subtree_bounds(ERNode* n)
         y1 += over;
     }
 
-    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
-                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+    const bool clips = node_clips_children(n);
 
     uint16_t child_tag = n->first_child_tag;
     while (child_tag != ER_INVALID_TAG)
@@ -1828,8 +1864,7 @@ static void render_node_content(
     /* Overflow clipping: children cannot draw outside this node. A scroller (ScrollView / FlatList)
      * ALWAYS clips to its viewport — that is its defining behaviour — regardless of an explicit
      * overflow style, so scrolled children can't escape past the top or bottom edge. */
-    const bool clips = (n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
-                        || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
+    const bool clips = node_clips_children(n);
 
     /* Scroll offset translation: ScrollView and FlatList children are shifted by the current offset. */
     const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
@@ -2475,6 +2510,10 @@ void er_node_set_props(ERNode* node, const ERProps* props)
      * subtree's hidden state settled once, after this node's own dirty marking (see propagate_hidden). */
     const uint8_t prev_display = node->layout.display;
 
+    /* Same idea for overflow, and read HERE because the cached subtree paint bounds it is compared
+     * against are still the pre-change ones (see the settle below). */
+    const bool prev_clips = node_clips_children(node);
+
     /* Copy all layout fields. */
     ERLayoutSpec* L = &node->layout;
     L->left = props->left;
@@ -2833,6 +2872,36 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             er_mark_dirty_upward(node);
         else
             mark_reflow_upward(node);
+    }
+
+    /* overflow clip/unclip. The node's own box is damaged like any other visual change, but the box is
+     * not what moved: what changed is whether descendants may paint OUTSIDE it, and the pre-pass sees
+     * only each node's own rect. Unclipping leaves the newly-reachable region un-painted (the children
+     * did not move, so nothing damages it); clipping leaves what they painted there on screen. Both are
+     * settled by damaging the subtree paint bounds from either side of the change — union, not
+     * difference, since whichever side does not clip is the larger one and covers the other.
+     *
+     * The pre-change bounds are still cached on the node right now, so they go straight into the
+     * vacated-pixel set (which both repaints and reports them, exactly as a removed node's footprint
+     * does). The post-change bounds do not exist until the layout pass recomputes them, so the flag
+     * hands that half to the pre-pass. A node whose own transform the damage tracker cannot bound has
+     * no usable bounds on either side; that rare case repaints everything instead. */
+    if (node_clips_children(node) != prev_clips)
+    {
+        int sx, sy, sw, sh;
+        if (node_subtree_screen_rect(node, &sx, &sy, &sw, &sh))
+        {
+            clip_rect_to_clippers(node, &sx, &sy, &sw, &sh);
+            er_damage_set_add(&s_removed_set, sx, sy, sw, sh);
+            node->overflow_toggled = true;
+        }
+        else
+        {
+            er_force_full_repaint();
+        }
+        /* Independent of which half of the props hash caught the change: the subtree has to be
+         * repainted, so the node must be source-dirty and the walk must reach it. */
+        er_mark_dirty_upward(node);
     }
 
     /* display:none show/hide. Runs AFTER the dirty marking above so that hiding retires this node's
@@ -4033,6 +4102,27 @@ void er_commit(void)
 
             if (n->subtree_hidden && !(n->type == ER_NODE_MODAL && n->modal_scrim_shown))
                 continue;
+            if (n->overflow_toggled)
+            {
+                /* This node clipped or unclipped its children since the last commit. Its own box is
+                 * damaged below like any visual change; the half the box cannot express is the region
+                 * its descendants painted (or are about to paint) outside it, which is this — the
+                 * post-layout subtree bounds. The pre-change bounds came in through the vacated set at
+                 * the top, so the union of the two covers the toggle in either direction.
+                 *
+                 * Reported as well as damaged: the descendants out there are not necessarily
+                 * source-dirty, and on the clipping side what repaints the region is an ancestor's
+                 * background, so render_tree's accumulator would never contribute it. */
+                int sx, sy, sw, sh;
+                if (!node_subtree_screen_rect(n, &sx, &sy, &sw, &sh))
+                {
+                    trackable = false; /* transform we cannot bound: repaint everything */
+                    break;
+                }
+                clip_rect_to_clippers(n, &sx, &sy, &sw, &sh);
+                add_damage(&dmg, sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
+                report_repaint_clamped(sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
+            }
             int rx, ry, rw, rh;
             if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
             {
@@ -4550,7 +4640,11 @@ void er_commit(void)
     for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
     {
         ERNode* pn = &s_nodes[i];
-        if (pn->in_use && (pn->painted_seq == s_commit_seq || pn->subtree_hidden))
+        if (!pn->in_use)
+            continue;
+
+        pn->overflow_toggled = false;
+        if (pn->painted_seq == s_commit_seq || pn->subtree_hidden)
         {
             pn->dirty = false;
             pn->source_dirty = false;
