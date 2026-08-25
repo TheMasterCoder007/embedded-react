@@ -13,6 +13,12 @@ target_link_libraries(test_opacity PRIVATE embedded-react)
 add_test(NAME rendering_opacity COMMAND test_opacity)
 
 find_package(Threads REQUIRED)
+add_executable(test_opacity_equiv test_opacity_equiv.c)
+target_link_libraries(test_opacity_equiv PRIVATE embedded-react)
+# test_opacity_equiv needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
+target_include_directories(test_opacity_equiv PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_opacity_equiv COMMAND test_opacity_equiv)
+
 add_executable(test_parallel test_parallel.c)
 target_link_libraries(test_parallel PRIVATE embedded-react Threads::Threads)
 # test_parallel needs engine/core for renderer_internal.h (er_parallel_for / worker contexts).
