@@ -25,6 +25,18 @@ target_link_libraries(test_scratch_copy PRIVATE embedded-react)
 target_include_directories(test_scratch_copy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_scratch_copy COMMAND test_scratch_copy)
 
+add_executable(test_reflow_damage test_reflow_damage.c)
+target_link_libraries(test_reflow_damage PRIVATE embedded-react)
+# test_reflow_damage needs engine/core for renderer_internal.h (er_force_full_repaint).
+target_include_directories(test_reflow_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_reflow_damage COMMAND test_reflow_damage)
+
+add_executable(test_occlusion test_occlusion.c)
+target_link_libraries(test_occlusion PRIVATE embedded-react)
+# test_occlusion needs engine/core for renderer_internal.h (er_force_full_repaint).
+target_include_directories(test_occlusion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_occlusion COMMAND test_occlusion)
+
 add_executable(test_transform test_transform.c)
 target_link_libraries(test_transform PRIVATE embedded-react)
 add_test(NAME rendering_transform COMMAND test_transform)

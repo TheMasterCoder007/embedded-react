@@ -30,6 +30,15 @@ See the README for the release process.
 
 ### Changed
 
+- The engine no longer draws layers that something opaque covers. Painting was strictly bottom-up, so
+  every layer inside a repaint region was drawn even where an opaque one buried it — a page background
+  over a wallpaper over a root cost three fills where one would do. Measured on a 800x480 ESP32-S3
+  with a page stacked over two full-screen layers: a full repaint drops from 95 ms to 33 ms, and a
+  single row update went from 8.2 ms to 4.3 ms.
+- Changing only a node's layout props no longer repaints its box. The node still looks the same, so
+  the repaint now covers what the layout pass actually moved. A layout tweak on a full-screen container
+  that lands every child back where it was used to damage the whole screen; on the same S3 panel that
+  frame goes from 90 ms to 4.4 ms, and the screen updates 3.6x as often.
 - Screens with many small independent updaters repaint far less. Damage tracking kept only four
   disjoint rects per frame, so a grid of dials cascade-merged toward one big box — and since a vector
   or arc node repaints wherever its background was erased, every dial then re-rasterized in full. The

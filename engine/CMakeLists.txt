@@ -84,6 +84,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 option(ERUI_SHADOWS "Enable box shadow rasterizer (significant flash + scratch RAM)" OFF)
 option(ERUI_BORDER_AA "Anti-aliased corner edges on rounded rects" ON)
+option(ERUI_OCCLUSION_CULLING "Skip layers an opaque node painted on top of them fully covers" ON)
 option(ERUI_3D_TRANSFORMS "Enable rotateX/rotateY/perspective (requires ERUI_TRANSFORMS=FULL)" OFF)
 option(ERUI_BILINEAR_SCALE "Bilinear image scaling (vs nearest-neighbor; ~1 KB extra)" OFF)
 option(ERUI_GRADIENT "Enable gradient rasterizer (~1 KB extra)" OFF)
@@ -151,6 +152,7 @@ target_include_directories(embedded-react
 target_compile_definitions(embedded-react PUBLIC
         ERUI_SHADOWS=$<BOOL:${ERUI_SHADOWS}>
         ERUI_BORDER_AA=$<BOOL:${ERUI_BORDER_AA}>
+        ERUI_OCCLUSION_CULLING=$<BOOL:${ERUI_OCCLUSION_CULLING}>
         ERUI_3D_TRANSFORMS=$<BOOL:${ERUI_3D_TRANSFORMS}>
         ERUI_BILINEAR_SCALE=$<BOOL:${ERUI_BILINEAR_SCALE}>
         ERUI_GRADIENT=$<BOOL:${ERUI_GRADIENT}>
