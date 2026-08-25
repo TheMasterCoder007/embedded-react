@@ -1152,6 +1152,13 @@ composite_from_cache(ERNode* n, uint8_t alpha, int px, int py, int w, int h, int
     if (w <= 0 || h <= 0 || w > ERUI_FADE_CACHE_W || h > ERUI_FADE_CACHE_H)
         return false;
 
+    /* The cache buffer is the node BOX. A subtree that paints past it does not fit, and capturing it
+     * anyway would clip those descendants away — the defect composite_with_opacity's region union
+     * fixes. Such a group takes the strip pool instead. */
+    if ((int)n->sub_x - translate_x < px || (int)n->sub_y - translate_y < py
+        || (int)n->sub_x - translate_x + (int)n->sub_w > px + w || (int)n->sub_y - translate_y + (int)n->sub_h > py + h)
+        return false;
+
     /* Cache HIT: a read-only blend, clipped by the active scissor — safe under any scissor
      * (a partial repaint blends just the damaged part) and from any render worker (slices blend
      * disjoint rows of the same cached content). Checked before the full-coverage gate below,
@@ -1239,7 +1246,30 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
     if (!er_scratch_avail())
         return false;
 
+    /* The group's own footprint: the node box UNIONED with the subtree's cached paint bounds, so a
+     * child that lays out past its parent's box is composited with the group instead of being clipped
+     * out of existence. Bounding the region to the node box alone did exactly that — and because the
+     * clipped-away descendants were then never reached by the walk, they also never had painted_seq
+     * stamped, so their dirty flags survived every commit. A later commit in which the group itself was
+     * clean would find such an orphan dirty on its own, with no dirty ancestor to composite it, and
+     * paint it straight into the framebuffer at full alpha (see tests/rendering/test_opacity_equiv.c).
+     * sub_* is computed-space (compute_subtree_bounds); the node box comes from `animated`, so union
+     * both rather than trusting either alone while a layout animation interpolates. */
     int rx = px, ry = py, rx1 = px + w, ry1 = py + h;
+    {
+        const int sx0 = (int)n->sub_x - translate_x;
+        const int sy0 = (int)n->sub_y - translate_y;
+        const int sx1 = sx0 + (int)n->sub_w;
+        const int sy1 = sy0 + (int)n->sub_h;
+        if (sx0 < rx)
+            rx = sx0;
+        if (sy0 < ry)
+            ry = sy0;
+        if (sx1 > rx1)
+            rx1 = sx1;
+        if (sy1 > ry1)
+            ry1 = sy1;
+    }
     int gx, gy, gw, gh;
     if (er_get_clip_rect(&gx, &gy, &gw, &gh))
     {

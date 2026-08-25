@@ -69,6 +69,9 @@ See the README for the release process.
 
 ### Fixed
 
+- A child that laid out past its faded parent's box vanished. `opacity` composited the subtree
+  through a scratch region bounded by the parent's own rect, which cut the child out entirely — and
+  the same child could later reappear at full opacity, unfaded, on a partial repaint.
 - A view with a shadow that moved left its old shadow behind and had its new one clipped. Only the
   layout box was repainted, and a shadow is drawn outside it.
 - An `<Svg>` path that closes without returning to its start left that closing side unstroked. The fill
