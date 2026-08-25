@@ -117,7 +117,14 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 }
 
 /**
- * @brief Backend copy_rect: copies premultiplied pixels into the framebuffer.
+ * @brief Backend copy_rect: source-over composites a premultiplied buffer into the framebuffer.
+ *
+ * copy_rect is NOT a replacing blit: only the separate copy_opaque callback carries the
+ * every-pixel-is-opaque guarantee. The engine's own scratch_do_copy skips fully transparent source
+ * pixels and source-overs the rest, and the reference software backend does the same — so a test
+ * backend that overwrote unconditionally would erase the painted background under antialiased glyph
+ * and rounded-corner edges, and make the incremental-vs-full comparison depend on repaint history
+ * rather than on scene state.
  *
  * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
@@ -136,8 +143,22 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
         for (int col = 0; col < w; col++)
         {
             const int dx = x + col, dy = y + row;
-            if (dx >= 0 && dx < t->fb_w && dy >= 0 && dy < t->fb_h)
-                t->fb[dy * t->fb_w + dx] = s[col];
+            if (dx < 0 || dx >= t->fb_w || dy < 0 || dy >= t->fb_h)
+                continue;
+            const uint32_t sp = s[col];
+            const uint32_t sa = (sp >> 24) & 0xFFU;
+            if (sa == 0U)
+                continue; /* fully transparent: leave the destination alone */
+            uint32_t* d = &t->fb[dy * t->fb_w + dx];
+            if (sa == 0xFFU)
+            {
+                *d = sp; /* opaque source replaces the destination */
+                continue;
+            }
+            const uint32_t inv = 255U - sa;
+            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
+            *d = 0xFF000000U | ((((sp >> 16) & 0xFFU) + div255(dr * inv)) << 16)
+                 | ((((sp >> 8) & 0xFFU) + div255(dg * inv)) << 8) | ((sp & 0xFFU) + div255(db * inv));
         }
     }
 }
