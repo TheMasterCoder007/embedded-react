@@ -97,3 +97,9 @@ target_link_libraries(test_arc PRIVATE embedded-react)
 # test_arc needs engine/rendering (arc.h), engine/scene (er_node_internal.h) and engine/core (er_force_full_repaint).
 target_include_directories(test_arc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_arc COMMAND test_arc)
+
+add_executable(test_overflow_damage test_overflow_damage.c)
+target_link_libraries(test_overflow_damage PRIVATE embedded-react)
+# test_overflow_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
+target_include_directories(test_overflow_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_overflow_damage COMMAND test_overflow_damage)

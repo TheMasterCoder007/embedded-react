@@ -69,6 +69,8 @@ See the README for the release process.
 
 ### Fixed
 
+- Toggling `overflow` on a view left its children's overflowing pixels wrong. Hiding kept them on
+  screen; showing never painted them back. Only the view's own box was ever repainted.
 - A child that laid out past its faded parent's box vanished. `opacity` composited the subtree
   through a scratch region bounded by the parent's own rect, which cut the child out entirely — and
   the same child could later reappear at full opacity, unfaded, on a partial repaint.

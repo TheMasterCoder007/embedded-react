@@ -84,6 +84,15 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
             put(q, r, a, sr, sg, sb);
 }
 
+/*
+ * copy_rect hands over a PREMULTIPLIED ARGB8888 buffer, not an opaque one — the engine has a separate
+ * copy_rect_fmt for the known-opaque case. So the per-pixel alpha is honoured here, and a fully
+ * transparent pixel is skipped outright rather than "blended" at alpha 0: put() would leave the colour
+ * alone but still count the pixel as touched, and this test is built entirely on touched-pixel counts
+ * ("a hidden page is free per frame"). The page is solid opaque Views today, so neither this nor
+ * blend_cb is reached at all — the handling is here so that stays true if anyone gives the page an
+ * image, text or an opacity group.
+ */
 static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
@@ -92,7 +101,13 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
     {
         const uint32_t* row = (const uint32_t*)p;
         for (int q = 0; q < w; q++)
-            put(x + q, y + r, 255u, (row[q] >> 16) & 0xFFu, (row[q] >> 8) & 0xFFu, row[q] & 0xFFu);
+        {
+            const uint32_t v = row[q];
+            const uint32_t sa = (v >> 24) & 0xFFu;
+            if (sa == 0u)
+                continue;
+            put(x + q, y + r, sa, (v >> 16) & 0xFFu, (v >> 8) & 0xFFu, v & 0xFFu);
+        }
     }
 }
 
@@ -114,6 +129,8 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
                 sg = div255(sg * alpha);
                 sb = div255(sb * alpha);
             }
+            if (sa == 0u)
+                continue; /* scaled away to nothing: not a write, so not a touched pixel either */
             put(x + q, y + r, sa, sr, sg, sb);
         }
     }
