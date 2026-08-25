@@ -24,7 +24,8 @@
  *   - not culled when the cover cannot prove coverage: translucent, rounded corners (the corner
  *     squares show through), or smaller than the region,
  *   - partial: only the siblings BELOW the cover are skipped, the ones above still paint,
- *   - flags retire: a buried node that changed does not re-damage the same pixels forever,
+ *   - flags retire: a buried node that changed does not re-damage the same pixels forever, and a
+ *     TRANSFORMED sibling is never buried at all (it has no box-shaped footprint to record),
  *   - pixel equivalence: the culled frame is byte-identical to one rendered with everything drawn.
  *
  * The assertions that a layer WAS skipped are the only ones gated on ERUI_OCCLUSION_CULLING; every
@@ -56,10 +57,14 @@
 static uint32_t s_fb[SCREEN * SCREEN];
 static uint32_t s_fills[4096];
 static int s_fill_count;
+/* Every backend op, not just fills: a transformed node reaches the panel through copy/blend, so a
+ * fill-only counter would score "painted nothing" for a subtree that painted plenty. */
+static int s_op_count;
 
 static void log_reset(void)
 {
     s_fill_count = 0;
+    s_op_count = 0;
 }
 
 /** @brief Whether any fill this frame used the given colour (alpha included). */
@@ -82,6 +87,7 @@ static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
     const uint32_t a = (argb >> 24) & 0xFFU;
     if (a == 0U || w <= 0 || h <= 0)
         return;
+    s_op_count++;
     if (s_fill_count < (int)(sizeof(s_fills) / sizeof(s_fills[0])))
         s_fills[s_fill_count++] = argb;
     for (int row = y; row < y + h; row++)
@@ -112,6 +118,31 @@ static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
+
+static void fb_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+    s_op_count++;
+}
+
+static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+{
+    (void)src;
+    (void)stride;
+    (void)alpha;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)ctx;
+    s_op_count++;
+}
 
 static ERProps props_default(void)
 {
@@ -290,10 +321,78 @@ static int check_buried_change_retires(void)
     /* Nothing changed since: the commit must be a complete no-op, not a repeat of the same damage. */
     log_reset();
     er_commit();
-    if (s_fill_count != 0)
+    if (s_op_count != 0)
         return fail("a buried change re-damaged on the following idle commit");
     return EXIT_SUCCESS;
 }
+
+#if ERUI_TRANSFORMS_FULL
+/*
+ * A TRANSFORMED sibling must never be buried. Burying it skips the scratch capture that gives it a
+ * transformed AABB, so its last_paint_rect is recorded as the raw box; the damage pre-pass measures it
+ * as an AABB, the two never agree, and it reads as "moved" on every commit from then on.
+ *
+ * Nothing looks wrong on screen — a move-only damage sets no dirty flag, so the region is damaged and
+ * repainted by nobody. What leaks is the REPORT: er_get_dirty_rect() names that region again on every
+ * idle commit, so a partial-update host re-transfers it forever. The assertion is therefore that an
+ * idle commit leaves the reported rect exactly where the last real change put it.
+ */
+static int check_transformed_sibling_not_buried(void)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = box(0, 0, SCREEN, SCREEN, C_ROOT);
+    rp.position = ER_POS_RELATIVE;
+    er_node_set_props(root, &rp);
+
+    ERNode* spun = er_node_create(ER_NODE_VIEW);
+    ERProps sp = box(40, 40, 80, 80, C_DEEP);
+    sp.transform_rotate_z = 30.0f; /* not translate-only: measured by its transformed AABB */
+    er_node_set_props(spun, &sp);
+
+    ERNode* cover = er_node_create(ER_NODE_VIEW);
+    ERProps cp = box(0, 0, SCREEN, SCREEN, C_COVER);
+    er_node_set_props(cover, &cp);
+
+    /* A small opaque marker on top, far from the rotated node, to give the reported rect a known
+     * value that the rotated node's AABB (0,40 110x110) could never be mistaken for. */
+    ERNode* marker = er_node_create(ER_NODE_VIEW);
+    ERProps mp = box(160, 160, 20, 20, C_TOP);
+    er_node_set_props(marker, &mp);
+
+    er_tree_append_child(root, spun);
+    er_tree_append_child(root, cover); /* painted after the rotated node: would bury it */
+    er_tree_append_child(root, marker);
+    er_tree_set_root(root);
+
+    full_frame();
+    er_commit();
+    er_commit(); /* settle */
+
+    /* One real change, so the reported rect is the marker and nothing else. */
+    ERProps mp2 = box(160, 160, 20, 20, 0xFF00AAFFU);
+    er_node_set_props(marker, &mp2);
+    er_commit();
+
+    ERRect after_change;
+    if (!er_get_dirty_rect(&after_change))
+        return fail("recolouring the marker reported no damage");
+    if (after_change.x < 100)
+        return fail("the marker's own change reported a region far from the marker");
+
+    /* Nothing has changed since. The report must not move. */
+    for (int i = 0; i < 3; i++)
+    {
+        er_commit();
+        ERRect idle;
+        if (!er_get_dirty_rect(&idle))
+            return fail("the dirty rect vanished across an idle commit");
+        if (idle.x != after_change.x || idle.y != after_change.y || idle.w != after_change.w
+            || idle.h != after_change.h)
+            return fail("a buried TRANSFORMED sibling re-damages its footprint on every idle commit");
+    }
+    return EXIT_SUCCESS;
+}
+#endif
 
 /*
  * The catch-all. Drive an incremental, damage-clipped sequence over a scene whose occluder is only
@@ -337,7 +436,7 @@ static int check_pixel_equivalence(void)
 
 int main(void)
 {
-    static const EmbeddedRenderBackend k_backend = {.fill_rect = fb_fill};
+    static const EmbeddedRenderBackend k_backend = {.fill_rect = fb_fill, .copy_rect = fb_copy, .blend_rect = fb_blend};
     embedded_renderer_set_backend(&k_backend);
 
     int (*const cases[])(void) = {
@@ -346,6 +445,9 @@ int main(void)
         check_rounded_cover_does_not_cull,
         check_partial_cover_does_not_cull,
         check_buried_change_retires,
+#if ERUI_TRANSFORMS_FULL
+        check_transformed_sibling_not_buried,
+#endif
         check_pixel_equivalence,
     };
 

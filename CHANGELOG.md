@@ -69,6 +69,8 @@ See the README for the release process.
 
 ### Fixed
 
+- A view with a shadow that moved left its old shadow behind and had its new one clipped. Only the
+  layout box was repainted, and a shadow is drawn outside it.
 - An `<Svg>` path that closes without returning to its start left that closing side unstroked. The fill
   closed the shape, so a ring sector came out with one bare radial edge and a notch at the corner.
 - A dial's conic gradient didn't re-color until you released the drag.

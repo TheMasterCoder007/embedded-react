@@ -887,6 +887,32 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
     *rh = (y1 > y0) ? (y1 - y0) : 0;
 }
 
+#if ERUI_SHADOWS
+/**
+ * @brief Grows a rect by however far this node's shadow bleeds past its layout box.
+ *
+ * A shadow is painted outside the box, so any rect meant to bound what the node PUTS ON SCREEN — its
+ * damage, its erase trail, its reported repaint — has to include the bleed or the old shadow is never
+ * erased and the new one is clipped at the damage edge. No-op for a node that casts none.
+ */
+static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
+{
+    if (!(n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+          || (n->type == ER_NODE_MODAL && n->modal_visible)))
+        return;
+    if (!(n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
+        return;
+    const int r = (int)n->props.view.shadow_radius;
+    const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
+    const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
+    const int exp = r + (ox > oy ? ox : oy);
+    *x -= exp;
+    *y -= exp;
+    *w += 2 * exp;
+    *h += 2 * exp;
+}
+#endif
+
 /**
  * @brief Reports a rect as repainted, clamped to the root the way add_damage clamps its insert.
  *
@@ -1344,6 +1370,14 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
     return true;
 }
 
+/** @brief How far one edge's opaque fill is set in: the corner radius, or a partly opaque border band. */
+static int edge_opaque_inset(int border_w, uint32_t border_c, int radius)
+{
+    const uint32_t a = border_c >> 24;
+    const int band = (border_w > 0 && a != 0U && a != 0xFFU) ? border_w : 0;
+    return band > radius ? band : radius;
+}
+
 /**
  * @brief Whether a node's own background paints every pixel of a screen rect at full alpha.
  *
@@ -1356,10 +1390,13 @@ composite_with_opacity(ERNode* n, uint8_t alpha, int px, int py, int w, int h, i
  *   - fully opaque: node opacity 255 and a background colour with alpha 255 and no active gradient
  *     (a gradient replaces the flat fill and may carry translucent stops),
  *   - inset by the largest corner radius, because rounded corners — and the anti-aliased pixels along
- *     them — leave the corner squares showing whatever is underneath.
- *
- * A border does NOT disqualify it: an opaque background fills the whole box first and the border
- * strokes on top of it, so the covered area is the same either way.
+ *     them — leave the corner squares showing whatever is underneath,
+ *   - inset again, per edge, by the width of any border whose colour is only PARTLY opaque. An opaque
+ *     background does not imply an opaque box: for a uniform solid border, render_view_bg fills the
+ *     whole shape in the BORDER colour and paints the background back over the inset (see
+ *     er_rrect_fill_bordered), so a translucent border leaves a blended ring around an opaque middle.
+ *     A fully opaque or fully transparent border needs no inset — the first covers the ring itself,
+ *     the second routes to the path that fills the background across the whole shape.
  *
  * @param[in] c            Candidate occluder.
  * @param[in] translate_x  Scroll translation in effect for c (its parent's child translation).
@@ -1399,8 +1436,12 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
         return false;
 #endif
 
-    /* Largest corner radius: the fill is guaranteed only inside the box inset by it on every side. */
-    int r = (int)vp->border_radius;
+    /* Largest corner radius, starting from 0 so a negative value can never widen the tested area —
+     * the rasteriser clamps a negative radius to a square corner, and reading it literally here would
+     * push x1/y1 past the node's actual box. */
+    int r = 0;
+    if ((int)vp->border_radius > r)
+        r = (int)vp->border_radius;
     if ((int)vp->border_tl_radius > r)
         r = (int)vp->border_tl_radius;
     if ((int)vp->border_tr_radius > r)
@@ -1410,10 +1451,25 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
     if ((int)vp->border_bl_radius > r)
         r = (int)vp->border_bl_radius;
 
-    const int x0 = c->animated.x - translate_x + r;
-    const int y0 = c->animated.y - translate_y + r;
-    const int x1 = c->animated.x - translate_x + c->animated.w - r;
-    const int y1 = c->animated.y - translate_y + c->animated.h - r;
+    /* Per-edge border inset (see the note above): only a PARTLY opaque band hides nothing. */
+    const int bw_l = vp->border_left_width > 0 ? (int)vp->border_left_width : (int)vp->border_width;
+    const int bw_t = vp->border_top_width > 0 ? (int)vp->border_top_width : (int)vp->border_width;
+    const int bw_r = vp->border_right_width > 0 ? (int)vp->border_right_width : (int)vp->border_width;
+    const int bw_b = vp->border_bottom_width > 0 ? (int)vp->border_bottom_width : (int)vp->border_width;
+    const uint32_t bc_l = vp->border_left_color ? vp->border_left_color : vp->border_color;
+    const uint32_t bc_t = vp->border_top_color ? vp->border_top_color : vp->border_color;
+    const uint32_t bc_r = vp->border_right_color ? vp->border_right_color : vp->border_color;
+    const uint32_t bc_b = vp->border_bottom_color ? vp->border_bottom_color : vp->border_color;
+
+    const int in_l = edge_opaque_inset(bw_l, bc_l, r);
+    const int in_t = edge_opaque_inset(bw_t, bc_t, r);
+    const int in_r = edge_opaque_inset(bw_r, bc_r, r);
+    const int in_b = edge_opaque_inset(bw_b, bc_b, r);
+
+    const int x0 = c->animated.x - translate_x + in_l;
+    const int y0 = c->animated.y - translate_y + in_t;
+    const int x1 = c->animated.x - translate_x + c->animated.w - in_r;
+    const int y1 = c->animated.y - translate_y + c->animated.h - in_b;
 
     return rx >= x0 && ry >= y0 && (rx + rw) <= x1 && (ry + rh) <= y1;
 }
@@ -1681,19 +1737,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             }
 #if ERUI_SHADOWS
             /* Expand conservatively for shadow bleed outside the node layout rect. */
-            if ((n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
-                 || (n->type == ER_NODE_MODAL && n->modal_visible))
-                && (n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
-            {
-                const int r = (int)n->props.view.shadow_radius;
-                const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
-                const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
-                const int exp = r + (ox > oy ? ox : oy);
-                ux -= exp;
-                uy -= exp;
-                uw += 2 * exp;
-                uh += 2 * exp;
-            }
+            expand_for_shadow(n, &ux, &uy, &uw, &uh);
 #endif
             union_dirty_rect(ux, uy, uw, uh);
         }
@@ -1778,8 +1822,12 @@ static void render_node_content(
      * bbox while each pass emits only one strip.
      *
      * Culled subtrees are still WALKED, with occluded = true, so their paint bookkeeping stays in
-     * step; they just emit nothing. Only transform-free subtrees (subtree_prunable) are eligible,
-     * which keeps last_paint_rect on the simple box path for every node inside them. */
+     * step; they just emit nothing. Only transform-free subtrees (subtree_prunable) are buried: a
+     * transformed node records last_paint_rect as its TRANSFORMED AABB, which the occluded path —
+     * which deliberately skips the scratch capture — cannot compute. Storing the raw box instead
+     * would leave the damage pre-pass comparing a box against an AABB, reading `moved` on every
+     * subsequent commit and re-damaging a subtree nobody can see, forever. Such a sibling simply
+     * paints as usual and the occluder covers it a moment later. */
     int occ_idx = -1;
 #if ERUI_OCCLUSION_CULLING
     if (!occluded && child_count > 0 && er_get_draw_alpha() == 255U)
@@ -1814,7 +1862,7 @@ static void render_node_content(
         for (int i = child_count - 1; i >= 0; i--)
         {
             const ERNode* c = er_get_node(child_tags[i]);
-            if (c && c->subtree_prunable && node_covers_opaque(c, child_tx, child_ty, rx, ry, rw, rh))
+            if (node_covers_opaque(c, child_tx, child_ty, rx, ry, rw, rh))
             {
                 occ_idx = i;
                 break;
@@ -2017,8 +2065,10 @@ static void render_node_content(
         ERNode* child = er_get_node(child_tags[i]);
         if (!child)
             continue;
-        /* Children before the occluder are buried by it; children from the occluder on still paint. */
-        render_tree(child, needs_paint, occluded || (i < occ_idx), child_tx, child_ty);
+        /* Children before the occluder are buried by it; children from the occluder on still paint.
+         * A subtree carrying a transform is never buried — see the note on the cull above. */
+        const bool buried = (i < occ_idx) && child->subtree_prunable;
+        render_tree(child, needs_paint, occluded || buried, child_tx, child_ty);
     }
 
     if (clips)
@@ -3979,8 +4029,7 @@ void er_commit(void)
                                 ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
                             clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                             add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
-                            if (!n->source_dirty)
-                                report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
+                            report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
                         }
                     }
                     continue;
@@ -4053,6 +4102,11 @@ void er_commit(void)
              * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
              * repaint, where it would be cleared but not restored for a frame. */
             int nx = rx, ny = ry, nw = rw, nh = rh;
+#if ERUI_SHADOWS
+            /* The shadow is part of this node's footprint: a move that ignores it leaves the old
+             * shadow on screen and clips the new one at the damage edge. */
+            expand_for_shadow(n, &nx, &ny, &nw, &nh);
+#endif
             clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
             add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
             /* A node here that is NOT source_dirty is contributing purely because it MOVED, and
@@ -4065,10 +4119,14 @@ void er_commit(void)
             {
                 int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
                     oh = (int)n->last_paint_rect.h;
+#if ERUI_SHADOWS
+                expand_for_shadow(n, &ox, &oy, &ow, &oh);
+#endif
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
-                if (!n->source_dirty)
-                    report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
+                /* Reported unconditionally, unlike the new position: render_tree's accumulator only
+                 * ever sees where a node is NOW, so nothing else can report the trail it vacated. */
+                report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
 
                 /* A node with NO visible current position (scrolled out of its clipper, or otherwise
                  * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire

@@ -184,7 +184,12 @@ static int check_moved_child_only(void)
     ERRect r;
     if (!er_get_dirty_rect(&r))
         return fail("moving a child reported no damage at all");
-    /* Old spot x[0,20) plus new spot x[40,60), padded — nowhere near the bar's 200px width. */
+    /* Both footprints, or the contract is broken in the other direction: the reported rect has to
+     * COVER what was repainted, and a move repaints the trail as well as the destination. Old spot
+     * is x[0,20), new spot x[40,60). */
+    if (r.x > 0 || r.x + r.w < 40 + KID)
+        return fail("reported damage does not cover both the old and new position of a moved child");
+    /* ...and no wider than that, or nothing was saved over damaging the whole 200px bar. */
     if (r.w > 100)
         return fail("a moved child damaged the whole re-measured container");
     if (r.h > BAR_H + 8)
