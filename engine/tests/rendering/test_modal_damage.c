@@ -35,6 +35,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include "transform.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -466,9 +467,101 @@ int main(void)
         if (frame_distinct() != 0)
             return fail("a non-full-screen modal repainted on an idle frame");
 
+#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SW) && (ERUI_XFORM_H + 1 < SH)
+    /* --- a TRANSFORMED modal owes the same root-wide scrim damage (issue #142) ---
+     *
+     * The pre-pass measures a node with a scale/rotate transform down a different branch, and that
+     * branch used to `continue` before the Modal case ever came up: the modal was damaged by its own
+     * footprint, so the scrim was scissored to the modal's box on show and only that box was erased on
+     * hide — leaving stale scrim wherever anything else had repainted under it, and latching
+     * modal_scrim_shown for the node's lifetime. How the rect was measured says nothing about how far
+     * the backdrop reaches, so both branches route a changed modal to the same handling now.
+     *
+     * The transform is scale 1.0 on purpose. That is where a zoom entrance SETTLES, and
+     * er_transform_is_translate_only() reads only 0.0 as "unset" — so the modal sits on the transformed
+     * branch permanently, with no animation in flight. The size is one pixel over the transform source
+     * so the scratch capture fails and the backdrop is filled straight to the framebuffer, scissored to
+     * whatever damage this pre-pass produced: the configuration where damage alone decides the scrim. */
+    er_reset();
+    build_scene();
+    s_modal_p.left = 60;
+    s_modal_p.top = 200;
+    s_modal_p.width = (int16_t)(ERUI_XFORM_W + 1);
+    s_modal_p.height = (int16_t)(ERUI_XFORM_H + 1);
+    s_modal_p.transform_scale_x = 1.0f;
+    s_modal_p.transform_scale_y = 1.0f;
+    s_modal_p.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    frame_distinct();
+
+    if (er_transform_source_fits(s_modal_p.width, s_modal_p.height))
+        return fail("the transformed modal fits the transform source — it is not on the intended path");
+
+    const uint32_t xf_clean = at(px_x, px_y); /* over the page node, far outside the modal's box */
+
+    s_modal_p.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    if (at(px_x, px_y) == xf_clean)
+    {
+        fprintf(stderr, "  (%d,%d) still %06X with the transformed modal shown\n", px_x, px_y, xf_clean);
+        return fail("a transformed modal did not scrim the page outside its own box");
+    }
+    if (dirty_rect_spans_root("transformed show"))
+        return fail("raising a transformed modal's scrim did not report a full-root dirty rect");
+
+    /* Repaint an unrelated page node while the modal is up. With the scrim damaged to the modal's box
+     * only, the backdrop fill lands on THIS damage too — a stray dark patch out on the page that the
+     * hide below then has no reason to erase. */
+    s_page_p.background_color = 0xFF88CCF0U;
+    er_node_set_props(s_page_node, &s_page_p);
+    frame_distinct();
+
+    s_modal_p.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    if (dirty_rect_spans_root("transformed hide"))
+        return fail("dropping a transformed modal's scrim did not report a full-root dirty rect");
+    frame_distinct();
+
+    if (at(px_x, px_y) != 0x88CCF0u)
+    {
+        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), 0x88CCF0u);
+        return fail("hiding a transformed modal left scrim on a node that repainted under it");
+    }
+    long stale_xf = 0;
+    for (int y = 0; y < 20; y++)
+        for (int x = 200; x < 260; x++)
+            if (at(x, y) != 0x203040u)
+                stale_xf++;
+    if (stale_xf != 0)
+    {
+        fprintf(stderr, "  %ld px still scrimmed\n", stale_xf);
+        return fail("hiding a transformed modal left scrim residue on the page");
+    }
+
+    /* And it must still cost nothing while it sits there — the shared handling is reached only for a
+     * modal that is source-dirty or moved, exactly like the untransformed one. */
+    s_modal_p.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    frame_distinct();
+    for (int i = 0; i < 3; i++)
+        if (frame_distinct() != 0)
+            return fail("a transformed modal repainted on an idle frame");
+#endif /* ERUI_TRANSFORMS_FULL && the modal fits on screen without covering it */
+
     printf(
         "PASS: modal + scrim — idle frames paint nothing; a %ldpx control repaints <= %ldpx;\n", ctrl_px, ctrl_px * 2);
     printf("      the scrim does not drift; a non-full-screen modal scrims and un-scrims the whole\n");
     printf("      page; the modal node itself is full-screen by design\n");
+#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SW) && (ERUI_XFORM_H + 1 < SH)
+    printf("      a %dx%d transformed modal (past the %dx%d transform source) does the same\n",
+           ERUI_XFORM_W + 1,
+           ERUI_XFORM_H + 1,
+           ERUI_XFORM_W,
+           ERUI_XFORM_H);
+#endif
     return EXIT_SUCCESS;
 }
