@@ -49,6 +49,9 @@ add_test(NAME rendering_transform COMMAND test_transform)
 
 add_executable(test_transform_damage test_transform_damage.c)
 target_link_libraries(test_transform_damage PRIVATE embedded-react)
+# test_transform_damage needs engine/rendering (transform.h, er_transform_source_fits — it asserts which
+# path each case takes) and engine/scene (er_node_internal.h, pulled in by transform.h).
+target_include_directories(test_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
 
 add_executable(test_transform_shadow_damage test_transform_shadow_damage.c)

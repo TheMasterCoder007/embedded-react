@@ -33,6 +33,8 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include "transform.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -264,12 +266,23 @@ static int check_reflow_moved_no_trail(int screen)
  * Run against BOTH sizes — the node that fits the scratch is the control, and it has to come out
  * identical.
  *
- * @param[in] side    Node size; > ERUI_XFORM_W/H makes the scratch capture fail.
- * @param[in] screen  Root size.
- * @param[in] label   Printed name for the case.
+ * @param[in] side            Node size (square); the capture succeeds only when it clears BOTH
+ *                            ERUI_XFORM_W and ERUI_XFORM_H.
+ * @param[in] screen          Root size.
+ * @param[in] expect_capture  Which path this case is meant to exercise — asserted, not assumed.
+ * @param[in] label           Printed name for the case.
  */
-static int check_oversized_no_idle_damage(int side, int screen, const char* label)
+static int check_oversized_no_idle_damage(int side, int screen, bool expect_capture, const char* label)
 {
+    /* er_transform_source_fits() needs BOTH dimensions inside the limits, so a square sized off one axis
+     * alone can silently miss the other. Without this, a mis-sized "control" quietly takes the same
+     * raw-box fallback as the oversized case, every assertion below still passes, and the captured side
+     * of the pre-pass goes uncovered. */
+    if (er_transform_source_fits(side, side) != expect_capture)
+        return fail(expect_capture ? "control node does not fit the transform scratch — it takes the "
+                                     "raw-box fallback too and covers nothing extra"
+                                   : "oversized node still fits the transform scratch");
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;
@@ -532,17 +545,16 @@ int main(void)
         return rc;
 
 #if ERUI_TRANSFORMS_FULL
-    /* One side over the transform-scratch limit (capture fails → raw-box fallback), one comfortably
-     * under it as the control. The root grows to fit the larger of the two plus the marker's corner. */
+    const int fits = (ERUI_XFORM_W < ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
     const int limit = (ERUI_XFORM_W > ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
     const int over = limit + 1;
     const int big_screen = over + 120;
 
-    rc = check_oversized_no_idle_damage(over / 2, big_screen, "node within the scratch limit");
+    rc = check_oversized_no_idle_damage(fits, big_screen, true, "node within the scratch limit");
     if (rc != EXIT_SUCCESS)
         return rc;
 
-    rc = check_oversized_no_idle_damage(over, big_screen, "node over the scratch limit");
+    rc = check_oversized_no_idle_damage(over, big_screen, false, "node over the scratch limit");
     if (rc != EXIT_SUCCESS)
         return rc;
 
