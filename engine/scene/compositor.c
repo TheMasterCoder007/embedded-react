@@ -761,6 +761,31 @@ static bool node_clips_children(const ERNode* n)
 }
 
 /**
+ * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
+ *
+ * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
+ * parent context, so they re-derive it here.
+ *
+ * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
+ * @param[out] sx,sy   Receive the accumulated ancestor scroll.
+ */
+static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
+{
+    *sx = 0;
+    *sy = 0;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
+        {
+            *sx += (int)a->scroll_offset_x;
+            *sy += (int)a->scroll_offset_y;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+}
+
+/**
  * @brief Computes a node's current screen rect for damage tracking.
  *
  * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
@@ -778,18 +803,8 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
     if (n->has_transform && !er_transform_is_translate_only(n))
         return false;
 #endif
-    int sx = 0;
-    int sy = 0;
-    const ERNode* a = er_get_node(n->parent_tag);
-    while (a)
-    {
-        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
-        {
-            sx += (int)a->scroll_offset_x;
-            sy += (int)a->scroll_offset_y;
-        }
-        a = er_get_node(a->parent_tag);
-    }
+    int sx, sy;
+    node_ancestor_scroll(n, &sx, &sy);
     *rx = (int)n->animated.x - sx + (int)n->tp_translate_x;
     *ry = (int)n->animated.y - sy + (int)n->tp_translate_y - s_kbd_avoid_y;
     *rw = (int)n->animated.w;
@@ -822,18 +837,8 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
 #if ERUI_TRANSFORMS_FULL
     if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
         return false;
-    int sx = 0;
-    int sy = 0;
-    const ERNode* a = er_get_node(n->parent_tag);
-    while (a)
-    {
-        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
-        {
-            sx += (int)a->scroll_offset_x;
-            sy += (int)a->scroll_offset_y;
-        }
-        a = er_get_node(a->parent_tag);
-    }
+    int sx, sy;
+    node_ancestor_scroll(n, &sx, &sy);
     const int px = (int)n->animated.x - sx;
     const int py = (int)n->animated.y - sy - s_kbd_avoid_y;
     const int w = (int)n->animated.w;
@@ -862,6 +867,69 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
     (void)rh;
     return false;
 #endif
+}
+
+/**
+ * @brief Computes the raw, untransformed screen box of a transformed node.
+ *
+ * The footprint render_tree degrades to when it cannot start the node's scratch capture: same origin as
+ * node_transformed_screen_rect (layout position minus ancestor scroll and the keyboard shift), but the
+ * node's own w×h rather than a projected AABB, and no translate folded in — the fallback paints the node
+ * exactly where it would sit with no transform at all. An Arc's knob reach is added for the same reason
+ * render_tree adds it to last_paint_rect on that path: it is part of what the fallback puts on screen.
+ *
+ * @param[in]  n             Node to measure.
+ * @param[out] rx,ry,rw,rh   Receive the node's untransformed screen box.
+ */
+static void node_untransformed_screen_rect(ERNode* n, int* rx, int* ry, int* rw, int* rh)
+{
+    int sx, sy;
+    node_ancestor_scroll(n, &sx, &sy);
+    *rx = (int)n->animated.x - sx;
+    *ry = (int)n->animated.y - sy - s_kbd_avoid_y;
+    *rw = (int)n->animated.w;
+    *rh = (int)n->animated.h;
+    if (n->type == ER_NODE_ARC)
+    {
+        const int over = er_arc_refresh_overhang(n);
+        *rx -= over;
+        *ry -= over;
+        *rw += 2 * over;
+        *rh += 2 * over;
+    }
+}
+
+/**
+ * @brief Whether a transformed node's next paint will degrade to its raw, untransformed box.
+ *
+ * render_tree paints a transformed node by capturing its subtree into the transform scratch and
+ * inverse-mapping it out; when the capture cannot be started it falls back to painting the node
+ * untransformed at its layout box. The damage pre-pass has to make the SAME call or it measures a
+ * footprint the paint never uses: last_paint_rect then holds the box while the pre-pass computes an
+ * AABB, they can never agree, `moved` latches true, and the node damages and re-reports its own region
+ * on every commit for as long as it exists.
+ *
+ * Two things stop a capture, and only one of them is visible from here:
+ *   - the node is larger than the transform source (or degenerate) — er_transform_source_fits() is the
+ *     exact test er_transform_source_begin() admits on, so this is a prediction, not a guess;
+ *   - a capture is already active for a transformed ancestor — not a property of this node's geometry.
+ *     The flag the last paint left behind stands in for it. That is a guess: it can go stale (the
+ *     ancestor's transform may be gone this commit), so the caller damages the transformed AABB
+ *     alongside the box whenever the node actually changes.
+ *
+ * @param[in]  n         Transformed node about to be measured.
+ * @param[out] certain   Receives true when the fallback was predicted from size (exact), false when it
+ *                       was carried over from the last paint (may be stale).
+ *
+ * @return true when the next paint is expected to use the raw box.
+ */
+static bool node_transform_falls_back(const ERNode* n, bool* certain)
+{
+    *certain = true;
+    if (!er_transform_source_fits((int)n->animated.w, (int)n->animated.h))
+        return true;
+    *certain = false;
+    return n->has_last_paint && n->last_paint_untransformed;
 }
 
 /**
@@ -1725,6 +1793,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         n->last_paint_rect.y = (int16_t)(doing_affine ? dst_y : py);
         n->last_paint_rect.w = (int16_t)(doing_affine ? dst_w : w);
         n->last_paint_rect.h = (int16_t)(doing_affine ? dst_h : h);
+        n->last_paint_untransformed = !doing_affine;
         if (n->type == ER_NODE_ARC && !doing_affine)
         {
             /* The footprint must include the knob's reach past the box, or a move / removal leaves it. */
@@ -4133,16 +4202,32 @@ void er_commit(void)
                 int tx, ty, tw, th;
                 if (node_transformed_screen_rect(n, &tx, &ty, &tw, &th))
                 {
+                    bool certain = true;
+                    const bool raw = node_transform_falls_back(n, &certain);
+                    int fx = tx, fy = ty, fw = tw, fh = th;
+                    if (raw)
+                        node_untransformed_screen_rect(n, &fx, &fy, &fw, &fh);
                     const bool moved = n->has_last_paint
-                                       && (tx != (int)n->last_paint_rect.x || ty != (int)n->last_paint_rect.y
-                                           || tw != (int)n->last_paint_rect.w || th != (int)n->last_paint_rect.h);
+                                       && (fx != (int)n->last_paint_rect.x || fy != (int)n->last_paint_rect.y
+                                           || fw != (int)n->last_paint_rect.w || fh != (int)n->last_paint_rect.h);
                     if (n->source_dirty || moved)
                     {
-                        int nx = tx, ny = ty, nw = tw, nh = th;
+                        int nx = fx, ny = fy, nw = fw, nh = fh;
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
-                        add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new transformed footprint */
+                        add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
                         if (!n->source_dirty)
                             report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
+                        if (raw && !certain)
+                        {
+                            /* The fallback was carried over from the last paint, not predicted from
+                             * size, so the capture may succeed this commit and paint the AABB instead.
+                             * Damage both rather than risk scissoring the node's own paint away. */
+                            int ax = tx, ay = ty, aw = tw, ah = th;
+                            clip_rect_to_clippers(n, &ax, &ay, &aw, &ah);
+                            add_damage(&dmg, ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+                            if (!n->source_dirty)
+                                report_repaint_clamped(ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+                        }
                         if (n->has_last_paint)
                         {
                             int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,

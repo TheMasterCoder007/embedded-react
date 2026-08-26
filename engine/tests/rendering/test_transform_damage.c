@@ -249,6 +249,208 @@ static int check_reflow_moved_no_trail(int screen)
     return EXIT_SUCCESS;
 }
 
+#if ERUI_TRANSFORMS_FULL
+/* Scenario 3: a transformed node too large for the transform scratch must not become a permanent damage
+ * source. er_transform_source_begin() refuses a node wider/taller than ERUI_XFORM_W/H, and render_tree
+ * then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
+ * every transformed node by its transformed AABB regardless. last_paint_rect held the box while the
+ * pre-pass computed an AABB, the two could never agree, `moved` latched true, and the node damaged and
+ * re-reported its own footprint on every commit for the rest of the run.
+ *
+ * Nothing looked wrong (the box the pre-pass adds covers what the fallback paints), so the observable is
+ * the cost: a commit where only a distant marker changed must repaint — and report — the marker and
+ * nothing else. A move-only damage sets no dirty flag, so a wholly idle commit paints nothing either
+ * way; it is asserted anyway so the fix cannot buy the marker commit back with a spurious idle repaint.
+ * Run against BOTH sizes — the node that fits the scratch is the control, and it has to come out
+ * identical.
+ *
+ * @param[in] side    Node size; > ERUI_XFORM_W/H makes the scratch capture fail.
+ * @param[in] screen  Root size.
+ * @param[in] label   Printed name for the case.
+ */
+static int check_oversized_no_idle_damage(int side, int screen, const char* label)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = screen;
+    rp.height = screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    /* Scaled-down box in the top-left. Nothing ever changes about it after the first commit. */
+    ERNode* node = er_node_create(ER_NODE_VIEW);
+    ERProps np = props_default();
+    np.position = ER_POS_ABSOLUTE;
+    np.left = 10;
+    np.top = 10;
+    np.width = (int16_t)side;
+    np.height = (int16_t)side;
+    np.background_color = 0xFF33AA55U;
+    np.transform_scale_x = 0.3f;
+    np.transform_scale_y = 0.3f;
+    er_node_set_props(node, &np);
+
+    /* The only thing that changes, parked clear of the node's raw box AND its scaled AABB. */
+    const int mx = side + 40;
+    ERNode* marker = er_node_create(ER_NODE_VIEW);
+    ERProps mp = props_default();
+    mp.position = ER_POS_ABSOLUTE;
+    mp.left = (int16_t)mx;
+    mp.top = (int16_t)mx;
+    mp.width = 40;
+    mp.height = 40;
+    mp.background_color = 0xFF00AAFFU;
+    er_node_set_props(marker, &mp);
+
+    er_tree_append_child(root, node);
+    er_tree_append_child(root, marker);
+    er_tree_set_root(root);
+
+    er_commit(); /* full first frame */
+    er_commit(); /* settle: everything has a last-painted footprint now */
+
+    /* Recolour the marker — the one and only change. */
+    mp.background_color = 0xFFFF00FFU;
+    er_node_set_props(marker, &mp);
+    ext_reset();
+    er_commit();
+    const int cx0 = g_ext.x0, cy0 = g_ext.y0, cops = g_ext.ops;
+    ERRect rep = {0, 0, 0, 0};
+    er_get_dirty_rect(&rep);
+
+    /* Nothing at all changes here. */
+    ext_reset();
+    er_commit();
+    const int idle_ops = g_ext.ops;
+
+    printf("%s: marker commit ops=%d from %d,%d (marker at %d,%d), reported %d,%d %dx%d; idle ops=%d\n",
+           label,
+           cops,
+           cx0,
+           cy0,
+           mx,
+           mx,
+           rep.x,
+           rep.y,
+           rep.w,
+           rep.h,
+           idle_ops);
+
+    er_node_destroy(root);
+
+    /* The node's raw box ends at side + 10 = mx - 30 and its scaled AABB is well inside that, so a
+     * repaint (or a report) that starts before this stayed clear of both. The slack absorbs the few
+     * pixels add_damage pads a rect by before inserting it. */
+    const int clear = mx - 20;
+    if (cops == 0)
+        return fail("the marker change repainted nothing");
+    if (cx0 < clear || cy0 < clear)
+        return fail("the marker change dragged the transformed node's region into the repaint");
+    if (rep.x < clear || rep.y < clear)
+        return fail("the marker change reported the transformed node's region as dirty");
+    if (idle_ops != 0)
+        return fail("an idle commit repainted — the transformed node damages its footprint forever");
+
+    printf("PASS: %s contributes no damage when nothing about it changed\n", label);
+    return EXIT_SUCCESS;
+}
+
+/* Scenario 4: the other half of the same defect, reached where geometry cannot predict it. Only one
+ * transform capture can be active at a time, so a transformed node INSIDE another transformed node is
+ * refused the scratch and painted at its raw box however small it is. Nothing about its size says so —
+ * the fallback is only knowable from what the last paint actually did — and without that, the pre-pass
+ * measured it by its AABB and it re-damaged the outer node's whole region on every commit.
+ *
+ * @param[in] screen  Root size.
+ */
+static int check_nested_transform_no_damage(int screen)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = screen;
+    rp.height = screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    /* Outer transform: comfortably within the scratch, so ITS capture succeeds and stays active for the
+     * whole of the subtree below it. */
+    ERNode* outer = er_node_create(ER_NODE_VIEW);
+    ERProps op = props_default();
+    op.position = ER_POS_ABSOLUTE;
+    op.left = 10;
+    op.top = 10;
+    op.width = 100;
+    op.height = 100;
+    op.background_color = 0xFF33AA55U;
+    op.transform_rotate_z = 20.0f;
+    er_node_set_props(outer, &op);
+
+    /* Inner transform: tiny, but refused the scratch because the outer capture holds it. */
+    ERNode* inner = er_node_create(ER_NODE_VIEW);
+    ERProps ip = props_default();
+    ip.position = ER_POS_ABSOLUTE;
+    ip.left = 10;
+    ip.top = 10;
+    ip.width = 40;
+    ip.height = 40;
+    ip.background_color = 0xFFAA3355U;
+    ip.transform_scale_x = 0.5f;
+    ip.transform_scale_y = 0.5f;
+    er_node_set_props(inner, &ip);
+
+    const int mx = screen - 50;
+    ERNode* marker = er_node_create(ER_NODE_VIEW);
+    ERProps mp = props_default();
+    mp.position = ER_POS_ABSOLUTE;
+    mp.left = (int16_t)mx;
+    mp.top = (int16_t)mx;
+    mp.width = 30;
+    mp.height = 30;
+    mp.background_color = 0xFF00AAFFU;
+    er_node_set_props(marker, &mp);
+
+    er_tree_append_child(outer, inner);
+    er_tree_append_child(root, outer);
+    er_tree_append_child(root, marker);
+    er_tree_set_root(root);
+
+    er_commit();
+    er_commit();
+
+    mp.background_color = 0xFFFF00FFU;
+    er_node_set_props(marker, &mp);
+    ext_reset();
+    er_commit();
+    ERRect rep = {0, 0, 0, 0};
+    er_get_dirty_rect(&rep);
+
+    printf("nested transform: marker commit ops=%d from %d,%d (marker at %d,%d), reported %d,%d %dx%d\n",
+           g_ext.ops,
+           g_ext.x0,
+           g_ext.y0,
+           mx,
+           mx,
+           rep.x,
+           rep.y,
+           rep.w,
+           rep.h);
+
+    er_node_destroy(root);
+
+    const int clear = mx - 20; /* the outer node ends at 110, far above this */
+    if (g_ext.ops == 0)
+        return fail("the marker change repainted nothing");
+    if (g_ext.x0 < clear || g_ext.y0 < clear)
+        return fail("the marker change dragged the nested transform's region into the repaint");
+    if (rep.x < clear || rep.y < clear)
+        return fail("the marker change reported the nested transform's region as dirty");
+
+    printf("PASS: a nested transform contributes no damage when nothing about it changed\n");
+    return EXIT_SUCCESS;
+}
+
+#endif /* ERUI_TRANSFORMS_FULL */
+
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
 /* Before the damage pre-pass projected the 3D AABB, a source_dirty 3D/perspective node fell through to
  * the full-repaint fallback on every animated frame. */
@@ -328,6 +530,26 @@ int main(void)
     rc = check_reflow_moved_no_trail(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
+
+#if ERUI_TRANSFORMS_FULL
+    /* One side over the transform-scratch limit (capture fails → raw-box fallback), one comfortably
+     * under it as the control. The root grows to fit the larger of the two plus the marker's corner. */
+    const int limit = (ERUI_XFORM_W > ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
+    const int over = limit + 1;
+    const int big_screen = over + 120;
+
+    rc = check_oversized_no_idle_damage(over / 2, big_screen, "node within the scratch limit");
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_oversized_no_idle_damage(over, big_screen, "node over the scratch limit");
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_nested_transform_no_damage(300);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+#endif
 
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
     if (rc != EXIT_SUCCESS)
