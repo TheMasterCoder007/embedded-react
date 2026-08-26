@@ -94,6 +94,9 @@ add_test(NAME rendering_damage_rects COMMAND test_damage_rects)
 
 add_executable(test_modal_damage test_modal_damage.c)
 target_link_libraries(test_modal_damage PRIVATE embedded-react)
+# test_modal_damage needs engine/rendering (transform.h, er_transform_source_fits — the transformed-modal
+# case asserts the modal really is too big to capture) and engine/scene (er_node_internal.h, pulled in by it).
+target_include_directories(test_modal_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_modal_damage COMMAND test_modal_damage)
 
 add_executable(test_perf test_perf.c)

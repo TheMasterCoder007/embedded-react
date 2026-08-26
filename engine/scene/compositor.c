@@ -1193,6 +1193,39 @@ static void report_repaint_clamped(int x, int y, int w, int h, int rb_x0, int rb
 }
 
 /**
+ * @brief Damages, reports and retires the root-wide backdrop of a changed Modal.
+ *
+ * A modal's scrim covers the whole ROOT, not the modal's own box, so that is what a changed modal
+ * repaints — measuring it by either rect helper would scissor the scrim to the box and leave the rest
+ * of the page uncovered on show, or still scrimmed after hide.
+ *
+ * Shared by BOTH pre-pass branches on purpose: which helper managed to measure the node's rect says
+ * nothing about how far its backdrop reaches, so a modal carrying a scale/rotate transform owes
+ * exactly the same root-wide damage as a plain one. It used to be inline in the translate-only
+ * branch, which a transformed modal never reaches — it scrimmed only its own footprint on show, and
+ * on hide erased only that footprint while the flag stayed latched for the node's lifetime.
+ *
+ * The scrim flag carries the hide case, where modal_visible has already gone but the old scrim is
+ * still on screen; it is retired here because this damage is what erases it.
+ *
+ * Reported as well as damaged, and it has to happen HERE rather than in render_tree's accumulator:
+ * on the hide commit the modal is display:none, so the walk never reaches it and nothing would
+ * contribute at all. Callers reach this only for a modal that is source_dirty or moved, so a steady
+ * on-screen modal still costs nothing and a change to one of its CHILDREN keeps its own tight damage.
+ *
+ * @param[in]     n    Modal node, already known to be source-dirty or moved.
+ * @param[in,out] dmg  Damage set to add the root rect to.
+ * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Root bounds — both the rect damaged and the clamp.
+ */
+static void modal_scrim_damage(ERNode* n, ERDamageSet* dmg, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+{
+    add_damage(dmg, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0, rb_x0, rb_y0, rb_x1, rb_y1);
+    union_dirty_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
+    if (!n->modal_visible)
+        n->modal_scrim_shown = 0U;
+}
+
+/**
  * @brief Damages the region a capturing ancestor's blit writes, standing in for a descendant's own.
  *
  * The ancestor's transformed AABB bounds everything its subtree can put on screen — the capture is
@@ -4424,6 +4457,10 @@ void er_commit(void)
                 add_damage(&dmg, sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
                 report_repaint_clamped(sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
             }
+            /* Asked before the rect is measured, because the answer must not depend on which helper
+             * manages to measure it: the backdrop covers the root either way. Both branches below
+             * hand a changed scrim modal straight to modal_scrim_damage(). */
+            const bool scrim_modal = (n->type == ER_NODE_MODAL && (n->modal_visible || n->modal_scrim_shown));
             int rx, ry, rw, rh;
             if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
             {
@@ -4439,6 +4476,14 @@ void er_commit(void)
                                            || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
                     if (n->source_dirty || moved)
                     {
+                        /* Asked before the ancestor-capture escalation below, for the same reason the
+                         * translate-only branch asks it before its own: the scrim covers the root
+                         * regardless of what any ancestor does to this node's pixels. */
+                        if (scrim_modal)
+                        {
+                            modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
+                            continue;
+                        }
                         /* Refused the scratch because an ancestor holds it: this node painted into
                          * that ancestor's capture in source space, so td measures a region its pixels
                          * never reach. The ancestor's AABB is where they actually land. */
@@ -4497,6 +4542,14 @@ void er_commit(void)
                  */
                 if (n->source_dirty)
                 {
+                    /* Bounded after all, and by the only rect that was ever right for it: a modal that
+                     * cannot be measured still scrims exactly the root. Cheaper than the full-repaint
+                     * fallback below, and unlike it, retires the scrim flag. */
+                    if (scrim_modal)
+                    {
+                        modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
+                        continue;
+                    }
                     /* Inside an ancestor's capture this is bounded after all: whatever the node's own
                      * transform does, it does it in source space and reaches the screen only through
                      * the ancestor's blit. Beats a full-screen repaint per spinner frame. */
@@ -4517,24 +4570,9 @@ void er_commit(void)
                                    || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
-            if (n->type == ER_NODE_MODAL && (n->modal_visible || n->modal_scrim_shown))
+            if (scrim_modal)
             {
-                /* A modal's backdrop covers the whole ROOT, not its own box, so that is what it
-                 * repaints — measuring it by node_screen_rect would scissor the scrim to the box and
-                 * leave the rest of the page uncovered (or, on hide, still scrimmed). The scrim flag
-                 * carries the hide case, where modal_visible has already gone but the old scrim is
-                 * still on screen; it is cleared here because this damage is what erases it.
-                 *
-                 * Reached only when the modal is source_dirty or moved, so a steady on-screen modal
-                 * still costs nothing and a change to one of its CHILDREN keeps its own tight damage. */
-                add_damage(&dmg, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0, rb_x0, rb_y0, rb_x1, rb_y1);
-                /* Report it too, or a partial-update host flushes less than was repainted and leaves
-                 * scrim on the panel. It has to happen HERE rather than in render_tree's accumulator:
-                 * on the hide commit the modal is display:none, so the walk never reaches it and
-                 * nothing would contribute at all. */
-                union_dirty_rect(rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0);
-                if (!n->modal_visible)
-                    n->modal_scrim_shown = 0U;
+                modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
                 continue;
             }
             /* Everything below measures this node in plain layout-minus-scroll space. Under a

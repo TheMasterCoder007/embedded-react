@@ -72,6 +72,10 @@ See the README for the release process.
 
 ### Fixed
 
+- A `<Modal>` with a scale or rotate transform scrimmed only its own box instead of the page behind it,
+  and left that scrim behind when it closed. The backdrop covers the whole screen, but a transformed
+  modal was measured down a path that never knew that. A zoom entrance settling at scale 1.0 was enough
+  to hit it.
 - A scaled or rotated view too big for the transform scratch — or sitting inside another transformed
   view — repainted its whole region on every commit, forever. It renders untransformed in that case,
   and damage tracking didn't know.
