@@ -1935,26 +1935,6 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
     if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR && !occluded)
     {
-        /* A transformed Modal's backdrop covers the whole root, but once its capture succeeds every
-         * draw call below is redirected into the capture's own node-sized scratch buffer (see
-         * er_transform_source_begin) — a root-rect fill issued from inside that redirect can't reach
-         * past the modal's own box no matter what the damage pre-pass reported. Paint it here instead,
-         * in real screen space, before any capture redirects anything. Translate-only modals skip this:
-         * they never capture, so the existing fill in render_node_content already reaches the root.
-         * The size check mirrors what er_transform_source_begin() will decide; missing its OTHER
-         * reason to refuse (an ancestor already holds the capture) is the same approximation
-         * node_transform_damage() already accepts for that case. */
-        if (needs_paint && n->type == ER_NODE_MODAL && n->modal_visible && !er_transform_is_translate_only(n)
-            && er_transform_source_fits((int)n->animated.w, (int)n->animated.h))
-        {
-            ERNode* const rt = er_get_root_node();
-            if (rt)
-            {
-                const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
-                er_blit_fill(bd, rt->computed.x, rt->computed.y, rt->computed.w, rt->computed.h);
-                n->modal_scrim_shown = 1U;
-            }
-        }
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
         if (er_transform_is_3d(n))
         {
@@ -4578,23 +4558,6 @@ void er_commit(void)
                         continue;
                     trackable = false;
                     break;
-                }
-                if (scrim_modal)
-                {
-                    /* Not source_dirty, but the modal may still have MOVED — there is no predicted
-                     * footprint to compare here (that is what "could not bound it" means), so ask the
-                     * same raw-box question node_untransformed_screen_rect() would, using only pieces
-                     * that compile unconditionally (that helper is ERUI_TRANSFORMS_FULL-only). */
-                    int sx, sy;
-                    node_ancestor_scroll(n, &sx, &sy);
-                    const int ux = (int)n->animated.x - sx;
-                    const int uy = (int)n->animated.y - sy - s_kbd_avoid_y;
-                    const bool xf_moved = !n->has_last_paint || ux != (int)n->last_paint_rect.x
-                                          || uy != (int)n->last_paint_rect.y
-                                          || (int)n->animated.w != (int)n->last_paint_rect.w
-                                          || (int)n->animated.h != (int)n->last_paint_rect.h;
-                    if (xf_moved)
-                        modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
                 }
                 continue;
             }
