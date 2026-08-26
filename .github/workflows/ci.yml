@@ -94,6 +94,22 @@ jobs:
         run: cmake --build engine/build-ci-3d
       - name: Test (3D transforms)
         run: ctest --test-dir engine/build-ci-3d --output-on-failure
+      # Sixth pass with shadows, and with the transform source deliberately SMALLER than the composite
+      # scratch. Two reasons for the pairing:
+      #   - ERUI_SHADOWS is OFF by default, so the shadow rasteriser has never been compiled here at all
+      #     and roughly half of tests/rendering/test_shadow.c sits behind #if ERUI_SHADOWS unbuilt.
+      #   - ERUI_XFORM_W/H exists to be decoupled from ERUI_SCRATCH_W/H, and only the decoupled build has
+      #     a size band where a node is too big for a transform capture (so it paints untransformed) yet
+      #     small enough to still cast a shadow. tests/rendering/test_transform_shadow_damage.c compiles
+      #     to a SKIP without that band, so this pass is the one that gives it teeth.
+      - name: Configure (shadows, decoupled transform scratch)
+        run: >
+          cmake -S engine -B engine/build-ci-shadow
+          -DERUI_TRANSFORMS=FULL -DERUI_SHADOWS=ON -DERUI_XFORM_W=120 -DERUI_XFORM_H=120
+      - name: Build (shadows, decoupled transform scratch)
+        run: cmake --build engine/build-ci-shadow
+      - name: Test (shadows, decoupled transform scratch)
+        run: ctest --test-dir engine/build-ci-shadow --output-on-failure
 
   bridge:
     name: QuickJS bridge build + heap-accounting test

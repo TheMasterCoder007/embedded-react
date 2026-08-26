@@ -4213,6 +4213,16 @@ void er_commit(void)
                     if (n->source_dirty || moved)
                     {
                         int nx = fx, ny = fy, nw = fw, nh = fh;
+#if ERUI_SHADOWS
+                        /* Only the FALLBACK footprint carries a shadow. render_tree gates the shadow on
+                         * `!doing_affine`, so a node that captures its transform scratch genuinely casts
+                         * none (it would be rasterised into the source and distorted by the inverse-map
+                         * blit) and must not be grown — but one painted untransformed at its raw box
+                         * draws its shadow like any other node, and a move that ignores the bleed leaves
+                         * the old shadow on screen and clips the new one at the damage edge. */
+                        if (raw)
+                            expand_for_shadow(n, &nx, &ny, &nw, &nh);
+#endif
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
                         add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
                         if (!n->source_dirty)
@@ -4232,6 +4242,12 @@ void er_commit(void)
                         {
                             int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
                                 ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+#if ERUI_SHADOWS
+                            /* Same rule, asked of the PREVIOUS paint: the trail carries a shadow only if
+                             * that paint was the raw-box fallback, which is exactly what the flag records. */
+                            if (n->last_paint_untransformed)
+                                expand_for_shadow(n, &ox, &oy, &ow, &oh);
+#endif
                             clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                             add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
                             report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
