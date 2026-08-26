@@ -812,6 +812,7 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
     return true;
 }
 
+#if ERUI_TRANSFORMS_FULL
 /**
  * @brief Computes the screen-space AABB of a node under a full transform (2D affine or 3D/perspective).
  *
@@ -822,23 +823,23 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
  * falling back to a full-screen repaint. tp_translate_x/y is folded into the matrix/homography, so it is
  * NOT added to the origin here.
  *
- * Returns false (leaving the caller on its full-repaint fallback) for the cases this can't bound: builds
- * without the affine path, translate-only nodes (handled by node_screen_rect), the ActivityIndicator
- * (whose rotate_z is an internal spin, not an affine render), or a degenerate / off-screen-projected
+ * This is the expensive half of the pre-pass — two sinf/cosf on the affine path, six plus up to eight
+ * projective divides on the 3D one — so node_transform_damage() reaches it only after the cheap size test
+ * has said a capture can actually start. The gates that used to live at the top of this function (no
+ * transform, translate-only, ActivityIndicator) are the caller's now, and the ancestor-scroll walk is
+ * passed in so the two rect helpers share one.
+ *
+ * Returns false (leaving the caller on its full-repaint fallback) for a degenerate or off-screen-projected
  * (zero-area) result — including a 3D node whose corners all fall behind the perspective plane.
  *
  * @param[in]  n             Node to measure.
+ * @param[in]  sx,sy         Accumulated ancestor scroll, from node_ancestor_scroll().
  * @param[out] rx,ry,rw,rh   Receive the node's transformed screen AABB.
  *
  * @return true if a finite AABB was produced; false to fall back to a full repaint.
  */
-static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
+static bool node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* rx, int* ry, int* rw, int* rh)
 {
-#if ERUI_TRANSFORMS_FULL
-    if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
-        return false;
-    int sx, sy;
-    node_ancestor_scroll(n, &sx, &sy);
     const int px = (int)n->animated.x - sx;
     const int py = (int)n->animated.y - sy - s_kbd_avoid_y;
     const int w = (int)n->animated.w;
@@ -859,14 +860,6 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
     er_transform_compute_matrix(n, px, py, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
     er_transform_aabb(px, py, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
     return (*rw > 0 && *rh > 0);
-#else
-    (void)n;
-    (void)rx;
-    (void)ry;
-    (void)rw;
-    (void)rh;
-    return false;
-#endif
 }
 
 /**
@@ -879,12 +872,11 @@ static bool node_transformed_screen_rect(const ERNode* n, int* rx, int* ry, int*
  * render_tree adds it to last_paint_rect on that path: it is part of what the fallback puts on screen.
  *
  * @param[in]  n             Node to measure.
+ * @param[in]  sx,sy         Accumulated ancestor scroll, from node_ancestor_scroll().
  * @param[out] rx,ry,rw,rh   Receive the node's untransformed screen box.
  */
-static void node_untransformed_screen_rect(ERNode* n, int* rx, int* ry, int* rw, int* rh)
+static void node_untransformed_screen_rect(ERNode* n, int sx, int sy, int* rx, int* ry, int* rw, int* rh)
 {
-    int sx, sy;
-    node_ancestor_scroll(n, &sx, &sy);
     *rx = (int)n->animated.x - sx;
     *ry = (int)n->animated.y - sy - s_kbd_avoid_y;
     *rw = (int)n->animated.w;
@@ -898,38 +890,93 @@ static void node_untransformed_screen_rect(ERNode* n, int* rx, int* ry, int* rw,
         *rh += 2 * over;
     }
 }
+#endif /* ERUI_TRANSFORMS_FULL */
+
+/** @brief What the damage pre-pass expects a full-transform node's next paint to cover. */
+typedef struct
+{
+    int fx, fy, fw, fh; /**< The footprint itself: either the transformed AABB or the raw box. */
+    int ax, ay, aw, ah; /**< The transformed AABB — meaningful only when `hedge`. */
+    bool raw;           /**< The footprint is the raw, untransformed box (so it carries a shadow). */
+    bool hedge;         /**< Damage the AABB alongside the footprint: the raw prediction may be stale. */
+} NodeTransformDamage;
 
 /**
- * @brief Whether a transformed node's next paint will degrade to its raw, untransformed box.
+ * @brief Bounds the next paint of a node carrying a transform the fast path cannot express.
  *
- * render_tree paints a transformed node by capturing its subtree into the transform scratch and
- * inverse-mapping it out; when the capture cannot be started it falls back to painting the node
- * untransformed at its layout box. The damage pre-pass has to make the SAME call or it measures a
- * footprint the paint never uses: last_paint_rect then holds the box while the pre-pass computes an
- * AABB, they can never agree, `moved` latches true, and the node damages and re-reports its own region
- * on every commit for as long as it exists.
+ * render_tree paints such a node by capturing its subtree into the transform scratch and inverse-mapping
+ * it out; when the capture cannot be started it falls back to painting the node untransformed at its
+ * layout box. The damage pre-pass has to make the SAME call or it measures a footprint the paint never
+ * uses: last_paint_rect then holds the box while the pre-pass computes an AABB, they can never agree,
+ * `moved` latches true, and the node damages and re-reports its own region on every commit for as long
+ * as it exists.
  *
  * Two things stop a capture, and only one of them is visible from here:
  *   - the node is larger than the transform source (or degenerate) — er_transform_source_fits() is the
  *     exact test er_transform_source_begin() admits on, so this is a prediction, not a guess;
  *   - a capture is already active for a transformed ancestor — not a property of this node's geometry.
  *     The flag the last paint left behind stands in for it. That is a guess: it can go stale (the
- *     ancestor's transform may be gone this commit), so the caller damages the transformed AABB
- *     alongside the box whenever the node actually changes.
+ *     ancestor's transform may be gone this commit), so `hedge` asks the caller to damage the
+ *     transformed AABB alongside the box.
  *
- * @param[in]  n         Transformed node about to be measured.
- * @param[out] certain   Receives true when the fallback was predicted from size (exact), false when it
- *                       was carried over from the last paint (may be stale).
+ * The size test is four integer compares and it is asked FIRST, because when it fails the AABB is dead:
+ * the footprint is the raw box and the uncertain-fallback hedge cannot fire. Computing the matrix before
+ * asking spent two sinf/cosf (six, plus up to eight projective divides, in 3D) per node per commit —
+ * including on fully idle commits — to produce a rect that was then thrown away.
  *
- * @return true when the next paint is expected to use the raw box.
+ * @param[in]  n   Node to measure.
+ * @param[out] d   Receives the footprint (and, when `hedge`, the AABB to damage with it).
+ *
+ * @return true if the paint could be bounded; false to leave the caller on its full-repaint fallback.
  */
-static bool node_transform_falls_back(const ERNode* n, bool* certain)
+static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
 {
-    *certain = true;
+#if ERUI_TRANSFORMS_FULL
+    /* Not a transform this path owns. The ActivityIndicator is excluded first and deliberately: its
+     * rotate_z is an internal spin, not an affine render, so it must still reach the full-repaint
+     * fallback rather than be measured by either rect helper. */
+    if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
+        return false;
+
+    /* One walk, shared by both helpers below. */
+    int sx, sy;
+    node_ancestor_scroll(n, &sx, &sy);
+
+    d->hedge = false;
     if (!er_transform_source_fits((int)n->animated.w, (int)n->animated.h))
+    {
+        /* Decisive: er_transform_source_begin() admits on size alone, so this node paints its raw box.
+         * No matrix, no AABB — and no full-repaint fallback either, even for a degenerate transform,
+         * because bounded damage matching the actual paint beats a conservative whole-screen repaint. */
+        d->raw = true;
+        node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
         return true;
-    *certain = false;
-    return n->has_last_paint && n->last_paint_untransformed;
+    }
+
+    if (!node_transformed_screen_rect(n, sx, sy, &d->ax, &d->ay, &d->aw, &d->ah))
+        return false;
+
+    d->raw = n->has_last_paint && n->last_paint_untransformed;
+    if (d->raw)
+    {
+        /* Carried over from the last paint, not predicted from size, so the capture may succeed this
+         * commit and paint the AABB instead. Damage both rather than risk scissoring away its own paint. */
+        d->hedge = true;
+        node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+    }
+    else
+    {
+        d->fx = d->ax;
+        d->fy = d->ay;
+        d->fw = d->aw;
+        d->fh = d->ah;
+    }
+    return true;
+#else
+    (void)n;
+    (void)d;
+    return false;
+#endif
 }
 
 /**
@@ -4199,20 +4246,15 @@ void er_commit(void)
                  * current box plus where it was painted last commit, so a shrinking pulse erases its
                  * trail — instead of forcing a full-screen repaint.
                  */
-                int tx, ty, tw, th;
-                if (node_transformed_screen_rect(n, &tx, &ty, &tw, &th))
+                NodeTransformDamage td = {0};
+                if (node_transform_damage(n, &td))
                 {
-                    bool certain = true;
-                    const bool raw = node_transform_falls_back(n, &certain);
-                    int fx = tx, fy = ty, fw = tw, fh = th;
-                    if (raw)
-                        node_untransformed_screen_rect(n, &fx, &fy, &fw, &fh);
                     const bool moved = n->has_last_paint
-                                       && (fx != (int)n->last_paint_rect.x || fy != (int)n->last_paint_rect.y
-                                           || fw != (int)n->last_paint_rect.w || fh != (int)n->last_paint_rect.h);
+                                       && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
+                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
                     if (n->source_dirty || moved)
                     {
-                        int nx = fx, ny = fy, nw = fw, nh = fh;
+                        int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
 #if ERUI_SHADOWS
                         /* Only the FALLBACK footprint carries a shadow. render_tree gates the shadow on
                          * `!doing_affine`, so a node that captures its transform scratch genuinely casts
@@ -4220,19 +4262,19 @@ void er_commit(void)
                          * blit) and must not be grown — but one painted untransformed at its raw box
                          * draws its shadow like any other node, and a move that ignores the bleed leaves
                          * the old shadow on screen and clips the new one at the damage edge. */
-                        if (raw)
+                        if (td.raw)
                             expand_for_shadow(n, &nx, &ny, &nw, &nh);
 #endif
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
                         add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
                         if (!n->source_dirty)
                             report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
-                        if (raw && !certain)
+                        if (td.hedge)
                         {
                             /* The fallback was carried over from the last paint, not predicted from
                              * size, so the capture may succeed this commit and paint the AABB instead.
                              * Damage both rather than risk scissoring the node's own paint away. */
-                            int ax = tx, ay = ty, aw = tw, ah = th;
+                            int ax = td.ax, ay = td.ay, aw = td.aw, ah = td.ah;
                             clip_rect_to_clippers(n, &ax, &ay, &aw, &ah);
                             add_damage(&dmg, ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
                             if (!n->source_dirty)
@@ -4256,7 +4298,9 @@ void er_commit(void)
                     continue;
                 }
                 /*
-                 * Could not bound it (3D / oversized): only forces a full repaint if actually changing.
+                 * Could not bound it (ActivityIndicator spin, or a transform that projects to nothing):
+                 * only forces a full repaint if actually changing. An oversized node no longer lands here —
+                 * node_transform_damage() settles it on size and returns the raw box.
                  * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still
                  * missed — that needs the 3D AABB path ().
                  */
