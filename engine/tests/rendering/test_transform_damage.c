@@ -552,6 +552,7 @@ int main(void)
 #endif
 
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+    rc = check_3d_rotate_bounded(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
 #endif

@@ -83,6 +83,17 @@ jobs:
         run: cmake --build engine/build-ci-noocc
       - name: Test (occlusion culling off)
         run: ctest --test-dir engine/build-ci-noocc --output-on-failure
+      # Fifth pass with rotateX/rotateY/perspective. ERUI_3D_TRANSFORMS is OFF by default and was off in
+      # every pass above, so the whole 3D path — the homography + projected AABB in transform.c, the 3D
+      # branches of the damage pre-pass and hit-testing — were never compiled, and the scenarios guarding
+      # it in tests/rendering/test_transform.c and test_transform_damage.c never ran. It implies
+      # ERUI_TRANSFORMS=FULL (the 3D code lives inside the affine path).
+      - name: Configure (3D transforms)
+        run: cmake -S engine -B engine/build-ci-3d -DERUI_TRANSFORMS=FULL -DERUI_3D_TRANSFORMS=ON
+      - name: Build (3D transforms)
+        run: cmake --build engine/build-ci-3d
+      - name: Test (3D transforms)
+        run: ctest --test-dir engine/build-ci-3d --output-on-failure
 
   bridge:
     name: QuickJS bridge build + heap-accounting test
