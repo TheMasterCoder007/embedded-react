@@ -35,6 +35,13 @@
 #define ERUI_XFORM_H ERUI_SCRATCH_H
 #endif
 
+/* Below these the matrix is treated as singular and the node falls back to an untransformed paint.
+ * Named because er_transform_is_invertible() has to answer with EXACTLY the same rule the inverting
+ * functions apply — the damage pre-pass picks which ancestor captures by asking it, and a predicate
+ * that disagreed with the paint by an epsilon would escalate damage to the wrong node. */
+#define ER_XFORM_DET_EPS_2D 1e-6f
+#define ER_XFORM_DET_EPS_3D 1e-7f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -383,7 +390,7 @@ bool er_transform_homography_invert(const float H[9], float inv[9])
     const float c22 = H[0] * H[4] - H[1] * H[3];
 
     const float det = H[0] * c00 + H[1] * c01 + H[2] * c02;
-    if (det > -1e-7f && det < 1e-7f)
+    if (det > -ER_XFORM_DET_EPS_3D && det < ER_XFORM_DET_EPS_3D)
         return false;
 
     const float inv_det = 1.0f / det;
@@ -595,7 +602,7 @@ bool er_transform_invert(float a,
                          float* ity)
 {
     const float det = a * d - b * c;
-    if (det > -1e-6f && det < 1e-6f)
+    if (det > -ER_XFORM_DET_EPS_2D && det < ER_XFORM_DET_EPS_2D)
         return false;
 
     const float inv = 1.0f / det;
@@ -669,6 +676,52 @@ void er_transform_map_point(float ia,
 {
     *layout_x = (int)(ia * (float)screen_x + ic * (float)screen_y + itx);
     *layout_y = (int)(ib * (float)screen_x + id * (float)screen_y + ity);
+}
+
+/**
+ * @brief Whether a node's transform can be inverted — the other half of the capture admission test.
+ *
+ * er_transform_source_fits() answers the size half; this answers the rest of what render_tree()
+ * requires before it starts a capture, because the inverse-map blit is what puts the captured scratch
+ * back on screen and a singular matrix has no inverse. Such a node degrades to painting untransformed
+ * at its layout box, and — the reason this is exported — the capture then passes to whichever
+ * transform is nested inside it. The damage pre-pass picks the ancestor to escalate a descendant's
+ * damage to (see capturing_transform_ancestor), so it has to make that same call or it escalates to a
+ * node that never captured while the pixels land somewhere else entirely.
+ *
+ * Answered with the identical thresholds er_transform_invert() and er_transform_homography_invert()
+ * apply, on a matrix built from the same inputs — a prediction, not a guess.
+ *
+ * @param[in] n              Node to test.
+ * @param[in] ref_x,ref_y    Layout-space origin of the node (render px/py); the 3D homography's
+ *                           pivot depends on it, so pass what render_tree would.
+ * @param[in] w,h            Node size in pixels.
+ *
+ * @return true when the transform inverts (always false without ERUI_TRANSFORMS=FULL, which has no
+ *         capture path at all).
+ */
+bool er_transform_is_invertible(const ERNode* n, int ref_x, int ref_y, int w, int h)
+{
+#if ERUI_TRANSFORMS_FULL
+#if ERUI_3D_TRANSFORMS
+    if (er_transform_is_3d(n))
+    {
+        float H[9], inv[9];
+        er_transform_compute_homography_3d(n, ref_x, ref_y, w, h, H);
+        return er_transform_homography_invert(H, inv);
+    }
+#endif
+    float a, b, c, d, tx, ty, ia, ib, ic, id, itx, ity;
+    er_transform_compute_matrix(n, ref_x, ref_y, w, h, &a, &b, &c, &d, &tx, &ty);
+    return er_transform_invert(a, b, c, d, tx, ty, &ia, &ib, &ic, &id, &itx, &ity);
+#else
+    (void)n;
+    (void)ref_x;
+    (void)ref_y;
+    (void)w;
+    (void)h;
+    return false;
+#endif
 }
 
 bool er_transform_source_fits(int w, int h)

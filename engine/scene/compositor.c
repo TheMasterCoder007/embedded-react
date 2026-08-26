@@ -315,6 +315,10 @@ typedef struct
     bool tile_first;
     ERRect dirty_rect; /**< This worker's union of painted-node rects this commit. */
     bool has_dirty;
+    bool xf_capturing;     /**< A transformed ancestor's scratch capture is active: everything rendering
+                                below it is in SOURCE space and reaches the screen only through that
+                                ancestor's inverse-map blit. */
+    ERRect xf_capture_dst; /**< Where that blit writes — the ancestor's transformed screen AABB. */
 } CompCtx;
 
 static CompCtx s_comp_ctx[ERUI_RENDER_WORKERS];
@@ -644,6 +648,119 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
 }
 
 /**
+ * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
+ *
+ * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
+ * parent context, so they re-derive it here.
+ *
+ * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
+ * @param[out] sx,sy   Receive the accumulated ancestor scroll.
+ */
+static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
+{
+    *sx = 0;
+    *sy = 0;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
+        {
+            *sx += (int)a->scroll_offset_x;
+            *sy += (int)a->scroll_offset_y;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+}
+
+/**
+ * @brief The transformed ancestor whose scratch capture this node's pixels are painted into, if any.
+ *
+ * A node under a full transform does NOT paint itself onto the screen: render_tree captures the
+ * transformed ancestor's whole subtree into the transform scratch in SOURCE space, then inverse-maps
+ * that scratch out at the ancestor's transformed AABB. Every measurement the damage pre-pass can make
+ * of the inner node — its screen rect, and last_paint_rect itself — is plain layout-minus-scroll and
+ * knows nothing of the ancestor's matrix, so damaging it scissors the re-capture and the blit to a
+ * region the changed pixels never land in and the change is simply lost (issue #143). The fix is to
+ * escalate such damage to the ancestor, which is the only node here that measures in screen space.
+ *
+ * Only ONE capture can be active at a time (er_transform_source_begin refuses a second), so of a
+ * chain of transformed ancestors it is the OUTERMOST one render_tree ADMITS that captures — every
+ * transform nested inside that one is refused and painted untransformed into its capture. Hence the
+ * walk runs all the way to the root and keeps the last match rather than stopping at the first.
+ *
+ * "Admits" means BOTH halves of render_tree's test, not just the size one. A transform that does not
+ * invert has no inverse-map blit, so it paints untransformed at its layout box and the capture passes
+ * DOWN to the next transform inside it — and an outer ancestor counted as capturing on size alone
+ * would take the escalation while the pixels landed at the inner one's AABB, which is the same class
+ * of miss this path exists to fix. er_transform_is_invertible() answers with the exact rule the blit's
+ * own inverse applies. Occlusion, the third thing that stops a capture, is deliberately not asked: an
+ * occluded ancestor shows nothing, so escalating to it can only over-damage.
+ *
+ * Not a free predicate: it walks the ancestor chain, and pays for a matrix at each TRANSFORMED
+ * ancestor on it (usually none at all). So it is asked only of nodes actually contributing damage this
+ * commit, never of the idle majority the pre-pass sweeps past.
+ *
+ * @param[in] n  Node whose ancestors to search.
+ *
+ * @return The capturing ancestor, or NULL when this node paints straight to the screen.
+ */
+static ERNode* capturing_transform_ancestor(const ERNode* n)
+{
+#if ERUI_TRANSFORMS_FULL
+    ERNode* cap = NULL;
+    for (ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
+    {
+        if (!a->has_transform || a->type == ER_NODE_ACTIVITY_INDICATOR || er_transform_is_translate_only(a)
+            || !er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+            continue;
+        /* The same pre-transform origin render_tree hands the matrix: layout position minus ancestor
+         * scroll and the keyboard shift. Only the 3D homography's pivot actually depends on it, but
+         * deriving it any other way here would be a second rule to keep in step. */
+        int sx, sy;
+        node_ancestor_scroll(a, &sx, &sy);
+        if (er_transform_is_invertible(a,
+                                       (int)a->animated.x - sx,
+                                       (int)a->animated.y - sy - s_kbd_avoid_y,
+                                       (int)a->animated.w,
+                                       (int)a->animated.h))
+            cap = a;
+    }
+    return cap;
+#else
+    (void)n;
+    return NULL;
+#endif
+}
+
+/**
+ * @brief Registers pixels a node is vacating, in the space they were actually painted in.
+ *
+ * The rect a node leaves behind is its last-painted one — except under a transformed ancestor, where
+ * the node never painted to the screen at all: it painted into that ancestor's capture in source
+ * space, and what reached the panel is the ancestor's inverse-map blit. Erasing the source-space rect
+ * repaints an unrelated region and leaves the vacated pixels on screen (issue #143), so the region
+ * that blit last wrote is vacated instead.
+ *
+ * Whether the ancestor really captured is not predicted here: last_paint_untransformed records what
+ * the previous paint actually did, and it is the previous paint whose pixels are being vacated.
+ *
+ * @param[in] n         Node vacating the pixels (used to find its capturing ancestor, if any).
+ * @param[in] x,y,w,h   Screen rect being vacated, as measured for @p n itself.
+ */
+static void note_vacated_rect(const ERNode* n, int x, int y, int w, int h)
+{
+    const ERNode* cap = capturing_transform_ancestor(n);
+    if (cap && cap->has_last_paint && !cap->last_paint_untransformed)
+    {
+        x = (int)cap->last_paint_rect.x;
+        y = (int)cap->last_paint_rect.y;
+        w = (int)cap->last_paint_rect.w;
+        h = (int)cap->last_paint_rect.h;
+    }
+    er_damage_set_add(&s_removed_set, x, y, w, h);
+}
+
+/**
  * @brief Accumulates a removed subtree's last-painted rects into the pending removal damage.
  *
  * Called while the subtree is still intact (before detach). The next er_commit() seeds its damage set
@@ -657,12 +774,11 @@ static void note_removed_subtree(ERNode* n)
         return;
     if (n->has_last_paint)
     {
-        er_damage_set_add(&s_removed_set,
+        note_vacated_rect(n,
                           (int)n->last_paint_rect.x,
                           (int)n->last_paint_rect.y,
                           (int)n->last_paint_rect.w,
                           (int)n->last_paint_rect.h);
-
         n->has_last_paint = false;
     }
     uint16_t c = n->first_child_tag;
@@ -712,7 +828,7 @@ static void propagate_hidden(ERNode* n, bool ancestor_hidden)
         {
             if (n->has_last_paint)
             {
-                er_damage_set_add(&s_removed_set,
+                note_vacated_rect(n,
                                   (int)n->last_paint_rect.x,
                                   (int)n->last_paint_rect.y,
                                   (int)n->last_paint_rect.w,
@@ -758,31 +874,6 @@ static bool node_clips_children(const ERNode* n)
 {
     return n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
            || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST;
-}
-
-/**
- * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
- *
- * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
- * parent context, so they re-derive it here.
- *
- * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
- * @param[out] sx,sy   Receive the accumulated ancestor scroll.
- */
-static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
-{
-    *sx = 0;
-    *sy = 0;
-    const ERNode* a = er_get_node(n->parent_tag);
-    while (a)
-    {
-        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
-        {
-            *sx += (int)a->scroll_offset_x;
-            *sy += (int)a->scroll_offset_y;
-        }
-        a = er_get_node(a->parent_tag);
-    }
 }
 
 /**
@@ -1099,6 +1190,57 @@ static void report_repaint_clamped(int x, int y, int w, int h, int rb_x0, int rb
     const int cx1 = (x + w < rb_x1) ? (x + w) : rb_x1;
     const int cy1 = (y + h < rb_y1) ? (y + h) : rb_y1;
     union_dirty_rect(cx0, cy0, cx1 - cx0, cy1 - cy0);
+}
+
+/**
+ * @brief Damages the region a capturing ancestor's blit writes, standing in for a descendant's own.
+ *
+ * The ancestor's transformed AABB bounds everything its subtree can put on screen — the capture is
+ * exactly its w x h, so content laid out past that box is clipped away by the capture itself — which
+ * makes one rect the correct (and only correct) damage for a change anywhere inside it. This is the
+ * ancestor's own footprint, computed the same way node_transform_damage() computes it for the
+ * ancestor's sake, hedge included: the capture may fail this commit and degrade to the raw box, and
+ * damaging only one of the two would risk scissoring away the paint that actually happens.
+ *
+ * The ancestor's last-paint TRAIL is deliberately not added. It is only stale when the ancestor
+ * itself moved, and then the ancestor contributes it through its own pass of the pre-pass.
+ *
+ * @param[in]     cap        Capturing ancestor, from capturing_transform_ancestor().
+ * @param[in,out] dmg        Damage set to add to.
+ * @param[in]     report     Report the region as repainted too (for a descendant that is not
+ *                           source_dirty, so render_tree's accumulator will never report it).
+ * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Root bounds the insert is clamped to.
+ *
+ * @return true when the ancestor's footprint was damaged; false when it could not be bounded, in
+ *         which case the caller falls back to measuring the descendant itself.
+ */
+static bool
+escalate_damage_to_capture(ERNode* cap, ERDamageSet* dmg, bool report, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+{
+    NodeTransformDamage td = {0};
+    if (!node_transform_damage(cap, &td))
+        return false;
+
+    int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
+#if ERUI_SHADOWS
+    /* Same rule as the ancestor's own pass: only the raw-box fallback casts a shadow. */
+    if (td.raw)
+        expand_for_shadow(cap, &nx, &ny, &nw, &nh);
+#endif
+    clip_rect_to_clippers(cap, &nx, &ny, &nw, &nh);
+    add_damage(dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
+    if (report)
+        report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
+
+    if (td.hedge)
+    {
+        int ax = td.ax, ay = td.ay, aw = td.aw, ah = td.ah;
+        clip_rect_to_clippers(cap, &ax, &ay, &aw, &ah);
+        add_damage(dmg, ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+        if (report)
+            report_repaint_clamped(ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+    }
+    return true;
 }
 
 /* Set per-commit: true when the cached subtree bounds are trustworthy this frame (no layout
@@ -1841,8 +1983,20 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * pruning and nested composite regions inside the capture aren't bounded by a
      * post-transform rectangle. er_transform_source_begin pushed the matching clip reset. */
     const bool xf_saved_tile_active = cc()->tile_active;
+    /* Whether an OUTER capture was already running when this node was entered — read below to report
+     * this node's change at the position its pixels actually reach the screen. Sampled before the
+     * assignment, so a node that starts its own capture still reports its own transformed AABB. */
+    const bool xf_outer_capturing = cc()->xf_capturing;
+    const ERRect xf_outer_dst = cc()->xf_capture_dst;
     if (doing_affine)
+    {
         cc()->tile_active = false;
+        cc()->xf_capturing = true;
+        cc()->xf_capture_dst.x = dst_x;
+        cc()->xf_capture_dst.y = dst_y;
+        cc()->xf_capture_dst.w = dst_w;
+        cc()->xf_capture_dst.h = dst_h;
+    }
 
     /* Record where this node is painted so the next commit can damage-clip a move: the old rect
      * (stored here) unioned with the new rect erases the node's trail without a full-screen repaint.
@@ -1895,7 +2049,11 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * pixels so MCU display drivers can restrict partial DMA transfers. */
     if (n->source_dirty && n->painted_seq != s_commit_seq)
     {
-        if (doing_affine)
+        if (xf_outer_capturing)
+        {
+            union_dirty_rect(xf_outer_dst.x, xf_outer_dst.y, xf_outer_dst.w, xf_outer_dst.h);
+        }
+        else if (doing_affine)
         {
             union_dirty_rect(dst_x, dst_y, dst_w, dst_h);
         }
@@ -1985,6 +2143,8 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             er_transform_source_end_blit(
                 px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
         cc()->tile_active = xf_saved_tile_active;
+        cc()->xf_capturing = xf_outer_capturing;
+        cc()->xf_capture_dst = xf_outer_dst;
     }
 }
 
@@ -2508,7 +2668,7 @@ void er_node_destroy(ERNode* node)
     fade_cache_invalidate();
     /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
     if (node->has_last_paint)
-        er_damage_set_add(&s_removed_set,
+        note_vacated_rect(node,
                           (int)node->last_paint_rect.x,
                           (int)node->last_paint_rect.y,
                           (int)node->last_paint_rect.w,
@@ -3022,7 +3182,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
         if (node_subtree_screen_rect(node, &sx, &sy, &sw, &sh))
         {
             clip_rect_to_clippers(node, &sx, &sy, &sw, &sh);
-            er_damage_set_add(&s_removed_set, sx, sy, sw, sh);
+            note_vacated_rect(node, sx, sy, sw, sh);
             node->overflow_toggled = true;
         }
         else
@@ -3902,7 +4062,7 @@ void er_tree_append_child(ERNode* parent, ERNode* child)
     }
 
     child->next_sibling_tag = ER_INVALID_TAG;
-    parent->dirty = true;
+    mark_reflow_upward(parent);
     mark_layout_dirty();
     propagate_hidden(child, parent->subtree_hidden);
 }
@@ -3953,7 +4113,7 @@ void er_tree_insert_before(ERNode* parent, ERNode* child, ERNode* before)
         }
     }
 
-    parent->dirty = true;
+    mark_reflow_upward(parent); /* the chain above must repaint too — see er_tree_append_child */
     mark_layout_dirty();
     propagate_hidden(child, parent->subtree_hidden);
 }
@@ -3969,7 +4129,7 @@ void er_tree_remove_child(ERNode* parent, ERNode* child)
 
     tree_detach(child);
     child->parent_tag = ER_INVALID_TAG;
-    parent->dirty = true;
+    mark_reflow_upward(parent); /* the chain above must repaint too — see er_tree_append_child */
     mark_layout_dirty();
     propagate_hidden(child, true);
 }
@@ -4076,7 +4236,12 @@ void er_commit(void)
      * (s_dirty_rect / s_has_dirty / s_last_paint_set) are deliberately not touched here: a commit that
      * paints nothing leaves the last painting commit's rects readable — see er_get_dirty_rect(). */
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)
+    {
         s_comp_ctx[i].has_dirty = false;
+        /* render_tree saves and restores this around each capture, so it is already false — cleared
+         * anyway so one unbalanced render can't make every later node report an ancestor's stale AABB. */
+        s_comp_ctx[i].xf_capturing = false;
+    }
 
     /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the
      * 500 ms blink phase has changed since the last commit. This keeps the render
@@ -4234,6 +4399,12 @@ void er_commit(void)
                 continue;
             if (n->overflow_toggled)
             {
+                /* Under a transformed ancestor the subtree bounds below are source-space, like every
+                 * other measurement of this node — the ancestor's blit is what puts the toggled
+                 * region on screen, and its AABB already covers the whole subtree. */
+                ERNode* const ov_cap = capturing_transform_ancestor(n);
+                if (ov_cap && escalate_damage_to_capture(ov_cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+                    continue;
                 /* This node clipped or unclipped its children since the last commit. Its own box is
                  * damaged below like any visual change; the half the box cannot express is the region
                  * its descendants painted (or are about to paint) outside it, which is this — the
@@ -4268,6 +4439,12 @@ void er_commit(void)
                                            || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
                     if (n->source_dirty || moved)
                     {
+                        /* Refused the scratch because an ancestor holds it: this node painted into
+                         * that ancestor's capture in source space, so td measures a region its pixels
+                         * never reach. The ancestor's AABB is where they actually land. */
+                        ERNode* const cap = capturing_transform_ancestor(n);
+                        if (cap && escalate_damage_to_capture(cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+                            continue;
                         int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
 #if ERUI_SHADOWS
                         /* Only the FALLBACK footprint carries a shadow. render_tree gates the shadow on
@@ -4320,6 +4497,12 @@ void er_commit(void)
                  */
                 if (n->source_dirty)
                 {
+                    /* Inside an ancestor's capture this is bounded after all: whatever the node's own
+                     * transform does, it does it in source space and reaches the screen only through
+                     * the ancestor's blit. Beats a full-screen repaint per spinner frame. */
+                    ERNode* const cap = capturing_transform_ancestor(n);
+                    if (cap && escalate_damage_to_capture(cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+                        continue;
                     trackable = false;
                     break;
                 }
@@ -4353,6 +4536,16 @@ void er_commit(void)
                 if (!n->modal_visible)
                     n->modal_scrim_shown = 0U;
                 continue;
+            }
+            /* Everything below measures this node in plain layout-minus-scroll space. Under a
+             * transformed ancestor that space is the ancestor's CAPTURE, not the screen: the node's
+             * pixels are inverse-mapped out at the ancestor's transformed AABB, so that AABB — and
+             * not any rect derived from the node's own box — is what has to be repainted.
+             * (Asked after the Modal case, whose scrim covers the root regardless of any ancestor.) */
+            {
+                ERNode* const cap = capturing_transform_ancestor(n);
+                if (cap && escalate_damage_to_capture(cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+                    continue;
             }
             if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty && !moved)
             {
