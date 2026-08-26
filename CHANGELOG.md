@@ -30,6 +30,9 @@ See the README for the release process.
 
 ### Changed
 
+- A rotated or scaled node that is too big to transform no longer costs trigonometry on every idle
+  commit. The damage pass built the transform matrix and its bounding box first and only then asked
+  whether the node could be transformed at all, throwing the work away when the answer was no.
 - The engine no longer draws layers that something opaque covers. Painting was strictly bottom-up, so
   every layer inside a repaint region was drawn even where an opaque one buried it — a page background
   over a wallpaper over a root cost three fills where one would do. Measured on a 800x480 ESP32-S3
