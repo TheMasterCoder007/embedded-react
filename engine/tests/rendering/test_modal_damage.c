@@ -280,6 +280,86 @@ static void build_scene(void)
     er_tree_append_child(sheet, s_ctrl);
 }
 
+/**
+ * @brief Shows then hides the shared s_modal, checking the root-wide scrim contract at (px_x, px_y).
+ *
+ * Common to every modal shape this file exercises against a probe point outside the modal's own box:
+ * raising the modal scrims that point and reports a full-root dirty rect; an optional callback runs
+ * once while it's shown (e.g. to repaint something else under the scrim); hiding it reports a
+ * full-root dirty rect too, restores the probe point to `expect_after_hide`, leaves no residue in the
+ * reference strip, and costs nothing once it settles idle again.
+ *
+ * @param[in] desc              Label for failure messages ("non-full-screen", "transformed").
+ * @param[in] px_x,px_y         Probe point outside the modal's own box.
+ * @param[in] expect_after_hide Pixel value (px_x, px_y) must settle back to once hidden.
+ * @param[in] while_shown       Optional: runs once after show, before hide.
+ *
+ * @return 0 on success, or a fail()-produced EXIT_FAILURE.
+ */
+static int
+check_modal_scrim_roundtrip(const char* desc, int px_x, int px_y, uint32_t expect_after_hide, void (*while_shown)(void))
+{
+    const uint32_t before_show = at(px_x, px_y);
+
+    s_modal_p.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    if (at(px_x, px_y) == before_show)
+    {
+        fprintf(stderr, "  (%d,%d) still %06X with the %s modal shown\n", px_x, px_y, before_show, desc);
+        return fail("a modal did not scrim the page outside its own box");
+    }
+    char label[64];
+    snprintf(label, sizeof(label), "%s show", desc);
+    if (dirty_rect_spans_root(label))
+        return fail("raising a scrim did not report a full-root dirty rect");
+
+    if (while_shown)
+        while_shown();
+
+    s_modal_p.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    snprintf(label, sizeof(label), "%s hide", desc);
+    if (dirty_rect_spans_root(label))
+        return fail("dropping a scrim did not report a full-root dirty rect");
+    frame_distinct();
+
+    if (at(px_x, px_y) != expect_after_hide)
+    {
+        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), expect_after_hide);
+        return fail("hiding a modal left scrim on the page");
+    }
+    long stale = 0;
+    for (int y = 0; y < 20; y++)
+        for (int x = 200; x < 260; x++) /* page background, well clear of every card and the dialog */
+            if (at(x, y) != 0x203040u)
+                stale++;
+    if (stale != 0)
+    {
+        fprintf(stderr, "  %ld px still scrimmed\n", stale);
+        return fail("hiding a modal left scrim residue on the page");
+    }
+
+    /* An on-screen modal must still cost nothing while idle. */
+    s_modal_p.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_p);
+    frame_distinct();
+    frame_distinct();
+    for (int i = 0; i < 3; i++)
+        if (frame_distinct() != 0)
+            return fail("a modal repainted on an idle frame");
+    return 0;
+}
+
+/** @brief check_modal_scrim_roundtrip() while_shown callback: repaints s_page_node under the modal. */
+static void repaint_page_node_under_modal(void)
+{
+    s_page_p.background_color = 0xFF88CCF0U;
+    er_node_set_props(s_page_node, &s_page_p);
+    frame_distinct();
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Test
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -423,49 +503,11 @@ int main(void)
     frame_distinct();
 
     const int px_x = 40, px_y = 40; /* over the page node, far outside the small modal box */
-    const uint32_t unscrimmed = at(px_x, px_y);
-
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    if (at(px_x, px_y) == unscrimmed)
     {
-        fprintf(stderr, "  (%d,%d) still %06X with the modal shown\n", px_x, px_y, unscrimmed);
-        return fail("a non-full-screen modal did not scrim the page outside its own box");
+        const int rc = check_modal_scrim_roundtrip("non-full-screen", px_x, px_y, at(px_x, px_y), NULL);
+        if (rc)
+            return rc;
     }
-    if (dirty_rect_spans_root("show"))
-        return fail("raising a scrim did not report a full-root dirty rect");
-
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    if (dirty_rect_spans_root("hide"))
-        return fail("dropping a scrim did not report a full-root dirty rect");
-    frame_distinct();
-    if (at(px_x, px_y) != unscrimmed)
-    {
-        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), unscrimmed);
-        return fail("hiding a non-full-screen modal left its scrim on the page");
-    }
-    long stale_small = 0;
-    for (int y = 0; y < 20; y++)
-        for (int x = 200; x < 260; x++)
-            if (at(x, y) != 0x203040u)
-                stale_small++;
-    if (stale_small != 0)
-    {
-        fprintf(stderr, "  %ld px still scrimmed\n", stale_small);
-        return fail("hiding a non-full-screen modal left scrim residue on the page");
-    }
-
-    /* An on-screen non-full-screen modal must still cost nothing while idle. */
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    frame_distinct();
-    for (int i = 0; i < 3; i++)
-        if (frame_distinct() != 0)
-            return fail("a non-full-screen modal repainted on an idle frame");
 
 #if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SW) && (ERUI_XFORM_H + 1 < SH)
     /* --- a TRANSFORMED modal owes the same root-wide scrim damage (issue #142) ---
@@ -498,58 +540,15 @@ int main(void)
     if (er_transform_source_fits(s_modal_p.width, s_modal_p.height))
         return fail("the transformed modal fits the transform source — it is not on the intended path");
 
-    const uint32_t xf_clean = at(px_x, px_y); /* over the page node, far outside the modal's box */
-
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    if (at(px_x, px_y) == xf_clean)
+    /* The while-shown callback repaints an unrelated page node while the modal is up. With the scrim
+     * damaged to the modal's box only, the backdrop fill lands on THIS damage too — a stray dark patch
+     * out on the page that the hide would then have no reason to erase — so the expected post-hide
+     * pixel is the page's NEW color, not its pre-show one. */
     {
-        fprintf(stderr, "  (%d,%d) still %06X with the transformed modal shown\n", px_x, px_y, xf_clean);
-        return fail("a transformed modal did not scrim the page outside its own box");
+        const int rc = check_modal_scrim_roundtrip("transformed", px_x, px_y, 0x88CCF0u, repaint_page_node_under_modal);
+        if (rc)
+            return rc;
     }
-    if (dirty_rect_spans_root("transformed show"))
-        return fail("raising a transformed modal's scrim did not report a full-root dirty rect");
-
-    /* Repaint an unrelated page node while the modal is up. With the scrim damaged to the modal's box
-     * only, the backdrop fill lands on THIS damage too — a stray dark patch out on the page that the
-     * hide below then has no reason to erase. */
-    s_page_p.background_color = 0xFF88CCF0U;
-    er_node_set_props(s_page_node, &s_page_p);
-    frame_distinct();
-
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    if (dirty_rect_spans_root("transformed hide"))
-        return fail("dropping a transformed modal's scrim did not report a full-root dirty rect");
-    frame_distinct();
-
-    if (at(px_x, px_y) != 0x88CCF0u)
-    {
-        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), 0x88CCF0u);
-        return fail("hiding a transformed modal left scrim on a node that repainted under it");
-    }
-    long stale_xf = 0;
-    for (int y = 0; y < 20; y++)
-        for (int x = 200; x < 260; x++)
-            if (at(x, y) != 0x203040u)
-                stale_xf++;
-    if (stale_xf != 0)
-    {
-        fprintf(stderr, "  %ld px still scrimmed\n", stale_xf);
-        return fail("hiding a transformed modal left scrim residue on the page");
-    }
-
-    /* And it must still cost nothing while it sits there — the shared handling is reached only for a
-     * modal that is source-dirty or moved, exactly like the untransformed one. */
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
-    frame_distinct();
-    frame_distinct();
-    for (int i = 0; i < 3; i++)
-        if (frame_distinct() != 0)
-            return fail("a transformed modal repainted on an idle frame");
 #endif /* ERUI_TRANSFORMS_FULL && the modal fits on screen without covering it */
 
     printf(
