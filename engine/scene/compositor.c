@@ -786,6 +786,32 @@ static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
 }
 
 /**
+ * @brief Grows a rect by however far this node's Arc knob reaches past its layout box.
+ *
+ * A knob wider than the ring paints outside the box, so any rect meant to bound what the node PUTS ON
+ * SCREEN — its damage, its prune bounds, its last-paint trail, the pre-pass footprint compared against
+ * that trail — has to include the reach or the knob is clipped and a move leaves it behind. The pre-pass
+ * compares its answer to last_paint_rect for exact equality, so every site must inflate identically:
+ * that is why this lives in one place. No-op for anything but an Arc, or an Arc with no overhang.
+ *
+ * Not applied on the affine path: a rotated/scaled Arc renders through a `w × h` transform scratch and
+ * is bounded by the transformed layout box, so its knob is clipped there (see engine/README.md).
+ *
+ * @param[in]     n        Node to measure; its cached ERNode::arc_overhang is refreshed as a side effect.
+ * @param[in,out] x,y,w,h  Rect grown in place by the knob's reach on every side.
+ */
+static void expand_for_arc(ERNode* n, int* x, int* y, int* w, int* h)
+{
+    if (n->type != ER_NODE_ARC)
+        return;
+    const int over = er_arc_refresh_overhang(n);
+    *x -= over;
+    *y -= over;
+    *w += 2 * over;
+    *h += 2 * over;
+}
+
+/**
  * @brief Computes a node's current screen rect for damage tracking.
  *
  * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
@@ -881,14 +907,7 @@ static void node_untransformed_screen_rect(ERNode* n, int sx, int sy, int* rx, i
     *ry = (int)n->animated.y - sy - s_kbd_avoid_y;
     *rw = (int)n->animated.w;
     *rh = (int)n->animated.h;
-    if (n->type == ER_NODE_ARC)
-    {
-        const int over = er_arc_refresh_overhang(n);
-        *rx -= over;
-        *ry -= over;
-        *rw += 2 * over;
-        *rh += 2 * over;
-    }
+    expand_for_arc(n, rx, ry, rw, rh);
 }
 #endif /* ERUI_TRANSFORMS_FULL */
 
@@ -1120,15 +1139,11 @@ static void compute_subtree_bounds(ERNode* n)
     int x1 = x0 + n->computed.w;
     int y1 = y0 + n->computed.h;
     bool prunable = !n->has_transform;
-    if (n->type == ER_NODE_ARC)
-    {
-        /* A knob wider than the ring paints past the box: widen the prune bounds by its reach. */
-        const int over = er_arc_refresh_overhang(n);
-        x0 -= over;
-        y0 -= over;
-        x1 += over;
-        y1 += over;
-    }
+    /* A knob wider than the ring paints past the box: widen the prune bounds by its reach. */
+    int aw = x1 - x0, ah = y1 - y0;
+    expand_for_arc(n, &x0, &y0, &aw, &ah);
+    x1 = x0 + aw;
+    y1 = y0 + ah;
 
     const bool clips = node_clips_children(n);
 
@@ -1836,20 +1851,19 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * subsequent commit, re-damaging the same pixels for as long as it stays hidden. */
     if (needs_paint)
     {
-        n->last_paint_rect.x = (int16_t)(doing_affine ? dst_x : px);
-        n->last_paint_rect.y = (int16_t)(doing_affine ? dst_y : py);
-        n->last_paint_rect.w = (int16_t)(doing_affine ? dst_w : w);
-        n->last_paint_rect.h = (int16_t)(doing_affine ? dst_h : h);
+        int lp_x = doing_affine ? dst_x : px;
+        int lp_y = doing_affine ? dst_y : py;
+        int lp_w = doing_affine ? dst_w : w;
+        int lp_h = doing_affine ? dst_h : h;
+        /* The footprint must include the knob's reach past the box, or a move / removal leaves it.
+         * Not on the affine path, which bounds itself by the transformed layout box. */
+        if (!doing_affine)
+            expand_for_arc(n, &lp_x, &lp_y, &lp_w, &lp_h);
+        n->last_paint_rect.x = (int16_t)lp_x;
+        n->last_paint_rect.y = (int16_t)lp_y;
+        n->last_paint_rect.w = (int16_t)lp_w;
+        n->last_paint_rect.h = (int16_t)lp_h;
         n->last_paint_untransformed = !doing_affine;
-        if (n->type == ER_NODE_ARC && !doing_affine)
-        {
-            /* The footprint must include the knob's reach past the box, or a move / removal leaves it. */
-            const int over = er_arc_refresh_overhang(n);
-            n->last_paint_rect.x = (int16_t)(px - over);
-            n->last_paint_rect.y = (int16_t)(py - over);
-            n->last_paint_rect.w = (int16_t)(w + 2 * over);
-            n->last_paint_rect.h = (int16_t)(h + 2 * over);
-        }
         n->has_last_paint = true;
     }
 
@@ -4312,16 +4326,9 @@ void er_commit(void)
                 continue;
             }
             const int box_rx = rx, box_ry = ry; /* the layout box, before any arc inflation */
-            if (n->type == ER_NODE_ARC)
-            {
-                /* Measure the arc by its painted footprint — the box plus the knob's reach past it — which is
-                 * what last_paint_rect records, so a steady arc is not read as "moved" every commit. */
-                const int over = er_arc_refresh_overhang(n);
-                rx -= over;
-                ry -= over;
-                rw += 2 * over;
-                rh += 2 * over;
-            }
+            /* Measure the arc by its painted footprint — the box plus the knob's reach past it — which is
+             * what last_paint_rect records, so a steady arc is not read as "moved" every commit. */
+            expand_for_arc(n, &rx, &ry, &rw, &rh);
             const bool moved = n->has_last_paint
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
                                    || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
