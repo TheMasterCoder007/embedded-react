@@ -81,7 +81,10 @@ allocation happens in a render pass. Three pools exist, each sized by its own co
   `ERUI_XFORM_W/H` cap the largest rotatable/scalable node — decouple them when strips
   are screen-wide but transforms only ever hit small widgets. The transformed **output**
   is streamed out per row segment, so the destination AABB (which grows under
-  rotation/scale-up) is unlimited.
+  rotation/scale-up) is unlimited. Damage inside such a subtree is **whole-node**: the
+  contents are captured in the node's own untransformed space, and only the blit puts them on
+  screen, so a change to one child repaints the node's entire transformed AABB rather than a
+  rect around the child. Keep transformed subtrees small if they update often.
 - **Shadow plane** — `ERUI_SCRATCH_W × ERUI_SCRATCH_H` bytes of A8 coverage
   (`ERUI_SHADOWS` only).
 

@@ -77,6 +77,13 @@ See the README for the release process.
   and damage tracking didn't know.
 - A shadow on one of those views was left behind when it moved, and clipped at its new position. Only
   the view's own box was repainted, and a shadow is drawn outside it.
+- A change to anything inside a rotated or scaled view didn't show up. The view's contents are drawn
+  into a scratch buffer and mapped onto the screen. However, the damage tracker measured the changed child
+  where it was laid out rather than where the mapping puts it, so the repaint missed the pixels
+  entirely, and the change simply stayed invisible.
+- Adding or removing a node under a see-through parent — a translucent background, a faded group, the
+  soft edge of a rotated view — darkened it. Only the immediate parent was repainted, so it composited
+  over the old pixels instead of a fresh background.
 - Toggling `overflow` on a view left its children's overflowing pixels wrong. Hiding kept them on
   screen; showing never painted them back. Only the view's own box was ever repainted.
 - A child that laid out past its faded parent's box vanished. `opacity` composited the subtree
