@@ -648,6 +648,31 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
 }
 
 /**
+ * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
+ *
+ * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
+ * parent context, so they re-derive it here.
+ *
+ * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
+ * @param[out] sx,sy   Receive the accumulated ancestor scroll.
+ */
+static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
+{
+    *sx = 0;
+    *sy = 0;
+    const ERNode* a = er_get_node(n->parent_tag);
+    while (a)
+    {
+        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
+        {
+            *sx += (int)a->scroll_offset_x;
+            *sy += (int)a->scroll_offset_y;
+        }
+        a = er_get_node(a->parent_tag);
+    }
+}
+
+/**
  * @brief The transformed ancestor whose scratch capture this node's pixels are painted into, if any.
  *
  * A node under a full transform does NOT paint itself onto the screen: render_tree captures the
@@ -659,12 +684,21 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
  * escalate such damage to the ancestor, which is the only node here that measures in screen space.
  *
  * Only ONE capture can be active at a time (er_transform_source_begin refuses a second), so of a
- * chain of transformed ancestors it is the OUTERMOST one that fits the scratch that captures — every
- * transform nested inside it is refused and painted untransformed into that same capture. Hence the
+ * chain of transformed ancestors it is the OUTERMOST one render_tree ADMITS that captures — every
+ * transform nested inside that one is refused and painted untransformed into its capture. Hence the
  * walk runs all the way to the root and keeps the last match rather than stopping at the first.
  *
- * Not a free predicate: it walks the ancestor chain, so it is asked only of nodes that are actually
- * contributing damage this commit, never of the idle majority the pre-pass sweeps past.
+ * "Admits" means BOTH halves of render_tree's test, not just the size one. A transform that does not
+ * invert has no inverse-map blit, so it paints untransformed at its layout box and the capture passes
+ * DOWN to the next transform inside it — and an outer ancestor counted as capturing on size alone
+ * would take the escalation while the pixels landed at the inner one's AABB, which is the same class
+ * of miss this path exists to fix. er_transform_is_invertible() answers with the exact rule the blit's
+ * own inverse applies. Occlusion, the third thing that stops a capture, is deliberately not asked: an
+ * occluded ancestor shows nothing, so escalating to it can only over-damage.
+ *
+ * Not a free predicate: it walks the ancestor chain, and pays for a matrix at each TRANSFORMED
+ * ancestor on it (usually none at all). So it is asked only of nodes actually contributing damage this
+ * commit, never of the idle majority the pre-pass sweeps past.
  *
  * @param[in] n  Node whose ancestors to search.
  *
@@ -676,8 +710,19 @@ static ERNode* capturing_transform_ancestor(const ERNode* n)
     ERNode* cap = NULL;
     for (ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
     {
-        if (a->has_transform && a->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(a)
-            && er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+        if (!a->has_transform || a->type == ER_NODE_ACTIVITY_INDICATOR || er_transform_is_translate_only(a)
+            || !er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+            continue;
+        /* The same pre-transform origin render_tree hands the matrix: layout position minus ancestor
+         * scroll and the keyboard shift. Only the 3D homography's pivot actually depends on it, but
+         * deriving it any other way here would be a second rule to keep in step. */
+        int sx, sy;
+        node_ancestor_scroll(a, &sx, &sy);
+        if (er_transform_is_invertible(a,
+                                       (int)a->animated.x - sx,
+                                       (int)a->animated.y - sy - s_kbd_avoid_y,
+                                       (int)a->animated.w,
+                                       (int)a->animated.h))
             cap = a;
     }
     return cap;
@@ -829,31 +874,6 @@ static bool node_clips_children(const ERNode* n)
 {
     return n->layout.overflow == ER_OVERFLOW_HIDDEN || n->layout.overflow == ER_OVERFLOW_SCROLL
            || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST;
-}
-
-/**
- * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
- *
- * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
- * parent context, so they re-derive it here.
- *
- * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
- * @param[out] sx,sy   Receive the accumulated ancestor scroll.
- */
-static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
-{
-    *sx = 0;
-    *sy = 0;
-    const ERNode* a = er_get_node(n->parent_tag);
-    while (a)
-    {
-        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
-        {
-            *sx += (int)a->scroll_offset_x;
-            *sy += (int)a->scroll_offset_y;
-        }
-        a = er_get_node(a->parent_tag);
-    }
 }
 
 /**

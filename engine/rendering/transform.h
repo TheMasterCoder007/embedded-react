@@ -286,6 +286,24 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h);
 bool er_transform_source_fits(int w, int h);
 
 /**
+ * @brief Whether a node's transform can be inverted — the other half of the capture admission test.
+ *
+ * er_transform_source_fits() answers the size half. render_tree() also needs an invertible matrix,
+ * because the inverse-map blit is what puts the captured scratch back on screen; a singular transform
+ * (a scale collapsed to nothing, a perspective that projects the box to a line) makes the node paint
+ * untransformed at its layout box instead, and the capture passes to whichever transform is nested
+ * inside it. The damage pre-pass has to know which ancestor actually captures before it can escalate
+ * a descendant's damage to that ancestor's transformed AABB.
+ *
+ * @param[in] n            Node to test.
+ * @param[in] ref_x,ref_y  Layout-space origin (render px/py) — the 3D homography's pivot depends on it.
+ * @param[in] w,h          Node size in pixels.
+ *
+ * @return true when the transform inverts (always false without ERUI_TRANSFORMS=FULL).
+ */
+bool er_transform_is_invertible(const ERNode* n, int ref_x, int ref_y, int w, int h);
+
+/**
  * @brief Records which node's subtree the transform source buffer currently holds.
  *
  * Called by the compositor after a successful er_transform_source_begin() during a banded

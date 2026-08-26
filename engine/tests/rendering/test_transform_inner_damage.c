@@ -399,6 +399,128 @@ static int check_inner_mutation(int ox, int oy, float rot, Mutation mut, const c
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief The capture passes DOWN past a transformed ancestor whose matrix cannot be inverted.
+ *
+ * render_tree admits a capture on two things: the node fits the transform scratch AND its matrix
+ * inverts (the inverse-map blit is what puts the scratch back on screen). A transform that collapses
+ * — a scale animating toward zero is the everyday way to get one — fails the second test however
+ * comfortably it passes the first, so it paints untransformed at its layout box and the capture
+ * passes down to the next transform inside it.
+ *
+ * A damage escalation that picked the capturing ancestor on SIZE alone would name the outer node here
+ * and damage its raw box, while the leaf's pixels come out of the inner node's blit somewhere else
+ * entirely — the same missed update this file is about, one level down. Flagged in review on #143.
+ *
+ * @param[in] screen  Root size.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
+ */
+static int check_noninvertible_outer(int screen)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = (int16_t)screen;
+    rp.height = (int16_t)screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    /* Outer: fits the scratch with room to spare, but its 2x2 determinant (scale_x * scale_y) lands
+     * far below the threshold er_transform_invert() rejects at, so no capture starts here. */
+    ERNode* outer = er_node_create(ER_NODE_VIEW);
+    ERProps op = props_default();
+    op.position = ER_POS_ABSOLUTE;
+    op.left = 10;
+    op.top = 10;
+    op.width = 100;
+    op.height = 100;
+    op.background_color = 0xFF2244AAU;
+    op.transform_rotate_z = 20.0f;
+    op.transform_scale_x = 5.0e-4f;
+    op.transform_scale_y = 5.0e-4f;
+    er_node_set_props(outer, &op);
+
+    /* Inner: ordinary rotation, fits — and with the outer refused, this is what captures. Parked at
+     * the outer's bottom-right corner (overflow is visible, so a child may paint past its parent) and
+     * rotated 45 degrees, which throws its AABB well clear of the outer's raw box. That separation is
+     * the whole point: naming the outer as the capturing ancestor damages a region that does NOT
+     * contain what the inner's blit writes, instead of one that happens to. */
+    ERNode* inner = er_node_create(ER_NODE_VIEW);
+    ERProps ip = props_default();
+    ip.position = ER_POS_ABSOLUTE;
+    ip.left = 70;
+    ip.top = 70;
+    ip.width = 60;
+    ip.height = 60;
+    ip.background_color = 0xFF117733U;
+    ip.transform_rotate_z = 45.0f;
+    er_node_set_props(inner, &ip);
+
+    /* Leaf: the thing that changes. Tucked into the far corner of the inner node's source, so its
+     * pixels come out of the blit past the outer's box entirely. */
+    ERNode* leaf = er_node_create(ER_NODE_VIEW);
+    ERProps lp = props_default();
+    lp.position = ER_POS_ABSOLUTE;
+    lp.left = 35;
+    lp.top = 35;
+    lp.width = 25;
+    lp.height = 25;
+    lp.background_color = 0xFF33FF33U;
+    er_node_set_props(leaf, &lp);
+
+    er_tree_append_child(inner, leaf);
+    er_tree_append_child(outer, inner);
+    er_tree_append_child(root, outer);
+    er_tree_set_root(root);
+
+    er_force_full_repaint();
+    er_commit();
+    er_commit();
+
+    static uint32_t before[FB_PIXELS];
+    memcpy(before, s_fb, sizeof(before));
+
+    lp.background_color = 0xFFFF2222U;
+    er_node_set_props(leaf, &lp);
+    er_commit();
+
+    ERRect rects[ER_DAMAGE_RECTS_MAX];
+    const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    static uint32_t inc[FB_PIXELS];
+    memcpy(inc, s_fb, sizeof(inc));
+
+    er_force_full_repaint();
+    er_commit();
+
+    ERRect bbox = {0, 0, 0, 0};
+    const int differ = diff_frames(inc, s_fb, &bbox);
+    const int missed = unreported_pixels(before, inc, rects, rect_count);
+    /* The case is only meaningful if the leaf change really moved pixels through the inner blit. */
+    const int changed = diff_frames(before, inc, NULL);
+
+    printf("non-invertible outer, capturing inner: %d px differ from a full repaint, %d changed px "
+           "unreported (%d changed in all)\n",
+           differ,
+           missed,
+           changed);
+    if (differ)
+        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.w, bbox.h);
+
+    er_node_destroy(root);
+
+    /* Asked first: when the escalation names the outer node, the damage misses the inner blit
+     * completely and the commit changes nothing at all — so `changed` reads 0 for the very reason the
+     * test exists, and reporting it as "proves nothing" would bury the real failure. */
+    if (differ != 0)
+        return fail("damage escalated to the wrong ancestor — the outer transform never captured, so "
+                    "the capture (and the pixels) belong to the inner one");
+    if (missed != 0)
+        return fail("pixels changed outside every reported dirty rect");
+    if (changed == 0)
+        return fail("the leaf recolour changed nothing on screen — the case proves nothing");
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     EmbeddedRenderBackend be = {0};
@@ -452,6 +574,10 @@ int main(void)
                 return rc;
         }
     }
+
+    const int rc_ni = check_noninvertible_outer(200);
+    if (rc_ni != EXIT_SUCCESS)
+        return rc_ni;
 
     printf("PASS: inner-only mutations under a transformed ancestor match a full repaint\n");
 #else
