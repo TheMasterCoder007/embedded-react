@@ -279,6 +279,12 @@ struct ERNode
     ERLayoutRect animated;        /**< Current display rect; updated by layout animations; equals computed when idle. */
     ERLayoutRect last_paint_rect; /**< Screen rect this node was last painted at (damage-clip trail erase). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
+    bool last_paint_untransformed; /**< The last paint of this TRANSFORMED node degraded to its raw,
+                                        untransformed box: the scratch capture could not be started, so
+                                        last_paint_rect holds the layout box and not the transformed AABB.
+                                        The damage pre-pass has to predict the same fallback or the two
+                                        never agree and the node reads as moved on every commit. Only
+                                        meaningful alongside has_last_paint. */
     uint32_t layout_props_hash; /**< Hash of the layout (Yoga) block of the last applied ERProps. */
     uint32_t visual_props_hash; /**< Hash of everything after it — appearance, text, image, transform. */
     bool has_props_hash;        /**< Whether the two hashes above hold a previous update yet. */

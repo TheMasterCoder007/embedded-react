@@ -51,6 +51,13 @@ add_executable(test_transform_damage test_transform_damage.c)
 target_link_libraries(test_transform_damage PRIVATE embedded-react)
 add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
 
+add_executable(test_transform_shadow_damage test_transform_shadow_damage.c)
+target_link_libraries(test_transform_shadow_damage PRIVATE embedded-react)
+# test_transform_shadow_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the
+# reference frame it compares each damage-clipped frame against).
+target_include_directories(test_transform_shadow_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_transform_shadow_damage COMMAND test_transform_shadow_damage)
+
 add_executable(test_multibuffer test_multibuffer.c)
 target_link_libraries(test_multibuffer PRIVATE embedded-react)
 add_test(NAME rendering_multibuffer COMMAND test_multibuffer)

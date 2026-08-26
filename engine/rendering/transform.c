@@ -671,12 +671,23 @@ void er_transform_map_point(float ia,
     *layout_y = (int)(ib * (float)screen_x + id * (float)screen_y + ity);
 }
 
+bool er_transform_source_fits(int w, int h)
+{
+#if ERUI_TRANSFORMS_FULL
+    return w > 0 && h > 0 && w <= ERUI_XFORM_W && h <= ERUI_XFORM_H;
+#else
+    (void)w;
+    (void)h;
+    return false;
+#endif
+}
+
 bool er_transform_source_begin(int src_x, int src_y, int w, int h)
 {
 #if ERUI_TRANSFORMS_FULL
     if (xc()->active)
         return false;
-    if (w <= 0 || h <= 0 || w > ERUI_XFORM_W || h > ERUI_XFORM_H)
+    if (!er_transform_source_fits(w, h))
         return false;
 
     /* Clear only the used w×h sub-rect (node-local origin 0,0), not the whole scratch.

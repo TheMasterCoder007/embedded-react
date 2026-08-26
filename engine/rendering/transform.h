@@ -267,6 +267,25 @@ void er_transform_source_replay_blit_3d(
 bool er_transform_source_begin(int src_x, int src_y, int w, int h);
 
 /**
+ * @brief Whether a w×h capture fits the transform source buffer.
+ *
+ * The size half of er_transform_source_begin()'s admission test, exposed so the damage pre-pass can
+ * predict the raw-box fallback render_tree degrades to when a capture cannot be started. Keeping the
+ * limit in one place is the point: a pre-pass that measured a node by its transformed AABB while
+ * render_tree painted the untransformed box would disagree with last_paint_rect forever, and the node
+ * would re-damage its own footprint on every commit.
+ *
+ * Says nothing about the OTHER reason a capture fails — one already being active for an ancestor —
+ * which is not a property of the size.
+ *
+ * @param[in] w  Content width in pixels.
+ * @param[in] h  Content height in pixels.
+ *
+ * @return true when a capture of this size is admissible (always false without ERUI_TRANSFORMS=FULL).
+ */
+bool er_transform_source_fits(int w, int h);
+
+/**
  * @brief Records which node's subtree the transform source buffer currently holds.
  *
  * Called by the compositor after a successful er_transform_source_begin() during a banded
