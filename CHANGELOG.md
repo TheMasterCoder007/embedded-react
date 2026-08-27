@@ -79,6 +79,9 @@ See the README for the release process.
 - A scaled or rotated view too big for the transform scratch — or sitting inside another transformed
   view — repainted its whole region on every commit, forever. It renders untransformed in that case,
   and damage tracking didn't know.
+- A view scaled down almost to nothing — or turned edge-on with `rotateY` — was left half-drawn, and
+  stayed that way. Past that point the transform can no longer be undone, so the view renders
+  untransformed, and damage tracking was still measuring it at its vanishing size.
 - A shadow on one of those views was left behind when it moved, and clipped at its new position. Only
   the view's own box was repainted, and a shadow is drawn outside it.
 - A shadow was left on screen when its view was unmounted, hidden with `display: none`, or simply had

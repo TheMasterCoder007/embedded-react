@@ -139,3 +139,11 @@ target_link_libraries(test_transform_ancestor_flip PRIVATE embedded-react)
 # asserts the outer really captures and that the inner starts on the fallback flag the bug turns stale.
 target_include_directories(test_transform_ancestor_flip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_transform_ancestor_flip COMMAND test_transform_ancestor_flip)
+
+add_executable(test_transform_singular_damage test_transform_singular_damage.c)
+target_link_libraries(test_transform_singular_damage PRIVATE embedded-react)
+# test_transform_singular_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the
+# reference frame), plus engine/rendering + engine/scene for transform.h and er_node_internal.h — it
+# asserts each case really straddles the invert epsilon and that the paint took the fallback path.
+target_include_directories(test_transform_singular_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
+add_test(NAME rendering_transform_singular_damage COMMAND test_transform_singular_damage)
