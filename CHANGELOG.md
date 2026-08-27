@@ -131,6 +131,10 @@ See the README for the release process.
   host could read it. A commit that paints nothing now leaves the last painted rects in place.
 - `er_get_dirty_rect()` reported nothing on a full repaint that no node had dirtied while `er_get_dirty_rects()` 
   reported the whole screen. Both now report the region actually painted.
+- Adding or removing a transform on a view left a rotated or scaled child inside it half-drawn. Only
+  the outermost transform is rendered through the scratch buffer, so a change up top silently moves
+  the child between its transformed shape and its plain box — and the repaint, which never expected
+  it to move, stayed on the old one. The frame did not recover on its own.
 
 ## [0.12.0] - 2026-08-19
 ### Added

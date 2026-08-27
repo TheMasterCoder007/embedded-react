@@ -131,3 +131,11 @@ target_link_libraries(test_overflow_damage PRIVATE embedded-react)
 # test_overflow_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
 target_include_directories(test_overflow_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_overflow_damage COMMAND test_overflow_damage)
+
+add_executable(test_transform_ancestor_flip test_transform_ancestor_flip.c)
+target_link_libraries(test_transform_ancestor_flip PRIVATE embedded-react)
+# test_transform_ancestor_flip needs engine/core for renderer_internal.h (er_force_full_repaint, the
+# reference frame), plus engine/rendering + engine/scene for transform.h and er_node_internal.h — it
+# asserts the outer really captures and that the inner starts on the fallback flag the bug turns stale.
+target_include_directories(test_transform_ancestor_flip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
+add_test(NAME rendering_transform_ancestor_flip COMMAND test_transform_ancestor_flip)
