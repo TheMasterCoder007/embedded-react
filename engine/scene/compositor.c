@@ -1922,10 +1922,10 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     /* --- 2D/3D transform application --- */
     bool doing_affine = false;
     bool doing_replay = false;
-    bool doing_3d = false;
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
-#if ERUI_3D_TRANSFORMS
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
+    bool doing_3d = false;
     float xf_inv_H[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 #endif
 
@@ -2175,7 +2175,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     /* Affine/perspective transform: end source capture and blit the transformed result. */
     if (doing_affine)
     {
-#if ERUI_3D_TRANSFORMS
+#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
         if (doing_3d)
             er_transform_source_end_blit_3d(px, py, w, h, xf_inv_H, dst_x, dst_y, dst_w, dst_h);
         else

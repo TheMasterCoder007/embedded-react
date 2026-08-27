@@ -113,6 +113,9 @@ See the README for the release process.
 - The Flow B AOT compiler no longer declares a C slot for a `useRef` the generated code never
   touches, so a ref that only holds a JS value (a callback, say) stops producing an
   `unused variable` warning in every consumer build.
+- The shipped ESP32-S3 example built with an `unused variable` warning from the engine compositor. The
+  3D-transform state was declared under a weaker `#if` than every use of it, so a build with
+  `ERUI_3D_TRANSFORMS=0` never read it. (GCC device builds only — clang doesn't flag it.)
 - `er_get_dirty_rects()` / `er_get_dirty_rect()` reported nothing on Flow A. React commits inside
   `er_runtime_pump()`, so the host's own `er_commit()` — a no-op — was wiping the answer before the
   host could read it. A commit that paints nothing now leaves the last painted rects in place.
