@@ -277,11 +277,17 @@ struct ERNode
     ERLayoutRect computed;
     ERLayoutRect prev_computed;   /**< Computed rect from the previous commit, used to detect layout changes. */
     ERLayoutRect animated;        /**< Current display rect; updated by layout animations; equals computed when idle. */
-    ERLayoutRect last_paint_rect; /**< Screen rect this node was last painted at (damage-clip trail erase). */
+    ERLayoutRect last_paint_rect; /**< Screen FOOTPRINT this node last painted — its box grown by whatever
+                                       it drew outside it, an Arc knob's reach or a shadow's bleed — used
+                                       to erase the trail it leaves behind. Recorded already inflated
+                                       (see render_tree): re-deriving the reach when the trail is READ
+                                       answers from props that may have changed since, which is how
+                                       clearing a shadow used to erase only the box (issue #140). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
     bool last_paint_untransformed; /**< The last paint of this TRANSFORMED node degraded to its raw,
                                         untransformed box: the scratch capture could not be started, so
-                                        last_paint_rect holds the layout box and not the transformed AABB.
+                                        last_paint_rect holds that box (knob reach and shadow bleed included
+                                        — the fallback paints both) and not the transformed AABB.
                                         The damage pre-pass has to predict the same fallback or the two
                                         never agree and the node reads as moved on every commit. Only
                                         meaningful alongside has_last_paint. */

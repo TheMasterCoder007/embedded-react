@@ -902,6 +902,37 @@ static void expand_for_arc(ERNode* n, int* x, int* y, int* w, int* h)
     *h += 2 * over;
 }
 
+#if ERUI_SHADOWS
+/**
+ * @brief Grows a rect by however far this node's shadow bleeds past its layout box.
+ *
+ * A shadow is painted outside the box, so any rect meant to bound what the node PUTS ON SCREEN — its
+ * damage, its erase trail, its reported repaint — has to include the bleed or the old shadow is never
+ * erased and the new one is clipped at the damage edge. No-op for a node that casts none.
+ *
+ * Read from the node's CURRENT props, so it answers for the paint that is about to happen. What a
+ * PREVIOUS paint put on screen is not re-derived from here — last_paint_rect records it already
+ * inflated (see render_tree), because these props can change between the two commits and then this
+ * function no longer describes what is on the panel.
+ */
+static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
+{
+    if (!(n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+          || (n->type == ER_NODE_MODAL && n->modal_visible)))
+        return;
+    if (!(n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
+        return;
+    const int r = (int)n->props.view.shadow_radius;
+    const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
+    const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
+    const int exp = r + (ox > oy ? ox : oy);
+    *x -= exp;
+    *y -= exp;
+    *w += 2 * exp;
+    *h += 2 * exp;
+}
+#endif
+
 /**
  * @brief Computes a node's current screen rect for damage tracking.
  *
@@ -994,8 +1025,11 @@ static bool node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* r
  * The footprint render_tree degrades to when it cannot start the node's scratch capture: same origin as
  * node_transformed_screen_rect (layout position minus ancestor scroll and the keyboard shift), but the
  * node's own w×h rather than a projected AABB, and no translate folded in — the fallback paints the node
- * exactly where it would sit with no transform at all. An Arc's knob reach is added for the same reason
- * render_tree adds it to last_paint_rect on that path: it is part of what the fallback puts on screen.
+ * exactly where it would sit with no transform at all. An Arc's knob reach and a shadow's bleed are added
+ * for the same reason render_tree adds them to last_paint_rect on that path: they are part of what the
+ * fallback puts on screen. (A node that DOES capture casts no shadow — render_tree gates the shadow on
+ * `!doing_affine` because it would be rasterised into the source and distorted by the blit — which is
+ * exactly why the bleed belongs here, on the raw-box helper, rather than at the callers.)
  *
  * @param[in]  n             Node to measure.
  * @param[in]  sx,sy         Accumulated ancestor scroll, from node_ancestor_scroll().
@@ -1008,15 +1042,18 @@ static void node_untransformed_screen_rect(ERNode* n, int sx, int sy, int* rx, i
     *rw = (int)n->animated.w;
     *rh = (int)n->animated.h;
     expand_for_arc(n, rx, ry, rw, rh);
+#if ERUI_SHADOWS
+    expand_for_shadow(n, rx, ry, rw, rh);
+#endif
 }
 #endif /* ERUI_TRANSFORMS_FULL */
 
 /** @brief What the damage pre-pass expects a full-transform node's next paint to cover. */
 typedef struct
 {
-    int fx, fy, fw, fh; /**< The footprint itself: either the transformed AABB or the raw box. */
+    int fx, fy, fw, fh; /**< The footprint itself: either the transformed AABB or the raw box, the
+                             latter already grown by the arc/shadow reach the fallback paints. */
     int ax, ay, aw, ah; /**< The transformed AABB — meaningful only when `hedge`. */
-    bool raw;           /**< The footprint is the raw, untransformed box (so it carries a shadow). */
     bool hedge;         /**< Damage the AABB alongside the footprint: the raw prediction may be stale. */
 } NodeTransformDamage;
 
@@ -1069,7 +1106,6 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
         /* Decisive: er_transform_source_begin() admits on size alone, so this node paints its raw box.
          * No matrix, no AABB — and no full-repaint fallback either, even for a degenerate transform,
          * because bounded damage matching the actual paint beats a conservative whole-screen repaint. */
-        d->raw = true;
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
         return true;
     }
@@ -1077,8 +1113,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
     if (!node_transformed_screen_rect(n, sx, sy, &d->ax, &d->ay, &d->aw, &d->ah))
         return false;
 
-    d->raw = n->has_last_paint && n->last_paint_untransformed;
-    if (d->raw)
+    if (n->has_last_paint && n->last_paint_untransformed)
     {
         /* Carried over from the last paint, not predicted from size, so the capture may succeed this
          * commit and paint the AABB instead. Damage both rather than risk scissoring away its own paint. */
@@ -1160,32 +1195,6 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
     *rh = (y1 > y0) ? (y1 - y0) : 0;
 }
 
-#if ERUI_SHADOWS
-/**
- * @brief Grows a rect by however far this node's shadow bleeds past its layout box.
- *
- * A shadow is painted outside the box, so any rect meant to bound what the node PUTS ON SCREEN — its
- * damage, its erase trail, its reported repaint — has to include the bleed or the old shadow is never
- * erased and the new one is clipped at the damage edge. No-op for a node that casts none.
- */
-static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
-{
-    if (!(n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
-          || (n->type == ER_NODE_MODAL && n->modal_visible)))
-        return;
-    if (!(n->props.view.shadow_opacity > 0.0f || n->props.view.elevation > 0))
-        return;
-    const int r = (int)n->props.view.shadow_radius;
-    const int ox = (int)(fabsf(n->props.view.shadow_offset_x) + 0.5f);
-    const int oy = (int)(fabsf(n->props.view.shadow_offset_y) + 0.5f);
-    const int exp = r + (ox > oy ? ox : oy);
-    *x -= exp;
-    *y -= exp;
-    *w += 2 * exp;
-    *h += 2 * exp;
-}
-#endif
-
 /**
  * @brief Reports a rect as repainted, clamped to the root the way add_damage clamps its insert.
  *
@@ -1266,11 +1275,6 @@ escalate_damage_to_capture(ERNode* cap, ERDamageSet* dmg, bool report, int rb_x0
         return false;
 
     int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
-#if ERUI_SHADOWS
-    /* Same rule as the ancestor's own pass: only the raw-box fallback casts a shadow. */
-    if (td.raw)
-        expand_for_shadow(cap, &nx, &ny, &nw, &nh);
-#endif
     clip_rect_to_clippers(cap, &nx, &ny, &nw, &nh);
     add_damage(dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
     if (report)
@@ -2060,10 +2064,23 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         int lp_y = doing_affine ? dst_y : py;
         int lp_w = doing_affine ? dst_w : w;
         int lp_h = doing_affine ? dst_h : h;
-        /* The footprint must include the knob's reach past the box, or a move / removal leaves it.
-         * Not on the affine path, which bounds itself by the transformed layout box. */
+        /* RECORD WHAT WAS PAINTED, not the bare box: the knob's reach past the box and the shadow's
+         * bleed around it are on the panel too, so every reader of this trail — the move erase below,
+         * note_removed_subtree(), propagate_hidden(), er_node_destroy() — must erase them with it.
+         * Re-deriving the bleed at those read sites instead was the bug in issue #140: they read the
+         * node's CURRENT props, so the very commit that clears shadow_opacity reconstructed a bleed of
+         * zero and left the old ring on screen, and the three retire paths never expanded at all.
+         *
+         * Neither is added on the affine path, which bounds itself by the transformed layout box: a
+         * captured node's knob is clipped by the scratch and it casts no shadow at all (see the
+         * shadow block below, gated on the same `!doing_affine`). */
         if (!doing_affine)
+        {
             expand_for_arc(n, &lp_x, &lp_y, &lp_w, &lp_h);
+#if ERUI_SHADOWS
+            expand_for_shadow(n, &lp_x, &lp_y, &lp_w, &lp_h);
+#endif
+        }
         n->last_paint_rect.x = (int16_t)lp_x;
         n->last_paint_rect.y = (int16_t)lp_y;
         n->last_paint_rect.w = (int16_t)lp_w;
@@ -4515,16 +4532,6 @@ void er_commit(void)
                         if (cap && escalate_damage_to_capture(cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
                             continue;
                         int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
-#if ERUI_SHADOWS
-                        /* Only the FALLBACK footprint carries a shadow. render_tree gates the shadow on
-                         * `!doing_affine`, so a node that captures its transform scratch genuinely casts
-                         * none (it would be rasterised into the source and distorted by the inverse-map
-                         * blit) and must not be grown — but one painted untransformed at its raw box
-                         * draws its shadow like any other node, and a move that ignores the bleed leaves
-                         * the old shadow on screen and clips the new one at the damage edge. */
-                        if (td.raw)
-                            expand_for_shadow(n, &nx, &ny, &nw, &nh);
-#endif
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
                         add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
                         if (!n->source_dirty)
@@ -4544,12 +4551,6 @@ void er_commit(void)
                         {
                             int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
                                 ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
-#if ERUI_SHADOWS
-                            /* Same rule, asked of the PREVIOUS paint: the trail carries a shadow only if
-                             * that paint was the raw-box fallback, which is exactly what the flag records. */
-                            if (n->last_paint_untransformed)
-                                expand_for_shadow(n, &ox, &oy, &ow, &oh);
-#endif
                             clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                             add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
                             report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
@@ -4587,9 +4588,15 @@ void er_commit(void)
                 continue;
             }
             const int box_rx = rx, box_ry = ry; /* the layout box, before any arc inflation */
-            /* Measure the arc by its painted footprint — the box plus the knob's reach past it — which is
-             * what last_paint_rect records, so a steady arc is not read as "moved" every commit. */
+            /* Measure the node by its painted footprint — the box plus the arc knob's reach past it and
+             * the shadow's bleed around it — which is what last_paint_rect records, so a steady node is
+             * not read as "moved" every commit. Both are folded in HERE, ahead of the comparison, and
+             * not again below: the new footprint and the recorded trail have to be the same measurement
+             * or they can never agree. */
             expand_for_arc(n, &rx, &ry, &rw, &rh);
+#if ERUI_SHADOWS
+            expand_for_shadow(n, &rx, &ry, &rw, &rh);
+#endif
             const bool moved = n->has_last_paint
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
                                    || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
@@ -4630,11 +4637,6 @@ void er_commit(void)
              * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
              * repaint, where it would be cleared but not restored for a frame. */
             int nx = rx, ny = ry, nw = rw, nh = rh;
-#if ERUI_SHADOWS
-            /* The shadow is part of this node's footprint: a move that ignores it leaves the old
-             * shadow on screen and clips the new one at the damage edge. */
-            expand_for_shadow(n, &nx, &ny, &nw, &nh);
-#endif
             clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
             add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
             /* A node here that is NOT source_dirty is contributing purely because it MOVED, and
@@ -4647,9 +4649,6 @@ void er_commit(void)
             {
                 int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
                     oh = (int)n->last_paint_rect.h;
-#if ERUI_SHADOWS
-                expand_for_shadow(n, &ox, &oy, &ow, &oh);
-#endif
                 clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
                 add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
                 /* Reported unconditionally, unlike the new position: render_tree's accumulator only
