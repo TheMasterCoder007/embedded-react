@@ -81,6 +81,9 @@ See the README for the release process.
   and damage tracking didn't know.
 - A shadow on one of those views was left behind when it moved, and clipped at its new position. Only
   the view's own box was repainted, and a shadow is drawn outside it.
+- Taps on one of those views missed it. It draws untransformed, but touches were still mapped through
+  the transform, so the area that answered didn't overlap the area you could see. A spinning
+  `<ActivityIndicator>` had the same mismatch.
 - A change to anything inside a rotated or scaled view didn't show up. The view's contents are drawn
   into a scratch buffer and mapped onto the screen. However, the damage tracker measured the changed child
   where it was laid out rather than where the mapping puts it, so the repaint missed the pixels

@@ -26,6 +26,13 @@
 
 #define EVENT_LOG_MAX 64
 
+/* A node this size cannot fit the transform source buffer, so er_transform_source_begin() refuses it
+ * and render_tree paints it UNTRANSFORMED at its raw layout box. Derived from the build's own limit
+ * rather than hard-coded, so the fallback is reachable in every configuration — including the default
+ * one, where ERUI_XFORM_W/H tracks the composite scratch. */
+#define XF_TOO_BIG_W (ERUI_XFORM_W + 10)
+#define XF_TOO_BIG_H (ERUI_XFORM_H + 10)
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -481,20 +488,45 @@ static void touch_move(int x, int y)
 }
 
 /**
+ * @brief Presses and releases one finger at a single point.
+ *
+ * @param[in] x  X coordinate of the tap.
+ * @param[in] y  Y coordinate of the tap.
+ */
+static void tap(int x, int y)
+{
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, x, y);
+    embedded_renderer_touch(0, ER_TOUCH_UP, x, y);
+}
+
+/**
+ * @brief Creates a root node of a given size and installs it as the scene root.
+ *
+ * @param[in] w  Root width in pixels.
+ * @param[in] h  Root height in pixels.
+ *
+ * @return New root node.
+ */
+static ERNode* create_root_sized(int16_t w, int16_t h)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.width = w;
+    p.height = h;
+    p.background_color = 0xFF000000U;
+    er_node_set_props(root, &p);
+    er_tree_set_root(root);
+    return root;
+}
+
+/**
  * @brief Creates a fixed-size root node.
  *
  * @return New root node.
  */
 static ERNode* create_root(void)
 {
-    ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.width = 240;
-    p.height = 160;
-    p.background_color = 0xFF000000U;
-    er_node_set_props(root, &p);
-    er_tree_set_root(root);
-    return root;
+    return create_root_sized(240, 160);
 }
 
 /**
@@ -1771,6 +1803,161 @@ static int test_opacity_zero_not_hittable(void)
 }
 
 /**
+ * @brief Checks a transformed node render_tree could not capture is hit where it is actually painted.
+ *
+ * A scale/rotate node is normally painted by capturing its subtree into the transform scratch and
+ * inverse-mapping it back out, and hit-testing answers it by inverse-mapping the touch the same way.
+ * When the capture cannot be started the node is painted UNTRANSFORMED at its raw layout box instead —
+ * and hit-testing used to map the touch through the transform anyway, leaving a phantom hit region
+ * that does not overlap a single drawn pixel (issue #141). At half scale about a top-left pivot that
+ * region is the box's top-left quarter: everything past it looks like the node and answered as the
+ * background.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_uncaptured_transform_hits_painted_box(void)
+{
+    ERNode* root = create_root_sized(XF_TOO_BIG_W + 80, XF_TOO_BIG_H + 80);
+    EventCounts counts = {0};
+    ERNode* box = create_pressable(40, 40, XF_TOO_BIG_W, XF_TOO_BIG_H, &counts);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 40;
+    p.top = 40;
+    p.width = XF_TOO_BIG_W;
+    p.height = XF_TOO_BIG_H;
+    p.background_color = 0xFF101010U;
+    p.transform_scale_x = 0.5f;
+    p.transform_scale_y = 0.5f;
+    p.transform_origin_x = 0.0f; /* top-left pivot, so the phantom rect is the box's top-left quarter */
+    p.transform_origin_y = 0.0f;
+    er_node_set_props(box, &p);
+
+    er_tree_append_child(root, box);
+    er_commit();
+
+    /* Three quarters across the painted box — outside the halved rect, on pixels that are plainly the
+     * node. This is the tap the issue reported falling through to the background. */
+    tap(40 + (XF_TOO_BIG_W * 3) / 4, 40 + (XF_TOO_BIG_H * 3) / 4);
+    if (counts.press_count != 1)
+        return fail("tap on the painted area of an uncaptured transformed node did not reach it");
+
+    /* The near corner lies inside the paint AND the phantom rect, so it worked before the fix too. */
+    tap(40 + XF_TOO_BIG_W / 4, 40 + XF_TOO_BIG_H / 4);
+    if (counts.press_count != 2)
+        return fail("tap near the pivot of an uncaptured transformed node did not reach it");
+
+    /* Past the raw box there is nothing painted: following the pixels must not widen the node either. */
+    tap(40 + XF_TOO_BIG_W + 20, 40 + XF_TOO_BIG_H + 20);
+    if (counts.press_count != 2)
+        return fail("tap beyond an uncaptured transformed node still reached it");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks an oversized TRANSLATE-only node still hit-tests at its offset.
+ *
+ * A translate has no capture and no fallback — render_tree just shifts the render position, whatever
+ * the node's size — so the size that degrades a scale must not degrade it. The counterpart to
+ * test_uncaptured_transform_hits_painted_box: same node, same too-big dimensions, offset preserved.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_oversized_translate_only_keeps_offset(void)
+{
+    ERNode* root = create_root_sized(XF_TOO_BIG_W + 80, XF_TOO_BIG_H + 80);
+    EventCounts counts = {0};
+    ERNode* box = create_pressable(40, 40, XF_TOO_BIG_W, XF_TOO_BIG_H, &counts);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 40;
+    p.top = 40;
+    p.width = XF_TOO_BIG_W;
+    p.height = XF_TOO_BIG_H;
+    p.background_color = 0xFF101010U;
+    p.transform_translate_x = 30.0f;
+    p.transform_translate_y = 20.0f;
+    er_node_set_props(box, &p);
+
+    er_tree_append_child(root, box);
+    er_commit();
+
+    /* Past the layout box's right edge, but inside the translated one the node is drawn at. */
+    tap(40 + XF_TOO_BIG_W + 10, 40 + XF_TOO_BIG_H / 2);
+    if (counts.press_count != 1)
+        return fail("an oversized translate-only node lost its offset");
+
+    /* Inside the layout box, left of everything the node actually covers. */
+    tap(45, 45);
+    if (counts.press_count != 1)
+        return fail("an oversized translate-only node was hit at its untranslated box");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks a transformed node nested inside a CAPTURING one is hit where it is painted.
+ *
+ * The other way a capture fails, and the one no size test can predict: the outer node's capture is
+ * already running, so the inner one — which fits the source perfectly well — paints untransformed
+ * inside it. Only the flag the previous paint recorded says so, which is why hit-testing consults it
+ * before it falls back to the size.
+ *
+ * The outer half-scale about a top-left pivot maps screen x to 2x-20, so the inner node's source-space
+ * box (40..80) is drawn over screen 30..50, and a tap at 45 lands on it. Mapped through the inner
+ * quarter-scale as well it would land at 160 — far outside the node, and outside the root.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_nested_uncaptured_transform_hits_painted_box(void)
+{
+    ERNode* root = create_root_sized(200, 200);
+    EventCounts counts = {0};
+
+    /* Outer: small enough to capture, so its transform genuinely reaches the screen. */
+    ERNode* outer = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 20;
+    p.top = 20;
+    p.width = 100;
+    p.height = 100;
+    p.background_color = 0xFF202020U;
+    p.transform_scale_x = 0.5f;
+    p.transform_scale_y = 0.5f;
+    p.transform_origin_x = 0.0f;
+    p.transform_origin_y = 0.0f;
+    er_node_set_props(outer, &p);
+
+    ERNode* inner = create_pressable(20, 20, 40, 40, &counts);
+    p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 20;
+    p.top = 20;
+    p.width = 40;
+    p.height = 40;
+    p.background_color = 0xFF303030U;
+    p.transform_scale_x = 0.25f;
+    p.transform_scale_y = 0.25f;
+    p.transform_origin_x = 0.0f;
+    p.transform_origin_y = 0.0f;
+    er_node_set_props(inner, &p);
+
+    er_tree_append_child(outer, inner);
+    er_tree_append_child(root, outer);
+    er_commit();
+
+    tap(45, 45);
+    if (counts.press_count != 1)
+        return fail("tap on a fallback-painted node inside a capturing transform did not reach it");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Test entry point for hit-testing and press dispatch.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
@@ -1838,6 +2025,12 @@ int main(void)
     if (test_responder_termination_accepted() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_responder_termination_rejected() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_oversized_translate_only_keeps_offset() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_nested_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;
