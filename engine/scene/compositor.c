@@ -2742,9 +2742,15 @@ void er_node_destroy(ERNode* node)
         er_vector_free(node->vector_slot);
         node->vector_slot = -1;
     }
-    /* Drop any animated-value bindings to this node — its tag is about to be recycled onto the free list,
-     * and a stale binding would drive whatever node next reuses it (see er_anim_unbind_node). */
+    /* Cut every animation loose from this node — its tag is about to be recycled onto the free list, and
+     * anything still pointing at it would drive whatever node next reuses it. Three separate tables hold
+     * such a reference: ERAnimValue bindings (er_anim_unbind_node), animations keyed by tag
+     * (er_anim_cancel_node, groups included) and layout animations (er_layout_anim_cancel_node). The tick
+     * functions each drop a reference whose node has gone, but only while the tag is still unclaimed —
+     * a node created before the next tick inherits it. */
     er_anim_unbind_node(node->tag);
+    er_anim_cancel_node(node->tag);
+    er_layout_anim_cancel_node(node->tag);
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */

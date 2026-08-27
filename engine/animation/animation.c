@@ -913,6 +913,88 @@ void er_anim_unbind_node(uint16_t node_tag)
     }
 }
 
+/**
+ * @brief Deactivates a group and every animation running under it.
+ *
+ * The one place a group is torn down early, shared by the two callers that need it: er_anim_stop()
+ * cancels on the caller's word and reports it, er_anim_cancel_node() cancels because the group's node
+ * is being destroyed and must stay silent (see the reasoning there).
+ *
+ * @param[in,out] grp     Group to tear down; must be active.
+ * @param[in]     notify  Fire each member's on_complete and then the group's, all with
+ *                        `finished = false`. The group is marked inactive before its own callback
+ *                        runs, so a handler that starts something new does not see a dead group.
+ */
+static void deactivate_group(ERAnimGroup* grp, bool notify)
+{
+    const uint8_t slot = (uint8_t)(grp - s_groups);
+    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    {
+        if (!s_animations[i].active || s_animations[i].group_slot != slot)
+            continue;
+        s_animations[i].active = false;
+        if (notify && s_animations[i].on_complete)
+            s_animations[i].on_complete(false, s_animations[i].on_complete_user_data);
+    }
+    grp->active = false;
+    if (notify && grp->on_complete)
+        grp->on_complete(false, grp->on_complete_user_data);
+}
+
+void er_anim_cancel_node(uint16_t node_tag)
+{
+    /*
+     * Stop every animation aimed at this node. Called from er_node_destroy for the same reason as
+     * er_anim_unbind_node next to it, and covering the half that one does not: er_anim_unbind_node drops
+     * ERAnimValue BINDINGS, while these are the animations keyed directly by node_tag (er_anim_start).
+     *
+     * er_anim_tick already deactivates an animation whose node has gone (er_get_node returns NULL), but
+     * that only holds while the tag is still on the free list. The destroyed tag is recycled by the very
+     * next er_node_create, so a node created before the next tick resolves the SAME tag to itself and
+     * inherits the animation: an <ActivityIndicator> unmounted mid-spin left its looping ER_PROP_ROTATE_Z
+     * behind, and a plain View that took its tag started rotating on its own.
+     *
+     * No on_complete is fired, here or for a group. Two reasons:
+     *   - er_node_destroy runs inside the bridge's subtree teardown, so a callback would re-enter JS
+     *     partway through a walk that is deleting nodes. The trampoline's own safety note is about
+     *     running inside er_anim_tick, where the tree is not being mutated underneath it.
+     *   - An unmounted component does not want its .start() callback. Nothing leaks by staying quiet:
+     *     the bridge allocates a completion slot only for VALUE animations (js_anim_value_animate), and
+     *     those are skipped below.
+     */
+
+    /* Groups first, so a group losing one member does not leave its siblings running against a
+     * half-dismantled group. A group choreographing a node that no longer exists cannot finish
+     * correctly, so the whole group goes — including one that merely holds the tag in a PENDING entry:
+     * a sequence would otherwise reach that entry later and start_anim_internal() would hand it to
+     * whatever now owns the tag. Freeing the slot also beats today's outcome, where such a group stalls
+     * at a step that never completes and is never reclaimed. */
+    for (int g = 0; g < ERUI_MAX_ANIM_GROUPS; g++)
+    {
+        ERAnimGroup* grp = &s_groups[g];
+        if (!grp->active)
+            continue;
+        for (uint16_t e = 0; e < grp->count; e++)
+        {
+            if (grp->entries[e].node_tag == node_tag)
+            {
+                deactivate_group(grp, false);
+                break;
+            }
+        }
+    }
+
+    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    {
+        ERAnimation* a = &s_animations[i];
+        /* value_handle guards the ERAnimValue animations, which do not target a node at all. They park
+         * node_tag at 0xFFFF so no real tag can collide with them today; the test is here so that
+         * sentinel is not the only thing standing between a destroyed tag 0 and every value animation. */
+        if (a->active && a->value_handle == 0U && a->node_tag == node_tag)
+            a->active = false;
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — spring / decay tick helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1187,19 +1269,7 @@ void er_anim_stop(ERAnimHandle handle)
         ERAnimGroup* grp = &s_groups[i];
         if (grp->active && grp->handle == handle)
         {
-            /* Cancel every running animation that belongs to this group. */
-            for (int j = 0; j < ERUI_MAX_ANIMATIONS; j++)
-            {
-                if (s_animations[j].active && s_animations[j].group_slot == (uint8_t)i)
-                {
-                    s_animations[j].active = false;
-                    if (s_animations[j].on_complete)
-                        s_animations[j].on_complete(false, s_animations[j].on_complete_user_data);
-                }
-            }
-            grp->active = false;
-            if (grp->on_complete)
-                grp->on_complete(false, grp->on_complete_user_data);
+            deactivate_group(grp, true); /* cancels every member and reports finished = false */
             return;
         }
     }

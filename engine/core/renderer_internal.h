@@ -340,6 +340,29 @@ void er_anim_reapply_bound(struct ERNode* node);
 void er_anim_unbind_node(uint16_t node_tag);
 
 /**
+ * @brief Stops every animation started against the given node tag (er_anim_start), and any group holding it.
+ *
+ * The other half of er_anim_unbind_node, which covers only ERAnimValue bindings. Call from
+ * er_node_destroy: er_anim_tick drops an animation whose node has gone, but only while the tag is still
+ * on the free list — the next er_node_create recycles it, and an animation left pointing at it then
+ * drives the new node instead (an <ActivityIndicator> unmounted mid-spin makes a plain View rotate).
+ * Fires no completion callback; see the implementation for why. No-op when nothing targets the tag.
+ *
+ * @param[in] node_tag  Tag of the node being destroyed.
+ */
+void er_anim_cancel_node(uint16_t node_tag);
+
+/**
+ * @brief Stops any layout animation interpolating the given node tag.
+ *
+ * The er_layout_anim_tick half of the same recycled-tag hazard er_anim_cancel_node covers. Call from
+ * er_node_destroy. No-op when the tag has no layout animation.
+ *
+ * @param[in] node_tag  Tag of the node being destroyed.
+ */
+void er_layout_anim_cancel_node(uint16_t node_tag);
+
+/**
  * @brief Advances all active layout animations by delta_ms milliseconds.
  *
  * Updates node->animated for every node with a running layout animation and marks

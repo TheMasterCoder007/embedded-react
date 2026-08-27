@@ -94,6 +94,19 @@ void er_layout_anim_reset(void)
     s_pending_active = false;
 }
 
+void er_layout_anim_cancel_node(uint16_t node_tag)
+{
+    /* Same recycled-tag hazard er_anim_cancel_node() exists for, in this module's own slot table: the
+     * tick below deactivates a slot whose node is gone, but only while the tag is still on the free
+     * list. A node created before the next tick takes the tag and inherits the interpolation — the
+     * destroyed node's position animation would drive it to coordinates it never asked for. */
+    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+    {
+        if (s_la[i].active && s_la[i].node_tag == node_tag)
+            s_la[i].active = false;
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants: Public (preset configs)
  ---------------------------------------------------------------------------------------------------------------------*/
