@@ -222,8 +222,8 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  * size is read from `animated` because that is what render_tree offers the capture — mid-animation the
  * layout box is not yet the box being painted.
  *
- * The ActivityIndicator is excluded for the same reason render_tree excludes it: its rotate_z is an
- * internal spin baked into the arc it draws, never an affine render, so its box never turns with it.
+ * Asked only of a node render_tree would put on the capture path at all; the ActivityIndicator, which
+ * it never does, is settled by the caller.
  *
  * @param[in] node  Node carrying a transform that is not translate-only.
  *
@@ -231,8 +231,6 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  */
 static bool node_transform_reaches_screen(const ERNode* node)
 {
-    if (node->type == ER_NODE_ACTIVITY_INDICATOR)
-        return false;
     if (node->has_last_paint)
         return !node->last_paint_untransformed;
     return er_transform_source_fits((int)node->animated.w, (int)node->animated.h);
@@ -260,10 +258,13 @@ static bool node_transform_reaches_screen(const ERNode* node)
 static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* out_y)
 {
     int qx = x, qy = y;
+#if ERUI_TRANSFORMS_FULL
+    const bool can_capture = node->type != ER_NODE_ACTIVITY_INDICATOR;
+#endif
     if (node->has_transform)
     {
 #if ERUI_TRANSFORMS_FULL
-        if (!er_transform_is_translate_only(node))
+        if (can_capture && !er_transform_is_translate_only(node))
         {
             /* Degraded to the raw-box paint: the drawn pixels carry no transform, so neither may the
              * touch. The translate component goes with it — render_tree's fallback paints at the plain
@@ -460,46 +461,15 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
     if (pe == ER_POINTER_EVENTS_NONE)
         return NULL;
 
-    /* Apply this node's transform (if any) to convert the screen-space query point into the
-     * coordinate space where the node's computed rect lives.  For translate-only transforms,
-     * subtract the translation offset.  For full affine transforms, apply the inverse matrix —
-     * but only when that transform is one render_tree actually painted. */
-    int qx = x, qy = y;
-    if (node->has_transform)
-    {
-#if ERUI_TRANSFORMS_FULL
-        if (!er_transform_is_translate_only(node))
-        {
-            /* Mapped only when the transform is one render_tree actually painted. A degraded node is
-             * drawn untransformed at its raw box, translate component and all, and the query point
-             * passes straight through to it — see node_transform_reaches_screen(). */
-            if (node_transform_reaches_screen(node))
-            {
-                float a, b, c, d, ftx, fty;
-                er_transform_compute_matrix(node,
-                                            node->computed.x,
-                                            node->computed.y,
-                                            node->computed.w,
-                                            node->computed.h,
-                                            &a,
-                                            &b,
-                                            &c,
-                                            &d,
-                                            &ftx,
-                                            &fty);
-                float ia, ib, ic, id, itx, ity;
-                if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
-                    return NULL; /* Singular transform — not hittable. */
-                er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
-            }
-        }
-        else
-#endif
-        {
-            qx = x - (int)node->tp_translate_x;
-            qy = y - (int)node->tp_translate_y;
-        }
-    }
+    /* Convert the screen-space query point into the coordinate space where the node's computed rect
+     * lives. node_map_point() owns that decision for every input path, so the entry gate here and the
+     * press-inside test below cannot drift apart — a second copy of it living here is what let a 3D
+     * node be gated by its 2D matrix while node_map_point back-projected the homography, and what let
+     * #141 be fixed in one place and not the other. It fails only on a transform with no inverse (a
+     * scale collapsed to nothing, a point behind the perspective plane), which is not hittable. */
+    int qx, qy;
+    if (!node_map_point(node, x, y, &qx, &qy))
+        return NULL;
 
     /* Gate entry on the slop-extended bounds (using the transform-adjusted query). An Arc's knob and touch
      * slop reach past its box, so it gates on a wider rect and decides precisely below. */

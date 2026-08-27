@@ -251,8 +251,96 @@ static int check_reflow_moved_no_trail(int screen)
     return EXIT_SUCCESS;
 }
 
+/* Scenario 3: an ActivityIndicator carrying a translate must be PAINTED at the offset — the same place
+ * node_screen_rect() measures it and hit-testing answers for it.
+ *
+ * render_tree gates its transform block on the node type, meant only to keep the spinner off the
+ * capture path: tp_rotate_z is its internal spin angle, and rasterising it into the transform scratch
+ * would distort it. Gating the WHOLE block dropped the translate fast path with it, so a translated
+ * spinner painted at its raw layout box while the pre-pass measured it at the offset one. The two could
+ * never agree, `moved` latched, and it re-damaged both boxes on every commit for the rest of the run —
+ * the same pathology scenarios 4 and 5 below guard for scale, reached without any transform scratch
+ * being involved at all.
+ *
+ * The observable is where the pixels land: recolouring the spinner repaints its footprint and nothing
+ * else, so a repaint that reaches back to the raw box means it was drawn there.
+ *
+ * @param[in] screen  Root size.
+ */
+static int check_activity_indicator_translate(int screen)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = (int16_t)screen;
+    rp.height = (int16_t)screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    /* Laid out top-left, drawn well clear of it: the offset is larger than the node, so the raw box and
+     * the translated one do not touch and a repaint of either is unambiguous. */
+    const int box = 40, off = 60;
+    ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    ERProps sp = props_default();
+    sp.position = ER_POS_ABSOLUTE;
+    sp.left = 20;
+    sp.top = 20;
+    sp.width = (int16_t)box;
+    sp.height = (int16_t)box;
+    sp.color = 0xFF3366FFU;
+    sp.transform_translate_x = (float)off;
+    sp.transform_translate_y = (float)off;
+    er_node_set_props(spinner, &sp);
+
+    er_tree_append_child(root, spinner);
+    er_tree_set_root(root);
+
+    er_commit(); /* full first frame */
+    er_commit(); /* settle: the spinner has a last-painted footprint now */
+
+    /* Recolour it — the one and only change, so the repaint is its footprint alone. */
+    sp.color = 0xFFFF00FFU;
+    er_node_set_props(spinner, &sp);
+    ext_reset();
+    er_commit();
+    const int cx0 = g_ext.x0, cy0 = g_ext.y0, cops = g_ext.ops;
+
+    /* Nothing changes here: a footprint the pre-pass and the paint agree on reports nothing new, so the
+     * last painting commit's rects are what stays readable. */
+    er_commit();
+    ERRect rep = {0, 0, 0, 0};
+    er_get_dirty_rect(&rep);
+
+    printf("activity indicator translate: recolour ops=%d from %d,%d (laid out 20,20, drawn %d,%d), "
+           "after idle reported %d,%d %dx%d\n",
+           cops,
+           cx0,
+           cy0,
+           20 + off,
+           20 + off,
+           rep.x,
+           rep.y,
+           rep.w,
+           rep.h);
+
+    er_node_destroy(root);
+
+    /* The raw box ends at 20 + box; the drawn one starts at 20 + off. Anything at or past this cleared
+     * the raw box entirely, with slack for the padding add_damage applies before inserting a rect. */
+    const int clear = 20 + off - 10;
+    if (cops == 0)
+        return fail("recolouring the activity indicator repainted nothing");
+    if (cx0 < clear || cy0 < clear)
+        return fail("the activity indicator was painted at its raw box — its translate was dropped");
+    if (rep.x < clear || rep.y < clear)
+        return fail("an idle commit re-reported the activity indicator's raw box: paint and pre-pass "
+                    "disagree about where it is");
+
+    printf("PASS: a translated activity indicator is painted at its offset\n");
+    return EXIT_SUCCESS;
+}
+
 #if ERUI_TRANSFORMS_FULL
-/* Scenario 3: a transformed node too large for the transform scratch must not become a permanent damage
+/* Scenario 4: a transformed node too large for the transform scratch must not become a permanent damage
  * source. er_transform_source_begin() refuses a node wider/taller than ERUI_XFORM_W/H, and render_tree
  * then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
  * every transformed node by its transformed AABB regardless. last_paint_rect held the box while the
@@ -368,7 +456,7 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     return EXIT_SUCCESS;
 }
 
-/* Scenario 4: the other half of the same defect, reached where geometry cannot predict it. Only one
+/* Scenario 5: the other half of the same defect, reached where geometry cannot predict it. Only one
  * transform capture can be active at a time, so a transformed node INSIDE another transformed node is
  * refused the scratch and painted at its raw box however small it is. Nothing about its size says so —
  * the fallback is only knowable from what the last paint actually did — and without that, the pre-pass
@@ -541,6 +629,10 @@ int main(void)
         return rc;
 
     rc = check_reflow_moved_no_trail(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_activity_indicator_translate(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
 

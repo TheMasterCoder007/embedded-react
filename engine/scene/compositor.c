@@ -1929,14 +1929,21 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     float xf_inv_H[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 #endif
 
-    /* ActivityIndicator uses tp_rotate_z as its internal spin angle — skip the affine
-     * transform path which would rasterize the whole node into a scratch buffer. */
+    /* ActivityIndicator uses tp_rotate_z as its internal spin angle — keep it off the capture path,
+     * which would rasterize the whole node into a scratch buffer and distort the spin. Only the
+     * CAPTURE is skipped: a translate still moves it, the way node_screen_rect() and hit-testing both
+     * already place it. Gating the whole block on the type dropped the offset instead, so a translated
+     * spinner painted at its raw box while the pre-pass measured it at the offset one — the two never
+     * agreed, `moved` latched, and it re-damaged itself on every commit for as long as it existed. */
+#if ERUI_TRANSFORMS_FULL
+    const bool can_capture = n->type != ER_NODE_ACTIVITY_INDICATOR;
+#endif
     /* An occluded node never captures a transform source: the scratch render would be thrown away,
      * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
-    if (n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR && !occluded)
+    if (n->has_transform && !occluded)
     {
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
-        if (er_transform_is_3d(n))
+        if (can_capture && er_transform_is_3d(n))
         {
             /* 3D perspective path: compute homography, render into scratch, back-project blit. */
             float H[9];
@@ -1961,7 +1968,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         else
 #endif
 #if ERUI_TRANSFORMS_FULL
-            if (!er_transform_is_translate_only(n))
+            if (can_capture && !er_transform_is_translate_only(n))
         {
             /* Full affine: render into scratch, then inverse-map blit. */
             float a, b, c, d, ftx, fty;

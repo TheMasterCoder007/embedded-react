@@ -1958,6 +1958,106 @@ static int test_nested_uncaptured_transform_hits_painted_box(void)
 }
 
 /**
+ * @brief Checks a translated ActivityIndicator is hit where render_tree draws it.
+ *
+ * The spinner is the one node kept off the transform capture path — tp_rotate_z is an internal spin
+ * angle, not an affine render — but it still honours a translate, which render_tree applies by shifting
+ * the render position. Hit-testing has to make the same distinction: skip the capture, keep the offset.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_translated_activity_indicator_keeps_offset(void)
+{
+    ERNode* root = create_root_sized(200, 200);
+    EventCounts counts = {0};
+
+    ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 20;
+    p.top = 20;
+    p.width = 40;
+    p.height = 40;
+    p.color = 0xFF3366FFU;
+    p.transform_translate_x = 60.0f;
+    p.transform_translate_y = 60.0f;
+    /* A spin angle alongside the offset: the node is not translate-only, so it takes the branch that
+     * asks whether a capture happened — and must still come out at its offset, not its raw box. */
+    p.transform_rotate_z = 45.0f;
+    er_node_set_props(spinner, &p);
+    er_event_set(spinner, ER_EVENT_PRESS, on_press, &counts);
+
+    er_tree_append_child(root, spinner);
+    er_commit();
+
+    /* Where it is drawn: layout box 20,20 40x40 shifted by 60,60. */
+    tap(90, 90);
+    if (counts.press_count != 1)
+        return fail("a translated activity indicator was not hit where it is drawn");
+
+    /* Its raw layout box, which nothing is drawn at. */
+    tap(30, 30);
+    if (counts.press_count != 1)
+        return fail("a translated activity indicator was hit at its untranslated box");
+
+    return EXIT_SUCCESS;
+}
+
+#if ERUI_3D_TRANSFORMS
+/**
+ * @brief Checks a 3D-transformed node is hit through its homography, not its 2D matrix.
+ *
+ * render_tree paints a rotateX/rotateY/perspective node by back-projecting the inverse homography, and
+ * node_map_point() maps touches the same way — but hit_test_node() used to carry its own copy of the
+ * mapping that knew only the 2D affine matrix. For a pure rotateY that matrix is the identity, so the
+ * entry gate was the raw layout box while the pixels sat in a projected trapezoid: taps on the drawn
+ * node below the box were refused, and taps on empty background inside the box were accepted.
+ *
+ * Both edges are asserted. At rotateY 60 / perspective 300 a 100x100 box at 50,50 is drawn over roughly
+ * 49,49 93x163 — narrower than the box on the far side, and half as tall again below it.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_3d_transform_hit_follows_projection(void)
+{
+    ERNode* root = create_root_sized(300, 300);
+    EventCounts counts = {0};
+    ERNode* box = create_pressable(50, 50, 100, 100, &counts);
+
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 50;
+    p.top = 50;
+    p.width = 100;
+    p.height = 100;
+    p.background_color = 0xFF101010U;
+    p.transform_rotate_y = 60.0f;
+    p.transform_perspective = 300.0f;
+    er_node_set_props(box, &p);
+
+    er_tree_append_child(root, box);
+    er_commit();
+
+    /* Dead centre: inside the box and inside the projection, so it hits either way. */
+    tap(100, 100);
+    if (counts.press_count != 1)
+        return fail("tap on the middle of a 3D-transformed node did not reach it");
+
+    /* Below the layout box (which ends at 150) but on drawn pixels: the projection reaches past y=180. */
+    tap(100, 175);
+    if (counts.press_count != 2)
+        return fail("tap on the projected part of a 3D-transformed node outside its box missed it");
+
+    /* Inside the layout box but past the far edge of the projection, which stops short of x=142. */
+    tap(145, 100);
+    if (counts.press_count != 2)
+        return fail("tap inside a 3D-transformed node's box but off its projection still hit it");
+
+    return EXIT_SUCCESS;
+}
+#endif /* ERUI_3D_TRANSFORMS */
+
+/**
  * @brief Test entry point for hit-testing and press dispatch.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
@@ -2032,6 +2132,12 @@ int main(void)
         return EXIT_FAILURE;
     if (test_nested_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
         return EXIT_FAILURE;
+    if (test_translated_activity_indicator_keeps_offset() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#if ERUI_3D_TRANSFORMS
+    if (test_3d_transform_hit_follows_projection() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#endif
 
     return EXIT_SUCCESS;
 }
