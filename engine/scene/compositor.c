@@ -1048,13 +1048,26 @@ static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh
  * Returns false (leaving the caller on its full-repaint fallback) for a degenerate or off-screen-projected
  * (zero-area) result — including a 3D node whose corners all fall behind the perspective plane.
  *
+ * `invertible` rides along because the matrix this already builds is the one render_tree hands to
+ * er_transform_invert() / er_transform_homography_invert() before it starts a capture, and a matrix
+ * too singular to invert has no inverse-map blit — so the node paints untransformed at its raw box
+ * and the AABB measured here is not what reaches the screen (issue #138). Answering it here costs a
+ * determinant on the matrix already in hand (the 3D path pays a 3x3 cofactor inverse for it, since the
+ * epsilon rule lives inside er_transform_homography_invert and is not worth a second copy); asking
+ * er_transform_is_invertible() instead would rebuild the matrix itself, trig and all. It is set on
+ * every return, including the zero-area one, because the caller has to read it BEFORE it decides
+ * whether a missing AABB matters.
+ *
  * @param[in]  n             Node to measure.
  * @param[in]  sx,sy         Accumulated ancestor scroll, from node_ancestor_scroll().
  * @param[out] rx,ry,rw,rh   Receive the node's transformed screen AABB.
+ * @param[out] invertible    Receives whether the matrix behind that AABB can be inverted, i.e. whether
+ *                           the AABB is a footprint the paint can actually use.
  *
  * @return true if a finite AABB was produced; false to fall back to a full repaint.
  */
-static bool node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* rx, int* ry, int* rw, int* rh)
+static bool
+node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* rx, int* ry, int* rw, int* rh, bool* invertible)
 {
     const int px = (int)n->animated.x - sx;
     const int py = (int)n->animated.y - sy - s_kbd_avoid_y;
@@ -1066,14 +1079,17 @@ static bool node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* r
         /* 3D/perspective: project the node's box through the same homography render_tree paints with,
          * so the damage bounds exactly match the painted dst rect. A node whose corners all fall behind
          * the perspective plane yields a zero-area AABB → false → full-repaint fallback. */
-        float H[9];
+        float H[9], inv_H[9];
         er_transform_compute_homography_3d(n, px, py, w, h, H);
+        *invertible = er_transform_homography_invert(H, inv_H);
         er_transform_aabb_3d(px, py, w, h, H, rx, ry, rw, rh);
         return (*rw > 0 && *rh > 0);
     }
 #endif
     float ma, mb, mc, md, mtx, mty;
     er_transform_compute_matrix(n, px, py, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
+    float ia, ib, ic, id, itx, ity;
+    *invertible = er_transform_invert(ma, mb, mc, md, mtx, mty, &ia, &ib, &ic, &id, &itx, &ity);
     er_transform_aabb(px, py, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
     return (*rw > 0 && *rh > 0);
 }
@@ -1126,13 +1142,21 @@ typedef struct
  * `moved` latches true, and the node damages and re-reports its own region on every commit for as long
  * as it exists.
  *
- * Two things stop a capture, and only one of them is visible from here:
+ * Three things stop a capture, and two of them are visible from here:
  *   - the node is larger than the transform source (or degenerate) — er_transform_source_fits() is the
  *     exact test er_transform_source_begin() admits on, so this is a prediction, not a guess;
+ *   - its matrix does not invert — the blit that puts the capture back on screen is an inverse map, so
+ *     render_tree abandons the capture at exactly the threshold er_transform_invert() (and, in 3D,
+ *     er_transform_homography_invert()) refuses at. Also a prediction, not a guess: the matrix behind
+ *     the AABB is the one that gets tested, so node_transformed_screen_rect() reports the verdict
+ *     alongside the rect (issue #138);
  *   - a capture is already active for a transformed ancestor — not a property of this node's geometry.
  *     The flag the last paint left behind stands in for it. That is a guess: an ancestor's transform
  *     may have appeared or vanished since, so `hedge` asks the caller to damage the other candidate
  *     footprint alongside the predicted one.
+ *
+ * The first two are decisive and hedge nothing: whichever of them fires, this node paints its raw box
+ * whether or not an ancestor would also have refused it the capture.
  *
  * The hedge is symmetric, and has to be (issue #139). The flag is equally stale in both directions: it
  * says "raw" for a node whose ancestor has since dropped its transform and is about to let this one
@@ -1144,7 +1168,8 @@ typedef struct
  * The size test is four integer compares and it is asked FIRST, because when it fails the AABB is dead:
  * the footprint is the raw box and neither hedge can fire. Computing the matrix before asking spent two
  * sinf/cosf (six, plus up to eight projective divides, in 3D) per node per commit — including on fully
- * idle commits — to produce a rect that was then thrown away.
+ * idle commits — to produce a rect that was then thrown away. The invert test cannot be hoisted the
+ * same way — it IS the matrix — so it rides on the one the AABB already needed.
  *
  * @param[in]  n   Node to measure.
  * @param[out] d   Receives the footprint (and, when `hedge`, the other candidate to damage with it).
@@ -1177,7 +1202,24 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
     }
 
     int ax, ay, aw, ah;
-    if (!node_transformed_screen_rect(n, sx, sy, &ax, &ay, &aw, &ah))
+    bool invertible = false;
+    const bool bounded = node_transformed_screen_rect(n, sx, sy, &ax, &ay, &aw, &ah, &invertible);
+    if (!invertible)
+    {
+        /* Decisive, exactly like the size test above: the capture reaches the screen through an
+         * inverse-map blit, and a matrix render_tree cannot invert has no such map, so it falls
+         * through to painting the raw box. Nothing an ancestor does can change that, so there is
+         * nothing to hedge. Asked BEFORE the AABB is required to be finite, because a near-singular
+         * matrix is precisely the one that collapses its own AABB to nothing: taking the full-repaint
+         * fallback there would be conservative but wrong-headed, since the footprint IS known.
+         *
+         * Without this the pre-pass damaged the sub-pixel AABB the paint never used, the fallback
+         * paint recorded the raw box, and from the next commit the (stale) prediction agreed with it —
+         * `moved` stayed false and the torn node was never source-dirty again (issue #138). */
+        node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        return true;
+    }
+    if (!bounded)
         return false;
 
     if (n->has_last_paint && n->last_paint_untransformed)
