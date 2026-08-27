@@ -81,6 +81,8 @@ See the README for the release process.
   and damage tracking didn't know.
 - A shadow on one of those views was left behind when it moved, and clipped at its new position. Only
   the view's own box was repainted, and a shadow is drawn outside it.
+- A shadow was left on screen when its view was unmounted, hidden with `display: none`, or simply had
+  its shadow turned off. Only the bare box was erased in each case; the shadow is drawn outside it.
 - Taps on one of those views missed it. It draws untransformed, but touches were still mapped through
   the transform, so the area that answered didn't overlap the area you could see.
 - `translateX`/`translateY` on an `<ActivityIndicator>` did nothing — the spinner stayed at its layout
