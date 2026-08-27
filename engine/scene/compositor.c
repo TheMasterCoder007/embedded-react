@@ -732,6 +732,65 @@ static ERNode* capturing_transform_ancestor(const ERNode* n)
 #endif
 }
 
+#if ERUI_TRANSFORMS_FULL
+/**
+ * @brief Whether any ancestor carries a transform that could take the capture away from this node.
+ *
+ * The cheap half of capturing_transform_ancestor(): the same walk, the same type/translate/size
+ * filters, but no matrix and so no trig. It answers a weaker question — "could the capture belong to
+ * someone above me?" rather than "who holds it?" — and errs the safe way, naming an ancestor whose
+ * matrix turns out not to invert. That only ever widens a hedge, never narrows one.
+ *
+ * It exists because the answer decides whether a node's own footprint is knowable HERE. Only the
+ * outermost admitted transform captures, so a node with such an ancestor paints its raw box in that
+ * ancestor's source space, and one without paints its transformed AABB on screen — and nothing about
+ * the node itself distinguishes the two. Asked of every complex-transformed node on every commit, so
+ * the expensive invertibility test is deliberately left to the callers that need the exact answer.
+ *
+ * Defined only for ERUI_TRANSFORMS=FULL, the only build with a capture to take.
+ *
+ * @param[in] n  Node whose ancestors to search.
+ *
+ * @return true when some ancestor's transform could hold the capture.
+ */
+static bool capture_candidate_above(const ERNode* n)
+{
+    for (const ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
+    {
+        if (a->has_transform && a->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(a)
+            && er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+            return true;
+    }
+    return false;
+}
+#endif /* ERUI_TRANSFORMS_FULL */
+
+/**
+ * @brief Whether a change ABOVE this node is about to repaint it.
+ *
+ * source_dirty marks the node a mutation actually landed on, so this is "something above me changed
+ * its own content" — which is exactly when render_tree repaints this whole subtree for a reason the
+ * node cannot see in itself. `dirty` would not do: it propagates to the root, so on any commit at all
+ * every node would answer yes.
+ *
+ * Only asked of a node whose predicted footprint is uncertain (issue #139): the thing that flips a
+ * nested transform between its AABB and its raw box is an ANCESTOR gaining or losing a transform, and
+ * that leaves the node itself clean and its layout box exactly where it was.
+ *
+ * @param[in] n  Node whose ancestors to search.
+ *
+ * @return true when some ancestor was directly dirtied this commit.
+ */
+static bool source_dirty_above(const ERNode* n)
+{
+    for (const ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
+    {
+        if (a->source_dirty)
+            return true;
+    }
+    return false;
+}
+
 /**
  * @brief Registers pixels a node is vacating, in the space they were actually painted in.
  *
@@ -1053,8 +1112,8 @@ typedef struct
 {
     int fx, fy, fw, fh; /**< The footprint itself: either the transformed AABB or the raw box, the
                              latter already grown by the arc/shadow reach the fallback paints. */
-    int ax, ay, aw, ah; /**< The transformed AABB — meaningful only when `hedge`. */
-    bool hedge;         /**< Damage the AABB alongside the footprint: the raw prediction may be stale. */
+    int hx, hy, hw, hh; /**< The OTHER candidate footprint — meaningful only when `hedge`. */
+    bool hedge;         /**< Damage both candidates: which one the paint uses is not decided here. */
 } NodeTransformDamage;
 
 /**
@@ -1071,17 +1130,24 @@ typedef struct
  *   - the node is larger than the transform source (or degenerate) — er_transform_source_fits() is the
  *     exact test er_transform_source_begin() admits on, so this is a prediction, not a guess;
  *   - a capture is already active for a transformed ancestor — not a property of this node's geometry.
- *     The flag the last paint left behind stands in for it. That is a guess: it can go stale (the
- *     ancestor's transform may be gone this commit), so `hedge` asks the caller to damage the
- *     transformed AABB alongside the box.
+ *     The flag the last paint left behind stands in for it. That is a guess: an ancestor's transform
+ *     may have appeared or vanished since, so `hedge` asks the caller to damage the other candidate
+ *     footprint alongside the predicted one.
+ *
+ * The hedge is symmetric, and has to be (issue #139). The flag is equally stale in both directions: it
+ * says "raw" for a node whose ancestor has since dropped its transform and is about to let this one
+ * capture, and it says "captured" for a node whose ancestor has since gained one and is about to
+ * refuse it. The second direction is asked of capture_candidate_above() rather than assumed, so an
+ * ordinary transformed node with no transformed ancestor — the common case — keeps its tight AABB and
+ * pays nothing: the capture cannot be taken from it, so the AABB is not a guess at all.
  *
  * The size test is four integer compares and it is asked FIRST, because when it fails the AABB is dead:
- * the footprint is the raw box and the uncertain-fallback hedge cannot fire. Computing the matrix before
- * asking spent two sinf/cosf (six, plus up to eight projective divides, in 3D) per node per commit —
- * including on fully idle commits — to produce a rect that was then thrown away.
+ * the footprint is the raw box and neither hedge can fire. Computing the matrix before asking spent two
+ * sinf/cosf (six, plus up to eight projective divides, in 3D) per node per commit — including on fully
+ * idle commits — to produce a rect that was then thrown away.
  *
  * @param[in]  n   Node to measure.
- * @param[out] d   Receives the footprint (and, when `hedge`, the AABB to damage with it).
+ * @param[out] d   Receives the footprint (and, when `hedge`, the other candidate to damage with it).
  *
  * @return true if the paint could be bounded; false to leave the caller on its full-repaint fallback.
  */
@@ -1110,7 +1176,8 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
         return true;
     }
 
-    if (!node_transformed_screen_rect(n, sx, sy, &d->ax, &d->ay, &d->aw, &d->ah))
+    int ax, ay, aw, ah;
+    if (!node_transformed_screen_rect(n, sx, sy, &ax, &ay, &aw, &ah))
         return false;
 
     if (n->has_last_paint && n->last_paint_untransformed)
@@ -1119,13 +1186,24 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
          * commit and paint the AABB instead. Damage both rather than risk scissoring away its own paint. */
         d->hedge = true;
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        d->hx = ax;
+        d->hy = ay;
+        d->hw = aw;
+        d->hh = ah;
     }
     else
     {
-        d->fx = d->ax;
-        d->fy = d->ay;
-        d->fw = d->aw;
-        d->fh = d->ah;
+        d->fx = ax;
+        d->fy = ay;
+        d->fw = aw;
+        d->fh = ah;
+        /* The mirror image: the flag says this node held the capture, and only an ancestor can have
+         * taken it since. When one could have, the raw box is the other candidate — a node about to be
+         * captured from above paints it in the ancestor's source space, and the AABB predicted here is
+         * abandoned. Without a transformed ancestor there is nothing to take it, so no hedge. */
+        d->hedge = capture_candidate_above(n);
+        if (d->hedge)
+            node_untransformed_screen_rect(n, sx, sy, &d->hx, &d->hy, &d->hw, &d->hh);
     }
     return true;
 #else
@@ -1258,6 +1336,14 @@ static void modal_scrim_damage(ERNode* n, ERDamageSet* dmg, int rb_x0, int rb_y0
  * The ancestor's last-paint TRAIL is deliberately not added. It is only stale when the ancestor
  * itself moved, and then the ancestor contributes it through its own pass of the pre-pass.
  *
+ * The DESCENDANT's trail is, though, in the one case where the ancestor's footprint cannot stand in
+ * for it: a node whose own last paint went straight to the screen — it held the capture itself, and
+ * an ancestor has taken it since (issue #139). The rect it blitted is abandoned this commit and lies
+ * wherever its own matrix put it, which is not bounded by the ancestor's box. A source-space trail
+ * (the ordinary case: last_paint_untransformed) is not a screen rect at all and is exactly what the
+ * ancestor's footprint does cover, so it is left alone.
+ *
+ * @param[in]     n          Descendant whose damage is being escalated.
  * @param[in]     cap        Capturing ancestor, from capturing_transform_ancestor().
  * @param[in,out] dmg        Damage set to add to.
  * @param[in]     report     Report the region as repainted too (for a descendant that is not
@@ -1267,8 +1353,8 @@ static void modal_scrim_damage(ERNode* n, ERDamageSet* dmg, int rb_x0, int rb_y0
  * @return true when the ancestor's footprint was damaged; false when it could not be bounded, in
  *         which case the caller falls back to measuring the descendant itself.
  */
-static bool
-escalate_damage_to_capture(ERNode* cap, ERDamageSet* dmg, bool report, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+static bool escalate_damage_to_capture(
+    ERNode* n, ERNode* cap, ERDamageSet* dmg, bool report, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
 {
     NodeTransformDamage td = {0};
     if (!node_transform_damage(cap, &td))
@@ -1282,11 +1368,22 @@ escalate_damage_to_capture(ERNode* cap, ERDamageSet* dmg, bool report, int rb_x0
 
     if (td.hedge)
     {
-        int ax = td.ax, ay = td.ay, aw = td.aw, ah = td.ah;
-        clip_rect_to_clippers(cap, &ax, &ay, &aw, &ah);
-        add_damage(dmg, ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+        int hx = td.hx, hy = td.hy, hw = td.hw, hh = td.hh;
+        clip_rect_to_clippers(cap, &hx, &hy, &hw, &hh);
+        add_damage(dmg, hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
         if (report)
-            report_repaint_clamped(ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+            report_repaint_clamped(hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
+    }
+
+    /* Always reported, like every other trail erase: what repaints those pixels is an ancestor's
+     * background, so render_tree's accumulator would never contribute them for this node. */
+    if (n->has_last_paint && !n->last_paint_untransformed)
+    {
+        int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
+            oh = (int)n->last_paint_rect.h;
+        clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+        add_damage(dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
+        report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
     }
     return true;
 }
@@ -4477,7 +4574,7 @@ void er_commit(void)
                  * other measurement of this node — the ancestor's blit is what puts the toggled
                  * region on screen, and its AABB already covers the whole subtree. */
                 ERNode* const ov_cap = capturing_transform_ancestor(n);
-                if (ov_cap && escalate_damage_to_capture(ov_cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+                if (ov_cap && escalate_damage_to_capture(n, ov_cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
                     continue;
                 /* This node clipped or unclipped its children since the last commit. Its own box is
                  * damaged below like any visual change; the half the box cannot express is the region
@@ -4515,7 +4612,15 @@ void er_commit(void)
                     const bool moved = n->has_last_paint
                                        && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
                                            || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
-                    if (n->source_dirty || moved)
+                    /* The third way this node's pixels can move: an ANCESTOR gained or lost a transform,
+                     * which hands the capture to a different node and flips this one between its AABB and
+                     * its raw box (issue #139). It leaves the node clean and its layout box where it was,
+                     * so neither test above sees it — and `moved` never will, because the prediction that
+                     * has to be checked against is the STALE flag's, which by definition still agrees with
+                     * last_paint_rect. `hedge` is exactly the state of not knowing which footprint the
+                     * paint will use, so it is the state in which a change above has to be listened for;
+                     * a node whose footprint is certain stays as idle as it was. */
+                    if (n->source_dirty || moved || (td.hedge && source_dirty_above(n)))
                     {
                         /* Asked before the ancestor-capture escalation below, for the same reason the
                          * translate-only branch asks it before its own: the scrim covers the root
@@ -4529,7 +4634,8 @@ void er_commit(void)
                          * that ancestor's capture in source space, so td measures a region its pixels
                          * never reach. The ancestor's AABB is where they actually land. */
                         ERNode* const cap = capturing_transform_ancestor(n);
-                        if (cap && escalate_damage_to_capture(cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+                        if (cap
+                            && escalate_damage_to_capture(n, cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
                             continue;
                         int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
                         clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
@@ -4538,14 +4644,14 @@ void er_commit(void)
                             report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
                         if (td.hedge)
                         {
-                            /* The fallback was carried over from the last paint, not predicted from
-                             * size, so the capture may succeed this commit and paint the AABB instead.
-                             * Damage both rather than risk scissoring the node's own paint away. */
-                            int ax = td.ax, ay = td.ay, aw = td.aw, ah = td.ah;
-                            clip_rect_to_clippers(n, &ax, &ay, &aw, &ah);
-                            add_damage(&dmg, ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+                            /* Which footprint the paint lands on rests on the ancestor chain, not on
+                             * anything measurable here, so damage the other candidate too rather than
+                             * risk scissoring the node's own paint away. */
+                            int hx = td.hx, hy = td.hy, hw = td.hw, hh = td.hh;
+                            clip_rect_to_clippers(n, &hx, &hy, &hw, &hh);
+                            add_damage(&dmg, hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
                             if (!n->source_dirty)
-                                report_repaint_clamped(ax, ay, aw, ah, rb_x0, rb_y0, rb_x1, rb_y1);
+                                report_repaint_clamped(hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
                         }
                         if (n->has_last_paint)
                         {
@@ -4580,7 +4686,7 @@ void er_commit(void)
                      * transform does, it does it in source space and reaches the screen only through
                      * the ancestor's blit. Beats a full-screen repaint per animated frame. */
                     ERNode* const cap = capturing_transform_ancestor(n);
-                    if (cap && escalate_damage_to_capture(cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+                    if (cap && escalate_damage_to_capture(n, cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
                         continue;
                     trackable = false;
                     break;
@@ -4614,7 +4720,7 @@ void er_commit(void)
              * (Asked after the Modal case, whose scrim covers the root regardless of any ancestor.) */
             {
                 ERNode* const cap = capturing_transform_ancestor(n);
-                if (cap && escalate_damage_to_capture(cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+                if (cap && escalate_damage_to_capture(n, cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
                     continue;
             }
             if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty && !moved)
