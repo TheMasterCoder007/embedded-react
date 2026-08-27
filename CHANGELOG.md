@@ -86,6 +86,14 @@ See the README for the release process.
 - `translateX`/`translateY` on an `<ActivityIndicator>` did nothing — the spinner stayed at its layout
   position while taps and repaints went to the offset one, and it repainted both spots on every frame
   forever.
+- A spinning `<ActivityIndicator>` carrying any transform repainted the whole screen on every frame.
+  Its spin angle lives in the same field as `rotate`, so damage tracking read it as a real rotation and
+  gave up on bounding it. On an 800x480 panel that was ~10 fps — slow enough that the dots aliased
+  against their own spacing and appeared to turn backwards.
+- Unmounting a component mid-animation could hand its animation to an unrelated one. Node slots are
+  recycled, and a destroyed node's animations kept running against whatever took its slot — an
+  `<ActivityIndicator>` that disappeared while spinning left a plain `<View>` rotating on its own.
+  Property animations, animation groups and `LayoutAnimation` are all cleaned up now.
 - Taps on a view with `rotateX`, `rotateY` or `perspective` were matched against its flat layout box
   instead of the shape you see, so the parts leaning toward you didn't answer and empty space beside
   them did. (`ERUI_3D_TRANSFORMS` builds only.)

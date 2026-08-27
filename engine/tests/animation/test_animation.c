@@ -809,6 +809,153 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * STALE ANIM: the other half of STALE_BIND above. er_anim_unbind_node()
+     * covered ERAnimValue bindings; animations started against a node tag
+     * (er_anim_start) went uncancelled, so a destroyed node handed its
+     * animation to whatever took its tag.
+     *
+     * er_anim_tick() does drop an animation whose node has gone, but only
+     * while the tag is still on the free list. The next er_node_create()
+     * recycles it, so a node built before the next tick resolves the SAME tag
+     * to itself and inherits the animation. (Regression.)
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* doomed = er_node_create(ER_NODE_VIEW);
+        ERProps dp = props_default();
+        dp.width = 10;
+        dp.height = 10;
+        er_node_set_props(doomed, &dp);
+        const uint16_t recycled_tag = doomed->tag;
+
+        ERAnimConfig acfg = {0};
+        acfg.type = ER_ANIM_TIMING;
+        acfg.duration_ms = 1000U;
+        er_anim_start(doomed, ER_PROP_TRANSLATE_X, 500.0f, &acfg);
+
+        /* Destroyed mid-flight, and — the point of the case — with no tick in
+         * between, which is the only window where the tag is still claimable. */
+        er_node_destroy(doomed);
+
+        ERNode* heir = er_node_create(ER_NODE_VIEW);
+        if (heir->tag != recycled_tag)
+            return fail("stale_anim: precondition — freed tag was not recycled");
+        ERProps hp = props_default();
+        hp.width = 10;
+        hp.height = 10;
+        er_node_set_props(heir, &hp);
+
+        embedded_renderer_tick(200U);
+        if (heir->tp_translate_x > 0.1f || heir->tp_translate_x < -0.1f)
+            return fail("stale_anim: an animation on a destroyed node drove the node that reused its tag");
+
+        er_node_destroy(heir);
+    }
+
+    /* -----------------------------------------------------------------------
+     * STALE SPIN: the case that surfaced the bug above, and the one that hits
+     * it without anybody calling er_anim_start at all.
+     *
+     * er_node_create() starts a looping ER_PROP_ROTATE_Z for EVERY
+     * ActivityIndicator, so an indicator that unmounts while spinning always
+     * leaves one behind. Recycled onto a plain View, that loop turned it into
+     * a rotating View nobody asked for: tp_rotate_z climbed and has_transform
+     * flipped to true, which then dragged the view onto the transform paths.
+     * (Regression.)
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+        ERProps sip = props_default();
+        sip.width = 40;
+        sip.height = 40;
+        /* props_default() zeroes `animating`, which er_node_set_props reads as
+         * "stop" and cancels the spin — the case would then pass vacuously. */
+        sip.animating = 1U;
+        er_node_set_props(spinner, &sip);
+        const uint16_t spin_tag = spinner->tag;
+
+        embedded_renderer_tick(100U);
+        if (spinner->tp_rotate_z <= 0.0f)
+            return fail("stale_spin: precondition — the indicator is not actually spinning");
+
+        er_node_destroy(spinner);
+
+        ERNode* heir = er_node_create(ER_NODE_VIEW);
+        if (heir->tag != spin_tag)
+            return fail("stale_spin: precondition — freed tag was not recycled");
+        ERProps hp = props_default();
+        hp.width = 10;
+        hp.height = 10;
+        er_node_set_props(heir, &hp);
+
+        embedded_renderer_tick(100U);
+        if (heir->tp_rotate_z != 0.0f)
+            return fail("stale_spin: a destroyed indicator's spin drove the node that reused its tag");
+        if (heir->has_transform)
+            return fail("stale_spin: the inherited spin gave a plain view a transform");
+
+        er_node_destroy(heir);
+    }
+
+    /* -----------------------------------------------------------------------
+     * STALE GROUP: a group is torn down when one of its nodes is destroyed —
+     * including a SEQUENCE holding the tag in an entry that has not started.
+     *
+     * Cancelling only the running animation would leave the sequence to reach
+     * that entry later and start it against whatever now owns the tag. The
+     * whole group goes instead: it cannot finish correctly without the node,
+     * and freeing the slot beats stalling forever at a step that never
+     * completes. Callbacks stay silent — er_node_destroy runs inside subtree
+     * teardown, which is no place to re-enter a completion handler.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* first = er_node_create(ER_NODE_VIEW);
+        ERNode* later = er_node_create(ER_NODE_VIEW);
+        ERProps gp2 = props_default();
+        gp2.width = 10;
+        gp2.height = 10;
+        er_node_set_props(first, &gp2);
+        er_node_set_props(later, &gp2);
+        const uint16_t later_tag = later->tag;
+
+        ERAnimEntry entries[2] = {0};
+        entries[0].node = first;
+        entries[0].prop = ER_PROP_TRANSLATE_X;
+        entries[0].value = 50.0f;
+        entries[0].cfg.type = ER_ANIM_TIMING;
+        entries[0].cfg.duration_ms = 100U;
+        entries[1].node = later; /* never starts: destroyed while entry 0 runs */
+        entries[1].prop = ER_PROP_TRANSLATE_Y;
+        entries[1].value = 500.0f;
+        entries[1].cfg.type = ER_ANIM_TIMING;
+        entries[1].cfg.duration_ms = 100U;
+
+        s_complete_count = 0;
+        if (er_anim_sequence(entries, 2U, on_complete, NULL) == ER_ANIM_HANDLE_INVALID)
+            return fail("stale_group: er_anim_sequence returned INVALID");
+
+        embedded_renderer_tick(50U); /* entry 0 mid-flight, entry 1 still pending */
+        er_node_destroy(later);
+
+        ERNode* heir = er_node_create(ER_NODE_VIEW);
+        if (heir->tag != later_tag)
+            return fail("stale_group: precondition — freed tag was not recycled");
+        er_node_set_props(heir, &gp2);
+
+        const float first_x = first->tp_translate_x;
+        embedded_renderer_tick(200U); /* long enough for entry 0 to have ended and entry 1 to start */
+
+        if (heir->tp_translate_y > 0.1f || heir->tp_translate_y < -0.1f)
+            return fail("stale_group: a pending sequence entry ran against the node that reused its tag");
+        if (first->tp_translate_x != first_x)
+            return fail("stale_group: the group kept animating after one of its nodes was destroyed");
+        if (s_complete_count != 0)
+            return fail("stale_group: tearing the group down fired its completion callback");
+
+        er_node_destroy(heir);
+        er_node_destroy(first);
+    }
+
+    /* -----------------------------------------------------------------------
      * CLOBBER GUARD: a declarative er_node_set_props() must not reset a prop
      * that is currently owned by an ERAnimValue binding.
      *

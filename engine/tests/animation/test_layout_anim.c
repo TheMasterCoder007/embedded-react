@@ -316,6 +316,60 @@ int main(void)
     if (child->animated.w != 40)
         return fail("retarget: did not settle at new target 40 after re-animation");
 
+    /* -----------------------------------------------------------------------
+     * STALE SLOT: a layout animation must not survive its node.
+     *
+     * er_layout_anim_tick() drops a slot whose node has gone, but only while
+     * the tag is still on the free list — the next er_node_create() recycles
+     * it, and the slot then interpolates the NEW node to the dead one's
+     * geometry. er_node_destroy() cancels the slot outright, the same way it
+     * cancels tag-keyed property animations. (Regression.)
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* doomed = er_node_create(ER_NODE_VIEW);
+        p = props_default();
+        p.width = 60;
+        p.height = 60;
+        p.background_color = 0xFFE76F51;
+        er_node_set_props(doomed, &p);
+        er_tree_append_child(root, doomed);
+        er_commit(); /* settles at 60×60 */
+
+        er_layout_anim_configure_next(&cfg);
+        p = props_default();
+        p.width = 160;
+        p.height = 160;
+        p.background_color = 0xFFE76F51;
+        er_node_set_props(doomed, &p);
+        er_commit(); /* starts a 60 → 160 interpolation */
+        embedded_renderer_tick(50U);
+        if (doomed->animated.w <= 60 || doomed->animated.w >= 160)
+            return fail("stale_slot: precondition — the layout animation is not mid-flight");
+
+        const uint16_t recycled_tag = doomed->tag;
+        er_tree_remove_child(root, doomed);
+        er_node_destroy(doomed); /* destroyed mid-interpolation, before any tick */
+
+        ERNode* heir = er_node_create(ER_NODE_VIEW);
+        if (heir->tag != recycled_tag)
+            return fail("stale_slot: precondition — freed tag was not recycled");
+        p = props_default();
+        p.width = 30;
+        p.height = 30;
+        p.background_color = 0xFF264653;
+        er_node_set_props(heir, &p);
+        er_tree_append_child(root, heir);
+        er_commit();
+
+        /* A surviving slot would drag the heir toward the dead node's 160×160. */
+        embedded_renderer_tick(200U);
+        if (heir->animated.w != heir->computed.w || heir->animated.h != heir->computed.h)
+            return fail("stale_slot: a destroyed node's layout animation drove the node that reused its tag");
+
+        er_tree_remove_child(root, heir);
+        er_node_destroy(heir);
+    }
+
     printf("OK\n");
     return EXIT_SUCCESS;
 }
