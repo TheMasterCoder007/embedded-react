@@ -259,7 +259,7 @@ static int check_reflow_moved_no_trail(int screen)
  * would distort it. Gating the WHOLE block dropped the translate fast path with it, so a translated
  * spinner painted at its raw layout box while the pre-pass measured it at the offset one. The two could
  * never agree, `moved` latched, and it re-damaged both boxes on every commit for the rest of the run —
- * the same pathology scenarios 4 and 5 below guard for scale, reached without any transform scratch
+ * the same pathology scenarios 5 and 6 below guard for scale, reached without any transform scratch
  * being involved at all.
  *
  * The observable is where the pixels land: recolouring the spinner repaints its footprint and nothing
@@ -339,8 +339,123 @@ static int check_activity_indicator_translate(int screen)
     return EXIT_SUCCESS;
 }
 
+/* Scenario 4: a SPINNING ActivityIndicator must contribute only its own box to the damage set, never a
+ * full-screen repaint. This is the cost half of scenario 3's correctness half, and the last member of
+ * the family that bounding a scale/rotate (scenario 1) and a 3D node closed.
+ *
+ * er_node_create() starts a looping ER_PROP_ROTATE_Z animation the moment an indicator exists, so the
+ * node is source_dirty on every commit — and tp_rotate_z is non-zero on all but the frame it wraps.
+ * That angle is an internal spin that render_activity_indicator() bakes into the ring of dots; it is
+ * never an affine render, and render_tree keeps the node off the capture path for exactly that reason.
+ * But er_transform_is_translate_only() reads the same field, so as soon as the indicator carries ANY
+ * real transform prop — has_transform true, a translate is enough — the spin made it look like a
+ * rotate: node_screen_rect() refused it, node_transform_damage() excluded it by type, and with no
+ * capturing ancestor to escalate to, the pre-pass gave up and repainted the whole screen once per spin
+ * frame. Measured on an 800x480 panel that was commit=48 ms / present=52 ms, ~10 fps — slow enough that
+ * the dots aliased against their own 45 degree spacing and appeared to rotate backwards.
+ *
+ * Nothing about the pixels was wrong, so the observable is the cost: the extent of every paint op in a
+ * mid-spin commit. Run against both a translate and a real scale — a scaled indicator is still refused
+ * the capture path by type, so it too paints untransformed at box+translate and must be bounded by the
+ * same box, not by a scaled AABB it never draws.
+ *
+ * @param[in] screen  Root size.
+ * @param[in] sx,sy   Scale to put on the indicator (0 = none: the translate-only case).
+ * @param[in] label   Printed name for the case.
+ */
+static int check_spinner_bounded(int screen, float sx, float sy, const char* label)
+{
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = (int16_t)screen;
+    rp.height = (int16_t)screen;
+    rp.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
+    er_node_set_props(root, &rp);
+
+    const int box = 40;
+    ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    ERProps sp = props_default();
+    sp.position = ER_POS_ABSOLUTE;
+    sp.left = 20;
+    sp.top = 20;
+    sp.width = (int16_t)box;
+    sp.height = (int16_t)box;
+    sp.indicator_color = 0xFF3366FFU;
+    /* props_default() zeroes `animating`, and er_node_set_props() reads it as "stop": a spinner left at
+     * the default is CANCELLED here, tp_rotate_z pinned at 0, and every assertion below passes without
+     * the spin path ever being entered. */
+    sp.animating = 1U;
+    /* A real transform prop, so has_transform is true — the state the spin angle used to turn into a
+     * whole-screen repaint. Without one the node has no transform at all (the animation deliberately
+     * skips update_has_transform for this type) and the pre-pass bounds it either way. */
+    sp.transform_translate_x = 30.0f;
+    sp.transform_translate_y = 30.0f;
+    sp.transform_scale_x = sx;
+    sp.transform_scale_y = sy;
+    er_node_set_props(spinner, &sp);
+
+    er_tree_append_child(root, spinner);
+    er_tree_set_root(root);
+
+    er_commit(); /* full first frame */
+    er_commit(); /* settle: the spinner has a last-painted footprint now */
+
+    embedded_renderer_tick(100U); /* advance the spin ~36 degrees → source_dirty, tp_rotate_z non-zero */
+
+    ext_reset(); /* measure ONLY the mid-spin commit */
+    er_commit();
+
+    const int pw = g_ext.x1 - g_ext.x0;
+    const int ph = g_ext.y1 - g_ext.y0;
+    const long screen_area = (long)screen * screen;
+    const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
+    /* Asserted, not assumed: this is the whole point of the case. If it reads translate-only the node
+     * took node_screen_rect()'s ordinary fast path for a reason that has nothing to do with the fix. */
+    const bool spinning = !er_transform_is_translate_only(spinner) && spinner->has_transform;
+
+    printf("%s: mid-spin paint ops=%d extent=%d,%d %dx%d (%.1f%% of screen), rotate_z=%.1f\n",
+           label,
+           g_ext.ops,
+           g_ext.x0,
+           g_ext.y0,
+           pw,
+           ph,
+           100.0 * (double)paint_area / (double)screen_area,
+           (double)spinner->tp_rotate_z);
+
+    /* Torn down deliberately, and in this order. er_node_destroy() frees ONE node — the caller unlinks
+     * and destroys the subtree (see er_scene.h) — and the damage pre-pass sweeps every tag in the pool,
+     * not just the ones reachable from the root. So an indicator left orphaned but in_use goes on being
+     * source_dirty and contributing its box to every LATER scenario's damage, which is exactly the cost
+     * this case exists to measure. Stopping it first also retires its looping ER_PROP_ROTATE_Z: a
+     * destroyed node's node-target animations outlive it, and would drive whatever node next recycles
+     * its tag. */
+    sp.animating = 0U;
+    er_node_set_props(spinner, &sp);
+    er_tree_remove_child(root, spinner);
+    er_node_destroy(spinner);
+    er_node_destroy(root);
+
 #if ERUI_TRANSFORMS_FULL
-/* Scenario 4: a transformed node too large for the transform scratch must not become a permanent damage
+    if (!spinning)
+        return fail("the indicator is not carrying a live spin angle over a real transform — the case "
+                    "that forced the full repaint was never reached");
+#else
+    (void)spinning; /* TRANSLATE_ONLY compiles the refusing gate out entirely */
+#endif
+    if (g_ext.ops == 0)
+        return fail("a spinning activity indicator produced no repaint at all");
+    if (pw >= screen && ph >= screen)
+        return fail("a spinning activity indicator forced a full-screen repaint (its damage is not bounded)");
+    if (paint_area > screen_area / 4)
+        return fail("a spinning activity indicator's repaint region is far larger than its own box");
+
+    printf("PASS: %s damages only its own box\n", label);
+    return EXIT_SUCCESS;
+}
+
+#if ERUI_TRANSFORMS_FULL
+/* Scenario 5: a transformed node too large for the transform scratch must not become a permanent damage
  * source. er_transform_source_begin() refuses a node wider/taller than ERUI_XFORM_W/H, and render_tree
  * then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
  * every transformed node by its transformed AABB regardless. last_paint_rect held the box while the
@@ -456,7 +571,7 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     return EXIT_SUCCESS;
 }
 
-/* Scenario 5: the other half of the same defect, reached where geometry cannot predict it. Only one
+/* Scenario 6: the other half of the same defect, reached where geometry cannot predict it. Only one
  * transform capture can be active at a time, so a transformed node INSIDE another transformed node is
  * refused the scratch and painted at its raw box however small it is. Nothing about its size says so —
  * the fallback is only knowable from what the last paint actually did — and without that, the pre-pass
@@ -633,6 +748,16 @@ int main(void)
         return rc;
 
     rc = check_activity_indicator_translate(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_spinner_bounded(screen, 0.0f, 0.0f, "spinning indicator (translate)");
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    /* A scaled indicator is refused the capture path by type just like the plain one, so it paints —
+     * and must be damaged — at the same raw box, not at a scaled AABB it never draws. */
+    rc = check_spinner_bounded(screen, 1.8f, 1.8f, "spinning indicator (scale)");
     if (rc != EXIT_SUCCESS)
         return rc;
 

@@ -86,6 +86,10 @@ See the README for the release process.
 - `translateX`/`translateY` on an `<ActivityIndicator>` did nothing — the spinner stayed at its layout
   position while taps and repaints went to the offset one, and it repainted both spots on every frame
   forever.
+- A spinning `<ActivityIndicator>` carrying any transform repainted the whole screen on every frame.
+  Its spin angle lives in the same field as `rotate`, so damage tracking read it as a real rotation and
+  gave up on bounding it. On an 800x480 panel that was ~10 fps — slow enough that the dots aliased
+  against their own spacing and appeared to turn backwards.
 - Taps on a view with `rotateX`, `rotateY` or `perspective` were matched against its flat layout box
   instead of the shape you see, so the parts leaning toward you didn't answer and empty space beside
   them did. (`ERUI_3D_TRANSFORMS` builds only.)

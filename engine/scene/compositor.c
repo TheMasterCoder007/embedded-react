@@ -909,6 +909,15 @@ static void expand_for_arc(ERNode* n, int* x, int* y, int* w, int* h)
  * plus the translate-transform offset. Returns false for non-translate transforms (rotate/scale/3D)
  * whose painted bounding box this fast path can't reproduce — the caller then repaints in full.
  *
+ * The ActivityIndicator is the one node that answers here whatever its transform props say, because it
+ * is the one node render_tree never captures: `can_capture` is false for it, so its transform block
+ * always falls through to the translate fast path and it paints untransformed at box+translate, which
+ * is exactly what this helper measures. Its tp_rotate_z is an internal spin angle that
+ * render_activity_indicator() bakes into the ring of dots, not an affine render — so it is non-zero on
+ * every commit of a spinning indicator, and without this exception a spinner that also carries a real
+ * transform (a translate is enough) reads as a non-translate transform, is refused by both rect helpers,
+ * and repaints the whole screen once per spin frame.
+ *
  * @param[in]  n             Node to measure.
  * @param[out] rx,ry,rw,rh   Receive the node's screen rectangle.
  *
@@ -917,7 +926,7 @@ static void expand_for_arc(ERNode* n, int* x, int* y, int* w, int* h)
 static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (n->has_transform && !er_transform_is_translate_only(n))
+    if (n->has_transform && !er_transform_is_translate_only(n) && n->type != ER_NODE_ACTIVITY_INDICATOR)
         return false;
 #endif
     int sx, sy;
@@ -1043,8 +1052,10 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
 {
 #if ERUI_TRANSFORMS_FULL
     /* Not a transform this path owns. The ActivityIndicator is excluded first and deliberately: its
-     * rotate_z is an internal spin, not an affine render, so it must still reach the full-repaint
-     * fallback rather than be measured by either rect helper. */
+     * rotate_z is an internal spin, not an affine render, so it must never be measured by an AABB it
+     * does not paint. It is node_screen_rect()'s node — it paints untransformed at box+translate — so
+     * in practice the pre-pass has already bounded it and never reaches here; this keeps the helper's
+     * contract true for any other caller. */
     if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
         return false;
 
@@ -4541,9 +4552,10 @@ void er_commit(void)
                     continue;
                 }
                 /*
-                 * Could not bound it (ActivityIndicator spin, or a transform that projects to nothing):
-                 * only forces a full repaint if actually changing. An oversized node no longer lands here —
-                 * node_transform_damage() settles it on size and returns the raw box.
+                 * Could not bound it (a transform that projects to nothing): only forces a full repaint
+                 * if actually changing. An oversized node no longer lands here — node_transform_damage()
+                 * settles it on size and returns the raw box; neither does a spinning ActivityIndicator,
+                 * which node_screen_rect() bounds at the box+translate it actually paints at.
                  * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still
                  * missed — that needs the 3D AABB path ().
                  */
@@ -4559,7 +4571,7 @@ void er_commit(void)
                     }
                     /* Inside an ancestor's capture this is bounded after all: whatever the node's own
                      * transform does, it does it in source space and reaches the screen only through
-                     * the ancestor's blit. Beats a full-screen repaint per spinner frame. */
+                     * the ancestor's blit. Beats a full-screen repaint per animated frame. */
                     ERNode* const cap = capturing_transform_ancestor(n);
                     if (cap && escalate_damage_to_capture(cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
                         continue;
