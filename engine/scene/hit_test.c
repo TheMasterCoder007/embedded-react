@@ -206,6 +206,37 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
     return x >= x1 && y >= y1 && x < x2 && y < y2;
 }
 
+#if ERUI_TRANSFORMS_FULL
+/**
+ * @brief Whether a node's non-translate transform actually reaches the screen.
+ *
+ * render_tree paints a scale / rotate / 3D node by capturing its subtree into the transform scratch and
+ * inverse-mapping it back out. When it cannot start that capture — the node is larger than the source
+ * buffer, or an ancestor's capture is already running — it degrades to painting the node untransformed
+ * at its raw layout box. The pixels a finger lands on then carry no transform at all, so mapping the
+ * touch through one produces a phantom hit region that does not overlap what is drawn (issue #141).
+ *
+ * Answered the way the damage pre-pass answers it (see node_transform_damage), so hit-testing and
+ * damage agree about where the node is: the flag the previous paint recorded is authoritative, and the
+ * size half of the capture admission test stands in on a node's first frame, before there is one. The
+ * size is read from `animated` because that is what render_tree offers the capture — mid-animation the
+ * layout box is not yet the box being painted.
+ *
+ * Asked only of a node render_tree would put on the capture path at all; the ActivityIndicator, which
+ * it never does, is settled by the caller.
+ *
+ * @param[in] node  Node carrying a transform that is not translate-only.
+ *
+ * @return true when the transform is on screen and a touch must be inverse-mapped through it.
+ */
+static bool node_transform_reaches_screen(const ERNode* node)
+{
+    if (node->has_last_paint)
+        return !node->last_paint_untransformed;
+    return er_transform_source_fits((int)node->animated.w, (int)node->animated.h);
+}
+#endif /* ERUI_TRANSFORMS_FULL */
+
 /**
  * @brief Maps a screen-space point into a node's own untransformed coordinate space.
  *
@@ -214,7 +245,8 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  * rather than one path silently working in raw screen pixels.
  *
  * An untransformed node passes the point straight through; a translated one subtracts the offset; a
- * full-affine or 3D one applies the inverse matrix / homography.
+ * full-affine or 3D one applies the inverse matrix / homography — but only when that transform is
+ * really on screen, since one render_tree could not capture paints at the raw box instead.
  *
  * @param[in]  node   Node whose space to map into.
  * @param[in]  x,y    Screen-space point.
@@ -226,46 +258,59 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
 static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* out_y)
 {
     int qx = x, qy = y;
+#if ERUI_TRANSFORMS_FULL
+    const bool can_capture = node->type != ER_NODE_ACTIVITY_INDICATOR;
+#endif
     if (node->has_transform)
     {
-#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
-        if (er_transform_is_3d(node))
-        {
-            float H[9], inv_H[9];
-            er_transform_compute_homography_3d(
-                node, node->computed.x, node->computed.y, node->computed.w, node->computed.h, H);
-            if (!er_transform_homography_invert(H, inv_H))
-                return false;
-            /* Back-project screen point through the inverse homography. */
-            const float sx_f = (float)x, sy_f = (float)y;
-            const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
-            if (Wp <= 0.0f)
-                return false;
-            qx = (int)((inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp);
-            qy = (int)((inv_H[3] * sx_f + inv_H[4] * sy_f + inv_H[5]) / Wp);
-        }
-        else
-
-#endif
 #if ERUI_TRANSFORMS_FULL
-            if (!er_transform_is_translate_only(node))
+        if (can_capture && !er_transform_is_translate_only(node))
         {
-            float a, b, c, d, ftx, fty;
-            er_transform_compute_matrix(node,
-                                        node->computed.x,
-                                        node->computed.y,
-                                        node->computed.w,
-                                        node->computed.h,
-                                        &a,
-                                        &b,
-                                        &c,
-                                        &d,
-                                        &ftx,
-                                        &fty);
-            float ia, ib, ic, id, itx, ity;
-            if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
-                return false;
-            er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
+            /* Degraded to the raw-box paint: the drawn pixels carry no transform, so neither may the
+             * touch. The translate component goes with it — render_tree's fallback paints at the plain
+             * layout position and does not apply one either. */
+            if (!node_transform_reaches_screen(node))
+            {
+                *out_x = x;
+                *out_y = y;
+                return true;
+            }
+#if ERUI_3D_TRANSFORMS
+            if (er_transform_is_3d(node))
+            {
+                float H[9], inv_H[9];
+                er_transform_compute_homography_3d(
+                    node, node->computed.x, node->computed.y, node->computed.w, node->computed.h, H);
+                if (!er_transform_homography_invert(H, inv_H))
+                    return false;
+                /* Back-project screen point through the inverse homography. */
+                const float sx_f = (float)x, sy_f = (float)y;
+                const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
+                if (Wp <= 0.0f)
+                    return false;
+                qx = (int)((inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp);
+                qy = (int)((inv_H[3] * sx_f + inv_H[4] * sy_f + inv_H[5]) / Wp);
+            }
+            else
+#endif
+            {
+                float a, b, c, d, ftx, fty;
+                er_transform_compute_matrix(node,
+                                            node->computed.x,
+                                            node->computed.y,
+                                            node->computed.w,
+                                            node->computed.h,
+                                            &a,
+                                            &b,
+                                            &c,
+                                            &d,
+                                            &ftx,
+                                            &fty);
+                float ia, ib, ic, id, itx, ity;
+                if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
+                    return false;
+                er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
+            }
         }
         else
 #endif
@@ -416,39 +461,15 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
     if (pe == ER_POINTER_EVENTS_NONE)
         return NULL;
 
-    /* Apply this node's transform (if any) to convert the screen-space query point into the
-     * coordinate space where the node's computed rect lives.  For translate-only transforms,
-     * subtract the translation offset.  For full affine transforms, apply the inverse matrix. */
-    int qx = x, qy = y;
-    if (node->has_transform)
-    {
-#if ERUI_TRANSFORMS_FULL
-        if (!er_transform_is_translate_only(node))
-        {
-            float a, b, c, d, ftx, fty;
-            er_transform_compute_matrix(node,
-                                        node->computed.x,
-                                        node->computed.y,
-                                        node->computed.w,
-                                        node->computed.h,
-                                        &a,
-                                        &b,
-                                        &c,
-                                        &d,
-                                        &ftx,
-                                        &fty);
-            float ia, ib, ic, id, itx, ity;
-            if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
-                return NULL; /* Singular transform — not hittable. */
-            er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
-        }
-        else
-#endif
-        {
-            qx = x - (int)node->tp_translate_x;
-            qy = y - (int)node->tp_translate_y;
-        }
-    }
+    /* Convert the screen-space query point into the coordinate space where the node's computed rect
+     * lives. node_map_point() owns that decision for every input path, so the entry gate here and the
+     * press-inside test below cannot drift apart — a second copy of it living here is what let a 3D
+     * node be gated by its 2D matrix while node_map_point back-projected the homography, and what let
+     * #141 be fixed in one place and not the other. It fails only on a transform with no inverse (a
+     * scale collapsed to nothing, a point behind the perspective plane), which is not hittable. */
+    int qx, qy;
+    if (!node_map_point(node, x, y, &qx, &qy))
+        return NULL;
 
     /* Gate entry on the slop-extended bounds (using the transform-adjusted query). An Arc's knob and touch
      * slop reach past its box, so it gates on a wider rect and decides precisely below. */

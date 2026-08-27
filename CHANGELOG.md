@@ -81,6 +81,14 @@ See the README for the release process.
   and damage tracking didn't know.
 - A shadow on one of those views was left behind when it moved, and clipped at its new position. Only
   the view's own box was repainted, and a shadow is drawn outside it.
+- Taps on one of those views missed it. It draws untransformed, but touches were still mapped through
+  the transform, so the area that answered didn't overlap the area you could see.
+- `translateX`/`translateY` on an `<ActivityIndicator>` did nothing — the spinner stayed at its layout
+  position while taps and repaints went to the offset one, and it repainted both spots on every frame
+  forever.
+- Taps on a view with `rotateX`, `rotateY` or `perspective` were matched against its flat layout box
+  instead of the shape you see, so the parts leaning toward you didn't answer and empty space beside
+  them did. (`ERUI_3D_TRANSFORMS` builds only.)
 - A change to anything inside a rotated or scaled view didn't show up. The view's contents are drawn
   into a scratch buffer and mapped onto the screen. However, the damage tracker measured the changed child
   where it was laid out rather than where the mapping puts it, so the repaint missed the pixels
