@@ -353,56 +353,6 @@ void er_pie_fill_row_565(uint16_t* dst, uint32_t sp, int n8)
  - Self-test
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/**
- * @brief Scalar reference identical in rounding to the PIE routines (565-domain blend).
- *
- * @param[in] phase  Dither phase for the blend rows: 0/1 select the checkerboard tables
- *                   applied per column parity, 2 = uniform round-to-nearest, and -1 = the
- *                   fill-row math (truncating, no bias).
- * @param[in] col    Column index within the row (selects the checkerboard lane).
- */
-static uint16_t ref_blend_px(uint16_t d, uint32_t sp, uint8_t ga, int phase, int col)
-{
-    uint32_t a = sp >> 24;
-    uint32_t r = (sp >> 16) & 0xFFU;
-    uint32_t g = (sp >> 8) & 0xFFU;
-    uint32_t b = sp & 0xFFU;
-    if (ga < 255U)
-    {
-        a = (a * ga) >> 8;
-        r = (r * ga) >> 8;
-        g = (g * ga) >> 8;
-        b = (b * ga) >> 8;
-    }
-    uint32_t bias = 0U;
-    uint32_t b3 = 0U;
-    uint32_t b2 = 0U;
-    if (phase == 0 || phase == 1)
-    {
-        const int par = (phase + col) & 1;
-        bias = par ? 192U : 64U;
-        b3 = par ? 6U : 2U;
-        b2 = par ? 3U : 1U;
-    }
-    else if (phase == 2)
-    {
-        bias = 128U;
-    }
-    const uint32_t inv = 256U - a; /* a==0 → dst unchanged; a==255 → dst removed (exact edges) */
-    const uint32_t dr5 = (d >> 11) & 31U;
-    const uint32_t dg6 = (d >> 5) & 63U;
-    const uint32_t db5 = d & 31U;
-    uint32_t or5 = ((r + b3) >> 3) + ((dr5 * inv + bias) >> 8);
-    uint32_t og6 = ((g + b2) >> 2) + ((dg6 * inv + bias) >> 8);
-    uint32_t ob5 = ((b + b3) >> 3) + ((db5 * inv + bias) >> 8);
-    if (or5 > 31U)
-        or5 = 31U;
-    if (og6 > 63U)
-        og6 = 63U;
-    if (ob5 > 31U)
-        ob5 = 31U;
-    return (uint16_t)((or5 << 11) | (og6 << 5) | ob5);
-}
 
 /** @brief xorshift PRNG so the test needs no libc rand. */
 static uint32_t xr(uint32_t* s)
@@ -455,7 +405,7 @@ bool er_pie_blend_selftest(void)
             for (int i = 0; i < 64; i++)
             {
                 const uint16_t before = dst_ref[i];
-                dst_ref[i] = ref_blend_px(dst_ref[i], src[i], ga, phase, i);
+                dst_ref[i] = er_pie_blend_px_565(dst_ref[i], src[i], ga, phase, i);
                 if (dst_pie[i] != dst_ref[i])
                 {
                     snprintf(s_pie_diag, sizeof(s_pie_diag),
@@ -489,7 +439,7 @@ bool er_pie_blend_selftest(void)
         er_pie_fill_row_565(dst_pie, sp, 64 / 8);
         for (int i = 0; i < 64; i++)
         {
-            dst_ref[i] = ref_blend_px(dst_ref[i], sp, 255U, -1, i);
+            dst_ref[i] = er_pie_blend_px_565(dst_ref[i], sp, 255U, -1, i); /* -1 = fill math */
             if (dst_pie[i] != dst_ref[i])
             {
                 snprintf(s_pie_diag, sizeof(s_pie_diag), "fill i=%d sp=%08x pie=%04x ref=%04x", i, (unsigned)sp,
