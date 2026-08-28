@@ -211,16 +211,33 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  * @brief Whether a node's non-translate transform actually reaches the screen.
  *
  * render_tree paints a scale / rotate / 3D node by capturing its subtree into the transform scratch and
- * inverse-mapping it back out. When it cannot start that capture — the node is larger than the source
- * buffer, or an ancestor's capture is already running — it degrades to painting the node untransformed
- * at its raw layout box. The pixels a finger lands on then carry no transform at all, so mapping the
- * touch through one produces a phantom hit region that does not overlap what is drawn (issue #141).
+ * inverse-mapping it back out. Three things stop that capture — the node is larger than the source
+ * buffer, an ancestor's capture is already running, or the matrix will not invert, so there is no
+ * inverse map to blit the scratch back with — and on any of them it degrades to painting the node
+ * untransformed at its raw layout box. The pixels a finger lands on then carry no transform at all, so
+ * mapping the touch through one produces a phantom hit region that does not overlap what is drawn
+ * (issue #141).
  *
- * Answered the way the damage pre-pass answers it (see node_transform_damage), so hit-testing and
- * damage agree about where the node is: the flag the previous paint recorded is authoritative, and the
- * size half of the capture admission test stands in on a node's first frame, before there is one. The
- * size is read from `animated` because that is what render_tree offers the capture — mid-animation the
- * layout box is not yet the box being painted.
+ * The first two are answered the way the damage pre-pass answers them (see node_transform_damage), so
+ * hit-testing and damage agree about where the node is: the flag the previous paint recorded is
+ * authoritative, and the size half of the capture admission test stands in on a node's first frame,
+ * before there is one. The size is read from `animated` because that is what render_tree offers the
+ * capture — mid-animation the layout box is not yet the box being painted.
+ *
+ * Invertibility is asked first, and of the CURRENT matrix, because that flag cannot answer it: it
+ * reports the previous paint, while node_map_point() is about to build a matrix from today's props and
+ * invert it. A transform that has just collapsed makes the two disagree for exactly one commit — the
+ * flag still says "transformed" because it was, the fresh matrix is singular, er_transform_invert()
+ * fails, and the touch is declined on pixels that are plainly still on the panel (issue #159). Asking
+ * it here answers with the very thresholds that inverse applies, so the gate and the matrix it gates
+ * cannot come from different frames; it is also the answer the coming paint will record, since a
+ * singular transform is exactly what render_tree degrades to the raw box. The first-frame branch gets
+ * it too, so its size test stops standing in for the whole admission rule.
+ *
+ * The origin handed over is node_map_point()'s own — `computed`, not the animated-minus-scroll one
+ * render_tree measures with — because what has to agree here is the inverse THIS function gates, not
+ * the one the last paint took. On the affine path the determinant does not depend on the origin at all;
+ * on the 3D one the pivot does, and following node_map_point() is what keeps the two in step.
  *
  * Asked only of a node render_tree would put on the capture path at all; the ActivityIndicator, which
  * it never does, is settled by the caller.
@@ -231,6 +248,9 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  */
 static bool node_transform_reaches_screen(const ERNode* node)
 {
+    if (!er_transform_is_invertible(
+            node, (int)node->computed.x, (int)node->computed.y, (int)node->computed.w, (int)node->computed.h))
+        return false;
     if (node->has_last_paint)
         return !node->last_paint_untransformed;
     return er_transform_source_fits((int)node->animated.w, (int)node->animated.h);
@@ -246,14 +266,17 @@ static bool node_transform_reaches_screen(const ERNode* node)
  *
  * An untransformed node passes the point straight through; a translated one subtracts the offset; a
  * full-affine or 3D one applies the inverse matrix / homography — but only when that transform is
- * really on screen, since one render_tree could not capture paints at the raw box instead.
+ * really on screen, since one render_tree could not capture paints at the raw box instead. A singular
+ * matrix is one of the ways it could not, so it takes that same raw-box path rather than failing here;
+ * the inverse calls below cannot fail on a matrix the gate has admitted, and stay as a guard in case
+ * the two thresholds ever drift apart.
  *
  * @param[in]  node   Node whose space to map into.
  * @param[in]  x,y    Screen-space point.
  * @param[out] out_x  Receives the node-space X.
  * @param[out] out_y  Receives the node-space Y.
  *
- * @return false when the transform is singular or the point projects behind the perspective plane.
+ * @return false when the point projects behind the perspective plane (3D only).
  */
 static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* out_y)
 {
@@ -266,9 +289,10 @@ static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* ou
 #if ERUI_TRANSFORMS_FULL
         if (can_capture && !er_transform_is_translate_only(node))
         {
-            /* Degraded to the raw-box paint: the drawn pixels carry no transform, so neither may the
-             * touch. The translate component goes with it — render_tree's fallback paints at the plain
-             * layout position and does not apply one either. */
+            /* Degraded to the raw-box paint — too large, an ancestor holds the capture, or the matrix
+             * does not invert: the drawn pixels carry no transform, so neither may the touch. The
+             * translate component goes with it — render_tree's fallback paints at the plain layout
+             * position and does not apply one either. */
             if (!node_transform_reaches_screen(node))
             {
                 *out_x = x;
@@ -789,7 +813,7 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
  * @param[in]  x,y   Screen-space point.
  * @param[out] qx,qy Receives the arc-space point.
  *
- * @return false when the arc's transform cannot be inverted.
+ * @return false when the point projects behind the arc's perspective plane.
  */
 static bool arc_local_point(const ERNode* arc, int x, int y, int* qx, int* qy)
 {
