@@ -21,6 +21,10 @@ See the README for the release process.
   thermostat's AUTO band. `minSpan` keeps the pair a set distance apart, pushing the far end along
   instead of stopping dead. `onChange` reports both values.
 - `onValueChange` on `<Switch>` now works in Flow A. It had only ever fired in AOT builds.
+- The engine now caches a static `<Svg>`'s built geometry, so repainting one under a moving sibling
+  no longer re-tessellates it every frame — the repaint goes straight to the rasterizer. Animated
+  tapes are unaffected, output is pixel-identical, and `ERUI_VECTOR_EDGE_CACHE=0` compiles the cache
+  (and its RAM) out on tight boards.
 - Per-phase raster timings. The perf overlay's RASTER number now splits into the four things it's
   made of — damage pre-pass, compositing, backend blits, and the dirty-flag sweep — so a slow frame
   names a culprit instead of a phase. A new `blit_px` counter shows how many pixels actually reached

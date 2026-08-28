@@ -124,6 +124,10 @@ int er_vector_store(int slot,
     if (slot >= ERUI_MAX_VECTOR_NODES)
         return -1;
 
+    /* The tape/paints are changing: any cached edge lists built from the old contents are stale.
+     * (Also clears the cache's per-slot promotion state, so an animated tape never records.) */
+    er_vector_cache_invalidate_slot(slot);
+
     VecSlot* s = &s_slots[slot];
     s->used = true;
     if (n_ops > ERUI_VECTOR_TAPE_MAX)
@@ -155,7 +159,10 @@ int er_vector_store(int slot,
 void er_vector_free(int slot)
 {
     if (slot >= 0 && slot < ERUI_MAX_VECTOR_NODES)
+    {
         s_slots[slot].used = false;
+        er_vector_cache_invalidate_slot(slot); /* the slot may be re-issued to a different node */
+    }
 }
 
 void er_vector_reset(void)
@@ -163,6 +170,7 @@ void er_vector_reset(void)
     /* Free every storage slot. The rasterizer's scratch (vector.c) is reset per shape inside
      * er_vector_render, so it needs no clearing here. */
     memset(s_slots, 0, sizeof(s_slots));
+    er_vector_cache_reset(); /* every cached edge list described geometry that is now gone */
     /* The overflow flag describes the geometry that was in the pool, so it goes with it — a fresh scene
      * gets a fresh verdict. The one-shot warning latch is deliberately NOT cleared: it is per process. */
     s_pool_overflowed = false;

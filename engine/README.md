@@ -370,6 +370,10 @@ into transient rasterize scratch (reused per shape) and persistent per-node stor
 | `ERUI_VECTOR_TAPE_MAX` | 1024 | op-tape floats stored per node | (in the per-node cost) |
 | `ERUI_VECTOR_PAINTS_MAX` | 16 | paint entries (shapes) per node | (in the per-node cost) |
 | `ERUI_VECTOR_GRAD_LUT` | 256 | gradient colour-LUT entries (`ERUI_GRADIENT` only) | `LUT × 4` B internal |
+| `ERUI_VECTOR_EDGE_CACHE` | 1 | edge cache on/off (`vector_cache.c`; 0 compiles it out) | — |
+| `ERUI_VECTOR_CACHE_NODES` | 2 | nodes with cached geometry at once (LRU) | `NODES × (CACHE_EDGES×20 + CACHE_PASSES×52)` B |
+| `ERUI_VECTOR_CACHE_EDGES` | 4096 | cached edges per node (sum over its passes) | (in the per-cache-node cost) |
+| `ERUI_VECTOR_CACHE_PASSES` | 48 | cached rasterise passes per node | (in the per-cache-node cost) |
 
 `ERUI_VECTOR_SORT_BUCKETS` sizes the counting sort that orders edges for the active-edge table. One bucket
 per clip row until the clip is taller than the table, then one bucket covers 2/4/… rows — which only means a
@@ -380,23 +384,42 @@ gradient shape) instead of interpolating the stops each pixel — the bulk of an
 cost. 256 matches 8-bit color resolution; a RAM-tight board can lower it (e.g., 64–128) for coarser steps,
 and there's little benefit above 256.
 
+**The edge cache** (`ERUI_VECTOR_EDGE_CACHE`, pool in `rendering/vector_cache.c`) keeps a static
+node's *built* rasterizer geometry — its flattened, stroke-outlined edge lists — so repainting an
+unchanged `<Svg>` (a moving sibling's damage rect crossing it every frame, or the same damage
+replayed into each buffer of a multi-buffer display) skips the tape parse, bezier/arc flattening and
+stroke outlining and goes straight to the scanline rasterize. It is keyed on the storage slot and the
+node's screen origin, invalidated by any `er_vector_store`/`er_vector_free` on the slot, and only
+records a tape that survived unchanged from one render to the next (so an animated dial, whose tape
+updates every frame, never pays the recording cost). A node whose geometry does not fit the entry
+(`ERUI_VECTOR_CACHE_EDGES` is the total across *all* the node's fill+stroke passes — a decorated
+gauge face with 60 round-capped ticks measures ~3k) simply keeps rendering uncached; a debug build
+prints a one-line warning naming the knobs to raise. Analytic-arc shapes replay through the arc core
+(they cache parameters, not edges), and gradients re-resolve from the paint table at replay, so a
+cached repaint is pixel-identical to a fresh one — the test suite asserts this
+(`tests/rendering/test_vector_cache.c`).
+
 The Arc widget (`rendering/arc.c`) has two more: `ERUI_ARC_SPAN_CACHE` (default 8) row-span cache entries
 of `ERUI_ARC_MAX_RADIUS` (default 255) rows — `ENTRIES × (RADIUS + 2) × 2` B ≈ 4 KB, plus a 1 KB
 premultiplied row chunk and a 512 B color LUT per render worker.
 
-At the defaults that's ~122 KB. The fastest-growing terms are `MAX_EDGES` (~32 B each, across
-three lists) and the **per-node op-tape**: persistent storage is `MAX_VECTOR_NODES ×
-VECTOR_TAPE_MAX × 4` bytes, so "many nodes" and "large tape" multiply.
+At the defaults that's ~122 KB, plus ~170 KB of edge cache (2 × ~85 KB; set
+`ERUI_VECTOR_EDGE_CACHE=0` to drop it entirely on a RAM-tight board). The fastest-growing terms are
+`MAX_EDGES` (~32 B each, across three lists) and the **per-node op-tape**: persistent storage is
+`MAX_VECTOR_NODES × VECTOR_TAPE_MAX × 4` bytes, so "many nodes" and "large tape" multiply.
 
-**Placement (PSRAM targets).** The vector code is two objects: `vector.c` (the **hot** per-pixel
-rasterize scratch — edge/coverage/crossing lists) and `vector_store.c` (the **cold** per-node
-op-tape/paint pool). The storage pool is read once per node when it re-rasterizes, not in the
-scanline inner loop, so a target with far memory can place `vector_store.o`'s `.bss` there — e.g.,
-ESP32 PSRAM via a linker fragment — while the hot scratch stays in fast internal RAM. With the
-storage in PSRAM, **`ERUI_MAX_VECTOR_NODES` (and `ERUI_VECTOR_TAPE_MAX`) can be raised well past
-the internal-RAM-bound default**. See `examples/esp32/esp32-s3` —
-`components/engine/linker_psram.lf` maps `vector_store` to `extram_bss` and the component sets
-`ERUI_MAX_VECTOR_NODES=32`.
+**Placement (PSRAM targets).** The vector code is three objects: `vector.c` (the **hot** per-pixel
+rasterize scratch — edge/coverage/crossing lists), `vector_store.c` (the **cold** per-node
+op-tape/paint pool) and `vector_cache.c` (the edge cache). The storage pool is read once per node
+when it re-rasterizes, not in the scanline inner loop, so a target with far memory can place
+`vector_store.o`'s `.bss` there — e.g., ESP32 PSRAM via a linker fragment — while the hot scratch
+stays in fast internal RAM. With the storage in PSRAM, **`ERUI_MAX_VECTOR_NODES` (and
+`ERUI_VECTOR_TAPE_MAX`) can be raised well past the internal-RAM-bound default**. The edge cache
+sits between the two: a replay *does* read cached edges in the scanline crossing loop, but the
+per-row active set is small and cache-fronted, and even a PSRAM-resident replay beats rebuilding
+the geometry — put it wherever the RAM budget allows. See `examples/esp32/esp32-s3` —
+`components/engine/linker_psram.lf` maps `vector_store` and `vector_cache` to `extram_bss` and the
+component sets `ERUI_MAX_VECTOR_NODES=32`.
 
 **Overflow is silent truncation, not a crash** — an over-complex shape is clipped or dropped.
 A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the

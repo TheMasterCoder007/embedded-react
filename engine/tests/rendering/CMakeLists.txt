@@ -116,6 +116,12 @@ target_link_libraries(test_vector PRIVATE embedded-react)
 target_include_directories(test_vector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering)
 add_test(NAME rendering_vector COMMAND test_vector)
 
+add_executable(test_vector_cache test_vector_cache.c)
+target_link_libraries(test_vector_cache PRIVATE embedded-react)
+# test_vector_cache needs engine/rendering for vector.h (a private engine header).
+target_include_directories(test_vector_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering)
+add_test(NAME rendering_vector_cache COMMAND test_vector_cache)
+
 add_executable(test_display_none test_display_none.c)
 target_link_libraries(test_display_none PRIVATE embedded-react)
 add_test(NAME rendering_display_none COMMAND test_display_none)

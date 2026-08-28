@@ -34,6 +34,8 @@
 
 #include "vector.h"
 
+#include "vector_cache.h" /* ERVecEdge + the cache entry layout (record/replay share it with vector_cache.c) */
+
 #include "arc.h"               /* er_arc_fill_sector — the shared analytic core (ERUI_VECTOR_ANALYTIC_ARC) */
 #include "renderer_internal.h" /* er_blit_fill */
 
@@ -98,11 +100,8 @@
  - Working state (static, reused per render)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-typedef struct
-{
-    float x0, y0, x1, y1; /**< Normalized so y0 <= y1. */
-    int dir;              /**< +1 if the edge originally went downward (y increasing), else -1. */
-} VecEdge;
+/* One rasterizer edge: ERVecEdge, defined in vector_cache.h — the edge cache (vector_cache.c) stores
+ * arrays of them, and replay hands them straight back to rasterize(). */
 
 typedef struct
 {
@@ -117,8 +116,9 @@ static int s_npts;
 static VecSub s_sub[ERUI_VECTOR_MAX_SUBPATHS];
 static int s_nsub;
 
-static VecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
+static ERVecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_nedges;
+static bool s_edge_trunc;              /**< The current build dropped an edge on the pool cap (recording aborts). */
 static float s_edge_ytop, s_edge_ybot; /**< Clip rows for the current pass; edge_add drops edges outside them. */
 
 /* Edge ordering for the active-edge table: a counting sort writes indices into s_order, and s_bkt ends
@@ -138,6 +138,18 @@ static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo
 /* Crossing list reused per sub-scanline. */
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
 static int s_cross_d[ERUI_VECTOR_MAX_EDGES];
+
+#if ERUI_VECTOR_EDGE_CACHE
+/* Edge-cache recording state. Non-NULL while er_vector_render_slot is recording a render into a cache
+ * entry (vector_cache.c owns the pool). While recording, edge builds run UNCLIPPED (the cache must
+ * hold the node's whole geometry, not just this clip's slice) and the per-shape clip reject is off —
+ * a one-render cost paid only for a tape that already proved static (see er_vector_cache_begin). */
+static ERVecCache* s_rec;
+static bool s_rec_failed; /**< The recording overflowed/truncated; entry will be discarded. */
+#define VEC_RECORDING() (s_rec != 0 && !s_rec_failed)
+#else
+#define VEC_RECORDING() false
+#endif
 
 /* The per-node op-tape/paint storage pool (er_vector_store/free/reset/slot_ops/slot_paints + s_slots) lives
  * in vector_store.c — a separate translation unit so a target can place that cold pool in PSRAM (via the
@@ -258,9 +270,10 @@ static void edge_add(float x0, float y0, float x1, float y1)
     if (s_nedges >= ERUI_VECTOR_MAX_EDGES)
     {
         ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
+        s_edge_trunc = true;
         return;
     }
-    VecEdge* e = &s_edges[s_nedges++];
+    ERVecEdge* e = &s_edges[s_nedges++];
     if (y0 < y1)
     {
         e->x0 = x0;
@@ -546,12 +559,26 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
 /* Indices of edges crossing the current scanline (the active-edge table). */
 static int s_active[ERUI_VECTOR_MAX_EDGES];
 
-/** @brief Rasterizes the current edge list into the clip box with anti-aliasing. */
-static void
-rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0, int clipy0, int clipx1, int clipy1)
+/**
+ * @brief Rasterizes an edge list into the clip box with anti-aliasing.
+ *
+ * @p edges is normally this file's own scratch (s_edges) just built for the pass, but a cache replay
+ * hands in a recorded list instead — the pointer indirection is what lets replay skip the geometry
+ * build entirely. @p n_edges must not exceed ERUI_VECTOR_MAX_EDGES (the sort/active tables are sized
+ * to it); every producer — the build path and the cache recorder — enforces that cap.
+ */
+static void rasterize(const ERVecEdge* edges,
+                      int n_edges,
+                      uint32_t color,
+                      const ERVectorGradient* grad,
+                      int evenodd,
+                      int clipx0,
+                      int clipy0,
+                      int clipx1,
+                      int clipy1)
 {
     /* Bail on a fully-transparent solid colour — unless a gradient supplies the fill colour instead. */
-    if (s_nedges == 0 || (!grad && ((color >> 24) & 0xFFU) == 0U))
+    if (n_edges == 0 || (!grad && ((color >> 24) & 0xFFU) == 0U))
         return;
     const int width = clipx1 - clipx0;
     if (width <= 0)
@@ -569,12 +596,12 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
 #endif
 
     float fy0 = 1e30f, fy1 = -1e30f;
-    for (int i = 0; i < s_nedges; i++)
+    for (int i = 0; i < n_edges; i++)
     {
-        if (s_edges[i].y0 < fy0)
-            fy0 = s_edges[i].y0;
-        if (s_edges[i].y1 > fy1)
-            fy1 = s_edges[i].y1;
+        if (edges[i].y0 < fy0)
+            fy0 = edges[i].y0;
+        if (edges[i].y1 > fy1)
+            fy1 = edges[i].y1;
     }
     int ymin = (int)floorf(fy0);
     int ymax = (int)ceilf(fy1);
@@ -602,9 +629,9 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
         shift++;
     const int nb = ((nrows - 1) >> shift) + 1;
     memset(s_bkt, 0, sizeof(VecIdx) * (size_t)nb);
-    for (int i = 0; i < s_nedges; i++)
+    for (int i = 0; i < n_edges; i++)
     {
-        int row = (int)floorf(s_edges[i].y0) - ymin;
+        int row = (int)floorf(edges[i].y0) - ymin;
         if (row < 0)
             row = 0; /* starts above the clip: activate it on the first row */
         else if (row >= nrows)
@@ -620,9 +647,9 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
     }
     if (acc == 0)
         return;
-    for (int i = 0; i < s_nedges; i++)
+    for (int i = 0; i < n_edges; i++)
     {
-        int row = (int)floorf(s_edges[i].y0) - ymin;
+        int row = (int)floorf(edges[i].y0) - ymin;
         if (row < 0)
             row = 0;
         else if (row >= nrows)
@@ -642,7 +669,7 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
             s_active[n_active++] = (int)s_order[next++];
         for (int a = 0; a < n_active;)
         {
-            if (s_edges[s_active[a]].y1 <= (float)iy)
+            if (edges[s_active[a]].y1 <= (float)iy)
                 s_active[a] = s_active[--n_active];
             else
                 a++;
@@ -659,7 +686,7 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
             int m = 0;
             for (int a = 0; a < n_active; a++)
             {
-                const VecEdge* e = &s_edges[s_active[a]];
+                const ERVecEdge* e = &edges[s_active[a]];
                 if (sy < e->y0 || sy >= e->y1)
                     continue;
                 const float t = (sy - e->y0) / (e->y1 - e->y0);
@@ -702,12 +729,71 @@ rasterize(uint32_t color, const ERVectorGradient* grad, int evenodd, int clipx0,
  - Fill + stroke
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Builds closed edges from every subpath and rasterizes the fill. */
-static void fill_shape(uint32_t color, const ERVectorGradient* grad, int evenodd, int cx0, int cy0, int cx1, int cy1)
+#if ERUI_VECTOR_EDGE_CACHE
+/**
+ * @brief Appends the just-built edge list (s_edges) to the recording entry as one replay pass.
+ *
+ * Stores the pass's ink bounds off the edges so replay can skip it for a clip that cannot see it —
+ * the cached counterpart of shape_clipped_out (which reads the tape the replay no longer walks).
+ *
+ * @return false when the entry is out of pass or edge capacity (the recording must be discarded).
+ */
+static bool record_pass(uint8_t kind, int paint_idx)
+{
+    ERVecCache* e = s_rec;
+    if (s_nedges == 0)
+        return true; /* nothing painted, nothing to replay */
+    if (e->n_passes >= ERUI_VECTOR_CACHE_PASSES || e->n_edges + s_nedges > ERUI_VECTOR_CACHE_EDGES)
+    {
+#if ERUI_VECTOR_DIAGNOSTICS
+        static bool warned = false;
+        if (!warned)
+        {
+            warned = true;
+            fprintf(stderr,
+                    "embedded-react vector: edge cache entry full (ERUI_VECTOR_CACHE_EDGES %d / "
+                    "ERUI_VECTOR_CACHE_PASSES %d) - node repaints uncached; raise them.\n",
+                    (int)ERUI_VECTOR_CACHE_EDGES,
+                    (int)ERUI_VECTOR_CACHE_PASSES);
+        }
+#endif
+        return false;
+    }
+    ERVecPass* p = &e->passes[e->n_passes++];
+    p->kind = kind;
+    p->paint = (uint16_t)paint_idx;
+    p->start = e->n_edges;
+    p->count = s_nedges;
+    float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+    for (int i = 0; i < s_nedges; i++)
+    {
+        const ERVecEdge* ed = &s_edges[i];
+        const float xlo = (ed->x0 < ed->x1) ? ed->x0 : ed->x1;
+        const float xhi = (ed->x0 < ed->x1) ? ed->x1 : ed->x0;
+        if (xlo < bx0)
+            bx0 = xlo;
+        if (xhi > bx1)
+            bx1 = xhi;
+        if (ed->y0 < by0)
+            by0 = ed->y0; /* edges are normalized y0 <= y1 */
+        if (ed->y1 > by1)
+            by1 = ed->y1;
+    }
+    p->bx0 = bx0;
+    p->by0 = by0;
+    p->bx1 = bx1;
+    p->by1 = by1;
+    memcpy(e->edges + e->n_edges, s_edges, (size_t)s_nedges * sizeof(ERVecEdge));
+    e->n_edges += s_nedges;
+    return true;
+}
+#endif /* ERUI_VECTOR_EDGE_CACHE */
+
+/** @brief Builds closed fill edges from every subpath (into s_edges, honoring s_edge_ytop/ybot). */
+static void fill_build(void)
 {
     s_nedges = 0;
-    s_edge_ytop = (float)cy0;
-    s_edge_ybot = (float)cy1;
+    s_edge_trunc = false;
     for (int si = 0; si < s_nsub; si++)
     {
         const VecSub* sp = &s_sub[si];
@@ -718,7 +804,41 @@ static void fill_shape(uint32_t color, const ERVectorGradient* grad, int evenodd
         /* Fill implicitly closes every subpath. */
         edge_add(s_px[sp->start + sp->count - 1], s_py[sp->start + sp->count - 1], s_px[sp->start], s_py[sp->start]);
     }
-    rasterize(color, grad, evenodd, cx0, cy0, cx1, cy1);
+}
+
+/** @brief Builds closed edges from every subpath and rasterizes the fill (recording it when armed). */
+static void
+fill_shape(uint32_t color, const ERVectorGradient* grad, int evenodd, int paint_idx, int cx0, int cy0, int cx1, int cy1)
+{
+#if ERUI_VECTOR_EDGE_CACHE
+    if (VEC_RECORDING())
+    {
+        /* Record mode: build the FULL edge list (no clip-row drop) so any later clip can replay it. */
+        s_edge_ytop = -1e30f;
+        s_edge_ybot = 1e30f;
+        fill_build();
+        if (s_edge_trunc)
+        {
+            /* The unclipped build overflowed the edge pool; a clipped build may keep edges this one
+             * dropped, so abandon the recording and fall through to the legacy build for THIS render. */
+            s_rec_failed = true;
+        }
+        else
+        {
+            if (!record_pass(ER_VEC_PASS_FILL, paint_idx))
+                s_rec_failed = true;
+            /* The built edges are complete either way — rasterize them directly. */
+            rasterize(s_edges, s_nedges, color, grad, evenodd, cx0, cy0, cx1, cy1);
+            return;
+        }
+    }
+#else
+    (void)paint_idx;
+#endif
+    s_edge_ytop = (float)cy0;
+    s_edge_ybot = (float)cy1;
+    fill_build();
+    rasterize(s_edges, s_nedges, color, grad, evenodd, cx0, cy0, cx1, cy1);
 }
 
 /** @brief Adds a filled convex quad (4 corners, CCW or CW) as edges. */
@@ -1047,13 +1167,24 @@ static void stroke_subpath(const VecSub* sp, float sw, int cap, int join, float 
     }
 }
 
-/** @brief Builds stroke geometry for all subpaths and rasterizes it. */
+/** @brief Builds stroke outline edges for every subpath (into s_edges, honoring s_edge_ytop/ybot). */
+static void stroke_build(float sw, int cap, int join, float miter)
+{
+    s_nedges = 0;
+    s_edge_trunc = false;
+    for (int si = 0; si < s_nsub; si++)
+        if (s_sub[si].count >= 1)
+            stroke_subpath(&s_sub[si], sw, cap, join, miter);
+}
+
+/** @brief Builds stroke geometry for all subpaths and rasterizes it (recording it when armed). */
 static void stroke_shape(uint32_t color,
                          const ERVectorGradient* grad,
                          float sw,
                          int cap,
                          int join,
                          float miter,
+                         int paint_idx,
                          int cx0,
                          int cy0,
                          int cx1,
@@ -1061,13 +1192,32 @@ static void stroke_shape(uint32_t color,
 {
     if (sw <= 0.0f)
         return;
-    s_nedges = 0;
+#if ERUI_VECTOR_EDGE_CACHE
+    if (VEC_RECORDING())
+    {
+        /* Record mode: full edge list, no clip-row drop — see fill_shape for the overflow contract. */
+        s_edge_ytop = -1e30f;
+        s_edge_ybot = 1e30f;
+        stroke_build(sw, cap, join, miter);
+        if (s_edge_trunc)
+        {
+            s_rec_failed = true;
+        }
+        else
+        {
+            if (!record_pass(ER_VEC_PASS_STROKE, paint_idx))
+                s_rec_failed = true;
+            rasterize(s_edges, s_nedges, color, grad, 0, cx0, cy0, cx1, cy1);
+            return;
+        }
+    }
+#else
+    (void)paint_idx;
+#endif
     s_edge_ytop = (float)cy0;
     s_edge_ybot = (float)cy1;
-    for (int si = 0; si < s_nsub; si++)
-        if (s_sub[si].count >= 1)
-            stroke_subpath(&s_sub[si], sw, cap, join, miter);
-    rasterize(color, grad, 0, cx0, cy0, cx1, cy1);
+    stroke_build(sw, cap, join, miter);
+    rasterize(s_edges, s_nedges, color, grad, 0, cx0, cy0, cx1, cy1);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1366,6 +1516,42 @@ static void arc_run_draw(const VecArcRun* a, const ERVectorPaint* pt, int cx0, i
 
 static uint32_t s_analytic_arcs = 0U;
 
+#if ERUI_VECTOR_EDGE_CACHE
+/**
+ * @brief Records a matched analytic-arc run as a replay pass (no edges — the sector core re-derives
+ *        its geometry from these few parameters, and is already cheap under a small clip).
+ *
+ * @return false when the entry is out of pass capacity (the recording must be discarded).
+ */
+static bool record_arc(const VecArcRun* a, int paint_idx, const ERVectorPaint* pt)
+{
+    ERVecCache* e = s_rec;
+    if (e->n_passes >= ERUI_VECTOR_CACHE_PASSES)
+        return false;
+    ERVecPass* p = &e->passes[e->n_passes++];
+    p->kind = ER_VEC_PASS_ARC;
+    p->paint = (uint16_t)paint_idx;
+    p->start = 0;
+    p->count = 0;
+    /* Ink reach: the radius, plus half the stroke width when one is drawn (arc_paint_ok already
+     * limited caps/joins to styles that stay inside it). */
+    float reach = a->r;
+    if (((pt->stroke >> 24) & 0xFFU) != 0U && pt->stroke_w > 0.0f)
+        reach += pt->stroke_w * 0.5f;
+    p->bx0 = a->cx - reach;
+    p->by0 = a->cy - reach;
+    p->bx1 = a->cx + reach;
+    p->by1 = a->cy + reach;
+    p->arc_cx = a->cx;
+    p->arc_cy = a->cy;
+    p->arc_r = a->r;
+    p->arc_a0_deg = a->a0_deg;
+    p->arc_sweep_deg = a->sweep_deg;
+    p->arc_full = a->full;
+    return true;
+}
+#endif /* ERUI_VECTOR_EDGE_CACHE */
+
 #endif /* ERUI_VECTOR_ANALYTIC_ARC */
 
 uint32_t er_vector_analytic_arc_count(void)
@@ -1384,18 +1570,19 @@ void er_vector_analytic_arc_count_reset(void)
 #endif
 }
 
-void er_vector_render(const float* ops,
-                      int n_ops,
-                      const ERVectorPaint* paints,
-                      int n_paints,
-                      const ERVectorGradient* grads,
-                      int n_grads,
-                      int px,
-                      int py,
-                      int clipx0,
-                      int clipy0,
-                      int clipx1,
-                      int clipy1)
+/** @brief Walks an op-tape and paints it — er_vector_render's body, shared with the recording path. */
+static void render_tape(const float* ops,
+                        int n_ops,
+                        const ERVectorPaint* paints,
+                        int n_paints,
+                        const ERVectorGradient* grads,
+                        int n_grads,
+                        int px,
+                        int py,
+                        int clipx0,
+                        int clipy0,
+                        int clipx1,
+                        int clipy1)
 {
     if (!ops || n_ops <= 0)
         return;
@@ -1423,7 +1610,10 @@ void er_vector_render(const float* ops,
          * clip box. A few compares per op replaces flattening it, expanding its stroke outline, sorting
          * the edges and walking every row — all of which the rasterizer would otherwise do before the
          * clip threw the result away. This is what makes a tape of many small shapes (tick marks,
-         * segments, a legend) cheap to repaint for a damage rect covering only one of them. */
+         * segments, a legend) cheap to repaint for a damage rect covering only one of them.
+         * OFF while recording into the edge cache: the cache must hold every shape, whatever this
+         * render's clip — replay does the equivalent skip from each pass's stored bounds. */
+        if (!VEC_RECORDING())
         {
             int bend = 0;
             if (shape_clipped_out(ops, i, n_ops, px, py, paint_margin(shape_paint), cx0, cy0, cx1, cy1, &bend))
@@ -1443,6 +1633,10 @@ void er_vector_render(const float* ops,
             VecArcRun arun;
             if (arc_run_match(ops, i, n_ops, px, py, &arun) && arc_paint_ok(shape_paint, &arun))
             {
+#if ERUI_VECTOR_EDGE_CACHE
+                if (VEC_RECORDING() && !record_arc(&arun, pidx, shape_paint))
+                    s_rec_failed = true;
+#endif
                 arc_run_draw(&arun, shape_paint, cx0, cy0, cx1, cy1);
                 s_analytic_arcs++;
                 i = arun.end;
@@ -1549,7 +1743,7 @@ void er_vector_render(const float* ops,
             sg = resolve_grad(pt->stroke_grad, grads, n_grads, px, py, &sgbuf);
 #endif
             if (fg || ((pt->fill >> 24) & 0xFFU) != 0U)
-                fill_shape(pt->fill, fg, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
+                fill_shape(pt->fill, fg, pt->fill_rule == ER_VFILL_EVENODD, pidx, cx0, cy0, cx1, cy1);
             if ((sg || ((pt->stroke >> 24) & 0xFFU) != 0U) && pt->stroke_w > 0.0f)
                 stroke_shape(pt->stroke,
                              sg,
@@ -1557,10 +1751,128 @@ void er_vector_render(const float* ops,
                              pt->cap,
                              pt->join,
                              pt->miter > 0.0f ? pt->miter : 4.0f,
+                             pidx,
                              cx0,
                              cy0,
                              cx1,
                              cy1);
         }
     }
+}
+
+void er_vector_render(const float* ops,
+                      int n_ops,
+                      const ERVectorPaint* paints,
+                      int n_paints,
+                      const ERVectorGradient* grads,
+                      int n_grads,
+                      int px,
+                      int py,
+                      int clipx0,
+                      int clipy0,
+                      int clipx1,
+                      int clipy1)
+{
+    /* The tape-only entry point has no node identity to key a cache on, so it never records. */
+    render_tape(ops, n_ops, paints, n_paints, grads, n_grads, px, py, clipx0, clipy0, clipx1, clipy1);
+}
+
+#if ERUI_VECTOR_EDGE_CACHE
+/**
+ * @brief Paints a cache entry: replays each recorded pass whose ink bounds reach the clip.
+ *
+ * Colors, gradients and fill rules come from the CURRENT paint table, not the recording — the store
+ * invalidates the entry on any tape/paint change, so they are the same ones the recording saw; reading
+ * them fresh just avoids duplicating paint state into the entry.
+ */
+static void replay_cache(const ERVecCache* e,
+                         const ERVectorPaint* paints,
+                         int n_paints,
+                         const ERVectorGradient* grads,
+                         int n_grads,
+                         int px,
+                         int py,
+                         int cx0,
+                         int cy0,
+                         int cx1,
+                         int cy1)
+{
+#if !ERUI_GRADIENT
+    (void)grads;
+    (void)n_grads;
+    (void)px;
+    (void)py;
+#endif
+    /* One pixel of slack around the stored bounds: coverage rounds outward to pixel cells. */
+    const float fx0 = (float)cx0 - 1.0f, fy0 = (float)cy0 - 1.0f;
+    const float fx1 = (float)cx1 + 1.0f, fy1 = (float)cy1 + 1.0f;
+    for (int k = 0; k < e->n_passes; k++)
+    {
+        const ERVecPass* p = &e->passes[k];
+        if (p->bx1 <= fx0 || p->bx0 >= fx1 || p->by1 <= fy0 || p->by0 >= fy1)
+            continue; /* this pass cannot touch the clip — the cached form of shape_clipped_out */
+        if ((int)p->paint >= n_paints)
+            continue; /* unreachable while invalidation is sound; never index past the table */
+        const ERVectorPaint* pt = &paints[p->paint];
+        if (p->kind == ER_VEC_PASS_ARC)
+        {
+#if ERUI_VECTOR_ANALYTIC_ARC
+            VecArcRun a;
+            a.cx = p->arc_cx;
+            a.cy = p->arc_cy;
+            a.r = p->arc_r;
+            a.a0_deg = p->arc_a0_deg;
+            a.sweep_deg = p->arc_sweep_deg;
+            a.full = p->arc_full;
+            a.end = 0; /* tape position; meaningless on replay */
+            arc_run_draw(&a, pt, cx0, cy0, cx1, cy1);
+            s_analytic_arcs++;
+#endif
+            continue;
+        }
+        const ERVectorGradient* g = NULL;
+#if ERUI_GRADIENT
+        ERVectorGradient gbuf;
+        g = resolve_grad(
+            (p->kind == ER_VEC_PASS_FILL) ? pt->fill_grad : pt->stroke_grad, grads, n_grads, px, py, &gbuf);
+#endif
+        if (p->kind == ER_VEC_PASS_FILL)
+            rasterize(
+                e->edges + p->start, p->count, pt->fill, g, pt->fill_rule == ER_VFILL_EVENODD, cx0, cy0, cx1, cy1);
+        else
+            rasterize(e->edges + p->start, p->count, pt->stroke, g, 0, cx0, cy0, cx1, cy1);
+    }
+}
+#endif /* ERUI_VECTOR_EDGE_CACHE */
+
+void er_vector_render_slot(int slot, int px, int py, int clipx0, int clipy0, int clipx1, int clipy1)
+{
+    int no = 0, np = 0, ng = 0;
+    const float* ops = er_vector_slot_ops(slot, &no);
+    const ERVectorPaint* paints = er_vector_slot_paints(slot, &np);
+    const ERVectorGradient* grads = er_vector_slot_grads(slot, &ng);
+    if (!ops || no <= 0)
+        return;
+    if (clipx1 <= clipx0 || clipy1 <= clipy0)
+        return;
+#if ERUI_VECTOR_EDGE_CACHE
+    const ERVecCache* hit = er_vector_cache_lookup(slot, px, py);
+    if (hit)
+    {
+        replay_cache(hit, paints, np, grads, ng, px, py, clipx0, clipy0, clipx1, clipy1);
+        return;
+    }
+    /* Miss. Maybe record this render — begin() only grants an entry for a tape that stayed unchanged
+     * since the previous render (two-touch), so an animated node never pays the record-mode build. */
+    s_rec = er_vector_cache_begin(slot, px, py);
+    s_rec_failed = false;
+    render_tape(ops, no, paints, np, grads, ng, px, py, clipx0, clipy0, clipx1, clipy1);
+    if (s_rec)
+    {
+        er_vector_cache_finish(s_rec, !s_rec_failed);
+        s_rec = 0;
+    }
+#else
+    render_tape(ops, no, paints, np, grads, ng, px, py, clipx0, clipy0, clipx1, clipy1);
+#endif
 }
