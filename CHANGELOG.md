@@ -72,6 +72,9 @@ See the README for the release process.
 
 ### Fixed
 
+- Translucent regions on the ESP32-S3 no longer get a darker bar down their right edge when their
+  width is not a multiple of 8. The SIMD blend does 8 pixels at a time, and the leftover columns were
+  finished by a different rounding rule, so they landed a shade darker than the rest of the row.
 - A `<Modal>` with a scale or rotate transform scrimmed only its own box instead of the page behind it,
   and left that scrim behind when it closed. The backdrop covers the whole screen, but a transformed
   modal was measured down a path that never knew that. A zoom entrance settling at scale 1.0 was enough

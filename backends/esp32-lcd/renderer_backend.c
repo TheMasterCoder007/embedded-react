@@ -534,7 +534,12 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
             {
                 const int n8 = w / 8;
                 er_pie_fill_row_565(stage, sp, n8);
-                col0 = n8 * 8;
+
+                for (int col = n8 * 8; col < w; col++)
+                {
+                    stage[col] = er_pie_blend_px_565(stage[col], sp, 255U, -1, col);
+                }
+                col0 = w;
             }
 #endif
             for (int col = col0; col < w; col++)
@@ -664,8 +669,8 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
             memcpy(stage, d, (size_t)w * sizeof(fbpx_t));
         int col0 = 0;
 #if ER_LCD_PIE_ACTIVE
-        /* SIMD path: 8 px per iteration on the aligned stage row; the scalar loops below mop up
-         * the tail. A misaligned source row is burst-copied to the aligned staging first. */
+        /* SIMD path: 8 px per iteration on the aligned stage row, plus a matching scalar mop-up
+         * for the tail. A misaligned source row is burst-copied to the aligned staging first. */
         if (s_pie && stage == row_stage() && w >= 8)
         {
             const uint32_t* s2 = s;
@@ -679,7 +684,12 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
              * anchored to screen coordinates (spatially stable across frames and regions). */
             const int ph = ER_LCD_DITHER ? ((x + y + row) & 1) : 2;
             er_pie_blend_row_565(stage, s2, n8, (uint8_t)ga, ph);
-            col0 = n8 * 8;
+
+            for (int col = n8 * 8; col < w; col++)
+            {
+                stage[col] = er_pie_blend_px_565(stage[col], s2[col], (uint8_t)ga, ph, col);
+            }
+            col0 = w;
         }
 #endif
         if (ga == 255U)
