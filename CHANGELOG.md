@@ -88,6 +88,9 @@ See the README for the release process.
   its shadow turned off. Only the bare box was erased in each case; the shadow is drawn outside it.
 - Taps on one of those views missed it. It draws untransformed, but touches were still mapped through
   the transform, so the area that answered didn't overlap the area you could see.
+- Taps were dropped for one commit after a scale or rotate collapsed to nothing. The view still shows
+  its previous frame until the repaint, but touches were already being mapped through the new transform,
+  which can no longer be undone. A `<Dial>` animating through that point lost drag samples the same way.
 - `translateX`/`translateY` on an `<ActivityIndicator>` did nothing — the spinner stayed at its layout
   position while taps and repaints went to the offset one, and it repainted both spots on every frame
   forever.
