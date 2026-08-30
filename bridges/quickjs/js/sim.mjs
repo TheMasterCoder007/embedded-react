@@ -30,7 +30,7 @@ import {dirname, resolve, basename, relative} from 'node:path';
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import {bakeAssetPack} from './assets/index.mjs';
 import {resolveFontJobs} from './assets/font-config.mjs';
-import {analyzeFontSizes} from './assets/font-sizes.mjs';
+import {analyzeFontSizes, fontSizeSignature} from './assets/font-sizes.mjs';
 import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
@@ -108,9 +108,11 @@ async function bakePack() {
   }));
 
   // Only re-bake when the asset inputs actually changed (avoids re-rasterizing fonts on every save).
-  // The app's non-ASCII text counts as an input: new characters must be re-checked against the bake.
+  // The app's text counts as an input: new characters and new font sizes must both be re-checked
+  // against the bake, even when no font or image file changed.
   const sig = JSON.stringify({
     t: textSignature(bundleSrc),
+    z: fontSizeSignature(usedSizes),
     i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
     f: fontJobs
       .map(j => [

@@ -30,6 +30,17 @@
         "3336"
       ],
       "port": 3336
+    },
+    {
+      "name": "watch-face-websim",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/web-sim/dev.mjs",
+        "watch-face",
+        "--port",
+        "3337"
+      ],
+      "port": 3337
     }
   ]
 }

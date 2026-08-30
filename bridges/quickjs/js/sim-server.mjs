@@ -41,7 +41,7 @@ const {bakeAssetPack} = await import(
 const {resolveFontJobs} = await import(
   pathToFileURL(resolve(HERE, 'assets/font-config.mjs')).href
 );
-const {analyzeFontSizes, warnFontSizes} = await import(
+const {analyzeFontSizes, fontSizeSignature, warnFontSizes} = await import(
   pathToFileURL(resolve(HERE, 'assets/font-sizes.mjs')).href
 );
 const {textSignature, warnMissingGlyphs} = await import(
@@ -122,10 +122,11 @@ function createBundle({
       format: imageConfig[name]?.format,
     }));
 
-    // The app's non-ASCII text is an asset input too: new characters must be re-checked against
-    // the bake even when no font or image file changed.
+    // The app's text is an asset input too: new characters and new font sizes must both be
+    // re-checked against the bake even when no font or image file changed.
     const sig = JSON.stringify({
       t: textSignature(bundleSrc),
+      z: fontSizeSignature(usedSizes),
       i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
       f: fontJobs
         .map(j => [

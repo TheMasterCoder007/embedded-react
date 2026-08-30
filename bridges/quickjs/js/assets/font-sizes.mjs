@@ -298,7 +298,7 @@ function memberKey(node, scope, depth) {
  */
 function lookup(name, scope, depth) {
   const known = scope.env.get(name);
-  if (known) return known;
+  if (known !== undefined) return known; // a memoized "nothing" is an answer, not a miss
   const bound = scope.bindings.get(name);
   if (!bound || scope.resolving.has(name)) return [];
 
@@ -446,6 +446,23 @@ export function analyzeFontSizes(source) {
       .map(([expr, count]) => ({expr, count}))
       .sort((a, b) => b.count - a.count || a.expr.localeCompare(b.expr)),
   };
+}
+
+/**
+ * Compact signature of the sizes a source uses. Watch loops fold this into their "did the asset
+ * inputs change?" key so a `fontSize` edit re-runs the check below.
+ *
+ * Without it the check is skipped exactly where it matters most: an app with no imported font has no
+ * baked `sizes` in that key at all, so editing a size changes nothing the loop compares and the
+ * re-bake never happens. Sizes that resolve and sizes that don't both count — swapping a constant
+ * for a runtime value changes what is reported without changing what is baked.
+ *
+ * @param {{sizes:number[], dynamic:Array<{expr:string}>}} used  analyzeFontSizes() result.
+ * @returns {string} Sizes and unresolved expressions, joined.
+ */
+export function fontSizeSignature(used) {
+  const {sizes = [], dynamic = []} = used ?? {};
+  return `${sizes.join(',')}|${dynamic.map(d => d.expr).join('\u0000')}`;
 }
 
 /*--- Coverage check -----------------------------------------------------------------------------*/

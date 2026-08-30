@@ -23,6 +23,7 @@ import {BUILTIN_FAMILY} from '../glyph-coverage.mjs';
 import {
   analyzeFontSizes,
   findSizeGaps,
+  fontSizeSignature,
   formatFontSizeReport,
   pickBakedSize,
   warnFontSizes,
@@ -195,6 +196,36 @@ describe('analyzeFontSizes — what it cannot see', () => {
 
   it('handles an empty source', () => {
     expect(analyzeFontSizes('')).toEqual({sizes: [], dynamic: []});
+  });
+});
+
+describe('fontSizeSignature', () => {
+  const sig = source => fontSizeSignature(analyzeFontSizes(source));
+
+  it('changes when a size changes — the whole point, for an app with no imported font', () => {
+    // A watch loop keys its re-bake on this. With no font imported there are no baked `sizes` in
+    // that key, so without this signature a fontSize edit would skip the re-bake and its check.
+    expect(sig(`const s = {fontSize: 14};`)).not.toBe(
+      sig(`const s = {fontSize: 16};`),
+    );
+  });
+
+  it('changes when a size stops being readable, even though the bake would not', () => {
+    expect(sig(`const T = {b: 14}; const s = {fontSize: T.b};`)).not.toBe(
+      sig(`const T = {b: 14}; const s = {fontSize: p.b};`),
+    );
+  });
+
+  it('is stable across an edit that touches no size', () => {
+    expect(sig(`const s = {fontSize: 14}; const a = 1;`)).toBe(
+      sig(`const s = {fontSize: 14}; const b = 2;`),
+    );
+  });
+
+  it('survives a missing analysis', () => {
+    expect(fontSizeSignature(undefined)).toBe(
+      fontSizeSignature({sizes: [], dynamic: []}),
+    );
   });
 });
 
