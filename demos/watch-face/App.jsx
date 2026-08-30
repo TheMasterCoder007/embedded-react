@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
   topBar: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'},
   weekday: {color: theme.white, fontSize: 16, fontWeight: 'bold', letterSpacing: 1},
   date: {color: theme.amber, fontSize: 12, fontWeight: '500', marginTop: 2},
-  batteryPct: {color: theme.green, fontSize: 14, fontWeight: '600'},
+  batteryPct: {color: theme.green, fontSize: 16, fontWeight: '600'},
 
   middle: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   timeRow: {flexDirection: 'row', alignItems: 'center'},

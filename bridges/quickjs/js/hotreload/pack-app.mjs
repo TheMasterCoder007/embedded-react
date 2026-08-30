@@ -57,8 +57,9 @@ export async function packAppContainer({
   const esbuild = require('esbuild');
   const {bakeImage} = await import('../assets/bake-image.mjs');
   const {bakeFont} = await import('../assets/bake-font.mjs');
-  const {discoverFontSizes, resolveFontJobs} = await import(
-    '../assets/font-config.mjs'
+  const {resolveFontJobs} = await import('../assets/font-config.mjs');
+  const {analyzeFontSizes, warnFontSizes} = await import(
+    '../assets/font-sizes.mjs'
   );
   const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
   const {emitAssetPack} = await import('../assets/emit-pack.mjs');
@@ -149,14 +150,14 @@ export async function packAppContainer({
 
   const bytecode = await compileToBytecode(bundleSrc, simDir, {strip});
 
-  const discoveredSizes = discoverFontSizes(bundleSrc);
+  const usedSizes = analyzeFontSizes(bundleSrc);
   let cfg = {};
   const cp = resolve(projectRoot, 'assets.config.js');
   if (existsSync(cp))
     cfg = (await import(pathToFileURL(cp).href)).default || {};
   const fontConfig = cfg.fonts || {};
   const imageConfig = cfg.images || {};
-  const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
+  const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
     path,
     name,
@@ -165,6 +166,7 @@ export async function packAppContainer({
   const bakedImages = imageJobs.map(bakeImage);
   const bakedFonts = fontJobs.map(bakeFont);
   warnMissingGlyphs({source: bundleSrc, fonts: bakedFonts});
+  warnFontSizes({used: usedSizes, fonts: bakedFonts});
   const assetPack =
     bakedImages.length || bakedFonts.length
       ? emitAssetPack({images: bakedImages, fonts: bakedFonts})

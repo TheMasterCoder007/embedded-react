@@ -24,6 +24,7 @@ import {bakeFont} from './bake-font.mjs';
 import {emitAssetsC} from './emit-c.mjs';
 import {emitAssetPack} from './emit-pack.mjs';
 import {warnMissingGlyphs} from './glyph-coverage.mjs';
+import {warnFontSizes} from './font-sizes.mjs';
 
 /**
  * Bakes the given assets and writes assets.generated.{c,h} into outDir.
@@ -35,12 +36,21 @@ import {warnMissingGlyphs} from './glyph-coverage.mjs';
  *        [opts.fonts] Discovered font imports with their resolved size/bpp/glyph config.
  * @param {string} opts.outDir   Directory to write the generated files into.
  * @param {string} [opts.source] Bundled app JS — scanned for text the bake has no glyph for.
+ * @param {{sizes:number[],dynamic:Array<object>}} [opts.usedSizes]  analyzeFontSizes() result,
+ *        checked against what was baked so an unbaked size is reported rather than silently snapped.
  * @returns {{cPath:string, hPath:string, images:number, fonts:number}}
  */
-export function bakeAssets({images = [], fonts = [], outDir, source}) {
+export function bakeAssets({
+  images = [],
+  fonts = [],
+  outDir,
+  source,
+  usedSizes,
+}) {
   const bakedImages = images.map(i => bakeImage(i));
   const bakedFonts = fonts.map(f => bakeFont(f));
   if (source) warnMissingGlyphs({source, fonts: bakedFonts});
+  if (usedSizes) warnFontSizes({used: usedSizes, fonts: bakedFonts});
 
   const headerName = 'assets.generated.h';
   const {c, h} = emitAssetsC({
@@ -69,12 +79,20 @@ export function bakeAssets({images = [], fonts = [], outDir, source}) {
  *        [opts.fonts]
  * @param {string} opts.outPath  Path to write the .pack file.
  * @param {string} [opts.source]  Bundled app JS — scanned for text the bake has no glyph for.
+ * @param {{sizes:number[],dynamic:Array<object>}} [opts.usedSizes]  analyzeFontSizes() result.
  * @returns {{path:string, bytes:number, images:number, fonts:number}}
  */
-export function bakeAssetPack({images = [], fonts = [], outPath, source}) {
+export function bakeAssetPack({
+  images = [],
+  fonts = [],
+  outPath,
+  source,
+  usedSizes,
+}) {
   const bakedImages = images.map(i => bakeImage(i));
   const bakedFonts = fonts.map(f => bakeFont(f));
   if (source) warnMissingGlyphs({source, fonts: bakedFonts});
+  if (usedSizes) warnFontSizes({used: usedSizes, fonts: bakedFonts});
   const pack = emitAssetPack({images: bakedImages, fonts: bakedFonts});
   fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, pack);

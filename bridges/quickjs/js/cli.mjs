@@ -369,6 +369,9 @@ async function buildAot(cwd, explicit, outDir, screen) {
   const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mjs');
   const {bakeAssets} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
+  const {analyzeFontSizes, warnFontSizes} = await import(
+    './assets/font-sizes.mjs'
+  );
   const appPath = resolveAppComponent(cwd, explicit);
   const appDir = dirname(appPath);
   const src = readFileSync(appPath, 'utf8');
@@ -403,8 +406,10 @@ async function buildAot(cwd, explicit, outDir, screen) {
       process.exit(1);
     }
   }
-  // Flow B renders everything in the engine's built-in font (no font imports) — check against it.
+  // Flow B renders everything in the engine's built-in font (no font imports) — check the app's text
+  // and its font sizes against what that font actually covers.
   warnMissingGlyphs({source: src, jsx: true});
+  warnFontSizes({used: analyzeFontSizes(src)});
   const baked = bakeAssets({images: imageJobs, fonts: [], outDir});
   console.log(
     `✓ Flow B (AOT) → ${relative(cwd, outDir) || '.'}/app.gen.c (+ app.gen.h, assets.generated.c — ${baked.images} image(s))`,

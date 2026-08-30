@@ -17,6 +17,12 @@ See the README for the release process.
 - Every asset bake now warns about characters the app renders that it has no glyph for, naming the
   font and the `extraGlyphs` line that fixes it. The engine silently substitutes `?` for them, so
   previously you only found out by looking at the device.
+- Font-size discovery now folds constants, so a token-driven type scale bakes the sizes it means.
+  A scale read as `fontSize: TYPE.title` — or handed to a component as a prop — used to bake nothing
+  and collapse the whole app onto one size.
+- Every asset bake now warns about a `fontSize` with no baked size, naming what it will render at
+  instead, and about sizes it could not read at build time. Unbaked sizes snap silently at runtime,
+  so previously you only found out by looking at the device.
 - Added `<Dial>`, a native arc widget. Dials, gauges, and progress rings are now one engine node
   instead of a hand-built `<Svg>`. It draws a track, a value indicator, an optional backing band and
   segment gaps, and a knob — a circle, an image, or any child you want anchored to the value. The value

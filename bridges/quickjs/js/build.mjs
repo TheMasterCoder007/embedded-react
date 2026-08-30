@@ -31,7 +31,8 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {bakeAssets} from './assets/index.mjs';
-import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
+import {resolveFontJobs} from './assets/font-config.mjs';
+import {analyzeFontSizes} from './assets/font-sizes.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
@@ -120,11 +121,11 @@ await build({
 console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 
 // --- Bake imported assets ---------------------------------------------------------------------
-// Fonts are pre-rasterized at fixed sizes (the engine has no runtime rasterizer), so bake exactly
-// the literal fontSize values the bundle uses. Computed/dynamic sizes can't be discovered statically
-// and will snap to the nearest baked size at runtime; pin them via assets.config.js if needed.
+// Fonts are pre-rasterized at fixed sizes (the engine has no runtime rasterizer), so bake exactly the
+// fontSize values the bundle uses — constants and token scales folded, not just literals. A size that
+// only exists at runtime can't be discovered; the bake reports those rather than snapping silently.
 const bundleSrc = readFileSync(bundlePath, 'utf8');
-const discoveredSizes = discoverFontSizes(bundleSrc);
+const usedSizes = analyzeFontSizes(bundleSrc);
 
 // Optional per-demo overrides: demos/<demo>/assets.config.js
 //   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps],
@@ -137,7 +138,7 @@ if (existsSync(configPath)) {
 const fontConfig = config.fonts || {};
 const imageConfig = config.images || {};
 
-const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
+const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
 const imageJobs = [...images.entries()].map(([name, path]) => ({
   path,
   name,
@@ -149,6 +150,7 @@ const summary = bakeAssets({
   fonts: fontJobs,
   outDir: distDir,
   source: bundleSrc,
+  usedSizes,
 });
 const fontDesc = fontJobs.length
   ? fontJobs

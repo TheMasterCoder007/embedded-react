@@ -835,7 +835,7 @@ export function App() {
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}>
-                <Text style={{fontSize: 22, color: '#7d7e7f'}}>×</Text>
+                <Text style={{fontSize: 24, color: '#7d7e7f'}}>×</Text>
               </Pressable>
             </View>
             <Text style={{fontSize: 10, letterSpacing: 2, color: '#7d7e7f'}}>
