@@ -60,6 +60,7 @@ import {
   scaleVectorArtifact,
 } from '../src/embedded-react/svg-ops.js';
 import {bakeAssets} from '../assets/index.mjs';
+import {warnMissingGlyphs} from '../assets/glyph-coverage.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/aot
 const repoRoot = resolve(here, '../../../..');
@@ -5622,6 +5623,9 @@ if (
       process.exit(1);
     }
   }
+  // Flow B has no font imports — every string renders in the engine's built-in font, so check the
+  // app's text against that coverage.
+  warnMissingGlyphs({source: src, jsx: true});
   const baked = bakeAssets({images: imageJobs, fonts: [], outDir: distDir});
   console.log(
     `AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ` +

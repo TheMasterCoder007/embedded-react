@@ -203,15 +203,13 @@ export async function bundleAppSource({
 async function bakeAssets({images, fonts, source, projectRoot}) {
   const {bakeImage} = await import('../assets/bake-image.mjs');
   const {bakeFont} = await import('../assets/bake-font.mjs');
+  const {discoverFontSizes, resolveFontJobs} = await import(
+    '../assets/font-config.mjs'
+  );
+  const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
   const {emitAssetPack} = await import('../assets/emit-pack.mjs');
 
-  const discoveredSizes = [
-    ...new Set(
-      [...source.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-        Math.round(Number(m[1])),
-      ),
-    ),
-  ].sort((a, b) => a - b);
+  const discoveredSizes = discoverFontSizes(source);
 
   let cfg = {};
   const cp = resolve(projectRoot, 'assets.config.js');
@@ -220,20 +218,7 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
   const fontConfig = cfg.fonts || {};
   const imageConfig = cfg.images || {};
 
-  const fontJobs = [...fonts.entries()].map(([family, path]) => {
-    const fc = fontConfig[family] || {};
-    return {
-      path,
-      family,
-      sizes: fc.sizes?.length
-        ? fc.sizes
-        : discoveredSizes.length
-          ? discoveredSizes
-          : [16],
-      bpp: fc.bpp ?? 4,
-      glyphs: fc.glyphs ?? 'ascii',
-    };
-  });
+  const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
     path,
     name,
@@ -241,6 +226,7 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
   }));
   const bakedImages = imageJobs.map(bakeImage);
   const bakedFonts = fontJobs.map(bakeFont);
+  warnMissingGlyphs({source, fonts: bakedFonts});
   return bakedImages.length || bakedFonts.length
     ? emitAssetPack({images: bakedImages, fonts: bakedFonts})
     : null;

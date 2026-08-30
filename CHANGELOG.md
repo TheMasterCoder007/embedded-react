@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- `extraGlyphs` in `assets.config.js` — add your app's own characters to a font bake by writing them
+  (or their codepoints) directly, instead of hoping a named glyph set covers them.
+- Every asset bake now warns about characters the app renders that it has no glyph for, naming the
+  font and the `extraGlyphs` line that fixes it. Those characters used to just render as blanks,
+  visible only on the device.
 - Added `<Dial>`, a native arc widget. Dials, gauges, and progress rings are now one engine node
   instead of a hand-built `<Svg>`. It draws a track, a value indicator, an optional backing band and
   segment gaps, and a knob — a circle, an image, or any child you want anchored to the value. The value

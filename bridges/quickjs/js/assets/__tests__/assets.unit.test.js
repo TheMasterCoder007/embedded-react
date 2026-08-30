@@ -146,6 +146,27 @@ describe('resolveExtras', () => {
     expect(common.length).toBeGreaterThan(0);
     expect(common.every(c => c < ASCII_FIRST || c > ASCII_LAST)).toBe(true);
   });
+
+  it('takes extraGlyphs as characters or codepoints, on top of the named set', () => {
+    expect(resolveExtras('ascii', '°±')).toEqual([0x00b0, 0x00b1]);
+    expect(resolveExtras('ascii', [0x2318, '≡'])).toEqual([0x2261, 0x2318]);
+    expect(resolveExtras('minimal', '⌘')).toEqual(
+      [...resolveExtras('minimal'), 0x2318].sort((a, b) => a - b),
+    );
+  });
+
+  it('accepts characters inside an explicit glyph list', () => {
+    expect(resolveExtras(['°', 0x2318, 'ok'])).toEqual([0x00b0, 0x2318]);
+  });
+
+  it('rejects a named set in extraGlyphs — as characters it would bake nothing', () => {
+    expect(() => resolveExtras('ascii', 'common')).toThrow(/named glyph set/);
+  });
+
+  it('rejects an unknown glyph set and a non-codepoint entry', () => {
+    expect(() => resolveExtras('bogus')).toThrow(/unknown glyph set/);
+    expect(() => resolveExtras('ascii', [1.5])).toThrow(/extraGlyphs/);
+  });
 });
 
 describe('bakeFont', () => {
@@ -187,6 +208,30 @@ describe('bakeFont', () => {
       glyphs: 'common',
     });
     expect(f.sizes[0].extras.length).toBeGreaterThan(0);
+  });
+
+  it('bakes the per-app extraGlyphs a named set does not cover', () => {
+    const f = bakeFont({
+      path: INTER,
+      family: 'Inter',
+      sizes: [16],
+      glyphs: 'minimal',
+      extraGlyphs: '⌘',
+    });
+    const extras = f.sizes[0].extras.map(e => e.codepoint);
+    expect(extras).toContain(0x2318);
+    expect(extras).toContain(0x00b0); // still everything 'minimal' asked for
+    expect(f.path).toBe(INTER);
+  });
+
+  it('skips an extra glyph the font file has no glyph for', () => {
+    const f = bakeFont({
+      path: INTER,
+      family: 'Inter',
+      sizes: [16],
+      extraGlyphs: '°漢',
+    });
+    expect(f.sizes[0].extras.map(e => e.codepoint)).toEqual([0x00b0]);
   });
 
   it('rejects an unsupported bpp', () => {
