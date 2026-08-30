@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-// Build-time glyph-coverage check: a character the app renders but the bake has no glyph for draws
-// as nothing on the device — an invisible failure that only shows up on hardware. Every bake path
-// (build, pack, sim, hot reload, AOT) runs this over the app source and warns with the exact
-// `assets.config.js` line that fixes it.
+// Build-time glyph-coverage check: a character the app renders but the bake has no glyph for is
+// silently substituted with '?' by the engine (font_glyph() in engine/font/font_bitmap.c), so the
+// only way to find out used to be looking at the device. Every bake path (build, pack, sim, hot
+// reload, AOT) runs this over the app source and warns with the `assets.config.js` line that fixes it.
 //
 // The check is source-driven: it reads string and template literals (plus JSX element text, for the
 // unbundled `.jsx` the AOT flow compiles). Non-ASCII from a runtime source — a fetched string,
@@ -250,7 +250,7 @@ export function formatMissingGlyphs(missing, fonts = []) {
 
   return (
     `embedded-react: ${missing.length} character(s) in the app's text have no baked glyph and will ` +
-    `render as blanks:\n${lines.join('\n')}\n${fix}`
+    `render as '?':\n${lines.join('\n')}\n${fix}`
   );
 }
 

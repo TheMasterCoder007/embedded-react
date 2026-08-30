@@ -194,11 +194,11 @@ export default {
 
 `extraGlyphs` takes the characters themselves or their codepoints (`[0x2318, '⏻']`) — the named sets
 can't anticipate every UI. Every bake path checks the app's text against what it baked and **warns
-about characters that have no glyph**, since those render as blanks on the device and nothing else
-tells you:
+about characters that have no glyph**, since the engine silently substitutes `?` for them on the
+device and nothing else tells you:
 
 ```
-embedded-react: 1 character(s) in the app's text have no baked glyph and will render as blanks:
+embedded-react: 1 character(s) in the app's text have no baked glyph and will render as '?':
   U+2318 '⌘'  missing from Inter   in "press ⌘S to save"
   fix: assets.config.js → fonts: {Inter: {extraGlyphs: "⌘"}}
 ```
