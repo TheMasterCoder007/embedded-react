@@ -38,6 +38,12 @@ const esbuild = require('esbuild');
 const {bakeAssetPack} = await import(
   pathToFileURL(resolve(HERE, 'assets/index.mjs')).href
 );
+const {discoverFontSizes, resolveFontJobs} = await import(
+  pathToFileURL(resolve(HERE, 'assets/font-config.mjs')).href
+);
+const {textSignature, warnMissingGlyphs} = await import(
+  pathToFileURL(resolve(HERE, 'assets/glyph-coverage.mjs')).href
+);
 const {registerSvgVectorLoader} = await import(
   pathToFileURL(resolve(HERE, 'assets/svg-loader.mjs')).href
 );
@@ -94,15 +100,8 @@ function createBundle({
   let lastAssetSig = null;
 
   async function bakePack() {
-    const discoveredSizes = [
-      ...new Set(
-        [
-          ...readFileSync(bundlePath, 'utf8').matchAll(
-            /\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g,
-          ),
-        ].map(m => Math.round(Number(m[1]))),
-      ),
-    ].sort((a, b) => a - b);
+    const bundleSrc = readFileSync(bundlePath, 'utf8');
+    const discoveredSizes = discoverFontSizes(bundleSrc);
 
     let cfg = {};
     const cp = resolve(projectRoot, 'assets.config.js');
@@ -113,43 +112,43 @@ function createBundle({
     const fontConfig = cfg.fonts || {};
     const imageConfig = cfg.images || {};
 
-    const fontJobs = [...fonts.entries()].map(([family, path]) => {
-      const fc = fontConfig[family] || {};
-      const sizes =
-        fc.sizes && fc.sizes.length
-          ? fc.sizes
-          : discoveredSizes.length
-            ? discoveredSizes
-            : [16];
-      return {
-        path,
-        family,
-        sizes,
-        bpp: fc.bpp ?? 4,
-        glyphs: fc.glyphs ?? 'ascii',
-      };
-    });
+    const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
     const imageJobs = [...images.entries()].map(([name, path]) => ({
       path,
       name,
       format: imageConfig[name]?.format,
     }));
 
+    // The app's non-ASCII text is an asset input too: new characters must be re-checked against
+    // the bake even when no font or image file changed.
     const sig = JSON.stringify({
+      t: textSignature(bundleSrc),
       i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
       f: fontJobs
-        .map(j => [j.family, j.path, mtime(j.path), j.sizes, j.bpp, j.glyphs])
+        .map(j => [
+          j.family,
+          j.path,
+          mtime(j.path),
+          j.sizes,
+          j.bpp,
+          j.glyphs,
+          j.extraGlyphs,
+        ])
         .sort(),
     });
     if (sig === lastAssetSig) return;
     lastAssetSig = sig;
-    if (!imageJobs.length && !fontJobs.length) return; // built-in font only → no pack
+    if (!imageJobs.length && !fontJobs.length) {
+      warnMissingGlyphs({source: bundleSrc}); // built-in font only → no pack, but still check it
+      return;
+    }
 
     try {
       const s = bakeAssetPack({
         images: imageJobs,
         fonts: fontJobs,
         outPath: packPath,
+        source: bundleSrc,
       });
       console.log(
         `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B`,

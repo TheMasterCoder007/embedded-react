@@ -29,6 +29,8 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename, relative} from 'node:path';
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import {bakeAssetPack} from './assets/index.mjs';
+import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
+import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
 
@@ -87,13 +89,7 @@ let lastAssetSig = null; // skip re-baking the pack on pure-JS saves (font raste
 async function bakePack() {
   // Font sizes: bake exactly the literal fontSizes the bundle uses (engine has no runtime rasterizer).
   const bundleSrc = readFileSync(bundlePath, 'utf8');
-  const discoveredSizes = [
-    ...new Set(
-      [...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-        Math.round(Number(m[1])),
-      ),
-    ),
-  ].sort((a, b) => a - b);
+  const discoveredSizes = discoverFontSizes(bundleSrc);
 
   let cfg = {};
   const cp = resolve(demoDir, 'assets.config.js');
@@ -103,22 +99,7 @@ async function bakePack() {
   const fontConfig = cfg.fonts || {};
   const imageConfig = cfg.images || {};
 
-  const fontJobs = [...fonts.entries()].map(([family, path]) => {
-    const fc = fontConfig[family] || {};
-    const sizes =
-      fc.sizes && fc.sizes.length
-        ? fc.sizes
-        : discoveredSizes.length
-          ? discoveredSizes
-          : [16];
-    return {
-      path,
-      family,
-      sizes,
-      bpp: fc.bpp ?? 4,
-      glyphs: fc.glyphs ?? 'ascii',
-    };
-  });
+  const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
     path,
     name,
@@ -126,10 +107,20 @@ async function bakePack() {
   }));
 
   // Only re-bake when the asset inputs actually changed (avoids re-rasterizing fonts on every save).
+  // The app's non-ASCII text counts as an input: new characters must be re-checked against the bake.
   const sig = JSON.stringify({
+    t: textSignature(bundleSrc),
     i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
     f: fontJobs
-      .map(j => [j.family, j.path, mtime(j.path), j.sizes, j.bpp, j.glyphs])
+      .map(j => [
+        j.family,
+        j.path,
+        mtime(j.path),
+        j.sizes,
+        j.bpp,
+        j.glyphs,
+        j.extraGlyphs,
+      ])
       .sort(),
   });
   if (sig === lastAssetSig) return;
@@ -140,6 +131,7 @@ async function bakePack() {
       images: imageJobs,
       fonts: fontJobs,
       outPath: packPath,
+      source: bundleSrc,
     });
     console.log(
       `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B → dist/assets.pack`,

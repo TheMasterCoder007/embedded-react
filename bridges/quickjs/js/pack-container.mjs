@@ -41,6 +41,8 @@ import {
 } from 'node:fs';
 import {bakeImage} from './assets/bake-image.mjs';
 import {bakeFont} from './assets/bake-font.mjs';
+import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
+import {warnMissingGlyphs} from './assets/glyph-coverage.mjs';
 import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
@@ -170,13 +172,7 @@ const bytecode = readFileSync(qbcPath);
 
 // --- Bake imported assets into an ERPK pack (same sizing rules as build.mjs / sim.mjs) ----------
 const bundleSrc = readFileSync(bundlePath, 'utf8');
-const discoveredSizes = [
-  ...new Set(
-    [...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-      Math.round(Number(m[1])),
-    ),
-  ),
-].sort((a, b) => a - b);
+const discoveredSizes = discoverFontSizes(bundleSrc);
 
 let config = {};
 const configPath = resolve(demoDir, 'assets.config.js');
@@ -185,16 +181,7 @@ if (existsSync(configPath))
 const fontConfig = config.fonts || {};
 const imageConfig = config.images || {};
 
-const fontJobs = [...fonts.entries()].map(([family, path]) => {
-  const fc = fontConfig[family] || {};
-  const sizes =
-    fc.sizes && fc.sizes.length
-      ? fc.sizes
-      : discoveredSizes.length
-        ? discoveredSizes
-        : [16];
-  return {path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii'};
-});
+const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
 const imageJobs = [...images.entries()].map(([name, path]) => ({
   path,
   name,
@@ -203,6 +190,7 @@ const imageJobs = [...images.entries()].map(([name, path]) => ({
 
 const bakedImages = imageJobs.map(i => bakeImage(i));
 const bakedFonts = fontJobs.map(f => bakeFont(f));
+warnMissingGlyphs({source: bundleSrc, fonts: bakedFonts});
 const assetPack =
   bakedImages.length || bakedFonts.length
     ? emitAssetPack({images: bakedImages, fonts: bakedFonts})

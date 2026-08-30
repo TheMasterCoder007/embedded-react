@@ -58,24 +58,99 @@ const SYMBOL_SETS = {
   ),
 };
 
+// The engine's built-in font (engine/font/font_data.c) covers printable ASCII plus these. It is its
+// own list, not an alias of a named set: build-builtin-font.mjs bakes from it and the coverage check
+// reports against it, so the two can never drift — while the named sets stay free to evolve.
+// Changing it changes the engine's fallback font; re-run `npm run build:builtin-font` if you do.
+export const BUILTIN_EXTRAS = Object.freeze([
+  0x00a2, 0x00a3, 0x00a5, 0x00a7, 0x00a9, 0x00ae, 0x00b0, 0x00b1, 0x00b5,
+  0x00d7, 0x00f7, 0x2013, 0x2014, 0x2018, 0x2019, 0x201c, 0x201d, 0x2020,
+  0x2021, 0x2022, 0x2026, 0x2030, 0x20ac, 0x2122, 0x2190, 0x2191, 0x2192,
+  0x2193, 0x2194, 0x21b5, 0x2202, 0x2206, 0x2211, 0x2212, 0x221a, 0x221e,
+  0x2248, 0x2260, 0x2264, 0x2265, 0x25a0, 0x25c6, 0x25cf, 0x2605, 0x2606,
+  0x2713, 0x2717,
+]);
+
+/**
+ * Normalizes one codepoint list: numbers are codepoints, a string contributes every character in
+ * it — so `'°±'` and `[0x00b0, 0x00b1]` mean the same thing.
+ *
+ * @param {number|string|Array<number|string>|undefined} spec
+ * @param {string} field  Config field name, for error messages.
+ * @returns {number[]} Codepoints, unsorted and possibly duplicated.
+ */
+function toCodepoints(spec, field) {
+  if (spec === undefined || spec === null) return [];
+  const out = [];
+  for (const item of Array.isArray(spec) ? spec : [spec]) {
+    if (typeof item === 'string') {
+      for (const ch of item) out.push(ch.codePointAt(0));
+    } else if (
+      typeof item === 'number' &&
+      Number.isInteger(item) &&
+      item >= 0 &&
+      item <= 0x10ffff
+    ) {
+      out.push(item);
+    } else {
+      throw new Error(
+        `${field}: expected a codepoint number or a string of characters, got ${JSON.stringify(item)}`,
+      );
+    }
+  }
+  return out;
+}
+
 /**
  * Resolves a glyph-coverage spec into a sorted list of extra (sparse) codepoints.
  *
- * @param {string|Array<number>|undefined} glyphs  'ascii' (none), a named set, or explicit codepoints.
+ * `glyphs` picks the baseline: 'ascii' (none), a named set, or an explicit list. `extraGlyphs` adds
+ * the per-app characters no named set can cover, as codepoints or as the characters themselves.
+ *
+ * @param {string|Array<number|string>|undefined} glyphs      'ascii', a named set, or explicit codepoints.
+ * @param {number|string|Array<number|string>} [extraGlyphs]  Per-app additions, on top of `glyphs`.
  * @returns {number[]} Sorted extra codepoints outside the dense ASCII range.
  */
-export function resolveExtras(glyphs) {
-  if (!glyphs || glyphs === 'ascii') return [];
+export function resolveExtras(glyphs, extraGlyphs) {
   let cps;
-  if (Array.isArray(glyphs)) cps = glyphs.slice();
-  else if (SYMBOL_SETS[glyphs]) cps = SYMBOL_SETS[glyphs].slice();
-  else
+  if (!glyphs || glyphs === 'ascii') cps = [];
+  else if (typeof glyphs === 'string') {
+    if (!SYMBOL_SETS[glyphs])
+      throw new Error(
+        `unknown glyph set "${glyphs}" (use 'ascii', one of [${Object.keys(SYMBOL_SETS).join(', ')}], or a list of codepoints/characters)`,
+      );
+    cps = SYMBOL_SETS[glyphs].slice();
+  } else cps = toCodepoints(glyphs, 'glyphs');
+
+  // A bare set name here is almost certainly meant for `glyphs` — as characters it would be a
+  // silent no-op (all ASCII), so say so instead of baking nothing.
+  if (typeof extraGlyphs === 'string' && SYMBOL_SETS[extraGlyphs])
     throw new Error(
-      `unknown glyph set "${glyphs}" (use 'ascii', a named set, or a codepoint array)`,
+      `extraGlyphs: "${extraGlyphs}" is a named glyph set — put it in \`glyphs\` (extraGlyphs takes the characters themselves)`,
     );
+  cps.push(...toCodepoints(extraGlyphs, 'extraGlyphs'));
+
   return [...new Set(cps)]
     .filter(c => c < ASCII_FIRST || c > ASCII_LAST)
     .sort((a, b) => a - b);
+}
+
+/**
+ * Opens a font file and returns a predicate for "does this file have a glyph for this codepoint?".
+ * The coverage check uses it to tell a missing bake ("add it to extraGlyphs") apart from a font that
+ * simply cannot draw the character ("pick a different font").
+ *
+ * @param {string} path  Path to the .ttf/.otf file.
+ * @returns {(cp:number)=>boolean} Always true if the file can't be read, so a probe failure never
+ *          turns into a misleading claim about the font.
+ */
+export function loadGlyphProbe(path) {
+  try {
+    const font = opentype.parse(fs.readFileSync(path).buffer);
+    return cp => font.charToGlyphIndex(String.fromCodePoint(cp)) !== 0;
+  } catch {
+    return () => true;
+  }
 }
 
 /**
@@ -155,14 +230,23 @@ function bakeGlyph(font, cp, pixelSize, baseline, scale, bpp) {
  * @param {string} opts.family  Family name to register under (used by fontFamily lookups).
  * @param {number[]} opts.sizes Pixel sizes to bake.
  * @param {number} [opts.bpp]   Bits per pixel (default 4).
- * @param {string|Array<number>} [opts.glyphs] Extra glyph coverage beyond ASCII (default 'ascii').
- * @returns {{family:string, sizes:Array<object>}} Baked data ready for the C emitter.
+ * @param {string|Array<number|string>} [opts.glyphs] Extra glyph coverage beyond ASCII (default 'ascii').
+ * @param {number|string|Array<number|string>} [opts.extraGlyphs] Per-app additions on top of `glyphs`.
+ * @returns {{family:string, path:string, sizes:Array<object>}} Baked data ready for the C emitter.
+ *          Extras the font file has no glyph for are silently absent from each size's `extras`.
  */
-export function bakeFont({path, family, sizes, bpp = 4, glyphs = 'ascii'}) {
+export function bakeFont({
+  path,
+  family,
+  sizes,
+  bpp = 4,
+  glyphs = 'ascii',
+  extraGlyphs,
+}) {
   if (![1, 2, 4, 8].includes(bpp))
     throw new Error(`bpp must be 1, 2, 4, or 8 (got ${bpp})`);
   const font = opentype.parse(fs.readFileSync(path).buffer);
-  const extraCps = resolveExtras(glyphs);
+  const extraCps = resolveExtras(glyphs, extraGlyphs);
 
   const baked = [];
   for (const pixelSize of sizes) {
@@ -210,5 +294,5 @@ export function bakeFont({path, family, sizes, bpp = 4, glyphs = 'ascii'}) {
       bitmap,
     });
   }
-  return {family, sizes: baked};
+  return {family, path, sizes: baked};
 }

@@ -23,6 +23,7 @@ import {bakeImage} from './bake-image.mjs';
 import {bakeFont} from './bake-font.mjs';
 import {emitAssetsC} from './emit-c.mjs';
 import {emitAssetPack} from './emit-pack.mjs';
+import {warnMissingGlyphs} from './glyph-coverage.mjs';
 
 /**
  * Bakes the given assets and writes assets.generated.{c,h} into outDir.
@@ -30,14 +31,16 @@ import {emitAssetPack} from './emit-pack.mjs';
  * @param {object} opts
  * @param {Array<{path:string,name:string,format?:string}>} [opts.images]  Discovered image
  *        imports; format 'rgb565' bakes 16-bit (see bake-image.mjs), default ARGB8888.
- * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any}>} [opts.fonts]
- *        Discovered font imports with their resolved size/bpp/glyph config.
+ * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any,extraGlyphs:any}>}
+ *        [opts.fonts] Discovered font imports with their resolved size/bpp/glyph config.
  * @param {string} opts.outDir   Directory to write the generated files into.
+ * @param {string} [opts.source] Bundled app JS — scanned for text the bake has no glyph for.
  * @returns {{cPath:string, hPath:string, images:number, fonts:number}}
  */
-export function bakeAssets({images = [], fonts = [], outDir}) {
+export function bakeAssets({images = [], fonts = [], outDir, source}) {
   const bakedImages = images.map(i => bakeImage(i));
   const bakedFonts = fonts.map(f => bakeFont(f));
+  if (source) warnMissingGlyphs({source, fonts: bakedFonts});
 
   const headerName = 'assets.generated.h';
   const {c, h} = emitAssetsC({
@@ -62,13 +65,16 @@ export function bakeAssets({images = [], fonts = [], outDir}) {
  *
  * @param {object} opts
  * @param {Array<{path:string,name:string}>} [opts.images]
- * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any}>} [opts.fonts]
+ * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any,extraGlyphs:any}>}
+ *        [opts.fonts]
  * @param {string} opts.outPath  Path to write the .pack file.
+ * @param {string} [opts.source]  Bundled app JS — scanned for text the bake has no glyph for.
  * @returns {{path:string, bytes:number, images:number, fonts:number}}
  */
-export function bakeAssetPack({images = [], fonts = [], outPath}) {
+export function bakeAssetPack({images = [], fonts = [], outPath, source}) {
   const bakedImages = images.map(i => bakeImage(i));
   const bakedFonts = fonts.map(f => bakeFont(f));
+  if (source) warnMissingGlyphs({source, fonts: bakedFonts});
   const pack = emitAssetPack({images: bakedImages, fonts: bakedFonts});
   fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, pack);

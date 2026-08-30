@@ -31,6 +31,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {bakeAssets} from './assets/index.mjs';
+import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
@@ -123,16 +124,11 @@ console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 // the literal fontSize values the bundle uses. Computed/dynamic sizes can't be discovered statically
 // and will snap to the nearest baked size at runtime; pin them via assets.config.js if needed.
 const bundleSrc = readFileSync(bundlePath, 'utf8');
-const discoveredSizes = [
-  ...new Set(
-    [...bundleSrc.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-      Math.round(Number(m[1])),
-    ),
-  ),
-].sort((a, b) => a - b);
+const discoveredSizes = discoverFontSizes(bundleSrc);
 
 // Optional per-demo overrides: demos/<demo>/assets.config.js
-//   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps] } } }
+//   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps],
+//                                         extraGlyphs: '°±' } } }
 let config = {};
 const configPath = resolve(demoDir, 'assets.config.js');
 if (existsSync(configPath)) {
@@ -141,16 +137,7 @@ if (existsSync(configPath)) {
 const fontConfig = config.fonts || {};
 const imageConfig = config.images || {};
 
-const fontJobs = [...fonts.entries()].map(([family, path]) => {
-  const fc = fontConfig[family] || {};
-  const sizes =
-    fc.sizes && fc.sizes.length
-      ? fc.sizes
-      : discoveredSizes.length
-        ? discoveredSizes
-        : [16];
-  return {path, family, sizes, bpp: fc.bpp ?? 4, glyphs: fc.glyphs ?? 'ascii'};
-});
+const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
 const imageJobs = [...images.entries()].map(([name, path]) => ({
   path,
   name,
@@ -161,6 +148,7 @@ const summary = bakeAssets({
   images: imageJobs,
   fonts: fontJobs,
   outDir: distDir,
+  source: bundleSrc,
 });
 const fontDesc = fontJobs.length
   ? fontJobs
