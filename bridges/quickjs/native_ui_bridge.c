@@ -3748,6 +3748,38 @@ static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
+/**
+ * @brief NativeUI.animUnbind(nodeHandle, propName) — releases the animated binding on a node prop.
+ *
+ * Node+prop keyed, not value keyed: the reconciler knows the property it is taking back (a style prop that
+ * stopped being animated, or that swapped to a different Animated.Value) but not which value drives it.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_anim_unbind(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 2)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    const char* name = JS_ToCString(ctx, argv[1]);
+    if (node && name)
+    {
+        ERAnimProp prop;
+        if (anim_prop_from_name(name, &prop))
+        {
+            er_anim_unbind_prop(node, prop);
+        }
+    }
+    if (name)
+    {
+        JS_FreeCString(ctx, name);
+    }
+    return JS_UNDEFINED;
+}
+
 /** @brief Maps an extrapolate token to ERExtrapolate. @param[in] s String. @return Enum (default extend). */
 static ERExtrapolate extrapolate_from_name(const char* s)
 {
@@ -4137,6 +4169,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "animValueSet", JS_NewCFunction(ctx, js_anim_value_set, "animValueSet", 2));
     JS_SetPropertyStr(ctx, native_ui, "animValueGet", JS_NewCFunction(ctx, js_anim_value_get, "animValueGet", 1));
     JS_SetPropertyStr(ctx, native_ui, "animValueBind", JS_NewCFunction(ctx, js_anim_value_bind, "animValueBind", 3));
+    JS_SetPropertyStr(ctx, native_ui, "animUnbind", JS_NewCFunction(ctx, js_anim_unbind, "animUnbind", 2));
     JS_SetPropertyStr(ctx,
                       native_ui,
                       "animValueBindInterpolated",

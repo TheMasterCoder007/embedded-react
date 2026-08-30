@@ -913,6 +913,31 @@ void er_anim_unbind_node(uint16_t node_tag)
     }
 }
 
+void er_anim_unbind_prop(ERNode* node, ERAnimProp prop)
+{
+    /*
+     * Release ONE property of one node, whatever value happens to drive it. The reconciler calls this when a
+     * prop stops being animated (or changes to a different Animated.Value) — it knows the node and the prop,
+     * but not which value owns the binding, and er_anim_value_unbind_all() would also drop that value's
+     * bindings on every OTHER node it drives. Dropping the pair everywhere it appears is also what recovers a
+     * node whose property ended up bound to two values at once: after this call nothing writes it but
+     * er_node_set_props.
+     */
+    if (!node)
+        return;
+    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    {
+        ERAnimValue* val = &s_anim_values[s];
+        if (!val->in_use)
+            continue;
+        for (int b = 0; b < val->binding_count; b++)
+        {
+            if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+                val->bindings[b].active = false;
+        }
+    }
+}
+
 /**
  * @brief Deactivates a group and every animation running under it.
  *
@@ -1434,6 +1459,7 @@ void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
             val->bindings[b].node_tag = node->tag;
             val->bindings[b].prop = prop;
             val->bindings[b].active = true;
+            val->bindings[b].interpolated = false;
             if ((uint8_t)(b + 1) > val->binding_count)
                 val->binding_count = (uint8_t)(b + 1);
             /* Apply immediately so the node reflects the current value on bind (matches the

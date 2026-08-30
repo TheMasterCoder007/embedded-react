@@ -19,7 +19,7 @@
 // prop (via Animated.View) lets the engine advance the animation each frame with NO per-frame JS.
 import {createElement, useRef, useEffect} from 'react';
 import {NativeUI} from '../native-ui.js';
-import {splitAnimatedStyle} from './split-style.js';
+import {deepEqualProps} from '../props.js';
 
 /** A standalone animatable value bound to an engine-side float. */
 export class AnimatedValue {
@@ -79,6 +79,19 @@ export class AnimatedInterpolation {
       node,
       prop,
       this._config,
+    );
+  }
+
+  /**
+   * Two interpolations drive a prop identically when they map the same parent value through the same
+   * config. The host config asks because `value.interpolate(...)` builds a fresh object on every
+   * render: without this an unchanged interpolated style would be unbound and re-bound each commit.
+   */
+  __bindEq(other) {
+    return (
+      other instanceof AnimatedInterpolation &&
+      other._parent === this._parent &&
+      deepEqualProps(this._config, other._config)
     );
   }
 
@@ -354,17 +367,18 @@ export function useAnimatedValue(initial = 0) {
 }
 
 /**
- * Wraps a host component so animated values in its `style` are bound to the node (native driver).
+ * Wraps a host component for RN API parity. The style is forwarded untouched: the host config splits
+ * the animated values out of ANY element's style and binds them (native driver), so `<Animated.View
+ * style={{opacity: v}}>` and `<View style={{opacity: v}}>` render identically.
+ *
+ * The wrapper used to strip the bindings itself and apply them through a ref. Binding in two places
+ * was the reason a prop that stopped being animated kept following its old value: the ref knew what it
+ * had bound, but it ran after the commit had already written the props, and the host config — the only
+ * side that sees the PREVIOUS render — never saw those bindings at all, so nothing released them.
  */
 export function createAnimatedComponent(Component) {
   return function AnimatedComponent(props) {
-    const {style, ...rest} = props;
-    const {staticStyle, bindings} = splitAnimatedStyle(style);
-    const ref = node => {
-      if (node == null) return; // unmount
-      for (const b of bindings) b.value.__bind(node, b.prop);
-    };
-    return createElement(Component, {...rest, style: staticStyle, ref});
+    return createElement(Component, props);
   };
 }
 

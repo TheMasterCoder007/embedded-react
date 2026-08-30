@@ -995,5 +995,86 @@ int main(void)
         er_node_destroy(clobber);
     }
 
+    /* -----------------------------------------------------------------------
+     * UNBIND ONE PROP: the counterpart to the clobber guard above. Re-applying
+     * bound values is what keeps a re-render from jumping a running animation,
+     * but it also means a binding writes its prop forever — a prop that STOPS
+     * being animated has its static value overwritten on the way out of every
+     * er_node_set_props. er_anim_unbind_prop() is how the reconciler hands the
+     * property back, and it must release the pair from every value that holds
+     * it while leaving the node's other bindings (and the value's bindings to
+     * other nodes) running. (Regression: issue #124.)
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* owned = er_node_create(ER_NODE_VIEW);
+        ERNode* other = er_node_create(ER_NODE_VIEW);
+        ERProps up = props_default();
+        up.width = 10;
+        up.height = 10;
+        er_node_set_props(owned, &up);
+        er_node_set_props(other, &up);
+
+        ERAnimValueHandle uh = er_anim_value_create(0.0f);
+        ERAnimValueHandle uh2 = er_anim_value_create(0.0f);
+        if (uh == ER_ANIM_VALUE_INVALID || uh2 == ER_ANIM_VALUE_INVALID)
+            return fail("unbind_prop: er_anim_value_create returned INVALID");
+
+        /* translateX is driven by BOTH values (what a re-render that swapped Animated.Values without
+         * releasing the old one leaves behind); translateY and the second node are bystanders. */
+        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(uh2, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_Y);
+        er_anim_value_bind(uh, other, ER_PROP_TRANSLATE_X);
+
+        er_anim_unbind_prop(owned, ER_PROP_TRANSLATE_X);
+
+        /* Nothing drives owned->translateX now, from either value... */
+        er_anim_value_set(uh, 70.0f);
+        er_anim_value_set(uh2, 40.0f);
+        if (owned->tp_translate_x > 0.1f || owned->tp_translate_x < -0.1f)
+            return fail("unbind_prop: a released property still followed its animated value");
+        /* ...while the same node's other property and the same value's other node keep running. */
+        if (owned->tp_translate_y < 69.9f || owned->tp_translate_y > 70.1f)
+            return fail("unbind_prop: releasing one property dropped the node's other binding");
+        if (other->tp_translate_x < 69.9f || other->tp_translate_x > 70.1f)
+            return fail("unbind_prop: releasing one node dropped the value's binding to another node");
+
+        /* And the static value a declarative update writes now sticks: er_node_set_props re-applies
+         * only what is still bound, so with nothing bound translateX stays where it was put. */
+        ERProps up2 = props_default();
+        up2.width = 10;
+        up2.height = 10;
+        up2.transform_translate_x = 25.0f;
+        er_node_set_props(owned, &up2);
+        er_anim_value_set(uh, 90.0f);
+        if (owned->tp_translate_x < 24.9f || owned->tp_translate_x > 25.1f)
+            return fail("unbind_prop: the static value did not survive after the release");
+
+        /* A freed binding slot is reusable, and must not carry the previous tenant's interpolation. */
+        ERInterpolation interp = {0};
+        interp.point_count = 2U;
+        interp.input_range[0] = 0.0f;
+        interp.input_range[1] = 1.0f;
+        interp.output_range[0] = 0.0f;
+        interp.output_range[1] = 100.0f;
+        interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
+        interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
+        er_anim_value_bind_interpolated(uh, owned, ER_PROP_TRANSLATE_X, &interp);
+        er_anim_value_set(uh, 0.5f);
+        if (owned->tp_translate_x < 49.9f || owned->tp_translate_x > 50.1f)
+            return fail("unbind_prop: re-binding a released property did not take effect");
+
+        er_anim_unbind_prop(owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(uh, 0.25f);
+        if (owned->tp_translate_x < 0.24f || owned->tp_translate_x > 0.26f)
+            return fail("unbind_prop: a reused binding slot inherited the previous interpolation");
+
+        er_anim_value_destroy(uh);
+        er_anim_value_destroy(uh2);
+        er_node_destroy(owned);
+        er_node_destroy(other);
+    }
+
     return EXIT_SUCCESS;
 }

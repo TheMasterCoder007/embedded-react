@@ -76,6 +76,10 @@ See the README for the release process.
 
 ### Fixed
 
+- A prop that stops being animated now takes its new value. Binding an `Animated.Value` to a prop
+  handed it to the engine for good, so setting that prop back to a plain number — or to a different
+  `Animated.Value` — left the old value still writing it, and the number you set was overwritten on
+  every commit. Applies to any animated style prop and to `<Dial value>`.
 - Translucent regions on the ESP32-S3 no longer get a darker bar down their right edge when their
   width is not a multiple of 8. The SIMD blend does 8 pixels at a time, and the leftover columns were
   finished by a different rounding rule, so they landed a shade darker than the rest of the row.
