@@ -33,6 +33,7 @@ import {createHash} from 'node:crypto';
 import {
   parsePath,
   parseColor,
+  rectRadii,
   VOP_SHAPE,
   VOP_MOVE,
   VOP_LINE,
@@ -148,7 +149,16 @@ function rectPath(a) {
   const w = num(a.width);
   const h = num(a.height);
   if (w <= 0 || h <= 0) return '';
-  return `M${x} ${y}L${x + w} ${y}L${x + w} ${y + h}L${x} ${y + h}Z`;
+  const [rx, ry] = rectRadii(a.rx, a.ry, w, h);
+  if (!rx || !ry)
+    return `M${x} ${y}L${x + w} ${y}L${x + w} ${y + h}L${x} ${y + h}Z`;
+  // Quarter-ellipse corners; parsePath lowers each `A` to the same single cubic the runtime emits.
+  return (
+    `M${x + rx} ${y}L${x + w - rx} ${y}A${rx} ${ry} 0 0 1 ${x + w} ${y + ry}` +
+    `L${x + w} ${y + h - ry}A${rx} ${ry} 0 0 1 ${x + w - rx} ${y + h}` +
+    `L${x + rx} ${y + h}A${rx} ${ry} 0 0 1 ${x} ${y + h - ry}` +
+    `L${x} ${y + ry}A${rx} ${ry} 0 0 1 ${x + rx} ${y}Z`
+  );
 }
 function circlePath(a) {
   const cx = num(a.cx);

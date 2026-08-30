@@ -54,6 +54,7 @@ import {
   flattenSvg,
   parseColor,
   parsePath,
+  KAPPA,
   PAINT_STRIDE,
   GRAD_MAX_STOPS,
   scaleVectorArtifact,
@@ -2011,10 +2012,12 @@ function refTarget(node, env) {
   return null;
 }
 
-/** An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[…]|line:[…]|path:'…', fill, stroke, … }`
- *  → { entries (op-tape C exprs), paint (static 7-num record) }. Geometry coords may reference state/refs/
- *  event fields (emitExpr); paint must be static. Shares the ...EntriesC geometry with the JSX path. */
-function imperativeShape(shapeNode, env) {
+/** An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[x,y,w,h,rx?,ry?]|line:[…]|path:'…', fill, … }`
+ *  → { entries (op-tape C exprs), locals (C declarations to emit ahead of them), paint (static 7-num
+ *  record) }. Geometry coords may reference state/refs/event fields (emitExpr); paint must be static.
+ *  Shares the ...EntriesC geometry with the JSX path. `tag` names any locals and must be unique in the
+ *  handler block the caller writes them into. */
+function imperativeShape(shapeNode, env, tag) {
   if (shapeNode?.type !== 'ObjectExpression')
     throw new Error('AOT: each updateVector shape must be an object literal');
   const props = {};
@@ -2032,14 +2035,18 @@ function imperativeShape(shapeNode, env) {
       .slice(0, n)
       .map(el => `(float)(${emitExpr(el, env).code})`);
   };
-  let entries;
-  if (props.arc) entries = arcEntriesC(...arr('arc', 5));
-  else if (props.circle) entries = circleEntriesC(...arr('circle', 3));
-  else if (props.rect) entries = rectEntriesC(...arr('rect', 4));
-  else if (props.line) entries = lineEntriesC(...arr('line', 4));
+  let geo;
+  if (props.arc) geo = geometryOf(arcEntriesC(...arr('arc', 5)));
+  else if (props.circle) geo = geometryOf(circleEntriesC(...arr('circle', 3)));
+  else if (props.rect) {
+    // Destructured rather than spread: the radii are optional, so a 4-element literal must not slide
+    // `tag` into rx's slot.
+    const [x, y, w, h, rx = null, ry = null] = arr('rect', 6);
+    geo = geometryOf(rectEntriesC(x, y, w, h, rx, ry, tag));
+  } else if (props.line) geo = geometryOf(lineEntriesC(...arr('line', 4)));
   else if (props.path)
-    entries = parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(
-      floatLit,
+    geo = geometryOf(
+      parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(floatLit),
     );
   else
     throw new Error(
@@ -2062,7 +2069,7 @@ function imperativeShape(shapeNode, env) {
     JOIN_MAP[stat('join', 'miter')] ?? 0,
     stat('fillRule', 'nonzero') === 'evenodd' ? 1 : 0,
   ];
-  return {entries, paint};
+  return {...geo, paint};
 }
 
 /** Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)` to: fill a mutable op-tape, push it to the node, and
@@ -2080,21 +2087,32 @@ function compileUpdateVector(expr, env, ctx, indent) {
     throw new Error(
       'AOT: updateVector(ref, shapes, …) shapes must be an array literal',
     );
+  // Claimed before the shape loop so a shape's locals can carry it: two updateVector calls can land in
+  // the same handler block, where a name keyed only on the shape index would collide.
+  const id = out.svgN++;
   const entries = [];
+  const decls = [];
   const paints = [];
   for (const s of shapesArg.elements) {
-    const {entries: e, paint} = imperativeShape(s, env);
+    const {
+      entries: e,
+      locals,
+      paint,
+    } = imperativeShape(s, env, `uv${id}_${paints.length}`);
+    decls.push(...locals);
     entries.push('ER_VOP_SHAPE', floatLit(paints.length), ...e);
     paints.push(paint);
   }
-  const id = out.svgN++;
   const len = entries.length;
   out.needsMath = true;
   out.vectorData.push(`static float s_uv${id}_ops[${len}];`);
   out.vectorData.push(
     `static const ERVectorPaint s_uv${id}_paints[] = {\n${paints.map(p => '    ' + emitVectorPaint(p)).join(',\n')}\n};`,
   );
-  const lines = entries.map((e, i) => `${indent}s_uv${id}_ops[${i}] = ${e};`);
+  const lines = [
+    ...decls.map(d => `${indent}${d}`),
+    ...entries.map((e, i) => `${indent}s_uv${id}_ops[${i}] = ${e};`),
+  ];
   lines.push(
     `${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${id}_ops, ${len}, s_uv${id}_paints, ${paints.length}, NULL, 0);`,
   );
@@ -3207,7 +3225,32 @@ const circleEntriesC = (cx, cy, r) => [
   '0.0f',
   'ER_VOP_CLOSE',
 ];
-const rectEntriesC = (x, y, w, h) => [
+/** The numeric value of a C float literal (as produced by floatLit/cf, or the `(float)(N)` cast the
+ *  imperative updateVector path emits), or null for a state-driven expr. */
+const C_NUM = '-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
+const cLit = e => {
+  const t = String(e).trim();
+  const cast = new RegExp(`^\\(float\\)\\((${C_NUM})\\)$`).exec(t);
+  if (cast) return parseFloat(cast[1]);
+  return new RegExp(`^${C_NUM}f$`).test(t) ? parseFloat(t) : null;
+};
+
+/** Normalizes a shape's geometry result. Most shapes are just an op-tape; a rounded <Rect> also returns
+ *  the `const float` locals the caller must declare ahead of that tape, in the same C block. */
+const geometryOf = g => (Array.isArray(g) ? {entries: g, locals: []} : g);
+
+/** A corner radius clamped to half its side, mirroring svg-ops rectRadii. Folded to a literal when both
+ *  the radius and the side are static — the usual case, since only x/y/width tend to be state-driven. */
+const clampRadiusC = (r, side) => {
+  const lr = cLit(r);
+  if (lr != null && lr <= 0) return '0.0f';
+  const ls = cLit(side);
+  if (lr != null && ls != null)
+    return floatLit(Math.max(0, Math.min(lr, ls / 2)));
+  return `fminf(fmaxf(${r}, 0.0f), (${side}) * 0.5f)`;
+};
+
+const sharpRectEntriesC = (x, y, w, h) => [
   'ER_VOP_MOVE',
   x,
   y,
@@ -3222,6 +3265,95 @@ const rectEntriesC = (x, y, w, h) => [
   `(${y} + ${h})`,
   'ER_VOP_CLOSE',
 ];
+
+// rx/ry are null when the rect has no corner radius at all. Corners are cubics, not ER_VOP_ARC, for the
+// same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's endpoint. Returns
+// { entries, locals }; `tag` names the locals and must be unique within the caller's C block.
+const rectEntriesC = (x, y, w, h, rx = null, ry = null, tag = '') => {
+  // A negative radius is invalid, and invalid means `auto` — so it falls back to the other radius
+  // rather than squaring the corners (svg-ops rectRadii, and what browsers render). Only a literal can
+  // be resolved here; a state-driven radius is assumed non-negative and merely clamped at runtime.
+  const isNeg = e => {
+    const l = cLit(e);
+    return l != null && l < 0;
+  };
+  if (isNeg(rx)) rx = null;
+  if (isNeg(ry)) ry = null;
+  if (rx == null && ry == null)
+    return {entries: sharpRectEntriesC(x, y, w, h), locals: []};
+  let cx = clampRadiusC(rx ?? ry, w);
+  let cy = clampRadiusC(ry ?? rx, h);
+  if (cLit(cx) === 0 || cLit(cy) === 0)
+    return {entries: sharpRectEntriesC(x, y, w, h), locals: []};
+  // A clamp that did not fold is a runtime fminf/fmaxf pair the tape below would otherwise repeat ten
+  // times over — and with a state-driven side, each copy drags the whole side expression with it. Bind
+  // it once instead; a folded radius stays inline, so an all-static rect emits exactly what it used to.
+  const locals = [];
+  if (cLit(cx) == null) {
+    locals.push(`const float rx_${tag} = ${cx};`);
+    cx = `rx_${tag}`;
+  }
+  if (cLit(cy) == null) {
+    locals.push(`const float ry_${tag} = ${cy};`);
+    cy = `ry_${tag}`;
+  }
+  const k = floatLit(KAPPA);
+  const kx = `(${cx} * ${k})`;
+  const ky = `(${cy} * ${k})`;
+  const x1 = `(${x} + ${cx})`;
+  const x2 = `(${x} + ${w} - ${cx})`;
+  const y1 = `(${y} + ${cy})`;
+  const y2 = `(${y} + ${h} - ${cy})`;
+  const r = `(${x} + ${w})`;
+  const b = `(${y} + ${h})`;
+  const entries = [
+    'ER_VOP_MOVE',
+    x1,
+    y,
+    'ER_VOP_LINE',
+    x2,
+    y,
+    'ER_VOP_CUBIC',
+    `(${x2} + ${kx})`,
+    y,
+    r,
+    `(${y1} - ${ky})`,
+    r,
+    y1,
+    'ER_VOP_LINE',
+    r,
+    y2,
+    'ER_VOP_CUBIC',
+    r,
+    `(${y2} + ${ky})`,
+    `(${x2} + ${kx})`,
+    b,
+    x2,
+    b,
+    'ER_VOP_LINE',
+    x1,
+    b,
+    'ER_VOP_CUBIC',
+    `(${x1} - ${kx})`,
+    b,
+    x,
+    `(${y2} + ${ky})`,
+    x,
+    y2,
+    'ER_VOP_LINE',
+    x,
+    y1,
+    'ER_VOP_CUBIC',
+    x,
+    `(${y1} - ${ky})`,
+    `(${x1} - ${kx})`,
+    y,
+    x1,
+    y,
+    'ER_VOP_CLOSE',
+  ];
+  return {entries, locals};
+};
 const lineEntriesC = (x1, y1, x2, y2) => [
   'ER_VOP_MOVE',
   x1,
@@ -3235,8 +3367,16 @@ const lineEntriesC = (x1, y1, x2, y2) => [
 const arcEntries = a =>
   arcEntriesC(cf(a.cx), cf(a.cy), cf(a.r), cf(a.startAngle), cf(a.endAngle));
 const circleEntries = a => circleEntriesC(cf(a.cx), cf(a.cy), cf(a.r));
-const rectEntries = a =>
-  rectEntriesC(cf(a.x), cf(a.y), cf(a.width), cf(a.height));
+const rectEntries = (a, tag) =>
+  rectEntriesC(
+    cf(a.x),
+    cf(a.y),
+    cf(a.width),
+    cf(a.height),
+    a.rx == null ? null : cf(a.rx),
+    a.ry == null ? null : cf(a.ry),
+    tag,
+  );
 const lineEntries = a => lineEntriesC(cf(a.x1), cf(a.y1), cf(a.x2), cf(a.y2));
 const pathEntries = a => {
   if (a.d == null) return [];
@@ -3463,6 +3603,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
       'AOT: a viewBox on a state-driven <Svg> is not yet supported — size shapes in the width/height space',
     );
   const entries = [];
+  const decls = []; // C locals the shapes need declared ahead of the tape (rounded-rect radii)
   const specs = [];
   for (const c of el.children) {
     if (c.type !== 'JSXElement') continue;
@@ -3473,9 +3614,11 @@ function emitSvgDynamic(el, scope, out, env, state) {
         `AOT: <${type}> is not a supported shape in a state-driven <Svg> (no <G>/viewBox yet)`,
       );
     const a = svgAttrs(c.openingElement, scope, env);
-    const shape = fn(a);
-    if (!shape.length) continue;
-    entries.push('ER_VOP_SHAPE', floatLit(specs.length), ...shape);
+    // build_svgN() is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
+    const shape = geometryOf(fn(a, `s${specs.length}`));
+    if (!shape.entries.length) continue;
+    decls.push(...shape.locals);
+    entries.push('ER_VOP_SHAPE', floatLit(specs.length), ...shape.entries);
     specs.push(paintSpec(a, env, scope));
   }
   const v = `n${out.n++}`;
@@ -3520,9 +3663,10 @@ function emitSvgDynamic(el, scope, out, env, state) {
     out.vectorData.push(
       `static const ERVectorPaint s_svg${id}_paints[] = {\n${specs.map(p => '    ' + paintInitFromSpec(p)).join(',\n')}\n};`,
     );
-  const builderLines = entries.map(
-    (e, i) => `    s_svg${id}_ops[${i}] = ${e};`,
-  );
+  const builderLines = [
+    ...decls.map(d => `    ${d}`),
+    ...entries.map((e, i) => `    s_svg${id}_ops[${i}] = ${e};`),
+  ];
   if (dynPaint)
     specs.forEach((ps, pi) =>
       ps.fields.forEach((f, fi) =>

@@ -252,3 +252,58 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     expect(zero.dropped).toEqual([]);
   });
 });
+
+describe('svgToVector — <rect rx/ry>', () => {
+  it('bakes rounded corners as cubics instead of squaring them off', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 40 20"><rect width="40" height="20" rx="5" fill="#fff"/></svg>',
+    );
+    // Four edges + four corner cubics. Walk the tape — every opcode is also a plausible coordinate.
+    const seen = [];
+    const argc = {
+      [MOVE]: 2,
+      [LINE]: 2,
+      [QUAD]: 4,
+      [CUBIC]: 6,
+      [ARC]: 6,
+      [CLOSE]: 0,
+    };
+    for (let i = 0; i < a.ops.length; ) {
+      const op = a.ops[i++];
+      if (op === SHAPE) {
+        i++;
+        continue;
+      }
+      seen.push(op);
+      i += argc[op];
+    }
+    expect(seen.filter(o => o === CUBIC).length).toBe(4);
+    expect(seen.filter(o => o === LINE).length).toBe(4);
+    // Opens on the top edge one radius in from the left, and stays inside the box.
+    expect(a.ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 5, 0]);
+    expect(a.dropped).toEqual([]);
+  });
+
+  it('leaves a rect with no rx/ry square-cornered', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/></svg>',
+    );
+    expect(a.ops).toEqual([
+      SHAPE,
+      0,
+      MOVE,
+      0,
+      0,
+      LINE,
+      10,
+      0,
+      LINE,
+      10,
+      10,
+      LINE,
+      0,
+      10,
+      CLOSE,
+    ]);
+  });
+});
