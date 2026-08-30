@@ -75,6 +75,7 @@ add_library(er_engine STATIC
     "${E}/rendering/shadow.c"
     "${E}/rendering/transform.c"
     "${E}/rendering/vector.c"
+    "${E}/rendering/vector_cache.c"
     "${E}/rendering/vector_store.c"
     "${E}/text/text_renderer.c"
     "${E}/animation/animation.c"
@@ -125,6 +126,7 @@ target_compile_definitions(er_engine PRIVATE
     ERUI_VECTOR_TAPE_MAX=64
     ERUI_VECTOR_PAINTS_MAX=8
     ERUI_VECTOR_GRADS_MAX=1
+    ERUI_VECTOR_EDGE_CACHE=0     # cached <Svg> edge lists: this face uses no vector nodes, save the RAM
     ER_PERF_OVERLAY=0
 )
 

@@ -32,6 +32,7 @@ idf_component_register(
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
         "${E}/rendering/vector.c"
+        "${E}/rendering/vector_cache.c"
         "${E}/rendering/vector_store.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
@@ -90,6 +91,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ERUI_VECTOR_TAPE_MAX=256     # op-tape floats per node (the dial is ~45)
     ERUI_VECTOR_PAINTS_MAX=16    # paints per node (the dial uses 4)
     ERUI_VECTOR_GRADS_MAX=2      # gradient entries per node (the dial uses none; default 8 → trim RAM)
+    ERUI_VECTOR_EDGE_CACHE=0     # cached edge lists for static <Svg> nodes: ~85 KB/node of .bss this
+                                 # board does not have; the thermostat's dial is a native <Dial> anyway
 )
 
 # Perf overlay off (saves code/RAM); the host doesn't gather metrics either.

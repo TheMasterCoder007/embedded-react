@@ -82,6 +82,61 @@
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Edge cache (per-node cached rasterizer geometry; pool lives in vector_cache.c)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* Cache a static node's built rasterizer geometry (flattened + stroked edge lists) so repainting it —
+ * e.g. every frame, under a moving sibling's damage rect — skips the tape parse, bezier/arc flattening
+ * and stroke outlining and goes straight to the scanline rasterize. Set to 0 to compile the cache out
+ * entirely (no pool, no record/replay code). The pool sizes (ERUI_VECTOR_CACHE_NODES / _EDGES /
+ * _PASSES) and the entry layout are private to the engine — see vector_cache.h. */
+#ifndef ERUI_VECTOR_EDGE_CACHE
+#define ERUI_VECTOR_EDGE_CACHE 1
+#endif
+
+/* Opaque to the compositor and to tests: the layout depends on the private pool-size macros, so only
+ * the two TUs that share it (vector.c / vector_cache.c, via vector_cache.h) may see it. */
+typedef struct ERVecCache ERVecCache;
+
+/**
+ * @brief Returns the valid cache entry for (slot, px, py), or NULL on a miss.
+ *
+ * A hit refreshes the entry's LRU stamp and counts toward er_vector_cache_hits().
+ */
+const ERVecCache* er_vector_cache_lookup(int slot, int px, int py);
+
+/**
+ * @brief Claims an entry to record (slot, px, py) into, or returns NULL when this render should not
+ *        record: the cache is compiled out, the slot's geometry overflowed the entry before (blocked
+ *        until the slot is re-stored), or this is the FIRST render of the key — the first call arms
+ *        the key and declines; only a later call with the key still intact is granted an entry.
+ *
+ * That last rule is the two-touch promotion: recording costs a full (unclipped) geometry build plus a
+ * copy, which must never be added to an animated node's per-frame tape update — a key only proves it
+ * is static by surviving from one render to the next (any er_vector_store() disarms it). The claimed
+ * entry is invalid until er_vector_cache_finish(e, true).
+ */
+ERVecCache* er_vector_cache_begin(int slot, int px, int py);
+
+/** @brief Ends a recording: ok=true publishes the entry, ok=false discards it and blocks the slot. */
+void er_vector_cache_finish(ERVecCache* e, bool ok);
+
+/** @brief Drops any cache entry (and pending promotion / block) for a storage slot. */
+void er_vector_cache_invalidate_slot(int slot);
+
+/** @brief Drops every cache entry (part of er_vector_reset()). */
+void er_vector_cache_reset(void);
+
+/** @brief Renders served from the cache since the last stats reset (0 when compiled out). */
+uint32_t er_vector_cache_hits(void);
+
+/** @brief Recordings published since the last stats reset (0 when compiled out). */
+uint32_t er_vector_cache_builds(void);
+
+/** @brief Zeroes the hit/build counters. */
+void er_vector_cache_stats_reset(void);
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Rasterizer
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -118,6 +173,25 @@ void er_vector_render(const float* ops,
                       int clipy0,
                       int clipx1,
                       int clipy1);
+
+/**
+ * @brief Renders a storage slot's geometry at a node's box, through the edge cache when possible.
+ *
+ * The compositor's entry point for ER_NODE_VECTOR. Same painting contract as er_vector_render() with
+ * the slot's stored tape/paints/gradients — but with the slot identity in hand it can cache the built
+ * edge lists: a repaint of an unchanged node (same tape, same origin) replays the cached geometry
+ * instead of re-flattening and re-stroking the tape. See ERUI_VECTOR_EDGE_CACHE; with the cache
+ * compiled out (or on a miss) this renders exactly like er_vector_render().
+ *
+ * @param[in] slot      Storage slot holding the node's tape (er_vector_store); no-op when empty.
+ * @param[in] px        Geometry origin X in framebuffer pixels (node box left).
+ * @param[in] py        Geometry origin Y in framebuffer pixels (node box top).
+ * @param[in] clipx0    Clip box left edge — the caller passes node box ∩ damage clip.
+ * @param[in] clipy0    Clip box top edge.
+ * @param[in] clipx1    Clip box right edge (exclusive).
+ * @param[in] clipy1    Clip box bottom edge (exclusive).
+ */
+void er_vector_render_slot(int slot, int px, int py, int clipx0, int clipy0, int clipx1, int clipy1);
 
 /**
  * @brief Number of shapes er_vector_render() has routed to the shared analytic arc core since the last

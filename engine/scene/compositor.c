@@ -2501,33 +2501,28 @@ static void render_node_content(
             case ER_NODE_VECTOR:
                 if (n->vector_slot >= 0)
                 {
-                    int no = 0, np = 0, ng = 0;
-                    const float* vops = er_vector_slot_ops(n->vector_slot, &no);
-                    const ERVectorPaint* vpa = er_vector_slot_paints(n->vector_slot, &np);
-                    const ERVectorGradient* vg = er_vector_slot_grads(n->vector_slot, &ng);
-                    if (vops && no > 0)
+                    /* Clip the rasterize to the CURRENT DAMAGE REGION (the active scissor), not just
+                     * this node's own sub-rect: the background under the vector is repainted across
+                     * the whole damage clip (which may be larger — e.g. unioned with the readout's
+                     * box), so the vector must recompute + repaint everywhere the background was
+                     * erased, or its content (e.g. the track ring) goes missing there. Intersect with
+                     * the node box. With no scissor (full repaint), this is just the node box. */
+                    int clx0 = px, cly0 = py, clx1 = px + w, cly1 = py + h;
+                    int gx, gy, gw, gh;
+                    if (er_get_clip_rect(&gx, &gy, &gw, &gh))
                     {
-                        /* Clip the rasterize to the CURRENT DAMAGE REGION (the active scissor), not just
-                         * this node's own sub-rect: the background under the vector is repainted across
-                         * the whole damage clip (which may be larger — e.g. unioned with the readout's
-                         * box), so the vector must recompute + repaint everywhere the background was
-                         * erased, or its content (e.g. the track ring) goes missing there. Intersect with
-                         * the node box. With no scissor (full repaint), this is just the node box. */
-                        int clx0 = px, cly0 = py, clx1 = px + w, cly1 = py + h;
-                        int gx, gy, gw, gh;
-                        if (er_get_clip_rect(&gx, &gy, &gw, &gh))
-                        {
-                            if (gx > clx0)
-                                clx0 = gx;
-                            if (gy > cly0)
-                                cly0 = gy;
-                            if (gx + gw < clx1)
-                                clx1 = gx + gw;
-                            if (gy + gh < cly1)
-                                cly1 = gy + gh;
-                        }
-                        er_vector_render(vops, no, vpa, np, vg, ng, px, py, clx0, cly0, clx1, cly1);
+                        if (gx > clx0)
+                            clx0 = gx;
+                        if (gy > cly0)
+                            cly0 = gy;
+                        if (gx + gw < clx1)
+                            clx1 = gx + gw;
+                        if (gy + gh < cly1)
+                            cly1 = gy + gh;
                     }
+                    /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
+                     * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
+                    er_vector_render_slot(n->vector_slot, px, py, clx0, cly0, clx1, cly1);
                 }
                 n->vec_has_dirty = false; /* one-shot: consumed by this commit */
                 break;

@@ -26,6 +26,7 @@ idf_component_register(
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
         "${E}/rendering/vector.c"
+        "${E}/rendering/vector_cache.c"
         "${E}/rendering/vector_store.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
@@ -86,6 +87,11 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 # (MAX_PTS / MAX_EDGES / MAX_ROW) keep the engine defaults.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ERUI_MAX_VECTOR_NODES=32   # storage lives in PSRAM (see linker_psram.lf); raise as needed for many <Svg> nodes
+    # Edge cache (vector_cache.c): cached rasterizer geometry so a static <Svg> repainted under a moving
+    # sibling's damage skips re-tessellation. The pool also lives in PSRAM (linker_psram.lf) — replay
+    # reads edges through the PSRAM cache, still far cheaper than rebuilding them. ~85 KB per node.
+    ERUI_VECTOR_EDGE_CACHE=1
+    ERUI_VECTOR_CACHE_NODES=2
     # ER_PROF=1                # uncomment for on-device compositor phase profiling (prints ERPROF lines)
 )
 

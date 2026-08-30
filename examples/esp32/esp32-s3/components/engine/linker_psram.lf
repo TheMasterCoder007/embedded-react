@@ -23,6 +23,12 @@
 # re-rasterizes, NOT in the scanline loop — so it goes to PSRAM with everything else. That is what lets
 # ERUI_MAX_VECTOR_NODES be raised well past the internal-RAM-bound default: the per-node storage no longer
 # competes with the hot scratch for internal DRAM. Listed explicitly for clarity (the wildcard catches it too).
+#
+# vector_cache.o (the cached edge lists for static <Svg> nodes, vector_cache.c) also goes to PSRAM —
+# a deliberate middle ground: a replay DOES read cached edges in the scanline crossing loop, but the
+# active set per row is small and cache-fronted, and the alternative the cache replaces (re-flattening
+# and re-stroking the tape every repaint) costs far more. If a profiled replay is still slow here,
+# move this entry up to (default) to keep the pool internal — at ~85 KB per ERUI_VECTOR_CACHE_NODES.
 # scratch_pool.o (the opacity-composite strips) is INTERNAL: strip pixels are read-modify-written
 # 3-4 times per composited pixel per nesting level, and PSRAM RMW measured ~90 cycles/px on this
 # board (commit time: 220x24 badge fade +3.5 ms) vs single-digit cycles from internal DRAM. The
@@ -37,4 +43,5 @@ entries:
     scratch_pool (default)
     native_renderer (default)
     vector_store (extram_bss)
+    vector_cache (extram_bss)
     * (extram_bss)

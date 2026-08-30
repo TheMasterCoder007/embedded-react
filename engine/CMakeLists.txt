@@ -29,6 +29,7 @@ set(EMBEDDED_REACT_SOURCES
         rendering/shadow.c
         rendering/transform.c
         rendering/vector.c
+        rendering/vector_cache.c
         rendering/vector_store.c
 
         # text: UTF-8 + glyph blits
@@ -128,6 +129,14 @@ set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per n
 set(ERUI_VECTOR_GRADS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
 set(ERUI_VECTOR_GRAD_LUT "256" CACHE STRING "Vector: gradient colour-LUT entries (ERUI_GRADIENT; 1KB internal at 256)")
 
+# Vector edge cache (vector_cache.c): cached rasterizer geometry for static <Svg> nodes, so repainting
+# one under a moving sibling's damage skips the tape parse / flatten / stroke-outline every frame.
+# ~NODES x (EDGES x 20 + PASSES x 52) B of .bss; set ERUI_VECTOR_EDGE_CACHE=0 to compile it out.
+option(ERUI_VECTOR_EDGE_CACHE "Cache built edge lists for static vector nodes (RAM: see vector pools table)" ON)
+set(ERUI_VECTOR_CACHE_NODES "2" CACHE STRING "Vector cache: nodes cached at once (LRU)")
+set(ERUI_VECTOR_CACHE_EDGES "4096" CACHE STRING "Vector cache: edges per cached node (sum over its passes)")
+set(ERUI_VECTOR_CACHE_PASSES "48" CACHE STRING "Vector cache: rasterize passes per cached node")
+
 # Arc widget (ER_NODE_ARC) row-span cache — see engine/README.md "Arc widget". Private to rendering/arc.c.
 set(ERUI_ARC_SPAN_CACHE "8" CACHE STRING "Arc: per-radius row-span cache entries (~2 B per px of radius each)")
 set(ERUI_ARC_MAX_RADIUS "255" CACHE STRING "Arc: largest radius (px) the row-span cache serves; larger falls back to sqrt")
@@ -159,6 +168,7 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_GRADIENT_RADIAL=$<BOOL:${ERUI_GRADIENT_RADIAL}>
         ERUI_GRADIENT_CONIC=$<BOOL:${ERUI_GRADIENT_CONIC}>
         ERUI_ONSCREEN_KEYBOARD=$<BOOL:${ERUI_ONSCREEN_KEYBOARD}>
+        ERUI_VECTOR_EDGE_CACHE=$<BOOL:${ERUI_VECTOR_EDGE_CACHE}>
         ERUI_TRANSFORMS_${ERUI_TRANSFORMS}=1
         ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
         ERUI_MAX_NODES=${ERUI_MAX_NODES}
@@ -195,6 +205,9 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
         ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
         ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
+        ERUI_VECTOR_CACHE_NODES=${ERUI_VECTOR_CACHE_NODES}
+        ERUI_VECTOR_CACHE_EDGES=${ERUI_VECTOR_CACHE_EDGES}
+        ERUI_VECTOR_CACHE_PASSES=${ERUI_VECTOR_CACHE_PASSES}
         ERUI_ARC_SPAN_CACHE=${ERUI_ARC_SPAN_CACHE}
         ERUI_ARC_MAX_RADIUS=${ERUI_ARC_MAX_RADIUS}
 )
