@@ -31,9 +31,9 @@ idf_component_register(
         "${E}/rendering/scratch_pool.c"
         "${E}/rendering/shadow.c"
         "${E}/rendering/transform.c"
-    ERUI_MAX_VECTOR_NODES=32   # storage lives in PSRAM (see linker_psram.lf); raise as needed for many <Svg> nodes
-    ERUI_VECTOR_EDGE_CACHE=1
-    ERUI_VECTOR_CACHE_NODES=2
+        "${E}/rendering/vector.c"
+        "${E}/rendering/vector_cache.c"
+        "${E}/rendering/vector_store.c"
         "${E}/text/text_renderer.c"
         "${E}/animation/animation.c"
         "${E}/animation/layout_anim.c"
