@@ -26,12 +26,23 @@ import {describe, it, expect, beforeEach} from 'vitest';
 // One mock installed before host-config.js is imported (native-ui.js captures globalThis.NativeUI
 // at import time, so a per-test mock object would be ignored by the cached module). Counters are
 // cleared per test instead.
-const calls = {setProps: [], setTextSpans: [], setVectorOps: [], setEvent: []};
+const calls = {
+  setProps: [],
+  setTextSpans: [],
+  setVectorOps: [],
+  setEvent: [],
+  animUnbind: [],
+};
+// Every recorded bridge call in order, so a test can pin the ones whose ORDER is the contract.
+const order = [];
 let idc = 0;
 globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 globalThis.NativeUI = {
   createNode: () => ++idc,
-  setProps: (h, p) => calls.setProps.push({h, p}),
+  setProps: (h, p) => {
+    calls.setProps.push({h, p});
+    order.push(`setProps:${h}`);
+  },
   setRoot: () => {},
   appendChild: () => {},
   insertBefore: () => {},
@@ -40,6 +51,10 @@ globalThis.NativeUI = {
   setEvent: (h, key, fn) => calls.setEvent.push({h, key, fn}),
   setTextSpans: (h, spans) => calls.setTextSpans.push({h, spans}),
   setVectorOps: (h, ops) => calls.setVectorOps.push({h, ops}),
+  animUnbind: (h, prop) => {
+    calls.animUnbind.push({h, prop});
+    order.push(`animUnbind:${h}:${prop}`);
+  },
   commit: () => {},
   now: () => 0,
   maxVectorOps: 4096,
@@ -75,11 +90,19 @@ const counts = () => ({
   setTextSpans: calls.setTextSpans.length,
   setVectorOps: calls.setVectorOps.length,
   setEvent: calls.setEvent.length,
+  animUnbind: calls.animUnbind.length,
 });
-const NOTHING = {setProps: 0, setTextSpans: 0, setVectorOps: 0, setEvent: 0};
+const NOTHING = {
+  setProps: 0,
+  setTextSpans: 0,
+  setVectorOps: 0,
+  setEvent: 0,
+  animUnbind: 0,
+};
 
 beforeEach(() => {
   for (const a of Object.values(calls)) a.length = 0;
+  order.length = 0;
 });
 
 // A minimal Animated.Value stand-in: a CLASS instance (deepEqualProps compares those by identity)
@@ -91,6 +114,7 @@ class FakeAnimatedValue {
   }
   __bind(h, prop) {
     this.bound.push({h, prop});
+    order.push(`bind:${h}:${prop}`);
   }
 }
 
@@ -304,6 +328,172 @@ describe('prepareUpdate diffing: Animated.Value binding stays correct', () => {
     update(ui(v2)); // a NEW instance must be treated as changed and bound
     expect(calls.setProps).toHaveLength(1);
     expect(v2.bound).toHaveLength(1);
+  });
+});
+
+// A binding outlives the render that made it — the engine re-pushes it over the static props of every
+// later setProps — so a prop that stops being animated has to be released explicitly, or it keeps
+// following its old value and the static value React just set never sticks.
+describe('animated bindings are released when a prop stops being animated', () => {
+  it('animated → static unbinds the prop, and unbinds it BEFORE re-applying the props', () => {
+    const v = new FakeAnimatedValue();
+    const ui = op => el('View', {style: {opacity: op, width: 80}});
+    const update = mount(ui(v));
+    const h = v.bound[0].h;
+    Object.values(calls).forEach(a => (a.length = 0));
+    order.length = 0;
+
+    update(ui(0.5));
+
+    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
+    expect(calls.setProps[0].p.opacity).toBe(0.5);
+    // setProps re-pushes every value STILL bound to the node (er_anim_reapply_bound), so unbinding
+    // afterwards would leave the last animated float on the node instead of the 0.5 just written.
+    expect(order).toEqual([`animUnbind:${h}:opacity`, `setProps:${h}`]);
+  });
+
+  it('a prop dropped from the style entirely is unbound too', () => {
+    const v = new FakeAnimatedValue();
+    const update = mount(el('View', {style: {opacity: v, width: 80}}));
+    const h = v.bound[0].h;
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(el('View', {style: {width: 80}})); // no opacity at all — reverts to the engine default
+
+    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
+  });
+
+  it('swapping the value unbinds the old one before binding the new one', () => {
+    const v1 = new FakeAnimatedValue();
+    const v2 = new FakeAnimatedValue();
+    const ui = v => el('View', {style: {opacity: v, width: 80}});
+    const update = mount(ui(v1));
+    const h = v1.bound[0].h;
+    Object.values(calls).forEach(a => (a.length = 0));
+    order.length = 0;
+
+    update(ui(v2));
+
+    // Without the unbind both values keep writing opacity — whichever ticks last wins.
+    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
+    expect(v2.bound).toEqual([{h, prop: 'opacity'}]);
+    expect(order).toEqual([
+      `animUnbind:${h}:opacity`,
+      `setProps:${h}`,
+      `bind:${h}:opacity`,
+    ]);
+  });
+
+  it('an unrelated prop change re-applies the props without touching a live binding', () => {
+    const v = new FakeAnimatedValue();
+    const ui = w => el('View', {style: {opacity: v, width: w}});
+    const update = mount(ui(80));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(90));
+
+    expect(counts()).toEqual({...NOTHING, setProps: 1});
+    expect(v.bound).toHaveLength(1); // still bound from the mount, not re-bound
+  });
+
+  it('`transform: [{scale}]` releases both axes it bound', () => {
+    const v = new FakeAnimatedValue();
+    const ui = s => el('View', {style: {transform: [{scale: s}], width: 80}});
+    const update = mount(ui(v));
+    const h = v.bound[0].h;
+    expect(v.bound.map(b => b.prop)).toEqual(['scaleX', 'scaleY']);
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(1));
+
+    expect(calls.animUnbind).toEqual([
+      {h, prop: 'scaleX'},
+      {h, prop: 'scaleY'},
+    ]);
+  });
+
+  it('<Dial value>: animated → static unbinds the arc value and marshals the number', () => {
+    const v = new FakeAnimatedValue();
+    const ui = value => el('Dial', {style: {width: 100, height: 100}, value});
+    const update = mount(ui(v));
+    const h = v.bound[0].h;
+    expect(v.bound[0].prop).toBe('value');
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(42));
+
+    expect(calls.animUnbind).toEqual([{h, prop: 'value'}]);
+    expect(calls.setProps[0].p.value).toBe(42);
+  });
+
+  it('a recycled handle is bound from scratch, not assumed to be bound already', () => {
+    // React hands removeChild only the TOP of a deleted subtree; destroyNode reclaims the descendants
+    // in C, so an inner node's handle returns to the free list without React ever naming it. A record
+    // left on that handle would tell the next node to claim it that it was already bound.
+    const v = new FakeAnimatedValue();
+    const update = mount(el('View', {}, el('View', {style: {opacity: v}})));
+    const inner = v.bound[0].h;
+
+    update(null); // only the outer View goes through removeChildFromContainer
+    idc = inner - 1; // the engine hands the freed handle to the next node
+    update(el('View', {style: {opacity: v}}));
+
+    expect(v.bound).toEqual([
+      {h: inner, prop: 'opacity'},
+      {h: inner, prop: 'opacity'},
+    ]);
+  });
+});
+
+// An interpolation is a throwaway object rebuilt by every `value.interpolate(...)` call in render, so
+// binding identity can't be object identity — it's the parent value plus the mapping.
+describe('interpolated bindings compare by parent + config', () => {
+  class FakeInterpolation {
+    constructor(parent, config) {
+      this.__animated = true;
+      this._parent = parent;
+      this._config = config;
+      this.bound = [];
+    }
+    __bind(h, prop) {
+      this.bound.push({h, prop});
+      order.push(`bind:${h}:${prop}`);
+    }
+    __bindEq(other) {
+      return (
+        other instanceof FakeInterpolation &&
+        other._parent === this._parent &&
+        JSON.stringify(other._config) === JSON.stringify(this._config)
+      );
+    }
+  }
+
+  const parent = new FakeAnimatedValue();
+  const interp = out =>
+    new FakeInterpolation(parent, {inputRange: [0, 1], outputRange: out});
+
+  it('a re-render with an equal interpolation leaves the binding alone', () => {
+    const ui = (w, out) =>
+      el('View', {style: {opacity: interp(out), width: w}});
+    const update = mount(ui(80, [0, 1]));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(90, [0, 1])); // fresh interpolation object, same mapping
+
+    expect(counts()).toEqual({...NOTHING, setProps: 1});
+  });
+
+  it('a changed range is re-bound — the engine ignores a duplicate bind, so the old one must go', () => {
+    const ui = out => el('View', {style: {opacity: interp(out), width: 80}});
+    const update = mount(ui([0, 1]));
+    Object.values(calls).forEach(a => (a.length = 0));
+    order.length = 0;
+
+    update(ui([0, 0.5]));
+
+    expect(calls.animUnbind).toHaveLength(1);
+    expect(calls.animUnbind[0].prop).toBe('opacity');
+    expect(order[order.length - 1]).toContain('bind:'); // released, then bound with the new mapping
   });
 });
 

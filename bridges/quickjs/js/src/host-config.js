@@ -35,12 +35,90 @@ import {
 } from './embedded-react/svg-ops.js';
 import {splitAnimatedStyle} from './embedded-react/split-style.js';
 
+// --- Animated bindings ---------------------------------------------------------------------------
+// A bound prop is owned by the engine from then on: it re-pushes the animated value over the static
+// props of every later setProps (er_anim_reapply_bound), which is what keeps a re-render from jumping
+// a running animation back to its declared value. Nothing in React says "this prop stopped being
+// animated", so the binding has to be released explicitly or it keeps writing the prop forever — and a
+// prop that swapped Animated.Values ends up written by both. Instances are bare node handles with no
+// JS object to hang state on, so what we bound is remembered here: handle → (prop → animated value).
+const boundValues = new Map();
+
+/**
+ * True when two animated values bind a prop the same way, so a re-render can leave the live binding
+ * alone. Identity settles an Animated.Value; an interpolation is a throwaway object that
+ * `value.interpolate(...)` rebuilds on every render, so it answers __bindEq for itself.
+ */
+function sameBinding(prev, next) {
+  if (prev === next) return true;
+  if (prev == null || next == null) return false;
+  return typeof prev.__bindEq === 'function' && prev.__bindEq(next);
+}
+
+/** The value `bindings` (from splitAnimatedStyle) drives `prop` with, or undefined if none does. */
+function bindingFor(bindings, prop) {
+  for (const b of bindings) {
+    if (b.prop === prop) return b.value;
+  }
+  return undefined;
+}
+
+/**
+ * Releases the bindings a node has that its new props no longer ask for — a prop that went back to a
+ * static value, or moved to a different Animated.Value.
+ *
+ * Runs BEFORE the node's setProps, and that order is the whole point: setProps re-pushes every value
+ * still bound to the node over the static props it just wrote, so a binding released afterwards would
+ * leave its last animated float sitting on the node instead of the value React just set.
+ */
+function releaseStaleBindings(handle, bindings) {
+  const bound = boundValues.get(handle);
+  if (bound === undefined) return;
+  for (const [prop, value] of bound) {
+    if (sameBinding(value, bindingFor(bindings, prop))) continue;
+    NativeUI.animUnbind(handle, prop);
+    bound.delete(prop);
+  }
+  if (bound.size === 0) boundValues.delete(handle);
+}
+
+/**
+ * Binds the props that aren't already bound to the value asking for them. The engine ignores a
+ * duplicate bind, but the bridge crossing to find that out isn't free on an MCU.
+ */
+function applyBindings(handle, bindings) {
+  if (bindings.length === 0) return;
+  let bound = boundValues.get(handle);
+  for (const b of bindings) {
+    if (bound !== undefined && sameBinding(bound.get(b.prop), b.value))
+      continue;
+    b.value.__bind(handle, b.prop);
+    if (bound === undefined) {
+      bound = new Map();
+      boundValues.set(handle, bound);
+    }
+    bound.set(b.prop, b.value);
+  }
+}
+
+/**
+ * Forgets what a handle was bound to. The engine releases the bindings itself when a node is destroyed
+ * (er_anim_unbind_node), so this only drops our record — but it has to happen, because handles are
+ * recycled: a record left behind would make the next node to claim that handle look already-bound.
+ * Called on destroy for the node React hands us, and again on create because destroyNode reclaims a
+ * whole SUBTREE in C — React never mentions the descendants, so their handles come back from the free
+ * list still carrying a record.
+ */
+function forgetBindings(handle) {
+  boundValues.delete(handle);
+}
+
 /**
  * Applies a node's resolved props, binding any Animated.Value found in its `style` to the matching
  * node prop (native driver). This makes animated styles work on ANY host element — `<Pressable
  * style={{ transform: [{ scale: v }] }}>` binds without an Animated.* wrapper — which is what the
- * Flow B AOT compiler does too, so the two render paths stay in parity. An Animated.* wrapper has
- * already stripped its bindings into a ref, so splitAnimatedStyle finds none here (no double bind).
+ * Flow B AOT compiler does too, so the two render paths stay in parity (and what an Animated.* wrapper
+ * relies on: it forwards its style untouched and is bound here like any other element).
  *
  * Returns the resolved flat style so a paired applyTextSpans call can reuse it instead of
  * re-flattening props.style from scratch — style flattening (recursive array walk and object merge)
@@ -60,8 +138,9 @@ function applyProps(type, handle, props) {
       props = {...props, valueStart: undefined};
     }
   }
+  releaseStaleBindings(handle, bindings);
   NativeUI.setProps(handle, buildProps(type, props, staticStyle));
-  for (const b of bindings) b.value.__bind(handle, b.prop);
+  applyBindings(handle, bindings);
   return staticStyle;
 }
 
@@ -301,11 +380,13 @@ export const hostConfig = {
     const raster = rasterSvgArtifact(type, props);
     if (raster) {
       const handle = NativeUI.createNode('Image');
+      forgetBindings(handle);
       applyProps('Image', handle, rasterImageProps(props, raster));
       applyEvents(handle, null, props);
       return handle;
     }
     const handle = NativeUI.createNode(type);
+    forgetBindings(handle);
     const flatStyle = applyProps(type, handle, props);
     applyTextSpans(type, handle, props, flatStyle);
     applyVectorOps(type, handle, props);
@@ -350,10 +431,12 @@ export const hostConfig = {
   removeChild(parent, child) {
     NativeUI.removeChild(parent, child);
     NativeUI.destroyNode(child);
+    forgetBindings(child);
   },
   removeChildFromContainer(container, child) {
     NativeUI.removeChild(container, child);
     NativeUI.destroyNode(child);
+    forgetBindings(child);
   },
   clearContainer() {
     // Children are removed individually via removeChildFromContainer.

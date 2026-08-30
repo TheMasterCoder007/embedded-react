@@ -1307,6 +1307,24 @@ extern "C"
     void er_anim_value_unbind_all(ERAnimValueHandle handle);
 
     /**
+     * @brief Releases whatever animated value drives one property of one node.
+     *
+     * The counterpart to er_anim_value_bind() for a caller that knows the node and the property but not
+     * which value owns the binding — a reconciler re-rendering a prop that used to be animated and now is
+     * not, or is now driven by a different value.  er_anim_value_unbind_all() is too coarse there: it would
+     * also unbind that value from every other node it drives.
+     *
+     * Bindings for this exact node+property pair are dropped from EVERY value, so a property that ended up
+     * bound twice is left owned by nobody.  Unbinding is silent and takes effect immediately; the property
+     * keeps its last animated value until something writes it (typically the er_node_set_props that
+     * follows).  Unknown pairs are a no-op.
+     *
+     * @param[in] node  Scene node to release; NULL is a no-op.
+     * @param[in] prop  Animatable property to release on that node.
+     */
+    void er_anim_unbind_prop(ERNode* node, ERAnimProp prop);
+
+    /**
      * @brief Starts an animation that drives a standalone value toward to_value.
      *
      * All bound node-property pairs are updated on each tick as the value interpolates.
