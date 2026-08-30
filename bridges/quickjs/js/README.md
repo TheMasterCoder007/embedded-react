@@ -170,9 +170,14 @@ file's basename.
   RGB565 images through its opaque copy fast path (no per-pixel blending).
 - **Fonts:** TTF/OTF → pre-rasterized `BitmapFont` glyphs (`bake-font.mjs`, via `opentype.js` + a
   pure-JS rasterizer). The engine has no runtime rasterizer, so the baker rasterizes **exactly the
-  literal `fontSize` values the bundle uses**. Computed/dynamic sizes snap to the nearest baked size
-  at runtime — pin them in `assets.config.js` if needed. Only the glyphs you ask for are baked:
-  printable ASCII, plus a named symbol set and any per-app characters you add.
+  `fontSize` values the app uses**. Discovery folds constants, so a token-driven type scale bakes
+  what it means — `const TYPE = {body: 14, title: 22}` read as `fontSize: TYPE.title`, including a
+  scale handed to a component as a prop, and both arms of a `screen.width` ternary. A size that only
+  exists at runtime can't be seen; the build **warns** and names the expression, because at runtime
+  it silently snaps to the nearest baked size. Sizes the bake missed are warned about the same way,
+  against your fonts or against the built-in one — pin them in `assets.config.js` if you want a
+  different set. Only the glyphs you ask for are baked: printable ASCII, plus a named symbol set and
+  any per-app characters you add.
 
 Optional per-demo overrides live in `demos/<demo>/assets.config.js`:
 

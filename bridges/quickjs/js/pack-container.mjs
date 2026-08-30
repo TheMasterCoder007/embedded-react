@@ -41,7 +41,8 @@ import {
 } from 'node:fs';
 import {bakeImage} from './assets/bake-image.mjs';
 import {bakeFont} from './assets/bake-font.mjs';
-import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
+import {resolveFontJobs} from './assets/font-config.mjs';
+import {analyzeFontSizes, warnFontSizes} from './assets/font-sizes.mjs';
 import {warnMissingGlyphs} from './assets/glyph-coverage.mjs';
 import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
@@ -172,7 +173,7 @@ const bytecode = readFileSync(qbcPath);
 
 // --- Bake imported assets into an ERPK pack (same sizing rules as build.mjs / sim.mjs) ----------
 const bundleSrc = readFileSync(bundlePath, 'utf8');
-const discoveredSizes = discoverFontSizes(bundleSrc);
+const usedSizes = analyzeFontSizes(bundleSrc);
 
 let config = {};
 const configPath = resolve(demoDir, 'assets.config.js');
@@ -181,7 +182,7 @@ if (existsSync(configPath))
 const fontConfig = config.fonts || {};
 const imageConfig = config.images || {};
 
-const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
+const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
 const imageJobs = [...images.entries()].map(([name, path]) => ({
   path,
   name,
@@ -191,6 +192,7 @@ const imageJobs = [...images.entries()].map(([name, path]) => ({
 const bakedImages = imageJobs.map(i => bakeImage(i));
 const bakedFonts = fontJobs.map(f => bakeFont(f));
 warnMissingGlyphs({source: bundleSrc, fonts: bakedFonts});
+warnFontSizes({used: usedSizes, fonts: bakedFonts});
 const assetPack =
   bakedImages.length || bakedFonts.length
     ? emitAssetPack({images: bakedImages, fonts: bakedFonts})

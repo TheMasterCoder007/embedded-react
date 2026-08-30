@@ -26,7 +26,7 @@
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {writeFileSync} from 'node:fs';
-import {bakeFont, BUILTIN_EXTRAS} from './bake-font.mjs';
+import {bakeFont, BUILTIN_EXTRAS, BUILTIN_SIZES} from './bake-font.mjs';
 import {emitBuiltinFont} from './emit-c.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js/assets
@@ -36,9 +36,9 @@ const OUT = resolve(repoRoot, 'engine/font/font_data.c');
 
 // The built-in covers printable ASCII plus a fixed set of common symbols (degrees, arrows, math,
 // punctuation, etc.) the UI components rely on — kept stable across regenerations. The set lives in
-// bake-font.mjs as BUILTIN_EXTRAS so the build-time coverage check reports against what is actually
-// baked here.
-const SIZES = [10, 12, 16, 20, 24, 32, 48];
+// bake-font.mjs as BUILTIN_EXTRAS — with BUILTIN_SIZES alongside it — so the build-time coverage
+// checks report against what is actually baked here.
+const SIZES = BUILTIN_SIZES;
 
 const font = bakeFont({
   path: FONT,

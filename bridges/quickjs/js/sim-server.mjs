@@ -38,8 +38,11 @@ const esbuild = require('esbuild');
 const {bakeAssetPack} = await import(
   pathToFileURL(resolve(HERE, 'assets/index.mjs')).href
 );
-const {discoverFontSizes, resolveFontJobs} = await import(
+const {resolveFontJobs} = await import(
   pathToFileURL(resolve(HERE, 'assets/font-config.mjs')).href
+);
+const {analyzeFontSizes, warnFontSizes} = await import(
+  pathToFileURL(resolve(HERE, 'assets/font-sizes.mjs')).href
 );
 const {textSignature, warnMissingGlyphs} = await import(
   pathToFileURL(resolve(HERE, 'assets/glyph-coverage.mjs')).href
@@ -101,7 +104,7 @@ function createBundle({
 
   async function bakePack() {
     const bundleSrc = readFileSync(bundlePath, 'utf8');
-    const discoveredSizes = discoverFontSizes(bundleSrc);
+    const usedSizes = analyzeFontSizes(bundleSrc);
 
     let cfg = {};
     const cp = resolve(projectRoot, 'assets.config.js');
@@ -112,7 +115,7 @@ function createBundle({
     const fontConfig = cfg.fonts || {};
     const imageConfig = cfg.images || {};
 
-    const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
+    const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
     const imageJobs = [...images.entries()].map(([name, path]) => ({
       path,
       name,
@@ -139,7 +142,9 @@ function createBundle({
     if (sig === lastAssetSig) return;
     lastAssetSig = sig;
     if (!imageJobs.length && !fontJobs.length) {
-      warnMissingGlyphs({source: bundleSrc}); // built-in font only → no pack, but still check it
+      // Built-in font only → no pack, but its glyph and size coverage still bind.
+      warnMissingGlyphs({source: bundleSrc});
+      warnFontSizes({used: usedSizes});
       return;
     }
 
@@ -149,6 +154,7 @@ function createBundle({
         fonts: fontJobs,
         outPath: packPath,
         source: bundleSrc,
+        usedSizes,
       });
       console.log(
         `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B`,

@@ -72,6 +72,14 @@ export const BUILTIN_EXTRAS = Object.freeze([
 ]);
 
 /**
+ * Pixel sizes the engine's built-in font is baked at (engine/font/font_data.c). Like BUILTIN_EXTRAS
+ * this is the single source of truth: build-builtin-font.mjs bakes from it and the build-time size
+ * check reports against it, so an app rendering at some other size is told what it will snap to.
+ * Changing it changes the engine's fallback font; re-run `npm run build:builtin-font` if you do.
+ */
+export const BUILTIN_SIZES = Object.freeze([10, 12, 16, 20, 24, 32, 48]);
+
+/**
  * Normalizes one codepoint list: numbers are codepoints, a string contributes every character in
  * it — so `'°±'` and `[0x00b0, 0x00b1]` mean the same thing.
  *

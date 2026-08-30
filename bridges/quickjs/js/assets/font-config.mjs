@@ -18,7 +18,7 @@
 // bake fonts (build, pack, sim, sim-server, hot-reload app/split chunks); they share this so a
 // config field means the same thing in every one of them.
 
-/** Fallback pixel size when the bundle has no literal fontSize and the config pins none. */
+/** Fallback pixel size when no fontSize could be discovered and the config pins none. */
 const DEFAULT_SIZE = 16;
 
 /**
@@ -26,7 +26,7 @@ const DEFAULT_SIZE = 16;
  *
  * @param {Map<string,string>} fonts        Discovered imports: family → .ttf/.otf path.
  * @param {object} [fontConfig]             assets.config.js `fonts` block, keyed by family.
- * @param {number[]} [discoveredSizes]      Literal fontSize values found in the bundle.
+ * @param {number[]} [discoveredSizes]      Sizes the bundle uses (font-sizes.mjs analyzeFontSizes).
  * @returns {Array<{path:string, family:string, sizes:number[], bpp:number, glyphs:any,
  *          extraGlyphs:any}>} One bakeFont() job per imported font.
  */
@@ -46,22 +46,4 @@ export function resolveFontJobs(fonts, fontConfig = {}, discoveredSizes = []) {
       extraGlyphs: fc.extraGlyphs,
     };
   });
-}
-
-/**
- * Extracts the literal `fontSize` values a bundle uses. The engine has no runtime rasterizer, so
- * these are exactly the sizes worth baking; computed sizes can't be seen here and snap to the
- * nearest baked size at runtime.
- *
- * @param {string} source  Bundled JS.
- * @returns {number[]} Ascending, de-duplicated pixel sizes.
- */
-export function discoverFontSizes(source) {
-  return [
-    ...new Set(
-      [...source.matchAll(/\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g)].map(m =>
-        Math.round(Number(m[1])),
-      ),
-    ),
-  ].sort((a, b) => a - b);
 }

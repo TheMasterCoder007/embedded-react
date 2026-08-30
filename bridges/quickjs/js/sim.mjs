@@ -29,7 +29,8 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename, relative} from 'node:path';
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import {bakeAssetPack} from './assets/index.mjs';
-import {discoverFontSizes, resolveFontJobs} from './assets/font-config.mjs';
+import {resolveFontJobs} from './assets/font-config.mjs';
+import {analyzeFontSizes} from './assets/font-sizes.mjs';
 import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
@@ -87,9 +88,9 @@ const fonts = new Map(); // family -> path
 let lastAssetSig = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
 
 async function bakePack() {
-  // Font sizes: bake exactly the literal fontSizes the bundle uses (engine has no runtime rasterizer).
+  // Font sizes: bake exactly the sizes the bundle uses, constants folded (engine has no rasterizer).
   const bundleSrc = readFileSync(bundlePath, 'utf8');
-  const discoveredSizes = discoverFontSizes(bundleSrc);
+  const usedSizes = analyzeFontSizes(bundleSrc);
 
   let cfg = {};
   const cp = resolve(demoDir, 'assets.config.js');
@@ -99,7 +100,7 @@ async function bakePack() {
   const fontConfig = cfg.fonts || {};
   const imageConfig = cfg.images || {};
 
-  const fontJobs = resolveFontJobs(fonts, fontConfig, discoveredSizes);
+  const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
     path,
     name,
@@ -132,6 +133,7 @@ async function bakePack() {
       fonts: fontJobs,
       outPath: packPath,
       source: bundleSrc,
+      usedSizes,
     });
     console.log(
       `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B → dist/assets.pack`,
