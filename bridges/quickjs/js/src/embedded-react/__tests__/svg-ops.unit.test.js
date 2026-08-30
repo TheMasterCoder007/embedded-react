@@ -21,6 +21,7 @@ import {
   flattenSvg,
   shapesToVector,
   scaleVectorArtifact,
+  rectRadii,
   encodeVectorGradients,
   warnVectorCaps,
   GRAD_STRIDE,
@@ -535,5 +536,129 @@ describe('warnVectorCaps — gradient cap', () => {
     warnVectorCaps(10, PAINT_STRIDE, 1000, 64, 99); // no maxGrads → no-op
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+// Walks a single-shape tape into { ops: [opcode…], points: [[x, y]…] }. A raw filter/indexOf would
+// miscount here, since every opcode is also a plausible coordinate value (CUBIC === 4 vs rx = 4).
+function walkShape(tape) {
+  const ops = [];
+  const points = [];
+  let i = 0;
+  while (i < tape.length) {
+    const op = tape[i++];
+    if (op === SHAPE) {
+      i++; // paint index
+      continue;
+    }
+    ops.push(op);
+    for (let a = 0; a < OP_ARGC[op]; a += 2)
+      points.push([tape[i++], tape[i++]]);
+  }
+  return {ops, points};
+}
+
+// <Rect rx/ry> — rounded corners without hand-built <Path> arc data (issue #121).
+describe('Rect corner radii', () => {
+  it('resolves rx/ry the way SVG does: mutual fallback, clamp to half the side, 0 disables', () => {
+    expect(rectRadii(undefined, undefined, 100, 60)).toEqual([0, 0]); // neither given
+    expect(rectRadii(8, undefined, 100, 60)).toEqual([8, 8]); // ry omitted -> rx
+    expect(rectRadii(undefined, 8, 100, 60)).toEqual([8, 8]); // rx omitted -> ry
+    expect(rectRadii(4, 9, 100, 60)).toEqual([4, 9]); // independent radii
+    expect(rectRadii(999, 999, 40, 20)).toEqual([20, 10]); // clamped per side
+    expect(rectRadii(0, 8, 100, 60)).toEqual([0, 0]); // an explicit 0 squares the corners
+    expect(rectRadii(-3, undefined, 100, 60)).toEqual([0, 0]); // negative is an error -> no rounding
+    expect(rectRadii('6', '6', 100, 60)).toEqual([6, 6]); // string attrs (JSX rx="6")
+  });
+
+  it('leaves a radius-free <Rect> on the four-line tape (no regression, no extra ops)', () => {
+    const {ops} = flattenSvg({
+      children: [
+        el('Rect', {x: 0, y: 0, width: 100, height: 60, fill: '#fff'}),
+      ],
+    });
+    expect(ops).toEqual([
+      SHAPE,
+      0,
+      MOVE,
+      0,
+      0,
+      LINE,
+      100,
+      0,
+      LINE,
+      100,
+      60,
+      LINE,
+      0,
+      60,
+      CLOSE,
+    ]);
+  });
+
+  it('compiles <Rect rx> to line edges joined by four cubic corners', () => {
+    const {ops} = flattenSvg({
+      children: [
+        el('Rect', {x: 0, y: 0, width: 100, height: 60, rx: 10, fill: '#fff'}),
+      ],
+    });
+    // Four straight edges + four corners, and NO arc op: a corner must start at exactly the previous
+    // line's endpoint, which ER_VOP_ARC's cos/sin start point cannot guarantee (the miter-spike trap).
+    expect(walkShape(ops).ops).toEqual([
+      MOVE,
+      LINE,
+      CUBIC,
+      LINE,
+      CUBIC,
+      LINE,
+      CUBIC,
+      LINE,
+      CUBIC,
+      CLOSE,
+    ]);
+    // Opens on the top edge past the top-left corner, not at the corner itself.
+    expect(ops.slice(0, 8)).toEqual([SHAPE, 0, MOVE, 10, 0, LINE, 90, 0]);
+    expect(ops[ops.length - 1]).toBe(CLOSE);
+    // The top-right corner ends on the right edge, one radius down.
+    const c0 = ops.indexOf(CUBIC);
+    expect(ops.slice(c0 + 5, c0 + 7)).toEqual([100, 10]);
+  });
+
+  it('never bulges past the box: an oversized rx/ry becomes a stadium/ellipse', () => {
+    const {ops} = flattenSvg({
+      children: [el('Rect', {x: 0, y: 0, width: 40, height: 20, rx: 999})],
+    });
+    const {points} = walkShape(ops);
+    const xs = points.map(pt => pt[0]);
+    const ys = points.map(pt => pt[1]);
+    expect(Math.min(...xs)).toBe(0);
+    expect(Math.max(...xs)).toBe(40);
+    expect(Math.min(...ys)).toBe(0);
+    expect(Math.max(...ys)).toBe(20);
+  });
+
+  it('rounds an imperative { rect: [x, y, w, h, rx, ry] } descriptor too', () => {
+    const {ops} = shapesToVector([{rect: [0, 0, 20, 20, 4, 4], fill: '#f00'}]);
+    expect(walkShape(ops).ops.filter(o => o === CUBIC).length).toBe(4);
+    expect(ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 4, 0]);
+    // The 4-element form stays on the allocation-free square-cornered path.
+    const sharp = shapesToVector([{rect: [0, 0, 20, 20], fill: '#f00'}]);
+    expect(sharp.ops).toEqual([
+      SHAPE,
+      0,
+      MOVE,
+      0,
+      0,
+      LINE,
+      20,
+      0,
+      LINE,
+      20,
+      20,
+      LINE,
+      0,
+      20,
+      CLOSE,
+    ]);
   });
 });

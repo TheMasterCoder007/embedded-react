@@ -20,6 +20,8 @@ See the README for the release process.
 - Dual-setpoint dials. `range` gives a dial two ends with a knob on each, for something like a
   thermostat's AUTO band. `minSpan` keeps the pair a set distance apart, pushing the far end along
   instead of stopping dead. `onChange` reports both values.
+- `rx` / `ry` on `<Rect>`. Rounded rects no longer need hand-built `<Path>` arc data. Both flows, plus
+  imported `.svg` files with `rx`/`ry` on a `<rect>`.
 - `onValueChange` on `<Switch>` now works in Flow A. It had only ever fired in AOT builds.
 - The engine now caches a static `<Svg>`'s built geometry, so repainting one under a moving sibling
   no longer re-tessellates it every frame — the repaint goes straight to the rasterizer. Animated

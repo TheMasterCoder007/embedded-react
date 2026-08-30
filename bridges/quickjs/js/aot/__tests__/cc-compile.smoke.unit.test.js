@@ -172,4 +172,55 @@ describe('AOT generated C compiles', () => {
       }
     },
   );
+
+  (CC ? it : it.skip)(
+    `a state-driven <Rect rx> passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // A corner radius bounded by a state-driven side clamps in C (fminf/fmaxf), so this is the one
+      // rounded-rect path a regex test can't vouch for — it needs math.h to actually be included.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Svg, Rect, Pressable, updateVector } from 'embedded-react';
+         export function App() {
+           const [pct, setPct] = useState(40);
+           const bar = useRef(null);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => setPct(pct + 10)}>
+                 <Svg width={200} height={24}>
+                   <Rect x={0} y={0} width={200} height={24} rx={12} fill="#16202f" />
+                   <Rect x={0} y={0} width={pct * 2} height={24} rx={12} fill="#f4a261" />
+                 </Svg>
+               </Pressable>
+               <Pressable onPress={() => updateVector(bar, [{ rect: [0, 0, pct * 2, 24, 12, 12], fill: '#f4a261' }])}>
+                 <Svg ref={bar} width={200} height={24} />
+               </Pressable>
+             </View>
+           );
+         }`,
+        'progress',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-rrect-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
 });

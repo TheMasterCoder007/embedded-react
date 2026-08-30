@@ -16,6 +16,7 @@
 
 import {describe, it, expect} from 'vitest';
 import {compileSource} from '../compile.mjs';
+import {flattenSvg} from '../../src/embedded-react/svg-ops.js';
 
 // The Flow B AOT compiler turns an App.jsx source string into C. These tests assert on the generated C
 // (compileSource is pure — no file I/O), so each fixture is a complete minimal app. `gen` returns the
@@ -296,6 +297,138 @@ describe('AOT baseline (regression)', () => {
     );
     expect(c).toContain('.stroke_w = 3.0f'); // circle stroke width baked
     expect(c).toContain('p.width = (int16_t)100;'); // node box from Svg width
+  });
+
+  it('bakes <Rect rx/ry> into cubic corners (static <Svg>), and leaves a plain <Rect> square', () => {
+    const svg = rx =>
+      gen(`${PRE}
+      import { Svg, Rect } from 'embedded-react';
+      export function App() {
+        return (<Svg width={100} height={60}><Rect x={0} y={0} width={100} height={60} ${rx} fill="#fff" /></Svg>);
+      }`);
+    // A static <Svg> bakes to raw float literals (opcodes included), so assert on the tape length and
+    // the corner geometry: 4 edges + 4 cubics = 46 entries vs the square rect's 15.
+    const round = svg('rx={10}');
+    expect(round).toMatch(/s_svg0_ops, 46,/);
+    expect(round).toContain('95.52284749830794f'); // top-right corner control point (x + w - rx + rx*k)
+    expect(svg('')).toMatch(/s_svg0_ops, 15,/);
+  });
+
+  it('emits the same rounded-rect tape as the runtime does (Flow A/B parity)', () => {
+    // A dynamic sibling forces the state-driven path while the <Rect> itself stays static, so every
+    // generated entry is literal arithmetic — evaluate it and diff against svg-ops. This is what catches
+    // a transposed control point, which the opcode-shape assertions above would happily let through.
+    const c = gen(`${PRE}
+      import { Svg, Rect, Line } from 'embedded-react';
+      export function App() {
+        const [t, setT] = useState(0);
+        return (
+          <Pressable onPress={() => setT(t + 1)}>
+            <Svg width={100} height={60}>
+              <Rect x={7} y={3} width={80} height={40} rx={11} ry={5} fill="#fff" />
+              <Line x1={0} y1={0} x2={t} y2={10} stroke="#fff" />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    const VOP = {
+      SHAPE: 0,
+      MOVE: 1,
+      LINE: 2,
+      QUAD: 3,
+      CUBIC: 4,
+      ARC: 5,
+      CLOSE: 6,
+    };
+    const {ops} = flattenSvg({
+      children: [
+        {
+          type: 'Rect',
+          props: {x: 7, y: 3, width: 80, height: 40, rx: 11, ry: 5},
+        },
+      ],
+    });
+    const got = [...c.matchAll(/s_svg0_ops\[(\d+)\] = (.+);/g)]
+      .map(m => [Number(m[1]), m[2]])
+      .sort((a, b) => a[0] - b[0])
+      .slice(0, ops.length) // the dynamic <Line> that forced this path follows the rect
+      .map(([, e]) =>
+        // C float literals -> JS numbers, ER_VOP_* -> opcode values; the rest is plain arithmetic.
+        Function(
+          `return (${e
+            .replace(/ER_VOP_(\w+)/g, (_, n) => String(VOP[n]))
+            .replace(/(\d)f\b/g, '$1')})`,
+        )(),
+      );
+    expect(got.length).toBe(ops.length);
+    got.forEach((v, i) => expect(v).toBeCloseTo(ops[i], 5));
+  });
+
+  it('folds a static corner radius in a state-driven <Rect> and clamps a dynamic side at runtime', () => {
+    const c = gen(`${PRE}
+      import { Svg, Rect } from 'embedded-react';
+      export function App() {
+        const [w, setW] = useState(10);
+        return (
+          <Pressable onPress={() => setW(w + 1)}>
+            <Svg width={100} height={40}><Rect x={0} y={0} width={w} height={20} rx={6} fill="#fff" /></Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toContain('static void build_svg0(void)');
+    expect((c.match(/ER_VOP_CUBIC/g) || []).length).toBe(4);
+    // ry is bounded by a static height → folded to a literal and left inline; rx is bounded by state,
+    // so it clamps in C — once, hoisted into a local, not re-evaluated at each of its ten use sites.
+    expect(c).toContain(
+      'const float rx_s0 = fminf(fmaxf(6.0f, 0.0f), ((float)(s_state.w)) * 0.5f);',
+    );
+    expect((c.match(/fminf/g) || []).length).toBe(1);
+    expect(c).not.toContain('ry_s0'); // the folded radius needs no local
+    expect(c).toContain('#include <math.h>');
+  });
+
+  it('rounds an imperative updateVector rect from its optional [.., rx, ry] elements', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      import { Svg, Rect, updateVector } from 'embedded-react';
+      export function App() {
+        const bar = useRef(null);
+        return (
+          <Pressable onPress={() => updateVector(bar, [{ rect: [0, 0, 80, 12, 6, 6], fill: '#f4a261' }])}>
+            <Svg ref={bar} width={100} height={20}><Rect x={0} y={0} width={80} height={12} fill="#222" /></Svg>
+          </Pressable>
+        );
+      }`);
+    expect((c.match(/ER_VOP_CUBIC/g) || []).length).toBe(4); // only the imperative rect is rounded
+    expect(c).toMatch(/const float rx_uv0_0 = fminf\(/); // radii hoisted, not repeated per entry
+    expect((c.match(/fminf/g) || []).length).toBe(2); // rx and ry, once each
+  });
+
+  it('keeps hoisted radius locals unique across shapes and across calls in one handler block', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      import { Svg, Rect, updateVector } from 'embedded-react';
+      export function App() {
+        const [w, setW] = useState(10);
+        const a = useRef(null);
+        const b = useRef(null);
+        return (
+          <Pressable onPress={() => {
+            updateVector(a, [{ rect: [0, 0, w, 20, 6, 6], fill: '#fff' }, { rect: [0, 30, w, 20, 4], fill: '#f00' }]);
+            updateVector(b, [{ rect: [0, 0, w, 12, 6, 6], fill: '#0f0' }]);
+          }}>
+            <Svg ref={a} width={100} height={60} />
+            <Svg ref={b} width={100} height={20} />
+          </Pressable>
+        );
+      }`);
+    // Two shapes in one call plus a second call, all landing in the same C block: a name keyed only on
+    // the shape index would redeclare. Six distinct locals, no duplicates.
+    const names = [...c.matchAll(/const float ((?:rx|ry)_\w+) =/g)].map(
+      m => m[1],
+    );
+    expect(names.length).toBe(6);
+    expect(new Set(names).size).toBe(6);
   });
 
   it('compiles a state-driven <Svg> (arc sweep) to a build_svg fn recomputed on update', () => {

@@ -32,6 +32,10 @@ export const VOP_CUBIC = 4;
 export const VOP_ARC = 5;
 export const VOP_CLOSE = 6;
 
+// Control-point ratio for approximating a quarter (circular or elliptical) arc with one cubic:
+// 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
+export const KAPPA = 0.5522847498307936;
+
 export const CAP = {butt: 0, round: 1, square: 2};
 export const JOIN = {miter: 0, round: 1, bevel: 2};
 
@@ -458,26 +462,107 @@ function ellipseOps(p) {
   return parsePath(d);
 }
 
+/**
+ * SVG <rect> corner-radius resolution (SVG 1.1 §9.2): a missing radius falls back to the other one, a
+ * zero/negative/non-numeric radius disables rounding, and each is clamped to half its own side. Returns
+ * [rx, ry] — [0, 0] for a square-cornered rect. Exported so the AOT and the SVG baker apply the same rules.
+ */
+export function rectRadii(rxAttr, ryAttr, w, h) {
+  let rx = num(rxAttr, -1);
+  let ry = num(ryAttr, -1);
+  if (rx < 0) rx = ry; // rx omitted -> ry
+  if (ry < 0) ry = rx; // ry omitted -> rx
+  rx = Math.min(rx, w / 2);
+  ry = Math.min(ry, h / 2);
+  return rx > 0 && ry > 0 ? [rx, ry] : [0, 0];
+}
+
+/**
+ * Rect path ops, clockwise from the top-left corner. rx/ry must already be resolved by rectRadii();
+ * 0 gives the plain four-line rectangle. Corners are cubics rather than VOP_ARC so each one STARTS at
+ * exactly the preceding line's endpoint — an arc recomputes that point from cos/sin and can miss the
+ * engine's exact-equality join dedupe by a ULP, which spikes the miter join on a stroked rect.
+ */
+function rectOpsXY(x, y, w, h, rx, ry) {
+  if (rx <= 0 || ry <= 0)
+    return [
+      VOP_MOVE,
+      x,
+      y,
+      VOP_LINE,
+      x + w,
+      y,
+      VOP_LINE,
+      x + w,
+      y + h,
+      VOP_LINE,
+      x,
+      y + h,
+      VOP_CLOSE,
+    ];
+  const kx = rx * KAPPA;
+  const ky = ry * KAPPA;
+  const x1 = x + rx; // where the top/bottom edges start, past the left corners
+  const x2 = x + w - rx; // ... and end, before the right corners
+  const y1 = y + ry;
+  const y2 = y + h - ry;
+  const r = x + w;
+  const b = y + h;
+  return [
+    VOP_MOVE,
+    x1,
+    y,
+    VOP_LINE,
+    x2,
+    y,
+    VOP_CUBIC,
+    x2 + kx,
+    y,
+    r,
+    y1 - ky,
+    r,
+    y1,
+    VOP_LINE,
+    r,
+    y2,
+    VOP_CUBIC,
+    r,
+    y2 + ky,
+    x2 + kx,
+    b,
+    x2,
+    b,
+    VOP_LINE,
+    x1,
+    b,
+    VOP_CUBIC,
+    x1 - kx,
+    b,
+    x,
+    y2 + ky,
+    x,
+    y2,
+    VOP_LINE,
+    x,
+    y1,
+    VOP_CUBIC,
+    x,
+    y1 - ky,
+    x1 - kx,
+    y,
+    x1,
+    y,
+    VOP_CLOSE,
+  ];
+}
+
 function rectOps(p) {
   const x = num(p.x, 0);
   const y = num(p.y, 0);
   const w = num(p.width, 0);
   const h = num(p.height, 0);
-  return [
-    VOP_MOVE,
-    x,
-    y,
-    VOP_LINE,
-    x + w,
-    y,
-    VOP_LINE,
-    x + w,
-    y + h,
-    VOP_LINE,
-    x,
-    y + h,
-    VOP_CLOSE,
-  ];
+  const [rx, ry] = rectRadii(p.rx, p.ry, w, h);
+  return rectOpsXY(x, y, w, h, rx, ry);
 }
 
 function lineOps(p) {
@@ -509,7 +594,7 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
  *   { arc: [cx, cy, r, startDeg, endDeg], stroke: '#f4a261', strokeWidth: 14, cap: 'round' }
  *   { circle: [cx, cy, r], fill: '#16202f', stroke: '#f4a261', strokeWidth: 3 }
  *   { line: [x1, y1, x2, y2], stroke, strokeWidth }
- *   { rect: [x, y, w, h], fill }
+ *   { rect: [x, y, w, h], fill }              // optional [x, y, w, h, rx, ry] for rounded corners
  *   { path: 'M..A..', stroke }   // d-string supported but slower (regex + bezier)
  * Arc angles are degrees, clockwise from 12 o'clock. This avoids the d-string parser entirely, so it's
  * cheap enough to call on every pointer move (the imperative drag path).
@@ -562,21 +647,29 @@ export function shapesToVector(shapes) {
       const y = s.rect[1];
       const w = s.rect[2];
       const h = s.rect[3];
-      ops.push(
-        VOP_MOVE,
-        x,
-        y,
-        VOP_LINE,
-        x + w,
-        y,
-        VOP_LINE,
-        x + w,
-        y + h,
-        VOP_LINE,
-        x,
-        y + h,
-        VOP_CLOSE,
-      );
+      if (s.rect.length > 4) {
+        // Rounded — the optional trailing [rx, ry]. Off the allocation-free path below, but a rounded
+        // rect is a chrome/backing shape, not something a drag rebuilds every move.
+        const [rx, ry] = rectRadii(s.rect[4], s.rect[5], w, h);
+        const ro = rectOpsXY(x, y, w, h, rx, ry);
+        for (let k = 0; k < ro.length; k++) ops.push(ro[k]);
+      } else {
+        ops.push(
+          VOP_MOVE,
+          x,
+          y,
+          VOP_LINE,
+          x + w,
+          y,
+          VOP_LINE,
+          x + w,
+          y + h,
+          VOP_LINE,
+          x,
+          y + h,
+          VOP_CLOSE,
+        );
+      }
     } else if (s.line) {
       ops.push(VOP_MOVE, s.line[0], s.line[1], VOP_LINE, s.line[2], s.line[3]);
     } else if (s.path) {
