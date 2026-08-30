@@ -567,7 +567,9 @@ describe('Rect corner radii', () => {
     expect(rectRadii(4, 9, 100, 60)).toEqual([4, 9]); // independent radii
     expect(rectRadii(999, 999, 40, 20)).toEqual([20, 10]); // clamped per side
     expect(rectRadii(0, 8, 100, 60)).toEqual([0, 0]); // an explicit 0 squares the corners
-    expect(rectRadii(-3, undefined, 100, 60)).toEqual([0, 0]); // negative is an error -> no rounding
+    expect(rectRadii(8, 0, 100, 60)).toEqual([0, 0]); // ... either way round
+    expect(rectRadii(-3, 8, 100, 60)).toEqual([8, 8]);
+    expect(rectRadii(-3, undefined, 100, 60)).toEqual([0, 0]);
     expect(rectRadii('6', '6', 100, 60)).toEqual([6, 6]); // string attrs (JSX rx="6")
   });
 

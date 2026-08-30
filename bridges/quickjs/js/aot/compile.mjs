@@ -3225,11 +3225,15 @@ const circleEntriesC = (cx, cy, r) => [
   '0.0f',
   'ER_VOP_CLOSE',
 ];
-/** The numeric value of a C float literal (as produced by floatLit/cf), or null for a state-driven expr. */
-const cLit = e =>
-  /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?f$/.test(String(e))
-    ? parseFloat(e)
-    : null;
+/** The numeric value of a C float literal (as produced by floatLit/cf, or the `(float)(N)` cast the
+ *  imperative updateVector path emits), or null for a state-driven expr. */
+const C_NUM = '-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
+const cLit = e => {
+  const t = String(e).trim();
+  const cast = new RegExp(`^\\(float\\)\\((${C_NUM})\\)$`).exec(t);
+  if (cast) return parseFloat(cast[1]);
+  return new RegExp(`^${C_NUM}f$`).test(t) ? parseFloat(t) : null;
+};
 
 /** Normalizes a shape's geometry result. Most shapes are just an op-tape; a rounded <Rect> also returns
  *  the `const float` locals the caller must declare ahead of that tape, in the same C block. */
@@ -3239,6 +3243,7 @@ const geometryOf = g => (Array.isArray(g) ? {entries: g, locals: []} : g);
  *  the radius and the side are static — the usual case, since only x/y/width tend to be state-driven. */
 const clampRadiusC = (r, side) => {
   const lr = cLit(r);
+  if (lr != null && lr <= 0) return '0.0f';
   const ls = cLit(side);
   if (lr != null && ls != null)
     return floatLit(Math.max(0, Math.min(lr, ls / 2)));
@@ -3265,6 +3270,15 @@ const sharpRectEntriesC = (x, y, w, h) => [
 // same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's endpoint. Returns
 // { entries, locals }; `tag` names the locals and must be unique within the caller's C block.
 const rectEntriesC = (x, y, w, h, rx = null, ry = null, tag = '') => {
+  // A negative radius is invalid, and invalid means `auto` — so it falls back to the other radius
+  // rather than squaring the corners (svg-ops rectRadii, and what browsers render). Only a literal can
+  // be resolved here; a state-driven radius is assumed non-negative and merely clamped at runtime.
+  const isNeg = e => {
+    const l = cLit(e);
+    return l != null && l < 0;
+  };
+  if (isNeg(rx)) rx = null;
+  if (isNeg(ry)) ry = null;
   if (rx == null && ry == null)
     return {entries: sharpRectEntriesC(x, y, w, h), locals: []};
   let cx = clampRadiusC(rx ?? ry, w);

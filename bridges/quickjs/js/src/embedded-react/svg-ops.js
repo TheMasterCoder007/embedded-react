@@ -463,9 +463,11 @@ function ellipseOps(p) {
 }
 
 /**
- * SVG <rect> corner-radius resolution (SVG 1.1 §9.2): a missing radius falls back to the other one, a
- * zero/negative/non-numeric radius disables rounding, and each is clamped to half its own side. Returns
- * [rx, ry] — [0, 0] for a square-cornered rect. Exported so the AOT and the SVG baker apply the same rules.
+ * SVG <rect> corner-radius resolution. A missing radius is `auto` and falls back to the other one; a
+ * NEGATIVE radius is invalid, which also means `auto`, so it falls back too — <rect rx="-3" ry="8">
+ * rounds at 8, matching what browsers render. An explicit ZERO is a valid radius and squares the
+ * corners, and each radius is clamped to half its own side. Returns [rx, ry] — [0, 0] for a
+ * square-cornered rect. Exported so the AOT and the SVG baker apply the same rules.
  */
 export function rectRadii(rxAttr, ryAttr, w, h) {
   let rx = num(rxAttr, -1);

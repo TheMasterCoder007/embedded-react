@@ -400,8 +400,55 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect((c.match(/ER_VOP_CUBIC/g) || []).length).toBe(4); // only the imperative rect is rounded
-    expect(c).toMatch(/const float rx_uv0_0 = fminf\(/); // radii hoisted, not repeated per entry
-    expect((c.match(/fminf/g) || []).length).toBe(2); // rx and ry, once each
+    // Every side and radius here is a literal, so both clamps fold at compile time: no runtime fminf
+    // and no hoisted local at all. cLit sees through the `(float)(N)` cast this path emits.
+    expect(c).not.toContain('fminf');
+    expect(c).not.toContain('const float rx_uv');
+  });
+
+  it('resolves rx/ry edge cases in a state-driven <Rect> exactly as the runtime does', () => {
+    // The presence-only check used to send <Rect rx={-3} ry={8}> down the square-cornered path here
+    // while the runtime (and the browser) round it at 8; and a literal rx={0} whose side was
+    // state-driven could not fold, so it built 44 ops of degenerate cubics for a square rect.
+    const svg = attrs =>
+      gen(`${PRE}
+      import { Svg, Rect, Line } from 'embedded-react';
+      export function App() {
+        const [t, setT] = useState(0);
+        return (
+          <Pressable onPress={() => setT(t + 1)}>
+            <Svg width={200} height={60}>
+              <Rect x={0} y={0} width={100} height={60} ${attrs} fill="#fff" />
+              <Line x1={0} y1={0} x2={t} y2={9} stroke="#fff" />
+            </Svg>
+          </Pressable>
+        );
+      }`);
+    const rounded = a => (svg(a).match(/ER_VOP_CUBIC/g) || []).length > 0;
+    expect(rounded('rx={-3} ry={8}')).toBe(true); // negative is `auto` -> falls back to ry
+    expect(rounded('rx={8} ry={-3}')).toBe(true); // ... and the other way round
+    expect(rounded('rx={-3}')).toBe(false); // nothing to fall back to -> square
+    expect(rounded('rx={0} ry={8}')).toBe(false); // an explicit 0 is valid and squares it
+    expect(rounded('rx={8} ry={0}')).toBe(false);
+    expect(rounded('rx={8}')).toBe(true);
+  });
+
+  it('folds a zero radius to a square rect even when the side it clamps against is state-driven', () => {
+    const c = gen(`${PRE}
+      import { Svg, Rect } from 'embedded-react';
+      export function App() {
+        const [w, setW] = useState(10);
+        return (
+          <Pressable onPress={() => setW(w + 1)}>
+            {/* BOTH sides state-driven: neither clamp can fold from its side, so squaring this rect
+                depends entirely on the radius itself being recognised as non-positive. */}
+            <Svg width={200} height={40}><Rect x={0} y={0} width={w} height={w / 2} rx={0} fill="#fff" /></Svg>
+          </Pressable>
+        );
+      }`);
+    expect(c).toMatch(/s_svg0_ops\[15\]/); // the 13-op square tape + its SHAPE header, not 44 + 2
+    expect(c).not.toContain('ER_VOP_CUBIC');
+    expect(c).not.toContain('fminf'); // no runtime clamp for a radius that is statically zero
   });
 
   it('keeps hoisted radius locals unique across shapes and across calls in one handler block', () => {
@@ -414,16 +461,16 @@ describe('AOT baseline (regression)', () => {
         const b = useRef(null);
         return (
           <Pressable onPress={() => {
-            updateVector(a, [{ rect: [0, 0, w, 20, 6, 6], fill: '#fff' }, { rect: [0, 30, w, 20, 4], fill: '#f00' }]);
-            updateVector(b, [{ rect: [0, 0, w, 12, 6, 6], fill: '#0f0' }]);
+            updateVector(a, [{ rect: [0, 0, w, w / 2, 6, 6], fill: '#fff' }, { rect: [0, 30, w, w / 3, 4], fill: '#f00' }]);
+            updateVector(b, [{ rect: [0, 0, w, w / 4, 6, 6], fill: '#0f0' }]);
           }}>
             <Svg ref={a} width={100} height={60} />
             <Svg ref={b} width={100} height={20} />
           </Pressable>
         );
       }`);
-    // Two shapes in one call plus a second call, all landing in the same C block: a name keyed only on
-    // the shape index would redeclare. Six distinct locals, no duplicates.
+    // Both sides are state-driven so every radius hoists — two shapes in one call plus a second call,
+    // all landing in the same C block. A name keyed only on the shape index would redeclare.
     const names = [...c.matchAll(/const float ((?:rx|ry)_\w+) =/g)].map(
       m => m[1],
     );
