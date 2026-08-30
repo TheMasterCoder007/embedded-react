@@ -26,7 +26,10 @@ bundled app) that runs in any browser with no server, for GitHub Pages / docs if
 ## Develop (hot reload)
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` on PATH) once
-to build the module; after that, day-to-day dev is just `dev.mjs`.
+to build the module; after that, day-to-day dev is just `dev.mjs`. `build.mjs` finds the CMake toolchain from
+`$EMSDK`, `em-config`, or `emcc` on PATH — following the symlinks and wrapper scripts a package manager puts
+there, so a Homebrew `emscripten` works as-is. If it can't work out your install, point it at one:
+`EMSCRIPTEN_ROOT="$(em-config EMSCRIPTEN_ROOT)" node tools/web-sim/build.mjs`.
 
 ```bash
 node tools/web-sim/build.mjs          # once → public/embedded-react.{js,wasm} (also fetches+builds QuickJS-ng)

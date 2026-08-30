@@ -152,6 +152,11 @@ See the README for the release process.
   the outermost transform is rendered through the scratch buffer, so a change up top silently moves
   the child between its transformed shape and its plain box — and the repaint, which never expected
   it to move, stayed on the old one. The frame did not recover on its own.
+- The web-sim build now finds a Homebrew-installed Emscripten. It looked for the CMake toolchain next
+  to `emcc` on PATH, which for a packaged install is a symlink or a wrapper script pointing elsewhere.
+  Set `EMSCRIPTEN_ROOT` to point it at any install it can't work out on its own.
+- `node tools/web-sim/build.mjs` no longer wipes its build directory and recompiles everything on every
+  run — it was checking a CMake variable the Emscripten toolchain never caches.
 
 ## [0.12.0] - 2026-08-19
 ### Added
