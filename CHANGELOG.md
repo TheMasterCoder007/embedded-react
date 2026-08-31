@@ -68,6 +68,12 @@ See the README for the release process.
 
 ### Changed
 
+- Anti-aliased vector edges no longer reach the display one run at a time. A row's AA pixels are built
+  up in fast RAM and handed over a stretch at a time, with a long solid run still going out as a plain
+  fill. Same picture pixel for pixel, 4-12x fewer driver calls, and a quarter off the render time of a
+  swept `<Svg>` dial on an ESP32-S3.
+- The software and Pico SPI display drivers stopped rescaling pixels by a factor of one, and no longer
+  read the framebuffer for pixels that cover it.
 - `ViewStyle` accepts object-valued entries, so `shadowOffset` and `transformOrigin` typecheck instead
   of colliding with the index signature.
 - `<ScrollView horizontal>` is gone from the types. The runtime never read it — lay the content out

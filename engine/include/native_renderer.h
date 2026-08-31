@@ -43,7 +43,10 @@ extern "C"
      * @brief Platform-supplied rendering callbacks.
      *
      * The host application fills this struct and passes it to embedded_renderer_set_backend().
-     * All function pointers are optional; NULL pointers are silently ignored by the blit helpers.
+     * All function pointers are optional; NULL pointers are silently ignored by the blit helpers —
+     * but a backend without blend_rect cannot anti-alias: every soft edge the engine draws (vector
+     * and arc coverage rows, gradients, shadows, transformed and translucent content) is emitted as
+     * a premultiplied row through it, and is silently dropped when it is NULL.
      */
     typedef struct EmbeddedRenderBackend
     {
@@ -53,7 +56,8 @@ extern "C"
         /** @brief Copy a premultiplied ARGB8888 buffer into the framebuffer. */
         void (*copy_rect)(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx);
 
-        /** @brief Blend a premultiplied ARGB8888 buffer into the framebuffer at the given global alpha. */
+        /** @brief Blend a premultiplied ARGB8888 buffer into the framebuffer at the given global alpha.
+         *         Required for anti-aliased output — see the note above. */
         void (*blend_rect)(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx);
 
         /** @brief Block until the hardware has finished consuming the last frame. May be NULL. */

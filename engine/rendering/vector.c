@@ -24,8 +24,9 @@
  *   3. STROKE: expand each subpath polyline into outline geometry (segment quads + caps + joins) and
  *      rasterize that as a nonzero fill in the stroke color.
  *   4. Rasterize = per pixel row, take SUBSAMPLES sub-scanlines, find edge crossings, walk them by
- *      winding to get covered spans, accumulate fractional horizontal coverage, then blend the row's
- *      AA spans through er_blit_fill (which composites — incl. into the RGB565 framebuffer).
+ *      winding to get covered spans, accumulate fractional horizontal coverage, then stage the row as
+ *      premultiplied ARGB and blend it out one call per covered stretch (which composites — incl. into
+ *      the RGB565 framebuffer).
  *
  * All working buffers are static and bounded (no allocation); the engine is single-threaded so reuse
  * across shapes is safe. Coordinates from the tape are node-local; the node's screen origin (px,py) is
@@ -37,7 +38,7 @@
 #include "vector_cache.h" /* ERVecEdge + the cache entry layout (record/replay share it with vector_cache.c) */
 
 #include "arc.h"               /* er_arc_fill_sector — the shared analytic core (ERUI_VECTOR_ANALYTIC_ARC) */
-#include "renderer_internal.h" /* er_blit_fill */
+#include "renderer_internal.h" /* er_blit_fill, er_blit_blend */
 
 #include <math.h>
 #include <stdbool.h>
@@ -83,6 +84,15 @@
 #define VEC_CLOSE_EPS 0.05f /**< Under this gap, a CLOSE that misses its start point counts as landing on it. */
 #define VEC_PI 3.14159265358979323846f
 #define VEC_RAD2DEG 57.29577951308232f
+
+/* Coverage at or above which a pixel quantizes to alpha 255 ((uint32)(c * 255 + 0.5f) == 255) — i.e.
+ * where a row stops being an AA fringe and becomes solid paint. */
+#define VEC_FULL_COV (254.5f / 255.0f)
+/* A fully-covered run at least this wide leaves the row blend and goes out as its own er_blit_fill: a
+ * fill carries no source pixels, and 64 px is where the DMA2D backend hands a span to its
+ * register-to-memory transfer instead of the CPU (its min_dma_pixels default). Below that the two extra
+ * backend calls the split costs are worth more than the source reads they save. */
+#define VEC_ROW_FILL_MIN 64
 
 /* Route a shape that IS just a circular arc at the shared analytic core (rendering/arc.c) instead of
  * flattening + stroking it — so an <Arc> or <Circle> in an <Svg> rasterizes through exactly the same
@@ -134,6 +144,11 @@ static VecIdx s_bkt[ERUI_VECTOR_SORT_BUCKETS];
 
 static float s_cover[ERUI_VECTOR_MAX_ROW]; /**< Per-pixel coverage accumulator for the current row. */
 static int s_row_lo, s_row_hi;             /**< Touched x-range (clip-local, [lo,hi)) in s_cover for the current row. */
+
+/* One row of PREMULTIPLIED ARGB8888 — the AA path's staging buffer, handed to the backend by emit_row
+ * as a single er_blit_blend per covered stretch. Sized like the coverage row (one entry per clip
+ * column); the solid and gradient fills share it, so it costs one buffer either way. */
+static uint32_t s_row[ERUI_VECTOR_MAX_ROW];
 
 /* Crossing list reused per sub-scanline. */
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
@@ -349,9 +364,6 @@ static int rule_inside(int acc, int evenodd)
 uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t);
 uint32_t er_gradient_premul(uint32_t sa);
 
-/* Per-row premultiplied scratch for a gradient fill span (sized like the coverage row). */
-static uint32_t s_vgrad_row[ERUI_VECTOR_MAX_ROW];
-
 /* Precomputed colour ramp: ERUI_VECTOR_GRAD_LUT premultiplied-ARGB entries sampled across t∈[0,1), rebuilt
  * once per gradient shape (build_grad_lut). The per-pixel sampler then indexes this instead of re-running the
  * stop search/interpolation (er_gradient_eval_stops) every pixel — the bulk of the conic dial's drag cost.
@@ -478,15 +490,30 @@ resolve_grad(int idx1, const ERVectorGradient* grads, int n_grads, int px, int p
 }
 #endif /* ERUI_GRADIENT */
 
+/** @brief Hands @p n staged pixels of s_row, starting at clip-local @p x0, to the backend as one blend. */
+static void flush_row(int x0, int n, int iy, int clipx0)
+{
+    er_blit_blend(s_row, (int)(sizeof(uint32_t) * (size_t)n), 255U, clipx0 + x0, iy, n, 1);
+}
+
 /**
- * @brief Blends the accumulated coverage row into the target, coalescing equal-alpha runs.
+ * @brief Blends the accumulated coverage row into the target, one backend call per covered stretch.
  *
  * Scans only [lo,hi) — the x-range cover_span() actually touched this row — and zeroes each
  * consumed cell so the next row starts clean without a full-width memset. For a thin stroke in a
  * wide clip this turns the per-row floor from O(clip width) into O(covered width).
  *
- * When @p grad is non-NULL the fill colour is sampled per pixel from the gradient (built into a
- * premultiplied row and flushed via er_blit_blend) instead of the constant @p color.
+ * Covered pixels are staged into s_row as premultiplied ARGB and flushed through flush_row, instead
+ * of going out as one er_blit_fill per equal-alpha run. An AA fringe carries a different alpha every
+ * pixel, so that split cost one backend call — one clip walk, one dispatch, and on the DMA2D one
+ * transfer fence — per PIXEL, and a row of a stroked ring cost a dozen or more. A stretch ends at the
+ * first pixel whose coverage quantizes to alpha 0, so the pixels handed to the backend are exactly
+ * the ones the run split wrote: a gap between subpaths (the two bands of a ring row) still costs
+ * nothing, and no uncovered pixel is ever pushed through the blend.
+ *
+ * When @p grad is non-NULL the fill colour is sampled per pixel from the gradient instead of the
+ * constant @p color; that path stages uncovered pixels as alpha 0 (a no-op at the backend) and
+ * flushes the whole range in one call.
  */
 static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int clipx0, int lo, int hi)
 {
@@ -500,7 +527,7 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
             s_cover[lo + xx] = 0.0f; /* consume so the cell is clean for the next row */
             if (c <= 0.0f)
             {
-                s_vgrad_row[xx] = 0u; /* uncovered: alpha 0 leaves the destination untouched */
+                s_row[xx] = 0u; /* uncovered: alpha 0 leaves the destination untouched */
                 continue;
             }
             if (c > 1.0f)
@@ -514,46 +541,106 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
                 idx = 0;
             else if (idx >= ERUI_VECTOR_GRAD_LUT)
                 idx = ERUI_VECTOR_GRAD_LUT - 1;
-            s_vgrad_row[xx] = vgrad_scale(s_vgrad_lut[idx], (uint32_t)(c * 255.0f + 0.5f));
+            s_row[xx] = vgrad_scale(s_vgrad_lut[idx], (uint32_t)(c * 255.0f + 0.5f));
         }
-        er_blit_blend(s_vgrad_row, (int)(sizeof(uint32_t) * (size_t)n), 255, clipx0 + lo, iy, n, 1);
+        flush_row(lo, n, iy, clipx0);
         return;
     }
 #else
     (void)grad;
 #endif
     const uint32_t pa = (color >> 24) & 0xFFU;
-    const uint32_t rgb = color & 0x00FFFFFFU;
+    const uint32_t cr = (color >> 16) & 0xFFU, cg = (color >> 8) & 0xFFU, cb = color & 0xFFU;
+    /* A fully-covered pixel keeps the paint's own alpha, so its premultiplied value is fixed. */
+    const uint32_t full_px =
+        (pa << 24) | (((cr * pa + 127U) / 255U) << 16) | (((cg * pa + 127U) / 255U) << 8) | ((cb * pa + 127U) / 255U);
+    /* One-entry premultiply cache: an AA fringe holds its alpha for a few pixels at a time. 0x100 is an
+     * impossible alpha, so the first pixel of the row always misses. */
+    uint32_t last_a = 0x100U, last_px = 0U;
+    int x0 = lo; /* clip-local x of s_row[0] */
+    int n = 0;   /* pixels staged in s_row, not yet flushed */
     int x = lo;
     while (x < hi)
     {
-        float c = s_cover[x];
-        if (c <= 0.0f)
+        const float c0 = s_cover[x];
+        if (c0 <= 0.0f)
         {
-            x++;
+            /* Uncovered: the cells are already zero, so there is nothing to consume — but they end the
+             * stretch, so the gap between the two bands of a ring row is never pushed through a blend.
+             * Skipped as a run: for a thin stroke in a wide clip the gaps ARE the row. */
+            if (n > 0)
+            {
+                flush_row(x0, n, iy, clipx0);
+                n = 0;
+            }
+            do
+            {
+                x++;
+            } while (x < hi && s_cover[x] <= 0.0f);
+            x0 = x;
             continue;
         }
+        if (c0 >= VEC_FULL_COV)
+        {
+            /* A fully-covered run is the paint colour at its own alpha from end to end, so it needs
+             * none of the per-pixel coverage arithmetic — and past VEC_ROW_FILL_MIN no source row
+             * either: it goes out as the one span shape a backend can hand to its blitter, which is
+             * how a filled shape's interior stays a single fill per row (and DMA-able) as before. */
+            int run = 1;
+            while (x + run < hi && s_cover[x + run] >= VEC_FULL_COV)
+                run++;
+            /* Consume the run so the cells are clean for the next row. memset because these runs are
+             * long (a filled shape's interior is one of them) and 0.0f is all-zero bits; the per-cell
+             * store below measures ~10% slower on a large fill. */
+            memset(&s_cover[x], 0, sizeof(float) * (size_t)run);
+            if (run >= VEC_ROW_FILL_MIN)
+            {
+                if (n > 0)
+                {
+                    flush_row(x0, n, iy, clipx0);
+                    n = 0;
+                }
+                er_blit_fill(color, clipx0 + x, iy, run, 1);
+                x += run;
+                x0 = x;
+                continue;
+            }
+            for (int k = 0; k < run; k++)
+                s_row[n++] = full_px;
+            x += run;
+            continue;
+        }
+        float c = c0;
         s_cover[x] = 0.0f; /* consume so the cell is clean for the next row */
+        x++;
         if (c > 1.0f)
             c = 1.0f;
         const uint32_t a = (pa * (uint32_t)(c * 255.0f + 0.5f) + 127U) / 255U;
-        /* Coalesce a run of pixels with the same quantized alpha. */
-        int run = 1;
-        while (x + run < hi)
+        if (a == 0U)
         {
-            float c2 = s_cover[x + run];
-            if (c2 > 1.0f)
-                c2 = 1.0f;
-            const uint32_t a2 = c2 <= 0.0f ? 0U : (pa * (uint32_t)(c2 * 255.0f + 0.5f) + 127U) / 255U;
-            if (a2 != a)
-                break;
-            s_cover[x + run] = 0.0f; /* consume */
-            run++;
+            /* Ink too faint to show: nothing to blend, and — like an uncovered cell — it ends the
+             * stretch, so the backend is handed exactly the pixels the per-run fills used to write. */
+            if (n > 0)
+            {
+                flush_row(x0, n, iy, clipx0);
+                n = 0;
+            }
+            x0 = x;
+            continue;
         }
-        if (a != 0U)
-            er_blit_fill((a << 24) | rgb, clipx0 + x, iy, run, 1);
-        x += run;
+        if (a != last_a)
+        {
+            last_a = a;
+            /* +127 rounds, which is what the backends' own div255 does when they premultiply a
+             * straight-alpha fill — so an AA pixel keeps the exact value it had before the row blend
+             * took over from er_blit_fill. */
+            last_px = (a << 24) | (((cr * a + 127U) / 255U) << 16) | (((cg * a + 127U) / 255U) << 8)
+                      | ((cb * a + 127U) / 255U);
+        }
+        s_row[n++] = last_px;
     }
+    if (n > 0)
+        flush_row(x0, n, iy, clipx0);
 }
 
 /* Indices of edges crossing the current scanline (the active-edge table). */
