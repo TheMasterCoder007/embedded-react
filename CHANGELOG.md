@@ -57,6 +57,14 @@ See the README for the release process.
   mounts and stays mounted — with the node budget a list costs on real boards and what to do with a
   long list instead. List virtualization is now a stated non-goal rather than deferred work: these
   panels show a few dozen rows, not thousands.
+- `gc_threshold` on `ErRuntimeConfig`, plus `er_runtime_run_gc()`. QuickJS re-derives its collection
+  schedule from the live set after every GC, so a big external-RAM heap mark-swept far more often than it
+  needed to, with no way to change it. You can now hold a longer interval — or take the collector off
+  automatic and run it where the pause doesn't show.
+- A bridge README section on external-RAM hosts: what `gc_threshold` is worth (18% measured on the
+  ESP32-S3), and that QuickJS recurses on the calling task's C stack — already fast RAM on ESP-IDF and
+  STM32, and what `max_stack_size` needs to stay under. It also records why a size-tiered heap was
+  built, measured (~2% on that board's cache-fronted PSRAM), and dropped.
 
 ### Changed
 

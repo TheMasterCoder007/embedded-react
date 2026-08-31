@@ -114,6 +114,14 @@ static void remap_touch(int* x, int* y)
    framebuffers and engine pools share. */
 #define ER_JS_MEMORY_LIMIT (4u * 1024u * 1024u)
 
+/* Floor under QuickJS's automatic GC (0 = leave its own schedule alone). QuickJS re-derives its trigger
+ * from the live set after every collection, so on a 4 MB PSRAM arena with a small live set it
+ * mark-sweeps the whole object graph over the octal-SPI bus far more often than it needs to. Raising
+ * this trades a higher peak heap for fewer pauses; keep it well under ER_JS_MEMORY_LIMIT. Measure
+ * before setting it — the RST/PKR overlay lines show whether GC pauses are what you are actually
+ * seeing. */
+#define ER_JS_GC_THRESHOLD 0u
+
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
 
@@ -495,6 +503,7 @@ static void run_app(void)
         .malloc_functions = &er_js_mf, /* JS heap → PSRAM */
         .max_stack_size = ER_JS_MAX_STACK,
         .memory_limit = ER_JS_MEMORY_LIMIT,
+        .gc_threshold = ER_JS_GC_THRESHOLD,
     };
     if (!er_runtime_init(&rt_cfg))
     {

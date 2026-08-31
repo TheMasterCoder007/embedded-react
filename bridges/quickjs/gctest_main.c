@@ -29,6 +29,9 @@
  *   - a broken allocator is detected by er_js_probe_alloc_health / er_runtime_gc_accounting_ok,
  *   - and with working accounting the GC actually reclaims churned garbage.
  *
+ * It also covers ErRuntimeConfig.gc_threshold, whose whole point is that the floor survives QuickJS's
+ * recompute-after-every-collection — and the manual-collection path a host uses once it raises it.
+ *
  * Needs the JS parser, so it is not built for ER_BRIDGE_QUICKJS_LITE.
  */
 
@@ -57,6 +60,15 @@
 /** @brief Headroom allowed above the pre-churn heap once ~10 MB of garbage has been created and collected. */
 #define CHURN_MAX_RETAINED (2 * 1024 * 1024)
 
+/** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
+#define GC_FLOOR_BYTES (4u * 1024u * 1024u)
+
+/** @brief Growth expected from SRC_CYCLES once automatic collection is switched off entirely. */
+#define GC_OFF_MIN_GROWTH (2 * 1024 * 1024)
+
+/** @brief Live bytes SRC_CYCLES may leave behind once the collector is finally allowed to run. */
+#define CYCLES_MAX_RETAINED (1024 * 1024)
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -80,6 +92,22 @@ static const char* const SRC_CHURN = "var acc = 0;\n"
                                      "    acc += o.c[0];\n"
                                      "}\n"
                                      "acc;\n";
+
+/**
+ * @brief Churns reference CYCLES — the only garbage the mark-sweep collector is actually needed for.
+ *
+ * QuickJS is refcounted first: the objects SRC_CHURN drops go away the moment the loop rebinds `o`,
+ * collector or no collector. A pair that points at each other never reaches refcount zero, so this is
+ * what accumulates when the GC is not allowed to run, and what disappears when it is.
+ */
+static const char* const SRC_CYCLES = "var n = 0;\n"
+                                      "for (var i = 0; i < 20000; i++) {\n"
+                                      "    var a = { pad: 'x'.repeat(200) };\n"
+                                      "    var b = { a: a };\n"
+                                      "    a.b = b;\n"
+                                      "    n++;\n"
+                                      "}\n"
+                                      "n;\n";
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — broken allocators (what a host on an unsupported platform effectively gets)
@@ -375,6 +403,60 @@ int main(void)
         cfg.malloc_functions = &MF_ALLOCATION_FAILS;
         check(!er_runtime_init(&cfg), "er_runtime: init fails when the JS heap cannot be allocated");
         check(er_runtime_gc_accounting_ok(), "er_runtime: a failed init does not report the previous runtime's verdict");
+    }
+
+    /* --- 5. The GC floor survives QuickJS's recompute-after-every-collection ----------------------- */
+    {
+        ErRuntimeConfig cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.screen_width = 240;
+        cfg.screen_height = 240;
+
+        /* Control: with no floor, the threshold is whatever the last collection left behind — live x 1.5,
+           which on a small live set is a fraction of the floor the next case asks for. */
+        check(er_runtime_init(&cfg), "gc floor: init without a threshold");
+        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"), "gc floor: control app ran");
+        er_runtime_pump();
+        const size_t unfloored = er_runtime_gc_threshold();
+        check(unfloored < GC_FLOOR_BYTES, "gc floor: unconfigured, the threshold settles near the live set");
+        er_runtime_shutdown();
+
+        cfg.gc_threshold = GC_FLOOR_BYTES;
+        check(er_runtime_init(&cfg), "gc floor: init with a threshold");
+        check(er_runtime_gc_threshold() == GC_FLOOR_BYTES, "gc floor: the configured value is applied at init");
+        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"),
+              "gc floor: app ran under the floor");
+        er_runtime_pump(); /* what a host does every frame — and what re-asserts the floor */
+        char msg[128];
+        snprintf(msg, sizeof msg, "gc floor: still %u KB after collections, not %u KB (the recompute is undone)",
+                 (unsigned)(er_runtime_gc_threshold() / 1024), (unsigned)(unfloored / 1024));
+        check(er_runtime_gc_threshold() >= GC_FLOOR_BYTES, msg);
+
+        /* Turning automatic collection off is the extreme of the same knob: the host then owns the pause
+           and places it somewhere it does not show. Both halves have to work for that to be usable. */
+        er_runtime_set_gc_threshold((size_t)-1);
+        JSRuntime* rt = JS_GetRuntime(er_runtime_context());
+        JS_RunGC(rt);
+        const int64_t before = tracked_bytes(rt);
+        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"),
+              "gc off: app ran with the GC disabled");
+        er_runtime_pump();
+        const int64_t peak = tracked_bytes(rt);
+        check(peak - before > GC_OFF_MIN_GROWTH, "gc off: cyclic garbage accumulates, as asked");
+
+        er_runtime_run_gc();
+        const int64_t collected = tracked_bytes(rt);
+        snprintf(msg, sizeof msg, "gc off: er_runtime_run_gc reclaimed %d KB of it",
+                 (int)((peak - collected) / 1024));
+        check(collected - before < CYCLES_MAX_RETAINED, msg);
+        check(er_runtime_gc_threshold() == (size_t)-1, "gc off: a manual collection does not re-arm the schedule");
+
+        /* Coming back from a disabled collector has to write a real threshold: nothing would ever run to
+           recompute one, so a host that only stopped re-applying the floor would never collect again. */
+        er_runtime_set_gc_threshold(0);
+        check(er_runtime_gc_threshold() > 0 && er_runtime_gc_threshold() < GC_FLOOR_BYTES,
+              "gc off: dropping the floor hands the schedule back to QuickJS");
+        er_runtime_shutdown();
     }
 
     if (s_failures)

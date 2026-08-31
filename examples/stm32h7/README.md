@@ -30,3 +30,9 @@ real block sizes, which is what QuickJS uses to decide when to collect garbage a
 0 disables the garbage collector entirely: free heap then falls a few KB per re-render and never
 recovers, which looks like a leak in the app. `er_runtime_init` warns through `log` when it detects
 this, and `er_runtime_gc_accounting_ok()` reports it to firmware.
+
+If the JS heap ends up in SDRAM on this board, see
+[the bridge README](../../bridges/quickjs/README.md#hosts-with-external-ram-psram--sdram): the
+collection interval can be widened with `ErRuntimeConfig.gc_threshold` so mark-sweep walks the SDRAM
+object graph less often, and the interpreter's own recursion already runs on the main stack — DTCM
+under the default linker script — whatever the heap does.

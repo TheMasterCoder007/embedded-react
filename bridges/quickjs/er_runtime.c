@@ -57,6 +57,11 @@ static char s_last_error[512] = "";
 /** @brief Result of the boot-time heap-accounting probe (see er_runtime_gc_accounting_ok). */
 static bool s_gc_accounting_ok = true;
 
+/** @brief QuickJS's own starting GC trigger, captured before any floor is applied, so that dropping the
+ *         floor can hand the schedule back. Without it, a runtime left with the automatic collector off
+ *         would never collect again — nothing would ever run to recompute the threshold. */
+static size_t s_gc_threshold_default = 0;
+
 /* The message-overlay app (RN redbox) ships as precompiled bytecode — see overlay/message_overlay.js
  * for the source, what it renders, and how to regenerate message_overlay.qbc.c. */
 
@@ -421,6 +426,42 @@ static void check_gc_accounting(void)
               " bridge default.");
 }
 
+/**
+ * @brief Applies ErRuntimeConfig.gc_threshold as a FLOOR under QuickJS's automatic-GC trigger.
+ *
+ * QuickJS resets the trigger to live x 1.5 after every collection, so a threshold set once at init is
+ * gone the first time the collector runs. Re-asserting it (from er_runtime_pump, once a frame — two
+ * cheap accessor calls) is what turns the config value into an actual schedule: collect at most once
+ * per `gc_threshold` bytes of allocation, however small the live set happens to be.
+ */
+static void apply_gc_floor(void)
+{
+    if (s_rt && s_cfg.gc_threshold && JS_GetGCThreshold(s_rt) < s_cfg.gc_threshold)
+    {
+        JS_SetGCThreshold(s_rt, s_cfg.gc_threshold);
+    }
+}
+
+/**
+ * @brief Warns when the GC floor sits at or above the memory limit — the app would hit the cap and throw
+ *        out-of-memory before the collector was ever allowed to reclaim anything.
+ */
+static void check_gc_threshold(void)
+{
+    if (!s_cfg.gc_threshold || !s_cfg.memory_limit || s_cfg.gc_threshold < s_cfg.memory_limit)
+    {
+        return;
+    }
+    char line[160];
+    emit_line("embedded-react: WARNING - gc_threshold is not below memory_limit.");
+    snprintf(line, sizeof(line), "  gc_threshold = %zu bytes, memory_limit = %zu bytes.", s_cfg.gc_threshold,
+             s_cfg.memory_limit);
+    emit_line(line);
+    emit_line("  The heap reaches the limit before the collector is allowed to run, so a growing app fails");
+    emit_line("  with a JS out-of-memory error instead of collecting. Leave headroom (a threshold of about");
+    emit_line("  half the limit is a reasonable start), or call er_runtime_run_gc() yourself.");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -452,6 +493,9 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     {
         JS_SetMemoryLimit(s_rt, s_cfg.memory_limit);
     }
+    s_gc_threshold_default = JS_GetGCThreshold(s_rt); /* before the floor, so it is QuickJS's own value */
+    check_gc_threshold();
+    apply_gc_floor();
     install_globals();
     return s_ctx != NULL;
 }
@@ -787,6 +831,7 @@ void er_runtime_pump(void)
     {
         er_bridge_pump(s_ctx);
     }
+    apply_gc_floor();
 }
 
 bool er_runtime_reset(void)
@@ -804,6 +849,29 @@ bool er_runtime_reset(void)
 bool er_runtime_gc_accounting_ok(void)
 {
     return s_gc_accounting_ok;
+}
+
+size_t er_runtime_gc_threshold(void)
+{
+    return s_rt ? JS_GetGCThreshold(s_rt) : 0u;
+}
+
+void er_runtime_set_gc_threshold(size_t bytes)
+{
+    s_cfg.gc_threshold = bytes;
+    if (s_rt)
+    {
+        JS_SetGCThreshold(s_rt, bytes ? bytes : s_gc_threshold_default);
+    }
+}
+
+void er_runtime_run_gc(void)
+{
+    if (s_rt)
+    {
+        JS_RunGC(s_rt);
+        apply_gc_floor();
+    }
 }
 
 const char* er_runtime_last_error(void)

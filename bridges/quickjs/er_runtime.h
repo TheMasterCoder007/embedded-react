@@ -93,13 +93,52 @@ typedef struct
                                         bridge default accounts correctly on every platform, including bare-metal
                                         newlib and Emscripten (er_js_alloc.h). */
     size_t max_stack_size;                     /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
-                                                QuickJS default. Set below the host/task stack on an MCU. */
+                                                QuickJS default. Set below the host/task stack on an MCU.
+
+                                                QuickJS has no separate JS stack: the interpreter recurses
+                                                on the C stack of whatever task calls into JS, so every JS
+                                                call frame, local and argument lives on YOUR task's stack,
+                                                in whatever memory you gave it — which is why the JS heap
+                                                moving to external RAM does not drag the interpreter's
+                                                working set with it. FreeRTOS task stacks (and an STM32's
+                                                main stack in DTCM) are internal RAM by default, so this is
+                                                already the fast case; keep it that way, and set this guard
+                                                below the real stack size so deep React recursion raises a
+                                                JS error instead of running off the end of it. */
     size_t memory_limit;                       /**< JS_SetMemoryLimit value: hard cap on the JS heap so a runaway
                                                 app fails with a JS out-of-memory error (caught by the error
                                                 overlay) instead of exhausting the shared system heap. 0 = no cap.
                                                 On an MCU, set to your JS arena size. Counted in the same bytes
                                                 as the GC, so it depends on a working `malloc_functions`
                                                 js_malloc_usable_size (see above). */
+    size_t gc_threshold;                       /**< Floor for QuickJS's automatic GC trigger, in tracked heap
+                                                bytes; 0 = leave QuickJS's schedule alone.
+
+                                                QuickJS collects when the tracked heap passes a threshold
+                                                that starts at 256 KB and is RECOMPUTED to live x 1.5 after
+                                                every collection — so on a host whose live set is small but
+                                                whose heap is a multi-MB external-RAM arena, mark-sweep runs
+                                                far more often than it needs to, walking the whole object
+                                                graph over a slow bus each time. This raises the floor: the
+                                                threshold is set here at init and pushed back up on each
+                                                er_runtime_pump if the recompute dropped below it, so the
+                                                collector runs at most once per `gc_threshold` bytes of
+                                                allocation. Bigger = fewer, longer pauses and a higher peak
+                                                heap. SIZE_MAX effectively disables the automatic GC — then
+                                                you own collection via er_runtime_run_gc() and should call it
+                                                somewhere the pause does not show (a screen change, an idle
+                                                frame). Keep it well under `memory_limit`, or the app hits
+                                                the cap before the collector ever gets a chance to run;
+                                                er_runtime_init warns when it is not.
+
+                                                LIMIT: the floor is re-asserted per pump, so it holds across
+                                                FRAMES — which is how a React app allocates — but not inside
+                                                one synchronous JS call that allocates past it. After the
+                                                first collection in such a call the trigger is back at
+                                                live x 1.5 until the next pump. A compute-heavy call that
+                                                churns megabytes without yielding will still collect often;
+                                                split it across frames, or call er_runtime_run_gc() around
+                                                it yourself. */
     uint32_t extra_intrinsics;                 /**< ER_JS_INTRINSIC_* flags for features beyond the lite profile;
                                                 0 = the lite set only (what the React runtime needs). */
 } ErRuntimeConfig;
@@ -306,6 +345,39 @@ bool er_runtime_reset(void);
  * @return true when byte accounting works (also before init, when nothing has been probed).
  */
 bool er_runtime_gc_accounting_ok(void);
+
+/**
+ * @brief Returns the JS heap's current automatic-GC trigger point, in tracked bytes.
+ *
+ * The live value, not the configured floor: QuickJS recomputes it after every collection, so reading it
+ * across frames shows the schedule the app is actually getting. Pair it with ErRuntimeConfig.gc_threshold
+ * to see whether the floor is doing anything.
+ *
+ * @return Threshold in bytes, or 0 before init.
+ */
+size_t er_runtime_gc_threshold(void);
+
+/**
+ * @brief Changes the automatic-GC floor at runtime (see ErRuntimeConfig.gc_threshold).
+ *
+ * Applies immediately and becomes the floor re-applied by er_runtime_pump, so it survives the collector's
+ * own recompute. Useful for phase-dependent tuning — a high floor while an animation runs, back down when
+ * the screen is idle. Survives er_runtime_reset; a fresh er_runtime_init replaces it with the config value.
+ *
+ * @param[in] bytes  New floor in tracked heap bytes; 0 hands the schedule back to QuickJS (its own
+ *                   starting threshold, so coming back from a disabled collector actually resumes).
+ */
+void er_runtime_set_gc_threshold(size_t bytes);
+
+/**
+ * @brief Runs a full garbage collection now.
+ *
+ * The other half of raising `gc_threshold`: it moves the mark-sweep pause off the allocation path so the
+ * host can spend it somewhere invisible — after a screen transition, on an idle frame, before starting an
+ * animation. Cost scales with the live object graph, and on a JS heap in external RAM that walk is the
+ * expensive part. No-op before init.
+ */
+void er_runtime_run_gc(void);
 
 /**
  * @brief Returns the last uncaught JS error (message + stack), or "" if none.
