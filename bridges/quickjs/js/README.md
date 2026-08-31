@@ -37,6 +37,12 @@ AppRegistry.registerComponent('demo', () => App);
 `embedded-react` resolves as a Node **package self-reference** (`package.json` `name` + `exports`),
 so esbuild and Vitest find it with no aliases.
 
+RN modules that wrap an operating system — `StatusBar`, `SafeAreaView`, `AppState`, `Appearance`,
+`Linking`, `AccessibilityInfo` — are **intentionally absent**; a microcontroller has no OS for them to
+wrap. See [Intentionally absent React Native
+APIs](https://github.com/TheMasterCoder007/embedded-react#intentionally-absent-react-native-apis) for
+the full list and what to use instead.
+
 ## Simulate — `npx embedded-react dev`
 
 Run your app in a browser with hot reload — no native toolchain, no repo clone. The engine is compiled to
