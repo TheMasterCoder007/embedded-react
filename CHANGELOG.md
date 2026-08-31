@@ -12,6 +12,12 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- The shipped TypeScript declarations now cover what the runtime actually supports. Touch handlers
+  (`onTouchCancel` and the rest), `pointerEvents`, `<Image resizeMode>` and `tintColor`, per-edge
+  borders and radii, shadows, absolute positioning, `fontStyle`/`lineHeight`/`letterSpacing`, and
+  `onLayout`/`onScroll`/`onFocus` were all honored by the engine but missing from the types, so
+  reaching for one was a compiler error. The SVG components are typed too — `<Circle cx r fill>`
+  instead of `Record<string, unknown>` — along with node refs, `updateVector`, and `setKeyboardConfig`.
 - `extraGlyphs` in `assets.config.js` — add your app's own characters to a font bake by writing them
   (or their codepoints) directly, instead of hoping a named glyph set covers them.
 - Every asset bake now warns about characters the app renders that it has no glyph for, naming the
@@ -47,6 +53,15 @@ See the README for the release process.
 
 ### Changed
 
+- `ViewStyle` accepts object-valued entries, so `shadowOffset` and `transformOrigin` typecheck instead
+  of colliding with the index signature.
+- `<ScrollView horizontal>` is gone from the types. The runtime never read it — lay the content out
+  with `flexDirection: 'row'` instead.
+- `maxWidth` / `maxHeight` no longer accept a percentage string. Only `width` and `height` resolve one;
+  everywhere else the engine ignored it.
+- A `.svg` import is typed as the baked vector artifact it actually is, not as a path string.
+- `<Image source>` and `<Dial knobImage>` no longer accept RN's numeric `require()` id. It carries no
+  engine-side asset name, so it never resolved — import the asset instead.
 - A rotated or scaled node that is too big to transform no longer costs trigonometry on every idle
   commit. The damage pass built the transform matrix and its bounding box first and only then asked
   whether the node could be transformed at all, throwing the work away when the answer was no.

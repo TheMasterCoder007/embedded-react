@@ -17,8 +17,11 @@ declare module '*.webp' {
   const src: string;
   export default src;
 }
+// A `.svg` import is baked at build time into a vector op-tape (or a raster fallback when the SVG uses
+// features the vector baker cannot represent) — an artifact object, not a path. Pass it to `<Svg source>`.
 declare module '*.svg' {
-  const src: string;
+  import type {SvgSource} from 'embedded-react';
+  const src: SvgSource;
   export default src;
 }
 declare module '*.ttf' {
