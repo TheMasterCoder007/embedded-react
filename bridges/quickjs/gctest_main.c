@@ -27,7 +27,9 @@
  *
  *   - the bridge's default allocator reports real byte sizes (er_js_alloc.c, both modes),
  *   - a broken allocator is detected by er_js_probe_alloc_health / er_runtime_gc_accounting_ok,
- *   - and with working accounting the GC actually reclaims churned garbage.
+ *   - and with working accounting the automatic collector actually reclaims the garbage only it
+ *     can reach (reference cycles — refcounting alone frees everything else, so nothing else can
+ *     tell a live collector from a dead one).
  *
  * It also covers ErRuntimeConfig.gc_threshold, whose whole point is that the floor survives QuickJS's
  * recompute-after-every-collection — and the manual-collection path a host uses once it raises it.
@@ -57,8 +59,8 @@
 /** @brief With accounting dead, malloc_size only moves by MALLOC_OVERHEAD per live allocation. */
 #define GROWTH_MAX_UNTRACKED 4096
 
-/** @brief Headroom allowed above the pre-churn heap once ~10 MB of garbage has been created and collected. */
-#define CHURN_MAX_RETAINED (2 * 1024 * 1024)
+/** @brief Headroom allowed above the pre-churn heap once SRC_CYCLES has run under the automatic GC. */
+#define AUTO_GC_MAX_RETAINED (2 * 1024 * 1024)
 
 /** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
 #define GC_FLOOR_BYTES (4u * 1024u * 1024u)
@@ -85,20 +87,14 @@ static int s_failures = 0;
 static const char* const SRC_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
                                     "globalThis.keep.length;\n";
 
-/** @brief Churns ~10 MB of immediately-unreachable objects/strings/arrays; the live set stays tiny. */
-static const char* const SRC_CHURN = "var acc = 0;\n"
-                                     "for (var i = 0; i < 50000; i++) {\n"
-                                     "    var o = { a: i, b: 'value-' + i, c: [i, i + 1, i + 2] };\n"
-                                     "    acc += o.c[0];\n"
-                                     "}\n"
-                                     "acc;\n";
-
 /**
  * @brief Churns reference CYCLES — the only garbage the mark-sweep collector is actually needed for.
  *
- * QuickJS is refcounted first: the objects SRC_CHURN drops go away the moment the loop rebinds `o`,
- * collector or no collector. A pair that points at each other never reaches refcount zero, so this is
- * what accumulates when the GC is not allowed to run, and what disappears when it is.
+ * QuickJS is refcounted first, so plain throwaway objects are freed the instant the loop rebinds the
+ * last reference to them — collector or no collector. Churning those measures nothing: this file used
+ * to, and the check passed unchanged with the GC switched off (issue #173). A pair that points at each
+ * other never reaches refcount zero, so cycles are what accumulate when mark-sweep is not allowed to
+ * run (~9 MB here) and what disappear when it is (~30 KB). Every GC claim below is made with these.
  */
 static const char* const SRC_CYCLES = "var n = 0;\n"
                                       "for (var i = 0; i < 20000; i++) {\n"
@@ -372,19 +368,20 @@ int main(void)
               "accounting: the same string is invisible when usable_size returns 0 (the reported bug)");
     }
 
-    /* --- 3. With accounting live, the GC actually reclaims churned garbage ------------------------- */
+    /* --- 3. With accounting live, the AUTOMATIC collector runs and reclaims cyclic garbage --------- */
     {
         JSRuntime* rt = JS_NewRuntime2(er_js_default_malloc_functions(), NULL);
         JSContext* ctx = er_js_new_context(rt, ER_JS_INTRINSIC_EVAL);
 
         JS_RunGC(rt); /* baseline = the live set, so the growth measured below is the churn's alone */
         const int64_t before = tracked_bytes(rt);
-        const bool ok = run_js(ctx, SRC_CHURN, "<churn>");
+        const bool ok = run_js(ctx, SRC_CYCLES, "<cycles>");
         const int64_t after = tracked_bytes(rt); /* NOT collected first: the automatic GC must have run */
 
         char msg[128];
-        snprintf(msg, sizeof msg, "gc: ~10 MB churned, heap grew %d KB (bounded)", (int)((after - before) / 1024));
-        check(ok && (after - before) < CHURN_MAX_RETAINED, msg);
+        snprintf(msg, sizeof msg, "gc: cyclic garbage churned, heap grew %d KB (bounded)",
+                 (int)((after - before) / 1024));
+        check(ok && (after - before) < AUTO_GC_MAX_RETAINED, msg);
 
         JS_FreeContext(ctx);
         JS_FreeRuntime(rt);

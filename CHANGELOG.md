@@ -209,6 +209,9 @@ See the README for the release process.
   Set `EMSCRIPTEN_ROOT` to point it at any install it can't work out on its own.
 - `node tools/web-sim/build.mjs` no longer wipes its build directory and recompiles everything on every
   run — it was checking a CMake variable the Emscripten toolchain never caches.
+- The JS-heap regression test's "the GC actually reclaims" check now churns reference cycles, which
+  only the collector can free. It churned plain objects before — QuickJS frees those by refcount on
+  its own — so the check passed unchanged with the collector switched off.
 
 ## [0.12.0] - 2026-08-19
 ### Added
