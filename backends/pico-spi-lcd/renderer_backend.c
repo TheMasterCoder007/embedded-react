@@ -264,6 +264,22 @@ static void blend_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x
     {
         const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)(skip_y + row) * src_stride_bytes) + skip_x;
         uint16_t* d = s_be.fb + (size_t)(y + row) * s_be.w + x;
+        if (ga == 255U)
+        {
+            /* Scaling by 255/255 is the identity, so take the row as it stands. Worth its own loop
+             * because the engine's row emitters — the vector AA rows, gradients, shadows, transforms —
+             * all blend at 255: otherwise every one of their pixels pays four multiply-and-divides
+             * that cannot change its value, and an opaque one pays a framebuffer read it never uses. */
+            for (int col = 0; col < w; col++)
+            {
+                const uint32_t p = s[col];
+                const uint32_t sa = p >> 24;
+                if (sa == 0U)
+                    continue; /* transparent: the destination is left alone */
+                d[col] = (sa == 255U) ? fb_store(p) : fb_store(over_premul(fb_load(d[col]), p));
+            }
+            continue;
+        }
         for (int col = 0; col < w; col++)
         {
             const uint32_t p = s[col];

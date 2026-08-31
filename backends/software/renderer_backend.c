@@ -222,6 +222,17 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
  */
 static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
+    if (alpha == 255U)
+    {
+        /* Nothing to scale — by 255/255 is the identity — and copy_rect_cb is the same source-over
+         * with an opaque-pixel shortcut on top. Worth the redirect because the engine's own row
+         * emitters (the vector AA rows, gradients, shadows, transforms) all blend at 255: without it
+         * every one of their pixels pays four multiply-and-divides that cannot change its value.
+         * Runs BEFORE the clip so copy_rect_cb still gets the unclipped rect to offset its source by. */
+        copy_rect_cb(src, src_stride_bytes, x, y, w, h, ctx);
+        return;
+    }
+
     SoftCtx* c = ctx;
     int sx = 0, sy = 0;
     const uint32_t ga = alpha;

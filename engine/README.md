@@ -364,7 +364,7 @@ into transient rasterize scratch (reused per shape) and persistent per-node stor
 | `ERUI_VECTOR_MAX_PTS` | 2048 | flattened vertices in one shape | `2 × PTS × 4` B |
 | `ERUI_VECTOR_MAX_SUBPATHS` | 256 | contours / holes in one shape | `SUBPATHS × 12` B |
 | `ERUI_VECTOR_MAX_EDGES` | 2048 | edges in one rasterise pass | `EDGES × 34` B (edge + crossing + active + sort lists) |
-| `ERUI_VECTOR_MAX_ROW` | 1024 | max vector-node **width** in px | `ROW × 4` B |
+| `ERUI_VECTOR_MAX_ROW` | 1024 | max vector-node **width** in px | `ROW × 8` B (coverage row + staged pixel row) |
 | `ERUI_VECTOR_SORT_BUCKETS` | 256 | buckets in the edge sort | `BUCKETS × 2` B |
 | `ERUI_MAX_VECTOR_NODES` | 8 | concurrent `<Svg>` nodes with geometry | `NODES × (TAPE_MAX×4 + PAINTS_MAX×20)` B |
 | `ERUI_VECTOR_TAPE_MAX` | 1024 | op-tape floats stored per node | (in the per-node cost) |

@@ -62,9 +62,14 @@ typedef struct
  * @param[in] h     Height of the fill rectangle in pixels.
  * @param[in] ctx   Pointer to the TestCtx to update.
  */
+static long g_blits;   /**< Backend calls (fill + blend) since the last reset — see the AA-row scenario. */
+static long g_blit_px; /**< Pixels handed to the backend since the last reset (sum of w*h). */
+
 static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
     TestCtx* t = ctx;
+    g_blits++;
+    g_blit_px += (long)w * h;
     for (int row = y; row < y + h; row++)
         for (int col = x; col < x + w; col++)
             if (row >= 0 && col >= 0 && row < t->fb_h && col < t->fb_w)
@@ -94,6 +99,8 @@ static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int
 {
     (void)a;
     TestCtx* t = ctx;
+    g_blits++;
+    g_blit_px += (long)w * h;
     const uint32_t* px_src = src;
     const int pitch = (s > 0) ? s / (int)sizeof(uint32_t) : w;
     for (int row = 0; row < h; row++)
@@ -132,10 +139,22 @@ static uint32_t px(const TestCtx* t, int x, int y)
     return t->fb[y * t->fb_w + x];
 }
 
-/** @brief Zeros the framebuffer. */
+/** @brief Zeros the framebuffer and the backend-traffic counters. */
 static void reset(TestCtx* t)
 {
     memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
+    g_blits = 0;
+    g_blit_px = 0;
+}
+
+/** @brief Counts framebuffer pixels the render left non-zero (i.e. that actually took ink). */
+static long inked(const TestCtx* t)
+{
+    long n = 0;
+    for (int i = 0; i < t->fb_w * t->fb_h; i++)
+        if (t->fb[i] != 0u)
+            n++;
+    return n;
 }
 
 /** @brief True if the pixel is fully opaque (alpha == 0xFF) with the given RGB. */
@@ -172,6 +191,8 @@ static int bluOf(uint32_t p)
  *   - A stroked line with round caps fills the band AND the cap region that overlaps the band — the
  *     regression guard for the round-cap winding bug (opposite-wound cap punched a hole in the stroke).
  *   - The clip box bounds the rasterize: geometry outside the clip emits no pixels.
+ *   - An anti-aliased row reaches the backend as a few spans covering exactly the inked pixels —
+ *     not one call per equal-alpha run, and not one call spanning the shape's holes.
  *   - Exhausting the per-node storage pool raises the sticky overflow flag (and a full-but-coping
  *     pool does not) — the signal that separates "missing shapes" from "pool merely at capacity".
  *
@@ -559,6 +580,40 @@ int main(void)
             if (!is_solid(px(&tc, cx, cy), 0xEEBB33u))
                 return fail("closed stroke: a corner of the ring is not solid (the wrap seam opened)");
         }
+    }
+
+    /* --- an anti-aliased row reaches the backend as a few spans, not one per pixel --- */
+    /* A stroked ring is nothing but AA fringe, and its rows are two thin bands with a wide hole
+     * between them. The rasterizer stages each covered stretch as a premultiplied row and blends it
+     * in one call; emitting per equal-alpha run instead costs a backend call — a clip walk, a
+     * dispatch, and on a DMA backend a transfer fence — for very nearly every pixel. Two properties
+     * are asserted, because the cheap way to cut calls would be to blend the whole row: the backend
+     * is handed exactly the pixels that took ink (never the hole), and the call count stays a small
+     * multiple of the ring's row count rather than of its pixel count. */
+    {
+        reset(&tc);
+        float ops[2 + 3 + 3 * 48 + 1];
+        int n = 0;
+        ops[n++] = ER_VOP_SHAPE;
+        ops[n++] = 0;
+        for (int i = 0; i <= 48; i++)
+        {
+            const float t = (float)i * (2.0f * 3.14159265f / 48.0f);
+            ops[n++] = (i == 0) ? ER_VOP_MOVE : ER_VOP_LINE;
+            ops[n++] = 64.0f + 50.0f * cosf(t);
+            ops[n++] = 64.0f + 50.0f * sinf(t);
+        }
+        ops[n++] = ER_VOP_CLOSE;
+        const ERVectorPaint p = {0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        er_vector_render(ops, n, &p, 1, NULL, 0, 0, 0, 0, 0, FB_W, FB_H);
+
+        if (g_blit_px != inked(&tc))
+            return fail("AA row: the backend was handed pixels the shape never inked (the ring's hole?)");
+        /* The ring spans ~101 rows and puts two bands in each, so ~200 spans is the floor; 4 calls per
+         * row leaves room for a band that an AA gap splits without admitting a per-pixel emit (which
+         * ran to thousands). */
+        if (g_blits > 4 * 101)
+            return fail("AA row: too many backend calls — AA spans are being emitted one run at a time");
     }
 
     /* --- a CLOSE that misses its start point still strokes the closing edge --- */
