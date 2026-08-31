@@ -85,8 +85,6 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 
 ### Engine features
 
-- **`FlatList` virtualization.** Currently scrolls like a `ScrollView` and renders all
-  children; windowing (mount only the visible range + overscan) is the next step.
 - **Canvas API** (`canvas_bindings.c`) — deliberately a stub; land only if the bundled
   React surface needs it.
 - **Ellipsize modes** — `tail` and `clip` ship; `head` and `middle` are deferred.
@@ -194,5 +192,13 @@ Deliberately out of scope:
 - **Display initialization** (SPI, MIPI DSI, LTDC) — the backend's responsibility.
 - **Network / fetch** — provided by the firmware if needed.
 - **Web-only React APIs** — DOM refs, portals, Suspense, Server Components.
+- **List virtualization** — `FlatList` windowing, or a native recycling list node.
+  `FlatList` is a documented `ScrollView` alias in both flows: every row mounts and stays
+  mounted (README: *`FlatList` is a `ScrollView` alias*). Windowing in JS would cost a
+  React commit every time the window shifts — during a flick, every frame — the same
+  per-event cost that caps Flow A drag, and Flow B has no runtime reconciler to recompute
+  a window at all. A native recycling list node is the only version worth building, and it
+  is not worth it here: these panels show a few dozen rows, not thousands. Paginate, or
+  window by hand against a scroll offset you hold in state.
 - **Pitching as a general-purpose multi-runtime UI engine.** Non-React frontends *could*
   live in `bridges/` later, but React is the supported path.

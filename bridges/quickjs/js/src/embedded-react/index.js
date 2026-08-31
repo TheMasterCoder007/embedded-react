@@ -26,7 +26,6 @@ export {
   Text,
   Image,
   ScrollView,
-  FlatList,
   Pressable,
   TouchableOpacity,
   TextInput,
@@ -43,6 +42,7 @@ export {
   G,
   Arc,
 } from './components.js';
+export {FlatList} from './FlatList.js';
 export {updateVector, updateText, setKeyboardConfig} from './imperative.js';
 export {StyleSheet} from './StyleSheet.js';
 export {Platform} from './Platform.js';

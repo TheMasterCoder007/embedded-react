@@ -53,6 +53,10 @@ See the README for the release process.
 - A README section for the React Native APIs that are intentionally absent — `StatusBar`,
   `SafeAreaView`, `AppState`, `Appearance`, `Linking`, `AccessibilityInfo` and friends — saying why
   each is N/A without an OS underneath, and what to reach for instead.
+- A README section documenting `<FlatList>` as a `ScrollView` alias — no virtualization, every row
+  mounts and stays mounted — with the node budget a list costs on real boards and what to do with a
+  long list instead. List virtualization is now a stated non-goal rather than deferred work: these
+  panels show a few dozen rows, not thousands.
 
 ### Changed
 
@@ -107,6 +111,9 @@ See the README for the release process.
 
 ### Fixed
 
+- `<FlatList>` now renders in Flow A. `data` and `renderItem` were dropped as unknown props, so a list
+  drew an empty scroller with no warning; it now maps rows into a `<ScrollView>` exactly as the AOT
+  already did. Props neither flow supports (`horizontal`, `onEndReached`, …) warn instead of vanishing.
 - A prop that stops being animated now takes its new value. Binding an `Animated.Value` to a prop
   handed it to the engine for good, so setting that prop back to a plain number — or to a different
   `Animated.Value` — left the old value still writing it, and the number you set was overwritten on
