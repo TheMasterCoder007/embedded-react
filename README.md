@@ -197,9 +197,10 @@ for free, and it's the same tree either way.
 
 Don't mount it. The options, cheapest first: paginate it yourself (render a page at a time with
 prev/next), render a fixed window against a scroll offset you own in state, or split the data across
-screens. True virtualization would need JS-driven windowing — a React render on every scroll frame,
-which is exactly the per-event JS cost that caps Flow A drag at ~24 fps (see **Known issues** in
-[`ROADMAP.md`](ROADMAP.md)) — so it is not on the near-term roadmap.
+screens. True virtualization would need JS-driven windowing — a React commit every time the window
+shifts, which during a flick is every frame, and exactly the per-event JS cost that caps Flow A drag at
+~24 fps (see **Known issues** in [`ROADMAP.md`](ROADMAP.md)). It is a deliberate **non-goal**, not
+deferred work: these panels show a few dozen rows, not thousands.
 
 ---
 

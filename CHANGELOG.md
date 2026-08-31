@@ -55,7 +55,8 @@ See the README for the release process.
   each is N/A without an OS underneath, and what to reach for instead.
 - A README section documenting `<FlatList>` as a `ScrollView` alias — no virtualization, every row
   mounts and stays mounted — with the node budget a list costs on real boards and what to do with a
-  long list instead.
+  long list instead. List virtualization is now a stated non-goal rather than deferred work: these
+  panels show a few dozen rows, not thousands.
 
 ### Changed
 
