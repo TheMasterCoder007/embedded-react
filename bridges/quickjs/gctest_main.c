@@ -228,6 +228,18 @@ static void noop_blend(const void* src, int stride, uint8_t a, int x, int y, int
  - Functions: Private — harness
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief Lines the gc_threshold sanity warning has emitted through the log sink (scenario 6). */
+static int s_gc_warns = 0;
+
+/** @brief Log sink that counts the gc_threshold-vs-memory_limit warning (and stays quiet otherwise). */
+static void counting_log(const char* line)
+{
+    if (strstr(line, "gc_threshold is not below memory_limit"))
+    {
+        s_gc_warns++;
+    }
+}
+
 /** @brief Records one assertion. @param ok Result. @param what Description printed either way. */
 static void check(bool ok, const char* what)
 {
@@ -456,6 +468,28 @@ int main(void)
         er_runtime_set_gc_threshold(0);
         check(er_runtime_gc_threshold() > 0 && er_runtime_gc_threshold() < GC_FLOOR_BYTES,
               "gc off: dropping the floor hands the schedule back to QuickJS");
+        er_runtime_shutdown();
+    }
+
+    /* --- 6. The threshold-vs-limit sanity warning fires from the setter, not just from init --------- */
+    {
+        ErRuntimeConfig cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.screen_width = 240;
+        cfg.screen_height = 240;
+        cfg.log = counting_log;
+        cfg.memory_limit = 1024 * 1024;
+
+        s_gc_warns = 0;
+        check(er_runtime_init(&cfg), "gc warn: init with a memory limit and no floor");
+        check(s_gc_warns == 0, "gc warn: a floor of 0 does not warn");
+
+        /* Raising the floor past the limit at RUNTIME disarms the automatic collector just as
+           thoroughly as doing it in the config, so the setter must warn the same way init does. */
+        er_runtime_set_gc_threshold(2 * 1024 * 1024);
+        check(s_gc_warns == 1, "gc warn: the setter warns when the floor is not below memory_limit");
+        er_runtime_set_gc_threshold(256 * 1024);
+        check(s_gc_warns == 1, "gc warn: a floor back under the limit is quiet");
         er_runtime_shutdown();
     }
 

@@ -443,8 +443,10 @@ static void apply_gc_floor(void)
 }
 
 /**
- * @brief Warns when the GC floor sits at or above the memory limit — the app would hit the cap and throw
- *        out-of-memory before the collector was ever allowed to reclaim anything.
+ * @brief Warns when the GC floor sits at or above the memory limit — the AUTOMATIC collector can then
+ *        never fire before the cap, so a growing app throws out-of-memory unless the host collects
+ *        manually (er_runtime_run_gc) before the heap reaches it. Deliberate in manual-GC mode (a
+ *        SIZE_MAX floor), which is why this warns rather than fails.
  */
 static void check_gc_threshold(void)
 {
@@ -457,9 +459,10 @@ static void check_gc_threshold(void)
     snprintf(line, sizeof(line), "  gc_threshold = %zu bytes, memory_limit = %zu bytes.", s_cfg.gc_threshold,
              s_cfg.memory_limit);
     emit_line(line);
-    emit_line("  The heap reaches the limit before the collector is allowed to run, so a growing app fails");
-    emit_line("  with a JS out-of-memory error instead of collecting. Leave headroom (a threshold of about");
-    emit_line("  half the limit is a reasonable start), or call er_runtime_run_gc() yourself.");
+    emit_line("  The heap reaches the limit before the AUTOMATIC collector is allowed to run, so a growing");
+    emit_line("  app fails with a JS out-of-memory error unless er_runtime_run_gc() is called before the heap");
+    emit_line("  gets there. If this floor is deliberate (manual-GC mode), make sure those calls happen;");
+    emit_line("  otherwise leave headroom - a threshold of about half the limit is a reasonable start.");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -859,6 +862,7 @@ size_t er_runtime_gc_threshold(void)
 void er_runtime_set_gc_threshold(size_t bytes)
 {
     s_cfg.gc_threshold = bytes;
+    check_gc_threshold();
     if (s_rt)
     {
         JS_SetGCThreshold(s_rt, bytes ? bytes : s_gc_threshold_default);

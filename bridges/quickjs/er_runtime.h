@@ -128,8 +128,9 @@ typedef struct
                                                 you own collection via er_runtime_run_gc() and should call it
                                                 somewhere the pause does not show (a screen change, an idle
                                                 frame). Keep it well under `memory_limit`, or the app hits
-                                                the cap before the collector ever gets a chance to run;
-                                                er_runtime_init warns when it is not.
+                                                the cap before the automatic collector ever gets a chance
+                                                to run; er_runtime_init (and er_runtime_set_gc_threshold)
+                                                warn when it is not.
 
                                                 LIMIT: the floor is re-asserted per pump, so it holds across
                                                 FRAMES — which is how a React app allocates — but not inside
