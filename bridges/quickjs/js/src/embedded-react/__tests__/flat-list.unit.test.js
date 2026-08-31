@@ -75,6 +75,16 @@ describe('FlatList renders as a ScrollView + .map', () => {
   it('renders an empty scroller when renderItem is missing', () => {
     expect(render({data: [1, 2, 3]}).props.children).toEqual([]);
   });
+
+  // React always hands a component an object, but the empty-scroller contract should hold for a
+  // direct call too rather than throwing at the destructure.
+  it('renders an empty scroller when called with no props at all', () => {
+    for (const props of [undefined, {}]) {
+      const el = FlatList(props);
+      expect(el.type).toBe('ScrollView');
+      expect(el.props.children).toEqual([]);
+    }
+  });
 });
 
 describe('FlatList keying', () => {

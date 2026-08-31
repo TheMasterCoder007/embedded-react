@@ -16,9 +16,13 @@
 
 // FlatList — a thin API-compat wrapper over <ScrollView>, NOT a virtualized list.
 //
-//   <FlatList data={items} renderItem={({item}) => <Row item={item} />} />
-//     renders exactly
-//   <ScrollView>{items.map((item, index) => <Row item={item} />)}</ScrollView>
+//   <FlatList data={items} keyExtractor={(it) => it.id}
+//             renderItem={({item}) => <Row item={item} />} />
+//     renders the same tree as
+//   <ScrollView>{items.map((item) => <Row key={item.id} item={item} />)}</ScrollView>
+//
+// Keys are the one part that is not literal: this component attaches each row's key itself (see
+// below), so callers never write one. Flow B ignores keys entirely — it unrolls at compile time.
 //
 // There is no windowing: every row mounts as a real engine node and stays mounted, so the list costs
 // data.length x (nodes per row) slots out of the fixed ERUI_MAX_NODES pool. See "FlatList is a
@@ -60,7 +64,7 @@ function warnUnsupportedProps(props) {
  * Renders `data` through `renderItem` into a <ScrollView>. Rows that render to nothing (null / false)
  * are dropped, matching a plain `.map` + conditional.
  *
- * @param {object} props
+ * @param {object} [props] Missing / empty renders an empty scroller, like a missing `data`.
  * @param {Array} [props.data] Row data. A non-array (or missing) renders an empty scroller.
  * @param {(info: {item: *, index: number}) => *} [props.renderItem] Row renderer, called per item.
  * @param {(item: *, index: number) => string|number} [props.keyExtractor] React key per row; defaults
@@ -68,7 +72,7 @@ function warnUnsupportedProps(props) {
  * @param {object} [props.style] Forwarded to the ScrollView untouched.
  * @returns {*} A <ScrollView> element holding one child per rendered row.
  */
-export function FlatList(props) {
+export function FlatList(props = {}) {
   const {data, renderItem, keyExtractor, style} = props;
 
   warnUnsupportedProps(props);

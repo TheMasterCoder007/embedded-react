@@ -140,10 +140,21 @@ Two related notes:
 perform the same rewrite:
 
 ```jsx
-<FlatList data={items} renderItem={({ item }) => <Row item={item} />} />
-// is exactly
-<ScrollView>{items.map((item, index) => <Row item={item} />)}</ScrollView>
+<FlatList
+  data={items}
+  keyExtractor={(it) => it.id}
+  renderItem={({ item }) => <Row item={item} />}
+/>
+// renders the same tree as
+<ScrollView>
+  {items.map((item) => <Row key={item.id} item={item} />)}
+</ScrollView>
 ```
+
+Keys are the one thing that isn't literal: Flow A supplies each row's key itself — from
+`keyExtractor`, else a key `renderItem` already set, else the index — so you never write the `.map`'s
+`key=` by hand. Flow B ignores keys altogether; it unrolls the rows at compile time, so there is no
+reconciler to key.
 
 Flow A does it at render time (`FlatList` is a plain component, not a host tag); Flow B does it at
 compile time (`emitFlatList`). `ER_NODE_FLAT_LIST` exists in the engine, but it sits next to
