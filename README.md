@@ -134,6 +134,75 @@ Two related notes:
 
 ---
 
+## `FlatList` is a `ScrollView` alias
+
+`<FlatList>` ships for API compatibility and it renders — but it does **not** virtualize. Both flows
+perform the same rewrite:
+
+```jsx
+<FlatList data={items} renderItem={({ item }) => <Row item={item} />} />
+// is exactly
+<ScrollView>{items.map((item, index) => <Row item={item} />)}</ScrollView>
+```
+
+Flow A does it at render time (`FlatList` is a plain component, not a host tag); Flow B does it at
+compile time (`emitFlatList`). `ER_NODE_FLAT_LIST` exists in the engine, but it sits next to
+`ER_NODE_SCROLL_VIEW` in every compositor, layout, and hit-test switch — identical behaviour — so
+neither flow emits it.
+
+**Every row mounts and stays mounted.** No windowing, no recycling, no cell reuse. Three limits
+follow, and they are worth sizing *before* you write the list:
+
+| Limit | What it costs | Why |
+|---|---|---|
+| **Node budget** | `rows × nodes-per-row` slots out of `ERUI_MAX_NODES` | The scene graph is a fixed `.bss` array (`static ERNode s_nodes[ERUI_MAX_NODES]`), and `sizeof(ERNode)` is ~1.3–1.6 KB depending on the feature set. |
+| **Layout** | Every row is measured and flexed on every layout pass | Layout walks the whole tree; off-screen rows are not exempt. |
+| **Flow A commit** | One bridge round-trip per node, per mount | Marshaling props across JS→C dominates a Flow A commit (see the ROADMAP's performance notes). |
+
+Painting is the one thing that *is* bounded: the scroller clips to its viewport, so off-screen rows
+draw no pixels, and the damage-clip prune skips whole subtrees on a partial repaint.
+
+The node budget is the hard wall, and it is small. Board configs in this repo:
+
+| Config | `ERUI_MAX_NODES` |
+|---|---|
+| Engine default | 512 |
+| ESP32-S3 (800×480) | 512 |
+| CYD — `esp32-2432s028r` | 44 |
+| RP2040-Touch-LCD 1.69" | 48 |
+| Simulator / web-sim | 4096 |
+
+Overflow is **silent**: `er_node_create` returns `NULL` past the cap, the bridge hands back an invalid
+handle, and those rows simply never appear. A 40-row list of 3-node rows needs 120 slots for the rows
+alone, before the rest of your UI — more than the two MCU boards above have in total. Budget the pool,
+or don't scroll a long list.
+
+### What's supported
+
+Both flows accept the same four props — `data`, `renderItem`, `keyExtractor`, `style` — and nothing
+else. Write `renderItem` as `({ item, index }) => …`: Flow B reads that destructuring literally at
+compile time and rejects any other signature, so it's the portable form.
+
+Anything else is a virtualization or platform knob with no meaning here: `horizontal`, `numColumns`,
+`inverted`, `onEndReached`, `initialNumToRender`, `windowSize`, `getItemLayout`,
+`removeClippedSubviews`, `ListHeaderComponent`, `ItemSeparatorComponent`, `onRefresh`, and friends.
+Flow B **fails the build** on them (`AOT: <FlatList> prop "horizontal" is not supported`); Flow A
+`console.warn`s once and ignores them, so a list that renders in the simulator still compiles for the
+device. TypeScript rejects them too, via `FlatListProps`.
+
+For any of those, use a `<ScrollView>` and `.map` directly — you get a header, a footer, and separators
+for free, and it's the same tree either way.
+
+### If you need a long list
+
+Don't mount it. The options, cheapest first: paginate it yourself (render a page at a time with
+prev/next), render a fixed window against a scroll offset you own in state, or split the data across
+screens. True virtualization would need JS-driven windowing — a React render on every scroll frame,
+which is exactly the per-event JS cost that caps Flow A drag at ~24 fps (see **Known issues** in
+[`ROADMAP.md`](ROADMAP.md)) — so it is not on the near-term roadmap.
+
+---
+
 ## Working examples
 
 The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:

@@ -85,8 +85,11 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 
 ### Engine features
 
-- **`FlatList` virtualization.** Currently scrolls like a `ScrollView` and renders all
-  children; windowing (mount only the visible range + overscan) is the next step.
+- **`FlatList` virtualization.** `FlatList` is a documented `ScrollView` alias in both flows
+  (README: *`FlatList` is a `ScrollView` alias*) — every row mounts and stays mounted.
+  Windowing would need a JS render per scroll frame, the same per-event cost that caps
+  Flow A drag; a native list node owning row creation is the only version worth building,
+  and it is not near-term. Paginate or window by hand until then.
 - **Canvas API** (`canvas_bindings.c`) — deliberately a stub; land only if the bundled
   React surface needs it.
 - **Ellipsize modes** — `tail` and `clip` ship; `head` and `middle` are deferred.

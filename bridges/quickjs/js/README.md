@@ -37,6 +37,12 @@ AppRegistry.registerComponent('demo', () => App);
 `embedded-react` resolves as a Node **package self-reference** (`package.json` `name` + `exports`),
 so esbuild and Vitest find it with no aliases.
 
+`<FlatList>` renders, but it is a thin `<ScrollView>` alias — no virtualization, every row mounts and
+stays mounted, and only `data` / `renderItem` / `keyExtractor` / `style` are honored. See [`FlatList` is
+a `ScrollView`
+alias](https://github.com/TheMasterCoder007/embedded-react#flatlist-is-a-scrollview-alias) for the node
+budget it costs and what to do with a long list.
+
 RN modules that wrap an operating system — `StatusBar`, `SafeAreaView`, `AppState`, `Appearance`,
 `Linking`, `AccessibilityInfo` — are **intentionally absent**; a microcontroller has no OS for them to
 wrap. See [Intentionally absent React Native

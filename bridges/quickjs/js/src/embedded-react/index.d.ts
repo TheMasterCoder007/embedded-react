@@ -343,6 +343,19 @@ export interface ScrollViewProps extends ViewProps {
   onScroll?: (event: ScrollEvent) => void;
 }
 
+/**
+ * `<FlatList>` is a thin `<ScrollView>` alias, **not** a virtualized list — every row mounts as a real
+ * engine node and stays mounted. These four props are the only ones either flow honors (the AOT
+ * rejects the rest at compile time); for headers, footers, separators, `horizontal` or
+ * `onEndReached`, use a `<ScrollView>` with `.map` directly.
+ */
+export interface FlatListProps<T = unknown> {
+  data?: readonly T[];
+  renderItem?: (info: {item: T; index: number}) => ReactNode;
+  keyExtractor?: (item: T, index: number) => string | number;
+  style?: StyleProp<ViewStyle>;
+}
+
 export interface TextInputProps extends TouchEventProps {
   style?: StyleProp<TextInputStyle>;
   value?: string;
@@ -452,7 +465,7 @@ export const Image: (props: ImageProps) => JSX.Element;
 export const Pressable: (props: PressableProps) => JSX.Element;
 export const TouchableOpacity: (props: PressableProps) => JSX.Element;
 export const ScrollView: (props: ScrollViewProps) => JSX.Element;
-export const FlatList: (props: Record<string, unknown>) => JSX.Element;
+export function FlatList<T>(props: FlatListProps<T>): JSX.Element;
 export const TextInput: (props: TextInputProps) => JSX.Element;
 export const Switch: (props: SwitchProps) => JSX.Element;
 export const ActivityIndicator: (props: ActivityIndicatorProps) => JSX.Element;
