@@ -60,6 +60,8 @@ See the README for the release process.
 - `maxWidth` / `maxHeight` no longer accept a percentage string. Only `width` and `height` resolve one;
   everywhere else the engine ignored it.
 - A `.svg` import is typed as the baked vector artifact it actually is, not as a path string.
+- `<Image source>` and `<Dial knobImage>` no longer accept RN's numeric `require()` id. It carries no
+  engine-side asset name, so it never resolved — import the asset instead.
 - A rotated or scaled node that is too big to transform no longer costs trigonometry on every idle
   commit. The damage pass built the transform matrix and its bounding box first and only then asked
   whether the node could be transformed at all, throwing the work away when the answer was no.

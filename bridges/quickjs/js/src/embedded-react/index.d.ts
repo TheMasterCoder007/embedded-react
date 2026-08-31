@@ -225,39 +225,40 @@ export interface LayoutRectangle {
   height: number;
 }
 
-/** The object every touch/press handler receives. Coordinates are screen px; `dx`/`dy` are since touch start. */
-export interface GestureResponderEvent {
-  type:
-    | 'press'
-    | 'longPress'
-    | 'pressIn'
-    | 'pressOut'
-    | 'touchStart'
-    | 'touchMove'
-    | 'touchEnd'
-    | 'touchCancel';
+/**
+ * The object an event handler receives. `type` is the engine's own name for the event that fired, so a
+ * handler shared between events can switch on it. Coordinates are screen px; `dx`/`dy` are the distance
+ * travelled since the touch went down.
+ */
+export interface NativeEvent<T extends string = string> {
+  type: T;
   x: number;
   y: number;
   dx: number;
   dy: number;
 }
 
-export interface ScrollEvent {
-  type: 'scroll';
-  x: number;
-  y: number;
-  dx: number;
-  dy: number;
+/** Any touch or press event — the type to give a handler shared across several of them. */
+export type GestureResponderEvent = NativeEvent<
+  | 'press'
+  | 'longPress'
+  | 'pressIn'
+  | 'pressOut'
+  | 'touchStart'
+  | 'touchMove'
+  | 'touchEnd'
+  | 'touchCancel'
+>;
+
+/** Any <TextInput> focus / blur / submit event. */
+export type TextInputEvent = NativeEvent<'focus' | 'blur' | 'submitEditing'>;
+
+export interface ScrollEvent extends NativeEvent<'scroll'> {
   scrollX: number;
   scrollY: number;
 }
 
-export interface LayoutChangeEvent {
-  type: 'layout';
-  x: number;
-  y: number;
-  dx: number;
-  dy: number;
+export interface LayoutChangeEvent extends NativeEvent<'layout'> {
   layout: LayoutRectangle;
 }
 
@@ -268,10 +269,10 @@ export interface LayoutChangeEvent {
  * screen — and is the hook for undoing whatever `onTouchStart` began.
  */
 export interface TouchEventProps {
-  onTouchStart?: (event: GestureResponderEvent) => void;
-  onTouchMove?: (event: GestureResponderEvent) => void;
-  onTouchEnd?: (event: GestureResponderEvent) => void;
-  onTouchCancel?: (event: GestureResponderEvent) => void;
+  onTouchStart?: (event: NativeEvent<'touchStart'>) => void;
+  onTouchMove?: (event: NativeEvent<'touchMove'>) => void;
+  onTouchEnd?: (event: NativeEvent<'touchEnd'>) => void;
+  onTouchCancel?: (event: NativeEvent<'touchCancel'>) => void;
   onLayout?: (event: LayoutChangeEvent) => void;
 }
 
@@ -280,10 +281,10 @@ export interface TouchEventProps {
  * a single <Pressable> is enough — no handler per child.
  */
 export interface PressEventProps {
-  onPress?: (event: GestureResponderEvent) => void;
-  onLongPress?: (event: GestureResponderEvent) => void;
-  onPressIn?: (event: GestureResponderEvent) => void;
-  onPressOut?: (event: GestureResponderEvent) => void;
+  onPress?: (event: NativeEvent<'press'>) => void;
+  onLongPress?: (event: NativeEvent<'longPress'>) => void;
+  onPressIn?: (event: NativeEvent<'pressIn'>) => void;
+  onPressOut?: (event: NativeEvent<'pressOut'>) => void;
 }
 
 // --- Components ------------------------------------------------------------
@@ -307,10 +308,11 @@ export interface TextProps extends TouchEventProps {
 }
 
 /**
- * An image source: the name an asset import resolves to, or an RN-style `{uri}`. A numeric `require()` id
- * has no engine-side asset name and does not resolve.
+ * An image source: the name an asset import resolves to (the bundler's image plugin turns
+ * `import logo from './logo.png'` into the file's basename), or an RN-style `{uri}`. RN's numeric
+ * `require()` id is not accepted — it carries no engine-side asset name, so it never resolves.
  */
-export type ImageSource = number | string | {uri: string};
+export type ImageSource = string | {uri: string};
 
 export interface ImageProps extends TouchEventProps {
   source: ImageSource;
@@ -349,9 +351,9 @@ export interface TextInputProps extends TouchEventProps {
   editable?: boolean;
   visible?: boolean;
   onChangeText?: (text: string) => void;
-  onSubmitEditing?: (event: GestureResponderEvent) => void;
-  onFocus?: (event: GestureResponderEvent) => void;
-  onBlur?: (event: GestureResponderEvent) => void;
+  onSubmitEditing?: (event: NativeEvent<'submitEditing'>) => void;
+  onFocus?: (event: NativeEvent<'focus'>) => void;
+  onBlur?: (event: NativeEvent<'blur'>) => void;
   ref?: Ref<NodeHandle>;
 }
 
