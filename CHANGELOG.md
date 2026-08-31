@@ -50,6 +50,9 @@ See the README for the release process.
   the backend, which against `dirty_px` gives you the frame's write amplification. Two new overlay
   lines (`RST` for the last frame, `PKR` for the worst), so `ER_PERF_OVERLAY_LINES` is now 7. All of it
   still compiles out with `ER_PERF_STATS=0`.
+- A README section for the React Native APIs that are intentionally absent — `StatusBar`,
+  `SafeAreaView`, `AppState`, `Appearance`, `Linking`, `AccessibilityInfo` and friends — saying why
+  each is N/A without an OS underneath, and what to reach for instead.
 
 ### Changed
 

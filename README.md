@@ -101,6 +101,39 @@ backend, or the toolchain — read on.
 
 ---
 
+## Intentionally absent React Native APIs
+
+A microcontroller has no operating system — no app switcher, no system chrome, no browser, no
+settings service, no other apps to hand anything to. The React Native modules that wrap those
+services have nothing to wrap here, so embedded-react doesn't ship them. **Their absence is a
+decision, not missing work**, and it won't change. Reaching for one fails at build time (`No
+matching export … for import "StatusBar"` in Flow A, `AOT: unknown element <StatusBar>` in Flow B)
+rather than silently doing nothing on the device.
+
+| React Native API | Why it's N/A on an MCU | Instead |
+|---|---|---|
+| `StatusBar` | There's no OS status bar. Your app owns every pixel of the panel from boot. | Draw your own header `<View>`. |
+| `SafeAreaView`, safe-area insets | No notch, no home indicator, no system overlay — the whole framebuffer is the safe area. | `<View style={{flex: 1}}>`, plus `padding` for a physical bezel. |
+| `AppState` | Nothing to background *to*. The app **is** the firmware; it runs from boot until power-off. | Sleep / wake / dim is a firmware decision — your host loop, not the UI. |
+| `Appearance`, `useColorScheme` | No OS-level light/dark setting to read. | Own the theme in app state and pass it down. |
+| `Linking` | No URL handler, no browser, no second app to deep-link into. | — |
+| `AccessibilityInfo`, `accessibility*` props | No assistive-technology service on the device to query or report to. | — |
+| `Alert` | No OS dialog service. | `<Modal>` — a real engine node you style yourself. |
+| `Dimensions`, `useWindowDimensions` | The panel can't resize or rotate; its size is fixed and known at build time. | The `screen` global — `screen.width` / `screen.height` (the AOT compiler folds them at compile time; set the target with `ER_AOT_SCREEN_W`/`_H`). |
+| `Vibration`, `Share`, `Clipboard`, `PermissionsAndroid`, `BackHandler` | Phone/OS services with no embedded counterpart. | Drive the hardware — haptic motor, buttons — from firmware. |
+| `NativeModules` / Turbo Modules | No OS module registry to register against; the firmware already *is* the native side. | Flow B: `useHostValue(initial)` compiles to a generated `er_app_set_*()` setter your firmware calls. |
+| `fetch`, `XMLHttpRequest`, `WebSocket` | QuickJS ships no networking, and there's no socket stack underneath it. | Do the I/O in firmware (Wi-Fi / BLE) and feed values into the UI. |
+
+Two related notes:
+
+- **`Platform.OS` is `'embedded'`** — there's no `'ios'` / `'android'` branch to take. Write
+  `Platform.select({ embedded: …, default: … })`.
+- **Absent-but-planned is a different list.** Gaps we intend to close (backends, AOT subset limits,
+  still-open API decisions) are tracked in [`ROADMAP.md`](ROADMAP.md); the permanent scope calls
+  live in its **Non-goals** section.
+
+---
+
 ## Working examples
 
 The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:
