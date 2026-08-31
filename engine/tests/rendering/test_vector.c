@@ -157,6 +157,20 @@ static long inked(const TestCtx* t)
     return n;
 }
 
+/** @brief Counts framebuffer ROWS the render left any ink in — the per-row budget's denominator. */
+static long inked_rows(const TestCtx* t)
+{
+    long n = 0;
+    for (int y = 0; y < t->fb_h; y++)
+        for (int x = 0; x < t->fb_w; x++)
+            if (t->fb[y * t->fb_w + x] != 0u)
+            {
+                n++;
+                break;
+            }
+    return n;
+}
+
 /** @brief True if the pixel is fully opaque (alpha == 0xFF) with the given RGB. */
 static int is_solid(uint32_t pix, uint32_t rgb)
 {
@@ -609,10 +623,13 @@ int main(void)
 
         if (g_blit_px != inked(&tc))
             return fail("AA row: the backend was handed pixels the shape never inked (the ring's hole?)");
-        /* The ring spans ~101 rows and puts two bands in each, so ~200 spans is the floor; 4 calls per
-         * row leaves room for a band that an AA gap splits without admitting a per-pixel emit (which
-         * ran to thousands). */
-        if (g_blits > 4 * 101)
+        /* The ring puts two bands in every row it reaches, so two spans per row is the floor. Budget
+         * four — room for a band an AA gap splits in two — against the row count taken from the render
+         * itself: the ink's vertical extent follows the radius, the stroke width AND the AA fringe, so
+         * a literal here would be a guess that silently loosens if the shape is ever retuned. A
+         * per-run emit blows this by a wide margin (it ran to thousands of calls for these rows). */
+        const long budget = 4 * inked_rows(&tc);
+        if (g_blits > budget)
             return fail("AA row: too many backend calls — AA spans are being emitted one run at a time");
     }
 
