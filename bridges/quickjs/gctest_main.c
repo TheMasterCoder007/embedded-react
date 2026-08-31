@@ -88,7 +88,7 @@ static const char* const SRC_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
                                     "globalThis.keep.length;\n";
 
 /**
- * @brief Churns reference CYCLES — the only garbage the mark-sweep collector is actually needed for.
+ * @brief Churns reference cycles — the only garbage the mark-sweep collector is actually needed for.
  *
  * QuickJS is refcounted first, so plain throwaway objects are freed the instant the loop rebinds the
  * last reference to them — collector or no collector. Churning those measures nothing: this file used
