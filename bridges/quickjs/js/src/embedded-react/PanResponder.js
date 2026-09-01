@@ -90,6 +90,18 @@ const now = () =>
     ? performance.now()
     : 0;
 
+/**
+ * Coerces whatever was passed to a usable config object. A default parameter only covers `undefined`,
+ * so `create(null)` would throw on Object.keys, and a primitive would enumerate its INDICES as unknown
+ * keys ("ignores 0, 1, 2, 3"). Neither is a useful failure for a public API on a device.
+ *
+ * @param {*} config Whatever the caller passed.
+ * @returns {object} The config when it is a usable object; an empty one otherwise.
+ */
+function asConfig(config) {
+  return config !== null && typeof config === 'object' ? config : {};
+}
+
 /** Warns ONCE PER KEY about config keys this module does not act on. */
 function warnUnsupportedConfig(config) {
   const names = Object.keys(config).filter(
@@ -124,10 +136,12 @@ function resetGestureState(g) {
  * Builds a gesture recogniser. Call it ONCE per component and keep the result in a ref — the returned
  * handlers close over one mutable gestureState, so re-creating it per render throws the drag away.
  *
- * @param {object} [config] RN-shaped callbacks; see SUPPORTED. Every one is optional.
+ * @param {object} [userConfig] RN-shaped callbacks; see SUPPORTED. Every one is optional, and a
+ *                                non-object (null, a primitive) is treated as an empty config.
  * @returns {{panHandlers: object}} `panHandlers` to spread onto a component.
  */
-export function create(config = {}) {
+export function create(userConfig = {}) {
+  const config = asConfig(userConfig);
   warnUnsupportedConfig(config);
 
   // The single mutable object handed to every callback — same identity for the responder's lifetime,

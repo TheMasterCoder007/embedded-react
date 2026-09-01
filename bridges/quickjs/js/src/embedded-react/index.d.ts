@@ -228,15 +228,38 @@ export interface LayoutRectangle {
 /**
  * The object an event handler receives. `type` is the engine's own name for the event that fired, so a
  * handler shared between events can switch on it. Coordinates are screen px; `dx`/`dy` are the distance
- * travelled since the touch went down.
+ * traveled since the touch went down.
  */
-export interface NativeEvent<T extends string = string> {
-  type: T;
+/**
+ * The touch payload every gesture callback receives: the point, plus the displacement from touch-down
+ * (`dx`/`dy` are 0 on the raw touch events, which carry only the point).
+ */
+export interface TouchPoint {
   x: number;
   y: number;
   dx: number;
   dy: number;
 }
+
+export interface NativeEvent<T extends string = string> extends TouchPoint {
+  type: T;
+}
+
+/** The `type` string on each of the engine's responder lifecycle events. */
+export type ResponderEvent = NativeEvent<
+  | 'responderGrant'
+  | 'responderReject'
+  | 'responderMove'
+  | 'responderRelease'
+  | 'responderTerminate'
+>;
+
+/**
+ * What a responder NEGOTIATION query is handed. Deliberately a bare `TouchPoint`: a query is not one
+ * of the named events — the engine asks it mid-hit-test — so the object carries NO `type` field. Reading
+ * `event.type` in a should-set predicate would be `undefined` at runtime, and the types say so.
+ */
+export type ResponderQueryEvent = TouchPoint;
 
 /** Any touch or press event — the type to give a handler shared across several of them. */
 export type GestureResponderEvent = NativeEvent<
@@ -271,22 +294,22 @@ export interface LayoutChangeEvent extends NativeEvent<'layout'> {
  * already started scrolling. Most apps want `PanResponder` (below) instead of wiring these directly.
  */
 export interface GestureResponderHandlers {
-  onStartShouldSetResponder?: (event: GestureResponderEvent) => boolean;
-  onStartShouldSetResponderCapture?: (event: GestureResponderEvent) => boolean;
-  onMoveShouldSetResponder?: (event: GestureResponderEvent) => boolean;
-  onMoveShouldSetResponderCapture?: (event: GestureResponderEvent) => boolean;
+  onStartShouldSetResponder?: (event: ResponderQueryEvent) => boolean;
+  onStartShouldSetResponderCapture?: (event: ResponderQueryEvent) => boolean;
+  onMoveShouldSetResponder?: (event: ResponderQueryEvent) => boolean;
+  onMoveShouldSetResponderCapture?: (event: ResponderQueryEvent) => boolean;
   /** The gesture was won: this node now owns the touch stream. */
-  onResponderGrant?: (event: GestureResponderEvent) => void;
+  onResponderGrant?: (event: ResponderEvent) => void;
   /** A claim was refused — the current owner declined to yield. Re-asked on later moves. */
-  onResponderReject?: (event: GestureResponderEvent) => void;
+  onResponderReject?: (event: ResponderEvent) => void;
   /** A move while owning the gesture; `dx`/`dy` accumulate from touch-down. */
-  onResponderMove?: (event: GestureResponderEvent) => void;
+  onResponderMove?: (event: ResponderEvent) => void;
   /** The touch lifted while this node owned the gesture. */
-  onResponderRelease?: (event: GestureResponderEvent) => void;
+  onResponderRelease?: (event: ResponderEvent) => void;
   /** The gesture was taken away (a canceled touch, or this node yielded to a challenger). */
-  onResponderTerminate?: (event: GestureResponderEvent) => void;
+  onResponderTerminate?: (event: ResponderEvent) => void;
   /** A challenger wants the gesture: return true to yield (the default), false to keep it. */
-  onResponderTerminationRequest?: (event: GestureResponderEvent) => boolean;
+  onResponderTerminationRequest?: (event: ResponderQueryEvent) => boolean;
 }
 
 /**
@@ -742,13 +765,16 @@ export interface PanResponderGestureState {
 }
 
 export type PanResponderCallback = (
-  event: GestureResponderEvent,
+  event: ResponderEvent,
   gestureState: PanResponderGestureState,
 ) => void;
 
-/** Returning `true` claims the gesture for this responder. */
+/**
+ * Returning `true` claims the gesture — or, for a termination request, KEEPS it. The event is a bare
+ * touchpoint: a negotiation query carries no `type`.
+ */
 export type PanResponderPredicate = (
-  event: GestureResponderEvent,
+  event: ResponderQueryEvent,
   gestureState: PanResponderGestureState,
 ) => boolean;
 
@@ -778,8 +804,14 @@ export interface PanResponderConfig {
   onPanResponderReject?: PanResponderCallback;
   /** A later finger joined the gesture in flight. */
   onPanResponderStart?: PanResponderCallback;
-  /** A finger lifted, but the gesture continues on the ones still down. */
-  onPanResponderEnd?: PanResponderCallback;
+  /**
+   * A finger lifted, but the gesture continues on the ones still down. Driven by the raw touch stream
+   * rather than a responder event, so this one receives the `touchEnd` payload.
+   */
+  onPanResponderEnd?: (
+    event: NativeEvent<'touchEnd'>,
+    gestureState: PanResponderGestureState,
+  ) => void;
 }
 
 export interface PanResponderInstance {

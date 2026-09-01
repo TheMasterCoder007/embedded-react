@@ -398,6 +398,31 @@ describe('multiple fingers', () => {
   });
 });
 
+describe('a bad config', () => {
+  it('coerces a non-object instead of throwing, and does not enumerate its indices', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const bad of [null, undefined, 'oops', 42, true]) {
+      const {panHandlers} = PanResponder.create(bad);
+      // The raw touch trio plus the responder lifecycle events; no query props, so it can never
+      // grant — which is the correct behaviour for a config that supplied no should-set predicate.
+      expect(typeof panHandlers.onTouchStart).toBe('function');
+      expect(panHandlers.onStartShouldSetResponder).toBeUndefined();
+    }
+    // A string config must not warn about "0, 1, 2, 3" — its character indices are not config keys.
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('still drives a gesture when handed a config with no callbacks at all', () => {
+    const sim = engineSim(PanResponder.create(null).panHandlers);
+    expect(() => {
+      sim.down(10, 10);
+      sim.move(40, 10);
+      sim.up(40, 10);
+    }).not.toThrow();
+  });
+});
+
 describe('unsupported config', () => {
   it('warns once per unknown key, so a second responder with a NEW bad key still warns', async () => {
     vi.resetModules(); // the per-key warn latch is module state
