@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Added `PanResponder` (Flow A). Drags, swipes, and flings now come with the start point, the
+  travel, and the velocity already worked out, instead of every app re-deriving them from raw
+  `onTouchMove` points. RN's responder negotiation is out of scope.
+- The watch-face demo now ships its swipe pager twice — the stock AOT-compatible one and a
+  `PanResponder` variant (`npm run dev:pan`) — so the two approaches sit side by side.
 - The shipped TypeScript declarations now cover what the runtime actually supports. Touch handlers
   (`onTouchCancel` and the rest), `pointerEvents`, `<Image resizeMode>` and `tintColor`, per-edge
   borders and radii, shadows, absolute positioning, `fontStyle`/`lineHeight`/`letterSpacing`, and

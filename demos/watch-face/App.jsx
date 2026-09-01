@@ -31,13 +31,17 @@ import {View, Text, StyleSheet, useHostValue} from 'embedded-react';
 //
 // There is no RTC, so time is a second counter seeded at 12:00:00 AM and advanced by a 1 Hz interval.
 
+// The pages, styles and page geometry are EXPORTED so the Flow A variant (App.pan.jsx) can re-use them
+// instead of forking 300 lines; only the pager shell differs between the two. The AOT ignores exports —
+// the generated C is byte-identical with and without them — so this costs the RP2040 build nothing.
+
 // ----------------------------------------------------------------------------------------------------
 // Model
 // ----------------------------------------------------------------------------------------------------
 // Seconds since midnight. Starts at 0 (12:00 AM) — the factory default of a device whose clock has
 // never been set. The weekday/date below (Wed, Jan 1 2020) is the matching unset default.
-const START_TIME = 0;
-const PAGE_W = 240; // page width == screen width
+export const START_TIME = 0;
+export const PAGE_W = 240; // page width == screen width
 
 // ----------------------------------------------------------------------------------------------------
 // Design tokens
@@ -79,7 +83,7 @@ function StatCard({dot, label, value, unit}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 0 — the watch face
 // ----------------------------------------------------------------------------------------------------
-function WatchFace({t, hr, steps}) {
+export function WatchFace({t, hr, steps}) {
   return (
     <View style={styles.page}>
       <View style={styles.topBar}>
@@ -121,7 +125,7 @@ function WatchFace({t, hr, steps}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 1 — a bubble level (dot rolls with the board's tilt; from the accelerometer's gravity vector)
 // ----------------------------------------------------------------------------------------------------
-function LevelPage({dotx, doty}) {
+export function LevelPage({dotx, doty}) {
   return (
     <View style={styles.page}>
       <Text style={styles.levelTitle}>LEVEL</Text>
@@ -233,7 +237,7 @@ export function App() {
   );
 }
 
-const styles = StyleSheet.create({
+export const styles = StyleSheet.create({
   root: {flex: 1, backgroundColor: theme.bg},
   track: {flexDirection: 'row', width: 480, height: 280},
   page: {width: PAGE_W, height: 280, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14},

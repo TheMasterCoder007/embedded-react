@@ -58,6 +58,37 @@ npm run build:aot    # Flow B → app.gen.c        (compiled to C for the RP2040
 and accelerometer tilt into the app's `useHostValue` setters. For a desktop preview of the same compiled
 app, build `examples/linux-aot` and run it with `ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280`.
 
+## Two pagers: hand-rolled vs `PanResponder`
+
+The demo ships the swipe **twice**, and the pair is the point:
+
+| | Entry | Swipe | Runs on |
+|---|---|---|---|
+| **`App.jsx`** (stock) | `index.jsx` | hand-rolled: records the touch-down `x` in a ref and subtracts it on every `onTouchMove` | Flow A **and** Flow B (AOT) — this is what the RP2040 compiles |
+| **`App.pan.jsx`** | `index.pan.jsx` | `PanResponder` — the gesture arrives with travel (`g.dx`) and speed (`g.vx`) already worked out | **Flow A only** |
+
+```bash
+npm run dev:pan      # simulator, PanResponder variant
+npm run build:pan    # Flow A → dist/app.erpkg (PSRAM-class board)
+```
+
+`App.pan.jsx` **cannot** be AOT-compiled: `PanResponder` is a JS module, and `{...pan.panHandlers}`
+fails with *"AOT: a spread `{...}` on `<View>` is not supported"*. That is exactly why the stock
+`App.jsx` stays hand-rolled — the RP2040 has 264 KB of SRAM and no room for QuickJS, so its app must
+compile to C. The two share everything but the pager shell: `App.jsx` exports the pages, the styles,
+and the page geometry, and `App.pan.jsx` imports them. (Those exports are invisible to the AOT — the
+generated C is byte-identical with and without them.)
+
+Two things the variant gets for free, which the raw-touch version cannot do:
+
+- **Flick to turn the page.** A plain `onTouchMove` carries a point and no speed, so `App.jsx` can only
+  latch on distance (drag 58 px). `App.pan.jsx` also latches on `g.vx`, so a short fast flick turns the
+  page. Note the RN-inherited issue: velocity is measured at the last *move*, so a drag that stops dead
+  and rests before the finger lifts still reads as a flick.
+- **A canceled gesture doesn't wedge it.** `App.jsx` has no `onTouchCancel`, so if the engine abandons
+  the sequence, its `dragging` flag stays latched at 1 and the settle animation freezes mid-drag.
+  `onPanResponderTerminate` clears it.
+
 ## Design notes (the AOT house rules)
 
 The demo is written to compile under **Flow B (AOT)** — the subset that runs with **no JS on the

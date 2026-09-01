@@ -67,6 +67,23 @@ const declaredKeys = dts =>
     ),
   );
 
+// Interfaces that are NOT component props: the callback bag of a JS-side module. Their `on*` keys are
+// invented by that module and go nowhere near the bridge's event table, so the phantom-handler check
+// below skips them. Anything declared outside this is a prop and must map to a real engine event.
+const NON_PROP_HANDLER_INTERFACES = ['PanResponderConfig'];
+
+/** Body of `interface NAME { … }`, brace-matched so a nested object literal doesn't end it early. */
+function interfaceBody(dts, name) {
+  const start = dts.search(new RegExp(`interface\\s+${name}\\s*\\{`));
+  if (start < 0) throw new Error(`index.d.ts: interface ${name} not found`);
+  let i = dts.indexOf('{', start);
+  for (let depth = 0; i < dts.length; i++) {
+    if (dts[i] === '{') depth++;
+    else if (dts[i] === '}' && --depth === 0) return dts.slice(start, i);
+  }
+  throw new Error(`index.d.ts: interface ${name} is not brace-balanced`);
+}
+
 /** Handler-shaped keys (`onFoo?: …`) declared in the declarations. */
 const declaredHandlers = dts => [
   ...new Set(
@@ -120,8 +137,14 @@ describe('embedded-react public types match the runtime prop surface', () => {
   });
 
   it('declares no handler the bridge would ignore', () => {
+    const clean = stripComments(dts);
+    const moduleCallbacks = new Set(
+      NON_PROP_HANDLER_INTERFACES.flatMap(n =>
+        declaredHandlers(interfaceBody(clean, n)),
+      ),
+    );
     const phantom = declaredHandlers(dts)
-      .filter(n => !events.includes(n))
+      .filter(n => !events.includes(n) && !moduleCallbacks.has(n))
       .sort();
     expect(
       phantom,
