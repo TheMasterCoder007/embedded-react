@@ -164,6 +164,19 @@ describe('FlatList row results that are not elements', () => {
     expect(el.props.children).toHaveLength(1);
   });
 
+  it('does not ask keyExtractor for the key of a row that rendered nothing', () => {
+    const seen = [];
+    render({
+      data: ['a', 'b'],
+      keyExtractor: item => {
+        seen.push(item);
+        return item;
+      },
+      renderItem: ({item}) => (item === 'a' ? null : createElement(Row, null)),
+    });
+    expect(seen).toEqual(['b']);
+  });
+
   it('keeps a raw string row as-is (no key to clone onto)', () => {
     const el = render({data: ['hi'], renderItem: ({item}) => item});
     expect(el.props.children).toEqual(['hi']);

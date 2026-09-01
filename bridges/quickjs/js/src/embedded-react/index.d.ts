@@ -413,6 +413,80 @@ export interface FlatListProps<T = unknown> {
   style?: StyleProp<ViewStyle>;
 }
 
+/**
+ * `<SectionList>` is a thin `<ScrollView>` alias like `<FlatList>` — no virtualization, no sticky
+ * headers, and every header, row and footer mounts as a real engine node and stays mounted. Header,
+ * rows and footer are flat siblings, exactly as in RN. Flow A / simulator only for now: the AOT has no
+ * `<SectionList>` lowering yet.
+ */
+export interface SectionListProps<ItemT = unknown, SectionT = DefaultSectionT> {
+  sections?: ReadonlyArray<SectionListData<ItemT, SectionT>>;
+  renderItem?: (info: SectionListRenderItemInfo<ItemT, SectionT>) => ReactNode;
+  renderSectionHeader?: (info: {
+    section: SectionListData<ItemT, SectionT>;
+  }) => ReactNode;
+  renderSectionFooter?: (info: {
+    section: SectionListData<ItemT, SectionT>;
+  }) => ReactNode;
+  keyExtractor?: (item: ItemT, index: number) => string | number;
+  style?: StyleProp<ViewStyle>;
+}
+
+/** Whatever else a section carries alongside its `data` — RN's convention is a `title`. */
+export type DefaultSectionT = {[key: string]: any};
+
+/** One section: your own fields, plus the row data and the optional per-section overrides. */
+export type SectionListData<ItemT, SectionT = DefaultSectionT> = SectionT & {
+  data: readonly ItemT[];
+  /** Namespaces this section's row keys. Defaults to the section's index. */
+  key?: string | number;
+  /** Overrides the list-wide `renderItem` for this section only. */
+  renderItem?: (info: SectionListRenderItemInfo<ItemT, SectionT>) => ReactNode;
+  /** Overrides the list-wide `keyExtractor` for this section only. */
+  keyExtractor?: (item: ItemT, index: number) => string | number;
+};
+
+/** What `renderItem` is called with. RN's `separators` is absent — there are no separators here. */
+export interface SectionListRenderItemInfo<ItemT, SectionT = DefaultSectionT> {
+  item: ItemT;
+  /** The row's index WITHIN its section. */
+  index: number;
+  section: SectionListData<ItemT, SectionT>;
+}
+
+/**
+ * RN's pre-styled button: a `<Pressable>` around a single centred `<Text>`. It takes no `style` — that
+ * is upstream's design, and the escape hatch is the same one RN gives you: build the `<Pressable>` +
+ * `<Text>` yourself. Accessibility, TV-focus and `testID` props are accepted and ignored (no OS to
+ * report them to); anything else warns once.
+ */
+export interface ButtonProps {
+  title?: string;
+  onPress?: (event: NativeEvent<'press'>) => void;
+  /** Fill colour, replacing the default blue. */
+  color?: string;
+  /** Greys the button out and detaches `onPress`. */
+  disabled?: boolean;
+}
+
+/**
+ * A `<View>` with an `<Image>` stretched behind its children — what you reach for because `<Image>`
+ * takes no children. `style` lays out the container; every other prop goes to the image, as upstream.
+ */
+export interface ImageBackgroundProps extends Omit<
+  ImageProps,
+  'style' | 'ref'
+> {
+  /** Container style — the box the picture fills (its content box, so padding insets the picture). */
+  style?: StyleProp<ViewStyle>;
+  /** Merged over the fill: `borderRadius`, `opacity`, `tintColor`. */
+  imageStyle?: StyleProp<ViewStyle>;
+  /** Ref to the `<Image>` node; the outer `ref` points at the `<View>`. */
+  imageRef?: Ref<NodeHandle>;
+  children?: ReactNode;
+  ref?: Ref<NodeHandle>;
+}
+
 export interface TextInputProps extends TouchEventProps {
   style?: StyleProp<TextInputStyle>;
   value?: string;
@@ -523,6 +597,11 @@ export const Pressable: (props: PressableProps) => JSX.Element;
 export const TouchableOpacity: (props: PressableProps) => JSX.Element;
 export const ScrollView: (props: ScrollViewProps) => JSX.Element;
 export function FlatList<T>(props: FlatListProps<T>): JSX.Element;
+export function SectionList<ItemT, SectionT = DefaultSectionT>(
+  props: SectionListProps<ItemT, SectionT>,
+): JSX.Element;
+export const Button: (props: ButtonProps) => JSX.Element;
+export const ImageBackground: (props: ImageBackgroundProps) => JSX.Element;
 export const TextInput: (props: TextInputProps) => JSX.Element;
 export const Switch: (props: SwitchProps) => JSX.Element;
 export const ActivityIndicator: (props: ActivityIndicatorProps) => JSX.Element;

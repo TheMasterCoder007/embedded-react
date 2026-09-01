@@ -32,33 +32,23 @@
 // rewrite at compile time. The two flows accept the SAME four props on purpose — a list that renders
 // in the simulator must also compile for the device, so anything Flow B rejects is warned about here
 // rather than silently forwarded.
-import {createElement, cloneElement} from 'react';
+import {createElement} from 'react';
 import {ScrollView} from './components.js';
+import {isElement, pushKeyedChild, rendersNothing} from './list-child.js';
+import {createPropWarner} from './warn-props.js';
 
 /** The only props both flows honour. Everything else is a virtualization/platform knob with no meaning. */
 const SUPPORTED = ['data', 'renderItem', 'keyExtractor', 'style'];
 
-let _warnedProps = false;
-
-/**
- * Warns once about props that do nothing here and that the AOT refuses to compile, so a list built in
- * the simulator doesn't fail the device build later. Scans nothing once it has warned — a list
- * re-renders on every data change, and this runs on the Flow A commit path.
- *
- * @param {object} props The full prop object.
- */
-function warnUnsupportedProps(props) {
-  if (_warnedProps) return;
-  const names = Object.keys(props).filter(k => !SUPPORTED.includes(k));
-  if (names.length === 0) return;
-  _warnedProps = true;
-  console.warn(
-    `embedded-react: <FlatList> ignores ${names.join(', ')} — it is a thin <ScrollView> alias with no ` +
-      `virtualization, and the AOT rejects these props outright ("AOT: <FlatList> prop ... is not supported"). ` +
-      `For headers/footers/separators/horizontal/onEndReached, use <ScrollView> + .map directly; ` +
-      `supported here: ${SUPPORTED.join(', ')}.`,
-  );
-}
+// Warns once about props that do nothing here and that the AOT refuses to compile, so a list built in
+// the simulator doesn't fail the device build later.
+const warnUnsupportedProps = createPropWarner(
+  'FlatList',
+  SUPPORTED,
+  'it is a thin <ScrollView> alias with no virtualization, and the AOT rejects these props outright ' +
+    '("AOT: <FlatList> prop ... is not supported"). For headers/footers/separators/horizontal/' +
+    'onEndReached, use <ScrollView> + .map directly.',
+);
 
 /**
  * Renders `data` through `renderItem` into a <ScrollView>. Rows that render to nothing (null / false)
@@ -82,18 +72,15 @@ export function FlatList(props = {}) {
     for (let index = 0; index < data.length; index++) {
       const item = data[index];
       const row = renderItem({item, index});
-      // A row may legitimately render nothing; keying a non-element (a raw string) is not possible.
-      if (row === null || row === undefined || row === false) continue;
-      if (typeof row !== 'object' || row.$$typeof === undefined) {
-        rows.push(row);
-        continue;
-      }
+      // A row may legitimately render nothing. Drop it before keying, so keyExtractor is never asked
+      // for the key of something that isn't there.
+      if (rendersNothing(row)) continue;
       const key = keyExtractor
         ? String(keyExtractor(item, index))
-        : row.key !== null && row.key !== undefined
+        : isElement(row) && row.key !== null && row.key !== undefined
           ? row.key
           : String(index);
-      rows.push(row.key === key ? row : cloneElement(row, {key}));
+      pushKeyedChild(rows, row, key);
     }
   }
 

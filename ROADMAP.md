@@ -78,6 +78,10 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 
 ### Flow B — AOT JSX→C (compile-time)
 
+- **`Button` / `ImageBackground` / `SectionList` lowering.** The three JS-only RN wrappers
+  render in Flow A; the AOT rejects them by name with the tree to write by hand. The first
+  two are fixed rewrites like `emitFlatList`; a section is a header *plus* a variable-length
+  `.map`, which is the part the unroller has no shape for.
 - Resolve the live-vs-snapshot `toValue` gap (see Known issues).
 - Imperative refs / `Animated` sequence / parallel / loop / interpolate hardening on the
   no-PSRAM hardware path.

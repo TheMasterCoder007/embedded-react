@@ -215,6 +215,44 @@ deferred work: these panels show a few dozen rows, not thousands.
 
 ---
 
+## `Button`, `ImageBackground` and `SectionList` are JSX, not nodes
+
+Upstream React Native implements these three in JavaScript, over primitives it already has. So do we —
+they add no engine node type, and each one is a fixed rewrite you could have written yourself:
+
+| Component | Renders |
+|---|---|
+| `<Button title="Save" onPress={save} />` | `<Pressable style={…}><Text style={…}>Save</Text></Pressable>` |
+| `<ImageBackground source={bg} style={…}>…</ImageBackground>` | `<View style={…}><Image source={bg} style={StyleSheet.absoluteFill} />…</View>` |
+| `<SectionList sections={…} renderSectionHeader={…} renderItem={…} />` | `<ScrollView>` with each section's header, rows and footer as **flat siblings** |
+
+They exist, so RN source pastes in and runs. Reach for the primitives directly whenever you want
+control — that is what the wrapper is doing anyway.
+
+Four things differ from upstream, all of them forced by the engine rather than chosen:
+
+- **`<Button>` pads its `<Pressable>`, not its `<Text>`.** An auto-sized text node measures its glyph
+  run and nothing else, so RN's padding-on-the-label would lay out as zero. Same pixels, one node up.
+- **`<Button>` is two nodes, not three.** RN wraps the label in a `<View>` inside its touchable because
+  that touchable takes no style; `<Pressable>` here *is* a styled scene node, so the `<View>` is
+  dropped. At 44 nodes total on a CYD, a node per button is worth having.
+- **`<SectionList>` does not stick its headers.** Sticky headers need a scroll listener re-laying the
+  header out every frame — the per-event JS cost Flow A can least afford. Everything the `FlatList`
+  section above says about the node budget applies here too, plus a header and a footer per section.
+- **`<ImageBackground>`'s picture fills the container's *content* box.** Padding on the container insets
+  the image as well as the children.
+
+`<Button>` takes no `style` — that is upstream's design, and upstream's answer is the same as ours: use
+`<Pressable>` + `<Text>`. Props none of the three honour are named in a one-time `console.warn`, except
+the accessibility / TV-focus / `testID` ones, which are silently ignored so a component stays portable
+back to RN.
+
+**Flow A only, for now.** The AOT has no lowering for any of the three, so a Flow B build fails with
+`AOT: <Button> is not supported in Flow B yet` and the tree to write by hand instead. `<FlatList>`,
+which does compile in both flows, is the exception rather than the rule here.
+
+---
+
 ## Working examples
 
 The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:

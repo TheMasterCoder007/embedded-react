@@ -12,6 +12,9 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Added `<Button>`, `<ImageBackground>` and `<SectionList>` — the React Native components that are
+  just JSX over the primitives, implemented the way RN implements them, so RN source pastes in and
+  runs. Flow A only for now: an AOT build rejects them by name and prints the tree to write by hand.
 - Added `PanResponder`, in **both flows**. Drags, swipes, and flings come with the start point, the
   travel, and the velocity already worked out, and the gesture rides the engine's real responder
   negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a

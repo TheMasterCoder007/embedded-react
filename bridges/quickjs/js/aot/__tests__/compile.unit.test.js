@@ -1923,6 +1923,43 @@ describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
   });
 });
 
+// The package exports three RN wrappers the AOT cannot lower yet (issue #114 shipped them Flow-A only).
+// The failure mode that matters is the MESSAGE: the import resolves, the simulator renders them, and the
+// spelling is right, so a bare "unknown element" sends people hunting for a typo that isn't there.
+describe('AOT Flow-A-only components', () => {
+  it.each([
+    ['Button', /<Pressable/],
+    ['ImageBackground', /<View/],
+    ['SectionList', /<ScrollView/],
+  ])(
+    'rejects <%s> by name, pointing at the tree to write instead',
+    (tag, hint) => {
+      let thrown;
+      try {
+        gen(`${PRE}
+        import { ${tag} } from 'embedded-react';
+        export function App() { return (<${tag} />); }`);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, `<${tag}> compiled instead of throwing`).toBeDefined();
+      expect(thrown.message).toContain(
+        `<${tag}> is not supported in Flow B yet`,
+      );
+      expect(thrown.message).not.toContain('unknown element');
+      expect(thrown.message).toMatch(hint);
+    },
+  );
+
+  // The catch-all must still fire for a name that really is a typo / a missing import.
+  it('still reports a genuinely unknown element as unknown', () => {
+    expect(() =>
+      gen(`${PRE}
+        export function App() { return (<Vieww />); }`),
+    ).toThrow(/unknown element <Vieww>/);
+  });
+});
+
 describe('AOT callback props', () => {
   const C = `import { useState } from 'react';
 import { View, Text, Pressable } from 'embedded-react';
