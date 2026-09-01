@@ -15,7 +15,7 @@
  */
 
 import {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, useHostValue} from 'embedded-react';
+import {View, Text, StyleSheet, PanResponder, useHostValue} from 'embedded-react';
 
 // Watch face — a two-page swipe pager for the Waveshare RP2040-Touch-LCD-1.69 (240×280):
 //   • page 0: a digital watch face (clock, weekday/date, battery, heart rate, live step counter)
@@ -25,23 +25,25 @@ import {View, Text, StyleSheet, useHostValue} from 'embedded-react';
 // Built for Flow B (AOT) — compiles to C, no JS on the device. The pager rides only AOT-supported
 // primitives: a dynamic `marginLeft` on a 480-wide track follows the finger during the drag and is
 // eased toward the settled page by a ~30 fps interval; a transparent full-screen overlay captures the
-// swipe (onTouchStart/Move/End; plain touch handlers get e.x/e.y, so the drag delta is derived from
-// e.x and a start ref). The real sensor values come from the host via useHostValue (the step count and
-// the level dot's x/y offset), fed by the IMU's accelerometer in main.c.
+// swipe with a `PanResponder`, which the AOT lowers onto the engine's own C gesture-responder system
+// (so the gesture arrives with its travel and speed already worked out, and costs no JS on the device).
+// The real sensor values come from the host via useHostValue (the step count and the level dot's x/y
+// offset), fed by the IMU's accelerometer in main.c.
 //
 // There is no RTC, so time is a second counter seeded at 12:00:00 AM and advanced by a 1 Hz interval.
-
-// The pages, styles and page geometry are EXPORTED so the Flow A variant (App.pan.jsx) can re-use them
-// instead of forking 300 lines; only the pager shell differs between the two. The AOT ignores exports —
-// the generated C is byte-identical with and without them — so this costs the RP2040 build nothing.
 
 // ----------------------------------------------------------------------------------------------------
 // Model
 // ----------------------------------------------------------------------------------------------------
 // Seconds since midnight. Starts at 0 (12:00 AM) — the factory default of a device whose clock has
 // never been set. The weekday/date below (Wed, Jan 1 2020) is the matching unset default.
-export const START_TIME = 0;
-export const PAGE_W = 240; // page width == screen width
+const START_TIME = 0;
+const PAGE_W = 240; // page width == screen width
+
+/** Past this much of a page dragged, release commits to the neighbor (directional, so both ways are easy). */
+const LATCH_PX = 58;
+/** …or past this speed, in px/ms, however short the drag was. A flick, rather than a haul. */
+const LATCH_VELOCITY = 0.4;
 
 // ----------------------------------------------------------------------------------------------------
 // Design tokens
@@ -83,7 +85,7 @@ function StatCard({dot, label, value, unit}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 0 — the watch face
 // ----------------------------------------------------------------------------------------------------
-export function WatchFace({t, hr, steps}) {
+function WatchFace({t, hr, steps}) {
   return (
     <View style={styles.page}>
       <View style={styles.topBar}>
@@ -125,7 +127,7 @@ export function WatchFace({t, hr, steps}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 1 — a bubble level (dot rolls with the board's tilt; from the accelerometer's gravity vector)
 // ----------------------------------------------------------------------------------------------------
-export function LevelPage({dotx, doty}) {
+function LevelPage({dotx, doty}) {
   return (
     <View style={styles.page}>
       <Text style={styles.levelTitle}>LEVEL</Text>
@@ -165,7 +167,47 @@ export function App() {
   const [page, setPage] = useState(0); // settled page (0 = watch, 1 = level)
   const [slide, setSlide] = useState(0.0); // px the track is shifted left (0..240); float for smooth ease
   const [dragging, setDragging] = useState(0); // 1 while a finger is down
-  const startX = useRef(0); // absolute touch x at drag start (onTouchMove has e.x/e.y but not e.dx)
+
+  // PanResponder.create runs ONCE (it owns the live gesture, so re-creating it per render would throw
+  // the drag away), so its callbacks close over the FIRST render's `page`. The standard RN discipline
+  // applies: mirror into a ref anything the handlers read. (Flow B reads state live and needs no ref,
+  // but one source has to be right in both flows.)
+  const pageRef = useRef(0);
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
+
+  // Where the track sat when the finger landed. Everything the gesture does is that plus g.dx, so the
+  // handlers never need to read `slide` back out of state.
+  const slideAtGrant = useRef(0);
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        slideAtGrant.current = pageRef.current * PAGE_W;
+        setDragging(1);
+      },
+      // Drag right-to-left (negative dx) to pull the next page over.
+      onPanResponderMove: (e, g) =>
+        setSlide(Math.max(0, Math.min(PAGE_W, slideAtGrant.current - g.dx))),
+      onPanResponderRelease: (e, g) => {
+        setDragging(0);
+        const settled = Math.max(0, Math.min(PAGE_W, slideAtGrant.current - g.dx));
+        // Commit on a long enough drag (~25% of a page, directional so it's easy both ways) OR on a
+        // fast enough flick, however short. Otherwise, the ease springs back to where you started.
+        if (pageRef.current === 0) {
+          if (settled > LATCH_PX || g.vx <= -LATCH_VELOCITY) setPage(1);
+        } else {
+          if (settled < PAGE_W - LATCH_PX || g.vx >= LATCH_VELOCITY) setPage(0);
+        }
+      },
+      // The engine can abandon the sequence (a canceled touch from the panel driver, or a fresh
+      // touch-down on a finger that never lifted). Without this the pager would stay stuck mid-drag,
+      // `dragging` latched at 1 and the settle interval frozen.
+      onPanResponderTerminate: () => setDragging(0),
+    }),
+  ).current;
 
   useEffect(() => {
     const clockId = setInterval(() => {
@@ -210,34 +252,13 @@ export function App() {
         <LevelPage dotx={dotx} doty={doty} />
       </View>
 
-      {/* Transparent overlay captures the swipe (the pages have no handlers). Plain touch handlers get
-          e.x/e.y but NOT a delta, so we record the start x in a ref and derive the drag from e.x. On
-          release, we settle to whichever page is more than half revealed. */}
-      <View
-        style={styles.overlay}
-        onTouchStart={e => {
-          startX.current = e.x;
-          setDragging(1);
-        }}
-        onTouchMove={e =>
-          setSlide(Math.max(0, Math.min(PAGE_W, page * PAGE_W - (e.x - startX.current))))
-        }
-        onTouchEnd={() => {
-          setDragging(0);
-          // Easy latch: commit to the other page after dragging only ~25% toward it (directional, so it's
-          // easy in both directions); otherwise the ease springs back to where you started.
-          if (page === 0) {
-            if (slide > 58) setPage(1);
-          } else {
-            if (slide < PAGE_W - 58) setPage(0);
-          }
-        }}
-      />
+      {/* Transparent overlay captures the swipe (the pages have no handlers). */}
+      <View style={styles.overlay} {...pan.panHandlers} />
     </View>
   );
 }
 
-export const styles = StyleSheet.create({
+const styles = StyleSheet.create({
   root: {flex: 1, backgroundColor: theme.bg},
   track: {flexDirection: 'row', width: 480, height: 280},
   page: {width: PAGE_W, height: 280, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14},

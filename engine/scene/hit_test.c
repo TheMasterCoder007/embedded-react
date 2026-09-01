@@ -58,6 +58,8 @@ typedef struct
     int prev_move_x;            /**< X coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
     int prev_move_y;            /**< Y coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
     uint32_t prev_move_time_ms; /**< er_now_ms() at the last recorded TOUCH_MOVE. */
+    float vel_x;                /**< Finger velocity X in px/ms at the last sampled move. */
+    float vel_y;                /**< Finger velocity Y in px/ms at the last sampled move. */
     float initial_scroll_x;     /**< ScrollView scroll_offset_x when the responder was granted. */
     float initial_scroll_y;     /**< ScrollView scroll_offset_y when the responder was granted. */
     uint16_t press_target_tag;
@@ -620,24 +622,6 @@ static void dispatch_to_node(ERNode* node, EREventType event, int x, int y)
 }
 
 /**
- * @brief Dispatches a raw touch event from target up through ancestors.
- *
- * @param[in] target  Original target node.
- * @param[in] event   Raw touch event type.
- * @param[in] x       Touch X coordinate.
- * @param[in] y       Touch Y coordinate.
- */
-static void dispatch_bubble(ERNode* target, EREventType event, int x, int y)
-{
-    ERNode* node = target;
-    while (node)
-    {
-        dispatch_to_node(node, event, x, y);
-        node = er_get_node(node->parent_tag);
-    }
-}
-
-/**
  * @brief Invokes a node event handler with a pre-built event data payload.
  *
  * @param[in] node   Target node.
@@ -649,6 +633,77 @@ static void dispatch_to_node_data(ERNode* node, EREventType event, const EREvent
     if (!has_handler(node, event))
         return;
     node->events[event].fn(node, data, node->events[event].user_data);
+}
+
+/**
+ * @brief Dispatches a raw touch event from target up through ancestors.
+ *
+ * @param[in] target  Original target node.
+ * @param[in] event   Raw touch event type.
+ * @param[in] data    Event payload to forward to each handler.
+ */
+static void dispatch_bubble_data(ERNode* target, EREventType event, const EREventData* data)
+{
+    ERNode* node = target;
+    while (node)
+    {
+        dispatch_to_node_data(node, event, data);
+        node = er_get_node(node->parent_tag);
+    }
+}
+
+/**
+ * @brief Builds the payload every gesture-bearing dispatch shares: point, travel and speed.
+ *
+ * Raw touch events carry the same three things as the responder events do — where the finger is, how
+ * far it has come since touch-down, and how fast it is moving — so a plain onTouchEnd can recognise a
+ * flick without the app re-deriving any of it (which it cannot do at all under the AOT, whose handler
+ * subset has no clock).
+ *
+ * @param[in] touch  Touch slot the event belongs to.
+ * @param[in] x,y    Current touch point.
+ *
+ * @return The filled payload.
+ */
+static EREventData gesture_data(const ERTouchState* touch, int x, int y)
+{
+    EREventData data = {0};
+    data.x = x;
+    data.y = y;
+    data.dx = x - touch->start_x;
+    data.dy = y - touch->start_y;
+    data.vx = touch->vel_x;
+    data.vy = touch->vel_y;
+    return data;
+}
+
+/**
+ * @brief Samples this finger's velocity against the previous move, then re-anchors the sample point.
+ *
+ * One sampler for both consumers: the gesture velocity handlers read (EREventData.vx/vy) and the
+ * ScrollView momentum that starts at touch-up are the same measurement, so they cannot disagree.
+ * A sample outside the window (two moves in one host tick, or a long pause) leaves the last reading
+ * standing — nothing new has been measured, and reporting zero would throw a fling away.
+ *
+ * @param[in,out] touch  Touch slot to sample and re-anchor.
+ * @param[in]     x,y    Current touch point.
+ *
+ * @return true when a fresh velocity was measured.
+ */
+static bool track_touch_velocity(ERTouchState* touch, int x, int y)
+{
+    const uint32_t now_ms = er_now_ms();
+    const uint32_t elapsed = now_ms - touch->prev_move_time_ms;
+    const bool sampled = elapsed > 0U && elapsed <= ER_SCROLL_VEL_WINDOW;
+    if (sampled)
+    {
+        touch->vel_x = (float)(x - touch->prev_move_x) / (float)elapsed;
+        touch->vel_y = (float)(y - touch->prev_move_y) / (float)elapsed;
+    }
+    touch->prev_move_x = x;
+    touch->prev_move_y = y;
+    touch->prev_move_time_ms = now_ms;
+    return sampled;
 }
 
 /**
@@ -787,15 +842,11 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
     ERNode* touch_target = er_get_node(touch->touch_target_tag);
     ERNode* press_target = er_get_node(touch->press_target_tag);
 
-    dispatch_bubble(touch_target, ER_EVENT_TOUCH_CANCEL, x, y);
+    const EREventData rdata = gesture_data(touch, x, y);
+    dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_CANCEL, &rdata);
     if (press_target && touch->inside)
         dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
 
-    EREventData rdata = {0};
-    rdata.x = x;
-    rdata.y = y;
-    rdata.dx = x - touch->start_x;
-    rdata.dy = y - touch->start_y;
     arc_drag_end(touch, finger_id);
     terminate_responder_if_active(touch, &rdata);
 
@@ -936,6 +987,17 @@ void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQue
 
     node->queries[(uint8_t)query].fn = fn;
     node->queries[(uint8_t)query].user_data = user_data;
+}
+
+int er_touch_active_count(void)
+{
+    int count = 0;
+    for (uint8_t i = 0U; i < (uint8_t)ER_MAX_TOUCHES; i++)
+    {
+        if (s_touches[i].active)
+            count++;
+    }
+    return count;
 }
 
 void er_input_reset(void)
@@ -1100,10 +1162,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             touch->prev_move_x = x;
             touch->prev_move_y = y;
             touch->prev_move_time_ms = er_now_ms();
+            touch->vel_x = 0.0f;
+            touch->vel_y = 0.0f;
             touch->press_target_tag = press_target ? press_target->tag : ER_INVALID_TAG;
             touch->touch_target_tag = hit ? hit->tag : ER_INVALID_TAG;
 
-            dispatch_bubble(hit, ER_EVENT_TOUCH_START, x, y);
+            const EREventData ddata = gesture_data(touch, x, y);
+            dispatch_bubble_data(hit, ER_EVENT_TOUCH_START, &ddata);
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
 
             /* Auto-focus TextInput on press; blur any focused TextInput when tapping
@@ -1118,13 +1183,10 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             {
                 uint16_t chain[ERUI_MAX_NODES];
                 const int chain_len = build_ancestor_chain(hit, chain, ERUI_MAX_NODES);
-                EREventData data = {0};
-                data.x = x;
-                data.y = y;
                 ERNode* claimant = negotiate_responder(
-                    chain, chain_len, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &data);
+                    chain, chain_len, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &ddata);
                 if (claimant)
-                    grant_responder(touch, claimant, &data);
+                    grant_responder(touch, claimant, &ddata);
 
                 /* Built-in Arc drag-to-set: an adjustable Arc under the finger takes the gesture natively —
                  * over a JS claimant and ahead of any ScrollView's auto-scroll — and jumps to the touched
@@ -1139,8 +1201,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 {
                     if (touch->responder_tag != arc->tag)
                     {
-                        terminate_responder_if_active(touch, &data);
-                        grant_responder(touch, arc, &data);
+                        terminate_responder_if_active(touch, &ddata);
+                        grant_responder(touch, arc, &ddata);
                     }
                     arc->arc_drag_finger = (int8_t)finger_id;
                     /* Latch which end of a RANGE band this gesture owns, ONCE, at the point it started —
@@ -1163,7 +1225,14 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* press_target = er_get_node(touch->press_target_tag);
             touch->last_x = x;
             touch->last_y = y;
-            dispatch_bubble(touch_target, ER_EVENT_TOUCH_MOVE, x, y);
+
+            /* Sample speed FIRST: everything dispatched below — the raw move, the responder move, the
+             * should-set queries — then reports the same, current velocity. */
+            const bool vel_sampled = track_touch_velocity(touch, x, y);
+            const EREventData rdata = gesture_data(touch, x, y);
+            const int dx = rdata.dx;
+            const int dy = rdata.dy;
+            dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_MOVE, &rdata);
 
             if (press_target)
             {
@@ -1178,15 +1247,6 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     touch->inside = inside;
                 }
             }
-
-            /* Build responder event data with cumulative displacement */
-            const int dx = x - touch->start_x;
-            const int dy = y - touch->start_y;
-            EREventData rdata = {0};
-            rdata.x = x;
-            rdata.y = y;
-            rdata.dx = dx;
-            rdata.dy = dy;
 
             /* Dispatch move to the current gesture responder */
             ERNode* responder = er_get_node(touch->responder_tag);
@@ -1264,18 +1324,14 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     er_scroll_view_set_offset(
                         active, touch->initial_scroll_x - (float)dx, touch->initial_scroll_y - (float)dy);
 
-                    /* Update live velocity so that TOUCH_UP always inherits the most
-                     * recent movement speed, even when UP follows MOVE in the same tick. */
-                    const uint32_t now_ms = er_now_ms();
-                    const uint32_t vel_elapsed = now_ms - touch->prev_move_time_ms;
-                    if (vel_elapsed > 0U && vel_elapsed <= ER_SCROLL_VEL_WINDOW)
+                    /* Update live velocity so that TOUCH_UP always inherits the most recent movement
+                     * speed, even when UP follows MOVE in the same tick. The content moves OPPOSITE the
+                     * finger, hence the sign flip on the shared sample. */
+                    if (vel_sampled)
                     {
-                        active->scroll_vel_x = -(float)(x - touch->prev_move_x) / (float)vel_elapsed;
-                        active->scroll_vel_y = -(float)(y - touch->prev_move_y) / (float)vel_elapsed;
+                        active->scroll_vel_x = -touch->vel_x;
+                        active->scroll_vel_y = -touch->vel_y;
                     }
-                    touch->prev_move_x = x;
-                    touch->prev_move_y = y;
-                    touch->prev_move_time_ms = now_ms;
                 }
             }
             break;
@@ -1294,10 +1350,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 accumulate_scroll_offsets(press_target, &sx, &sy);
                 inside = point_inside_transformed_with_slop(press_target, x + sx, y + sy);
             }
-            const int dx = x - touch->start_x;
-            const int dy = y - touch->start_y;
+            /* The velocity reported here is the LAST MOVE's, not a fresh sample: a fling ends with the
+             * finger resting for a frame or two, and measuring across that rest reports zero and throws
+             * the throw away. (The ScrollView's momentum below deliberately DOES re-sample — coming to
+             * rest before lifting should not launch the content.) */
+            const EREventData udata = gesture_data(touch, x, y);
 
-            dispatch_bubble(touch_target, ER_EVENT_TOUCH_END, x, y);
+            dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_END, &udata);
             if (press_target)
             {
                 /* Every dispatch below can run app code, and under the synchronous QuickJS root that code
@@ -1349,12 +1408,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* responder = er_get_node(touch->responder_tag);
             if (responder)
             {
-                EREventData rdata = {0};
-                rdata.x = x;
-                rdata.y = y;
-                rdata.dx = dx;
-                rdata.dy = dy;
-                dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &rdata);
+                dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &udata);
 
                 /* Final velocity update for ScrollView responders: if real time elapsed
                  * between the last MOVE and this UP (finger held still before release),

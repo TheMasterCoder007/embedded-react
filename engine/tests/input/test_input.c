@@ -84,6 +84,20 @@ typedef struct
 } ResponderRecord;
 
 /**
+ * @brief Captures the gesture fields (travel + speed) carried by raw touch events.
+ */
+typedef struct
+{
+    int move_count;
+    int end_count;
+    int cancel_count;
+    int dx; /**< From the most recent event of any phase below. */
+    int dy;
+    float vx;
+    float vy;
+} TouchGestureRecord;
+
+/**
  * @brief Records the last color drawn by a test backend.
  */
 typedef struct
@@ -314,6 +328,60 @@ static void on_touch_end(ERNode* node, const EREventData* data, void* user_data)
 }
 
 /**
+ * @brief Records the gesture payload of a raw touch-move.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to TouchGestureRecord.
+ */
+static void on_gesture_move(ERNode* node, const EREventData* data, void* user_data)
+{
+    TouchGestureRecord* rec = user_data;
+    (void)node;
+    rec->move_count++;
+    rec->dx = data->dx;
+    rec->dy = data->dy;
+    rec->vx = data->vx;
+    rec->vy = data->vy;
+}
+
+/**
+ * @brief Records the gesture payload of a raw touch-end.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to TouchGestureRecord.
+ */
+static void on_gesture_end(ERNode* node, const EREventData* data, void* user_data)
+{
+    TouchGestureRecord* rec = user_data;
+    (void)node;
+    rec->end_count++;
+    rec->dx = data->dx;
+    rec->dy = data->dy;
+    rec->vx = data->vx;
+    rec->vy = data->vy;
+}
+
+/**
+ * @brief Records the gesture payload of a raw touch-cancel.
+ *
+ * @param[in] node       Node that received the event.
+ * @param[in] data       Touch event payload.
+ * @param[in] user_data  Pointer to TouchGestureRecord.
+ */
+static void on_gesture_cancel(ERNode* node, const EREventData* data, void* user_data)
+{
+    TouchGestureRecord* rec = user_data;
+    (void)node;
+    rec->cancel_count++;
+    rec->dx = data->dx;
+    rec->dy = data->dy;
+    rec->vx = data->vx;
+    rec->vy = data->vy;
+}
+
+/**
  * @brief Records a touch-cancel event.
  *
  * @param[in] node       Node that received the event.
@@ -468,6 +536,20 @@ static int fail(const char* msg)
 {
     fprintf(stderr, "FAIL: %s\n", msg);
     return EXIT_FAILURE;
+}
+
+/**
+ * @brief Compares two velocities for equality within a pixel-per-second of slack.
+ *
+ * @param[in] a  Measured value.
+ * @param[in] b  Expected value.
+ *
+ * @return true when they agree.
+ */
+static bool near_vel(float a, float b)
+{
+    const float d = a - b;
+    return (d < 0.0f ? -d : d) < 0.001f;
 }
 
 /**
@@ -2134,6 +2216,157 @@ static int test_3d_transform_hit_follows_projection(void)
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
+/**
+ * @brief Builds a full-screen pressable whose raw touch events report into a TouchGestureRecord.
+ *
+ * @param[in]  root    Scene root to attach to.
+ * @param[in]  counts  Scratch counter block the pressable's press handlers need.
+ * @param[out] rec     Record the gesture handlers write into.
+ *
+ * @return The new node.
+ */
+static ERNode* create_gesture_target(ERNode* root, EventCounts* counts, TouchGestureRecord* rec)
+{
+    ERNode* node = create_pressable(0, 0, 240, 160, counts);
+    er_event_set(node, ER_EVENT_TOUCH_MOVE, on_gesture_move, rec);
+    er_event_set(node, ER_EVENT_TOUCH_END, on_gesture_end, rec);
+    er_event_set(node, ER_EVENT_TOUCH_CANCEL, on_gesture_cancel, rec);
+    er_tree_append_child(root, node);
+    er_commit();
+    return node;
+}
+
+/**
+ * @brief Checks a raw touch-move carries travel from touch-down and the speed it was travelling at.
+ *
+ * This is what lets a plain onTouchMove/onTouchEnd recognise a flick without an app re-deriving any of
+ * it — which an AOT-compiled app cannot do at all, its handler subset having no clock and no deltas.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_touch_move_carries_travel_and_velocity(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    TouchGestureRecord rec = {0};
+    create_gesture_target(root, &counts, &rec);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
+    embedded_renderer_tick(16U);
+    touch_move(140, 108); /* +40, +8 in 16 ms */
+
+    if (rec.move_count != 1)
+        return fail("expected one raw touch-move");
+    if (rec.dx != 40 || rec.dy != 8)
+        return fail("raw touch-move must carry displacement from touch-down");
+    if (!near_vel(rec.vx, 40.0f / 16.0f) || !near_vel(rec.vy, 8.0f / 16.0f))
+        return fail("raw touch-move must carry px/ms velocity");
+
+    embedded_renderer_tick(16U);
+    touch_move(160, 108); /* +20 more in 16 ms: velocity is the LAST leg, travel is cumulative */
+
+    if (rec.dx != 60)
+        return fail("displacement must accumulate from touch-down, not from the previous move");
+    if (!near_vel(rec.vx, 20.0f / 16.0f) || !near_vel(rec.vy, 0.0f))
+        return fail("velocity must be measured over the last move, not the whole gesture");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 160, 108);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks touch-up reports the flick's velocity even when the finger rested before lifting.
+ *
+ * A fling ends with the finger still for a frame or two; re-measuring across that rest would report
+ * zero and throw the throw away, so the release carries the last MOVE's reading (as RN does).
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_touch_end_keeps_flick_velocity(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    TouchGestureRecord rec = {0};
+    create_gesture_target(root, &counts, &rec);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
+    embedded_renderer_tick(16U);
+    touch_move(132, 100);        /* a fast flick: +32 in 16 ms */
+    embedded_renderer_tick(16U); /* …then a frame of rest before the finger lifts */
+    embedded_renderer_touch(0, ER_TOUCH_UP, 132, 100);
+
+    if (rec.end_count != 1)
+        return fail("expected one raw touch-end");
+    if (rec.dx != 32 || rec.dy != 0)
+        return fail("raw touch-end must carry the gesture's total displacement");
+    if (!near_vel(rec.vx, 32.0f / 16.0f))
+        return fail("touch-end must keep the last move's velocity across a rest before the lift");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks a cancelled sequence also reports its travel and speed.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_touch_cancel_carries_gesture(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    TouchGestureRecord rec = {0};
+    create_gesture_target(root, &counts, &rec);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
+    embedded_renderer_tick(16U);
+    touch_move(100, 76); /* -24 in 16 ms */
+    embedded_renderer_touch(0, ER_TOUCH_CANCEL, 100, 76);
+
+    if (rec.cancel_count != 1)
+        return fail("expected one raw touch-cancel");
+    if (rec.dx != 0 || rec.dy != -24)
+        return fail("raw touch-cancel must carry the gesture's displacement");
+    if (!near_vel(rec.vy, -24.0f / 16.0f))
+        return fail("raw touch-cancel must carry the last move's velocity");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks er_touch_active_count() tracks fingers down (RN's gestureState.numberActiveTouches).
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_touch_active_count(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 240, 160, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    if (er_touch_active_count() != 0)
+        return fail("no fingers down must count zero");
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    if (er_touch_active_count() != 1)
+        return fail("one finger down must count one");
+
+    embedded_renderer_touch(1, ER_TOUCH_DOWN, 60, 60);
+    if (er_touch_active_count() != 2)
+        return fail("two fingers down must count two");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 30, 30);
+    if (er_touch_active_count() != 1)
+        return fail("lifting one of two fingers must count one");
+
+    embedded_renderer_touch(1, ER_TOUCH_UP, 60, 60);
+    if (er_touch_active_count() != 0)
+        return fail("lifting the last finger must count zero");
+
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     embedded_renderer_set_backend(NULL);
@@ -2163,6 +2396,14 @@ int main(void)
     if (test_long_press_without_handler() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_raw_touch_bubbling() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_touch_move_carries_travel_and_velocity() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_touch_end_keeps_flick_velocity() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_touch_cancel_carries_gesture() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_touch_active_count() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_multi_touch() != EXIT_SUCCESS)
         return EXIT_FAILURE;

@@ -10,10 +10,11 @@ runnable on any embedded-react target.
   turning green when it settles level (centered).
 
 **Swipe right-to-left** to drag the level page over; release, and it eases to settle as the active page
-(swipe back to return). The pager uses only AOT-supported primitives: a dynamic `marginLeft` on a
-480-wide track follows the finger during the drag (a transparent overlay records the touch-down x and
-derives the drag from `onTouchMove`'s `e.x`), and a ~30 fps interval eases it to the settled page on
-release.
+(swipe back to return). A **short fast flick** turns the page too, without dragging it most of the way.
+The pager uses only AOT-supported primitives: a transparent overlay captures the swipe with a
+[`PanResponder`](../../bridges/quickjs/js/README.md#gestures--panresponder), a dynamic `marginLeft` on
+a 480-wide track follows the finger during the drag, and a ~30 fps interval eases it to the settled page
+on release.
 
 There is no RTC on the target board, so time is a second counter that **starts at 12:00 AM** — the
 factory default of a device whose clock has never been set (with a matching unset weekday/date,
@@ -58,36 +59,26 @@ npm run build:aot    # Flow B → app.gen.c        (compiled to C for the RP2040
 and accelerometer tilt into the app's `useHostValue` setters. For a desktop preview of the same compiled
 app, build `examples/linux-aot` and run it with `ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280`.
 
-## Two pagers: hand-rolled vs `PanResponder`
+## The swipe
 
-The demo ships the swipe **twice**, and the pair is the point:
+The pager is a `PanResponder`, which works in **both flows** — Flow A runs the JS module, and the AOT
+lowers `PanResponder.create` plus the `{...pan.panHandlers}` spread onto the engine's own C gesture
+responder system, so the RP2040 (264 KB of SRAM, no room for QuickJS) gets it with no JS on the device.
+Three things fall out of that which hand-rolled `onTouchMove` math did not give us:
 
-| | Entry | Swipe | Runs on |
-|---|---|---|---|
-| **`App.jsx`** (stock) | `index.jsx` | hand-rolled: records the touch-down `x` in a ref and subtracts it on every `onTouchMove` | Flow A **and** Flow B (AOT) — this is what the RP2040 compiles |
-| **`App.pan.jsx`** | `index.pan.jsx` | `PanResponder` — the gesture arrives with travel (`g.dx`) and speed (`g.vx`) already worked out | **Flow A only** |
+- **Flick to turn the page.** Release commits on a long enough drag (58 px) *or* a fast enough throw
+  (`g.vx` ≥ 0.4 px/ms), so a short flick turns the page. Note the RN-inherited wrinkle: velocity is
+  measured at the last *move*, so a drag that stops dead and rests before the finger lifts still reads
+  as a flick.
+- **A canceled gesture doesn't wedge it.** If the panel driver abandons the sequence,
+  `onPanResponderTerminate` clears `dragging` — otherwise the flag stays latched at 1 and the settle
+  animation freezes mid-drag.
+- **The drag is anchored at the grant.** `g.dx` is travel since the gesture was won, so the pager never
+  has to record a touch-down `x` in a ref and subtract it.
 
-```bash
-npm run dev:pan      # simulator, PanResponder variant
-npm run build:pan    # Flow A → dist/app.erpkg (PSRAM-class board)
-```
-
-`App.pan.jsx` **cannot** be AOT-compiled: `PanResponder` is a JS module, and `{...pan.panHandlers}`
-fails with *"AOT: a spread `{...}` on `<View>` is not supported"*. That is exactly why the stock
-`App.jsx` stays hand-rolled — the RP2040 has 264 KB of SRAM and no room for QuickJS, so its app must
-compile to C. The two share everything but the pager shell: `App.jsx` exports the pages, the styles,
-and the page geometry, and `App.pan.jsx` imports them. (Those exports are invisible to the AOT — the
-generated C is byte-identical with and without them.)
-
-Two things the variant gets for free, which the raw-touch version cannot do:
-
-- **Flick to turn the page.** A plain `onTouchMove` carries a point and no speed, so `App.jsx` can only
-  latch on distance (drag 58 px). `App.pan.jsx` also latches on `g.vx`, so a short fast flick turns the
-  page. Note the RN-inherited issue: velocity is measured at the last *move*, so a drag that stops dead
-  and rests before the finger lifts still reads as a flick.
-- **A canceled gesture doesn't wedge it.** `App.jsx` has no `onTouchCancel`, so if the engine abandons
-  the sequence, its `dragging` flag stays latched at 1 and the settle animation freezes mid-drag.
-  `onPanResponderTerminate` clears it.
+`PanResponder.create` runs once, in a ref, so its callbacks close over the first render's state — hence
+the `pageRef` mirror. Flow B reads state live and needs no such ref, but one source has to be right in
+both flows.
 
 ## Design notes (the AOT house rules)
 
@@ -107,5 +98,8 @@ device**:
   a dynamic `marginLeft`.
 - **Module-scope consts fold to literals.** `Math.*` is only available inside dynamic expressions — the
   clock digits, AM/PM, and seconds are computed inline from the `t` state that way.
+- **No helper calls inside an expression.** A handler can *call* a helper as a statement but not read
+  one mid-expression — which is why the pager's clamp is written out as
+  `Math.max(0, Math.min(PAGE_W, …))` at both use sites rather than factored into a `clamp()`.
 - **Font sizes come from the engine's baked Inter set** (10/12/16/20/24/32/48). The clock uses the
   largest, 48 — bump the baked font set if you want it larger.

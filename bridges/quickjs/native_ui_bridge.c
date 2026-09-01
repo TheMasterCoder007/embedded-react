@@ -2140,6 +2140,8 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
     JS_SetPropertyStr(ctx, ev, "y", JS_NewInt32(ctx, data->y));
     JS_SetPropertyStr(ctx, ev, "dx", JS_NewInt32(ctx, data->dx));
     JS_SetPropertyStr(ctx, ev, "dy", JS_NewInt32(ctx, data->dy));
+    JS_SetPropertyStr(ctx, ev, "vx", JS_NewFloat64(ctx, (double)data->vx));
+    JS_SetPropertyStr(ctx, ev, "vy", JS_NewFloat64(ctx, (double)data->vy));
 
     if (type == ER_EVENT_SCROLL)
     {
@@ -2239,12 +2241,12 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
  * @brief Engine → JS responder-query trampoline: calls the registered predicate, returns its boolean.
  *
  * Runs synchronously inside the engine's gesture negotiation (hit-test dispatch), like every event
- * trampoline. The event object carries x/y/dx/dy but no `type` — a query is not one of the named
+ * trampoline. The event object carries x/y/dx/dy/vx/vy but no `type` — a query is not one of the named
  * events (ER_EVENT_TYPE_COUNT_ makes build_event_object skip the type string). An exception in the
  * predicate is reported and answered with false, so a broken predicate never claims a gesture.
  *
  * @param[in] node       Node being queried (unused; key carries the handle).
- * @param[in] data       Current touch payload (x, y, dx, dy populated).
+ * @param[in] data       Current touch payload (x, y, dx, dy, vx, vy populated).
  * @param[in] user_data  Encoded key: handle * ER_RESPONDER_QUERY_COUNT + query.
  *
  * @return true when the JS predicate returned truthy (claim / keep the responder).

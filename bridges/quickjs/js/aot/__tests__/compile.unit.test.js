@@ -1170,6 +1170,291 @@ describe('AOT touch drag', () => {
   });
 });
 
+describe('AOT PanResponder (lowered onto the engine responder system)', () => {
+  const PAN_PRE = `import { useState, useRef } from 'react';
+import { View, Pressable, ScrollView, Text, PanResponder } from 'embedded-react';
+`;
+
+  it('lowers a should-set predicate to a responder QUERY and the callbacks to responder EVENTS', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onStartShouldSetPanResponder: () => true,
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain(
+      'static bool er_pan_pan_start_should_set(ERNode* node, const EREventData* data, void* user_data)',
+    );
+    expect(c).toMatch(
+      /er_responder_query_set\(n\d+, ER_QUERY_START_SHOULD_SET, er_pan_pan_start_should_set, NULL\);/,
+    );
+    expect(c).toMatch(
+      /er_event_set\(n\d+, ER_EVENT_RESPONDER_MOVE, er_pan_pan_move, NULL\);/,
+    );
+    // No transpiled state machine: the gesture is the engine's, not a JS one copied into C.
+    expect(c).not.toContain('ER_EVENT_TOUCH_MOVE');
+  });
+
+  it('anchors g.dx on the GRANT so a claim that cost slop opens at zero', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 8,
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain('static int s_pan_pan_base_dx = 0;');
+    expect(c).toContain('s_pan_pan_base_dx = data->dx;'); // set at the grant
+    expect(c).toContain('s_state.x = (data->dx - s_pan_pan_base_dx);'); // read relative to it
+    expect(c).toContain('s_pan_pan_base_dx = 0;'); // cleared when the gesture ends
+  });
+
+  it('always emits grant/release/terminate, even with only a move callback (they own the anchor)', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    for (const evt of ['GRANT', 'RELEASE', 'TERMINATE', 'MOVE'])
+      expect(c).toContain(`ER_EVENT_RESPONDER_${evt}`);
+    expect(c).not.toContain('ER_EVENT_RESPONDER_REJECT'); // not configured → not wired
+  });
+
+  it('maps every gestureState field, including the engine-supplied velocity and finger count', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderRelease: (e, g) =>
+            setX(g.moveX + g.moveY + g.x0 + g.y0 + g.dy + g.numberActiveTouches + g.stateID),
+          onPanResponderTerminate: (e, g) => setX(g.vx > 0.4 ? 1 : 0),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain('(data->x + data->y)'); // moveX, moveY
+    expect(c).toContain('s_pan_pan_x0) + s_pan_pan_y0'); // x0, y0 — the grant point
+    expect(c).toContain('er_touch_active_count()'); // numberActiveTouches
+    expect(c).toContain('(data->dy - s_pan_pan_base_dy)'); // dy, grant-relative
+    expect(c).toContain('(data->vx > 0.4f)'); // vx straight off the payload
+  });
+
+  it('wires the capture predicates and the termination request', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onStartShouldSetPanResponderCapture: () => false,
+          onMoveShouldSetPanResponderCapture: (e) => e.y < 40,
+          onPanResponderTerminationRequest: () => false,
+          onPanResponderReject: () => setX(1),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain('ER_QUERY_START_SHOULD_SET_CAPTURE');
+    expect(c).toContain('ER_QUERY_MOVE_SHOULD_SET_CAPTURE');
+    expect(c).toContain('ER_QUERY_TERMINATION_REQUEST');
+    expect(c).toContain('ER_EVENT_RESPONDER_REJECT');
+    expect(c).toContain('return ((data->y < 40)) != 0;');
+  });
+
+  it('emits ONE set of callbacks however many nodes spread the same responder', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (
+          <View>
+            <View style={{ width: 10, height: 10 }} {...pan.panHandlers} />
+            <View style={{ width: 10, height: 10 }} {...pan.panHandlers} />
+          </View>
+        );
+      }`);
+    expect(c.match(/static void er_pan_pan_move\(/g)).toHaveLength(1);
+    expect(c.match(/static int s_pan_pan_granted/g)).toHaveLength(1);
+    expect(
+      c.match(/ER_EVENT_RESPONDER_MOVE, er_pan_pan_move, NULL/g),
+    ).toHaveLength(2);
+  });
+
+  it('costs nothing when a responder is declared but never spread', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x] = useState(0);
+        const pan = useRef(PanResponder.create({ onPanResponderMove: () => {} })).current;
+        return (<View><Text>{x}</Text></View>);
+      }`);
+    expect(c).not.toContain('s_pan_');
+    expect(c).not.toContain('er_pan_');
+  });
+
+  it('accepts the useRef(...) form read back as pan.current.panHandlers', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        }));
+        return (<View {...pan.current.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain('ER_EVENT_RESPONDER_MOVE');
+  });
+
+  it('accepts shorthand-method callbacks as well as arrow properties', () => {
+    const c = gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onStartShouldSetPanResponder() { return true; },
+          onPanResponderMove(e, g) { setX(g.dx); },
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`);
+    expect(c).toContain('return (1) != 0;');
+    expect(c).toContain('s_state.x = (data->dx - s_pan_pan_base_dx);');
+  });
+
+  it('gives each instance of a child component its own gesture state', () => {
+    const c = gen(`${PAN_PRE}
+      function Knob() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (<View style={{ width: 40, height: 40 }} {...pan.panHandlers}><Text>{x}</Text></View>);
+      }
+      export function App() {
+        return (<View><Knob /><Knob /></View>);
+      }`);
+    expect(c).toContain('static int s_pan_c0_pan_granted');
+    expect(c).toContain('static int s_pan_c1_pan_granted');
+  });
+
+  it('still rejects a spread that is not a PanResponder', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      const extra = {};
+      export function App() { return (<View {...extra} />); }`),
+    ).toThrow(/a spread \{\.\.\.\} on <View> is not supported/);
+  });
+
+  it('rejects a PanResponder that is not kept in a useRef', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = PanResponder.create({ onPanResponderMove: (e, g) => setX(g.dx) });
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`),
+    ).toThrow(/must be kept in a useRef/);
+  });
+
+  it('rejects an unknown config key instead of silently dropping it', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const pan = useRef(PanResponder.create({ onPanResponderWobble: () => {} })).current;
+        return (<View {...pan.panHandlers} />);
+      }`),
+    ).toThrow(/unknown PanResponder config key "onPanResponderWobble"/);
+  });
+
+  it('names the Flow-A-only multi-finger callbacks rather than ignoring them', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const pan = useRef(PanResponder.create({ onPanResponderStart: () => {} })).current;
+        return (<View {...pan.panHandlers} />);
+      }`),
+    ).toThrow(/"onPanResponderStart" is not supported in Flow B/);
+  });
+
+  it('rejects a should-set predicate that is not a single expression', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onStartShouldSetPanResponder: (e, g) => { setX(1); return true; },
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`),
+    ).toThrow(/must be a single boolean expression/);
+  });
+
+  it('rejects an unknown gestureState field', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dz),
+        })).current;
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`),
+    ).toThrow(/unknown gestureState field "dz"/);
+  });
+
+  it('rejects a spread whose shape disagrees with how the responder was declared', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        }));
+        return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
+      }`),
+    ).toThrow(/does not match how it was declared/);
+  });
+
+  it('rejects a PanResponder spread onto a component instance', () => {
+    expect(() =>
+      gen(`${PAN_PRE}
+      function Box() { return (<View style={{ width: 10, height: 10 }} />); }
+      export function App() {
+        const [x, setX] = useState(0);
+        const pan = useRef(PanResponder.create({
+          onPanResponderMove: (e, g) => setX(g.dx),
+        })).current;
+        return (<View><Box {...pan.panHandlers} /><Text>{x}</Text></View>);
+      }`),
+    ).toThrow(/can only be spread onto a host element/);
+  });
+});
+
+describe('AOT raw touch gesture fields', () => {
+  it('lowers e.vx / e.vy so a plain onTouchEnd can recognise a flick', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [p, setP] = useState(0);
+        return (
+          <View onTouchEnd={(e) => setP(e.vx > 0.4 ? 1 : 0)}><Text>{p}</Text></View>
+        );
+      }`);
+    expect(c).toContain('ER_EVENT_TOUCH_END');
+    expect(c).toContain('s_state.p = ((data->vx > 0.4f) ? 1 : 0);');
+  });
+
+  it('lowers e.dx / e.dy on a raw touch handler (the engine fills them now)', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [d, setD] = useState(0);
+        return (<View onTouchMove={(e) => setD(e.dx)}><Text>{d}</Text></View>);
+      }`);
+    expect(c).toContain('s_state.d = data->dx;');
+  });
+});
+
 describe('AOT diagnostics', () => {
   it('locates an unsupported construct with file:line:col + a code-frame caret', () => {
     const src = `${PRE}

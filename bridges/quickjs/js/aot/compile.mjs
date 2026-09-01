@@ -440,6 +440,19 @@ function emitExprImpl(node, env) {
       ) {
         return {code: `data->${prop}`, cType: 'int'};
       }
+      // `<event>.vx / .vy` — how fast the finger was going (px/ms) at the last measured move. The engine
+      // measures it; a Flow B handler could not, having neither a clock nor the previous point.
+      if (
+        obj.type === 'Identifier' &&
+        env.event === obj.name &&
+        (prop === 'vx' || prop === 'vy')
+      ) {
+        return {code: `data->${prop}`, cType: 'float'};
+      }
+      // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
+      if (obj.type === 'Identifier' && env.gesture === obj.name && prop) {
+        return panGestureField(prop, env.pan);
+      }
       // `<event>.layout.x / .y / .width / .height` — the onLayout rect (EREventData.layout_rect; ERRect uses w/h).
       if (
         obj.type === 'MemberExpression' &&
@@ -460,7 +473,7 @@ function emitExprImpl(node, env) {
         return {code: '(float)M_PI', cType: 'float'};
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
-        'in a handler or dynamic expression you can read state, `ref.current`, a `.map` item field, event fields (e.x / e.y / e.dx / e.dy / e.layout.*), and Math.PI — other member access must be a compile-time constant.',
+        'in a handler or dynamic expression you can read state, `ref.current`, a `.map` item field, event fields (e.x / e.y / e.dx / e.dy / e.vx / e.vy / e.layout.*), and Math.PI — other member access must be a compile-time constant.',
       );
     }
     case 'CallExpression': {
@@ -1087,8 +1100,9 @@ function collectRefs(fnBody, scope, prefix = '') {
         init.callee.name === 'useRef' &&
         decl.id.type === 'Identifier'
       ) {
-        const cVar = `s_ref_${prefix}${decl.id.name}`;
         const arg = init.arguments[0];
+        if (isPanCreate(arg)) continue; // a PanResponder ref — collectPanResponders owns it
+        const cVar = `s_ref_${prefix}${decl.id.name}`;
         if (!arg || arg.type === 'NullLiteral') {
           refs.set(decl.id.name, {
             cVar,
@@ -2459,20 +2473,369 @@ function compileEffect(eff, env, state, out) {
   out.depEffects.push(check.join('\n'));
 }
 
-function compileHandler(fnNode, env, state, out) {
+function compileHandler(fnNode, env, state, out, pan = null) {
   const body = fnNode.body;
   const list =
     body.type === 'BlockStatement'
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
-  // The handler's first parameter is the event; `<event>.x/.y/.dx/.dy` map to EREventData fields.
+  // The handler's first parameter is the event; `<event>.x/.y/.dx/.dy/.vx/.vy` map to EREventData fields.
+  // A PanResponder callback takes a second one, RN's gestureState — see panGestureField.
   const eventParam =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
-  const henv = eventParam ? {...env, event: eventParam} : env;
+  const gestureParam =
+    pan && fnNode.params[1]?.type === 'Identifier'
+      ? fnNode.params[1].name
+      : null;
+  let henv = env;
+  if (eventParam) henv = {...henv, event: eventParam};
+  if (gestureParam) henv = {...henv, gesture: gestureParam, pan};
   const ctx = {stateChanged: false, animIdx: 0, out};
   const stmts = compileStmts(list, henv, state, ctx, '    ');
   if (ctx.stateChanged) stmts.push('    app_update();'); // re-apply state-dependent props once
   return stmts;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// PanResponder (Flow B) — LOWERED onto the engine's responder system, not transpiled.
+//
+// RN's PanResponder is a JS state machine over raw touches. The engine already has that machine, in C:
+// capture/bubble negotiation (er_responder_query_set) picks an owner, and GRANT / MOVE / RELEASE /
+// TERMINATE then fire on the owner alone, carrying cumulative travel and velocity. So the should-set
+// predicates become QUERIES and the callbacks become responder EVENT handlers — no gesture math is
+// duplicated into the generated C, and the app gets real arbitration for free (a granted pan owns the
+// gesture, so a ScrollView ancestor cannot auto-scroll out from under it).
+//
+// The one thing with no engine counterpart is RN's anchor: `g.dx` is measured from the GRANT, while the
+// engine's `data->dx` runs from touch-down — a claim that needed 10 px of slop would otherwise open with
+// a 10 px jump. That anchor, plus `x0`/`y0`, is a handful of file-scope ints per responder.
+// ---------------------------------------------------------------------------------------------------
+
+/** RN PanResponder config key → the engine responder QUERY it lowers to. */
+const PAN_QUERIES = {
+  onStartShouldSetPanResponder: 'ER_QUERY_START_SHOULD_SET',
+  onStartShouldSetPanResponderCapture: 'ER_QUERY_START_SHOULD_SET_CAPTURE',
+  onMoveShouldSetPanResponder: 'ER_QUERY_MOVE_SHOULD_SET',
+  onMoveShouldSetPanResponderCapture: 'ER_QUERY_MOVE_SHOULD_SET_CAPTURE',
+  onPanResponderTerminationRequest: 'ER_QUERY_TERMINATION_REQUEST',
+};
+
+/** Query constant → the suffix of the C function emitted for it. */
+const PAN_QUERY_SUFFIX = {
+  ER_QUERY_START_SHOULD_SET: 'start_should_set',
+  ER_QUERY_START_SHOULD_SET_CAPTURE: 'start_should_set_capture',
+  ER_QUERY_MOVE_SHOULD_SET: 'move_should_set',
+  ER_QUERY_MOVE_SHOULD_SET_CAPTURE: 'move_should_set_capture',
+  ER_QUERY_TERMINATION_REQUEST: 'termination_request',
+};
+
+/** RN PanResponder config key → the engine responder EVENT it lowers to. */
+const PAN_EVENTS = {
+  onPanResponderGrant: 'ER_EVENT_RESPONDER_GRANT',
+  onPanResponderMove: 'ER_EVENT_RESPONDER_MOVE',
+  onPanResponderRelease: 'ER_EVENT_RESPONDER_RELEASE',
+  onPanResponderTerminate: 'ER_EVENT_RESPONDER_TERMINATE',
+  onPanResponderReject: 'ER_EVENT_RESPONDER_REJECT',
+};
+
+/** Config keys the Flow A module acts on that have no Flow B lowering — rejected by name, not ignored. */
+const PAN_FLOW_A_ONLY = {
+  onPanResponderStart:
+    'it reports EXTRA fingers joining a gesture already in flight; Flow B lowers one gesture per responder.',
+  onPanResponderEnd:
+    'it reports a finger lifting while others stay down; Flow B lowers one gesture per responder.',
+};
+
+/** True for a `PanResponder.create({…})` call. */
+const isPanCreate = n =>
+  n?.type === 'CallExpression' &&
+  n.callee.type === 'MemberExpression' &&
+  !n.callee.computed &&
+  n.callee.object.type === 'Identifier' &&
+  n.callee.object.name === 'PanResponder' &&
+  n.callee.property.name === 'create';
+
+/**
+ * One `gestureState` field → the C expression that reads it. Travel is rebased onto the grant (RN's
+ * anchor); the point and the velocity come straight off the engine payload; the finger count is the
+ * engine's own, which is why er_touch_active_count() exists.
+ */
+function panGestureField(prop, pan) {
+  switch (prop) {
+    case 'dx':
+      return {code: `(data->dx - ${pan.cPrefix}_base_dx)`, cType: 'int'};
+    case 'dy':
+      return {code: `(data->dy - ${pan.cPrefix}_base_dy)`, cType: 'int'};
+    case 'moveX':
+      return {code: 'data->x', cType: 'int'};
+    case 'moveY':
+      return {code: 'data->y', cType: 'int'};
+    case 'x0':
+      return {code: `${pan.cPrefix}_x0`, cType: 'int'};
+    case 'y0':
+      return {code: `${pan.cPrefix}_y0`, cType: 'int'};
+    case 'vx':
+    case 'vy':
+      return {code: `data->${prop}`, cType: 'float'};
+    case 'numberActiveTouches':
+      return {code: 'er_touch_active_count()', cType: 'int'};
+    case 'stateID':
+      return {code: String(pan.stateID), cType: 'int'};
+  }
+  throw aotError(
+    `AOT: unknown gestureState field "${prop}" in a PanResponder callback`,
+    'a gestureState carries dx / dy / moveX / moveY / x0 / y0 / vx / vy / numberActiveTouches / stateID.',
+  );
+}
+
+/** Validates one `PanResponder.create({…})` config and builds the descriptor the emitter works from. */
+function buildPanDescriptor(name, createCall, prefix) {
+  const cfg = createCall.arguments[0];
+  if (!cfg || cfg.type !== 'ObjectExpression')
+    throw aotError(
+      'AOT: PanResponder.create(...) needs an object literal of callbacks',
+      'write the config inline — `PanResponder.create({ onStartShouldSetPanResponder: () => true, … })` — so the AOT can see which callbacks exist at compile time.',
+    );
+  const queries = new Map();
+  const events = new Map();
+  for (const prop of cfg.properties) {
+    if (prop.type !== 'ObjectProperty' && prop.type !== 'ObjectMethod')
+      throw aotError(
+        'AOT: a spread inside PanResponder.create({…}) is not supported',
+        'list the callbacks explicitly.',
+      );
+    if (prop.computed)
+      throw aotError(
+        'AOT: a computed key in PanResponder.create({…}) is not supported',
+        'name each callback literally — the AOT decides at compile time which engine query or event a key becomes.',
+      );
+    const key = prop.key.name ?? prop.key.value;
+    // A shorthand method (`onPanResponderMove(e, g) { … }`) IS the function node; a property holds it.
+    const fn = prop.type === 'ObjectMethod' ? prop : prop.value;
+    if (PAN_FLOW_A_ONLY[key])
+      throw aotError(
+        `AOT: PanResponder "${key}" is not supported in Flow B`,
+        `${PAN_FLOW_A_ONLY[key]} Use onPanResponderGrant / Release / Terminate instead, or build this screen for Flow A.`,
+      );
+    const query = PAN_QUERIES[key];
+    const event = PAN_EVENTS[key];
+    if (!query && !event)
+      throw aotError(
+        `AOT: unknown PanResponder config key "${key}"`,
+        `supported: ${[...Object.keys(PAN_QUERIES), ...Object.keys(PAN_EVENTS)].join(', ')}.`,
+      );
+    if (prop.type !== 'ObjectMethod' && !isFn(fn))
+      throw aotError(
+        `AOT: PanResponder "${key}" must be a function`,
+        'pass an inline arrow — `(e, g) => …` — so it can be compiled into the generated C.',
+      );
+    if (query) queries.set(query, fn);
+    else events.set(event, fn);
+  }
+  return {
+    name,
+    cPrefix: `s_pan_${prefix}${name}`,
+    fnPrefix: `er_pan_${prefix}${name}`,
+    stateID: 0, // assigned when the responder is first wired to a node
+    queries,
+    events,
+    emitted: null,
+  };
+}
+
+/**
+ * Collects `const pan = useRef(PanResponder.create({…})).current` → Map(name → descriptor). The
+ * `useRef(…)` form (read back as `pan.current.panHandlers`) is accepted too; a bare `create(…)` is not,
+ * because it would re-create the recogniser every render in Flow A and the two flows must agree.
+ */
+function collectPanResponders(fnBody, prefix = '') {
+  const pans = new Map();
+  if (fnBody.type !== 'BlockStatement') return pans;
+  for (const stmt of fnBody.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const decl of stmt.declarations) {
+      const init = decl.init;
+      if (decl.id.type !== 'Identifier' || !init) continue;
+      const viaCurrent =
+        init.type === 'MemberExpression' &&
+        !init.computed &&
+        init.property.name === 'current' &&
+        init.object.type === 'CallExpression' &&
+        init.object.callee.name === 'useRef'
+          ? init.object
+          : null;
+      const viaRef =
+        init.type === 'CallExpression' && init.callee.name === 'useRef'
+          ? init
+          : null;
+      const useRefCall = viaCurrent || viaRef;
+      if (!useRefCall || !isPanCreate(useRefCall.arguments[0])) {
+        if (isPanCreate(init))
+          throw aotError(
+            'AOT: PanResponder.create(...) must be kept in a useRef',
+            `write \`const ${decl.id.name} = useRef(PanResponder.create({…})).current;\` — the recogniser owns the live gesture, so a fresh one per render would throw the drag away (the same rule Flow A enforces).`,
+          );
+        continue;
+      }
+      const pan = buildPanDescriptor(
+        decl.id.name,
+        useRefCall.arguments[0],
+        prefix,
+      );
+      pan.viaRefCurrent = !viaCurrent; // how the app spells the spread: pan.current.panHandlers
+      pans.set(decl.id.name, pan);
+    }
+  }
+  return pans;
+}
+
+/**
+ * Lowers a should-set predicate to a single C boolean expression: the engine calls these synchronously
+ * inside hit-testing, before anyone owns the gesture, so they may only READ.
+ */
+function compilePanQuery(fnNode, env, pan) {
+  const eventParam =
+    fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
+  const gestureParam =
+    fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
+  const qenv = {...env, pan};
+  if (eventParam) qenv.event = eventParam;
+  if (gestureParam) qenv.gesture = gestureParam;
+  const body = fnNode.body;
+  const expr =
+    body.type === 'BlockStatement'
+      ? body.body.length === 1 && body.body[0].type === 'ReturnStatement'
+        ? body.body[0].argument
+        : null
+      : body;
+  if (!expr)
+    throw aotError(
+      'AOT: a PanResponder should-set predicate must be a single boolean expression',
+      'write it as `() => true` or `(e, g) => Math.abs(g.dx) > 8`. The engine asks these mid-hit-test, so they may only read (state, event/gesture fields, constants) — never set state.',
+    );
+  return `(${emitExpr(expr, qenv).code}) != 0`;
+}
+
+/**
+ * Emits one PanResponder's gesture state + C callbacks (once, however many nodes spread it), then wires
+ * them onto a node. Grant/release/terminate are ALWAYS emitted even with no user callback: they own the
+ * anchor bookkeeping that makes `g.dx` grant-relative.
+ */
+function emitPanResponder(pan, v, out, env, state) {
+  if (!pan.emitted) {
+    pan.stateID = ++out.panN;
+    const p = pan.cPrefix;
+    const penv = {...env, pan};
+    const userBody = evt =>
+      pan.events.has(evt)
+        ? compileHandler(pan.events.get(evt), penv, state, out, pan)
+        : [];
+    const guard = [
+      '    if (!' + p + '_granted)',
+      '    {',
+      '        return;',
+      '    }',
+    ];
+
+    out.panDecls.push(
+      `/* PanResponder "${pan.name}" (gesture ${pan.stateID}) — RN's gestureState. The grant anchors the`,
+      `   travel so g.dx opens at 0 however much slop the claim cost; data->dx runs from touch-down. */`,
+      `static int ${p}_granted = 0;`,
+      `static int ${p}_base_dx = 0;`,
+      `static int ${p}_base_dy = 0;`,
+      `static int ${p}_x0 = 0;`,
+      `static int ${p}_y0 = 0;`,
+    );
+
+    pan.emitted = {events: [], queries: []};
+    const push = (evt, suffix, body) => {
+      const name = `${pan.fnPrefix}_${suffix}`;
+      out.handlers.push({name, body});
+      pan.emitted.events.push([evt, name]);
+    };
+    push('ER_EVENT_RESPONDER_GRANT', 'grant', [
+      `    if (${p}_granted)`,
+      '    {',
+      '        return; /* a second finger re-granted this node: one gesture, not two */',
+      '    }',
+      `    ${p}_granted = 1;`,
+      `    ${p}_base_dx = data->dx;`,
+      `    ${p}_base_dy = data->dy;`,
+      `    ${p}_x0 = data->x;`,
+      `    ${p}_y0 = data->y;`,
+      ...userBody('ER_EVENT_RESPONDER_GRANT'),
+    ]);
+    // Release and terminate both END the gesture: run the app's callback while the anchor is still
+    // valid (it is what g.dx reads through), then clear it for the next one.
+    for (const [evt, suffix] of [
+      ['ER_EVENT_RESPONDER_RELEASE', 'release'],
+      ['ER_EVENT_RESPONDER_TERMINATE', 'terminate'],
+    ])
+      push(evt, suffix, [
+        ...guard,
+        ...userBody(evt),
+        `    ${p}_granted = 0;`,
+        `    ${p}_base_dx = 0;`,
+        `    ${p}_base_dy = 0;`,
+      ]);
+    if (pan.events.has('ER_EVENT_RESPONDER_MOVE'))
+      push('ER_EVENT_RESPONDER_MOVE', 'move', [
+        ...guard,
+        ...userBody('ER_EVENT_RESPONDER_MOVE'),
+      ]);
+    // Reject fires on a node that ASKED for the gesture and was refused — it never owned it, so no guard.
+    if (pan.events.has('ER_EVENT_RESPONDER_REJECT'))
+      push(
+        'ER_EVENT_RESPONDER_REJECT',
+        'reject',
+        userBody('ER_EVENT_RESPONDER_REJECT'),
+      );
+
+    for (const [query, fn] of pan.queries) {
+      const name = `${pan.fnPrefix}_${PAN_QUERY_SUFFIX[query]}`;
+      out.queries.push({name, expr: compilePanQuery(fn, penv, pan)});
+      pan.emitted.queries.push([query, name]);
+    }
+  }
+
+  for (const [evt, name] of pan.emitted.events)
+    out.build.push(`    er_event_set(${v}, ${evt}, ${name}, NULL);`);
+  for (const [query, name] of pan.emitted.queries)
+    out.build.push(
+      `    er_responder_query_set(${v}, ${query}, ${name}, NULL);`,
+    );
+}
+
+/**
+ * Resolves a JSX spread to the PanResponder it spreads, or null when it is some other spread. A name
+ * that IS a responder but is spelled the other way round (`.current` where the app already unwrapped it,
+ * or vice versa) is an error rather than a silent miss — Flow A would throw at runtime on the same code.
+ */
+function panSpreadTarget(argument, env) {
+  if (
+    argument?.type !== 'MemberExpression' ||
+    argument.computed ||
+    argument.property.name !== 'panHandlers'
+  )
+    return null;
+  const obj = argument.object;
+  const viaCurrent =
+    obj.type === 'MemberExpression' &&
+    !obj.computed &&
+    obj.property.name === 'current' &&
+    obj.object.type === 'Identifier';
+  const rootName = viaCurrent ? obj.object.name : obj.name;
+  const pan =
+    obj.type === 'Identifier' || viaCurrent ? env.pans?.get(rootName) : null;
+  if (!pan) return null;
+  if (pan.viaRefCurrent !== viaCurrent)
+    throw aotError(
+      `AOT: "${rootName}" is a PanResponder, but this spread does not match how it was declared`,
+      pan.viaRefCurrent
+        ? `it was declared as \`useRef(PanResponder.create({…}))\`, so spread \`{...${rootName}.current.panHandlers}\`.`
+        : `it was declared as \`useRef(PanResponder.create({…})).current\`, so spread \`{...${rootName}.panHandlers}\`.`,
+    );
+  return pan;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2489,6 +2852,11 @@ function extractProps(openingElement, scope, env) {
   for (const attr of openingElement.attributes) {
     if (attr.type === 'JSXSpreadAttribute') {
       // Static spread: {...obj} where obj folds to a compile-time object → merge its keys as props.
+      if (panSpreadTarget(attr.argument, env))
+        throw aotError(
+          'AOT: a PanResponder can only be spread onto a host element',
+          'spread `{...pan.panHandlers}` onto the <View> (or <Pressable>/<ScrollView>) that should own the gesture, not onto a component instance — the AOT wires the responder to a real scene node.',
+        );
       let obj;
       try {
         obj = evalStatic(attr.argument, scope);
@@ -2639,6 +3007,7 @@ function emitComponent(el, scope, out, env, state, opts) {
   const prefix = `c${out.instN++}_`;
   const childAnims = collectAnims(fn.body, childScope, prefix);
   const childRefs = collectRefs(fn.body, childScope, prefix);
+  const childPans = collectPanResponders(fn.body, prefix);
   const childCallbacks = collectCallbacks(fn.body);
   const childMemos = collectMemos(fn.body);
   let childState = state;
@@ -2658,6 +3027,7 @@ function emitComponent(el, scope, out, env, state, opts) {
     state: childState.byName,
     anims: childAnims,
     refs: childRefs,
+    pans: childPans,
     callbacks: childCallbacks,
     helpers: collectHelpers(fn.body, out.program),
     cbPrefix: prefix,
@@ -4689,16 +5059,27 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   }
 
   // Spread attributes on a host element (`<View {...props} />`) aren't lowered — the style/event loops
-  // below only read named JSXAttributes, so a spread would be SILENTLY dropped. Reject it explicitly
-  // (the typed components — Switch/TextInput/Modal/… — already throw on spreads). Pin the location to the
-  // spread itself, not the whole element, for a precise code-frame.
-  const spread = el.openingElement.attributes.find(
-    a => a.type === 'JSXSpreadAttribute',
-  );
-  if (spread) {
+  // below only read named JSXAttributes, so a spread would be SILENTLY dropped. The one exception is
+  // `{...pan.panHandlers}`, which the AOT understands as a whole (see emitPanResponder); everything else
+  // is rejected explicitly (the typed components — Switch/TextInput/Modal/… — already throw on spreads).
+  // Pin the location to the spread itself, not the whole element, for a precise code-frame.
+  const panSpreads = [];
+  for (const spread of el.openingElement.attributes) {
+    if (spread.type !== 'JSXSpreadAttribute') continue;
+    let pan;
+    try {
+      pan = panSpreadTarget(spread.argument, env);
+    } catch (e) {
+      if (spread.loc && !e.aotLoc) e.aotLoc = spread.loc.start;
+      throw e;
+    }
+    if (pan) {
+      panSpreads.push(pan);
+      continue;
+    }
     const e = aotError(
       `AOT: a spread {...} on <${tag}> is not supported`,
-      `list each prop explicitly (e.g. style={…} onPress={…}). Spread props are only supported on a function component instance whose spread object folds to a compile-time constant.`,
+      `list each prop explicitly (e.g. style={…} onPress={…}). The only spread a host element understands is a PanResponder's ({...pan.panHandlers}); otherwise spread props are supported on a function component instance whose spread object folds to a compile-time constant.`,
     );
     if (spread.loc) e.aotLoc = spread.loc.start;
     throw e;
@@ -4874,6 +5255,8 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     }
     out.build.push(`    er_event_set(${v}, ${evt}, ${handlerName}, NULL);`);
   }
+
+  for (const pan of panSpreads) emitPanResponder(pan, v, out, env, state);
 
   if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
   return v;
@@ -5154,6 +5537,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
 
   const anims = collectAnims(component.body, scope);
   const refs = collectRefs(component.body, scope);
+  const pans = collectPanResponders(component.body);
   const callbacks = collectCallbacks(component.body);
   const memos = collectMemos(component.body);
   const helpers = collectHelpers(component.body, ast.program);
@@ -5166,6 +5550,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     consts: scope,
     anims,
     refs,
+    pans,
     callbacks,
     helpers,
     imageNames,
@@ -5214,6 +5599,9 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     effectFns: [],
     effectDecls: [],
     depEffects: [],
+    panN: 0,
+    panDecls: [],
+    queries: [],
   };
   compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
   const appTop = emitNode(rootJSX, scope, out, env, state);
@@ -5330,6 +5718,16 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     lines.push('}');
     return lines.join('\n');
   })();
+
+  // PanResponder gesture state (one small block per responder) + the should-set predicates, which are
+  // bool-returning callbacks the engine calls during negotiation rather than ordinary event handlers.
+  const panDeclBlock = out.panDecls.join('\n');
+  const queryDefs = out.queries
+    .map(
+      q =>
+        `static bool ${q.name}(ERNode* node, const EREventData* data, void* user_data)\n{\n    (void)node;\n    (void)data;\n    (void)user_data;\n    return ${q.expr};\n}`,
+    )
+    .join('\n\n');
 
   const handlerDefs = out.handlers
     .map(
@@ -5466,6 +5864,7 @@ static void er_timer_clear(int id)
         vectorBuilderBlock,
         updateBlock,
         handlerDefs,
+        queryDefs,
         animCbDefs,
         timerFnDefs,
         out.mountEffects.join('\n'),
@@ -5506,7 +5905,7 @@ static void er_timer_clear(int id)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "embedded-react version mismatch: app.gen.c was generated by ${PKG_VERSION} but the engine header (er_version.h) is a different major.minor. Regenerate the app with 'npm run aot', or align the engine and npm versions.");
-${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 ${hostSettersBlock ? '\n' + hostSettersBlock + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)

@@ -85,7 +85,7 @@ src/
     Platform.js            { OS: 'embedded', select }
     AppRegistry.js         registerComponent(...) → mounts into a screen-sized root
     Animated.js            Value / timing / spring / decay / View|Text|Image / interpolate
-    PanResponder.js        create(config) → panHandlers: drag/swipe/fling over onTouch*
+    PanResponder.js        create(config) → panHandlers: drag/swipe/fling over the responder system
     Easing.js              easing tokens (+ bezier) → engine curves
     split-style.js         pure: split style into static props + animated bindings
     __tests__/             co-located UNIT tests for the pure surface
@@ -147,9 +147,10 @@ the pages you flip between, not every page.
 
 ### Gestures — `PanResponder`
 
-`onTouchMove` gives you an absolute point and nothing else, so every drag ends up re-deriving the same
-three things by hand: where the finger started, how far it has travelled, how fast it is going.
-`PanResponder` does that once, in the RN shape:
+The raw touch events already carry the travel and the speed (`e.dx`/`e.dy`, `e.vx`/`e.vy` — see below),
+which is enough for a one-off flick. A real drag wants more: an anchor that starts at zero, however, the
+gesture was won, ownership against a scrolling ancestor, and a teardown hook for when the gesture is
+taken away. `PanResponder` is that, in the RN shape (and it compiles in Flow B as well as Flow A):
 
 ```jsx
 const pan = useRef(
@@ -187,12 +188,21 @@ supplied nothing is ever granted — same as RN.
 - **`onPanResponderTerminate` is the undo hook.** It fires when the host cancels the touch sequence,
   when a fresh touch-down arrives on a finger whose previous sequence never ended, and when the
   responder yields to a challenger.
-- **Flow A only, single gesture.** The AOT compiler only spreads compile-time-constant objects, so
-  `{...pan.panHandlers}` fails the build ("AOT: a spread `{...}` on `<View>` is not supported") — Flow
-  B support is tracked in
-  [#176](https://github.com/TheMasterCoder007/embedded-react/issues/176). And the engine events carry
-  no finger id, so extra fingers fold into ONE gesture: they fire `onPanResponderStart`/`End`,
-  `numberActiveTouches` counts them, and the last to lift releases.
+- **Single gesture.** The engine events carry no finger id, so extra fingers fold into ONE gesture:
+  `numberActiveTouches` counts them and the last to lift releases — both true in either flow. Flow A
+  additionally reports each join and leave through `onPanResponderStart`/`End`; Flow B has no
+  equivalent (next bullet).
+- **Flow B compiles it too.** The AOT recognises `useRef(PanResponder.create({…})).current` and the
+  `{...pan.panHandlers}` spread as a whole and lowers them onto the same C responder system — the
+  should-set predicates become `er_responder_query_set` callbacks and the rest become responder event
+  handlers, with `g.dx`/`g.vx` reading the engine's own payload. No JS state machine is copied into the
+  generated C. Only `onPanResponderStart`/`End` — the two that fold EXTRA fingers into one gesture —
+  are Flow A only, and the AOT fails the build by name rather than dropping them. The watch-face demo's
+  swipe pager is the worked example: one source, both flows.
+
+As promised above: the raw touch events carry the same fields the responder ones do — `e.dx`/`e.dy` from
+touch-down and `e.vx`/`e.vy` in px per ms — so `onTouchEnd={e => e.vx > 0.4 && next()}` needs no
+recognizer at all, in either flow.
 
 The low-level responder props (`onStartShouldSetResponder`, `onResponderGrant`, …) are themselves
 public on every component for gestures that don't fit the pan shape. Only RN's Android-specific
@@ -378,8 +388,10 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   grant / move / release / terminate / reject / termination-request, `onPanResponderStart`/`End` for
   extra fingers, and a `gestureState` (`x0`/`y0`, `dx`/`dy`, `vx`/`vy`, `numberActiveTouches`) — wired
   to the ENGINE's responder negotiation, so a granted pan blocks a ScrollView's auto-scroll and can
-  take a started scroll over. The low-level responder props are public on every component. Covered by
-  `pan-responder` unit + `pan-responder.runtime.test.jsx` + the engine's `test_input` responder cases.
+  take a started scroll over. The low-level responder props are public on every component, and **Flow B
+  compiles the same config** — the AOT lowers it onto that C responder system, minus only
+  `onPanResponderStart`/`End`. Covered by `pan-responder` unit + `pan-responder.runtime.test.jsx` + the
+  AOT's `compile`/`cc-compile` PanResponder cases + the engine's `test_input` responder cases.
 - ✅ **Interpolate `extrapolate`.** `interpolate({ inputRange, outputRange, extrapolate })` supports
   `'extend'` (default) / `'clamp'` / `'identity'`, with per-end `extrapolateLeft`/`extrapolateRight`
   overrides. Math is engine-tested (`test_interpolate`); the bridge path by

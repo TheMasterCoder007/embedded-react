@@ -43,13 +43,15 @@ import {readFileSync, mkdirSync, existsSync} from 'node:fs';
 const JS_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(JS_DIR, '../../..');
 
+// CMake only appends .exe on Windows, so the harness has to ask (same as test/runtime/run.mjs).
+const EXE = process.platform === 'win32' ? '.exe' : '';
 const FLOW_A_EXE = join(
   ROOT,
-  'examples/linux/build/embedded-react-desktop.exe',
+  `examples/linux/build/embedded-react-desktop${EXE}`,
 );
 const FLOW_B_EXE = join(
   ROOT,
-  'examples/linux-aot/build/embedded-react-desktop-aot.exe',
+  `examples/linux-aot/build/embedded-react-desktop-aot${EXE}`,
 );
 const FLOW_A_BUILD = join(ROOT, 'examples/linux/build');
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
