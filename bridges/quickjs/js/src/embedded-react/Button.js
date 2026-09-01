@@ -30,7 +30,7 @@
 // knobs, exactly as upstream.
 import {createElement} from 'react';
 import {Pressable, Text} from './components.js';
-import {createPropWarner} from './warn-props.js';
+import {createPropWarner, RN_PLATFORM_NO_OPS} from './warn-props.js';
 
 // RN's Button styles are Platform.select({ios, android}) and Platform.OS is 'embedded', so neither
 // branch applies. These are the android ones — a filled, rounded button — because a panel button
@@ -47,35 +47,12 @@ const styles = {
 /** The props that do something here. RN's rest are OS services with nothing to wrap on an MCU. */
 const SUPPORTED = ['title', 'onPress', 'color', 'disabled'];
 
-// Accessibility, TV focus and test hooks: real RN props that need an OS (a screen reader, a focus
-// engine, a test runner) that a bare panel does not have. Carrying them costs nothing and keeps a
-// component portable back to RN, so they are dropped without a word.
-const RN_NO_OPS = [
-  'accessible',
-  'accessibilityLabel',
-  'accessibilityHint',
-  'accessibilityLanguage',
-  'accessibilityRole',
-  'accessibilityState',
-  'accessibilityActions',
-  'onAccessibilityAction',
-  'importantForAccessibility',
-  'testID',
-  'touchSoundDisabled',
-  'hasTVPreferredFocus',
-  'nextFocusDown',
-  'nextFocusForward',
-  'nextFocusLeft',
-  'nextFocusRight',
-  'nextFocusUp',
-];
-
 const warnUnsupportedProps = createPropWarner(
   'Button',
   SUPPORTED,
   "it is RN's fixed-style button — for a button you style yourself, use <Pressable> + <Text> " +
     '(the same tree this renders).',
-  RN_NO_OPS,
+  RN_PLATFORM_NO_OPS,
 );
 
 /**

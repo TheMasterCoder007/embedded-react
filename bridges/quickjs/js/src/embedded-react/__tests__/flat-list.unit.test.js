@@ -181,6 +181,19 @@ describe('FlatList row results that are not elements', () => {
     const el = render({data: ['hi'], renderItem: ({item}) => item});
     expect(el.props.children).toEqual(['hi']);
   });
+
+  it('does not ask keyExtractor for the key of a raw string row', () => {
+    const seen = [];
+    render({
+      data: ['a', 'b'],
+      keyExtractor: item => {
+        seen.push(item);
+        return item;
+      },
+      renderItem: ({item}) => (item === 'a' ? item : createElement(Row, null)),
+    });
+    expect(seen).toEqual(['b']);
+  });
 });
 
 describe('FlatList warns about props neither flow honours', () => {

@@ -240,11 +240,24 @@ describe('SectionList rows that are not elements', () => {
     });
     expect(el.props.children).toEqual(['hi']);
   });
+
+  it('does not ask keyExtractor for the key of a raw string row', () => {
+    const seen = [];
+    render({
+      sections: [{data: ['a', 'b']}],
+      keyExtractor: item => {
+        seen.push(item);
+        return item;
+      },
+      renderItem: ({item}) => (item === 'a' ? item : createElement(Row, null)),
+    });
+    expect(seen).toEqual(['b']);
+  });
 });
 
 describe('SectionList prop warnings', () => {
   // The warner latches ONCE per module, so the silent case has to be asserted first.
-  it('stays quiet for the six props it honours', () => {
+  it('stays quiet for the six props it honours, and for RN platform no-ops', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     render({
       sections: [],
@@ -253,6 +266,15 @@ describe('SectionList prop warnings', () => {
       renderSectionFooter: footer,
       keyExtractor: x => x,
       style: {},
+    });
+    // A list ported from RN carries these; they need an OS this board hasn't got, so they are
+    // dropped without a word rather than making the app strip them (the set <Button> quiets too).
+    render({
+      sections: [],
+      renderItem: row,
+      accessibilityLabel: 'Contacts',
+      testID: 'contact-list',
+      importantForAccessibility: 'yes',
     });
     expect(warn).not.toHaveBeenCalled();
   });

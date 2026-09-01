@@ -34,7 +34,7 @@
 // rather than silently forwarded.
 import {createElement} from 'react';
 import {ScrollView} from './components.js';
-import {isElement, pushKeyedChild, rendersNothing} from './list-child.js';
+import {pushKeyedChild} from './list-child.js';
 import {createPropWarner} from './warn-props.js';
 
 /** The only props both flows honour. Everything else is a virtualization/platform knob with no meaning. */
@@ -72,15 +72,15 @@ export function FlatList(props = {}) {
     for (let index = 0; index < data.length; index++) {
       const item = data[index];
       const row = renderItem({item, index});
-      // A row may legitimately render nothing. Drop it before keying, so keyExtractor is never asked
-      // for the key of something that isn't there.
-      if (rendersNothing(row)) continue;
-      const key = keyExtractor
-        ? String(keyExtractor(item, index))
-        : isElement(row) && row.key !== null && row.key !== undefined
-          ? row.key
-          : String(index);
-      pushKeyedChild(rows, row, key);
+      // The key is built lazily: pushKeyedChild calls this only for a row that can hold one, so
+      // keyExtractor never runs for a row that rendered nothing or for a raw string.
+      pushKeyedChild(rows, row, el =>
+        keyExtractor
+          ? String(keyExtractor(item, index))
+          : el.key !== null && el.key !== undefined
+            ? el.key
+            : String(index),
+      );
     }
   }
 

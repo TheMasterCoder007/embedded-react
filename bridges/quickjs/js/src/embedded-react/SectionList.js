@@ -38,8 +38,8 @@
 // component until that lands; the AOT says so by name rather than "unknown element".
 import {createElement} from 'react';
 import {ScrollView} from './components.js';
-import {isElement, pushKeyedChild, rendersNothing} from './list-child.js';
-import {createPropWarner} from './warn-props.js';
+import {pushKeyedChild} from './list-child.js';
+import {createPropWarner, RN_PLATFORM_NO_OPS} from './warn-props.js';
 
 /** The props this honours. The rest are virtualization / platform knobs with no meaning on a panel. */
 const SUPPORTED = [
@@ -56,6 +56,7 @@ const warnUnsupportedProps = createPropWarner(
   SUPPORTED,
   'it is a thin <ScrollView> alias with no virtualization and no sticky headers. For separators, ' +
     'list headers/footers or onEndReached, use <ScrollView> + .map directly.',
+  RN_PLATFORM_NO_OPS,
 );
 
 /**
@@ -102,7 +103,7 @@ export function SectionList(props = {}) {
         pushKeyedChild(
           children,
           renderSectionHeader({section}),
-          `${sectionKey}:$header`,
+          () => `${sectionKey}:$header`,
         );
 
       const rowRenderer =
@@ -117,15 +118,16 @@ export function SectionList(props = {}) {
         for (let index = 0; index < section.data.length; index++) {
           const item = section.data[index];
           const row = rowRenderer({item, index, section});
-          // Drop a row that rendered nothing before keying it — keyExtractor is never asked for the
-          // key of something that isn't there.
-          if (rendersNothing(row)) continue;
-          const key = rowKey
-            ? String(rowKey(item, index))
-            : isElement(row) && row.key !== null && row.key !== undefined
-              ? row.key
-              : String(index);
-          pushKeyedChild(children, row, `${sectionKey}:${key}`);
+          // Built lazily, so keyExtractor never runs for a row that rendered nothing or for a raw
+          // string — see pushKeyedChild.
+          pushKeyedChild(children, row, el => {
+            const key = rowKey
+              ? String(rowKey(item, index))
+              : el.key !== null && el.key !== undefined
+                ? el.key
+                : String(index);
+            return `${sectionKey}:${key}`;
+          });
         }
       }
 
@@ -133,7 +135,7 @@ export function SectionList(props = {}) {
         pushKeyedChild(
           children,
           renderSectionFooter({section}),
-          `${sectionKey}:$footer`,
+          () => `${sectionKey}:$footer`,
         );
     }
   }

@@ -28,21 +28,27 @@ export const isElement = node =>
   node !== null && typeof node === 'object' && node.$$typeof !== undefined;
 
 /**
- * Appends one rendered row to `out` under `key`, or drops it if it rendered nothing.
+ * Appends one rendered row to `out`, keyed, or drops it if it rendered nothing.
  *
  * Callers own the key because they know what makes one unique (a SectionList's rows are siblings
  * across sections, a FlatList's are not). A row that is not an element goes in untouched: there is no
  * key to attach to a raw string, and a plain `.map` wouldn't have attached one either.
  *
+ * The key arrives as a FUNCTION, not a value, and that is the point: it is called only for a node that
+ * can actually carry one. `keyExtractor` is the app's code — running it for a row that rendered
+ * nothing, or for a raw string that cannot be cloned, is both wasted work on the commit path and a
+ * side effect the app never asked for. Passing the key by value invites exactly that, and did.
+ *
  * @param {Array} out The child list being built.
  * @param {*} node Whatever the render callback returned.
- * @param {string} key The React key to attach.
+ * @param {(element: object) => string} keyFor Builds the React key, given the keyable element.
  */
-export function pushKeyedChild(out, node, key) {
+export function pushKeyedChild(out, node, keyFor) {
   if (rendersNothing(node)) return;
   if (!isElement(node)) {
     out.push(node);
     return;
   }
+  const key = keyFor(node);
   out.push(node.key === key ? node : cloneElement(node, {key}));
 }

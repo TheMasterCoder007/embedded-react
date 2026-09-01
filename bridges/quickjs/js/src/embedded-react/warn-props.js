@@ -24,6 +24,36 @@
 // line per commit is a flood that pushes everything else out of the scrollback.
 
 /**
+ * RN props that wrap an OS service a bare panel does not have: a screen reader, a focus engine, a test
+ * runner, a click sound. They are real RN props, they cost nothing to carry, and keeping them means a
+ * component still compiles when it goes back to React Native — so a wrapper drops them without a word
+ * rather than making an app strip them to silence a warning.
+ *
+ * Note that <FlatList> deliberately does NOT quiet these: it is the one wrapper the AOT lowers, and it
+ * rejects every prop outside its supported four, so a `testID` there fails the device build. Warning
+ * about it is the point.
+ */
+export const RN_PLATFORM_NO_OPS = [
+  'accessible',
+  'accessibilityLabel',
+  'accessibilityHint',
+  'accessibilityLanguage',
+  'accessibilityRole',
+  'accessibilityState',
+  'accessibilityActions',
+  'onAccessibilityAction',
+  'importantForAccessibility',
+  'testID',
+  'touchSoundDisabled',
+  'hasTVPreferredFocus',
+  'nextFocusDown',
+  'nextFocusForward',
+  'nextFocusLeft',
+  'nextFocusRight',
+  'nextFocusUp',
+];
+
+/**
  * Builds the once-only prop warner for a component.
  *
  * @param {string} component Component name, as it appears in JSX (no angle brackets).
