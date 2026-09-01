@@ -43,6 +43,14 @@ a `ScrollView`
 alias](https://github.com/TheMasterCoder007/embedded-react#flatlist-is-a-scrollview-alias) for the node
 budget it costs and what to do with a long list.
 
+`<Button>`, `<ImageBackground>` and `<SectionList>` are JavaScript wrappers over the primitives, the
+way RN implements them — a styled `<Pressable>` + `<Text>`, a `<View>` with an absolutely-filled
+`<Image>` behind its children, and a `<ScrollView>` whose sections lay out as flat siblings. They add
+no engine node, they are **Flow A only** (the AOT names them and tells you the tree to write instead),
+and `<SectionList>` inherits every `<FlatList>` caveat plus a header and footer per section. See
+[`Button`, `ImageBackground` and `SectionList` are JSX, not
+nodes](https://github.com/TheMasterCoder007/embedded-react#button-imagebackground-and-sectionlist-are-jsx-not-nodes).
+
 RN modules that wrap an operating system — `StatusBar`, `SafeAreaView`, `AppState`, `Appearance`,
 `Linking`, `AccessibilityInfo` — are **intentionally absent**; a microcontroller has no OS for them to
 wrap. See [Intentionally absent React Native

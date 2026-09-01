@@ -5038,6 +5038,19 @@ function resolveImageAttrs(el, env, out) {
 // text, events, refs, children. emitNode wraps it with withLoc so a thrown AOT error gets a location.
 // ---------------------------------------------------------------------------------------------------
 
+// The JS-only RN wrappers the package exports that this compiler cannot lower yet. Each is a fixed
+// rewrite over primitives the AOT DOES understand, so the fix is always to write that tree out — the
+// message says which one, because a stock "unknown element" here is actively misleading (the import
+// resolved, the simulator renders it, and the name is spelled right).
+const FLOW_A_ONLY_COMPONENTS = {
+  Button:
+    '<Pressable style={…} onPress={…}><Text style={…}>title</Text></Pressable>.',
+  ImageBackground:
+    "<View style={…}><Image source={…} style={{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0}} />…children…</View>.",
+  SectionList:
+    '<ScrollView> with the header element and a data.map(…) per section (a section is not one .map, which is why it has no lowering).',
+};
+
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
@@ -5052,6 +5065,14 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   if (!nodeType) {
     if (out.components.has(tag))
       return emitComponent(el, scope, out, env, state, opts);
+    // Exported by the package and rendering fine in the simulator, but with no lowering here yet — so
+    // say that, instead of "unknown element", which reads like a typo and sends people hunting for one.
+    const flowAOnly = FLOW_A_ONLY_COMPONENTS[tag];
+    if (flowAOnly)
+      throw aotError(
+        `AOT: <${tag}> is not supported in Flow B yet`,
+        `it renders in Flow A (the simulator and the QuickJS runtime) but the AOT has no lowering for it. Write it out by hand for the device build: ${flowAOnly}`,
+      );
     throw aotError(
       `AOT: unknown element <${tag}> (not a built-in or a component in this file)`,
       `<${tag}> must be a built-in (View / Text / Pressable / Image / ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS file. Check the import/spelling, or define the component here.`,

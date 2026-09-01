@@ -12,6 +12,9 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- Added `<Button>`, `<ImageBackground>` and `<SectionList>` — the React Native components that are
+  just JSX over the primitives, implemented the way RN implements them, so RN source pastes in and
+  runs. Flow A only for now: an AOT build rejects them by name and prints the tree to write by hand.
 - Added `PanResponder`, in **both flows**. Drags, swipes, and flings come with the start point, the
   travel, and the velocity already worked out, and the gesture rides the engine's real responder
   negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a
@@ -142,6 +145,10 @@ See the README for the release process.
 
 ### Fixed
 
+- `padding` on a `<Text>` now lays out, in both flows. The engine measured an auto-sized text node's
+  glyph run and stopped there, so padding on a label typechecked, marshaled, and then did nothing —
+  the box never grew and the glyphs never moved. Padded labels and text-only buttons hug their letters
+  no longer.
 - `<FlatList>` now renders in Flow A. `data` and `renderItem` were dropped as unknown props, so a list
   drew an empty scroller with no warning; it now maps rows into a `<ScrollView>` exactly as the AOT
   already did. Props neither flow supports (`horizontal`, `onEndReached`, …) warn instead of vanishing.

@@ -42,7 +42,10 @@ export {
   G,
   Arc,
 } from './components.js';
+export {Button} from './Button.js';
 export {FlatList} from './FlatList.js';
+export {ImageBackground} from './ImageBackground.js';
+export {SectionList} from './SectionList.js';
 export {updateVector, updateText, setKeyboardConfig} from './imperative.js';
 export {StyleSheet} from './StyleSheet.js';
 export {Platform} from './Platform.js';
