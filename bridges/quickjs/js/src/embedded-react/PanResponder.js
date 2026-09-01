@@ -50,8 +50,9 @@
 // Remaining limits: `onShouldBlockNativeResponder` is Android-specific and stays unsupported (holding
 // the responder already blocks the ScrollView; the built-in adjustable-Arc drag deliberately wins over
 // JS claimants). And the engine events carry no finger id, so multiple fingers fold into ONE gesture —
-// `numberActiveTouches` counts them, extra fingers fire `onPanResponderStart`/`End`, and the last one
-// to lift releases; two independent single-finger gestures need two responders on disjoint subtrees.
+// `numberActiveTouches` counts them, extra fingers fire `onPanResponderStart`/`End` (Flow A only; see
+// below), and the last one to lift releases; two independent single-finger gestures need two
+// responders on disjoint subtrees.
 //
 // Flow B compiles the same code: the AOT recognises `useRef(PanResponder.create({…})).current`
 // and the `{...pan.panHandlers}` spread as a special form and lowers them onto the SAME C responder

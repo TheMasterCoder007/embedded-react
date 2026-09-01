@@ -189,8 +189,9 @@ supplied nothing is ever granted — same as RN.
   when a fresh touch-down arrives on a finger whose previous sequence never ended, and when the
   responder yields to a challenger.
 - **Single gesture.** The engine events carry no finger id, so extra fingers fold into ONE gesture:
-  they fire `onPanResponderStart`/`End`, `numberActiveTouches` counts them, and the last to lift
-  releases.
+  `numberActiveTouches` counts them and the last to lift releases — both true in either flow. Flow A
+  additionally reports each join and leave through `onPanResponderStart`/`End`; Flow B has no
+  equivalent (next bullet).
 - **Flow B compiles it too.** The AOT recognises `useRef(PanResponder.create({…})).current` and the
   `{...pan.panHandlers}` spread as a whole and lowers them onto the same C responder system — the
   should-set predicates become `er_responder_query_set` callbacks and the rest become responder event

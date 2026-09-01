@@ -12,17 +12,17 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
-- `PanResponder` now compiles in Flow B. The AOT lowers it onto the engine's C responder system
-  instead of transpiling the JS state machine, so an AOT app gets real gesture negotiation — a granted
-  pan blocks a ScrollView's auto-scroll. `onPanResponderStart`/`End` stay Flow A only.
+- Added `PanResponder`, in **both flows**. Drags, swipes, and flings come with the start point, the
+  travel, and the velocity already worked out, and the gesture rides the engine's real responder
+  negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a
+  started scroll — with capture, rejection, and termination-request all supported. Flow B compiles the
+  same source, the AOT lowering it onto that C responder system instead of transpiling the JS state
+  machine, so an AOT app needs no JS on the device. The multi-finger join/leave callbacks
+  (`onPanResponderStart`/`End`) are Flow A only, though `numberActiveTouches` counts fingers in both;
+  RN's Android-specific `onShouldBlockNativeResponder` is out of scope everywhere.
 - Raw touch events now carry the gesture: `e.dx`/`e.dy` (travel since touch-down) and `e.vx`/`e.vy`
   (px/ms). A flick is `onTouchEnd={e => e.vx > 0.4 && next()}` in either flow — no recognizer, and
   nothing an AOT handler could have computed for itself.
-- Added `PanResponder` (Flow A). Drags, swipes, and flings come with the start point, the travel,
-  and the velocity already worked out, and the gesture rides the engine's real responder
-  negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a
-  started scroll — with capture, rejection, termination-request, and multi-finger join/leave all
-  supported. Only the Android-specific `onShouldBlockNativeResponder` is out of scope.
 - The RN responder props (`onStartShouldSetResponder`, `onResponderGrant`, …) now work on every
   component (Flow A), for gestures that don't fit the pan shape.
 - A ScrollView that yields a drag to another gesture responder now stops dead instead of coasting
