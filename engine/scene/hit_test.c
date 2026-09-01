@@ -1223,6 +1223,15 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
                     if (yields)
                     {
+                        /* A scroller losing the gesture must stop DEAD, not coast: its live velocity
+                         * was fed by the very moves that are now the claimant's, so momentum after
+                         * the handover would fight the new responder's gesture. */
+                        if (responder
+                            && (responder->type == ER_NODE_SCROLL_VIEW || responder->type == ER_NODE_FLAT_LIST))
+                        {
+                            responder->scroll_vel_x = 0.0f;
+                            responder->scroll_vel_y = 0.0f;
+                        }
                         terminate_responder_if_active(touch, &rdata);
                         grant_responder(touch, claimant, &rdata);
                     }

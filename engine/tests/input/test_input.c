@@ -1226,6 +1226,78 @@ static int test_responder_move_should_set(void)
     return EXIT_SUCCESS;
 }
 
+/** @brief ER_EVENT_SCROLL callback: counts scroll events (auto-scroll observation). */
+static void count_scroll(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (*(int*)user_data)++;
+}
+
+/**
+ * @brief Checks that a ScrollView which YIELDS the responder to a move-should-set claimant stops
+ *        dead: its momentum velocity is zeroed at the handover, so it does not keep scrolling
+ *        (coasting) under the new responder's gesture.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_takeover_stops_scroll(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord rec = {0};
+    rec.should_claim = true;
+    rec.min_abs_dx = 30; /* claim only once the drag is well past the scroller's slop */
+    int scroll_events = 0;
+
+    ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
+    ERProps sp = props_default();
+    sp.position = ER_POS_ABSOLUTE;
+    sp.left = 0;
+    sp.top = 0;
+    sp.width = 100;
+    sp.height = 100;
+    er_node_set_props(sv, &sp);
+    er_event_set(sv, ER_EVENT_SCROLL, count_scroll, &scroll_events);
+
+    ERNode* content = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.width = 400; /* wider than the viewport so horizontal scrolling has range */
+    cp.height = 100;
+    er_node_set_props(content, &cp);
+    wire_responder(content, &rec);
+    er_responder_query_set(content, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+
+    er_tree_append_child(root, sv);
+    er_tree_append_child(sv, content);
+    er_commit();
+
+    /* Drag with ticks between moves so the scroller accrues real momentum velocity. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 80, 50);
+    embedded_renderer_tick(16U);
+    touch_move(70, 50); /* |dx| 10: past the scroll slop — auto-scroll claims and scrolls */
+    embedded_renderer_tick(16U);
+    touch_move(60, 50); /* |dx| 20: still the scroller's; velocity is now non-zero */
+
+    if (scroll_events == 0)
+        return fail("auto-scroll never scrolled before the takeover");
+
+    embedded_renderer_tick(16U);
+    touch_move(45, 50); /* |dx| 35: the claimant takes the gesture; the scroller must yield AND stop */
+
+    if (rec.grant_count != 1)
+        return fail("move-should-set claimant was not granted at takeover");
+
+    const int at_takeover = scroll_events;
+    for (int i = 0; i < 30; i++)
+        embedded_renderer_tick(16U);
+
+    if (scroll_events != at_takeover)
+        return fail("yielded ScrollView kept coasting after the takeover");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 45, 50);
+    return EXIT_SUCCESS;
+}
+
 /**
  * @brief Checks that a capture-phase claim (ER_QUERY_START_SHOULD_SET_CAPTURE on the parent)
  *        wins over a bubble-phase claim (ER_QUERY_START_SHOULD_SET on the child).
@@ -2119,6 +2191,8 @@ int main(void)
     if (test_responder_start_should_set() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_responder_move_should_set() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_takeover_stops_scroll() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_responder_capture_wins_over_bubble() != EXIT_SUCCESS)
         return EXIT_FAILURE;

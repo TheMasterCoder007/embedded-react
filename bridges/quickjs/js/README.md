@@ -79,12 +79,13 @@ npx embedded-react export --out sim-export   # then: npx serve sim-export  (or d
 ```
 src/
   embedded-react/          the public package surface (what apps import)
-    index.js               barrel: components, StyleSheet, Platform, AppRegistry, Animated, Easing
+    index.js               barrel: components, StyleSheet, Platform, AppRegistry, Animated, PanResponder, Easing
     components.js          host component tags (View, Text, … → ERNodeType)
     StyleSheet.js          create() / flatten()
     Platform.js            { OS: 'embedded', select }
     AppRegistry.js         registerComponent(...) → mounts into a screen-sized root
     Animated.js            Value / timing / spring / decay / View|Text|Image / interpolate
+    PanResponder.js        create(config) → panHandlers: drag/swipe/fling over onTouch*
     Easing.js              easing tokens (+ bezier) → engine curves
     split-style.js         pure: split style into static props + animated bindings
     __tests__/             co-located UNIT tests for the pure surface
@@ -135,9 +136,68 @@ page change. Hiding costs a repaint, and a hidden page costs nothing per frame e
 rendering into it.
 
 `visible={false}` is the same switch under the other spelling, with an explicit `style.display`
-winning over it (`<Modal visible>` is unaffected — that is the Modal's own show/hide prop). Both work in Flow B too, where `display` can be static or 
+winning over it (`<Modal visible>` is unaffected — that is the Modal's own show/hide prop). Both work
+in Flow B too, where `display` can be static or state-driven — `display: page === 'home' ? 'flex' : 'none'`
+compiles, but a state-driven one has to be a string literal or a ternary of them, whereas `visible` takes
+any boolean expression. Either spelling lowers to a `p.display` write in `app_update`, so hiding costs no
+node churn there either. The one gap is `visible` on an `<Svg>`, which the AOT rejects outright: wrap it
+(`<View visible={…}><Svg …/></View>`) and the whole subtree goes with the View.
 The trade is memory: a cached page holds its nodes for the life of the app, so cache
 the pages you flip between, not every page.
+
+### Gestures — `PanResponder`
+
+`onTouchMove` gives you an absolute point and nothing else, so every drag ends up re-deriving the same
+three things by hand: where the finger started, how far it has travelled, how fast it is going.
+`PanResponder` does that once, in the RN shape:
+
+```jsx
+const pan = useRef(
+  PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderMove: (e, g) => setX(g.dx),
+    onPanResponderRelease: (e, g) => (g.vx > 0.5 ? next() : settle()),
+  }),
+).current;
+
+<View style={styles.overlay} {...pan.panHandlers} />;
+```
+
+Create it **once** per component and keep it in a ref — the handlers close over one gesture state, so
+re-creating it per render throws the drag away. `gestureState` carries `x0`/`y0` (the grant point),
+`dx`/`dy` (travel since the grant), `vx`/`vy` (px per ms), `moveX`/`moveY`, `numberActiveTouches` and
+`stateID`. Returning `true` from `onMoveShouldSetPanResponder` claims the gesture mid-pan and re-anchors
+`dx`/`dy` at that point, so a slop threshold never shows up as a jump. With neither should-set callback
+supplied nothing is ever granted — same as RN.
+
+`panHandlers` are the RN **responder props** — should-set queries plus `onResponderGrant`/`Move`/
+`Release`/`Terminate` — wired straight into the engine's C responder system, so claiming is real
+*negotiation*, not just listening:
+
+- **A granted pan OWNS the gesture.** A `ScrollView` ancestor will not auto-scroll under it, and a
+  `onMoveShouldSetPanResponder` claim takes the gesture *back* from a scroller that already started
+  (which then stops dead — no coasting).
+- **Negotiation covers the subtree.** The engine asks every node on the hit chain — capture phase
+  root→leaf first (the `*Capture` config keys), then bubble leaf→root — so one responder on a wrapper
+  claims its children's touches, and an outer responder can pre-empt an inner one.
+- **Losing and defending are callbacks.** A refused claim lands on `onPanResponderReject` (and is
+  re-asked on every later move while the predicate keeps returning true); a challenger asking for the
+  gesture hits the holder's `onPanResponderTerminationRequest` — return `false` to keep it (absent =
+  yield, as in RN).
+- **`onPanResponderTerminate` is the undo hook.** It fires when the host cancels the touch sequence,
+  when a fresh touch-down arrives on a finger whose previous sequence never ended, and when the
+  responder yields to a challenger.
+- **Flow A only, single gesture.** The AOT compiler only spreads compile-time-constant objects, so
+  `{...pan.panHandlers}` fails the build ("AOT: a spread `{...}` on `<View>` is not supported") — Flow
+  B support is tracked in
+  [#176](https://github.com/TheMasterCoder007/embedded-react/issues/176). And the engine events carry
+  no finger id, so extra fingers fold into ONE gesture: they fire `onPanResponderStart`/`End`,
+  `numberActiveTouches` counts them, and the last to lift releases.
+
+The low-level responder props (`onStartShouldSetResponder`, `onResponderGrant`, …) are themselves
+public on every component for gestures that don't fit the pan shape. Only RN's Android-specific
+`onShouldBlockNativeResponder` is unsupported — holding the responder already blocks the native one
+(the built-in adjustable-Arc drag deliberately still wins). Passing it, or a typo, warns.
 
 ## Build
 
@@ -313,6 +373,13 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   tweens every node whose computed rect moved on the next commit (in C — no per-frame JS). `Presets`
   / `create` / `Types` / `Properties` and the `easeInEaseOut`/`linear`/`spring` shorthands. Covered
   by `layout-animation` unit + `layout-anim.runtime.test.jsx`.
+- ✅ **`PanResponder` + the gesture responder system.** The full RN config minus only the
+  Android-specific `onShouldBlockNativeResponder`: should-set predicates (with `*Capture` variants),
+  grant / move / release / terminate / reject / termination-request, `onPanResponderStart`/`End` for
+  extra fingers, and a `gestureState` (`x0`/`y0`, `dx`/`dy`, `vx`/`vy`, `numberActiveTouches`) — wired
+  to the ENGINE's responder negotiation, so a granted pan blocks a ScrollView's auto-scroll and can
+  take a started scroll over. The low-level responder props are public on every component. Covered by
+  `pan-responder` unit + `pan-responder.runtime.test.jsx` + the engine's `test_input` responder cases.
 - ✅ **Interpolate `extrapolate`.** `interpolate({ inputRange, outputRange, extrapolate })` supports
   `'extend'` (default) / `'clamp'` / `'identity'`, with per-end `extrapolateLeft`/`extrapolateRight`
   overrides. Math is engine-tested (`test_interpolate`); the bridge path by

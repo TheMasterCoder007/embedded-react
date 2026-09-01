@@ -48,9 +48,11 @@ const INTERNAL_PROPS = new Set(['text']);
 const bridgePropNames = c =>
   [...c.matchAll(/\[PROP_[A-Z0-9_]+\]\s*=\s*"([A-Za-z]+)"/g)].map(m => m[1]);
 
-/** The handler names of the bridge's `event_type_from_name` map. */
+/** The handler names of the bridge's `event_type_from_name` + `query_type_from_name` maps (responder
+ *  negotiation queries ride the same setEvent prop path as events, so both are part of the routed
+ *  handler surface). */
 const bridgeEventNames = c =>
-  [...c.matchAll(/\{"(on[A-Za-z]+)",\s*ER_EVENT_/g)].map(m => m[1]);
+  [...c.matchAll(/\{"(on[A-Za-z]+)",\s*ER_(?:EVENT|QUERY)_/g)].map(m => m[1]);
 
 /** The entries of props.js's PASSTHROUGH array. */
 function passthroughNames(js) {
@@ -66,6 +68,23 @@ const declaredKeys = dts =>
       m => m[1],
     ),
   );
+
+// Interfaces that are NOT component props: the callback bag of a JS-side module. Their `on*` keys are
+// invented by that module and go nowhere near the bridge's event table, so the phantom-handler check
+// below skips them. Anything declared outside this is a prop and must map to a real engine event.
+const NON_PROP_HANDLER_INTERFACES = ['PanResponderConfig'];
+
+/** Body of `interface NAME { … }`, brace-matched so a nested object literal doesn't end it early. */
+function interfaceBody(dts, name) {
+  const start = dts.search(new RegExp(`interface\\s+${name}\\s*\\{`));
+  if (start < 0) throw new Error(`index.d.ts: interface ${name} not found`);
+  let i = dts.indexOf('{', start);
+  for (let depth = 0; i < dts.length; i++) {
+    if (dts[i] === '{') depth++;
+    else if (dts[i] === '}' && --depth === 0) return dts.slice(start, i);
+  }
+  throw new Error(`index.d.ts: interface ${name} is not brace-balanced`);
+}
 
 /** Handler-shaped keys (`onFoo?: …`) declared in the declarations. */
 const declaredHandlers = dts => [
@@ -120,8 +139,14 @@ describe('embedded-react public types match the runtime prop surface', () => {
   });
 
   it('declares no handler the bridge would ignore', () => {
+    const clean = stripComments(dts);
+    const moduleCallbacks = new Set(
+      NON_PROP_HANDLER_INTERFACES.flatMap(n =>
+        declaredHandlers(interfaceBody(clean, n)),
+      ),
+    );
     const phantom = declaredHandlers(dts)
-      .filter(n => !events.includes(n))
+      .filter(n => !events.includes(n) && !moduleCallbacks.has(n))
       .sort();
     expect(
       phantom,

@@ -116,21 +116,27 @@ static JSValue rt_console_log(JSContext* ctx, JSValueConst this_val, int argc, J
  * @param[in] ctx  QuickJS context.
  */
 /**
- * @brief __touch(phase, x, y): injects one touch event (phase 0 down / 1 move / 2 up / 3 cancel) and flushes
- *        coalesced moves — lets a runtime test drive engine-native gestures (a Dial drag) through the real
- *        bridge event path. Test runner only; the device host feeds touches from its panel driver.
+ * @brief __touch(phase, x, y[, finger]): injects one touch event (phase 0 down / 1 move / 2 up / 3 cancel)
+ *        and flushes coalesced moves — lets a runtime test drive engine-native gestures (a Dial drag, a
+ *        responder negotiation) through the real bridge event path. The optional finger index (default 0)
+ *        exercises the engine's per-finger touch slots for multi-touch scenarios. Test runner only; the
+ *        device host feeds touches from its panel driver.
  */
 static JSValue rt_touch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    int32_t phase = 0, x = 0, y = 0;
+    int32_t phase = 0, x = 0, y = 0, finger = 0;
     if (argc >= 3)
     {
         JS_ToInt32(ctx, &phase, argv[0]);
         JS_ToInt32(ctx, &x, argv[1]);
         JS_ToInt32(ctx, &y, argv[2]);
     }
-    embedded_renderer_touch(0, (ERTouchPhase)phase, x, y);
+    if (argc >= 4)
+    {
+        JS_ToInt32(ctx, &finger, argv[3]);
+    }
+    embedded_renderer_touch((uint8_t)finger, (ERTouchPhase)phase, x, y);
     embedded_renderer_flush_touch();
     return JS_UNDEFINED;
 }
@@ -138,7 +144,7 @@ static JSValue rt_touch(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 static void rt_install_globals(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "__touch", JS_NewCFunction(ctx, rt_touch, "__touch", 3));
+    JS_SetPropertyStr(ctx, global, "__touch", JS_NewCFunction(ctx, rt_touch, "__touch", 4));
 
     JSValue console = JS_NewObject(ctx);
     JSValue log = JS_NewCFunction(ctx, rt_console_log, "log", 1);
