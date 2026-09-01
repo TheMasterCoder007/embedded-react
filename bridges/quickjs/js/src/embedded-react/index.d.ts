@@ -231,14 +231,19 @@ export interface LayoutRectangle {
  * traveled since the touch went down.
  */
 /**
- * The touch payload every gesture callback receives: the point, plus the displacement from touch-down
- * (`dx`/`dy` are 0 on the raw touch events, which carry only the point).
+ * The touch payload every gesture callback receives: the point, the displacement from touch-down, and
+ * the speed the finger was traveling at when it was last measured. Raw `onTouch*` events carry the same
+ * fields as the responder events do, so a flick is `onTouchEnd={e => e.vx > 0.4 && next()}` — no
+ * PanResponder and no clock needed.
  */
 export interface TouchPoint {
   x: number;
   y: number;
   dx: number;
   dy: number;
+  /** Velocity in px/ms, measured over the most recent move (0 before the first one). */
+  vx: number;
+  vy: number;
 }
 
 export interface NativeEvent<T extends string = string> extends TouchPoint {
@@ -787,6 +792,11 @@ export type PanResponderPredicate = (
  * responder never grants, exactly as in RN.
  *
  * Only `onShouldBlockNativeResponder` (Android-specific) is absent; passing it — or a typo — warns.
+ *
+ * Flow B compiles this config too: the AOT lowers `useRef(PanResponder.create({…})).current` and the
+ * `{...pan.panHandlers}` spread onto the same engine responder system, so the gesture needs no JS on the
+ * device. `onPanResponderStart`/`End` are the exception — they fold EXTRA fingers into one gesture, which
+ * is Flow A only, and the AOT fails the build by name rather than dropping them.
  */
 export interface PanResponderConfig {
   onStartShouldSetPanResponder?: PanResponderPredicate;
@@ -802,11 +812,12 @@ export interface PanResponderConfig {
   onPanResponderTerminationRequest?: PanResponderPredicate;
   /** This responder's claim lost a negotiation. Re-asked claims are re-rejected on later moves. */
   onPanResponderReject?: PanResponderCallback;
-  /** A later finger joined the gesture in flight. */
+  /** A later finger joined the gesture in flight. Flow A only (the AOT rejects it by name). */
   onPanResponderStart?: PanResponderCallback;
   /**
    * A finger lifted, but the gesture continues on the ones still down. Driven by the raw touch stream
-   * rather than a responder event, so this one receives the `touchEnd` payload.
+   * rather than a responder event, so this one receives the `touchEnd` payload. Flow A only (the AOT
+   * rejects it by name).
    */
   onPanResponderEnd?: (
     event: NativeEvent<'touchEnd'>,

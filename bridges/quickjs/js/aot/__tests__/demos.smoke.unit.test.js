@@ -39,6 +39,9 @@ describe('AOT demo compile smoke', () => {
     expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
     expect(r.nodes).toBeGreaterThan(0);
     expect(r.c).toContain('static void er_timer_fn_1(void);');
+    // Its swipe pager is a PanResponder, lowered onto the engine's own responder negotiation.
+    expect(r.c).toContain('ER_QUERY_START_SHOULD_SET');
+    expect(r.c).toContain('ER_EVENT_RESPONDER_MOVE');
   });
 
   it('compiles the thermostat demo for a 240×320 (CYD) screen — the solo dial branch', async () => {

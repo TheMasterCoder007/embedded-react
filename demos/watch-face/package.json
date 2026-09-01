@@ -6,12 +6,10 @@
   "description": "embedded-react watch face demo \u2014 a two-page swipe pager (digital watch face + bubble level) for the Waveshare RP2040-Touch-LCD-1.69 (240\u00d7280).",
   "scripts": {
     "dev": "embedded-react dev",
-    "dev:pan": "embedded-react dev index.pan.jsx",
     "dev:device": "embedded-react dev --device",
     "export": "embedded-react export --out sim-export",
     "build": "embedded-react build",
-    "build:aot": "embedded-react build --aot --screen 240x280",
-    "build:pan": "embedded-react build index.pan.jsx"
+    "build:aot": "embedded-react build --aot --screen 240x280"
   },
   "dependencies": {
     "embedded-react": "^0.12.0",

@@ -12,6 +12,12 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- `PanResponder` now compiles in Flow B. The AOT lowers it onto the engine's C responder system
+  instead of transpiling the JS state machine, so an AOT app gets real gesture negotiation — a granted
+  pan blocks a ScrollView's auto-scroll. `onPanResponderStart`/`End` stay Flow A only.
+- Raw touch events now carry the gesture: `e.dx`/`e.dy` (travel since touch-down) and `e.vx`/`e.vy`
+  (px/ms). A flick is `onTouchEnd={e => e.vx > 0.4 && next()}` in either flow — no recognizer, and
+  nothing an AOT handler could have computed for itself.
 - Added `PanResponder` (Flow A). Drags, swipes, and flings come with the start point, the travel,
   and the velocity already worked out, and the gesture rides the engine's real responder
   negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a
@@ -21,8 +27,8 @@ See the README for the release process.
   component (Flow A), for gestures that don't fit the pan shape.
 - A ScrollView that yields a drag to another gesture responder now stops dead instead of coasting
   on its leftover momentum.
-- The watch-face demo now ships its swipe pager twice — the stock AOT-compatible one and a
-  `PanResponder` variant (`npm run dev:pan`) — so the two approaches sit side by side.
+- The watch-face demo's swipe pager is now a `PanResponder` in both flows (the hand-rolled variant is
+  gone). It gains flick-to-turn and no longer wedges mid-drag when a touch is canceled.
 - The shipped TypeScript declarations now cover what the runtime actually supports. Touch handlers
   (`onTouchCancel` and the rest), `pointerEvents`, `<Image resizeMode>` and `tintColor`, per-edge
   borders and radii, shadows, absolute positioning, `fontStyle`/`lineHeight`/`letterSpacing`, and

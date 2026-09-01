@@ -842,8 +842,10 @@ extern "C"
     {
         int x;                    /**< Touch X coordinate in framebuffer pixels. */
         int y;                    /**< Touch Y coordinate in framebuffer pixels. */
-        int dx;                   /**< X displacement from touch-down origin (responder events). */
-        int dy;                   /**< Y displacement from touch-down origin (responder events). */
+        int dx;                   /**< X displacement from touch-down origin (touch + responder events). */
+        int dy;                   /**< Y displacement from touch-down origin (touch + responder events). */
+        float vx;                 /**< X velocity in px/ms at the last sampled move (touch + responder events). */
+        float vy;                 /**< Y velocity in px/ms at the last sampled move (touch + responder events). */
         float scroll_x;           /**< Scroll offset X (ER_EVENT_SCROLL). */
         float scroll_y;           /**< Scroll offset Y (ER_EVENT_SCROLL). */
         ERRect layout_rect;       /**< New computed rectangle (ER_EVENT_LAYOUT). */
@@ -867,7 +869,7 @@ extern "C"
      * Returns true when the node wishes to become (or remain) the active gesture responder.
      *
      * @param[in] node       The node being queried.
-     * @param[in] data       Current touch event payload (x, y, dx, dy populated).
+     * @param[in] data       Current touch event payload (x, y, dx, dy, vx, vy populated).
      * @param[in] user_data  Opaque pointer supplied at registration.
      *
      * @return true to claim or retain the responder; false to pass.
@@ -1518,6 +1520,20 @@ extern "C"
      * @param[in] user_data  Opaque pointer forwarded to the callback.
      */
     void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data);
+
+    /**
+     * @brief Returns how many fingers are currently down (touch sequences in flight).
+     *
+     * This is RN's `gestureState.numberActiveTouches` — what a gesture recogniser reads to tell a
+     * one-finger pan from a two-finger one. The engine owns the per-finger touch slots, so neither an
+     * AOT-generated app nor a JS module can count them for itself without shadowing every touch event.
+     *
+     * Counts fingers whose touch-down landed on a node: a touch that hit nothing starts no sequence
+     * and so is not tracked.
+     *
+     * @return Number of active touches, 0 when nothing is down.
+     */
+    int er_touch_active_count(void);
 
     /*------------------------------------------------------------------------------------------------------
      - On-screen software keyboard (compiled in only when ERUI_ONSCREEN_KEYBOARD=1; for touch-only devices)

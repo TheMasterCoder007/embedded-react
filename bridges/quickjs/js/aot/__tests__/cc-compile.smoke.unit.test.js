@@ -174,6 +174,62 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `a PanResponder pager passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // The responder lowering generates two callback SHAPES the rest of the codegen never emits — a
+      // bool-returning ERResponderQueryFn and er_responder_query_set — plus a call to the engine's own
+      // er_touch_active_count(). A regex can't tell whether those still match the engine headers.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Text, PanResponder } from 'embedded-react';
+         export function App() {
+           const [page, setPage] = useState(0);
+           const [slide, setSlide] = useState(0);
+           const at = useRef(0);
+           const pan = useRef(PanResponder.create({
+             onStartShouldSetPanResponder: () => true,
+             onMoveShouldSetPanResponderCapture: (e, g) => Math.abs(g.dx) > 8,
+             onPanResponderTerminationRequest: () => false,
+             onPanResponderGrant: (e, g) => { at.current = g.x0; },
+             onPanResponderMove: (e, g) => setSlide(Math.max(0, Math.min(240, at.current - g.dx))),
+             onPanResponderRelease: (e, g) => setPage(g.vx < -0.4 || g.dx < -120 ? 1 : 0),
+             onPanResponderTerminate: () => setSlide(0),
+             onPanResponderReject: (e, g) => setSlide(g.numberActiveTouches),
+           })).current;
+           return (
+             <View style={{ flex: 1, marginLeft: -slide }}>
+               <Text>{page}</Text>
+               <View style={{ width: 240, height: 240 }} {...pan.panHandlers} />
+             </View>
+           );
+         }`,
+        'pan',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-pan-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `a state-driven <Rect rx> passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // A corner radius bounded by a state-driven side clamps in C (fminf/fmaxf), so this is the one

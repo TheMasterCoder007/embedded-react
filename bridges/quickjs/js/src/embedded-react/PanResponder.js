@@ -53,9 +53,11 @@
 // `numberActiveTouches` counts them, extra fingers fire `onPanResponderStart`/`End`, and the last one
 // to lift releases; two independent single-finger gestures need two responders on disjoint subtrees.
 //
-// Flow A only. The AOT compiler (Flow B) only spreads compile-time-constant objects, so
-// `{...pan.panHandlers}` fails the build with "AOT: a spread {...} on <View> is not supported"; Flow B
-// support is tracked in #176.
+// Flow B compiles the same code: the AOT recognises `useRef(PanResponder.create({…})).current`
+// and the `{...pan.panHandlers}` spread as a special form and lowers them onto the SAME C responder
+// system this module rides — so no part of this file ships to a device that has no JS. Only
+// `onPanResponderStart`/`End`, which exist here to fold extra fingers into one gesture, are Flow A only;
+// the AOT names them rather than dropping them.
 
 /** Per-instance gesture id, so two responders on screen at once are told apart. */
 let s_nextStateID = 1;

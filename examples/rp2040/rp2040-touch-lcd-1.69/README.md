@@ -79,9 +79,11 @@ and reflash.
   `er_app_set_dotx/doty`); `main.c` calls them each frame when the value changes. (`useHostValue` is the
   general Flow B mechanism for feeding host/sensor data into a compiled app — no engine changes, no
   QuickJS.)
-- **The swipe pager** needs no engine features: a 480-wide track holds both pages and a dynamic
-  `marginLeft` (state-driven margins are allowed) follows the finger, then a ~30 fps interval eases it
-  to the settled page on release. A transparent full-screen overlay captures the touch events.
+- **The swipe pager** needs no engine features beyond the gesture responder the engine already has: a
+  480-wide track holds both pages and a dynamic `marginLeft` (state-driven margins are allowed) follows
+  the finger, then a ~30 fps interval eases it to the settled page on release. A transparent
+  full-screen overlay captures the swipe with a `PanResponder`, which the AOT lowers onto the engine's
+  C responder negotiation — so travel and flick speed arrive worked out, with no JS on the board.
 - The **render backend** (`backends/pico-spi-lcd`) keeps one 240×280 RGB565 framebuffer in SRAM
   (131 KB), composites the engine's fills/blits into it, and on present streams only the dirty
   rectangle to the panel.
