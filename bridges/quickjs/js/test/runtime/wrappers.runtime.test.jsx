@@ -66,8 +66,8 @@ const tap = box => {
     box != null && box.width > 0 && box.height > 0,
     `Button sized itself to its label (${box && box.width}x${box && box.height})`,
   );
-  // padding: 8 on all four sides. It sits on the <Pressable> because an auto-sized text node measures
-  // its glyph run only — RN's padding-on-the-<Text> would have laid out as nothing at all.
+  // padding: 8 on all four sides, set on the label exactly as RN sets it — which is only meaningful
+  // because an auto-sized text node now grows around its own padding (engine/layout/layout_engine.c).
   check(
     box != null &&
       bare != null &&

@@ -153,3 +153,7 @@ target_link_libraries(test_transform_singular_damage PRIVATE embedded-react)
 # asserts each case really straddles the invert epsilon and that the paint took the fallback path.
 target_include_directories(test_transform_singular_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_transform_singular_damage COMMAND test_transform_singular_damage)
+
+add_executable(test_text_padding test_text_padding.c)
+target_link_libraries(test_text_padding PRIVATE embedded-react)
+add_test(NAME rendering_text_padding COMMAND test_text_padding)

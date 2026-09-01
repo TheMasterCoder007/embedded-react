@@ -2475,10 +2475,24 @@ static void render_node_content(
             case ER_NODE_TEXT:
             {
                 const ERTextProps* tp = &n->props.text;
+                /* Glyphs go in the node's PADDING BOX, not its border box. par.clip is both the clip
+                 * and the layout rect, so this one inset moves the origin, narrows the wrap width and
+                 * re-anchors text_align in a single step — and it is the same padding measure_content()
+                 * grew the auto-sized node by, so a padded <Text> fits its own glyph run exactly.
+                 *
+                 * Text is the only case below that does this. Image / Svg / Arc / Switch / TextInput
+                 * still paint across their whole border box — tracked in #180, not an oversight here. */
+                const ERPadding tpad = er_layout_padding(&n->layout);
+                int text_w = w - tpad.left - tpad.right;
+                int text_h = h - tpad.top - tpad.bottom;
+                if (text_w < 0)
+                    text_w = 0;
+                if (text_h < 0)
+                    text_h = 0;
                 ERTextRenderParams par;
                 memset(&par, 0, sizeof(par));
                 par.text = tp->text;
-                par.clip = (ERRect){px, py, w, h};
+                par.clip = (ERRect){px + tpad.left, py + tpad.top, text_w, text_h};
                 par.color = tp->color ? tp->color : 0xFFFFFFFFU;
                 par.font_size = tp->font_size;
                 par.font_family = tp->font_family;

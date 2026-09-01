@@ -229,10 +229,8 @@ they add no engine node type, and each one is a fixed rewrite you could have wri
 They exist, so RN source pastes in and runs. Reach for the primitives directly whenever you want
 control — that is what the wrapper is doing anyway.
 
-Four things differ from upstream, all of them forced by the engine rather than chosen:
+Three things differ from upstream, all of them forced by the engine rather than chosen:
 
-- **`<Button>` pads its `<Pressable>`, not its `<Text>`.** An auto-sized text node measures its glyph
-  run and nothing else, so RN's padding-on-the-label would lay out as zero. Same pixels, one node up.
 - **`<Button>` is two nodes, not three.** RN wraps the label in a `<View>` inside its touchable because
   that touchable takes no style; `<Pressable>` here *is* a styled scene node, so the `<View>` is
   dropped. At 44 nodes total on a CYD, a node per button is worth having.

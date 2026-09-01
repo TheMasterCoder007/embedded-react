@@ -215,8 +215,11 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
     const int16_t exp_w = L->width;
     const int16_t exp_h = L->height;
 
-    /* Text leaf: measure the glyph run (mirrors the Text branch of Pass 1). Both axes
-     * explicit means the measurement result is never consulted below, so skip it. */
+    /* Text leaf: measure the glyph run, then add the node's own padding — the glyphs are this node's
+     * content, so an auto axis has to grow around them exactly as a container grows around a child
+     * (the compositor insets the render clip by the same padding, so the two agree). An EXPLICIT
+     * width/height already includes its padding, as everywhere else here. Both axes explicit means
+     * the measurement result is never consulted below, so skip it. */
     if (n->type == ER_NODE_TEXT)
     {
         int16_t tw, th;
@@ -227,6 +230,7 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
         }
         else
         {
+            const ERPadding tp = er_layout_padding(L);
             int measured_w = 0, measured_h = 0;
             if (n->props.text.span_count > 0U)
             {
@@ -253,8 +257,8 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
             }
             const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
             const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
-            tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)measured_w;
-            th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines);
+            tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(measured_w + tp.left + tp.right);
+            th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines + tp.top + tp.bottom);
         }
         *out_w = clamp_size(tw, L->min_width, L->max_width);
         *out_h = clamp_size(th, L->min_height, L->max_height);
@@ -322,13 +326,10 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
         }
     }
 
-    const int16_t pl = edge_or(L->padding_left, L->padding);
-    const int16_t pr = edge_or(L->padding_right, L->padding);
-    const int16_t pt = edge_or(L->padding_top, L->padding);
-    const int16_t pb = edge_or(L->padding_bottom, L->padding);
+    const ERPadding pad = er_layout_padding(L);
 
-    const int16_t iw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(content_w + pl + pr);
-    const int16_t ih = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(content_h + pt + pb);
+    const int16_t iw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(content_w + pad.left + pad.right);
+    const int16_t ih = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(content_h + pad.top + pad.bottom);
     *out_w = clamp_size(iw, L->min_width, L->max_width);
     *out_h = clamp_size(ih, L->min_height, L->max_height);
     if (cacheable)
@@ -383,10 +384,11 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     const ERLayoutSpec* L = &n->layout;
 
     /* Padding (per-edge wins over shorthand). */
-    const int16_t pl = edge_or(L->padding_left, L->padding);
-    const int16_t pr = edge_or(L->padding_right, L->padding);
-    const int16_t pt = edge_or(L->padding_top, L->padding);
-    const int16_t pb = edge_or(L->padding_bottom, L->padding);
+    const ERPadding pad = er_layout_padding(L);
+    const int16_t pl = pad.left;
+    const int16_t pr = pad.right;
+    const int16_t pt = pad.top;
+    const int16_t pb = pad.bottom;
 
     int16_t content_w = (int16_t)(w - pl - pr);
     int16_t content_h = (int16_t)(h - pt - pb);

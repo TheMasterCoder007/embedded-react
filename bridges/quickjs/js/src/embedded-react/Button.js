@@ -36,16 +36,11 @@ import {createPropWarner} from './warn-props.js';
 // branch applies. These are the android ones — a filled, rounded button — because a panel button
 // should read as a button before it is styled, and the ios branch is bare text. RN's `elevation: 4`
 // is dropped: shadows are compile-gated (ERUI_SHADOWS) and off in every board config here, so it
-// would be a prop marshalled on every commit to paint nothing.
-//
-// The padding is the one value that MOVED: RN puts it on the <Text>, but an auto-sized text node here
-// measures its glyph run and nothing else (layout_engine.c), so padding on the label would be dropped
-// on the floor and the button would hug its letters. On the <Pressable> it lays out — same pixels, one
-// node up. `textAlign` still belongs on the label, which stretches to the button's content width.
+// would be a prop marshaled on every commit to paint nothing.
 const styles = {
-  button: {backgroundColor: '#2196F3', borderRadius: 2, padding: 8},
+  button: {backgroundColor: '#2196F3', borderRadius: 2},
   buttonDisabled: {backgroundColor: '#dfdfdf'},
-  text: {color: '#ffffff', textAlign: 'center', fontWeight: '500'},
+  text: {color: '#ffffff', textAlign: 'center', padding: 8, fontWeight: '500'},
   textDisabled: {color: '#a1a1a1'},
 };
 

@@ -145,6 +145,10 @@ See the README for the release process.
 
 ### Fixed
 
+- `padding` on a `<Text>` now lays out, in both flows. The engine measured an auto-sized text node's
+  glyph run and stopped there, so padding on a label typechecked, marshaled, and then did nothing —
+  the box never grew and the glyphs never moved. Padded labels and text-only buttons hug their letters
+  no longer.
 - `<FlatList>` now renders in Flow A. `data` and `renderItem` were dropped as unknown props, so a list
   drew an empty scroller with no warning; it now maps rows into a `<ScrollView>` exactly as the AOT
   already did. Props neither flow supports (`horizontal`, `onEndReached`, …) warn instead of vanishing.

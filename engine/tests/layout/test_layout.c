@@ -380,6 +380,103 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * Test: padding on a Text node grows its AUTO size, exactly as on a View.
+     *
+     * A text node's glyph run is its content, so an auto axis has to grow around
+     * it. This used to be dropped on the floor: measure_content()'s Text branch
+     * returned the raw glyph measurement and never added the node's own padding,
+     * so `padding` typechecked, marshalled, and then laid out as nothing.
+     *
+     * Every case measures the SAME string at the same size, so the padded boxes
+     * are asserted against the bare one rather than against baked-in glyph
+     * metrics — the numbers hold whatever font the build ships.
+     * -----------------------------------------------------------------------*/
+    {
+        static const char* k_word = "Save";
+
+        ERNode* tp_root = er_node_create(ER_NODE_VIEW);
+        ERProps trp = props_default();
+        trp.width = (int16_t)FB_W;
+        trp.height = (int16_t)FB_H;
+        trp.flex_direction = ER_FLEX_COL;
+        trp.align_items = ER_ALIGN_FLEX_START; /* shrink-wrap each child onto its own content */
+        er_node_set_props(tp_root, &trp);
+
+        /* Baseline: no padding. */
+        ERNode* t_bare = er_node_create(ER_NODE_TEXT);
+        ERRect r_bare = {-1, -1, -1, -1};
+        ERProps bp = props_default();
+        bp.font_size = 14;
+        strncpy(bp.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(t_bare, &bp);
+        er_event_set(t_bare, ER_EVENT_LAYOUT, on_layout_rect, &r_bare);
+
+        /* Uniform shorthand: +8 on all four edges. */
+        ERNode* t_pad = er_node_create(ER_NODE_TEXT);
+        ERRect r_pad = {-1, -1, -1, -1};
+        ERProps pp2 = props_default();
+        pp2.font_size = 14;
+        pp2.padding = 8;
+        strncpy(pp2.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(t_pad, &pp2);
+        er_event_set(t_pad, ER_EVENT_LAYOUT, on_layout_rect, &r_pad);
+
+        /* Per-edge + paddingHorizontal, asymmetric so a swapped axis cannot pass. */
+        ERNode* t_edges = er_node_create(ER_NODE_TEXT);
+        ERRect r_edges = {-1, -1, -1, -1};
+        ERProps ep = props_default();
+        ep.font_size = 14;
+        ep.padding_horizontal = 10;
+        ep.padding_top = 3;
+        ep.padding_bottom = 7;
+        strncpy(ep.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(t_edges, &ep);
+        er_event_set(t_edges, ER_EVENT_LAYOUT, on_layout_rect, &r_edges);
+
+        /* Explicit size: padding lives INSIDE it (border-box), as everywhere else here. */
+        ERNode* t_fixed = er_node_create(ER_NODE_TEXT);
+        ERRect r_fixed = {-1, -1, -1, -1};
+        ERProps fp = props_default();
+        fp.font_size = 14;
+        fp.width = 100;
+        fp.height = 40;
+        fp.padding = 8;
+        strncpy(fp.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(t_fixed, &fp);
+        er_event_set(t_fixed, ER_EVENT_LAYOUT, on_layout_rect, &r_fixed);
+
+        er_tree_append_child(tp_root, t_bare);
+        er_tree_append_child(tp_root, t_pad);
+        er_tree_append_child(tp_root, t_edges);
+        er_tree_append_child(tp_root, t_fixed);
+        er_tree_set_root(tp_root);
+        er_commit();
+
+        if (r_bare.w <= 0 || r_bare.h <= 0)
+            return fail("text padding: unpadded baseline measured non-positive");
+        if (r_pad.w != r_bare.w + 16)
+            return fail("text padding: padding=8 did not widen the auto text node by 16");
+        if (r_pad.h != r_bare.h + 16)
+            return fail("text padding: padding=8 did not heighten the auto text node by 16");
+        if (r_edges.w != r_bare.w + 20)
+            return fail("text padding: paddingHorizontal=10 did not widen the text node by 20");
+        if (r_edges.h != r_bare.h + 10)
+            return fail("text padding: paddingTop=3 + paddingBottom=7 did not add 10 to the height");
+        if (r_fixed.w != 100 || r_fixed.h != 40)
+            return fail("text padding: an explicit width/height must already include its padding");
+
+        er_tree_remove_child(tp_root, t_bare);
+        er_tree_remove_child(tp_root, t_pad);
+        er_tree_remove_child(tp_root, t_edges);
+        er_tree_remove_child(tp_root, t_fixed);
+        er_node_destroy(t_bare);
+        er_node_destroy(t_pad);
+        er_node_destroy(t_edges);
+        er_node_destroy(t_fixed);
+        er_node_destroy(tp_root);
+    }
+
+    /* -----------------------------------------------------------------------
      * Test: overflow:scroll — flex_shrink does not squish children to viewport.
      *
      * ScrollView 200×100 (flex_direction=col) contains 3 children each h=60.

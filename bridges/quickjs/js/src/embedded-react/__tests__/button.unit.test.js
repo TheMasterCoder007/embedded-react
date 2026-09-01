@@ -51,19 +51,12 @@ describe('Button renders as a Pressable + Text', () => {
 
   it('paints the default fill and centres the label', () => {
     const el = render({title: 'x'});
-    expect(flat(el)).toMatchObject({backgroundColor: '#2196F3', padding: 8});
+    expect(flat(el).backgroundColor).toBe('#2196F3');
     expect(flat(label(el))).toMatchObject({
       color: '#ffffff',
       textAlign: 'center',
+      padding: 8,
     });
-  });
-
-  // RN pads the <Text>; an auto-sized text node here measures only its glyph run, so padding on the
-  // label would vanish. It has to sit on the <Pressable> or the button hugs its letters.
-  it('puts the padding on the Pressable, not on the label', () => {
-    const el = render({title: 'x'});
-    expect(flat(el).padding).toBe(8);
-    expect(flat(label(el)).padding).toBe(undefined);
   });
 });
 

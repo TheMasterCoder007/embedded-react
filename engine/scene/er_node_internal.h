@@ -66,6 +66,49 @@ typedef struct
 } ERLayoutSpec;
 
 /**
+ * @brief Resolved per-edge padding in pixels, with every shorthand already folded in.
+ */
+typedef struct
+{
+    int16_t left, top, right, bottom;
+} ERPadding;
+
+/**
+ * @brief Resolves a node's padding box: per-edge value, else the shorthand, else 0.
+ *
+ * The single definition of "how wide is this node's padding", shared by the three places that need
+ * it — intrinsic measurement, child placement, and the text paint that insets its glyph origin.
+ * Keeping it in one place is the point: the text branch of measure_content() skipped padding
+ * entirely for as long as each caller resolved its own.
+ *
+ * paddingHorizontal / paddingVertical are NOT read here — er_node_set_props() has already expanded
+ * them into the per-edge fields (per-edge wins), so by the time a spec exists they are gone.
+ *
+ * @param[in] L  Layout spec to resolve. Must not be NULL.
+ *
+ * @return The four resolved edges, each >= 0.
+ */
+static inline ERPadding er_layout_padding(const ERLayoutSpec* L)
+{
+    ERPadding p;
+    p.left = (L->padding_left != ER_LAYOUT_AUTO) ? L->padding_left : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
+    p.top = (L->padding_top != ER_LAYOUT_AUTO) ? L->padding_top : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
+    p.right = (L->padding_right != ER_LAYOUT_AUTO) ? L->padding_right : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
+    p.bottom = (L->padding_bottom != ER_LAYOUT_AUTO) ? L->padding_bottom
+               : (L->padding != ER_LAYOUT_AUTO)      ? L->padding
+                                                     : 0;
+    if (p.left < 0)
+        p.left = 0;
+    if (p.top < 0)
+        p.top = 0;
+    if (p.right < 0)
+        p.right = 0;
+    if (p.bottom < 0)
+        p.bottom = 0;
+    return p;
+}
+
+/**
  * @brief Computed layout rectangle produced by the layout pass.
  */
 typedef struct
@@ -291,15 +334,15 @@ struct ERNode
                                         The damage pre-pass has to predict the same fallback or the two
                                         never agree and the node reads as moved on every commit. Only
                                         meaningful alongside has_last_paint. */
-    uint32_t layout_props_hash; /**< Hash of the layout (Yoga) block of the last applied ERProps. */
-    uint32_t visual_props_hash; /**< Hash of everything after it — appearance, text, image, transform. */
-    bool has_props_hash;        /**< Whether the two hashes above hold a previous update yet. */
-    float scroll_offset_x;      /**< Horizontal scroll position in pixels (ScrollView only). */
-    float scroll_offset_y;      /**< Vertical scroll position in pixels (ScrollView only). */
-    float scroll_vel_x;         /**< Momentum velocity X in px/ms (positive = content moving right). */
-    float scroll_vel_y;         /**< Momentum velocity Y in px/ms (positive = content moving down). */
-    int16_t scroll_content_w;   /**< Bounding width of all children; computed after layout (ScrollView only). */
-    int16_t scroll_content_h;   /**< Bounding height of all children; computed after layout (ScrollView only). */
+    uint32_t layout_props_hash;    /**< Hash of the layout (Yoga) block of the last applied ERProps. */
+    uint32_t visual_props_hash;    /**< Hash of everything after it — appearance, text, image, transform. */
+    bool has_props_hash;           /**< Whether the two hashes above hold a previous update yet. */
+    float scroll_offset_x;         /**< Horizontal scroll position in pixels (ScrollView only). */
+    float scroll_offset_y;         /**< Vertical scroll position in pixels (ScrollView only). */
+    float scroll_vel_x;            /**< Momentum velocity X in px/ms (positive = content moving right). */
+    float scroll_vel_y;            /**< Momentum velocity Y in px/ms (positive = content moving down). */
+    int16_t scroll_content_w;      /**< Bounding width of all children; computed after layout (ScrollView only). */
+    int16_t scroll_content_h;      /**< Bounding height of all children; computed after layout (ScrollView only). */
     /* Transform props: raw values copied from ERProps */
     float tp_translate_x; /**< X translation in pixels. */
     float tp_translate_y; /**< Y translation in pixels. */
