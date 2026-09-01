@@ -48,9 +48,11 @@ const INTERNAL_PROPS = new Set(['text']);
 const bridgePropNames = c =>
   [...c.matchAll(/\[PROP_[A-Z0-9_]+\]\s*=\s*"([A-Za-z]+)"/g)].map(m => m[1]);
 
-/** The handler names of the bridge's `event_type_from_name` map. */
+/** The handler names of the bridge's `event_type_from_name` + `query_type_from_name` maps (responder
+ *  negotiation queries ride the same setEvent prop path as events, so both are part of the routed
+ *  handler surface). */
 const bridgeEventNames = c =>
-  [...c.matchAll(/\{"(on[A-Za-z]+)",\s*ER_EVENT_/g)].map(m => m[1]);
+  [...c.matchAll(/\{"(on[A-Za-z]+)",\s*ER_(?:EVENT|QUERY)_/g)].map(m => m[1]);
 
 /** The entries of props.js's PASSTHROUGH array. */
 function passthroughNames(js) {

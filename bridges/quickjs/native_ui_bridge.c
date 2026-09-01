@@ -79,6 +79,13 @@ static JSContext* s_bridge_ctx = NULL;
 static JSValue s_event_handlers;
 
 /**
+ * @brief JS object mapping (handle * ER_RESPONDER_QUERY_COUNT + query) to that node's responder
+ *        query callback. Borrowed reference, owned by the NativeUI global — same ownership trick
+ *        as s_event_handlers (see below).
+ */
+static JSValue s_query_handlers;
+
+/**
  * @brief One scheduled timer slot. Index into s_timers[] doubles as the registry key.
  *
  * The JS callback and any bound extra args live in s_timer_handlers[slot] (a JS array
@@ -2052,6 +2059,11 @@ static bool event_type_from_name(const char* name, EREventType* out)
         {"onTouchMove", ER_EVENT_TOUCH_MOVE},
         {"onTouchEnd", ER_EVENT_TOUCH_END},
         {"onTouchCancel", ER_EVENT_TOUCH_CANCEL},
+        {"onResponderGrant", ER_EVENT_RESPONDER_GRANT},
+        {"onResponderReject", ER_EVENT_RESPONDER_REJECT},
+        {"onResponderMove", ER_EVENT_RESPONDER_MOVE},
+        {"onResponderRelease", ER_EVENT_RESPONDER_RELEASE},
+        {"onResponderTerminate", ER_EVENT_RESPONDER_TERMINATE},
         {"onScroll", ER_EVENT_SCROLL},
         {"onChangeText", ER_EVENT_CHANGE_TEXT},
         {"onSubmitEditing", ER_EVENT_SUBMIT_EDITING},
@@ -2066,6 +2078,42 @@ static bool event_type_from_name(const char* name, EREventType* out)
         if (strcmp(name, k_map[i].name) == 0)
         {
             *out = k_map[i].type;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Maps a responder-negotiation prop name to an ERResponderQuery.
+ *
+ * These are the RN View responder props (onStartShouldSetResponder and friends). Unlike events they
+ * are QUERIES: the engine calls them synchronously during gesture negotiation and the JS return value
+ * (a boolean) decides whether the node claims the responder.
+ *
+ * @param[in]  name  Query prop name.
+ * @param[out] out   Receives the query type when recognised.
+ *
+ * @return true when the name maps to a supported responder query; false otherwise.
+ */
+static bool query_type_from_name(const char* name, ERResponderQuery* out)
+{
+    static const struct
+    {
+        const char* name;
+        ERResponderQuery query;
+    } k_map[] = {
+        {"onStartShouldSetResponder", ER_QUERY_START_SHOULD_SET},
+        {"onStartShouldSetResponderCapture", ER_QUERY_START_SHOULD_SET_CAPTURE},
+        {"onMoveShouldSetResponder", ER_QUERY_MOVE_SHOULD_SET},
+        {"onMoveShouldSetResponderCapture", ER_QUERY_MOVE_SHOULD_SET_CAPTURE},
+        {"onResponderTerminationRequest", ER_QUERY_TERMINATION_REQUEST},
+    };
+    for (size_t i = 0; i < sizeof(k_map) / sizeof(k_map[0]); i++)
+    {
+        if (strcmp(name, k_map[i].name) == 0)
+        {
+            *out = k_map[i].query;
             return true;
         }
     }
@@ -2185,6 +2233,58 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
         JS_FreeValue(ctx, ev2);
     }
     JS_FreeValue(ctx, cb);
+}
+
+/**
+ * @brief Engine → JS responder-query trampoline: calls the registered predicate, returns its boolean.
+ *
+ * Runs synchronously inside the engine's gesture negotiation (hit-test dispatch), like every event
+ * trampoline. The event object carries x/y/dx/dy but no `type` — a query is not one of the named
+ * events (ER_EVENT_TYPE_COUNT_ makes build_event_object skip the type string). An exception in the
+ * predicate is reported and answered with false, so a broken predicate never claims a gesture.
+ *
+ * @param[in] node       Node being queried (unused; key carries the handle).
+ * @param[in] data       Current touch payload (x, y, dx, dy populated).
+ * @param[in] user_data  Encoded key: handle * ER_RESPONDER_QUERY_COUNT + query.
+ *
+ * @return true when the JS predicate returned truthy (claim / keep the responder).
+ */
+static bool bridge_query_trampoline(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    if (!s_bridge_ctx)
+    {
+        return false;
+    }
+    JSContext* ctx = s_bridge_ctx;
+    const uint32_t key = (uint32_t)(uintptr_t)user_data;
+
+    bool claim = false;
+    JSValue cb = JS_GetPropertyUint32(ctx, s_query_handlers, key);
+    if (JS_IsFunction(ctx, cb))
+    {
+        JSValue ev = build_event_object(ctx, ER_EVENT_TYPE_COUNT_, data);
+        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
+        if (JS_IsException(ret))
+        {
+            JSValue exc = JS_GetException(ctx);
+            const char* msg = JS_ToCString(ctx, exc);
+            fprintf(stderr, "JS responder query exception: %s\n", msg ? msg : "(unknown)");
+            if (msg)
+            {
+                JS_FreeCString(ctx, msg);
+            }
+            JS_FreeValue(ctx, exc);
+        }
+        else
+        {
+            claim = JS_ToBool(ctx, ret) > 0;
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, ev);
+    }
+    JS_FreeValue(ctx, cb);
+    return claim;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -2512,6 +2612,10 @@ static void free_node_handle(JSContext* ctx, int32_t h)
         for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
         {
             JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)h * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
+        }
+        for (uint32_t q = 0; q < ER_RESPONDER_QUERY_COUNT; q++)
+        {
+            JS_SetPropertyUint32(ctx, s_query_handlers, (uint32_t)h * ER_RESPONDER_QUERY_COUNT + q, JS_UNDEFINED);
         }
     }
     handle_free(h);
@@ -3308,24 +3412,45 @@ static JSValue js_set_event(JSContext* ctx, JSValueConst this_val, int argc, JSV
         return JS_UNDEFINED;
     }
     EREventType type;
-    const bool ok = event_type_from_name(name, &type);
+    ERResponderQuery query;
+    const bool is_event = event_type_from_name(name, &type);
+    const bool is_query = !is_event && query_type_from_name(name, &query);
     JS_FreeCString(ctx, name);
-    if (!ok)
+    if (!is_event && !is_query)
     {
         return JS_UNDEFINED;
     }
 
-    const uint32_t key = (uint32_t)handle * ER_EVENT_TYPE_COUNT_ + (uint32_t)type;
-    if (JS_IsFunction(ctx, argv[2]))
+    if (is_event)
     {
-        JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_DupValue(ctx, argv[2]));
-        er_event_set(node, type, bridge_event_trampoline, (void*)(uintptr_t)key);
+        const uint32_t key = (uint32_t)handle * ER_EVENT_TYPE_COUNT_ + (uint32_t)type;
+        if (JS_IsFunction(ctx, argv[2]))
+        {
+            JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_DupValue(ctx, argv[2]));
+            er_event_set(node, type, bridge_event_trampoline, (void*)(uintptr_t)key);
+        }
+        else
+        {
+            /* Storing undefined releases the previously held handler reference. */
+            JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_UNDEFINED);
+            er_event_set(node, type, NULL, NULL);
+        }
     }
     else
     {
-        /* Storing undefined releases the previously held handler reference. */
-        JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_UNDEFINED);
-        er_event_set(node, type, NULL, NULL);
+        /* Responder queries ride the same prop path as events (host-config routes every on* prop
+           here), but land in the engine's query table and their own registry. */
+        const uint32_t key = (uint32_t)handle * ER_RESPONDER_QUERY_COUNT + (uint32_t)query;
+        if (JS_IsFunction(ctx, argv[2]))
+        {
+            JS_SetPropertyUint32(ctx, s_query_handlers, key, JS_DupValue(ctx, argv[2]));
+            er_responder_query_set(node, query, bridge_query_trampoline, (void*)(uintptr_t)key);
+        }
+        else
+        {
+            JS_SetPropertyUint32(ctx, s_query_handlers, key, JS_UNDEFINED);
+            er_responder_query_set(node, query, NULL, NULL);
+        }
     }
     return JS_UNDEFINED;
 }
@@ -4183,6 +4308,11 @@ void er_bridge_install(JSContext* ctx)
     JSValue handlers = JS_NewObject(ctx);
     s_event_handlers = handlers;
     JS_SetPropertyStr(ctx, native_ui, "__er_event_handlers", handlers);
+
+    /* Responder-query registry: same ownership trick. */
+    JSValue queries = JS_NewObject(ctx);
+    s_query_handlers = queries;
+    JS_SetPropertyStr(ctx, native_ui, "__er_query_handlers", queries);
 
     /* Timer-callback registry: same ownership trick as the event handlers, so each timer's
        [callback, ...args] array is GC-rooted and reclaimed with the context. */

@@ -170,25 +170,34 @@ re-creating it per render throws the drag away. `gestureState` carries `x0`/`y0`
 `dx`/`dy` at that point, so a slop threshold never shows up as a jump. With neither should-set callback
 supplied nothing is ever granted — same as RN.
 
-Four things to know:
+`panHandlers` are the RN **responder props** — should-set queries plus `onResponderGrant`/`Move`/
+`Release`/`Terminate` — wired straight into the engine's C responder system, so claiming is real
+*negotiation*, not just listening:
 
-- **`panHandlers` are just `onTouch*` props**, and raw touches bubble. One responder on a wrapper covers
-  its whole subtree; the children need no handlers of their own.
-- **`onPanResponderTerminate` is the undo hook.** It fires when the host cancels the touch sequence, and
-  when a fresh touch-down arrives on a finger whose previous sequence never ended — which is what stops
-  a lost touch-up from wedging the gesture.
-- **A `ScrollView` ancestor still scrolls.** Touch events bubble regardless of what the engine's C
-  responder is doing, so a pan inside a scroller drives both. Put the responder outside the ScrollView,
-  or split the axes.
+- **A granted pan OWNS the gesture.** A `ScrollView` ancestor will not auto-scroll under it, and a
+  `onMoveShouldSetPanResponder` claim takes the gesture *back* from a scroller that already started
+  (which then stops dead — no coasting).
+- **Negotiation covers the subtree.** The engine asks every node on the hit chain — capture phase
+  root→leaf first (the `*Capture` config keys), then bubble leaf→root — so one responder on a wrapper
+  claims its children's touches, and an outer responder can pre-empt an inner one.
+- **Losing and defending are callbacks.** A refused claim lands on `onPanResponderReject` (and is
+  re-asked on every later move while the predicate keeps returning true); a challenger asking for the
+  gesture hits the holder's `onPanResponderTerminationRequest` — return `false` to keep it (absent =
+  yield, as in RN).
+- **`onPanResponderTerminate` is the undo hook.** It fires when the host cancels the touch sequence,
+  when a fresh touch-down arrives on a finger whose previous sequence never ended, and when the
+  responder yields to a challenger.
 - **Flow A only, single gesture.** The AOT compiler only spreads compile-time-constant objects, so
-  `{...pan.panHandlers}` fails the build ("AOT: a spread `{...}` on `<View>` is not supported") — write
-  the `onTouch*` handlers out by hand in Flow B. And because the JS touch event carries no finger id, a
-  second finger joins the gesture in flight rather than starting its own; the last to lift ends it.
+  `{...pan.panHandlers}` fails the build ("AOT: a spread `{...}` on `<View>` is not supported") — Flow
+  B support is tracked in
+  [#176](https://github.com/TheMasterCoder007/embedded-react/issues/176). And the engine events carry
+  no finger id, so extra fingers fold into ONE gesture: they fire `onPanResponderStart`/`End`,
+  `numberActiveTouches` counts them, and the last to lift releases.
 
-RN's responder *negotiation* — the `*Capture` variants, `onPanResponderReject`,
-`onPanResponderTerminationRequest`, `onShouldBlockNativeResponder` — is deliberately absent (the engine
-has a C responder system, but this module is not wired to it). Passing one warns instead of silently
-doing nothing.
+The low-level responder props (`onStartShouldSetResponder`, `onResponderGrant`, …) are themselves
+public on every component for gestures that don't fit the pan shape. Only RN's Android-specific
+`onShouldBlockNativeResponder` is unsupported — holding the responder already blocks the native one
+(the built-in adjustable-Arc drag deliberately still wins). Passing it, or a typo, warns.
 
 ## Build
 
@@ -364,11 +373,13 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   tweens every node whose computed rect moved on the next commit (in C — no per-frame JS). `Presets`
   / `create` / `Types` / `Properties` and the `easeInEaseOut`/`linear`/`spring` shorthands. Covered
   by `layout-animation` unit + `layout-anim.runtime.test.jsx`.
-- ✅ **`PanResponder`.** The commonly used RN subset — `onStartShouldSetPanResponder` /
-  `onMoveShouldSetPanResponder`, then grant / move / release / terminate with a `gestureState`
-  (`x0`/`y0`, `dx`/`dy`, `vx`/`vy`, `numberActiveTouches`) — as pure JS over the per-node `onTouch*`
-  events. Responder *negotiation* (capture, reject, termination request) is out of scope; see the
-  Gestures section above. Covered by `pan-responder` unit + `pan-responder.runtime.test.jsx`.
+- ✅ **`PanResponder` + the gesture responder system.** The full RN config minus only the
+  Android-specific `onShouldBlockNativeResponder`: should-set predicates (with `*Capture` variants),
+  grant / move / release / terminate / reject / termination-request, `onPanResponderStart`/`End` for
+  extra fingers, and a `gestureState` (`x0`/`y0`, `dx`/`dy`, `vx`/`vy`, `numberActiveTouches`) — wired
+  to the ENGINE's responder negotiation, so a granted pan blocks a ScrollView's auto-scroll and can
+  take a started scroll over. The low-level responder props are public on every component. Covered by
+  `pan-responder` unit + `pan-responder.runtime.test.jsx` + the engine's `test_input` responder cases.
 - ✅ **Interpolate `extrapolate`.** `interpolate({ inputRange, outputRange, extrapolate })` supports
   `'extend'` (default) / `'clamp'` / `'identity'`, with per-end `extrapolateLeft`/`extrapolateRight`
   overrides. Math is engine-tested (`test_interpolate`); the bridge path by

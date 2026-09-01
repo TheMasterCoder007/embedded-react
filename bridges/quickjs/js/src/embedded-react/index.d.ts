@@ -263,14 +263,41 @@ export interface LayoutChangeEvent extends NativeEvent<'layout'> {
 }
 
 /**
- * Touch and layout handlers, accepted on every host component. Raw touches bubble from the node that was
- * hit up through its ancestors, so a handler on a container sees its children's touches too. `onTouchCancel`
- * fires when the sequence is abandoned rather than finished — the host reporting a canceled touch, or a
- * fresh touch-down on a finger whose previous sequence never ended — and is the hook for undoing whatever
- * `onTouchStart` began. Note that an ancestor ScrollView claiming the pan does NOT cancel: raw touches keep
- * bubbling while it scrolls.
+ * The gesture responder system, RN-shaped — accepted on every host component. The `*ShouldSet*` props
+ * are negotiation QUERIES: on every touch-down (start) and touch-move (move) the engine walks the hit
+ * chain — capture phase root→leaf first, then bubble leaf→root — and the first node whose predicate
+ * returns true claims the gesture. The `onResponder*` events then fire on the owner alone. A granted
+ * responder blocks a ScrollView ancestor's auto-scroll and takes the gesture back from one that has
+ * already started scrolling. Most apps want `PanResponder` (below) instead of wiring these directly.
  */
-export interface TouchEventProps {
+export interface GestureResponderHandlers {
+  onStartShouldSetResponder?: (event: GestureResponderEvent) => boolean;
+  onStartShouldSetResponderCapture?: (event: GestureResponderEvent) => boolean;
+  onMoveShouldSetResponder?: (event: GestureResponderEvent) => boolean;
+  onMoveShouldSetResponderCapture?: (event: GestureResponderEvent) => boolean;
+  /** The gesture was won: this node now owns the touch stream. */
+  onResponderGrant?: (event: GestureResponderEvent) => void;
+  /** A claim was refused — the current owner declined to yield. Re-asked on later moves. */
+  onResponderReject?: (event: GestureResponderEvent) => void;
+  /** A move while owning the gesture; `dx`/`dy` accumulate from touch-down. */
+  onResponderMove?: (event: GestureResponderEvent) => void;
+  /** The touch lifted while this node owned the gesture. */
+  onResponderRelease?: (event: GestureResponderEvent) => void;
+  /** The gesture was taken away (a canceled touch, or this node yielded to a challenger). */
+  onResponderTerminate?: (event: GestureResponderEvent) => void;
+  /** A challenger wants the gesture: return true to yield (the default), false to keep it. */
+  onResponderTerminationRequest?: (event: GestureResponderEvent) => boolean;
+}
+
+/**
+ * Touch and layout handlers, accepted on every host component. Raw touches bubble from the node that was
+ * hit up through its ancestors, so a handler on a container sees its children's touches too — and they
+ * keep bubbling whatever the responder system decides; the responder props above are how a node OWNS a
+ * gesture. `onTouchCancel` fires when the sequence is abandoned rather than finished — the host reporting
+ * a canceled touch, or a fresh touch-down on a finger whose previous sequence never ended — and is the
+ * hook for undoing whatever `onTouchStart` began.
+ */
+export interface TouchEventProps extends GestureResponderHandlers {
   onTouchStart?: (event: NativeEvent<'touchStart'>) => void;
   onTouchMove?: (event: NativeEvent<'touchMove'>) => void;
   onTouchEnd?: (event: NativeEvent<'touchEnd'>) => void;
@@ -726,21 +753,33 @@ export type PanResponderPredicate = (
 ) => boolean;
 
 /**
- * The supported subset of RN's PanResponder config. Returning `true` from either should-set callback
- * claims the gesture; with neither supplied the responder never grants, exactly as in RN.
+ * RN's PanResponder config, riding the engine's native responder system (the low-level
+ * GestureResponderHandlers above). Returning `true` from a should-set predicate claims the gesture
+ * through real negotiation — capture asks root→leaf before bubble asks leaf→root — so a granted pan
+ * OWNS the touch stream: a ScrollView ancestor will not auto-scroll under it, and a move-should-set
+ * claim takes the gesture back from a scroller that already started. With no should-set supplied the
+ * responder never grants, exactly as in RN.
  *
- * RN's negotiation API — the `*Capture` variants, `onPanResponderReject`,
- * `onPanResponderTerminationRequest`, `onShouldBlockNativeResponder` — is deliberately absent: this is
- * built on the per-node `onTouch*` events, not the engine's C responder system. Passing one warns.
+ * Only `onShouldBlockNativeResponder` (Android-specific) is absent; passing it — or a typo — warns.
  */
 export interface PanResponderConfig {
   onStartShouldSetPanResponder?: PanResponderPredicate;
+  onStartShouldSetPanResponderCapture?: PanResponderPredicate;
   onMoveShouldSetPanResponder?: PanResponderPredicate;
+  onMoveShouldSetPanResponderCapture?: PanResponderPredicate;
   onPanResponderGrant?: PanResponderCallback;
   onPanResponderMove?: PanResponderCallback;
   onPanResponderRelease?: PanResponderCallback;
-  /** The engine took the gesture away (a ScrollView claimed the pan, or the touch was cancelled). */
+  /** The gesture was taken away: a canceled touch, or this responder yielded to a challenger. */
   onPanResponderTerminate?: PanResponderCallback;
+  /** A challenger wants the gesture: return true to yield (the default), false to keep it. */
+  onPanResponderTerminationRequest?: PanResponderPredicate;
+  /** This responder's claim lost a negotiation. Re-asked claims are re-rejected on later moves. */
+  onPanResponderReject?: PanResponderCallback;
+  /** A later finger joined the gesture in flight. */
+  onPanResponderStart?: PanResponderCallback;
+  /** A finger lifted, but the gesture continues on the ones still down. */
+  onPanResponderEnd?: PanResponderCallback;
 }
 
 export interface PanResponderInstance {
@@ -749,8 +788,9 @@ export interface PanResponderInstance {
 }
 
 /**
- * Recognizes drags, swipes, and flings over the raw touch events. Create it ONCE per component and keep
- * it in a ref — the handlers close over one gesture state, so re-creating it per render loses the drag.
+ * Recognizes drags, swipes, and flings via the native gesture responder system. Create it ONCE per
+ * component and keep it in a ref — the handlers close over one gesture state, so re-creating it per
+ * render loses the drag.
  */
 export const PanResponder: {
   create(config?: PanResponderConfig): PanResponderInstance;

@@ -29,42 +29,54 @@
 //
 //   <View {...pan.panHandlers} />
 //
-// Scope (issue #115): the commonly used subset — should-set, grant, move, release, terminate. This is
-// pure JS over the per-node `onTouch*` events, NOT the engine's C responder system, so there is no
-// negotiation between two PanResponders: whichever node's handlers see the touch decides for itself.
-// The `*Capture` variants, `onPanResponderReject`, `onPanResponderTerminationRequest` and
-// `onShouldBlockNativeResponder` are the negotiation API and are not implemented; passing one warns
-// rather than pretending to honour it.
+// The gesture rides the ENGINE's responder system (issue #115 shipped a JS-only precursor over the raw
+// onTouch* events; this is the rebase). `panHandlers` is a bag of RN View responder props — the
+// should-set predicates become native negotiation QUERIES (the engine calls them synchronously during
+// hit-testing and the boolean answer decides who owns the gesture), and grant/move/release/terminate
+// arrive as native responder events. That buys real arbitration:
 //
-// Three engine facts shape the rest:
-//   • Touches BUBBLE. A handler on a container sees its children's touches, so one PanResponder on a
-//     wrapper covers the whole subtree — no handlers on the children.
-//   • `onTouchCancel` → `onPanResponderTerminate` is the hook for undoing what `onPanResponderGrant`
-//     began. The engine raises it when the host reports a cancelled touch (a panel driver dropping the
-//     sequence, the browser's touchcancel), and when a fresh touch-down arrives on a finger whose
-//     previous sequence never ended — which is what keeps a lost touch-up from wedging the gesture.
-//   • A ScrollView ancestor still auto-scrolls. Raw touch events bubble whatever the C responder is
-//     doing, so a pan inside a scroller drives BOTH. Put the responder outside the ScrollView, or give
-//     the scrolling axis to the scroller and use only the other one here.
+//   • A granted PanResponder OWNS the gesture: a ScrollView ancestor no longer auto-scrolls under the
+//     pan (auto-scroll only claims a gesture nobody owns), and it takes a slop-claimed scroll BACK the
+//     moment `onMoveShouldSetPanResponder` answers true.
+//   • Negotiation covers the subtree: the engine asks every node on the hit chain, capture phase
+//     root→leaf first (`*Capture` config keys), then bubble leaf→root — so a responder on a wrapper
+//     claims touches that land on its children, and an outer responder can pre-empt an inner one.
+//   • Losing a negotiation is reported (`onPanResponderReject`), and a challenger asking for the
+//     gesture is refusable (`onPanResponderTerminationRequest` — return false to keep it).
+//   • `onPanResponderTerminate` is the undo hook for whatever `onPanResponderGrant` began: the engine
+//     fires it when the touch sequence is cancelled, when a fresh touch-down arrives on a finger whose
+//     previous sequence never ended, or when this responder yields to a challenger.
+//
+// Remaining limits: `onShouldBlockNativeResponder` is Android-specific and stays unsupported (holding
+// the responder already blocks the ScrollView; the built-in adjustable-Arc drag deliberately wins over
+// JS claimants). And the engine events carry no finger id, so multiple fingers fold into ONE gesture —
+// `numberActiveTouches` counts them, extra fingers fire `onPanResponderStart`/`End`, and the last one
+// to lift releases; two independent single-finger gestures need two responders on disjoint subtrees.
 //
 // Flow A only. The AOT compiler (Flow B) only spreads compile-time-constant objects, so
-// `{...pan.panHandlers}` fails the build with "AOT: a spread {...} on <View> is not supported"; write
-// the `onTouch*` handlers out by hand there.
+// `{...pan.panHandlers}` fails the build with "AOT: a spread {...} on <View> is not supported"; Flow B
+// support is tracked in #176.
 
 /** Per-instance gesture id, so two responders on screen at once are told apart. */
 let s_nextStateID = 1;
 
-/** True once the unsupported-config warning has been printed (once per process is enough). */
-let s_warnedConfig = false;
+/** Unsupported config keys already warned about (each unique key warns once per process). */
+const s_warnedKeys = new Set();
 
-/** Config keys this module acts on. Everything else is either RN negotiation or a typo. */
+/** Config keys this module acts on. Everything else is either RN-Android-specific or a typo. */
 const SUPPORTED = [
   'onStartShouldSetPanResponder',
+  'onStartShouldSetPanResponderCapture',
   'onMoveShouldSetPanResponder',
+  'onMoveShouldSetPanResponderCapture',
   'onPanResponderGrant',
   'onPanResponderMove',
   'onPanResponderRelease',
   'onPanResponderTerminate',
+  'onPanResponderTerminationRequest',
+  'onPanResponderReject',
+  'onPanResponderStart',
+  'onPanResponderEnd',
 ];
 
 /**
@@ -78,16 +90,16 @@ const now = () =>
     ? performance.now()
     : 0;
 
-/** Warns ONCE about config keys that are RN's responder negotiation (or simply misspelt). */
+/** Warns ONCE PER KEY about config keys this module does not act on. */
 function warnUnsupportedConfig(config) {
-  if (s_warnedConfig) return;
-  const names = Object.keys(config).filter(k => !SUPPORTED.includes(k));
+  const names = Object.keys(config).filter(
+    k => !SUPPORTED.includes(k) && !s_warnedKeys.has(k),
+  );
   if (names.length === 0) return;
-  s_warnedConfig = true;
+  for (const k of names) s_warnedKeys.add(k);
   console.warn(
-    `embedded-react: PanResponder ignores ${names.join(', ')} — this is the gesture subset built on ` +
-      `onTouch* events, not the responder negotiation system (no capture phase, no reject/terminate ` +
-      `request, no blocking the native responder). Supported: ${SUPPORTED.join(', ')}.`,
+    `embedded-react: PanResponder ignores ${names.join(', ')} — ` +
+      `supported: ${SUPPORTED.join(', ')}.`,
   );
 }
 
@@ -135,42 +147,28 @@ export function create(config = {}) {
     /** Velocity in pixels per millisecond. */
     vx: 0,
     vy: 0,
-    /** Fingers currently on the panel. */
+    /** Fingers currently on the panel (within this responder's subtree). */
     numberActiveTouches: 0,
   };
 
   let granted = false;
   let lastMoveTime = 0;
-
-  /** Runs a should-set callback; an absent one means "no", as in RN. */
-  const ask = (name, e) =>
-    typeof config[name] === 'function' &&
-    config[name](e, gestureState) === true;
+  // The engine measures e.dx/e.dy from TOUCH-DOWN; RN (and this module) measure g.dx/g.dy from the
+  // GRANT — a responder that needed 10px of slop to claim starts its own travel at zero, so the slop
+  // never shows up as a jump. The base is what e.dx read at the moment of the grant.
+  let baseDx = 0;
+  let baseDy = 0;
 
   const fire = (name, e) => {
     if (typeof config[name] === 'function') config[name](e, gestureState);
   };
 
-  /**
-   * Re-anchors the gesture at the current point and hands it over. RN does the same: a responder that
-   * needed 10 px of slop to claim the pan starts its own dx/dy at zero from where it took over, so the
-   * slop never shows up as a jump in the first move.
-   */
-  const grant = e => {
-    granted = true;
-    gestureState.x0 = e.x;
-    gestureState.y0 = e.y;
-    gestureState.dx = 0;
-    gestureState.dy = 0;
-    fire('onPanResponderGrant', e);
-  };
-
-  /** Folds one touch point into the travel fields. */
+  /** Folds one engine payload (e.x/e.y absolute, e.dx/e.dy from touch-down) into the travel fields. */
   const advance = e => {
     gestureState.moveX = e.x;
     gestureState.moveY = e.y;
-    gestureState.dx = e.x - gestureState.x0;
-    gestureState.dy = e.y - gestureState.y0;
+    gestureState.dx = e.dx - baseDx;
+    gestureState.dy = e.dy - baseDy;
   };
 
   /** A move: travel, plus a fresh velocity reading over the time since the last one. */
@@ -192,58 +190,118 @@ export function create(config = {}) {
     lastMoveTime = t;
   };
 
+  /** Wraps a should-set predicate as an engine query: track the point, ask, absent means "no" (as in RN). */
+  const query = name =>
+    typeof config[name] === 'function'
+      ? e => {
+          if (!granted) advance(e);
+          return config[name](e, gestureState) === true;
+        }
+      : undefined;
+
   /** Ends the gesture: reports it if this responder owned it, then clears the state for the next one. */
   const finish = (e, callback) => {
     const wasGranted = granted;
     granted = false;
-    // Fold the release point into the travel so `dx` is the gesture's true total even when the finger
+    // Fold the final point into the travel so `dx` is the gesture's true total even when the finger
     // lifted without a final move — but leave vx/vy at the last MOVE's reading. A fling ends with the
     // finger resting for a frame or two, and re-measuring across that would report zero and throw the
     // throw away.
     advance(e);
     if (wasGranted) fire(callback, e);
     resetGestureState(gestureState);
+    baseDx = 0;
+    baseDy = 0;
   };
 
   const panHandlers = {
+    // --- Raw touch bookkeeping (bubbles per finger): finger count + Start/End for extra fingers ---
     onTouchStart(e) {
       gestureState.numberActiveTouches += 1;
-      // A second finger joins the gesture in flight rather than starting its own: the JS touch event
-      // carries no finger id, so there is no way to track two independently. The first finger owns the
-      // gesture and the last one to lift ends it.
+      // A later finger joins the gesture in flight (the engine events carry no finger id, so
+      // independent tracking is impossible). Its own touch slot re-negotiates and re-grants this
+      // node, and THAT grant fires onPanResponderStart — not this raw handler, which runs first.
       if (gestureState.numberActiveTouches > 1) return;
-
       resetGestureState(gestureState);
+      baseDx = 0;
+      baseDy = 0;
       gestureState.x0 = e.x;
       gestureState.y0 = e.y;
       gestureState.moveX = e.x;
       gestureState.moveY = e.y;
       lastMoveTime = now();
-
-      if (ask('onStartShouldSetPanResponder', e)) grant(e);
     },
-
-    onTouchMove(e) {
-      if (gestureState.numberActiveTouches === 0) return;
-      track(e);
-      // The move that wins the gesture only grants it; the next one is the first onPanResponderMove
-      // (as in RN, where grant and move are separate responder events).
-      if (granted) fire('onPanResponderMove', e);
-      else if (ask('onMoveShouldSetPanResponder', e)) grant(e);
-    },
-
     onTouchEnd(e) {
-      if (gestureState.numberActiveTouches === 0) return;
-      gestureState.numberActiveTouches -= 1;
-      if (gestureState.numberActiveTouches > 0) return; // another finger is still down
+      if (gestureState.numberActiveTouches > 0)
+        gestureState.numberActiveTouches -= 1;
+      // A finger lifted but the gesture continues; the RELEASE for the last one arrives as a
+      // responder event below.
+      if (granted && gestureState.numberActiveTouches > 0)
+        fire('onPanResponderEnd', e);
+    },
+    onTouchCancel() {
+      gestureState.numberActiveTouches = 0;
+    },
+
+    // --- Negotiation queries (the engine calls these; returning true claims the gesture) ---
+    onStartShouldSetResponder: query('onStartShouldSetPanResponder'),
+    onStartShouldSetResponderCapture: query(
+      'onStartShouldSetPanResponderCapture',
+    ),
+    onMoveShouldSetResponder: query('onMoveShouldSetPanResponder'),
+    onMoveShouldSetResponderCapture: query(
+      'onMoveShouldSetPanResponderCapture',
+    ),
+    onResponderTerminationRequest:
+      typeof config.onPanResponderTerminationRequest === 'function'
+        ? e => config.onPanResponderTerminationRequest(e, gestureState) === true
+        : undefined, // absent → the engine's default: yield (RN's default too)
+
+    // --- Responder lifecycle (native events; fire only on the node that owns the gesture) ---
+    onResponderGrant(e) {
+      if (granted) {
+        // A second finger's touch slot granted the same node: one gesture, not two. RN calls this a
+        // responder "start" for the extra touch.
+        fire('onPanResponderStart', e);
+        return;
+      }
+      granted = true;
+      baseDx = e.dx;
+      baseDy = e.dy;
+      gestureState.x0 = e.x;
+      gestureState.y0 = e.y;
+      gestureState.dx = 0;
+      gestureState.dy = 0;
+      lastMoveTime = now();
+      fire('onPanResponderGrant', e);
+    },
+    onResponderMove(e) {
+      if (!granted) return;
+      track(e);
+      fire('onPanResponderMove', e);
+    },
+    onResponderRelease(e) {
+      if (!granted) return;
+      // Another finger still down: its touch slot keeps the responder, so the gesture continues (the
+      // raw onTouchEnd above already reported the End).
+      if (gestureState.numberActiveTouches > 0) return;
       finish(e, 'onPanResponderRelease');
     },
-
-    onTouchCancel(e) {
+    onResponderTerminate(e) {
+      if (!granted) return;
       gestureState.numberActiveTouches = 0;
       finish(e, 'onPanResponderTerminate');
     },
+    onResponderReject(e) {
+      fire('onPanResponderReject', e);
+    },
   };
+
+  // Absent queries must not appear as props at all (an undefined on* prop is skipped by the host
+  // config anyway, but a clean bag is easier to reason about and to spread).
+  for (const k of Object.keys(panHandlers)) {
+    if (panHandlers[k] === undefined) delete panHandlers[k];
+  }
 
   return {panHandlers};
 }

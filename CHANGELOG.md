@@ -12,9 +12,15 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
-- Added `PanResponder` (Flow A). Drags, swipes, and flings now come with the start point, the
-  travel, and the velocity already worked out, instead of every app re-deriving them from raw
-  `onTouchMove` points. RN's responder negotiation is out of scope.
+- Added `PanResponder` (Flow A). Drags, swipes, and flings come with the start point, the travel,
+  and the velocity already worked out, and the gesture rides the engine's real responder
+  negotiation: a granted pan owns the touch stream — a ScrollView won't scroll under it and yields a
+  started scroll — with capture, rejection, termination-request, and multi-finger join/leave all
+  supported. Only the Android-specific `onShouldBlockNativeResponder` is out of scope.
+- The RN responder props (`onStartShouldSetResponder`, `onResponderGrant`, …) now work on every
+  component (Flow A), for gestures that don't fit the pan shape.
+- A ScrollView that yields a drag to another gesture responder now stops dead instead of coasting
+  on its leftover momentum.
 - The watch-face demo now ships its swipe pager twice — the stock AOT-compatible one and a
   `PanResponder` variant (`npm run dev:pan`) — so the two approaches sit side by side.
 - The shipped TypeScript declarations now cover what the runtime actually supports. Touch handlers
