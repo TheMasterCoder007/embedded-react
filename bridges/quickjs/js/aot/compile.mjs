@@ -5120,11 +5120,20 @@ function opacityLiteralOrThrow(value, attr) {
  * Creates a <TouchableOpacity>'s animated value and binds it to the node's opacity. Returns the two
  * fades as handler-body lines, for the event loop to fold into its press handlers.
  */
-function touchablePressFades(el, v, staticAssigns, dynAssigns, out, scope) {
-  if (dynAssigns.some(a => a.field === 'opacity'))
+function touchablePressFades(
+  el,
+  v,
+  staticAssigns,
+  dynAssigns,
+  binds,
+  out,
+  scope,
+) {
+  const animatedOpacity = binds.some(b => b.prop === 'ER_PROP_OPACITY');
+  if (animatedOpacity || dynAssigns.some(a => a.field === 'opacity'))
     throw aotError(
-      'AOT: <TouchableOpacity> cannot take a state-driven opacity',
-      "the press feedback owns this node's opacity, so a value from state would be overwritten by the next touch. Use <Pressable> and animate the opacity yourself.",
+      `AOT: <TouchableOpacity> cannot take ${animatedOpacity ? 'an Animated' : 'a state-driven'} opacity`,
+      "the press feedback owns this node's opacity — a second writer does not blend with it, it races it. To animate opacity yourself, use <Pressable>: the dim is just onPressIn/onPressOut driving an Animated.Value (see TouchableOpacity.js for the whole of it).",
     );
   // lowerStyle has already scaled a static opacity to 0–255, and that byte IS the resting value. It is
   // NaN for a style opacity that was not a number — which lowerStyle emits as a `p.opacity = NaN` the C
@@ -5356,7 +5365,7 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   // <TouchableOpacity>'s own opacity binding, on top of any the style asked for.
   const pressFades =
     tag === 'TouchableOpacity' && !touchableOff
-      ? touchablePressFades(el, v, staticAssigns, dynAssigns, out, scope)
+      ? touchablePressFades(el, v, staticAssigns, dynAssigns, binds, out, scope)
       : null;
 
   emitRefBind(v, el.openingElement, out, env);

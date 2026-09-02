@@ -262,6 +262,14 @@ re-enters JS per frame, and the subtree React just built is not touched at all.
 Every `<Pressable>` prop works on it unchanged — the two are interchangeable, and the choice is only
 whether you want the dim. `disabled` is RN's: no press, and no feedback with it.
 
+The one prop it will not share is `opacity`. The press feedback owns that property, and a second writer
+does not blend with it — it races it. An animated `opacity` in the style is therefore ignored (with a
+one-time warning) in Flow A and rejected outright by the AOT, which would otherwise bind the same node
+property twice and let whichever changed last win the frame. RN drops it the same way; it just doesn't
+tell you. If you want to animate opacity yourself, use `<Pressable>` — the dim is only `onPressIn` /
+`onPressOut` driving an `Animated.Value`, which is the whole of `TouchableOpacity.js`. Animating any
+*other* property is fine, `transform` included.
+
 One thing to know before wrapping a screen in one: opacity below 1 makes the node an **opacity
 group**, so the engine composites its whole subtree through an off-screen strip for as long as the fade
 lasts. That is exactly what makes a label dim with its button — but it costs in proportion to the dimmed

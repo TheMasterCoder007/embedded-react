@@ -19,7 +19,7 @@
 // end. These run through the REAL reconciler against a mocked NativeUI — the component is all hooks,
 // so calling it directly would render nothing.
 
-import {describe, it, expect, beforeEach} from 'vitest';
+import {describe, it, expect, beforeEach, vi} from 'vitest';
 
 const calls = {
   createNode: [],
@@ -195,6 +195,43 @@ describe('TouchableOpacity disabled', () => {
     expect(handler('onPressIn')).toBeTypeOf('function');
     handler('onPressIn')({});
     expect(animated().to).toBe(0.2);
+  });
+});
+
+describe('TouchableOpacity with an animated opacity in its style', () => {
+  // The press feedback owns this node's opacity. RN drops the app's the same way (its composed style
+  // shadows it) but says nothing; Flow B refuses to compile it. Flow A's job is to not be silent.
+  // NB the warning is deliberately once-per-process, so the first test here is the one that sees it.
+  class FakeAnimatedValue {
+    constructor() {
+      this.__animated = true;
+    }
+    __bind() {}
+  }
+  const animatedStyle = () => ({opacity: new FakeAnimatedValue()});
+
+  it('says so rather than dropping it in silence — once, not once per render', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const update = mount(el(TouchableOpacity, {style: animatedStyle()}));
+    update(el(TouchableOpacity, {style: animatedStyle()}));
+    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/ignores an animated `opacity`/);
+    expect(warn.mock.calls[0][0]).toMatch(/<Pressable>/);
+    warn.mockRestore();
+  });
+
+  it('binds the press value only — never two things writing one prop', () => {
+    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    expect(calls.animValueBind).toHaveLength(1);
+    expect(calls.animValueBind[0].prop).toBe('opacity');
+  });
+
+  it('rests fully opaque, since what it was handed is not a number', () => {
+    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    expect(calls.animValueCreate).toEqual([1]);
+    handler('onPressOut')({});
+    expect(animated().to).toBe(1);
   });
 });
 

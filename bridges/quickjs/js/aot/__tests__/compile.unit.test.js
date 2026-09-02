@@ -1991,7 +1991,7 @@ describe('AOT Flow-A-only components', () => {
 
 describe('AOT TouchableOpacity (press-to-dim on the native driver)', () => {
   const T = `import { useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity } from 'embedded-react';
+import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embedded-react';
 `;
   /** The body of the handler wired to `event` on the (single) node, so a test can read its animate call. */
   const handlerFor = (c, event) => {
@@ -2130,6 +2130,51 @@ import { View, Text, TouchableOpacity } from 'embedded-react';
     expect(handlerFor(c, 'ER_EVENT_PRESS_IN')).toContain(
       `er_anim_value_animate(s_av_press_n0, ${v === 1 ? '1.0f' : v === 0 ? '0.0f' : '0.5f'},`,
     );
+  });
+
+  // An Animated.Value opacity is collected as a `binds` entry, NOT a dynAssign — a different list, so
+  // the state-driven check above misses it entirely. Left alone it emits a SECOND
+  // er_anim_value_bind on the same node+prop: the engine's duplicate guard is per-value, so both
+  // register and whichever changed last wins the frame.
+  it.each([
+    ['an Animated.Value', 'style={{opacity: fade}}'],
+    [
+      'an interpolation',
+      'style={{opacity: fade.interpolate({inputRange: [0, 1], outputRange: [0.3, 1]})}}',
+    ],
+  ])('rejects %s driving a TouchableOpacity opacity', (_what, attr) => {
+    expect(() =>
+      gen(`${T}
+        export function App() {
+          const fade = useAnimatedValue(1);
+          return (<TouchableOpacity ${attr}><Text>x</Text></TouchableOpacity>);
+        }`),
+    ).toThrow(/cannot take an Animated opacity/);
+  });
+
+  it('leaves an animated TRANSFORM alone — only opacity collides with the dim', () => {
+    const c = gen(`${T}
+      export function App() {
+        const s = useAnimatedValue(1);
+        return (<TouchableOpacity style={{transform: [{scale: s}]}}><Text>x</Text></TouchableOpacity>);
+      }`);
+    expect(c).toContain('ER_PROP_SCALE_X');
+    expect(c).toContain('ER_PROP_SCALE_Y');
+    // …and the press dim is still its own, separate binding.
+    expect(c).toMatch(
+      /er_anim_value_bind\(s_av_press_\w+, \w+, ER_PROP_OPACITY\)/,
+    );
+  });
+
+  it('still allows an animated opacity on a plain <Pressable>', () => {
+    const c = gen(`${T}
+      export function App() {
+        const fade = useAnimatedValue(1);
+        return (<Pressable style={{opacity: fade}}><Text>x</Text></Pressable>);
+      }`);
+    expect(
+      c.match(/er_anim_value_bind\(\w+, \w+, ER_PROP_OPACITY\)/g),
+    ).toHaveLength(1);
   });
 
   it('keeps a disabled one’s children, layout and style — only the press is gone', () => {

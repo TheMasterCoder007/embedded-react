@@ -395,7 +395,11 @@ export interface PressableProps extends TouchEventProps, PressEventProps {
 /**
  * A `<Pressable>` that dims while it is held — every Pressable prop works here unchanged. The fade runs
  * on the native driver, so it costs no re-render; note that a dimmed node composites its whole subtree
- * off-screen, so dim the box that reads as the button rather than the screen around it.
+ * off-screen, so dim the box that reads as the button rather than the surrounding screen.
+ *
+ * The press feedback owns `opacity`: an animated one in `style` is ignored here and rejected by the AOT.
+ * To animate opacity yourself, use `<Pressable>`. Animating any other property, `transform` included, is
+ * fine.
  */
 export interface TouchableOpacityProps extends PressableProps {
   /** Opacity to dim to while held, 0–1. Defaults to RN's 0.2. */

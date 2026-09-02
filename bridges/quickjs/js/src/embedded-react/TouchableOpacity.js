@@ -48,9 +48,22 @@ const DEFAULT_ACTIVE_OPACITY = 0.2;
 const DIM_MS = 0;
 const RESTORE_MS = 250;
 
+let warnedAnimatedOpacity = false;
+
 /** The opacity the touchable rests at — whatever its style asks for, fully opaque if it asks nothing. */
 function restingOpacity(style) {
   const o = flattenStyleObj(style).opacity;
+  if (o && o.__animated) {
+    if (!warnedAnimatedOpacity) {
+      warnedAnimatedOpacity = true;
+      console.warn(
+        'embedded-react: <TouchableOpacity> ignores an animated `opacity` in its style — the press ' +
+          'feedback owns that property. To animate opacity yourself, use <Pressable>: the dim is just ' +
+          'onPressIn/onPressOut driving an Animated.Value.',
+      );
+    }
+    return 1;
+  }
   return typeof o === 'number' ? o : 1;
 }
 
