@@ -6,6 +6,9 @@
 # Generated font blob (huge, machine-generated)
 **/font_data.c
 
+# Generated QuickJS bytecode blobs (er-bridge-quickjs-compile emits 16 bytes/line)
+**/*.qbc.c
+
 # Build trees + FetchContent deps (third-party QuickJS lives here) + IDE build dirs
 **/build/**
 **/cmake-build*/**

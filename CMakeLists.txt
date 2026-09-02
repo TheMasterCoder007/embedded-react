@@ -46,6 +46,7 @@ if (CLANG_FORMAT_EXE)
 
     # Exclude generated files
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX ".*/font_data\\.c$")
+    list(FILTER FORMAT_SOURCES EXCLUDE REGEX "\\.qbc\\.c$")
     list(FILTER FORMAT_SOURCES EXCLUDE REGEX "/dist/")
 
     add_custom_target(format
