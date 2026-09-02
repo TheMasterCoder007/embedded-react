@@ -54,7 +54,7 @@ import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join} from 'node:path';
 import {readFileSync, mkdirSync, existsSync} from 'node:fs';
 
-import {findCompileBin, COMPILE_BIN_HELP} from './compile-bin.mjs';
+import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
 
 const JS_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(JS_DIR, '../../..');
@@ -244,7 +244,7 @@ function main() {
   // Packing Flow A's container needs the bytecode precompiler too — check it here rather than letting
   // the first scenario die halfway through with a build error.
   if (!findCompileBin()) {
-    console.error(COMPILE_BIN_HELP);
+    console.error(compileBinHelp());
     process.exit(2);
   }
   mkdirSync(OUT_DIR, {recursive: true});

@@ -28,35 +28,44 @@ const here = dirname(fileURLToPath(import.meta.url)); // bridges/quickjs/js
 const repoRoot = resolve(here, '../../..');
 const exe = process.platform === 'win32' ? '.exe' : '';
 
-/** Returns the precompiler's path (ER_COMPILE_BIN wins), or null when it hasn't been built. */
+const SEARCH_DIRS = [
+  'bridges/quickjs/build',
+  'examples/linux/build/bridges/quickjs',
+  'tools/simulator/build/bridges/quickjs',
+];
+
+/**
+ * Returns the precompiler's path, or null when there isn't one.
+ *
+ * ER_COMPILE_BIN wins, but it still has to point at a file that exists: an override with a typo in it
+ * used to sail through every caller's check and only fail later, deep in a build, as a bare ENOENT
+ * from spawn. Returning null instead routes it to compileBinHelp(), which names the real problem.
+ */
 export function findCompileBin() {
+  const override = process.env.ER_COMPILE_BIN;
+  if (override) {
+    return existsSync(override) ? override : null;
+  }
   return (
-    process.env.ER_COMPILE_BIN ||
-    [
-      resolve(
-        repoRoot,
-        'bridges/quickjs/build',
-        `er-bridge-quickjs-compile${exe}`,
-      ),
-      resolve(
-        repoRoot,
-        'examples/linux/build/bridges/quickjs',
-        `er-bridge-quickjs-compile${exe}`,
-      ),
-      resolve(
-        repoRoot,
-        'tools/simulator/build/bridges/quickjs',
-        `er-bridge-quickjs-compile${exe}`,
-      ),
-    ].find(existsSync) ||
-    null
+    SEARCH_DIRS.map(d =>
+      resolve(repoRoot, d, `er-bridge-quickjs-compile${exe}`),
+    ).find(existsSync) || null
   );
 }
 
-/** What to print when findCompileBin() comes back null. */
-export const COMPILE_BIN_HELP = [
-  'Bytecode precompiler (er-bridge-quickjs-compile) not found. Build it once:',
-  '  cmake -S bridges/quickjs -B bridges/quickjs/build',
-  '  cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile',
-  '(or set ER_COMPILE_BIN to the binary path)',
-].join('\n');
+/** What to print when findCompileBin() comes back null — a bad override is a different problem. */
+export function compileBinHelp() {
+  const override = process.env.ER_COMPILE_BIN;
+  if (override) {
+    return (
+      `ER_COMPILE_BIN is set to "${override}", but there is no file there.\n` +
+      'Point it at a built er-bridge-quickjs-compile, or unset it to search the usual build dirs.'
+    );
+  }
+  return [
+    'Bytecode precompiler (er-bridge-quickjs-compile) not found. Build it once:',
+    '  cmake -S bridges/quickjs -B bridges/quickjs/build',
+    '  cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile',
+    '(or set ER_COMPILE_BIN to the binary path)',
+  ].join('\n');
+}

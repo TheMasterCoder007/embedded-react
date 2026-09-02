@@ -47,7 +47,7 @@ import {warnMissingGlyphs} from './assets/glyph-coverage.mjs';
 import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
-import {findCompileBin, COMPILE_BIN_HELP} from './compile-bin.mjs';
+import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
 // bridges/quickjs/CMakeLists.txt and ER_QUICKJS_TAG in er_runtime.c. The loader rejects a mismatch.
@@ -77,7 +77,7 @@ if (!existsSync(entry)) {
 // --- Locate the bytecode precompiler -----------------------------------------------------------
 const compileBin = findCompileBin();
 if (!compileBin) {
-  console.error(COMPILE_BIN_HELP);
+  console.error(compileBinHelp());
   process.exit(1);
 }
 
