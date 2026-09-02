@@ -398,7 +398,7 @@ export interface PressableProps extends TouchEventProps, PressEventProps {
  * off-screen, so dim the box that reads as the button rather than the screen around it.
  */
 export interface TouchableOpacityProps extends PressableProps {
-  /** Opacity to dim to while held. Defaults to RN's 0.2. */
+  /** Opacity to dim to while held, 0–1. Defaults to RN's 0.2. */
   activeOpacity?: number;
 }
 

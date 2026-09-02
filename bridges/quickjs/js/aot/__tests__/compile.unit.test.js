@@ -2091,6 +2091,59 @@ import { View, Text, TouchableOpacity } from 'embedded-react';
         }`),
     ).toThrow(/disabled> must be a compile-time constant/);
   });
+
+  // Everything here reaches floatLit, which would happily emit `NaNf` (does not compile) or `1.0f` for a
+  // bare `activeOpacity` (no dim at all) — a wrong build, or no build, from a prop the app got wrong.
+  it.each([
+    ['a bare flag', 'activeOpacity', 'true'],
+    ['a boolean', 'activeOpacity={false}', 'false'],
+    ['NaN', 'activeOpacity={0 / 0}', 'NaN'],
+    ['a numeric string', 'activeOpacity="0.4"', '"0.4"'],
+    ['over 1', 'activeOpacity={2}', '2'],
+    ['under 0', 'activeOpacity={-1}', '-1'],
+    ['a percentage', 'activeOpacity={20}', '20'],
+  ])(
+    'rejects %s as activeOpacity, naming what it got',
+    (_what, attr, shown) => {
+      let thrown;
+      try {
+        gen(`${T}
+        export function App() {
+          return (<TouchableOpacity ${attr}><Text>x</Text></TouchableOpacity>);
+        }`);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, `${attr} compiled instead of throwing`).toBeDefined();
+      expect(thrown.message).toContain(
+        'activeOpacity> must be a number between 0 and 1',
+      );
+      expect(thrown.message).toContain(`(got ${shown})`);
+    },
+  );
+
+  it.each([0, 0.5, 1])('accepts activeOpacity={%s}', v => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity activeOpacity={${v}}><Text>x</Text></TouchableOpacity>);
+      }`);
+    expect(handlerFor(c, 'ER_EVENT_PRESS_IN')).toContain(
+      `er_anim_value_animate(s_av_press_n0, ${v === 1 ? '1.0f' : v === 0 ? '0.0f' : '0.5f'},`,
+    );
+  });
+
+  it('keeps a disabled one’s children, layout and style — only the press is gone', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity disabled style={{padding: 8, opacity: 0.8}}><Text>label</Text></TouchableOpacity>);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_TEXT)'); // children still mount
+    expect(c).toContain('"label"');
+    expect(c).toContain('p.padding = 8;'); // …and still lay out
+    expect(c).toContain('p.opacity = 204;'); // …at the opacity the style asked for
+    expect(c).not.toContain('er_event_set(');
+    expect(c).not.toContain('er_anim_value_bind(');
+  });
 });
 
 describe('AOT callback props', () => {

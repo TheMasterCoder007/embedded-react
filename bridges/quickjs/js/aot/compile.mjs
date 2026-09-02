@@ -5077,8 +5077,8 @@ function namedAttr(openingElement, name) {
   );
 }
 
-/** True for `<TouchableOpacity disabled>` / `disabled={SOME_CONST}`. Must fold: the whole touchable
- *  (handlers and dim alike) is compiled away when it is set, so there is nothing to decide at runtime. */
+/** True for `<TouchableOpacity disabled>` / `disabled={SOME_CONST}`. Must fold: `disabled` decides what
+ *  the build EMITS — the press handlers and the dim binding — so there is nothing left to decide at runtime. */
 function touchableIsDisabled(el, scope) {
   const attr = namedAttr(el.openingElement, 'disabled');
   if (!attr) return false;
@@ -5086,8 +5086,34 @@ function touchableIsDisabled(el, scope) {
     attrExpr(attr),
     scope,
     'AOT: <TouchableOpacity disabled> must be a compile-time constant',
-    'a disabled touchable is compiled away entirely — press handlers and dim both — so the AOT has to know at build time. To gate on state, keep the touchable and return early in the handler (`onPress={() => { if (!ready) return; … }}`).',
+    'a disabled one still renders — it lowers to a plain <Pressable>, children, layout and style intact — but its press handlers and its dim are not emitted at all, so the AOT has to know at build time. To gate on state, leave it enabled and return early in the handler (`onPress={() => { if (!ready) return; … }}`).',
   );
+}
+
+/** A folded `activeOpacity` as a number in 0..1. Everything else is an error HERE, where the source line
+ *  is still in reach: it would otherwise reach floatLit and land in the generated C as a literal that
+ *  either does not compile (`NaNf`) or quietly means something the app never asked for — a bare
+ *  `activeOpacity` is `true`, so `1.0f`, which is no dim at all; `{false}` is an invisible one. */
+function opacityLiteralOrThrow(value, attr) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    // JSON.stringify turns NaN into the STRING "null", which reads as a different mistake entirely.
+    const shown =
+      typeof value === 'number'
+        ? String(value)
+        : (JSON.stringify(value) ?? String(value));
+    const e = aotError(
+      `AOT: <TouchableOpacity activeOpacity> must be a number between 0 and 1 (got ${shown})`,
+      'it is the opacity the node dims to while held — 0 is invisible, 1 is no dim at all. RN defaults it to 0.2.',
+    );
+    if (attr.loc) e.aotLoc = attr.loc.start;
+    throw e;
+  }
+  return value;
 }
 
 /**
@@ -5100,19 +5126,23 @@ function touchablePressFades(el, v, staticAssigns, dynAssigns, out, scope) {
       'AOT: <TouchableOpacity> cannot take a state-driven opacity',
       "the press feedback owns this node's opacity, so a value from state would be overwritten by the next touch. Use <Pressable> and animate the opacity yourself.",
     );
-  // lowerStyle has already scaled a static opacity to 0–255, and that byte IS the resting value.
+  // lowerStyle has already scaled a static opacity to 0–255, and that byte IS the resting value. It is
+  // NaN for a style opacity that was not a number — which lowerStyle emits as a `p.opacity = NaN` the C
+  // compiler rejects on its own, so leave that error to it rather than adding a second bad literal here.
   const restingByte = staticAssigns.find(a => a.field === 'opacity');
-  const resting = restingByte ? Number(restingByte.expr) / 255 : 1;
+  const restingRaw = restingByte ? Number(restingByte.expr) / 255 : 1;
+  const resting = Number.isFinite(restingRaw) ? restingRaw : 1;
 
   const activeAttr = namedAttr(el.openingElement, 'activeOpacity');
   const active = activeAttr
-    ? Number(
+    ? opacityLiteralOrThrow(
         evalStaticOrThrow(
           attrExpr(activeAttr),
           scope,
           'AOT: <TouchableOpacity activeOpacity> must be a compile-time constant',
           'the dim target is baked into the generated handler, so it cannot come from state.',
         ),
+        activeAttr,
       )
     : TOUCHABLE_ACTIVE_OPACITY;
 
@@ -5164,9 +5194,10 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     );
   }
 
-  // A <TouchableOpacity disabled> is compiled away to a plain Pressable node: no press handlers, and no
-  // animated value to dim it with. That is RN's `disabled`, and it is the whole of it here — the engine
-  // has no such node flag, so a node left holding onPress would still fire.
+  // A <TouchableOpacity disabled> lowers to a plain Pressable node — children, layout and style all
+  // intact — with no press handlers and no animated value to dim it with. That is RN's `disabled`, and
+  // it is the whole of it here: the engine has no such node flag, so a node left holding onPress would
+  // still fire, and one left holding the binding would still dim.
   const touchableOff =
     tag === 'TouchableOpacity' && touchableIsDisabled(el, scope);
 

@@ -269,9 +269,12 @@ area, so dim the box that reads as the button, not the surrounding page.
 
 Flow B compiles the same source down to the same animated value and the same two handlers, so an AOT
 app gets the feedback with no JS on the device. Two things have to fold at build time there, because
-they are baked into the generated C: `activeOpacity`, and `disabled` — a `disabled` touchable is
-compiled away entirely, so it cannot come from state. The AOT also rejects a state-driven `opacity` on
-one, since the press feedback owns that property and would overwrite it on the next touch.
+they decide what the generated C contains: `activeOpacity`, which is baked into the handler as a
+literal, and `disabled`, which decides whether the handlers and the binding are emitted at all — so
+neither can come from state. A `disabled` touchable still renders: it lowers to a plain `<Pressable>`
+with its children, layout and style intact, just without the press handlers and the dim. The AOT also
+rejects a state-driven `opacity` on one, since the press feedback owns that property and would overwrite
+it on the next touch.
 
 ---
 
