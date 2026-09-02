@@ -174,6 +174,47 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `the state-driven dimension rounder passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // app_round_dim is the only helper the codegen writes into the file itself rather than calling from
+      // the engine, and it is emitted only when something needs it — so nothing else here would notice it
+      // failing to compile.
+      const r = compileSource(
+        `import { useState } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(3);
+           return (<View style={{ width: n * 0.8875, marginLeft: -n / 2 }}><Text>x</Text></View>);
+         }`,
+        'round',
+      );
+      expect(r.c).toContain('static int16_t app_round_dim(double v)');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-round-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `a PanResponder pager passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // The responder lowering generates two callback SHAPES the rest of the codegen never emits — a

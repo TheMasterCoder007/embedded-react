@@ -1099,6 +1099,35 @@ describe('AOT arithmetic semantics', () => {
       }`);
     expect(c).toMatch(/\(s_state\.n \+ 2\) \* 4/);
   });
+
+  // A dimension folded at compile time goes through Math.round; one driven by state used to be handed to
+  // int16 with a plain C cast, which truncates toward zero. That made the AOT disagree with ITSELF (and
+  // with Flow A's bridge, which rounds) for any state-driven fractional size — the same half-pixel split
+  // that put the thermostat's dial a pixel off across the two flows in issue #187.
+  it('rounds a state-driven fractional size instead of truncating it', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<View style={{ width: n * 0.8875 }}><Text>x</Text></View>);
+      }`);
+    expect(c).toMatch(/p\.width = app_round_dim\(/);
+    expect(c).not.toMatch(/p\.width = \(int16_t\)\(/);
+    // The helper it calls has to come with it, and has to be floor(x + 0.5) — JS's rule, halves up.
+    expect(c).toContain('static int16_t app_round_dim(double v)');
+    expect(c).toContain('const double r = v + 0.5;');
+    expect(c).toContain('if (v != v)');
+    expect(c).toContain('if (v < -32768.0)');
+    expect(c).toContain('if (v > 32767.0)');
+  });
+
+  it('leaves the rounding helper out of an app with no state-driven sizes', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<View style={{ width: 40 }}><Text>{n}</Text></View>);
+      }`);
+    expect(c).not.toContain('app_round_dim');
+  });
 });
 
 describe('AOT touch drag', () => {

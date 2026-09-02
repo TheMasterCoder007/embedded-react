@@ -19,6 +19,7 @@
 #include "er_scene.h"
 #include "native_renderer.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -243,7 +244,43 @@ static bool prop_get(JSContext* ctx, JSValueConst obj, const char* key, JSValue*
 }
 
 /**
- * @brief Coerces a numeric JS value to a clamped int16 pixel dimension.
+ * @brief Snaps a JS number to a whole int16 pixel the way JavaScript's `Math.round` does.
+ *
+ * Style values are JS doubles (a scale factor lands `top` on 58.575) but ERProps dimensions are int16, so
+ * something has to snap them. Flow B's AOT compiler folds the very same expressions with `Math.round`, so
+ * this must agree exactly or the two flows lay one app out a pixel apart. `Math.round` is floor(x + 0.5)
+ * — halves go UP, not away from zero — which a plain C cast (truncate toward zero) gets wrong for every
+ * fraction, in both directions.
+ *
+ * Out-of-range and NaN inputs are resolved HERE rather than at the cast: a float-to-int cast is undefined
+ * when the value does not fit, and this runs on a spread of MCU toolchains that each pick their own answer.
+ *
+ * @param[in] d  Value to snap (any double, including NaN and out-of-range).
+ *
+ * @return d rounded to the nearest whole number (halves up), clamped to int16; 0 for NaN. Note that the
+ *         low clamp lands on ER_LAYOUT_AUTO, so a wildly negative dimension reads as "not specified".
+ */
+static int16_t dim_from_double(double d)
+{
+    /* NaN compares false against everything, so it would slip past both clamps below and reach the cast.
+       A NaN dimension is an app bug (a 0/0 in a computed layout); resolve it to 0 in both flows instead. */
+    if (d != d)
+    {
+        return 0;
+    }
+    if (d < INT16_MIN)
+    {
+        return INT16_MIN;
+    }
+    if (d > INT16_MAX)
+    {
+        return INT16_MAX;
+    }
+    return (int16_t)floor(d + 0.5);
+}
+
+/**
+ * @brief Coerces a numeric JS value to a clamped, rounded int16 pixel dimension.
  *
  * @param[in]  ctx  QuickJS context.
  * @param[in]  v    JS value (expected numeric).
@@ -262,15 +299,7 @@ static bool to_dim(JSContext* ctx, JSValueConst v, int16_t* out)
     {
         return false;
     }
-    if (d < INT16_MIN)
-    {
-        d = INT16_MIN;
-    }
-    if (d > INT16_MAX)
-    {
-        d = INT16_MAX;
-    }
-    *out = (int16_t)d;
+    *out = dim_from_double(d);
     return true;
 }
 
@@ -1321,7 +1350,7 @@ static void apply_flex_shorthand(JSContext* ctx, JSValueConst v, ERProps* p)
     {
         if (d > 0.0)
         {
-            p->flex_grow = (int16_t)d;
+            p->flex_grow = dim_from_double(d);
             p->flex_shrink = 1;
             p->flex_basis = 0;
         }
