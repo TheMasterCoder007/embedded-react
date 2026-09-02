@@ -103,8 +103,8 @@ int main(void)
     const uint32_t expect = over(bg, edge);
     if (scratch[0] != expect)
     {
-        fprintf(stderr, "got 0x%08X, expected blended 0x%08X (raw overwrite would be 0x%08X)\n",
-                scratch[0], expect, edge);
+        fprintf(
+            stderr, "got 0x%08X, expected blended 0x%08X (raw overwrite would be 0x%08X)\n", scratch[0], expect, edge);
         return fail("partial-alpha copy into scratch must source-over blend, not overwrite");
     }
     /* The blended result must still carry the blue it was laid over — the fringe bug zeroed it. */

@@ -149,7 +149,8 @@ extern "C"
         uint32_t phase_us[ER_PERF_PHASE_COUNT];   /**< Per-phase totals (a phase may be entered more than once). */
         uint32_t other_us;                        /**< frame_us minus the four phases: input, tick, host work. */
         uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSub): disjoint; may exceed
-                                                       the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is summed across workers. */
+                                                       the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is summed
+                                                     across workers. */
         uint32_t blit_px;                         /**< Pixels pushed through the backend blit callbacks this
                                                        frame (sum of each call's w*h, post-clip). Against
                                                        dirty_px this is the write amplification: overlapping

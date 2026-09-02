@@ -94,7 +94,7 @@ typedef struct
                                         newlib and Emscripten (er_js_alloc.h). */
     size_t max_stack_size;                     /**< JS_SetMaxStackSize value (stack-overflow guard); 0 leaves the
                                                 QuickJS default. Set below the host/task stack on an MCU.
-
+                    
                                                 QuickJS has no separate JS stack: the interpreter recurses
                                                 on the C stack of whatever task calls into JS, so every JS
                                                 call frame, local and argument lives on YOUR task's stack,
@@ -113,7 +113,7 @@ typedef struct
                                                 js_malloc_usable_size (see above). */
     size_t gc_threshold;                       /**< Floor for QuickJS's automatic GC trigger, in tracked heap
                                                 bytes; 0 = leave QuickJS's schedule alone.
-
+                      
                                                 QuickJS collects when the tracked heap passes a threshold
                                                 that starts at 256 KB and is RECOMPUTED to live x 1.5 after
                                                 every collection — so on a host whose live set is small but
@@ -131,7 +131,7 @@ typedef struct
                                                 the cap before the automatic collector ever gets a chance
                                                 to run; er_runtime_init (and er_runtime_set_gc_threshold)
                                                 warn when it is not.
-
+                      
                                                 LIMIT: the floor is re-asserted per pump, so it holds across
                                                 FRAMES — which is how a React app allocates — but not inside
                                                 one synchronous JS call that allocates past it. After the

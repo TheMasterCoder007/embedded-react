@@ -76,10 +76,10 @@
 #define VEC_SUBSAMPLES 4   /**< Vertical AA sub-scanlines per pixel row. */
 #define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
 #define VEC_ARC_TOL                                                                                                    \
-    0.10f /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:                              \
-             the rasterize cost is clip-area bound, not edge-count bound, and a coarse                                 \
-             value visibly facets small curves (0.25f measures ~13% faster on a stroked                                \
-             ring and shifts its edge by a visible quarter pixel — not worth it). */
+    0.10f                   /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:            \
+                               the rasterize cost is clip-area bound, not edge-count bound, and a coarse               \
+                               value visibly facets small curves (0.25f measures ~13% faster on a stroked              \
+                               ring and shifts its edge by a visible quarter pixel — not worth it). */
 #define VEC_JOIN_TOL 0.05f  /**< How far (px) a merged stroke corner may stray from the join it replaces. */
 #define VEC_CLOSE_EPS 0.05f /**< Under this gap, a CLOSE that misses its start point counts as landing on it. */
 #define VEC_PI 3.14159265358979323846f

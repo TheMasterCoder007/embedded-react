@@ -32,8 +32,8 @@
  * exactly the platforms QuickJS's own cutils.h implements, plus Emscripten (whose libc does provide
  * malloc_usable_size — QuickJS just never asks for it, which is why the simulator had no GC either). */
 #if !defined(ER_JS_USABLE_SIZE_NATIVE) && !defined(ER_JS_USABLE_SIZE_SHIM)
-#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__) || defined(__ANDROID__) ||                             \
-    defined(__CYGWIN__) || defined(__FreeBSD__) || defined(__GLIBC__) || defined(__EMSCRIPTEN__)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__) || defined(__ANDROID__) || defined(__CYGWIN__)         \
+    || defined(__FreeBSD__) || defined(__GLIBC__) || defined(__EMSCRIPTEN__)
 #define ER_JS_USABLE_SIZE_NATIVE 1
 #else
 #define ER_JS_USABLE_SIZE_SHIM 1

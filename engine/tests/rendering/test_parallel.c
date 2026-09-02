@@ -160,7 +160,7 @@ static void barrier_wait(TestBarrier* b, int n)
 static int s_ran[NW]; /* how many times each worker id ran */
 static int s_alpha_ok[NW];
 static int s_clip_ok[NW];
-static int s_active;  /* workers participating in the current fork (barrier participant count) */
+static int s_active; /* workers participating in the current fork (barrier participant count) */
 
 /** @brief One worker's share: set distinct state, rendezvous, read it back. */
 static void job(int worker, void* arg)

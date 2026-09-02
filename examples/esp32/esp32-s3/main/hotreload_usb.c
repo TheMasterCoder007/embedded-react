@@ -153,8 +153,10 @@ bool er_hotreload_usb_start(size_t max_container_bytes)
     if (!s_ready_q || !s_done_sem)
     {
         ESP_LOGE(TAG, "queue/sem alloc failed — hot reload disabled");
-        if (s_ready_q) vQueueDelete(s_ready_q);
-        if (s_done_sem) vSemaphoreDelete(s_done_sem);
+        if (s_ready_q)
+            vQueueDelete(s_ready_q);
+        if (s_done_sem)
+            vSemaphoreDelete(s_done_sem);
         s_ready_q = NULL;
         s_done_sem = NULL;
         heap_caps_free(s_buf);
@@ -188,7 +190,8 @@ bool er_hotreload_usb_start(size_t max_container_bytes)
     if (xTaskCreate(er_hotreload_rx_task, "er_hr_rx", 4096, NULL, tskIDLE_PRIORITY + 5, NULL) != pdPASS)
     {
         ESP_LOGE(TAG, "RX task create failed — hot reload disabled");
-        if (err == ESP_OK) usb_serial_jtag_driver_uninstall();
+        if (err == ESP_OK)
+            usb_serial_jtag_driver_uninstall();
         vQueueDelete(s_ready_q);
         vSemaphoreDelete(s_done_sem);
         s_ready_q = NULL;

@@ -25,10 +25,10 @@
 
 #include "er_runtime.h"
 
-#include "er_assets.h"                 /* er_assets_load_pack (ERPK asset section of the container) */
-#include "er_js_alloc.h"               /* default JS-heap allocator with working GC size accounting */
-#include "er_scene.h"                  /* er_reset, er_now_ms */
-#include "native_ui_bridge.h"          /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
+#include "er_assets.h"                   /* er_assets_load_pack (ERPK asset section of the container) */
+#include "er_js_alloc.h"                 /* default JS-heap allocator with working GC size accounting */
+#include "er_scene.h"                    /* er_reset, er_now_ms */
+#include "native_ui_bridge.h"            /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
 #include "overlay/message_overlay.qbc.h" /* precompiled error-overlay app (works on parser-less builds) */
 
 #include <stdint.h>
@@ -456,7 +456,10 @@ static void check_gc_threshold(void)
     }
     char line[160];
     emit_line("embedded-react: WARNING - gc_threshold is not below memory_limit.");
-    snprintf(line, sizeof(line), "  gc_threshold = %zu bytes, memory_limit = %zu bytes.", s_cfg.gc_threshold,
+    snprintf(line,
+             sizeof(line),
+             "  gc_threshold = %zu bytes, memory_limit = %zu bytes.",
+             s_cfg.gc_threshold,
              s_cfg.memory_limit);
     emit_line(line);
     emit_line("  The heap reaches the limit before the AUTOMATIC collector is allowed to run, so a growing");

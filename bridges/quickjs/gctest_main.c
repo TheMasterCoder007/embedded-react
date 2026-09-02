@@ -151,11 +151,11 @@ static size_t usable_size_constant(const void* ptr)
     return 16;
 }
 
-static const JSMallocFunctions MF_NO_ACCOUNTING = {plain_calloc, plain_malloc, plain_free, plain_realloc,
-                                                   usable_size_zero};
+static const JSMallocFunctions MF_NO_ACCOUNTING = {
+    plain_calloc, plain_malloc, plain_free, plain_realloc, usable_size_zero};
 
-static const JSMallocFunctions MF_IMPLAUSIBLE = {plain_calloc, plain_malloc, plain_free, plain_realloc,
-                                                 usable_size_constant};
+static const JSMallocFunctions MF_IMPLAUSIBLE = {
+    plain_calloc, plain_malloc, plain_free, plain_realloc, usable_size_constant};
 
 /** @brief Refuses everything. @param opaque Unused. @param count Element count. @param size Element size. */
 static void* failing_calloc(void* opaque, size_t count, size_t size)
@@ -175,14 +175,15 @@ static void* failing_malloc(void* opaque, size_t size)
 }
 
 /** @brief An out-of-memory host: JS_NewRuntime2 cannot even allocate the JSRuntime, so init fails early. */
-static const JSMallocFunctions MF_ALLOCATION_FAILS = {failing_calloc, failing_malloc, plain_free, plain_realloc,
-                                                      usable_size_zero};
+static const JSMallocFunctions MF_ALLOCATION_FAILS = {
+    failing_calloc, failing_malloc, plain_free, plain_realloc, usable_size_zero};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — no-op backend (the font registry needs one; nothing is painted here)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief No-op fill. @param argb Color. @param x X. @param y Y. @param w Width. @param h Height. @param ctx Context. */
+/** @brief No-op fill. @param argb Color. @param x X. @param y Y. @param w Width. @param h Height. @param ctx Context.
+ */
 static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
     (void)argb;
@@ -254,7 +255,8 @@ static int64_t tracked_bytes(JSRuntime* rt)
     return usage.malloc_size;
 }
 
-/** @brief Evaluates a script, reporting any exception. @param ctx Context. @param src Source. @param name Trace name. */
+/** @brief Evaluates a script, reporting any exception. @param ctx Context. @param src Source. @param name Trace name.
+ */
 static bool run_js(JSContext* ctx, const char* src, const char* name)
 {
     JSValue result = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_GLOBAL);
@@ -358,8 +360,11 @@ int main(void)
     {
         const int64_t tracked = measure_growth(er_js_default_malloc_functions());
         char msg[128];
-        snprintf(msg, sizeof msg, "accounting: %d KB live string tracked as %d KB (bridge default)",
-                 GROWTH_BYTES / 1024, (int)(tracked / 1024));
+        snprintf(msg,
+                 sizeof msg,
+                 "accounting: %d KB live string tracked as %d KB (bridge default)",
+                 GROWTH_BYTES / 1024,
+                 (int)(tracked / 1024));
         check(tracked >= GROWTH_MIN_TRACKED, msg);
 
         /* The defect itself, pinned down: same script, same heap traffic, invisible to the GC. */
@@ -379,8 +384,8 @@ int main(void)
         const int64_t after = tracked_bytes(rt); /* NOT collected first: the automatic GC must have run */
 
         char msg[128];
-        snprintf(msg, sizeof msg, "gc: cyclic garbage churned, heap grew %d KB (bounded)",
-                 (int)((after - before) / 1024));
+        snprintf(
+            msg, sizeof msg, "gc: cyclic garbage churned, heap grew %d KB (bounded)", (int)((after - before) / 1024));
         check(ok && (after - before) < AUTO_GC_MAX_RETAINED, msg);
 
         JS_FreeContext(ctx);
@@ -411,7 +416,8 @@ int main(void)
            allocator refuses the JSRuntime itself), so nothing is probed. */
         cfg.malloc_functions = &MF_ALLOCATION_FAILS;
         check(!er_runtime_init(&cfg), "er_runtime: init fails when the JS heap cannot be allocated");
-        check(er_runtime_gc_accounting_ok(), "er_runtime: a failed init does not report the previous runtime's verdict");
+        check(er_runtime_gc_accounting_ok(),
+              "er_runtime: a failed init does not report the previous runtime's verdict");
     }
 
     /* --- 5. The GC floor survives QuickJS's recompute-after-every-collection ----------------------- */
@@ -433,12 +439,14 @@ int main(void)
         cfg.gc_threshold = GC_FLOOR_BYTES;
         check(er_runtime_init(&cfg), "gc floor: init with a threshold");
         check(er_runtime_gc_threshold() == GC_FLOOR_BYTES, "gc floor: the configured value is applied at init");
-        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"),
-              "gc floor: app ran under the floor");
+        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"), "gc floor: app ran under the floor");
         er_runtime_pump(); /* what a host does every frame — and what re-asserts the floor */
         char msg[128];
-        snprintf(msg, sizeof msg, "gc floor: still %u KB after collections, not %u KB (the recompute is undone)",
-                 (unsigned)(er_runtime_gc_threshold() / 1024), (unsigned)(unfloored / 1024));
+        snprintf(msg,
+                 sizeof msg,
+                 "gc floor: still %u KB after collections, not %u KB (the recompute is undone)",
+                 (unsigned)(er_runtime_gc_threshold() / 1024),
+                 (unsigned)(unfloored / 1024));
         check(er_runtime_gc_threshold() >= GC_FLOOR_BYTES, msg);
 
         /* Turning automatic collection off is the extreme of the same knob: the host then owns the pause
@@ -455,8 +463,7 @@ int main(void)
 
         er_runtime_run_gc();
         const int64_t collected = tracked_bytes(rt);
-        snprintf(msg, sizeof msg, "gc off: er_runtime_run_gc reclaimed %d KB of it",
-                 (int)((peak - collected) / 1024));
+        snprintf(msg, sizeof msg, "gc off: er_runtime_run_gc reclaimed %d KB of it", (int)((peak - collected) / 1024));
         check(collected - before < CYCLES_MAX_RETAINED, msg);
         check(er_runtime_gc_threshold() == (size_t)-1, "gc off: a manual collection does not re-arm the schedule");
 
