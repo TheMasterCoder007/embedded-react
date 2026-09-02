@@ -45,9 +45,11 @@ struct of function pointers (see [`backends/README.md`](../backends/README.md)).
 `layout/layout_engine.c` implements a Yoga-compatible flexbox solve per container:
 collect in-flow children with hypothetical sizes → wrap into lines → resolve
 `flexGrow`/`flexShrink` against free space (iterative, like Yoga's resolve-flexible-lengths
-loop, so min/max-frozen children redistribute) → compute per-line cross size → place along
-main axis (`justifyContent`) and cross axis (`alignSelf`/`alignItems`) → write back and
-recurse → lay out absolutely-positioned children against the padding box. Scratch arrays
+loop, so min/max-frozen children redistribute) → compute per-line cross-size → place along
+the main axis (`justifyContent`) and cross axis (`alignSelf`/`alignItems`) → write back and
+recurse → lay out absolutely positioned children against the parent's content box. An
+absolute axis that the style does not pin (explicit length, percentage, opposing insets,
+or `aspectRatio`) sizes to the node's own content, like a flow child. Scratch arrays
 are static at module scope, sized to `ERUI_MAX_NODES`.
 
 ### Pixel format — premultiplied ARGB8888

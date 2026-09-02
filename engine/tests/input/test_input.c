@@ -1957,6 +1957,63 @@ static int test_opacity_zero_not_hittable(void)
 }
 
 /**
+ * @brief Checks an auto-height absolute container still hit-tests its children (issue #94).
+ *
+ * A `position:absolute` View given left/top/width but no height used to lay out 0 px tall. Its
+ * children painted normally — nothing clips them — so the screen looked right, but hit_test_node
+ * gates entry on the node's own rect, so the empty box turned the whole subtree into a dead zone and
+ * every touch fell through to whatever sat behind it. The container now sizes to its content, so the
+ * child inside it is hittable and the node behind it is not.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_auto_sized_absolute_is_hittable(void)
+{
+    ERNode* root = create_root();
+
+    /* Full-bleed pressable behind everything: it must NOT collect the tap. */
+    EventCounts behind = {0};
+    ERNode* backdrop = create_pressable(0, 0, 240, 160, &behind);
+    er_tree_append_child(root, backdrop);
+
+    /* Absolute container with no height, holding a pressable child. */
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 20;
+    ap.top = 30;
+    ap.width = 100;
+    LayoutRecord box_rect = {0};
+    ERNode* box = er_node_create(ER_NODE_VIEW);
+    er_node_set_props(box, &ap);
+    er_event_set(box, ER_EVENT_LAYOUT, on_layout, &box_rect);
+
+    EventCounts inner = {0};
+    ERProps cp = props_default();
+    cp.width = 80;
+    cp.height = 40;
+    cp.background_color = 0xFF202020U;
+    ERNode* child = er_node_create(ER_NODE_PRESSABLE);
+    er_node_set_props(child, &cp);
+    er_event_set(child, ER_EVENT_PRESS, on_press, &inner);
+
+    er_tree_append_child(box, child);
+    er_tree_append_child(root, box);
+    er_commit();
+
+    if (box_rect.rect.w != 100 || box_rect.rect.h != 40)
+        return fail("auto-height absolute container did not size to its content");
+
+    tap(60, 50);
+
+    if (inner.press_count != 1)
+        return fail("child of an auto-height absolute container did not receive the press");
+    if (behind.press_count != 0)
+        return fail("press fell through an auto-height absolute container to the node behind it");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks a transformed node render_tree could not capture is hit where it is actually painted.
  *
  * A scale/rotate node is normally painted by capturing its subtree into the transform scratch and
@@ -2416,6 +2473,8 @@ int main(void)
     if (test_display_none_not_hittable() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_opacity_zero_not_hittable() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_auto_sized_absolute_is_hittable() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_none() != EXIT_SUCCESS)
         return EXIT_FAILURE;
