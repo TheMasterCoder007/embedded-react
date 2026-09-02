@@ -147,7 +147,11 @@ See the README for the release process.
 
 - Flow A now rounds fractional style dimensions to the nearest pixel instead of truncating them, so a
   layout built from a scale factor lands where Flow B's AOT already put it. The thermostat's dial and
-  centre readout drew a pixel off between the two flows because of it.
+  center readout drew a pixel off between the two flows because of it.
+- `npm run parity` now renders Flow A from a packed `app.erpkg` container instead of a bare JS bundle,
+  so both flows see the same baked images. The desktop host only registers assets from a container, so
+  any demo with an `<Image>` was guaranteed to diverge — the thermostat's settings cog painted in Flow B
+  and was simply missing from Flow A.
 - `npm run parity` now compares the two flows at the same size on a Retina/HiDPI display. Both desktop
   hosts asked SDL for a HiDPI framebuffer, so a 320×480 scenario rendered at 640×960 — Flow A reads the
   screen size at runtime and filled the frame, while Flow B's layout had been folded from the scenario

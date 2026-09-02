@@ -18,10 +18,18 @@
 //
 // Renders the SAME demo through BOTH compile paths and asserts the framebuffers match pixel-for-pixel:
 //
-//   Flow A (interpreted): build.mjs bundles demos/<demo>/index.jsx → the QuickJS desktop host
-//                         (examples/linux) renders it headlessly (ER_SHOT) to a BMP.
+//   Flow A (interpreted): pack-container.mjs bundles demos/<demo>/index.jsx, precompiles it to QuickJS
+//                         bytecode and bakes its images/fonts into dist/app.erpkg → the QuickJS desktop
+//                         host (examples/linux) renders that headlessly (ER_SHOT) to a BMP.
 //   Flow B (AOT):         aot/compile.mjs compiles demos/<demo>/App.jsx → C, the AOT host
 //                         (examples/linux-aot) is rebuilt and renders headlessly (ER_AOT_SHOT) to a BMP.
+//
+// Flow A renders from a CONTAINER, not from the bare dist/app.bundle.js, because the desktop host only
+// registers baked assets when it loads one (examples/linux ships no assets of its own — it mirrors the
+// device's uploaded-config model). Handed a plain .js path it loads source and nothing else, so every
+// <Image> in the demo would simply be absent from Flow A's frame while Flow B — which links the assets
+// aot/compile.mjs bakes into assets.generated.c — painted it. That also puts Flow A on the bytecode the
+// MCU actually runs, which is the path this harness means to model.
 //
 // Then the two BMPs are pixel-diffed. Because the engine, fonts, and backend are shared, a correct demo
 // renders byte-identically through both paths — any difference is a real Flow A↔B divergence (this is
@@ -46,6 +54,8 @@ import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join} from 'node:path';
 import {readFileSync, mkdirSync, existsSync} from 'node:fs';
 
+import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
+
 const JS_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(JS_DIR, '../../..');
 
@@ -59,10 +69,9 @@ const FLOW_B_EXE = join(
   ROOT,
   `examples/linux-aot/build/embedded-react-desktop-aot${EXE}`,
 );
-const FLOW_A_BUILD = join(ROOT, 'examples/linux/build');
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
-const BUNDLE = join(JS_DIR, 'dist/app.bundle.js');
-const BUILD_MJS = join(JS_DIR, 'build.mjs');
+const CONTAINER = join(JS_DIR, 'dist/app.erpkg');
+const PACK_MJS = join(JS_DIR, 'pack-container.mjs');
 const COMPILE_MJS = join(JS_DIR, 'aot/compile.mjs');
 const OUT_DIR = join(JS_DIR, 'dist/parity');
 
@@ -172,9 +181,9 @@ function runScenario(s) {
     ER_AOT_SCREEN_H: String(s.screen.h),
   };
 
-  // --- Flow A: bundle (interpreted) → render via the QuickJS host ---
-  run(process.execPath, [BUILD_MJS, s.demo]);
-  run(FLOW_A_EXE, [BUNDLE], {
+  // --- Flow A: pack a container (bytecode + baked assets) → render via the QuickJS host ---
+  run(process.execPath, [PACK_MJS, s.demo]);
+  run(FLOW_A_EXE, [CONTAINER], {
     ER_SHOT: outA,
     ER_W: String(s.screen.w),
     ER_H: String(s.screen.h),
@@ -231,6 +240,12 @@ function main() {
       );
       process.exit(2);
     }
+  }
+  // Packing Flow A's container needs the bytecode precompiler too — check it here rather than letting
+  // the first scenario die halfway through with a build error.
+  if (!findCompileBin()) {
+    console.error(compileBinHelp());
+    process.exit(2);
   }
   mkdirSync(OUT_DIR, {recursive: true});
 

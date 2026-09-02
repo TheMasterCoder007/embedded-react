@@ -115,6 +115,7 @@ assets/                    build-time asset bakers (pure JS, no native deps) —
 build.mjs                  esbuild a demo's index.jsx → dist/app.bundle.js + bake its imported assets
 pack-container.mjs         bundle + bytecode-compile + bake → dist/app.erpkg config container (npm run pack)
   assets/emit-container.mjs  ERCF container writer (sections + QuickJS version stamp + CRC32)
+  compile-bin.mjs            finds er-bridge-quickjs-compile (shared with the parity harness)
 vitest.config.js           unit test config
 ```
 
