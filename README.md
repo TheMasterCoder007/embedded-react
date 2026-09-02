@@ -251,6 +251,41 @@ which does compile in both flows, is the exception rather than the rule here.
 
 ---
 
+## `<TouchableOpacity>` dims on the native driver
+
+`<TouchableOpacity>` is a fourth JSX-over-primitives wrapper, but it is not in the table above because
+it costs no extra node, and it compiles in **both** flows. It is a `<Pressable>` whose `opacity` is bound
+to a press animation: touch-down snaps it to `activeOpacity` (RN's `0.2`), the lift fades it back over
+250 ms, and both ends run in C. The two press handlers hand the engine a target and a duration; nothing
+re-enters JS per frame, and the subtree React just built is not touched at all.
+
+Every `<Pressable>` prop works on it unchanged — the two are interchangeable, and the choice is only
+whether you want the dim. `disabled` is RN's: no press, and no feedback with it.
+
+The one prop it will not share is `opacity`. The press feedback owns that property, and a second writer
+does not blend with it — it races it. An animated `opacity` in the style is therefore ignored (with a
+one-time warning) in Flow A and rejected outright by the AOT, which would otherwise bind the same node
+property twice and let whichever changed last win the frame. RN drops it the same way; it just doesn't
+tell you. If you want to animate opacity yourself, use `<Pressable>` — the dim is only `onPressIn` /
+`onPressOut` driving an `Animated.Value`, which is the whole of `TouchableOpacity.js`. Animating any
+*other* property is fine, `transform` included.
+
+One thing to know before wrapping a screen in one: opacity below 1 makes the node an **opacity
+group**, so the engine composites its whole subtree through an off-screen strip for as long as the fade
+lasts. That is exactly what makes a label dim with its button — but it costs in proportion to the dimmed
+area, so dim the box that reads as the button, not the surrounding page.
+
+Flow B compiles the same source down to the same animated value and the same two handlers, so an AOT
+app gets the feedback with no JS on the device. Two things have to fold at build time there, because
+they decide what the generated C contains: `activeOpacity`, which is baked into the handler as a
+literal, and `disabled`, which decides whether the handlers and the binding are emitted at all — so
+neither can come from state. A `disabled` touchable still renders: it lowers to a plain `<Pressable>`
+with its children, layout and style intact, just without the press handlers and the dim. The AOT also
+rejects a state-driven `opacity` on one, since the press feedback owns that property and would overwrite
+it on the next touch.
+
+---
+
 ## Working examples
 
 The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:

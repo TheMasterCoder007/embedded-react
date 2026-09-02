@@ -393,6 +393,20 @@ export interface PressableProps extends TouchEventProps, PressEventProps {
 }
 
 /**
+ * A `<Pressable>` that dims while it is held — every Pressable prop works here unchanged. The fade runs
+ * on the native driver, so it costs no re-render; note that a dimmed node composites its whole subtree
+ * off-screen, so dim the box that reads as the button rather than the surrounding screen.
+ *
+ * The press feedback owns `opacity`: an animated one in `style` is ignored here and rejected by the AOT.
+ * To animate opacity yourself, use `<Pressable>`. Animating any other property, `transform` included, is
+ * fine.
+ */
+export interface TouchableOpacityProps extends PressableProps {
+  /** Opacity to dim to while held, 0–1. Defaults to RN's 0.2. */
+  activeOpacity?: number;
+}
+
+/**
  * A scrolling container. It scrolls whichever axis overflows, so lay the content out with
  * `flexDirection: 'row'` for a horizontal scroller.
  */
@@ -594,7 +608,7 @@ export const View: (props: ViewProps) => JSX.Element;
 export const Text: (props: TextProps) => JSX.Element;
 export const Image: (props: ImageProps) => JSX.Element;
 export const Pressable: (props: PressableProps) => JSX.Element;
-export const TouchableOpacity: (props: PressableProps) => JSX.Element;
+export const TouchableOpacity: (props: TouchableOpacityProps) => JSX.Element;
 export const ScrollView: (props: ScrollViewProps) => JSX.Element;
 export function FlatList<T>(props: FlatListProps<T>): JSX.Element;
 export function SectionList<ItemT, SectionT = DefaultSectionT>(

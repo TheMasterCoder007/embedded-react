@@ -12,6 +12,10 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- `<TouchableOpacity>` now dims on press, in **both flows**. It was a bare alias of `<Pressable>` that
+  did nothing on touch; it is now that same one node with its opacity bound to a press animation the
+  engine runs in C, so the feedback costs no re-render (and no JS at all on a Flow B device). It owns
+  its `opacity`, so animate that one on a `<Pressable>` instead — every other style prop is yours.
 - Added `<Button>`, `<ImageBackground>` and `<SectionList>` — the React Native components that are
   just JSX over the primitives, implemented the way RN implements them, so RN source pastes in and
   runs. Flow A only for now: an AOT build rejects them by name and prints the tree to write by hand.
