@@ -32,6 +32,12 @@
 // fed to BOTH paths (ER_W/ER_H for Flow A's window, ER_AOT_SCREEN_W/H for Flow B's compile +
 // window) so they render the same branch at the same dimensions.
 //
+// Both hosts are run with ER_NO_HIDPI=1 so a Retina display can't scale that size out from under them.
+// The flows read "the screen" at different times — Flow A at runtime (it would see the 2x framebuffer and
+// lay out to fill it), Flow B at compile time (its layout is folded from ER_AOT_SCREEN_W/H, so it would
+// draw a 320x480 app in the corner of a 640x960 root) — so a 2x window compares two different layouts.
+// The rendered frames are size-checked below to keep them from silently regressing.
+//
 // This is a DEV-MACHINE harness: it opens real SDL windows (the desktop backend has no headless renderer),
 // so it needs a display. Run with `npm run parity` from bridges/quickjs/js.
 
@@ -172,6 +178,7 @@ function runScenario(s) {
     ER_SHOT: outA,
     ER_W: String(s.screen.w),
     ER_H: String(s.screen.h),
+    ER_NO_HIDPI: '1',
     ...(s.taps ? {ER_TAPS: s.taps} : {}),
   });
 
@@ -181,10 +188,29 @@ function runScenario(s) {
   run(FLOW_B_EXE, [], {
     ER_AOT_SHOT: outB,
     ...screenEnv,
+    ER_NO_HIDPI: '1',
     ...(s.taps ? {ER_AOT_TAPS: s.taps} : {}),
   });
 
-  return diffImages(readBMP(outA), readBMP(outB));
+  const a = readBMP(outA);
+  const b = readBMP(outB);
+  // Guard the premise of the whole comparison: both flows must have rendered the scenario's board size.
+  // A frame that isn't that size means the host ignored ER_NO_HIDPI (or the size env vars), and the diff
+  // below would be comparing two different layouts — a loud "wrong size" beats a 75% pixel divergence.
+  for (const [flow, img] of [
+    ['A', a],
+    ['B', b],
+  ]) {
+    if (img.w !== s.screen.w || img.h !== s.screen.h) {
+      return {
+        ok: false,
+        reason:
+          `Flow ${flow} rendered ${img.w}x${img.h}, expected ${s.screen.w}x${s.screen.h} — ` +
+          `the host scaled the framebuffer (HiDPI?), so the flows laid out at different sizes`,
+      };
+    }
+  }
+  return diffImages(a, b);
 }
 
 function main() {

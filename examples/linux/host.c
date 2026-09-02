@@ -111,6 +111,19 @@ static bool is_container_path(const char* path)
     return n >= 6 && strcmp(path + n - 6, ".erpkg") == 0;
 }
 
+/**
+ * @brief Reads a boolean env var: true when set to anything but empty or "0".
+ *
+ * @param[in] name  Environment variable name.
+ *
+ * @return true when the flag is on.
+ */
+static bool env_flag(const char* name)
+{
+    const char* v = SDL_getenv(name);
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -143,12 +156,18 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
     }
     er_perf_set_clock(host_now_us); /* frame timing split; a no-op when ER_PERF_STATS is off */
 
+    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (env_flag("ER_NO_HIDPI"))
+    {
+        window_flags &= ~(Uint32)SDL_WINDOW_ALLOW_HIGHDPI;
+    }
+
     host->window = SDL_CreateWindow(cfg->title ? cfg->title : "embedded-react",
                                     SDL_WINDOWPOS_CENTERED,
                                     SDL_WINDOWPOS_CENTERED,
                                     cfg->width,
                                     cfg->height,
-                                    SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+                                    window_flags);
     if (!host->window)
     {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
