@@ -5899,6 +5899,11 @@ static void er_timer_clear(int id)
    are folded with Math.round; this is that rule's runtime twin, and Flow A's bridge applies the same one. */
 static int16_t app_round_dim(double v)
 {
+    /* NaN compares false against everything, so it would slip past both clamps into an undefined cast. */
+    if (v != v)
+    {
+        return 0;
+    }
     if (v < -32768.0)
     {
         return -32768;

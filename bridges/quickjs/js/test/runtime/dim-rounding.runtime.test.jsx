@@ -48,6 +48,9 @@ function App() {
       {/* -1.5 → -1 and -0.5 → 0: Math.round is floor(x + 0.5), so halves go up on both signs. */}
       {box('negHalf', {left: -1.5, top: 40, width: 4, height: 4})}
       {box('negTiny', {left: -0.5, top: 60, width: 4, height: 4})}
+      {box('huge', {left: 0, top: 80, width: 1e9, height: 4})}
+      {box('tiny', {left: 0, top: 100, width: -1e9, height: 4})}
+      {box('nan', {left: 0, top: 120, width: 0 / 0, height: 4})}
     </View>
   );
 }
@@ -80,6 +83,18 @@ check(
 check(
   at('negTiny', 'x') === 0,
   `-0.5 rounds to 0, not -1 (${at('negTiny', 'x')})`,
+);
+check(
+  at('huge', 'width') === 32767,
+  `a width past int16 clamps instead of wrapping (${at('huge', 'width')})`,
+);
+check(
+  at('tiny', 'width') === 0,
+  `a width past int16 the other way does not wrap positive (${at('tiny', 'width')})`,
+);
+check(
+  at('nan', 'width') === 0,
+  `a NaN width resolves to 0 (${at('nan', 'width')})`,
 );
 
 report('dim-rounding');

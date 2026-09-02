@@ -1115,6 +1115,9 @@ describe('AOT arithmetic semantics', () => {
     // The helper it calls has to come with it, and has to be floor(x + 0.5) — JS's rule, halves up.
     expect(c).toContain('static int16_t app_round_dim(double v)');
     expect(c).toContain('const double r = v + 0.5;');
+    expect(c).toContain('if (v != v)');
+    expect(c).toContain('if (v < -32768.0)');
+    expect(c).toContain('if (v > 32767.0)');
   });
 
   it('leaves the rounding helper out of an app with no state-driven sizes', () => {
