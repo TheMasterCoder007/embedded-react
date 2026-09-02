@@ -203,12 +203,12 @@ export interface TextStyle extends ViewStyle {
   letterSpacing?: number;
 }
 
-/** <Modal> styling: a View plus the scrim colour painted behind the modal. */
+/** <Modal> styling: a View plus the scrim color painted behind the modal. */
 export interface ModalStyle extends ViewStyle {
   backdropColor?: string;
 }
 
-/** <TextInput> styling: text styling plus the caret colour. */
+/** <TextInput> styling: text styling plus the caret color. */
 export interface TextInputStyle extends TextStyle {
   cursorColor?: string;
 }

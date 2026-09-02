@@ -936,6 +936,30 @@ static bool node_clips_children(const ERNode* n)
 }
 
 /**
+ * @brief Offset from a node's border-box origin to the origin its vec_dirty_* rect is measured from.
+ *
+ * The two rects are stored in different spaces, and both land on screen through this. An ER_NODE_VECTOR
+ * records its tight sub-rect in TAPE coordinates, whose origin is the content box the tape now paints
+ * from — so the padding has to be added back. An Arc's comes out of er_arc_geom() called at (0, 0),
+ * which already resolves inside the content box, so its rect is border-box relative and needs nothing.
+ *
+ * @param[in]  n       Node holding the rect.
+ * @param[out] ox, oy  Offset to add to the node's screen origin.
+ */
+static void vec_dirty_offset(const ERNode* n, int* ox, int* oy)
+{
+    if (n->type != ER_NODE_VECTOR)
+    {
+        *ox = 0;
+        *oy = 0;
+        return;
+    }
+    const ERPadding p = er_layout_padding(&n->layout);
+    *ox = p.left;
+    *oy = p.top;
+}
+
+/**
  * @brief Grows a rect by however far this node's Arc knob reaches past its layout box.
  *
  * A knob wider than the ring paints outside the box, so any rect meant to bound what the node PUTS ON
@@ -2283,8 +2307,10 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty)
             {
                 /* Match the sub-region damage so the engine's dirty-rect tracker stays tight too. */
-                ux = px + (int)n->vec_dirty_x;
-                uy = py + (int)n->vec_dirty_y;
+                int vox, voy;
+                vec_dirty_offset(n, &vox, &voy);
+                ux = px + vox + (int)n->vec_dirty_x;
+                uy = py + voy + (int)n->vec_dirty_y;
                 uw = (int)n->vec_dirty_w;
                 uh = (int)n->vec_dirty_h;
             }
@@ -2312,11 +2338,16 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * scratch strips which are then blended at the node's alpha. Regions larger than one
      * strip are composited in multiple band passes (see composite_with_opacity); when no
      * slot is available at all the subtree falls back to a direct render. */
-    const uint8_t node_opacity =
-        (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
-         || (n->type == ER_NODE_MODAL && n->modal_visible) || n->type == ER_NODE_TEXT_INPUT)
-            ? n->props.view.opacity
-            : 255U;
+    /* A TextInput keeps its opacity in ITS OWN union member — props.view.opacity is a different offset
+     * in the same union, landing inside ERTextInputProps::font_family — a NUL for any font name short
+     * enough not to reach that byte, i.e. essentially always. Read through the wrong member, every
+     * field composited at alpha 0 and painted nothing at all. */
+    uint8_t node_opacity = 255U;
+    if (n->type == ER_NODE_VIEW || n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_PRESSABLE
+        || (n->type == ER_NODE_MODAL && n->modal_visible))
+        node_opacity = n->props.view.opacity;
+    else if (n->type == ER_NODE_TEXT_INPUT)
+        node_opacity = n->props.text_input.opacity;
 
     bool composited = false;
     if (node_opacity < 255U && should_render)
@@ -2475,24 +2506,16 @@ static void render_node_content(
             case ER_NODE_TEXT:
             {
                 const ERTextProps* tp = &n->props.text;
-                /* Glyphs go in the node's PADDING BOX, not its border box. par.clip is both the clip
+                /* Glyphs go in the node's CONTENT BOX, not its border box. par.clip is both the clip
                  * and the layout rect, so this one inset moves the origin, narrows the wrap width and
                  * re-anchors text_align in a single step — and it is the same padding measure_content()
-                 * grew the auto-sized node by, so a padded <Text> fits its own glyph run exactly.
-                 *
-                 * Text is the only case below that does this. Image / Svg / Arc / Switch / TextInput
-                 * still paint across their whole border box — tracked in #180, not an oversight here. */
-                const ERPadding tpad = er_layout_padding(&n->layout);
-                int text_w = w - tpad.left - tpad.right;
-                int text_h = h - tpad.top - tpad.bottom;
-                if (text_w < 0)
-                    text_w = 0;
-                if (text_h < 0)
-                    text_h = 0;
+                 * grew the auto-sized node by, so a padded <Text> fits its own glyph run exactly. */
+                int tx = px, ty = py, tw = w, th = h;
+                er_layout_content_box(&n->layout, &tx, &ty, &tw, &th);
                 ERTextRenderParams par;
                 memset(&par, 0, sizeof(par));
                 par.text = tp->text;
-                par.clip = (ERRect){px + tpad.left, py + tpad.top, text_w, text_h};
+                par.clip = (ERRect){tx, ty, tw, th};
                 par.color = tp->color ? tp->color : 0xFFFFFFFFU;
                 par.font_size = tp->font_size;
                 par.font_family = tp->font_family;
@@ -2510,8 +2533,17 @@ static void render_node_content(
                 break;
             }
             case ER_NODE_IMAGE:
-                er_image_render(&n->props.image, px, py, w, h);
+            {
+                /* A replaced element draws inside its padding, exactly as CSS and RN put a bitmap in
+                 * the box within border + padding. er_image_render() is entirely destination-rect
+                 * relative, so every resizeMode follows from insetting the rect alone: `cover` and
+                 * `contain` fit the CONTENT box, and `repeat` tiles from the content origin — which is
+                 * what `background-origin: padding-box`, the CSS default, does. */
+                int ix = px, iy = py, iw = w, ih = h;
+                er_layout_content_box(&n->layout, &ix, &iy, &iw, &ih);
+                er_image_render(&n->props.image, ix, iy, iw, ih);
                 break;
+            }
             case ER_NODE_VECTOR:
                 if (n->vector_slot >= 0)
                 {
@@ -2520,8 +2552,16 @@ static void render_node_content(
                      * the whole damage clip (which may be larger — e.g. unioned with the readout's
                      * box), so the vector must recompute + repaint everywhere the background was
                      * erased, or its content (e.g. the track ring) goes missing there. Intersect with
-                     * the node box. With no scissor (full repaint), this is just the node box. */
-                    int clx0 = px, cly0 = py, clx1 = px + w, cly1 = py + h;
+                     * the node box. With no scissor (full repaint), this is just the node box.
+                     *
+                     * Padding moves the tape's ORIGIN and shrinks the clip: the same replaced-element
+                     * inset as Image. It does not RESCALE the geometry — a tape arrives already flat,
+                     * with the <Svg> viewBox baked into its coordinates on the JS side, and the engine
+                     * has no paint-time scale for one — so a padded <Svg> shifts in and clips at the
+                     * content box rather than shrinking to fit it. */
+                    int vx = px, vy = py, vw = w, vh = h;
+                    er_layout_content_box(&n->layout, &vx, &vy, &vw, &vh);
+                    int clx0 = vx, cly0 = vy, clx1 = vx + vw, cly1 = vy + vh;
                     int gx, gy, gw, gh;
                     if (er_get_clip_rect(&gx, &gy, &gw, &gh))
                     {
@@ -2536,13 +2576,20 @@ static void render_node_content(
                     }
                     /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                      * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
-                    er_vector_render_slot(n->vector_slot, px, py, clx0, cly0, clx1, cly1);
+                    er_vector_render_slot(n->vector_slot, vx, vy, clx0, cly0, clx1, cly1);
                 }
                 n->vec_has_dirty = false; /* one-shot: consumed by this commit */
                 break;
             case ER_NODE_ACTIVITY_INDICATOR:
-                render_activity_indicator(n, px, py, w, h);
+            {
+                /* Ring diameter comes straight off the box, so the padding shrinks the spinner and
+                 * keeps it centred — the same thing the author would get by shrinking the node, but
+                 * without giving up the space they reserved around it. */
+                int ax = px, ay = py, aw = w, ah = h;
+                er_layout_content_box(&n->layout, &ax, &ay, &aw, &ah);
+                render_activity_indicator(n, ax, ay, aw, ah);
                 break;
+            }
             case ER_NODE_ARC:
                 er_arc_render(n, px, py, w, h);
                 n->vec_has_dirty = false; /* one-shot, like the vector sub-rect */
@@ -2552,26 +2599,35 @@ static void render_node_content(
                 const ERSwitchProps* sp = &n->props.sw;
                 const float t = n->switch_thumb_t;
 
+                /* Track and thumb are both proportional to the box, so the whole control is drawn in
+                 * the content box: padding is breathing room around the pill, not inside it. The 2 px
+                 * thumb margin below is the control's own geometry and stays relative to the track. */
+                int sx = px, sy = py, sw_ = w, sh = h;
+                er_layout_content_box(&n->layout, &sx, &sy, &sw_, &sh);
+
                 /* Track: pill-shaped rectangle, color lerped between off/on. */
                 const uint32_t off_c = sp->track_color_false ? sp->track_color_false : 0xFF767577U;
                 const uint32_t on_c = sp->track_color_true ? sp->track_color_true : 0xFF81B0FFU;
-                er_rrect_fill_bordered(lerp_color32(off_c, on_c, t), 0x00000000U, 0, px, py, w, h, h / 2);
+                er_rrect_fill_bordered(lerp_color32(off_c, on_c, t), 0x00000000U, 0, sx, sy, sw_, sh, sh / 2);
 
                 /* Thumb: circular knob that slides along the track. */
                 const int margin = 2;
-                const int thumb_size = h - 2 * margin;
-                const int travel = w - thumb_size - 2 * margin;
-                const int thumb_x = px + margin + (int)(t * (float)travel + 0.5f);
+                const int thumb_size = sh - 2 * margin;
+                const int travel = sw_ - thumb_size - 2 * margin;
+                const int thumb_x = sx + margin + (int)(t * (float)travel + 0.5f);
                 const uint32_t tc = sp->thumb_color ? sp->thumb_color : 0xFFFFFFFFU;
                 er_rrect_fill_bordered(
-                    tc, 0x00000000U, 0, thumb_x, py + margin, thumb_size, thumb_size, thumb_size / 2);
+                    tc, 0x00000000U, 0, thumb_x, sy + margin, thumb_size, thumb_size, thumb_size / 2);
                 break;
             }
             case ER_NODE_TEXT_INPUT:
             {
                 const ERTextInputProps* tip = &n->props.text_input;
-                const int pad_h = tip->border_width + 4;
-                const int pad_v = tip->border_width + 3;
+                const ERLayoutSpec* til = &n->layout;
+                const int pad_l = tip->border_width + er_layout_pad_edge(til->padding_left, til->padding, 4);
+                const int pad_r = tip->border_width + er_layout_pad_edge(til->padding_right, til->padding, 4);
+                const int pad_t = tip->border_width + er_layout_pad_edge(til->padding_top, til->padding, 3);
+                const int pad_b = tip->border_width + er_layout_pad_edge(til->padding_bottom, til->padding, 3);
 
                 /* Background + border. When focused we draw the border in cursor_color
                  * directly via the bordered fill helper. Doing it this way (rather than a
@@ -2588,7 +2644,13 @@ static void render_node_content(
                 ERTextRenderParams par;
                 memset(&par, 0, sizeof(par));
                 par.text = show_ph ? tip->placeholder : n->input_text;
-                par.clip = (ERRect){px + pad_h, py + pad_v, w - 2 * pad_h, h - 2 * pad_v};
+                int tin_w = w - pad_l - pad_r;
+                int tin_h = h - pad_t - pad_b;
+                if (tin_w < 0)
+                    tin_w = 0;
+                if (tin_h < 0)
+                    tin_h = 0;
+                par.clip = (ERRect){px + pad_l, py + pad_t, tin_w, tin_h};
                 par.color = show_ph ? (tip->placeholder_color ? tip->placeholder_color : 0xFF888888U)
                                     : (tip->color ? tip->color : 0xFFFFFFFFU);
                 par.font_size = tip->font_size ? tip->font_size : 16U;
@@ -2603,18 +2665,18 @@ static void render_node_content(
                     int text_w = 0, text_h = 0;
                     er_text_measure(
                         n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
-                    int cursor_x = px + pad_h + text_w;
-                    const int max_cx = px + w - pad_h - 2;
+                    int cursor_x = px + pad_l + text_w;
+                    const int max_cx = px + w - pad_r - 2;
                     if (cursor_x > max_cx)
                         cursor_x = max_cx;
                     const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
-                    er_rrect_fill_bordered(cc, 0x00000000U, 0, cursor_x, py + pad_v, 2, h - 2 * pad_v, 0);
+                    er_rrect_fill_bordered(cc, 0x00000000U, 0, cursor_x, py + pad_t, 2, tin_h, 0);
                 }
                 else if (n->is_focused && show_ph && (s_now_ms % 1000U < 500U))
                 {
                     /* Cursor at start when field is empty. */
                     const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
-                    er_rrect_fill_bordered(cc, 0x00000000U, 0, px + pad_h, py + pad_v, 2, h - 2 * pad_v, 0);
+                    er_rrect_fill_bordered(cc, 0x00000000U, 0, px + pad_l, py + pad_t, 2, tin_h, 0);
                 }
                 break;
             }
@@ -4779,9 +4841,11 @@ void er_commit(void)
                 /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
                  * screen), not the whole box. The caller's rect already covers old+new content, so the
                  * full last_paint_rect is intentionally NOT added (it would balloon back to the box). */
+                int vox, voy;
+                vec_dirty_offset(n, &vox, &voy);
                 add_damage(&dmg,
-                           box_rx + (int)n->vec_dirty_x,
-                           box_ry + (int)n->vec_dirty_y,
+                           box_rx + vox + (int)n->vec_dirty_x,
+                           box_ry + voy + (int)n->vec_dirty_y,
                            (int)n->vec_dirty_w,
                            (int)n->vec_dirty_h,
                            rb_x0,

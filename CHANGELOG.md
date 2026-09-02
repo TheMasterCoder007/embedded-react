@@ -145,6 +145,13 @@ See the README for the release process.
 
 ### Fixed
 
+- `padding` now insets what a leaf actually DRAWS, not just the space layout reserved for it. `<Image>`,
+  `<Svg>`, `<ActivityIndicator>`, `<Switch>` and `<Dial>` all painted across their whole box, so
+  padding on any of them typechecked, marshaled, and then made no visible difference. A `<TextInput>`
+  now takes its text inset from `padding` too, replacing the built-in 4px/3px per edge — set none and
+  a field looks as it always did.
+- `<TextInput>` painted nothing at all. It read its opacity from the wrong field, so every field
+  composited at alpha 0 and vanished — background, border, text, and cursor alike.
 - `padding` on a `<Text>` now lays out, in both flows. The engine measured an auto-sized text node's
   glyph run and stopped there, so padding on a label typechecked, marshaled, and then did nothing —
   the box never grew and the glyphs never moved. Padded labels and text-only buttons hug their letters
