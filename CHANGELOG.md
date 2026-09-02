@@ -145,6 +145,11 @@ See the README for the release process.
 
 ### Fixed
 
+- `npm run parity` now compares the two flows at the same size on a Retina/HiDPI display. Both desktop
+  hosts asked SDL for a HiDPI framebuffer, so a 320×480 scenario rendered at 640×960 — Flow A reads the
+  screen size at runtime and filled the frame, while Flow B's layout had been folded from the scenario
+  size at compile time and drew in one corner, reporting a 75% divergence that wasn't one. The harness
+  now pins both hosts to the scenario size, and fails loudly if either frame comes back another size.
 - `padding` now insets what a leaf actually DRAWS, not just the space layout reserved for it. `<Image>`,
   `<Svg>`, `<ActivityIndicator>`, `<Switch>` and `<Dial>` all painted across their whole box, so
   padding on any of them typechecked, marshaled, and then made no visible difference. A `<TextInput>`

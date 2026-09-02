@@ -51,6 +51,13 @@ static int env_int(const char* name, int fallback)
     return n > 0 ? n : fallback;
 }
 
+/** @brief Reads a boolean env var: true when set to anything but empty or "0". */
+static bool env_flag(const char* name)
+{
+    const char* v = SDL_getenv(name);
+    return v && v[0] && SDL_strcmp(v, "0") != 0;
+}
+
 /** @brief Scales a logical SDL coordinate to physical framebuffer pixels. */
 static int to_px(int logical, float scale)
 {
@@ -77,12 +84,18 @@ int main(void)
     const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
     const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
 
+    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (env_flag("ER_NO_HIDPI"))
+    {
+        window_flags &= ~(Uint32)SDL_WINDOW_ALLOW_HIGHDPI;
+    }
+
     SDL_Window* window = SDL_CreateWindow("embedded-react — desktop (Flow B / AOT)",
                                           SDL_WINDOWPOS_CENTERED,
                                           SDL_WINDOWPOS_CENTERED,
                                           SCREEN_W,
                                           SCREEN_H,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI);
+                                          window_flags);
     if (!window)
     {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
