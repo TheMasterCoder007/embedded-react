@@ -125,6 +125,9 @@ static void union_local_dirty(ERNode* n, int x0, int y0, int x1, int y1)
 void er_arc_geom(const ERNode* n, int px, int py, int w, int h, ERArcGeom* g)
 {
     const ERArcProps* p = &n->props.arc;
+
+    er_layout_content_box(&n->layout, &px, &py, &w, &h);
+
     const int side = (w < h) ? w : h;
     const float R = (float)side * 0.5f;
 

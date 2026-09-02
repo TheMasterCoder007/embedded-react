@@ -74,11 +74,30 @@ typedef struct
 } ERPadding;
 
 /**
+ * @brief Resolves ONE padding edge: the per-edge value, else the shorthand, else the caller's default.
+ *
+ * Split out so a node with a built-in inset of its own can reuse the exact same cascade instead of
+ * re-deriving it — TextInput does, to keep its historic 4 px / 3 px field padding as the value an
+ * unset edge falls back to. Everything else passes 0 via er_layout_padding().
+ *
+ * @param[in] edge       Per-edge field (paddingLeft…), or ER_LAYOUT_AUTO when unset.
+ * @param[in] shorthand  The `padding` shorthand, or ER_LAYOUT_AUTO when unset.
+ * @param[in] dflt       Value to use when neither is set.
+ *
+ * @return The resolved edge, clamped to >= 0.
+ */
+static inline int16_t er_layout_pad_edge(int16_t edge, int16_t shorthand, int16_t dflt)
+{
+    const int16_t v = (edge != ER_LAYOUT_AUTO) ? edge : (shorthand != ER_LAYOUT_AUTO) ? shorthand : dflt;
+    return (v < 0) ? 0 : v;
+}
+
+/**
  * @brief Resolves a node's padding box: per-edge value, else the shorthand, else 0.
  *
- * The single definition of "how wide is this node's padding", shared by the three places that need
- * it — intrinsic measurement, child placement, and the text paint that insets its glyph origin.
- * Keeping it in one place is the point: the text branch of measure_content() skipped padding
+ * The single definition of "how wide is this node's padding", shared by everything that needs it —
+ * intrinsic measurement, child placement, and the content paint of every leaf that draws its own
+ * pixels. Keeping it in one place is the point: the text branch of measure_content() skipped padding
  * entirely for as long as each caller resolved its own.
  *
  * paddingHorizontal / paddingVertical are NOT read here — er_node_set_props() has already expanded
@@ -91,21 +110,38 @@ typedef struct
 static inline ERPadding er_layout_padding(const ERLayoutSpec* L)
 {
     ERPadding p;
-    p.left = (L->padding_left != ER_LAYOUT_AUTO) ? L->padding_left : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
-    p.top = (L->padding_top != ER_LAYOUT_AUTO) ? L->padding_top : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
-    p.right = (L->padding_right != ER_LAYOUT_AUTO) ? L->padding_right : (L->padding != ER_LAYOUT_AUTO) ? L->padding : 0;
-    p.bottom = (L->padding_bottom != ER_LAYOUT_AUTO) ? L->padding_bottom
-               : (L->padding != ER_LAYOUT_AUTO)      ? L->padding
-                                                     : 0;
-    if (p.left < 0)
-        p.left = 0;
-    if (p.top < 0)
-        p.top = 0;
-    if (p.right < 0)
-        p.right = 0;
-    if (p.bottom < 0)
-        p.bottom = 0;
+    p.left = er_layout_pad_edge(L->padding_left, L->padding, 0);
+    p.top = er_layout_pad_edge(L->padding_top, L->padding, 0);
+    p.right = er_layout_pad_edge(L->padding_right, L->padding, 0);
+    p.bottom = er_layout_pad_edge(L->padding_bottom, L->padding, 0);
     return p;
+}
+
+/**
+ * @brief Insets a node's border box to its CONTENT box — the area inside its style `padding`.
+ *
+ * The layout pass already reserved this space (measure_content() grows an auto-sized node by it, and
+ * compute_layout() places children inside it); this is what makes a leaf that paints its own pixels
+ * SPEND it, so `<Image style={{width: 64, height: 64, padding: 8}} />` draws 48x48 centred rather
+ * than edge to edge. Border width is deliberately NOT subtracted — see issue #180.
+ *
+ * Degenerate padding (wider than the box) collapses to a zero-sized content box rather than going
+ * negative, which every renderer downstream already treats as "nothing to draw".
+ *
+ * @param[in]     L        Layout spec whose padding applies. Must not be NULL.
+ * @param[in,out] x,y,w,h  Border box on entry, content box on return.
+ */
+static inline void er_layout_content_box(const ERLayoutSpec* L, int* x, int* y, int* w, int* h)
+{
+    const ERPadding p = er_layout_padding(L);
+    *x += p.left;
+    *y += p.top;
+    *w -= (int)p.left + (int)p.right;
+    *h -= (int)p.top + (int)p.bottom;
+    if (*w < 0)
+        *w = 0;
+    if (*h < 0)
+        *h = 0;
 }
 
 /**

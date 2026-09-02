@@ -157,3 +157,10 @@ add_test(NAME rendering_transform_singular_damage COMMAND test_transform_singula
 add_executable(test_text_padding test_text_padding.c)
 target_link_libraries(test_text_padding PRIVATE embedded-react)
 add_test(NAME rendering_text_padding COMMAND test_text_padding)
+
+# Padding on a content-painting leaf (Image / Svg / ActivityIndicator / Switch / Arc / TextInput) has to
+# inset what it DRAWS, not just the box layout reserved — #180. Records the bounding box of a commit's
+# draw calls and asserts the content landed inside the content box.
+add_executable(test_content_padding test_content_padding.c)
+target_link_libraries(test_content_padding PRIVATE embedded-react)
+add_test(NAME rendering_content_padding COMMAND test_content_padding)

@@ -48,6 +48,11 @@ typedef struct
 
 /**
  * @brief Resolves an Arc node's geometry for a box at (px, py) of size w x h.
+ *
+ * The box passed in is the node's BORDER box; the dial is resolved inside the content box, with the
+ * node's style padding taken off first. Every caller therefore inherits the inset — paint, hit test,
+ * knob-child placement, damage — without repeating it. A caller passing (0, 0, w, h) gets geometry
+ * relative to the border-box origin, padding included, which is the space vec_dirty_* is stored in.
  */
 void er_arc_geom(const ERNode* n, int px, int py, int w, int h, ERArcGeom* g);
 
