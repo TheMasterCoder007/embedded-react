@@ -86,7 +86,10 @@ describe('emitContainer', () => {
     expect(p.qjsTag).toBe('v0.15.0');
     expect(p.end).toBe(c.length); // consumed every byte — no trailing slop
     const real = realSections(p);
-    expect(real.map(s => s.type)).toEqual([SECTION_ASSET_PACK, SECTION_BYTECODE]);
+    expect(real.map(s => s.type)).toEqual([
+      SECTION_ASSET_PACK,
+      SECTION_BYTECODE,
+    ]);
     expect(Buffer.compare(real[0].data, assetPack)).toBe(0);
     expect(Buffer.compare(real[1].data, bytecode)).toBe(0);
   });

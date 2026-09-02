@@ -29,22 +29,41 @@
 //
 // The IIFE keeps bindings out of the global scope so the overlay can run more than once per context.
 (() => {
-  const W = screen.width, H = screen.height;
-  const title = (typeof __title === 'string' && __title) ? __title : 'Error';
-  const msg = (typeof __error === 'string' && __error) ? __error : 'Unknown error';
-  const hint = (typeof __hint === 'string') ? __hint : '';
+  const W = screen.width,
+    H = screen.height;
+  const title = typeof __title === 'string' && __title ? __title : 'Error';
+  const msg =
+    typeof __error === 'string' && __error ? __error : 'Unknown error';
+  const hint = typeof __hint === 'string' ? __hint : '';
   const root = NativeUI.createNode('View');
-  NativeUI.setProps(root, { width: W, height: H, backgroundColor: '#7a0b0b',
-                            flexDirection: 'column', padding: 24, gap: 12 });
+  NativeUI.setProps(root, {
+    width: W,
+    height: H,
+    backgroundColor: '#7a0b0b',
+    flexDirection: 'column',
+    padding: 24,
+    gap: 12,
+  });
   const t = NativeUI.createNode('Text');
-  NativeUI.setProps(t, { text: title, color: '#ffffff', fontSize: 24, fontWeight: 'bold' });
+  NativeUI.setProps(t, {
+    text: title,
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: 'bold',
+  });
   NativeUI.appendChild(root, t);
   const body = NativeUI.createNode('Text');
-  NativeUI.setProps(body, { text: msg, color: '#ffd9d9', fontSize: 14, width: W - 48, numberOfLines: 20 });
+  NativeUI.setProps(body, {
+    text: msg,
+    color: '#ffd9d9',
+    fontSize: 14,
+    width: W - 48,
+    numberOfLines: 20,
+  });
   NativeUI.appendChild(root, body);
   if (hint) {
     const h = NativeUI.createNode('Text');
-    NativeUI.setProps(h, { text: hint, color: '#ff9b9b', fontSize: 12 });
+    NativeUI.setProps(h, {text: hint, color: '#ff9b9b', fontSize: 12});
     NativeUI.appendChild(root, h);
   }
   NativeUI.setRoot(root);

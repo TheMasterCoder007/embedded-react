@@ -369,9 +369,8 @@ async function buildAot(cwd, explicit, outDir, screen) {
   const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mjs');
   const {bakeAssets} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
-  const {analyzeFontSizes, warnFontSizes} = await import(
-    './assets/font-sizes.mjs'
-  );
+  const {analyzeFontSizes, warnFontSizes} =
+    await import('./assets/font-sizes.mjs');
   const appPath = resolveAppComponent(cwd, explicit);
   const appDir = dirname(appPath);
   const src = readFileSync(appPath, 'utf8');
@@ -436,7 +435,12 @@ async function buildContainer(cwd, explicit, outDir) {
 
   // Release artifact: strip the embedded source text + debug tables from the bytecode (~8x smaller
   // erpkg; stack traces lose line numbers). The dev loop (`embedded-react dev`) keeps them.
-  const vendor = await packVendor({libSrc: lib, nodePaths: paths, simDir, strip: true});
+  const vendor = await packVendor({
+    libSrc: lib,
+    nodePaths: paths,
+    simDir,
+    strip: true,
+  });
   const app = await packApp({
     entry,
     projectRoot: cwd,
