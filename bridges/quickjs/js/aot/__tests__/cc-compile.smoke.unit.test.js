@@ -320,4 +320,51 @@ describe('AOT generated C compiles', () => {
       }
     },
   );
+
+  (CC ? it : it.skip)(
+    `a <TouchableOpacity> passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // The press feedback is the one place the codegen writes an ERAnimConfig NOBODY asked for — it is
+      // synthesized from the tag, not lowered from an Animated.* call — and it wraps the app's own handler
+      // by calling it through the ERNodeEventFn signature. A regex sees neither of those go stale.
+      const r = compileSource(
+        `import { useState } from 'react';
+         import { View, Text, TouchableOpacity } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           return (
+             <View style={{ flex: 1 }}>
+               <TouchableOpacity activeOpacity={0.4} style={{ padding: 8, opacity: 0.9 }}
+                                 onPress={() => setN(n + 1)} onPressIn={() => setN(0)}>
+                 <Text>{n}</Text>
+               </TouchableOpacity>
+             </View>
+           );
+         }`,
+        'touchable',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-touchable-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
 });

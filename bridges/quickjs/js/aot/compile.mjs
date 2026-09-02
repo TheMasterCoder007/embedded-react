@@ -21,7 +21,7 @@
 // internal RAM.
 //
 // Supported subset (grows demo by demo; unsupported syntax throws "AOT: ..."):
-//   - View / Text / Pressable / Image / ScrollView elements
+//   - View / Text / Pressable / TouchableOpacity / Image / ScrollView elements
 //   - StyleSheet + inline styles → ERProps (static values)
 //   - text with literal + {interpolation} segments (interpolations may reference state)
 //   - useState(initial) → C state; on* handlers (onPress/onPressIn/onPressOut/onLongPress) → C functions
@@ -5037,7 +5037,8 @@ function resolveImageAttrs(el, env, out) {
 // ---------------------------------------------------------------------------------------------------
 // Node emitter — the element dispatcher + the generic host node. emitNodeImpl is the entry point for
 // every JSX element: it routes Svg / typed components / FlatList / components to their emitters above,
-// and handles the generic host nodes (View / Text / Pressable / Image / ScrollView) itself — style,
+// and handles the generic host nodes (View / Text / Pressable / TouchableOpacity / Image / ScrollView)
+// itself — style,
 // text, events, refs, children. emitNode wraps it with withLoc so a thrown AOT error gets a location.
 // ---------------------------------------------------------------------------------------------------
 
@@ -5053,6 +5054,87 @@ const FLOW_A_ONLY_COMPONENTS = {
   SectionList:
     '<ScrollView> with the header element and a data.map(…) per section (a section is not one .map, which is why it has no lowering).',
 };
+
+// <TouchableOpacity> is a Pressable node plus one synthetic animated value bound to its opacity:
+// press-in snaps it to activeOpacity, press-out fades it back to whatever the style asks for. Flow A
+// builds the same thing out of hooks (TouchableOpacity.js); lowering it here means the feedback runs on
+// the engine's native driver with no JS on the device at all.
+const TOUCHABLE_ACTIVE_OPACITY = 0.2; // RN's default
+const TOUCHABLE_RESTORE_MS = 250; // RN's fade-back; the dim itself lands with no ramp
+
+/** The press events a <TouchableOpacity disabled> drops — RN presses none of them, and dims for none. */
+const PRESS_EVENTS = new Set([
+  'onPress',
+  'onLongPress',
+  'onPressIn',
+  'onPressOut',
+]);
+
+/** A JSX element's named attribute, or undefined. */
+function namedAttr(openingElement, name) {
+  return openingElement.attributes.find(
+    a => a.type === 'JSXAttribute' && a.name && a.name.name === name,
+  );
+}
+
+/** True for `<TouchableOpacity disabled>` / `disabled={SOME_CONST}`. Must fold: the whole touchable
+ *  (handlers and dim alike) is compiled away when it is set, so there is nothing to decide at runtime. */
+function touchableIsDisabled(el, scope) {
+  const attr = namedAttr(el.openingElement, 'disabled');
+  if (!attr) return false;
+  return !!evalStaticOrThrow(
+    attrExpr(attr),
+    scope,
+    'AOT: <TouchableOpacity disabled> must be a compile-time constant',
+    'a disabled touchable is compiled away entirely — press handlers and dim both — so the AOT has to know at build time. To gate on state, keep the touchable and return early in the handler (`onPress={() => { if (!ready) return; … }}`).',
+  );
+}
+
+/**
+ * Creates a <TouchableOpacity>'s animated value and binds it to the node's opacity. Returns the two
+ * fades as handler-body lines, for the event loop to fold into its press handlers.
+ */
+function touchablePressFades(el, v, staticAssigns, dynAssigns, out, scope) {
+  if (dynAssigns.some(a => a.field === 'opacity'))
+    throw aotError(
+      'AOT: <TouchableOpacity> cannot take a state-driven opacity',
+      "the press feedback owns this node's opacity, so a value from state would be overwritten by the next touch. Use <Pressable> and animate the opacity yourself.",
+    );
+  // lowerStyle has already scaled a static opacity to 0–255, and that byte IS the resting value.
+  const restingByte = staticAssigns.find(a => a.field === 'opacity');
+  const resting = restingByte ? Number(restingByte.expr) / 255 : 1;
+
+  const activeAttr = namedAttr(el.openingElement, 'activeOpacity');
+  const active = activeAttr
+    ? Number(
+        evalStaticOrThrow(
+          attrExpr(activeAttr),
+          scope,
+          'AOT: <TouchableOpacity activeOpacity> must be a compile-time constant',
+          'the dim target is baked into the generated handler, so it cannot come from state.',
+        ),
+      )
+    : TOUCHABLE_ACTIVE_OPACITY;
+
+  const cVar = `s_av_press_${v}`;
+  out.childAnims.push({cVar, initCode: floatLit(resting)});
+  out.build.push(`    er_anim_value_bind(${cVar}, ${v}, ER_PROP_OPACITY);`);
+
+  const fade = (to, ms) => [
+    '    {',
+    '        ERAnimConfig cfg;',
+    '        memset(&cfg, 0, sizeof(cfg));',
+    '        cfg.type = ER_ANIM_TIMING;',
+    `        cfg.duration_ms = ${ms};`,
+    '        cfg.easing = ER_EASE_QUAD_IN_OUT;',
+    `        er_anim_value_animate(${cVar}, ${floatLit(to)}, &cfg);`,
+    '    }',
+  ];
+  return {
+    onPressIn: fade(active, 0),
+    onPressOut: fade(resting, TOUCHABLE_RESTORE_MS),
+  };
+}
 
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   const tag = resolveTag(el.openingElement);
@@ -5078,9 +5160,15 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
       );
     throw aotError(
       `AOT: unknown element <${tag}> (not a built-in or a component in this file)`,
-      `<${tag}> must be a built-in (View / Text / Pressable / Image / ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS file. Check the import/spelling, or define the component here.`,
+      `<${tag}> must be a built-in (View / Text / Pressable / TouchableOpacity / Image / ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS file. Check the import/spelling, or define the component here.`,
     );
   }
+
+  // A <TouchableOpacity disabled> is compiled away to a plain Pressable node: no press handlers, and no
+  // animated value to dim it with. That is RN's `disabled`, and it is the whole of it here — the engine
+  // has no such node flag, so a node left holding onPress would still fire.
+  const touchableOff =
+    tag === 'TouchableOpacity' && touchableIsDisabled(el, scope);
 
   // Spread attributes on a host element (`<View {...props} />`) aren't lowered — the style/event loops
   // below only read named JSXAttributes, so a spread would be SILENTLY dropped. The one exception is
@@ -5234,12 +5322,20 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     }
   });
 
+  // <TouchableOpacity>'s own opacity binding, on top of any the style asked for.
+  const pressFades =
+    tag === 'TouchableOpacity' && !touchableOff
+      ? touchablePressFades(el, v, staticAssigns, dynAssigns, out, scope)
+      : null;
+
   emitRefBind(v, el.openingElement, out, env);
 
+  const fadesWired = new Set();
   for (const attr of el.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') continue;
     const evt = EVENT_TYPES[attr.name.name];
     if (!evt) continue;
+    if (touchableOff && PRESS_EVENTS.has(attr.name.name)) continue;
     const fn = attrExpr(attr);
     let handlerName;
     if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
@@ -5277,7 +5373,31 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
         `pass an inline arrow (onPress={() => setX(…)}), a useCallback identifier, or a function prop received by this component.`,
       );
     }
+    // The app's own press-in/out on a <TouchableOpacity>: wrap it rather than prepend the fade to its
+    // body, which for a shared useCallback handler would dim every OTHER element using it too.
+    const fade = pressFades?.[attr.name.name];
+    if (fade) {
+      const wrapped = `er_handler_${out.handlers.length}`;
+      out.handlers.push({
+        name: wrapped,
+        body: [...fade, `    ${handlerName}(node, data, user_data);`],
+      });
+      handlerName = wrapped;
+      fadesWired.add(attr.name.name);
+    }
     out.build.push(`    er_event_set(${v}, ${evt}, ${handlerName}, NULL);`);
+  }
+
+  // Whichever end of the press the app did not handle itself is the fade on its own.
+  if (pressFades) {
+    for (const key of ['onPressIn', 'onPressOut']) {
+      if (fadesWired.has(key)) continue;
+      const name = `er_handler_${out.handlers.length}`;
+      out.handlers.push({name, body: pressFades[key]});
+      out.build.push(
+        `    er_event_set(${v}, ${EVENT_TYPES[key]}, ${name}, NULL);`,
+      );
+    }
   }
 
   for (const pan of panSpreads) emitPanResponder(pan, v, out, env, state);

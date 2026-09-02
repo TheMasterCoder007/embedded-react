@@ -51,6 +51,12 @@ and `<SectionList>` inherits every `<FlatList>` caveat plus a header and footer 
 [`Button`, `ImageBackground` and `SectionList` are JSX, not
 nodes](https://github.com/TheMasterCoder007/embedded-react#button-imagebackground-and-sectionlist-are-jsx-not-nodes).
 
+`<TouchableOpacity>` is a wrapper too, but a cheaper one: it is a `<Pressable>` whose opacity is bound to
+a press animation, so it costs no extra node and it compiles in **both flows**. The dim runs on the
+native driver — no JS per frame — and every `<Pressable>` prop works on it unchanged. See
+[`<TouchableOpacity>` dims on the native
+driver](https://github.com/TheMasterCoder007/embedded-react#touchableopacity-dims-on-the-native-driver).
+
 RN modules that wrap an operating system — `StatusBar`, `SafeAreaView`, `AppState`, `Appearance`,
 `Linking`, `AccessibilityInfo` — are **intentionally absent**; a microcontroller has no OS for them to
 wrap. See [Intentionally absent React Native

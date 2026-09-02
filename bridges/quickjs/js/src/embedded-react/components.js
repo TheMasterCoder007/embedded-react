@@ -24,8 +24,6 @@ export const ScrollView = 'ScrollView';
 // through `renderItem` (see FlatList.js). ER_NODE_FLAT_LIST exists in the engine but is byte-for-byte
 // a ScrollView, so both flows emit the ScrollView node instead.
 export const Pressable = 'Pressable';
-// TouchableOpacity is RN's press-with-opacity wrapper; for now it maps to the same Pressable node.
-export const TouchableOpacity = 'Pressable';
 export const TextInput = 'TextInput';
 export const Switch = 'Switch';
 export const ActivityIndicator = 'ActivityIndicator';

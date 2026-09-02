@@ -251,6 +251,30 @@ which does compile in both flows, is the exception rather than the rule here.
 
 ---
 
+## `<TouchableOpacity>` dims on the native driver
+
+`<TouchableOpacity>` is a fourth JSX-over-primitives wrapper, but it is not in the table above because
+it costs no extra node, and it compiles in **both** flows. It is a `<Pressable>` whose `opacity` is bound
+to a press animation: touch-down snaps it to `activeOpacity` (RN's `0.2`), the lift fades it back over
+250 ms, and both ends run in C. The two press handlers hand the engine a target and a duration; nothing
+re-enters JS per frame, and the subtree React just built is not touched at all.
+
+Every `<Pressable>` prop works on it unchanged — the two are interchangeable, and the choice is only
+whether you want the dim. `disabled` is RN's: no press, and no feedback with it.
+
+One thing to know before wrapping a screen in one: opacity below 1 makes the node an **opacity
+group**, so the engine composites its whole subtree through an off-screen strip for as long as the fade
+lasts. That is exactly what makes a label dim with its button — but it costs in proportion to the dimmed
+area, so dim the box that reads as the button, not the surrounding page.
+
+Flow B compiles the same source down to the same animated value and the same two handlers, so an AOT
+app gets the feedback with no JS on the device. Two things have to fold at build time there, because
+they are baked into the generated C: `activeOpacity`, and `disabled` — a `disabled` touchable is
+compiled away entirely, so it cannot come from state. The AOT also rejects a state-driven `opacity` on
+one, since the press feedback owns that property and would overwrite it on the next touch.
+
+---
+
 ## Working examples
 
 The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:

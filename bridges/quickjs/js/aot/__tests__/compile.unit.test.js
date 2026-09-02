@@ -1989,6 +1989,110 @@ describe('AOT Flow-A-only components', () => {
   });
 });
 
+describe('AOT TouchableOpacity (press-to-dim on the native driver)', () => {
+  const T = `import { useState, useCallback } from 'react';
+import { View, Text, TouchableOpacity } from 'embedded-react';
+`;
+  /** The body of the handler wired to `event` on the (single) node, so a test can read its animate call. */
+  const handlerFor = (c, event) => {
+    const name = c.match(
+      new RegExp(`er_event_set\\([^,]+, ${event}, (\\w+),`),
+    )?.[1];
+    if (!name) return '';
+    const at = c.indexOf(`static void ${name}(`);
+    return c.slice(at, c.indexOf('\n}', at));
+  };
+
+  it('emits ONE Pressable node with an animated value bound to its opacity', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity><Text>tap</Text></TouchableOpacity>);
+      }`);
+    expect(c.match(/er_node_create\(ER_NODE_PRESSABLE\)/g)).toHaveLength(1);
+    expect(c).toContain('er_anim_value_create(1.0f)');
+    expect(c).toMatch(
+      /er_anim_value_bind\(s_av_press_\w+, \w+, ER_PROP_OPACITY\)/,
+    );
+  });
+
+  it('dims with no ramp on press-in and fades back over RN’s 250 ms on press-out', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity><Text>tap</Text></TouchableOpacity>);
+      }`);
+    const down = handlerFor(c, 'ER_EVENT_PRESS_IN');
+    const up = handlerFor(c, 'ER_EVENT_PRESS_OUT');
+    expect(down).toContain('cfg.duration_ms = 0;');
+    expect(down).toMatch(/er_anim_value_animate\(s_av_press_\w+, 0.2f/);
+    expect(up).toContain('cfg.duration_ms = 250;');
+    expect(up).toMatch(/er_anim_value_animate\(s_av_press_\w+, 1.0f/);
+  });
+
+  it('rests at the style’s own opacity and dims to activeOpacity', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity activeOpacity={0.5} style={{opacity: 0.8}}><Text>x</Text></TouchableOpacity>);
+      }`);
+    expect(c).toContain('er_anim_value_create(0.8f)');
+    expect(handlerFor(c, 'ER_EVENT_PRESS_IN')).toMatch(/animate\(\w+, 0.5f/);
+    expect(handlerFor(c, 'ER_EVENT_PRESS_OUT')).toMatch(/animate\(\w+, 0.8f/);
+  });
+
+  it('wraps the app’s own press handler instead of replacing it', () => {
+    const c = gen(`${T}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<TouchableOpacity onPressIn={() => setN(n + 1)}><Text>{n}</Text></TouchableOpacity>);
+      }`);
+    const down = handlerFor(c, 'ER_EVENT_PRESS_IN');
+    expect(down).toContain('er_anim_value_animate');
+    expect(down).toMatch(/er_handler_\d+\(node, data, user_data\);/);
+    expect(c).toContain('s_state.n = (s_state.n + 1);');
+  });
+
+  it('shares one useCallback handler between the two ends rather than duplicating it', () => {
+    const c = gen(`${T}
+      export function App() {
+        const [n, setN] = useState(0);
+        const bump = useCallback(() => setN(n + 1), [n]);
+        return (<TouchableOpacity onPressIn={bump} onPressOut={bump}><Text>{n}</Text></TouchableOpacity>);
+      }`);
+    expect(c.match(/static void er_cb_bump\(/g)).toHaveLength(1);
+    expect(handlerFor(c, 'ER_EVENT_PRESS_IN')).toContain('er_cb_bump(');
+    expect(handlerFor(c, 'ER_EVENT_PRESS_OUT')).toContain('er_cb_bump(');
+  });
+
+  it('compiles a disabled one away entirely — no handlers, no dim', () => {
+    const c = gen(`${T}
+      export function App() {
+        return (<TouchableOpacity disabled onPress={() => {}}><Text>x</Text></TouchableOpacity>);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_PRESSABLE)');
+    expect(c).not.toContain('er_event_set(');
+    expect(c).not.toContain('er_anim_value_bind(');
+  });
+
+  it('rejects a state-driven opacity, which the feedback would overwrite', () => {
+    expect(() =>
+      gen(`${T}
+        export function App() {
+          const [o, setO] = useState(1);
+          return (<TouchableOpacity style={{opacity: o}} onPress={() => setO(0.5)}><Text>x</Text></TouchableOpacity>);
+        }`),
+    ).toThrow(/cannot take a state-driven opacity/);
+  });
+
+  it('rejects a state-driven disabled, which it cannot compile away', () => {
+    expect(() =>
+      gen(`${T}
+        export function App() {
+          const [d, setD] = useState(true);
+          return (<TouchableOpacity disabled={d} onPress={() => setD(false)}><Text>x</Text></TouchableOpacity>);
+        }`),
+    ).toThrow(/disabled> must be a compile-time constant/);
+  });
+});
+
 describe('AOT callback props', () => {
   const C = `import { useState } from 'react';
 import { View, Text, Pressable } from 'embedded-react';

@@ -27,7 +27,6 @@ export {
   Image,
   ScrollView,
   Pressable,
-  TouchableOpacity,
   TextInput,
   Switch,
   ActivityIndicator,
@@ -43,6 +42,7 @@ export {
   Arc,
 } from './components.js';
 export {Button} from './Button.js';
+export {TouchableOpacity} from './TouchableOpacity.js';
 export {FlatList} from './FlatList.js';
 export {ImageBackground} from './ImageBackground.js';
 export {SectionList} from './SectionList.js';

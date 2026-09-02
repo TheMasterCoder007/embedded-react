@@ -257,6 +257,7 @@ export const NODE_TYPES = {
   View: 'ER_NODE_VIEW',
   Text: 'ER_NODE_TEXT',
   Pressable: 'ER_NODE_PRESSABLE',
+  TouchableOpacity: 'ER_NODE_PRESSABLE',
   Image: 'ER_NODE_IMAGE',
   ScrollView: 'ER_NODE_SCROLL_VIEW',
 };
