@@ -47,6 +47,7 @@ import {warnMissingGlyphs} from './assets/glyph-coverage.mjs';
 import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
+import {findCompileBin, COMPILE_BIN_HELP} from './compile-bin.mjs';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
 // bridges/quickjs/CMakeLists.txt and ER_QUICKJS_TAG in er_runtime.c. The loader rejects a mismatch.
@@ -74,37 +75,9 @@ if (!existsSync(entry)) {
 }
 
 // --- Locate the bytecode precompiler -----------------------------------------------------------
-const exe = process.platform === 'win32' ? '.exe' : '';
-const compileBin =
-  process.env.ER_COMPILE_BIN ||
-  [
-    resolve(
-      repoRoot,
-      'bridges/quickjs/build',
-      `er-bridge-quickjs-compile${exe}`,
-    ),
-    resolve(
-      repoRoot,
-      'examples/linux/build/bridges/quickjs',
-      `er-bridge-quickjs-compile${exe}`,
-    ),
-    resolve(
-      repoRoot,
-      'tools/simulator/build/bridges/quickjs',
-      `er-bridge-quickjs-compile${exe}`,
-    ),
-  ].find(existsSync);
+const compileBin = findCompileBin();
 if (!compileBin) {
-  console.error(
-    'Bytecode precompiler (er-bridge-quickjs-compile) not found. Build it once:',
-  );
-  console.error(
-    '  cmake -S bridges/quickjs -B bridges/quickjs/build -G "MinGW Makefiles"',
-  );
-  console.error(
-    '  cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile',
-  );
-  console.error('(or set ER_COMPILE_BIN to the binary path)');
+  console.error(COMPILE_BIN_HELP);
   process.exit(1);
 }
 

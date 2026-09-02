@@ -35,7 +35,7 @@
 #endif
 #ifndef ERUI_VECTOR_CACHE_EDGES
 #define ERUI_VECTOR_CACHE_EDGES                                                                                        \
-    4096 /**< Edges cached per node — the SUM over all its fill+stroke passes, so                                      \
+    4096 /**< Edges cached per node — the SUM over all its fill+stroke passes, so                                    \
             larger than the per-pass ERUI_VECTOR_MAX_EDGES: a decorated face (60                                       \
             round-capped ticks + a few filled+stroked paths) measures ~2.5-3k. */
 #endif

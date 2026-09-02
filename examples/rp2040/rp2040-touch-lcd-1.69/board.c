@@ -42,7 +42,7 @@
 /* --- Display: ST7789V2 on SPI1 --- */
 #define LCD_SPI spi1
 #define LCD_SPI_HZ                                                                                                     \
-    (62500 * 1000)      /* clk_peri(125 MHz) / 2 — the fastest even divisor; ~2× the vendor's                          \
+    (62500 * 1000)      /* clk_peri(125 MHz) / 2 — the fastest even divisor; ~2× the vendor's                       \
                          * 40 MHz (which the pico rounds down to 31.25). Halves the full-screen                        \
                          * flush time (the swipe repaints the whole panel each frame). If a unit                       \
                          * shows sparkle/tearing, drop to 31250*1000. */

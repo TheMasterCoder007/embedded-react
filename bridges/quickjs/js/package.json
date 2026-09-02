@@ -48,6 +48,7 @@
     "hotreload/",
     "build.mjs",
     "pack-container.mjs",
+    "compile-bin.mjs",
     "persist-transform.mjs",
     "cli.mjs",
     "sim-server.mjs",
