@@ -15,7 +15,13 @@
  */
 
 import {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, PanResponder, useHostValue} from 'embedded-react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  PanResponder,
+  useHostValue,
+} from 'embedded-react';
 
 // Watch face — a two-page swipe pager for the Waveshare RP2040-Touch-LCD-1.69 (240×280):
 //   • page 0: a digital watch face (clock, weekday/date, battery, heart rate, live step counter)
@@ -98,7 +104,9 @@ function WatchFace({t, hr, steps}) {
 
       <View style={styles.middle}>
         <View style={styles.timeRow}>
-          <Text style={styles.time}>{((Math.floor(t / 3600) + 11) % 12) + 1}</Text>
+          <Text style={styles.time}>
+            {((Math.floor(t / 3600) + 11) % 12) + 1}
+          </Text>
           <Text style={styles.timeColon}>:</Text>
           <Text style={styles.time}>
             {Math.floor((Math.floor(t / 60) % 60) / 10)}
@@ -106,7 +114,9 @@ function WatchFace({t, hr, steps}) {
           </Text>
         </View>
         <View style={styles.metaRow}>
-          <Text style={styles.ampm}>{Math.floor(t / 43200) % 2 === 0 ? 'AM' : 'PM'}</Text>
+          <Text style={styles.ampm}>
+            {Math.floor(t / 43200) % 2 === 0 ? 'AM' : 'PM'}
+          </Text>
           <View style={styles.pill}>
             <Text style={styles.pillText}>
               {Math.floor((t % 60) / 10)}
@@ -144,7 +154,10 @@ function LevelPage({dotx, doty}) {
               {
                 marginLeft: dotx,
                 marginTop: doty,
-                backgroundColor: Math.abs(dotx) < 8 && Math.abs(doty) < 8 ? theme.green : theme.amber,
+                backgroundColor:
+                  Math.abs(dotx) < 8 && Math.abs(doty) < 8
+                    ? theme.green
+                    : theme.amber,
               },
             ]}
           />
@@ -193,7 +206,10 @@ export function App() {
         setSlide(Math.max(0, Math.min(PAGE_W, slideAtGrant.current - g.dx))),
       onPanResponderRelease: (e, g) => {
         setDragging(0);
-        const settled = Math.max(0, Math.min(PAGE_W, slideAtGrant.current - g.dx));
+        const settled = Math.max(
+          0,
+          Math.min(PAGE_W, slideAtGrant.current - g.dx),
+        );
         // Commit on a long enough drag (~25% of a page, directional so it's easy both ways) OR on a
         // fast enough flick, however short. Otherwise, the ease springs back to where you started.
         if (pageRef.current === 0) {
@@ -261,19 +277,44 @@ export function App() {
 const styles = StyleSheet.create({
   root: {flex: 1, backgroundColor: theme.bg},
   track: {flexDirection: 'row', width: 480, height: 280},
-  page: {width: PAGE_W, height: 280, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14},
+  page: {
+    width: PAGE_W,
+    height: 280,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 14,
+  },
   overlay: {position: 'absolute', left: 0, top: 0, right: 0, bottom: 0},
 
   // --- Watch face ---
-  topBar: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'},
-  weekday: {color: theme.white, fontSize: 16, fontWeight: 'bold', letterSpacing: 1},
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  weekday: {
+    color: theme.white,
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+  },
   date: {color: theme.amber, fontSize: 12, fontWeight: '500', marginTop: 2},
   batteryPct: {color: theme.green, fontSize: 16, fontWeight: '600'},
 
   middle: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   timeRow: {flexDirection: 'row', alignItems: 'center'},
-  time: {color: theme.white, fontSize: 48, fontWeight: 'bold', letterSpacing: 1},
-  timeColon: {color: theme.colon, fontSize: 48, fontWeight: 'bold', marginHorizontal: 4},
+  time: {
+    color: theme.white,
+    fontSize: 48,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+  },
+  timeColon: {
+    color: theme.colon,
+    fontSize: 48,
+    fontWeight: 'bold',
+    marginHorizontal: 4,
+  },
   metaRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8},
   ampm: {color: theme.muted, fontSize: 12, fontWeight: '600', letterSpacing: 1},
   pill: {
@@ -299,13 +340,29 @@ const styles = StyleSheet.create({
   },
   cardHead: {flexDirection: 'row', alignItems: 'center', gap: 6},
   dot: {width: 7, height: 7, borderRadius: 4},
-  cardLabel: {color: theme.muted, fontSize: 10, fontWeight: '600', letterSpacing: 1},
+  cardLabel: {
+    color: theme.muted,
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
   cardValueRow: {flexDirection: 'row', alignItems: 'flex-end', gap: 4},
   cardValue: {color: theme.white, fontSize: 24, fontWeight: 'bold'},
-  cardUnit: {color: theme.muted, fontSize: 10, fontWeight: '500', marginBottom: 3},
+  cardUnit: {
+    color: theme.muted,
+    fontSize: 10,
+    fontWeight: '500',
+    marginBottom: 3,
+  },
 
   // --- Level page ---
-  levelTitle: {color: theme.white, fontSize: 20, fontWeight: 'bold', letterSpacing: 2, marginTop: 6},
+  levelTitle: {
+    color: theme.white,
+    fontSize: 20,
+    fontWeight: 'bold',
+    letterSpacing: 2,
+    marginTop: 6,
+  },
   levelArea: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   target: {
     width: 168,
@@ -315,8 +372,22 @@ const styles = StyleSheet.create({
     borderColor: theme.cardBorder,
     backgroundColor: theme.card,
   },
-  crossH: {position: 'absolute', left: 16, right: 16, top: 81, height: 1, backgroundColor: theme.cardBorder},
-  crossV: {position: 'absolute', top: 16, bottom: 16, left: 81, width: 1, backgroundColor: theme.cardBorder},
+  crossH: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    top: 81,
+    height: 1,
+    backgroundColor: theme.cardBorder,
+  },
+  crossV: {
+    position: 'absolute',
+    top: 16,
+    bottom: 16,
+    left: 81,
+    width: 1,
+    backgroundColor: theme.cardBorder,
+  },
   centerRing: {
     position: 'absolute',
     left: 70,
@@ -327,5 +398,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.muted,
   },
-  levelDot: {position: 'absolute', left: 74, top: 74, width: 16, height: 16, borderRadius: 8},
+  levelDot: {
+    position: 'absolute',
+    left: 74,
+    top: 74,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+  },
 });

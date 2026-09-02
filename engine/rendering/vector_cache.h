@@ -34,9 +34,10 @@
 #define ERUI_VECTOR_CACHE_NODES 2 /**< Nodes whose geometry is cached at once (LRU across vector nodes). */
 #endif
 #ifndef ERUI_VECTOR_CACHE_EDGES
-#define ERUI_VECTOR_CACHE_EDGES 4096 /**< Edges cached per node — the SUM over all its fill+stroke passes, so
-                                        larger than the per-pass ERUI_VECTOR_MAX_EDGES: a decorated face (60
-                                        round-capped ticks + a few filled+stroked paths) measures ~2.5-3k. */
+#define ERUI_VECTOR_CACHE_EDGES                                                                                        \
+    4096 /**< Edges cached per node — the SUM over all its fill+stroke passes, so                                      \
+            larger than the per-pass ERUI_VECTOR_MAX_EDGES: a decorated face (60                                       \
+            round-capped ticks + a few filled+stroked paths) measures ~2.5-3k. */
 #endif
 #ifndef ERUI_VECTOR_CACHE_PASSES
 #define ERUI_VECTOR_CACHE_PASSES 48 /**< Rasterize passes cached per node (fill + stroke per shape, + arcs). */

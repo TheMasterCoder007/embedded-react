@@ -112,18 +112,18 @@ describe('bakeImage', () => {
     const tmp = join(os.tmpdir(), `er-bake565a-${process.pid}.png`);
     fs.writeFileSync(tmp, PNG.sync.write(png));
     try {
-      expect(() => bakeImage({path: tmp, name: 'bg', format: 'rgb565'})).toThrow(
-        /alpha 128/,
-      );
+      expect(() =>
+        bakeImage({path: tmp, name: 'bg', format: 'rgb565'}),
+      ).toThrow(/alpha 128/);
     } finally {
       fs.rmSync(tmp, {force: true});
     }
   });
 
   it('rejects an unknown format', () => {
-    expect(() => bakeImage({path: 'x.png', name: 'x', format: 'rgb888'})).toThrow(
-      /unknown format/,
-    );
+    expect(() =>
+      bakeImage({path: 'x.png', name: 'x', format: 'rgb888'}),
+    ).toThrow(/unknown format/);
   });
 });
 
@@ -373,7 +373,7 @@ describe('emitAssetPack', () => {
     expect(p.version).toBe(2);
   });
 
-  it('4-aligns every image\'s pixels relative to the pack, whatever the name lengths', () => {
+  it("4-aligns every image's pixels relative to the pack, whatever the name lengths", () => {
     // Odd/varied name lengths are exactly what knocked v1 pixel offsets off word alignment.
     const mk = (name, i) => ({
       name,

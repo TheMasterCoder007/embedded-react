@@ -124,7 +124,9 @@ static bool is_container_path(const char* path)
  */
 static uint32_t host_now_us(void)
 {
-    static Uint64 freq = 0; if (!freq) freq = SDL_GetPerformanceFrequency();
+    static Uint64 freq = 0;
+    if (!freq)
+        freq = SDL_GetPerformanceFrequency();
     const Uint64 now = SDL_GetPerformanceCounter();
     return (uint32_t)((now / freq) * 1000000ULL + (now % freq) * 1000000ULL / freq);
 }

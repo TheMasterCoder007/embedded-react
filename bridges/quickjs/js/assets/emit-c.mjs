@@ -84,12 +84,20 @@ export function emitAssetsC({headerName, images = [], fonts = []}) {
     const is565 = img.format === 'rgb565';
     const hex = Array.from(
       img.pixels,
-      p => '0x' + p.toString(16).toUpperCase().padStart(is565 ? 4 : 8, '0') + 'u',
+      p =>
+        '0x' +
+        p
+          .toString(16)
+          .toUpperCase()
+          .padStart(is565 ? 4 : 8, '0') +
+        'u',
     );
     lines.push(
       `/* image "${img.name}" — ${img.width}x${img.height}${is565 ? ' (RGB565)' : ''} */`,
     );
-    lines.push(`static const ${is565 ? 'uint16_t' : 'uint32_t'} ${id}_px[] = {`);
+    lines.push(
+      `static const ${is565 ? 'uint16_t' : 'uint32_t'} ${id}_px[] = {`,
+    );
     lines.push(rows(hex, is565 ? 12 : 8));
     lines.push(`};`);
     lines.push(``);

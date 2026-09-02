@@ -33,9 +33,9 @@ extern "C"
      */
     typedef struct
     {
-        float baseline; /**< Slow-tracked gravity magnitude (LSB). */
-        float smoothed; /**< Low-pass of the AC (gravity-removed) magnitude. */
-        int armed;      /**< 1 once the signal dropped below the low threshold (ready for the next peak). */
+        float baseline;        /**< Slow-tracked gravity magnitude (LSB). */
+        float smoothed;        /**< Low-pass of the AC (gravity-removed) magnitude. */
+        int armed;             /**< 1 once the signal dropped below the low threshold (ready for the next peak). */
         uint32_t last_step_ms; /**< Timestamp of the last counted step (refractory gate). */
         uint32_t steps;        /**< Total steps counted since reset. */
     } Pedometer;

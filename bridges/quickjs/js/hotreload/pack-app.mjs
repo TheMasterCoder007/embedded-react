@@ -58,9 +58,8 @@ export async function packAppContainer({
   const {bakeImage} = await import('../assets/bake-image.mjs');
   const {bakeFont} = await import('../assets/bake-font.mjs');
   const {resolveFontJobs} = await import('../assets/font-config.mjs');
-  const {analyzeFontSizes, warnFontSizes} = await import(
-    '../assets/font-sizes.mjs'
-  );
+  const {analyzeFontSizes, warnFontSizes} =
+    await import('../assets/font-sizes.mjs');
   const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
   const {emitAssetPack} = await import('../assets/emit-pack.mjs');
   const {emitContainer} = await import('../assets/emit-container.mjs');

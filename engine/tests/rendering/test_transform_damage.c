@@ -162,7 +162,7 @@ static int check_pulse_bounded(int screen)
 
     embedded_renderer_tick(100U); /* advance ~1/8: scale ~1.025, logo marked source-dirty */
 
-    ext_reset();   /* measure ONLY the mid-pulse commit */
+    ext_reset(); /* measure ONLY the mid-pulse commit */
     er_commit();
 
     const int pw = g_ext.x1 - g_ext.x0;
@@ -171,7 +171,12 @@ static int check_pulse_bounded(int screen)
     const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
 
     printf("mid-pulse paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
-           g_ext.ops, g_ext.x0, g_ext.y0, pw, ph, 100.0 * (double)paint_area / (double)screen_area);
+           g_ext.ops,
+           g_ext.x0,
+           g_ext.y0,
+           pw,
+           ph,
+           100.0 * (double)paint_area / (double)screen_area);
 
     er_anim_value_destroy(pulse);
     er_node_destroy(root); /* tears down the subtree */
@@ -236,7 +241,12 @@ static int check_reflow_moved_no_trail(int screen)
 
     const int bottom = g_ext.y1; /* lowest painted row + 1 */
     printf("post-reflow paint: ops=%d extent=%d,%d..%d,%d (bottom=%d, badge ~y120→140)\n",
-           g_ext.ops, g_ext.x0, g_ext.y0, g_ext.x1, g_ext.y1, bottom);
+           g_ext.ops,
+           g_ext.x0,
+           g_ext.y0,
+           g_ext.x1,
+           g_ext.y1,
+           bottom);
 
     er_node_destroy(root);
 
@@ -712,7 +722,12 @@ static int check_3d_rotate_bounded(int screen)
     const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
 
     printf("mid-spin (3D) paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
-           g_ext.ops, g_ext.x0, g_ext.y0, pw, ph, 100.0 * (double)paint_area / (double)screen_area);
+           g_ext.ops,
+           g_ext.x0,
+           g_ext.y0,
+           pw,
+           ph,
+           100.0 * (double)paint_area / (double)screen_area);
 
     er_anim_value_destroy(spin);
     er_node_destroy(root);

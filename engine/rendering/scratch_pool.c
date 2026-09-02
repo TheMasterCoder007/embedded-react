@@ -125,8 +125,11 @@ void er_scratch_pop_base(void)
         pc()->base_count--;
     /* Restore routing: the active opacity slot, then the next outer base, then clear. */
     if (pc()->depth > 0)
-        er_scratch_begin(
-            slot_px(pc()->depth - 1), ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, pc()->meta[pc()->depth - 1].ox, pc()->meta[pc()->depth - 1].oy);
+        er_scratch_begin(slot_px(pc()->depth - 1),
+                         ERUI_SCRATCH_W,
+                         ERUI_SCRATCH_BAND_H,
+                         pc()->meta[pc()->depth - 1].ox,
+                         pc()->meta[pc()->depth - 1].oy);
     else if (pc()->base_count > 0)
         er_scratch_begin(pc()->base[pc()->base_count - 1].buf,
                          pc()->base[pc()->base_count - 1].w,
@@ -192,8 +195,11 @@ void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
     /* Restore routing: prefer the next outer opacity slot, then the transform base, then NULL. */
     if (pc()->depth > 0)
     {
-        er_scratch_begin(
-            slot_px(pc()->depth - 1), ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, pc()->meta[pc()->depth - 1].ox, pc()->meta[pc()->depth - 1].oy);
+        er_scratch_begin(slot_px(pc()->depth - 1),
+                         ERUI_SCRATCH_W,
+                         ERUI_SCRATCH_BAND_H,
+                         pc()->meta[pc()->depth - 1].ox,
+                         pc()->meta[pc()->depth - 1].oy);
     }
     else if (pc()->base_count > 0)
     {

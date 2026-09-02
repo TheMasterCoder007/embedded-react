@@ -29,11 +29,11 @@
 
 #include <math.h>
 
-#define PEDO_BASE_A 0.02f      /**< Baseline (gravity) tracking rate — slow. */
-#define PEDO_SMOOTH_A 0.30f    /**< AC smoothing rate — faster, denoises footfall peaks. */
-#define PEDO_HI 1400.0f        /**< Upper threshold (~0.17 g): a peak above this arms a step. */
-#define PEDO_LO 500.0f         /**< Lower threshold (~0.06 g): must dip below this to re-arm. */
-#define PEDO_MIN_STEP_MS 260u  /**< Refractory: fastest plausible cadence (~230 steps/min). */
+#define PEDO_BASE_A 0.02f     /**< Baseline (gravity) tracking rate — slow. */
+#define PEDO_SMOOTH_A 0.30f   /**< AC smoothing rate — faster, denoises footfall peaks. */
+#define PEDO_HI 1400.0f       /**< Upper threshold (~0.17 g): a peak above this arms a step. */
+#define PEDO_LO 500.0f        /**< Lower threshold (~0.06 g): must dip below this to re-arm. */
+#define PEDO_MIN_STEP_MS 260u /**< Refractory: fastest plausible cadence (~230 steps/min). */
 
 void pedometer_reset(Pedometer* p)
 {

@@ -47,8 +47,8 @@
  * creates the panel — this file only needs the panel handle.
  */
 
-#include "esp32_lcd_backend.h"
 #include "er_scene.h" /* er_set_display_buffer_count / er_display_present (direct mode) */
+#include "esp32_lcd_backend.h"
 #include "native_renderer.h"
 
 #include "esp_heap_caps.h"
@@ -183,21 +183,21 @@ static const char* TAG = "er-lcd";
 typedef struct
 {
     esp_lcd_panel_handle_t panel;
-    int w;            /**< Logical (canonical fb) width — what the engine composites into. */
-    int h;            /**< Logical (canonical fb) height. */
-    int pw;           /**< Physical panel width (= w/h swapped for 90/270). */
-    int ph;           /**< Physical panel height. */
-    int rot;          /**< Clockwise display rotation: 0, 90, 180, or 270. */
-    fbpx_t* fb;       /**< Composite target: the canonical fb, or (direct mode) the back panel fb. */
-    uint16_t* fbp[3]; /**< The panel's rotating RGB565 framebuffers; fbp[0] == NULL = copy mode. */
-    int nfb;          /**< Number of panel framebuffers in fbp (2 or 3; 0 in copy mode). */
-    int back;         /**< Index of the off-screen framebuffer to draw next. */
-    uint16_t* line;   /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
-    bool direct;      /**< Direct mode: the engine composites straight into the panel framebuffers and the
-                           engine's multi-buffer damage replay keeps them all current — no canonical fb,
-                           no present copy. Requires RGB565 canonical format, rotation 0, and 2+ panel fbs. */
-    SemaphoreHandle_t flip_done;  /**< Given at each frame boundary: all earlier flips have taken effect. */
-    int pending_flips;            /**< Flips requested since the last confirmed frame boundary. */
+    int w;                       /**< Logical (canonical fb) width — what the engine composites into. */
+    int h;                       /**< Logical (canonical fb) height. */
+    int pw;                      /**< Physical panel width (= w/h swapped for 90/270). */
+    int ph;                      /**< Physical panel height. */
+    int rot;                     /**< Clockwise display rotation: 0, 90, 180, or 270. */
+    fbpx_t* fb;                  /**< Composite target: the canonical fb, or (direct mode) the back panel fb. */
+    uint16_t* fbp[3];            /**< The panel's rotating RGB565 framebuffers; fbp[0] == NULL = copy mode. */
+    int nfb;                     /**< Number of panel framebuffers in fbp (2 or 3; 0 in copy mode). */
+    int back;                    /**< Index of the off-screen framebuffer to draw next. */
+    uint16_t* line;              /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
+    bool direct;                 /**< Direct mode: the engine composites straight into the panel framebuffers and the
+                                      engine's multi-buffer damage replay keeps them all current — no canonical fb,
+                                      no present copy. Requires RGB565 canonical format, rotation 0, and 2+ panel fbs. */
+    SemaphoreHandle_t flip_done; /**< Given at each frame boundary: all earlier flips have taken effect. */
+    int pending_flips;           /**< Flips requested since the last confirmed frame boundary. */
     /* Current dirty bounding box (inclusive); x1 < x0 means "empty". */
     int dx0, dy0, dx1, dy1;
     /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
@@ -410,8 +410,8 @@ static inline uint32_t scale_premul_fast(uint32_t sp, uint32_t alpha)
 {
     /* a1 in [0,256]: 255→256 keeps full-opacity lossless. */
     const uint32_t a1 = alpha + (alpha >> 7);
-    const uint32_t ag = ((sp >> 8) & 0x00FF00FFU) * a1;      /* A and G lanes */
-    const uint32_t rb = (sp & 0x00FF00FFU) * a1;             /* R and B lanes */
+    const uint32_t ag = ((sp >> 8) & 0x00FF00FFU) * a1; /* A and G lanes */
+    const uint32_t rb = (sp & 0x00FF00FFU) * a1;        /* R and B lanes */
     return ((ag & 0xFF00FF00U)) | ((rb >> 8) & 0x00FF00FFU);
 }
 
@@ -1013,8 +1013,8 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief ISR callback: the previously displayed framebuffer is now safe to draw into. */
-static bool frame_buf_complete_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t* edata,
-                                  void* user_ctx)
+static bool
+frame_buf_complete_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t* edata, void* user_ctx)
 {
     (void)panel;
     (void)edata;
@@ -1059,8 +1059,8 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     void* fb1 = NULL;
     void* fb2 = NULL;
     s_be.nfb = 0;
-    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fb0, &fb1, &fb2) == ESP_OK && fb0 && fb1 && fb2 &&
-        fb0 != fb1 && fb0 != fb2 && fb1 != fb2)
+    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fb0, &fb1, &fb2) == ESP_OK && fb0 && fb1 && fb2 && fb0 != fb1
+        && fb0 != fb2 && fb1 != fb2)
     {
         s_be.nfb = 3;
     }

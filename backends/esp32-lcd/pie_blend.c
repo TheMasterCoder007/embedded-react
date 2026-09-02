@@ -192,104 +192,107 @@ void er_pie_blend_row_565(uint16_t* dst, const uint32_t* src, int n8, uint8_t ga
             "ee.vst.128.ip  q1, %[dw], 16       \n"
             ".Lblend_end%=:                     \n"
             : [src] "+a"(src), [dr] "+a"(dr), [dw] "+a"(dw)
-            : [n8] "a"(n8), [k256] "a"(&s_k256), [db] "a"(db), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f),
-              [m7f] "a"(&s_m7f)
+            : [n8] "a"(n8), [k256] "a"(&s_k256), [db] "a"(db), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f), [m7f] "a"(&s_m7f)
             : "memory");
         return;
     }
 
-    __asm__ volatile(
-        "loopnez        %[n8], .Lblendga_end%= \n"
-        "ee.vld.128.ip  q0, %[src], 16      \n"
-        "ee.vld.128.ip  q1, %[src], 16      \n"
-        "ee.vld.128.ip  q2, %[dr], 16       \n"
-        "ee.vunzip.8    q0, q1              \n"
-        "ee.vunzip.8    q0, q1              \n"
-        "ee.zero.q      q3                  \n"
-        "ee.vzip.8      q0, q3              \n"
-        "ee.zero.q      q4                  \n"
-        "ee.vzip.8      q1, q4              \n"
-        /* scale source channels AND alpha by the global alpha: c = c*ga >> 8 */
-        "ee.vldbc.16    q6, %[ga]           \n"
-        "ssai           8                  \n"
-        "ee.vmul.s16    q0, q0, q6          \n"
-        "ee.vmul.s16    q1, q1, q6          \n"
-        "ee.vmul.s16    q3, q3, q6          \n"
-        "ee.vmul.s16    q4, q4, q6          \n"
-        /* inv = 256 - a_scaled (exact at both alpha edges); q7 then holds the rounding bias */
-        "ee.vldbc.16    q7, %[k256]         \n"
-        "ee.vsubs.s16   q4, q7, q4          \n"
-        "ld.qr          q7, %[db], 0        \n" /* per-lane dst rounding/dither bias */
-        /* ---- red ---- */
-        "ssai           11                  \n"
-        "ee.vsr.32      q5, q2              \n"
-        "ee.vldbc.16    q6, %[m1f]          \n"
-        "ee.andq        q5, q5, q6          \n"
-        "ssai           0                  \n"
-        "ee.vmul.s16    q5, q5, q4          \n"
-        "ee.vadds.s16   q5, q5, q7          \n"
-        "ssai           8                  \n"
-        "ee.vsr.32      q5, q5              \n"
-        "ee.andq        q5, q5, q6          \n"
-        "ld.qr          q6, %[db], 16       \n"
-        "ee.vadds.s16   q1, q1, q6          \n"
-        "ssai           3                  \n"
-        "ee.vsr.32      q1, q1              \n"
-        "ee.vldbc.16    q6, %[m3f]          \n"
-        "ee.andq        q1, q1, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
-        "ee.vldbc.16    q6, %[m1f]          \n"
-        "ee.vadds.s16   q1, q1, q5          \n"
-        "ee.vmin.s16    q1, q1, q6          \n"
-        /* ---- blue ---- */
-        "ee.andq        q5, q2, q6          \n"
-        "ssai           0                  \n"
-        "ee.vmul.s16    q5, q5, q4          \n"
-        "ee.vadds.s16   q5, q5, q7          \n"
-        "ssai           8                  \n"
-        "ee.vsr.32      q5, q5              \n"
-        "ee.andq        q5, q5, q6          \n"
-        "ld.qr          q6, %[db], 16       \n"
-        "ee.vadds.s16   q0, q0, q6          \n"
-        "ssai           3                  \n"
-        "ee.vsr.32      q0, q0              \n"
-        "ee.vldbc.16    q6, %[m3f]          \n"
-        "ee.andq        q0, q0, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
-        "ee.vldbc.16    q6, %[m1f]          \n"
-        "ee.vadds.s16   q0, q0, q5          \n"
-        "ee.vmin.s16    q0, q0, q6          \n"
-        /* ---- green ---- */
-        "ssai           5                  \n"
-        "ee.vsr.32      q5, q2              \n"
-        "ee.vldbc.16    q6, %[m3f]          \n"
-        "ee.andq        q5, q5, q6          \n"
-        "ssai           0                  \n"
-        "ee.vmul.s16    q5, q5, q4          \n"
-        "ee.vadds.s16   q5, q5, q7          \n"
-        "ssai           8                  \n"
-        "ee.vsr.32      q5, q5              \n"
-        "ee.andq        q5, q5, q6          \n"
-        "ld.qr          q6, %[db], 32       \n"
-        "ee.vadds.s16   q3, q3, q6          \n"
-        "ssai           2                  \n"
-        "ee.vsr.32      q3, q3              \n"
-        "ee.vldbc.16    q6, %[m7f]          \n"
-        "ee.andq        q3, q3, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
-        "ee.vldbc.16    q6, %[m3f]          \n"
-        "ee.vadds.s16   q3, q3, q5          \n"
-        "ee.vmin.s16    q3, q3, q6          \n"
-        /* ---- repack + store ---- */
-        "ssai           11                  \n"
-        "ee.vsl.32      q1, q1              \n"
-        "ssai           5                  \n"
-        "ee.vsl.32      q3, q3              \n"
-        "ee.orq         q1, q1, q3          \n"
-        "ee.orq         q1, q1, q0          \n"
-        "ee.vst.128.ip  q1, %[dw], 16       \n"
-        ".Lblendga_end%=:                   \n"
-        : [src] "+a"(src), [dr] "+a"(dr), [dw] "+a"(dw)
-        : [n8] "a"(n8), [k256] "a"(&s_k256), [db] "a"(db), [m1f] "a"(&s_m1f), [m3f] "a"(&s_m3f),
-          [m7f] "a"(&s_m7f), [ga] "a"(&ga16)
-        : "memory");
+    __asm__ volatile("loopnez        %[n8], .Lblendga_end%= \n"
+                     "ee.vld.128.ip  q0, %[src], 16      \n"
+                     "ee.vld.128.ip  q1, %[src], 16      \n"
+                     "ee.vld.128.ip  q2, %[dr], 16       \n"
+                     "ee.vunzip.8    q0, q1              \n"
+                     "ee.vunzip.8    q0, q1              \n"
+                     "ee.zero.q      q3                  \n"
+                     "ee.vzip.8      q0, q3              \n"
+                     "ee.zero.q      q4                  \n"
+                     "ee.vzip.8      q1, q4              \n"
+                     /* scale source channels AND alpha by the global alpha: c = c*ga >> 8 */
+                     "ee.vldbc.16    q6, %[ga]           \n"
+                     "ssai           8                  \n"
+                     "ee.vmul.s16    q0, q0, q6          \n"
+                     "ee.vmul.s16    q1, q1, q6          \n"
+                     "ee.vmul.s16    q3, q3, q6          \n"
+                     "ee.vmul.s16    q4, q4, q6          \n"
+                     /* inv = 256 - a_scaled (exact at both alpha edges); q7 then holds the rounding bias */
+                     "ee.vldbc.16    q7, %[k256]         \n"
+                     "ee.vsubs.s16   q4, q7, q4          \n"
+                     "ld.qr          q7, %[db], 0        \n" /* per-lane dst rounding/dither bias */
+                     /* ---- red ---- */
+                     "ssai           11                  \n"
+                     "ee.vsr.32      q5, q2              \n"
+                     "ee.vldbc.16    q6, %[m1f]          \n"
+                     "ee.andq        q5, q5, q6          \n"
+                     "ssai           0                  \n"
+                     "ee.vmul.s16    q5, q5, q4          \n"
+                     "ee.vadds.s16   q5, q5, q7          \n"
+                     "ssai           8                  \n"
+                     "ee.vsr.32      q5, q5              \n"
+                     "ee.andq        q5, q5, q6          \n"
+                     "ld.qr          q6, %[db], 16       \n"
+                     "ee.vadds.s16   q1, q1, q6          \n"
+                     "ssai           3                  \n"
+                     "ee.vsr.32      q1, q1              \n"
+                     "ee.vldbc.16    q6, %[m3f]          \n"
+                     "ee.andq        q1, q1, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
+                     "ee.vldbc.16    q6, %[m1f]          \n"
+                     "ee.vadds.s16   q1, q1, q5          \n"
+                     "ee.vmin.s16    q1, q1, q6          \n"
+                     /* ---- blue ---- */
+                     "ee.andq        q5, q2, q6          \n"
+                     "ssai           0                  \n"
+                     "ee.vmul.s16    q5, q5, q4          \n"
+                     "ee.vadds.s16   q5, q5, q7          \n"
+                     "ssai           8                  \n"
+                     "ee.vsr.32      q5, q5              \n"
+                     "ee.andq        q5, q5, q6          \n"
+                     "ld.qr          q6, %[db], 16       \n"
+                     "ee.vadds.s16   q0, q0, q6          \n"
+                     "ssai           3                  \n"
+                     "ee.vsr.32      q0, q0              \n"
+                     "ee.vldbc.16    q6, %[m3f]          \n"
+                     "ee.andq        q0, q0, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
+                     "ee.vldbc.16    q6, %[m1f]          \n"
+                     "ee.vadds.s16   q0, q0, q5          \n"
+                     "ee.vmin.s16    q0, q0, q6          \n"
+                     /* ---- green ---- */
+                     "ssai           5                  \n"
+                     "ee.vsr.32      q5, q2              \n"
+                     "ee.vldbc.16    q6, %[m3f]          \n"
+                     "ee.andq        q5, q5, q6          \n"
+                     "ssai           0                  \n"
+                     "ee.vmul.s16    q5, q5, q4          \n"
+                     "ee.vadds.s16   q5, q5, q7          \n"
+                     "ssai           8                  \n"
+                     "ee.vsr.32      q5, q5              \n"
+                     "ee.andq        q5, q5, q6          \n"
+                     "ld.qr          q6, %[db], 32       \n"
+                     "ee.vadds.s16   q3, q3, q6          \n"
+                     "ssai           2                  \n"
+                     "ee.vsr.32      q3, q3              \n"
+                     "ee.vldbc.16    q6, %[m7f]          \n"
+                     "ee.andq        q3, q3, q6          \n" /* wide: keep the +bias overflow bit, drop spill */
+                     "ee.vldbc.16    q6, %[m3f]          \n"
+                     "ee.vadds.s16   q3, q3, q5          \n"
+                     "ee.vmin.s16    q3, q3, q6          \n"
+                     /* ---- repack + store ---- */
+                     "ssai           11                  \n"
+                     "ee.vsl.32      q1, q1              \n"
+                     "ssai           5                  \n"
+                     "ee.vsl.32      q3, q3              \n"
+                     "ee.orq         q1, q1, q3          \n"
+                     "ee.orq         q1, q1, q0          \n"
+                     "ee.vst.128.ip  q1, %[dw], 16       \n"
+                     ".Lblendga_end%=:                   \n"
+                     : [src] "+a"(src), [dr] "+a"(dr), [dw] "+a"(dw)
+                     : [n8] "a"(n8),
+                       [k256] "a"(&s_k256),
+                       [db] "a"(db),
+                       [m1f] "a"(&s_m1f),
+                       [m3f] "a"(&s_m3f),
+                       [m7f] "a"(&s_m7f),
+                       [ga] "a"(&ga16)
+                     : "memory");
 }
 
 void er_pie_fill_row_565(uint16_t* dst, uint32_t sp, int n8)
@@ -344,7 +347,12 @@ void er_pie_fill_row_565(uint16_t* dst, uint32_t sp, int n8)
         "ee.vst.128.ip  q5, %[dw], 16       \n"
         ".Lfill_end%=:                      \n"
         : [dr] "+a"(dr), [dw] "+a"(dw)
-        : [n8] "a"(n8), [b5] "a"(&srcB5), [r5] "a"(&srcR5), [g6] "a"(&srcG6), [inv] "a"(&inv), [m1f] "a"(&s_m1f),
+        : [n8] "a"(n8),
+          [b5] "a"(&srcB5),
+          [r5] "a"(&srcR5),
+          [g6] "a"(&srcG6),
+          [inv] "a"(&inv),
+          [m1f] "a"(&s_m1f),
           [m3f] "a"(&s_m3f)
         : "memory");
 }
@@ -352,7 +360,6 @@ void er_pie_fill_row_565(uint16_t* dst, uint32_t sp, int n8)
 /*----------------------------------------------------------------------------------------------------------------------
  - Self-test
  ---------------------------------------------------------------------------------------------------------------------*/
-
 
 /** @brief xorshift PRNG so the test needs no libc rand. */
 static uint32_t xr(uint32_t* s)
@@ -383,53 +390,60 @@ bool er_pie_blend_selftest(void)
         for (unsigned gi = 0; gi < sizeof(gas); gi++)
         {
             const uint8_t ga = gas[gi];
-        for (int round = 0; round < 8; round++)
-        {
-            for (int i = 0; i < 64; i++)
+            for (int round = 0; round < 8; round++)
             {
-                /* Premultiplied source: channels never exceed alpha. Force edge alphas often. */
-                uint32_t a = xr(&seed) & 0xFFU;
-                if ((xr(&seed) & 7U) == 0U)
-                    a = 0U;
-                if ((xr(&seed) & 7U) == 1U)
-                    a = 255U;
-                const uint32_t r = xr(&seed) % (a + 1U);
-                const uint32_t g = xr(&seed) % (a + 1U);
-                const uint32_t b = xr(&seed) % (a + 1U);
-                src[i] = (a << 24) | (r << 16) | (g << 8) | b;
-                const uint16_t d = (uint16_t)xr(&seed);
-                dst_pie[i] = d;
-                dst_ref[i] = d;
-            }
-            er_pie_blend_row_565(dst_pie, src, 64 / 8, ga, phase);
-            for (int i = 0; i < 64; i++)
-            {
-                const uint16_t before = dst_ref[i];
-                dst_ref[i] = er_pie_blend_px_565(dst_ref[i], src[i], ga, phase, i);
-                if (dst_pie[i] != dst_ref[i])
+                for (int i = 0; i < 64; i++)
                 {
-                    snprintf(s_pie_diag, sizeof(s_pie_diag),
-                             "blend ph=%d ga=%u i=%d src=%08x before=%04x pie=%04x ref=%04x", phase, (unsigned)ga,
-                             i, (unsigned)src[i], (unsigned)before, (unsigned)dst_pie[i], (unsigned)dst_ref[i]);
-                    return false;
+                    /* Premultiplied source: channels never exceed alpha. Force edge alphas often. */
+                    uint32_t a = xr(&seed) & 0xFFU;
+                    if ((xr(&seed) & 7U) == 0U)
+                        a = 0U;
+                    if ((xr(&seed) & 7U) == 1U)
+                        a = 255U;
+                    const uint32_t r = xr(&seed) % (a + 1U);
+                    const uint32_t g = xr(&seed) % (a + 1U);
+                    const uint32_t b = xr(&seed) % (a + 1U);
+                    src[i] = (a << 24) | (r << 16) | (g << 8) | b;
+                    const uint16_t d = (uint16_t)xr(&seed);
+                    dst_pie[i] = d;
+                    dst_ref[i] = d;
                 }
-                /* Source-over semantics at the edges: a fully transparent source pixel must be
-                 * a strict no-op (and via the reference, a==0 implies ref == before). */
-                if ((src[i] >> 24) == 0U && dst_pie[i] != before)
+                er_pie_blend_row_565(dst_pie, src, 64 / 8, ga, phase);
+                for (int i = 0; i < 64; i++)
                 {
-                    return false;
+                    const uint16_t before = dst_ref[i];
+                    dst_ref[i] = er_pie_blend_px_565(dst_ref[i], src[i], ga, phase, i);
+                    if (dst_pie[i] != dst_ref[i])
+                    {
+                        snprintf(s_pie_diag,
+                                 sizeof(s_pie_diag),
+                                 "blend ph=%d ga=%u i=%d src=%08x before=%04x pie=%04x ref=%04x",
+                                 phase,
+                                 (unsigned)ga,
+                                 i,
+                                 (unsigned)src[i],
+                                 (unsigned)before,
+                                 (unsigned)dst_pie[i],
+                                 (unsigned)dst_ref[i]);
+                        return false;
+                    }
+                    /* Source-over semantics at the edges: a fully transparent source pixel must be
+                     * a strict no-op (and via the reference, a==0 implies ref == before). */
+                    if ((src[i] >> 24) == 0U && dst_pie[i] != before)
+                    {
+                        return false;
+                    }
                 }
             }
         }
-    }
     }
 
     /* Fill routine vs the same reference with a constant source. */
     for (int round = 0; round < 8; round++)
     {
         const uint32_t a = 1U + (xr(&seed) % 253U);
-        const uint32_t sp = (a << 24) | ((xr(&seed) % (a + 1U)) << 16) | ((xr(&seed) % (a + 1U)) << 8)
-                            | (xr(&seed) % (a + 1U));
+        const uint32_t sp =
+            (a << 24) | ((xr(&seed) % (a + 1U)) << 16) | ((xr(&seed) % (a + 1U)) << 8) | (xr(&seed) % (a + 1U));
         for (int i = 0; i < 64; i++)
         {
             const uint16_t d = (uint16_t)xr(&seed);
@@ -442,8 +456,13 @@ bool er_pie_blend_selftest(void)
             dst_ref[i] = er_pie_blend_px_565(dst_ref[i], sp, 255U, -1, i); /* -1 = fill math */
             if (dst_pie[i] != dst_ref[i])
             {
-                snprintf(s_pie_diag, sizeof(s_pie_diag), "fill i=%d sp=%08x pie=%04x ref=%04x", i, (unsigned)sp,
-                         (unsigned)dst_pie[i], (unsigned)dst_ref[i]);
+                snprintf(s_pie_diag,
+                         sizeof(s_pie_diag),
+                         "fill i=%d sp=%08x pie=%04x ref=%04x",
+                         i,
+                         (unsigned)sp,
+                         (unsigned)dst_pie[i],
+                         (unsigned)dst_ref[i]);
                 return false;
             }
         }

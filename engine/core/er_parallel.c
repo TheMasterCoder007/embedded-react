@@ -37,10 +37,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #if ERUI_RENDER_WORKERS > 1
-static EmbeddedRenderWorkers s_workers;   /* copied at install; count == 0 → none installed */
-static ERParallelFn s_job_fn = NULL;      /* pending forked job (valid between dispatch and sync) */
+static EmbeddedRenderWorkers s_workers; /* copied at install; count == 0 → none installed */
+static ERParallelFn s_job_fn = NULL;    /* pending forked job (valid between dispatch and sync) */
 static void* s_job_arg = NULL;
-static bool s_forking = false;            /* true while a fork-join is in flight (re-entrancy guard) */
+static bool s_forking = false; /* true while a fork-join is in flight (re-entrancy guard) */
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------

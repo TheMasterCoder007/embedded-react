@@ -118,9 +118,8 @@ function makeAssetPlugin({images, fonts, persistHooks, projectRoot}) {
   return {
     name: 'embedded-react-assets',
     async setup(b) {
-      const {registerSvgVectorLoader} = await import(
-        '../assets/svg-loader.mjs'
-      );
+      const {registerSvgVectorLoader} =
+        await import('../assets/svg-loader.mjs');
       if (persistHooks) {
         b.onLoad({filter: /\.(jsx?|tsx?)$/}, a => {
           const {transformPersist, shouldPersist, projNorm} = persistHooks;
@@ -180,9 +179,8 @@ export async function bundleAppSource({
 
   let persistHooks = null;
   if (persist) {
-    const {transformPersist, shouldPersist} = await import(
-      '../persist-transform.mjs'
-    );
+    const {transformPersist, shouldPersist} =
+      await import('../persist-transform.mjs');
     persistHooks = {
       transformPersist,
       shouldPersist,
@@ -204,9 +202,8 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
   const {bakeImage} = await import('../assets/bake-image.mjs');
   const {bakeFont} = await import('../assets/bake-font.mjs');
   const {resolveFontJobs} = await import('../assets/font-config.mjs');
-  const {analyzeFontSizes, warnFontSizes} = await import(
-    '../assets/font-sizes.mjs'
-  );
+  const {analyzeFontSizes, warnFontSizes} =
+    await import('../assets/font-sizes.mjs');
   const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
   const {emitAssetPack} = await import('../assets/emit-pack.mjs');
 

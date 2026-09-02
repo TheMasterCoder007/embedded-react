@@ -41,11 +41,12 @@
 
 /* --- Display: ST7789V2 on SPI1 --- */
 #define LCD_SPI spi1
-#define LCD_SPI_HZ (62500 * 1000) /* clk_peri(125 MHz) / 2 — the fastest even divisor; ~2× the vendor's
-                                   * 40 MHz (which the pico rounds down to 31.25). Halves the full-screen
-                                   * flush time (the swipe repaints the whole panel each frame). If a unit
-                                   * shows sparkle/tearing, drop to 31250*1000. */
-#define LCD_Y_OFFSET 20               /* the 280 visible rows start at GRAM row 20 (240x320 GRAM) */
+#define LCD_SPI_HZ                                                                                                     \
+    (62500 * 1000)      /* clk_peri(125 MHz) / 2 — the fastest even divisor; ~2× the vendor's                          \
+                         * 40 MHz (which the pico rounds down to 31.25). Halves the full-screen                        \
+                         * flush time (the swipe repaints the whole panel each frame). If a unit                       \
+                         * shows sparkle/tearing, drop to 31250*1000. */
+#define LCD_Y_OFFSET 20 /* the 280 visible rows start at GRAM row 20 (240x320 GRAM) */
 #define PIN_LCD_DC 8
 #define PIN_LCD_CS 9
 #define PIN_LCD_SCLK 10
@@ -62,8 +63,8 @@
 #define PIN_TP_RST 22
 #define CST816_ADDR 0x15
 #define CST816_REG_FINGER_NUM 0x02 /* 0 = no contact */
-#define CST816_REG_XPOS_H 0x03    /* XposH/L, YposH/L are consecutive from here */
-#define CST816_REG_CHIP_ID 0xA7   /* reads 0xB5 on a CST816S */
+#define CST816_REG_XPOS_H 0x03     /* XposH/L, YposH/L are consecutive from here */
+#define CST816_REG_CHIP_ID 0xA7    /* reads 0xB5 on a CST816S */
 #define CST816_REG_DIS_AUTO_SLEEP 0xFE
 
 /* --- IMU: QMI8658 on the SAME I2C1 bus. The demo uses only the ACCELEROMETER (steps + the bubble
