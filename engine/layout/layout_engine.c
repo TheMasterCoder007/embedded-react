@@ -894,9 +894,11 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         if (count > 1)
             line_used += (count - 1) * main_gap;
 
-        int32_t remaining = (int32_t)main_size - line_used;
-        if (remaining < 0)
-            remaining = 0;
+        const int32_t remaining = (int32_t)main_size - line_used;
+        /* An overflowing line keeps the sign for centre and flex-end, so a child bigger than the box
+         * overhangs the way it does when it is placed as an absolute. The distribution modes have
+         * nothing to spread once the line is full, and fall back to flex-start. */
+        const int32_t spread = remaining > 0 ? remaining : 0;
 
         /* justifyContent as one exact fraction per item: item k sits (j_a + k * j_b) / j_den past
          * where flex-start would have put it. The leading offset and the between-item step share one
@@ -916,7 +918,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             case ER_JUSTIFY_SPACE_BETWEEN:
                 if (count > 1)
                 {
-                    j_b = remaining;
+                    j_b = spread;
                     j_den = count - 1;
                 }
                 break;
@@ -924,16 +926,16 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 if (count > 0)
                 {
                     /* Half a unit before the first item, a whole unit between each pair. */
-                    j_a = remaining;
-                    j_b = 2 * remaining;
+                    j_a = spread;
+                    j_b = 2 * spread;
                     j_den = 2 * count;
                 }
                 break;
             case ER_JUSTIFY_SPACE_EVENLY:
                 if (count > 0)
                 {
-                    j_a = remaining;
-                    j_b = remaining;
+                    j_a = spread;
+                    j_b = spread;
                     j_den = count + 1;
                 }
                 break;

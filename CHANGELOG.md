@@ -149,6 +149,9 @@ See the README for the release process.
 
 ### Fixed
 
+- A child too big for its parent now overhangs under `justifyContent: 'center'` / `'flex-end'`, as it
+  does in React Native, instead of packing against the start edge. Negative free space was clamped to
+  zero before `justifyContent` saw it, so the overflow lost its sign.
 - Centred content now lands on the same pixel React Native does. Layout positions were truncated where
   Yoga rounds, so anything centred in an odd amount of free space sat a pixel early — about half of all
   centred layouts, on either axis. `justifyContent`, `alignItems`, `alignContent` and the space-* modes

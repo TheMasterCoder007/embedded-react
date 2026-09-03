@@ -1360,8 +1360,8 @@ static void fixture_abs_static_margins(void)
  * @brief A child too big for the content box overhangs both edges instead of being pinned at 0.
  *
  * Free space goes negative and stays negative — centring a 200x200 child in a 160x160 content box
- * puts it at -20 relative to that box, i.e. 0 on screen. Clamping the free space at 0 (as Pass 5 does
- * for flow children) would stick it at the padding corner instead.
+ * puts it at -20 relative to that box, i.e. 0 on screen. Clamping the free space at 0 would stick it
+ * at the padding corner instead. fixture_flow_justify_overflow() is the same rule for a flow child.
  */
 static void fixture_abs_static_overflow(void)
 {
@@ -1808,11 +1808,8 @@ static void fixture_half_pixel_center(void)
     }
 
     /* A 201x171 child centred in a 160x160 content box overhangs both edges evenly: -20.5 rounds up
-     * to -20, same rule. The absolute path does this on both axes.
-     *
-     * The flow path only matches on the cross axis, because Pass 5 clamps negative main-axis free
-     * space to 0 and packs the child at the start instead. That is a clamping divergence rather than
-     * a rounding one, so it is pinned separately as an XFAIL. */
+     * to -20, same rule on both axes. Flow and absolute have to agree — the same child placed either
+     * way lands in the same place. */
     rp.flex_direction = ER_FLEX_COL;
     cp.width = 201;
     cp.height = 171;
@@ -1834,23 +1831,32 @@ static void fixture_half_pixel_center(void)
     er_tree_append_child(root, fl);
     er_tree_set_root(root);
     er_commit();
-    pcheck("half-overhang", "flow", XFAIL, ro, 0, 15, 201, 171);
+    pcheck("half-overhang", "flow", EXPECT, ro, 0, 15, 201, 171);
     kill_child(root, fl);
     er_node_destroy(root);
 }
 
 /**
- * @brief Builds `n` identical 50 x item children in a padded 200x200 column and checks each position.
+ * @brief Builds `n` children of the given main-axis sizes in a padded 200x200 box, checking each one.
+ *
+ * The container is the usual (20, 20, 160, 160) content box, and every child is 50 on the cross axis
+ * under alignItems: flex-start, so only the main axis is under test. Sizes are per child, in tree
+ * order: children that differ are what make an odd amount of free space, and what tell a mode that
+ * distributes between items apart from one that only offsets the block.
  *
  * @param[in] name     Assertion label.
- * @param[in] dir      ER_FLEX_COL or ER_FLEX_COL_REVERSE.
+ * @param[in] dir      Any ERFlexDirection.
  * @param[in] justify  justifyContent under test.
+ * @param[in] gap      Main-axis gap, or 0 for none.
  * @param[in] n        Child count (<= 8).
- * @param[in] item     Child main-axis size.
- * @param[in] want_y   Expected y per child, in tree order.
+ * @param[in] item     Child main-axis size, per child.
+ * @param[in] want     Expected main-axis position per child, in tree order.
  */
-static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, int16_t item, const int16_t* want_y)
+static void stack_sizes_case(
+    const char* name, uint8_t dir, uint8_t justify, int16_t gap, int n, const int16_t* item, const int16_t* want)
 {
+    const bool is_row = (dir == ER_FLEX_ROW || dir == ER_FLEX_ROW_REVERSE);
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1858,6 +1864,8 @@ static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, in
     rp.flex_direction = dir;
     rp.justify_content = justify;
     rp.align_items = ER_ALIGN_FLEX_START;
+    if (gap)
+        rp.gap = gap;
     ERNode* root = mk(rp, NULL);
 
     ERNode* kids[8];
@@ -1865,8 +1873,8 @@ static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, in
     for (int i = 0; i < n; i++)
     {
         ERProps cp = props_default();
-        cp.width = 50;
-        cp.height = item;
+        cp.width = is_row ? item[i] : 50;
+        cp.height = is_row ? 50 : item[i];
         kids[i] = mk(cp, &r[i]);
         er_tree_append_child(root, kids[i]);
     }
@@ -1877,11 +1885,176 @@ static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, in
     {
         char lbl[8];
         snprintf(lbl, sizeof lbl, "i%d", i);
-        pcheck(name, lbl, EXPECT, r[i], 20, want_y[i], 50, item);
+        pcheck(name,
+               lbl,
+               EXPECT,
+               r[i],
+               is_row ? want[i] : 20,
+               is_row ? 20 : want[i],
+               is_row ? item[i] : 50,
+               is_row ? 50 : item[i]);
     }
     for (int i = 0; i < n; i++)
         kill_child(root, kids[i]);
     er_node_destroy(root);
+}
+
+/**
+ * @brief stack_sizes_case() with `n` identically sized children and no gap.
+ *
+ * @param[in] name     Assertion label.
+ * @param[in] dir      ER_FLEX_COL or ER_FLEX_COL_REVERSE.
+ * @param[in] justify  justifyContent under test.
+ * @param[in] n        Child count (<= 8).
+ * @param[in] item     Child main-axis size.
+ * @param[in] want_y   Expected y per child, in tree order.
+ */
+static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, int16_t item, const int16_t* want_y)
+{
+    int16_t sizes[8];
+    for (int i = 0; i < n; i++)
+        sizes[i] = item;
+    stack_sizes_case(name, dir, justify, 0, n, sizes, want_y);
+}
+
+/**
+ * @brief Three wrapping children, one line of which overflows on its own, checking each y.
+ *
+ * 100, 90 and 171 tall in a 160px content box: each starts a new line, and only the last line is
+ * over. justifyContent runs per line, so the two that fit must keep placing normally while the third
+ * hangs off the end.
+ *
+ * @param[in] name     Assertion label.
+ * @param[in] justify  justifyContent under test.
+ * @param[in] want_y   Expected y for children 0, 1 and 2.
+ */
+static void wrap_overflow_case(const char* name, uint8_t justify, const int16_t* want_y)
+{
+    static const int16_t k_h[3] = {100, 90, 171};
+
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.flex_wrap = ER_WRAP_WRAP;
+    rp.align_content = ER_ALIGN_CONTENT_FLEX_START;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    rp.justify_content = justify;
+    ERNode* root = mk(rp, NULL);
+
+    ERNode* kids[3];
+    ERRect r[3];
+    for (int i = 0; i < 3; i++)
+    {
+        ERProps cp = props_default();
+        cp.width = 40;
+        cp.height = k_h[i];
+        kids[i] = mk(cp, &r[i]);
+        er_tree_append_child(root, kids[i]);
+    }
+    er_tree_set_root(root);
+    er_commit();
+
+    for (int i = 0; i < 3; i++)
+    {
+        char lbl[8];
+        snprintf(lbl, sizeof lbl, "l%d", i);
+        pcheck(name, lbl, EXPECT, r[i], (int16_t)(20 + 40 * i), want_y[i], 40, k_h[i]);
+    }
+    for (int i = 0; i < 3; i++)
+        kill_child(root, kids[i]);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief An overflowing line: centre and flex-end keep the negative free space, the rest do not.
+ *
+ * Yoga only offsets the block by free space it can still spread. `center` and `flex-end` move by
+ * whatever is left even when that is negative, so a child bigger than the box hangs off the far edge
+ * (and, centred, off both). `space-between` / `space-around` / `space-evenly` have nothing to put
+ * between items once the line is full and collapse to flex-start.
+ *
+ * A reversed axis measures the same line from the far edge, so it is flex-start that overhangs there
+ * while centre lands in the same place either way. The gap row is there because the gap is part of
+ * what fills the line: three 50px children plus two 8px gaps overflow a box the children alone fit.
+ */
+static void fixture_flow_justify_overflow(void)
+{
+    /* One 171px child in a 160px content box: 11 over, so centring lands on a half pixel. */
+    static const int16_t k_solo[] = {171};
+    static const int16_t k_solo_start[] = {20};
+    static const int16_t k_solo_end[] = {9};
+    static const int16_t k_solo_center[] = {15};
+    static const int16_t k_rsolo_start[] = {9};
+    static const int16_t k_rsolo_center[] = {15};
+    static const int16_t k_rsolo_end[] = {20};
+
+    stack_sizes_case("ovf-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_solo_center);
+    stack_sizes_case("ovf-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_solo_end);
+    stack_sizes_case("ovf-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_solo_start);
+
+    stack_sizes_case("ovf-rstart", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-rcenter", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_rsolo_center);
+    stack_sizes_case("ovf-rend", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_rsolo_end);
+    stack_sizes_case("ovf-rbetween", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-raround", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-revenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_rsolo_start);
+
+    /* The same overflow on a row, to pin that this is the main axis and not the y one. */
+    stack_sizes_case("ovf-row-center", ER_FLEX_ROW, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_solo_center);
+    stack_sizes_case("ovf-row-end", ER_FLEX_ROW, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_solo_end);
+    stack_sizes_case("ovf-rowrev-center", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_rsolo_center);
+    stack_sizes_case("ovf-rowrev-end", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_rsolo_end);
+
+    /* Two unequal children, 90 + 91 in 160: 21 over. Both shift by the same amount and stay touching,
+     * so the block is offset as a whole rather than the items being re-spaced. */
+    static const int16_t k_pair[] = {90, 91};
+    static const int16_t k_pair_start[] = {20, 110};
+    static const int16_t k_pair_center[] = {10, 100};
+    static const int16_t k_pair_end[] = {-1, 89};
+    static const int16_t k_rpair_start[] = {90, -1};
+    static const int16_t k_rpair_center[] = {101, 10};
+    static const int16_t k_rpair_end[] = {111, 20};
+
+    stack_sizes_case("ovf2-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_pair_center);
+    stack_sizes_case("ovf2-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_pair_end);
+    stack_sizes_case("ovf2-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_pair_start);
+
+    stack_sizes_case("ovf2-rstart", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-rcenter", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_rpair_center);
+    stack_sizes_case("ovf2-rend", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_rpair_end);
+    stack_sizes_case("ovf2-rbetween", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-raround", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-revenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_rpair_start);
+
+    /* 3 x 50 plus two 8px gaps = 166 in 160: the gaps alone put the line 6 over. */
+    static const int16_t k_gap3[] = {50, 50, 50};
+    static const int16_t k_gap3_start[] = {20, 78, 136};
+    static const int16_t k_gap3_center[] = {17, 75, 133};
+    static const int16_t k_gap3_end[] = {14, 72, 130};
+
+    stack_sizes_case("ovf-gap-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 8, 3, k_gap3, k_gap3_center);
+    stack_sizes_case("ovf-gap-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 8, 3, k_gap3, k_gap3_end);
+    stack_sizes_case("ovf-gap-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 8, 3, k_gap3, k_gap3_start);
+
+    /* Wrapped: the sign is per line, so lines that fit are unaffected by the one that does not. */
+    static const int16_t k_wrap_start[] = {20, 20, 20};
+    static const int16_t k_wrap_center[] = {50, 55, 15};
+    static const int16_t k_wrap_end[] = {80, 90, 9};
+
+    wrap_overflow_case("ovf-wrap-center", ER_JUSTIFY_CENTER, k_wrap_center);
+    wrap_overflow_case("ovf-wrap-end", ER_JUSTIFY_FLEX_END, k_wrap_end);
+    wrap_overflow_case("ovf-wrap-between", ER_JUSTIFY_SPACE_BETWEEN, k_wrap_start);
 }
 
 /**
@@ -2109,6 +2282,7 @@ int main(void)
     fixture_flow_wrap_reverse_overflow();
     fixture_half_pixel_center();
     fixture_half_pixel_justify();
+    fixture_flow_justify_overflow();
     fixture_half_pixel_align_content();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
