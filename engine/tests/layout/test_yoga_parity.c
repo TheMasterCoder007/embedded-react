@@ -2443,7 +2443,7 @@ static void fixture_half_pixel_flex_sizes(void)
  * @param[in] h       Container height (the main axis).
  * @param[in] pad     Padding on all four edges.
  * @param[in] wrap    ER_WRAP_WRAP or ER_WRAP_WRAP_REVERSE.
- * @param[in] n_kids  Child count (<= 9); must divide evenly into full lines.
+ * @param[in] n_kids  Child count (<= 9).
  * @param[in] want_x  Expected x per line.
  * @param[in] want_w  Expected width per line.
  */
