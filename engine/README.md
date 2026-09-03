@@ -48,9 +48,11 @@ collect in-flow children with hypothetical sizes → wrap into lines → resolve
 loop, so min/max-frozen children redistribute) → compute per-line cross-size → place along
 the main axis (`justifyContent`) and cross axis (`alignSelf`/`alignItems`) → write back and
 recurse → lay out absolutely positioned children against the parent's content box. An
-absolute axis that the style does not pin (explicit length, percentage, opposing insets,
-or `aspectRatio`) sizes to the node's own content, like a flow child. Scratch arrays
-are static at module scope, sized to `ERUI_MAX_NODES`.
+absolute axis is pinned by an explicit length, a percentage, or a pair of opposing insets;
+`aspectRatio` then derives the other axis from it, but only when exactly one of the two is
+pinned (with both auto, or both already pinned, it does nothing — as in Yoga). Any axis still
+unresolved sizes to the node's own content, like a flow child. Scratch arrays are static at
+module scope, sized to `ERUI_MAX_NODES`.
 
 ### Pixel format — premultiplied ARGB8888
 
@@ -389,7 +391,7 @@ and there's little benefit above 256.
 **The edge cache** (`ERUI_VECTOR_EDGE_CACHE`, pool in `rendering/vector_cache.c`) keeps a static
 node's *built* rasterizer geometry — its flattened, stroke-outlined edge lists — so repainting an
 unchanged `<Svg>` (a moving sibling's damage rect crossing it every frame, or the same damage
-replayed into each buffer of a multi-buffer display) skips the tape parse, bezier/arc flattening and
+replayed into each buffer of a multi-buffer display) skips the tape parse, bezier/arc flattening, and
 stroke outlining and goes straight to the scanline rasterize. It is keyed on the storage slot and the
 node's screen origin, invalidated by any `er_vector_store`/`er_vector_free` on the slot, and only
 records a tape that survived unchanged from one render to the next (so an animated dial, whose tape

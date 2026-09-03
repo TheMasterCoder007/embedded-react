@@ -852,6 +852,44 @@ static void fixture_abs_aspect_ratio(void)
     er_node_destroy(root);
 }
 
+/**
+ * @brief aspectRatio needs one axis already pinned; with both auto it is ignored and content wins.
+ *
+ * Yoga derives the missing axis from aspectRatio only when exactly one of width/height is resolved by
+ * an explicit length, a percentage, or opposing insets. With both auto there is nothing to derive
+ * from, so the node takes its max-content size on both axes and the ratio never applies.
+ */
+static void fixture_abs_aspect_ratio_both_auto(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ap.aspect_ratio = 2.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 60;
+    kp.height = 25;
+    ERNode* kid = mk(kp, NULL);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-aspect-both-auto", "abs", EXPECT, ra, 0, 0, 60, 25);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
 /** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
 static void fixture_abs_content_overflows(void)
 {
@@ -958,6 +996,7 @@ int main(void)
     fixture_abs_auto_both();
     fixture_abs_pct();
     fixture_abs_aspect_ratio();
+    fixture_abs_aspect_ratio_both_auto();
     fixture_abs_content_overflows();
     fixture_abs_containing_block();
 
