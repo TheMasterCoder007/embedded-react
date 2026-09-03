@@ -149,6 +149,10 @@ See the README for the release process.
 
 ### Fixed
 
+- Centred content now lands on the same pixel React Native does. Layout positions were truncated where
+  Yoga rounds, so anything centred in an odd amount of free space sat a pixel early — about half of all
+  centred layouts, on either axis. `justifyContent`, `alignItems`, `alignContent` and the space-* modes
+  are all affected, for flow and absolutely positioned children alike.
 - A child on a reversed flex axis (`flexDirection: 'column-reverse'` / `'row-reverse'`) is now held
   off the edge the axis starts from by the margin on *that* side — `marginBottom` for
   `column-reverse`. Asymmetric margins landed the wrong one against the start edge, so a flow child

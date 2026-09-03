@@ -122,6 +122,38 @@ static int16_t clamp_size(int16_t v, const int16_t mn, const int16_t mx)
 }
 
 /**
+ * @brief Divides and rounds a half up, matching Yoga's pixel grid.
+ *
+ * Layout positions round the way Yoga does: a coordinate on a half pixel goes up. Plain C division
+ * truncates instead, which lands a pixel short.
+ *
+ * Round a position ONCE, after everything that shifts it — including the mirror a reversed axis
+ * applies. `num` may carry the whole-pixel part of the position or only the fraction; Pass 5 leaves
+ * it out just to keep the operands small.
+ *
+ * @param[in] num  Numerator. May be negative: an item wider than the box it is centred in overhangs.
+ * @param[in] den  Denominator. Must be > 0.
+ *
+ * @return floor(num / den + 1/2).
+ */
+static int32_t div_round(const int32_t num, const int32_t den)
+{
+    int32_t q = num / den;
+    int32_t r = num % den; /* Same sign as num (C99 6.5.5p6). */
+
+    /* Renormalise to a floor quotient with a remainder in [0, den), so the half-up test below reads
+     * the same for negative numerators as for positive ones. */
+    if (r < 0)
+    {
+        q--;
+        r += den;
+    }
+    if (2 * r >= den)
+        q++;
+    return q;
+}
+
+/**
  * @brief Returns true when d is a row-based flex direction.
  *
  * @param[in] d  ERFlexDirection value.
@@ -154,21 +186,24 @@ static bool is_reverse_dir(const uint8_t d)
  * flex-start, and space-around / space-evenly both put the whole free space either side of the item,
  * i.e. centre it. These are Pass 5's own formulas evaluated at count == 1.
  *
+ * Returned in HALF pixels: solo_axis_pos() may still mirror the offset for a reversed axis, and
+ * mirroring is only correct before rounding.
+ *
  * @param[in] justify    ERFlexJustify value from the parent.
  * @param[in] remaining  Free main-axis space: available - item - its main margins. May be NEGATIVE.
  *
- * @return Offset from the content-box main start, before the item's own leading margin.
+ * @return TWICE the offset from the content-box main start, before the item's own leading margin.
  */
-static int16_t solo_main_offset(const uint8_t justify, const int16_t remaining)
+static int32_t solo_main_offset2(const uint8_t justify, const int16_t remaining)
 {
     switch (justify)
     {
         case ER_JUSTIFY_CENTER:
         case ER_JUSTIFY_SPACE_AROUND:
         case ER_JUSTIFY_SPACE_EVENLY:
-            return (int16_t)(remaining / 2);
-        case ER_JUSTIFY_FLEX_END:
             return remaining;
+        case ER_JUSTIFY_FLEX_END:
+            return 2 * (int32_t)remaining;
         default: /* ER_JUSTIFY_FLEX_START, ER_JUSTIFY_SPACE_BETWEEN */
             return 0;
     }
@@ -181,19 +216,21 @@ static int16_t solo_main_offset(const uint8_t justify, const int16_t remaining)
  * so `alignItems: 'stretch'` (the default) leaves an auto-sized absolute at its content size in the
  * cross-start corner. Only the placement modes move it.
  *
+ * In HALF pixels, like solo_main_offset2().
+ *
  * @param[in] align      ERFlexAlign value, already resolved through align_self / align_items.
  * @param[in] remaining  Free cross-axis space: available - item - its cross margins. May be NEGATIVE.
  *
- * @return Offset from the content-box cross start, before the item's own leading margin.
+ * @return TWICE the offset from the content-box cross start, before the item's own leading margin.
  */
-static int16_t solo_cross_offset(const uint8_t align, const int16_t remaining)
+static int32_t solo_cross_offset2(const uint8_t align, const int16_t remaining)
 {
     switch (align)
     {
         case ER_ALIGN_CENTER:
-            return (int16_t)(remaining / 2);
-        case ER_ALIGN_FLEX_END:
             return remaining;
+        case ER_ALIGN_FLEX_END:
+            return 2 * (int32_t)remaining;
         default: /* ER_ALIGN_FLEX_START, ER_ALIGN_STRETCH */
             return 0;
     }
@@ -213,7 +250,7 @@ static int16_t solo_cross_offset(const uint8_t align, const int16_t remaining)
  * @param[in] size     The item's resolved size on this axis.
  * @param[in] m_lead   Margin on the axis-start side.
  * @param[in] m_trail  Margin on the axis-end side.
- * @param[in] offset   Offset from solo_main_offset() / solo_cross_offset().
+ * @param[in] offset2  TWICE the offset, from solo_main_offset2() / solo_cross_offset2().
  * @param[in] reversed Whether this axis runs from the far edge.
  *
  * @return The item's screen origin on this axis.
@@ -223,11 +260,12 @@ static int16_t solo_axis_pos(const int16_t start,
                              const int16_t size,
                              const int16_t m_lead,
                              const int16_t m_trail,
-                             const int16_t offset,
+                             const int32_t offset2,
                              const bool reversed)
 {
-    const int16_t pos = reversed ? (int16_t)(avail - offset - m_trail - size) : (int16_t)(offset + m_lead);
-    return (int16_t)(start + pos);
+    /* Stay in half pixels until the mirror is done, then round once. */
+    const int32_t pos2 = reversed ? (2 * (int32_t)(avail - m_trail - size) - offset2) : (offset2 + 2 * (int32_t)m_lead);
+    return (int16_t)(start + div_round(pos2, 2));
 }
 
 static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h);
@@ -781,12 +819,18 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     /*--------------------------------------------------------------------------
      * alignContent — distribute leftover cross space among wrap lines.
      *
-     * Only meaningful for a multi-line (wrap) container whose lines do not already fill the
-     * cross axis. STRETCH grows each line equally; the other modes add a leading offset
-     * (ac_offset) and/or extra spacing between lines (ac_between) consumed in Pass 5.
+     * Only meaningful for a multi-line (wrap) container whose lines do not already fill the cross
+     * axis. Each mode is one exact fraction: line `ln` starts (ac_a + ln * ac_b) / ac_den past where
+     * flex-start would put it, and Pass 5 rounds that once.
+     *
+     * STRETCH is the same shape — growing every line also pushes each later line's start — so it is
+     * just ac_b. The growth is kept separately too, since a line's extent also sizes a stretched
+     * child and positions a centred one.
      *------------------------------------------------------------------------*/
-    int16_t ac_offset = 0;
-    int16_t ac_between = 0;
+    int32_t ac_a = 0;       /**< Numerator of line 0's cross offset. */
+    int32_t ac_b = 0;       /**< Numerator added per line. */
+    int32_t ac_den = 1;     /**< Shared denominator; always > 0. */
+    int32_t ac_stretch = 0; /**< STRETCH: cross space added to EVERY line, over ac_den. */
     if (L->flex_wrap != ER_WRAP_NOWRAP && n_lines > 1)
     {
         int16_t free_cross = (int16_t)(cross_avail - total_cross);
@@ -798,39 +842,44 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             switch (L->align_content)
             {
                 case ER_ALIGN_CONTENT_FLEX_END:
-                    ac_offset = free_cross;
+                    ac_a = free_cross;
                     break;
                 case ER_ALIGN_CONTENT_CENTER:
-                    ac_offset = (int16_t)(free_cross / 2);
+                    ac_a = free_cross;
+                    ac_den = 2;
                     break;
                 case ER_ALIGN_CONTENT_SPACE_BETWEEN:
-                    ac_between = (int16_t)(free_cross / (n_lines - 1));
+                    ac_b = free_cross;
+                    ac_den = n_lines - 1;
                     break;
                 case ER_ALIGN_CONTENT_SPACE_AROUND:
-                {
-                    const int16_t unit = (int16_t)(free_cross / n_lines);
-                    ac_offset = (int16_t)(unit / 2);
-                    ac_between = unit;
+                    ac_a = free_cross;
+                    ac_b = 2 * (int32_t)free_cross;
+                    ac_den = 2 * n_lines;
                     break;
-                }
                 case ER_ALIGN_CONTENT_STRETCH:
-                {
-                    const int16_t add = (int16_t)(free_cross / n_lines);
-                    for (int ln = 0; ln < n_lines; ln++)
-                        s_line_cross[ln] = (int16_t)(s_line_cross[ln] + add);
-                    total_cross = (int16_t)(total_cross + (int16_t)(add * n_lines));
+                    ac_b = free_cross;
+                    ac_den = n_lines;
+                    ac_stretch = free_cross;
                     break;
-                }
                 default: /* ER_ALIGN_CONTENT_FLEX_START — lines packed at the cross-start. */
                     break;
             }
         }
     }
 
+    /* A line's extent grows by whole pixels only; the remainder rides along in the numerators below,
+     * so what sits inside a stretched line is still placed exactly. */
+    const int16_t ac_stretch_int = (int16_t)(ac_stretch / ac_den);
+    const int32_t ac_stretch_rem = ac_stretch - (int32_t)ac_stretch_int * ac_den;
+
     /*--------------------------------------------------------------------------
      * Pass 5 — main-axis positions (justifyContent) + cross-axis (alignSelf).
      *------------------------------------------------------------------------*/
-    int16_t line_cross_offset = ac_offset;
+    const bool rev_main = is_reverse_dir(L->flex_direction);
+    const bool rev_cross = (L->flex_wrap == ER_WRAP_WRAP_REVERSE);
+    const int32_t cross_den = 2 * ac_den; /* The 2 is alignSelf: center halves the leftover. */
+    int32_t line_cross_int = 0;           /* Whole-pixel cross start of line ln (unstretched). */
     for (int ln = 0; ln < n_lines; ln++)
     {
         int32_t line_used = 0;
@@ -849,68 +898,82 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         if (remaining < 0)
             remaining = 0;
 
-        int16_t main_offset = 0;
-        int16_t between = main_gap;
+        /* justifyContent as one exact fraction per item: item k sits (j_a + k * j_b) / j_den past
+         * where flex-start would have put it. The leading offset and the between-item step share one
+         * fraction on purpose — rounding a step and then accumulating it drifts. */
+        int32_t j_a = 0;
+        int32_t j_b = 0;
+        int32_t j_den = 1;
         switch (L->justify_content)
         {
-            case ER_JUSTIFY_FLEX_START:
-                break;
             case ER_JUSTIFY_CENTER:
-                main_offset = (int16_t)(remaining / 2);
+                j_a = remaining;
+                j_den = 2;
                 break;
             case ER_JUSTIFY_FLEX_END:
-                main_offset = (int16_t)remaining;
+                j_a = remaining;
                 break;
             case ER_JUSTIFY_SPACE_BETWEEN:
                 if (count > 1)
-                    between = (int16_t)(main_gap + remaining / (count - 1));
+                {
+                    j_b = remaining;
+                    j_den = count - 1;
+                }
                 break;
             case ER_JUSTIFY_SPACE_AROUND:
                 if (count > 0)
                 {
-                    const int32_t unit = remaining / count;
-                    main_offset = (int16_t)(unit / 2);
-                    between = (int16_t)(main_gap + unit);
+                    /* Half a unit before the first item, a whole unit between each pair. */
+                    j_a = remaining;
+                    j_b = 2 * remaining;
+                    j_den = 2 * count;
                 }
                 break;
             case ER_JUSTIFY_SPACE_EVENLY:
                 if (count > 0)
                 {
-                    const int32_t unit = remaining / (count + 1);
-                    main_offset = (int16_t)unit;
-                    between = (int16_t)(main_gap + unit);
+                    j_a = remaining;
+                    j_b = remaining;
+                    j_den = count + 1;
                 }
                 break;
-            default:
+            default: /* ER_JUSTIFY_FLEX_START, and SPACE_BETWEEN with nothing to space. */
                 break;
         }
 
-        /* Main-axis positions in natural order. */
-        int16_t cursor = main_offset;
+        /* Main-axis positions. `cursor` carries only whole pixels — sizes, margins and gaps — so a
+         * rounded position never feeds back into where the next sibling lands.
+         *
+         * A reversed axis is mirrored here, while the offset is still a fraction. Mirroring a rounded
+         * position would round the same half pixel twice, in opposite directions. */
+        int32_t cursor = 0;
+        int32_t k = 0;
         for (int i = 0; i < n_inflow; i++)
         {
             if (s_scratch[i].line != ln)
                 continue;
-            cursor = (int16_t)(cursor + s_scratch[i].margin_main_start);
-            s_scratch[i].main_pos = cursor;
-            cursor = (int16_t)(cursor + s_scratch[i].main + s_scratch[i].margin_main_end + between);
-        }
 
-        /* Reverse the main axis if requested. */
-        if (is_reverse_dir(L->flex_direction))
-        {
-            for (int i = 0; i < n_inflow; i++)
+            int32_t pos = cursor + s_scratch[i].margin_main_start;
+            int32_t num = j_a + k * j_b;
+            if (rev_main)
             {
-                if (s_scratch[i].line != ln)
-                    continue;
-                const int16_t outer_start = (int16_t)(s_scratch[i].main_pos - s_scratch[i].margin_main_start);
-                s_scratch[i].main_pos =
-                    (int16_t)(main_size - outer_start - s_scratch[i].margin_main_end - s_scratch[i].main);
+                /* Mirror the item's OUTER box and re-seat the item inside it, so the margin that
+                 * leads is the one on the edge the axis starts from. */
+                pos = main_size - cursor - s_scratch[i].margin_main_end - s_scratch[i].main;
+                num = -num;
             }
+            s_scratch[i].main_pos = (int16_t)(pos + div_round(num, j_den));
+
+            cursor +=
+                (int32_t)s_scratch[i].margin_main_start + s_scratch[i].main + s_scratch[i].margin_main_end + main_gap;
+            k++;
         }
 
-        /* Cross-axis positions via alignSelf. */
-        const int16_t this_cross = s_line_cross[ln];
+        /* Cross-axis positions via alignSelf. Three fractions share cross_den — the line's
+         * alignContent offset, the remainder of a stretched line's growth, and the half that centring
+         * takes — and are rounded together at the end of the loop body. */
+        const int16_t this_cross = (int16_t)(s_line_cross[ln] + ac_stretch_int);
+        const int32_t line_num = 2 * (ac_a + (int32_t)ln * ac_b);
         for (int i = 0; i < n_inflow; i++)
         {
             if (s_scratch[i].line != ln)
@@ -920,6 +983,8 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (inner < 0)
                 inner = 0;
 
+            int32_t pos = s_scratch[i].margin_cross_start; /* Whole pixels, from the line's start. */
+            int32_t num = 0;                               /* Sub-pixel remainder, over cross_den. */
             switch (s_scratch[i].align)
             {
                 case ER_ALIGN_STRETCH:
@@ -937,48 +1002,38 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                             s_scratch[i].cross = clamp_size(inner, mn, mx);
                         }
                     }
-                    s_scratch[i].cross_pos = s_scratch[i].margin_cross_start;
                     break;
                 }
                 case ER_ALIGN_FLEX_START:
-                    s_scratch[i].cross_pos = s_scratch[i].margin_cross_start;
                     break;
                 case ER_ALIGN_CENTER:
-                    s_scratch[i].cross_pos =
-                        (int16_t)(s_scratch[i].margin_cross_start + (inner - s_scratch[i].cross) / 2);
+                    num = (int32_t)(inner - s_scratch[i].cross) * ac_den + ac_stretch_rem;
                     break;
                 case ER_ALIGN_FLEX_END:
-                    s_scratch[i].cross_pos = (int16_t)(this_cross - s_scratch[i].margin_cross_end - s_scratch[i].cross);
+                    pos = this_cross - s_scratch[i].margin_cross_end - s_scratch[i].cross;
+                    num = 2 * ac_stretch_rem;
                     break;
                 default:
-                    s_scratch[i].cross_pos = s_scratch[i].margin_cross_start;
                     break;
             }
-            s_scratch[i].cross_pos = (int16_t)(s_scratch[i].cross_pos + line_cross_offset);
+
+            pos += line_cross_int;
+            num += line_num;
+
+            /* wrap-reverse mirrors about the CONTENT box, not about the lines' own extent, which
+             * would reverse their order without moving the block off the cross-start. alignContent
+             * has already placed the block, so the mirror just carries it along. Lines that overflow
+             * mirror to negative positions rather than clamping. Mirror before rounding, as above. */
+            if (rev_cross)
+            {
+                pos = cross_avail - pos - s_scratch[i].cross;
+                num = -num;
+            }
+            s_scratch[i].cross_pos = (int16_t)(pos + div_round(num, cross_den));
         }
 
-        line_cross_offset = (int16_t)(line_cross_offset + this_cross + cross_gap + ac_between);
-    }
-
-    /* wrap-reverse: mirror the cross axis about the CONTENT box, not about the lines' own extent.
-     *
-     * `total_cross` is only how much cross space the lines occupy, so mirroring about it reverses
-     * their order but leaves the block parked at the cross-start -- the far edge it should travel to
-     * is `cross_avail`. The two agree only when the lines happen to fill the cross axis exactly,
-     * which is why the block never moving went unnoticed.
-     *
-     * alignContent has already placed the block inside `cross_avail`, so the mirror simply carries it
-     * along: flex-start lands against the far edge, flex-end against the near one, exactly as a
-     * flipped axis should. Lines that overflow the cross axis mirror to negative positions, matching
-     * Yoga and CSS. Same convention as the absolute path's static position, which mirrors against the
-     * full cross extent too. */
-    if (L->flex_wrap == ER_WRAP_WRAP_REVERSE && n_inflow > 0)
-    {
-        for (int i = 0; i < n_inflow; i++)
-        {
-            const int16_t end = (int16_t)(s_scratch[i].cross_pos + s_scratch[i].cross);
-            s_scratch[i].cross_pos = (int16_t)(cross_avail - end);
-        }
+        /* ac_b carries the stretch growth, so this advances by the line's unstretched extent. */
+        line_cross_int += (int32_t)s_line_cross[ln] + cross_gap;
     }
 
     /*--------------------------------------------------------------------------
@@ -1151,7 +1206,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                               s_main,
                               mm_lead,
                               mm_trail,
-                              solo_main_offset(L->justify_content, (int16_t)(main_size - s_main - mm_lead - mm_trail)),
+                              solo_main_offset2(L->justify_content, (int16_t)(main_size - s_main - mm_lead - mm_trail)),
                               is_reverse_dir(L->flex_direction));
             const int16_t cross_static =
                 solo_axis_pos(is_row ? content_y : content_x,
@@ -1159,7 +1214,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                               s_cross,
                               mc_lead,
                               mc_trail,
-                              solo_cross_offset(self_align, (int16_t)(cross_avail - s_cross - mc_lead - mc_trail)),
+                              solo_cross_offset2(self_align, (int16_t)(cross_avail - s_cross - mc_lead - mc_trail)),
                               L->flex_wrap == ER_WRAP_WRAP_REVERSE);
 
             /* Insets measure from the padding box; an axis pinned by neither takes the static position. */
