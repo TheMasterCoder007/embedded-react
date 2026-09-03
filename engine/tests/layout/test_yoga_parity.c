@@ -1448,15 +1448,19 @@ static void fixture_flow_reverse_margin(void)
 }
 
 /**
- * @brief FLOW children, wrap-reverse: the lines reverse but never travel to the far cross edge.
+ * @brief Builds the issue shape: a 200x200 column with padding 20, wrapping in reverse.
  *
- * Also not about absolutes — the absolute path mirrors against the full cross extent and matches Yoga
- * (abs-static wrap-rev-*), while Pass 5 mirrors about `total_cross`, the lines' OWN extent. That
- * reverses their order but leaves the block parked at the cross start, so a single 50px line in a
- * 160px content box sits at x=20 instead of x=130. The two agree only when the lines happen to fill
- * the cross axis exactly. Issue #192.
+ * Content box is (20, 20, 160, 160), so 40px-tall items give four per line and every extra item
+ * starts a second line. `n` items, an alignContent mode and an optional cross-axis (column) gap are
+ * all the fixtures below vary. Captures each item's rect for the caller to assert.
  */
-static void fixture_flow_wrap_reverse_anchor(void)
+static void build_wrap_rev(int n,
+                           uint8_t align_content,
+                           int16_t column_gap,
+                           int16_t item_h,
+                           ERNode** root_out,
+                           ERNode** kids_out,
+                           ERRect* rects)
 {
     ERProps rp = props_default();
     rp.width = 200;
@@ -1465,21 +1469,125 @@ static void fixture_flow_wrap_reverse_anchor(void)
     rp.flex_direction = ER_FLEX_COL;
     rp.flex_wrap = ER_WRAP_WRAP_REVERSE;
     rp.align_items = ER_ALIGN_FLEX_START;
+    rp.align_content = align_content;
+    rp.column_gap = column_gap;
     ERNode* root = mk(rp, NULL);
 
-    ERRect rc;
-    ERProps cp = props_default();
-    cp.width = 50;
-    cp.height = 40;
-    ERNode* c = mk(cp, &rc);
-
-    er_tree_append_child(root, c);
+    for (int i = 0; i < n; i++)
+    {
+        ERProps cp = props_default();
+        cp.width = 50;
+        cp.height = item_h;
+        kids_out[i] = mk(cp, &rects[i]);
+        er_tree_append_child(root, kids_out[i]);
+    }
     er_tree_set_root(root);
-    er_commit();
-    pcheck("flow-wrap-reverse", "c", XFAIL, rc, 130, 20, 50, 40);
+    *root_out = root;
+}
 
-    kill_child(root, c);
+/** @brief Tears down a wrap_rev fixture. */
+static void teardown_wrap_rev(int n, ERNode* root, ERNode** kids)
+{
+    for (int i = 0; i < n; i++)
+    {
+        kill_child(root, kids[i]);
+    }
     er_node_destroy(root);
+}
+
+/**
+ * @brief FLOW children, wrap-reverse: the lines reverse AND travel to the far cross edge.
+ *
+ * The mirror is taken about the content box, not about the lines' own extent -- the latter reverses
+ * their order but leaves the block parked at the cross-start, which is what issue #192 reported. A
+ * single 50px line in a 160px content box therefore sits at x=130, not x=20, and the second line of
+ * a two-line layout lands at x=80. The two only agree when the lines fill the cross axis exactly.
+ */
+static void fixture_flow_wrap_reverse_anchor(void)
+{
+    ERNode* root;
+    ERNode* kids[5];
+    ERRect r[5];
+
+    /* One line: 160 content - 50 line = 110 of leftover cross space to travel. */
+    build_wrap_rev(1, ER_ALIGN_CONTENT_FLEX_START, 0, 40, &root, kids, r);
+    er_commit();
+    pcheck("wrap-rev-1line", "c", EXPECT, r[0], 130, 20, 50, 40);
+    teardown_wrap_rev(1, root, kids);
+
+    /* Two lines: first line at the far edge, the second one line-width in from it. */
+    build_wrap_rev(5, ER_ALIGN_CONTENT_FLEX_START, 0, 40, &root, kids, r);
+    er_commit();
+    pcheck("wrap-rev-2line", "l0i0", EXPECT, r[0], 130, 20, 50, 40);
+    pcheck("wrap-rev-2line", "l0i3", EXPECT, r[3], 130, 140, 50, 40);
+    pcheck("wrap-rev-2line", "l1i0", EXPECT, r[4], 80, 20, 50, 40);
+    teardown_wrap_rev(5, root, kids);
+
+    /* A cross-axis gap widens the step between the mirrored lines, but not the anchor. */
+    build_wrap_rev(5, ER_ALIGN_CONTENT_FLEX_START, 10, 40, &root, kids, r);
+    er_commit();
+    pcheck("wrap-rev-gap", "l0i0", EXPECT, r[0], 130, 20, 50, 40);
+    pcheck("wrap-rev-gap", "l1i0", EXPECT, r[4], 70, 20, 50, 40);
+    teardown_wrap_rev(5, root, kids);
+}
+
+/**
+ * @brief wrap-reverse + alignContent: the mirror carries whatever alignContent already placed.
+ *
+ * alignContent distributes the leftover cross space first, then the whole block is mirrored, so the
+ * two must not double-count: flex-end lands the block against the NEAR edge (x=70/20) precisely
+ * because flex-start already put it against the far one. Expected rects are from `yoga-layout`.
+ */
+static void fixture_flow_wrap_reverse_align_content(void)
+{
+    ERNode* root;
+    ERNode* kids[5];
+    ERRect r[5];
+    /* Two lines of 50 in a 160 content box -> 60px of free cross space to distribute. */
+    static const struct
+    {
+        const char* name;
+        uint8_t mode;
+        int16_t x0; /**< First line (4 items). */
+        int16_t x1; /**< Second line (1 item). */
+    } k_cases[] = {
+        {"ac-flex-end", ER_ALIGN_CONTENT_FLEX_END, 70, 20},
+        {"ac-center", ER_ALIGN_CONTENT_CENTER, 100, 50},
+        {"ac-between", ER_ALIGN_CONTENT_SPACE_BETWEEN, 130, 20},
+        {"ac-around", ER_ALIGN_CONTENT_SPACE_AROUND, 115, 35},
+        {"ac-stretch", ER_ALIGN_CONTENT_STRETCH, 130, 50},
+    };
+
+    for (size_t c = 0; c < sizeof(k_cases) / sizeof(k_cases[0]); c++)
+    {
+        build_wrap_rev(5, k_cases[c].mode, 0, 40, &root, kids, r);
+        er_commit();
+        pcheck(k_cases[c].name, "l0", EXPECT, r[0], k_cases[c].x0, 20, 50, 40);
+        pcheck(k_cases[c].name, "l1", EXPECT, r[4], k_cases[c].x1, 20, 50, 40);
+        teardown_wrap_rev(5, root, kids);
+    }
+}
+
+/**
+ * @brief wrap-reverse whose lines overflow the cross axis mirrors into negative positions.
+ *
+ * Eight 80px-tall items give two per line and four lines of 50 = 200 in a 160 content box. Yoga does
+ * not clamp: the mirror keeps the FIRST line at the far edge and lets the last one hang off the
+ * cross-start at x=-20. Clamping the overflow here would silently drop a line off the other side.
+ */
+static void fixture_flow_wrap_reverse_overflow(void)
+{
+    ERNode* root;
+    ERNode* kids[8];
+    ERRect r[8];
+
+    build_wrap_rev(8, ER_ALIGN_CONTENT_FLEX_START, 0, 80, &root, kids, r);
+    er_commit();
+    pcheck("wrap-rev-overflow", "l0", EXPECT, r[0], 130, 20, 50, 80);
+    pcheck("wrap-rev-overflow", "l1", EXPECT, r[2], 80, 20, 50, 80);
+    pcheck("wrap-rev-overflow", "l2", EXPECT, r[4], 30, 20, 50, 80);
+    pcheck("wrap-rev-overflow", "l3", EXPECT, r[6], -20, 20, 50, 80);
+    teardown_wrap_rev(8, root, kids);
 }
 
 /** @brief In-flow siblings never move the static position — it is the SOLE-item spot, not a slot. */
@@ -1576,6 +1684,8 @@ int main(void)
     fixture_abs_static_ignores_siblings();
     fixture_flow_reverse_margin();
     fixture_flow_wrap_reverse_anchor();
+    fixture_flow_wrap_reverse_align_content();
+    fixture_flow_wrap_reverse_overflow();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -1608,6 +1718,13 @@ int main(void)
  *     width-aware measure pass; the expected height is font-dependent, so a tolerance-based
  *     assertion would be required rather than the exact-rect compare used here.)
  *   - alignItems: baseline: no baseline alignment.
+ *   - cross-axis margins under wrap-reverse: Pass 5 places a child with its LEADING cross margin and
+ *     then mirrors, so the mirrored child is held off the far edge by the wrong margin. Not pinned
+ *     because the two references disagree on the answer: for a 50px child with marginLeft 7 /
+ *     marginRight 3 in the fixture_flow_wrap_reverse_anchor container, Chrome says x=127 (the axis
+ *     flips wholesale, so marginRight leads) while Yoga says x=130 (its wrap path drops the leading
+ *     cross margin altogether — plain `wrap` + marginLeft 7 is x=20 there and x=27 in Chrome). The
+ *     engine says 123. Same root cause as the flow-reverse-margin XFAIL, one axis over.
  *   - half-pixel rounding: positions are integer arithmetic and truncate, where Yoga computes in
  *     floats and rounds to the pixel grid. Centring a 51px child in a 160px content box puts it at
  *     74 here and 75 in Yoga. Systemic (it applies to flow and absolute children alike), so it is
