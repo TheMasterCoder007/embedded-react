@@ -149,6 +149,10 @@ See the README for the release process.
 
 ### Fixed
 
+- A child on a reversed flex axis (`flexDirection: 'column-reverse'` / `'row-reverse'`) is now held
+  off the edge the axis starts from by the margin on *that* side — `marginBottom` for
+  `column-reverse`. Asymmetric margins landed the wrong one against the start edge, so a flow child
+  and an identical uninset absolute child disagreed inside a reversed parent.
 - `flexWrap: 'wrap-reverse'` now moves the wrap lines to the far cross edge, not just reverse their
   order. They stayed packed against the cross-start, so every child was off by the leftover cross
   space — a single line in a 160px-wide column sat 110px from where React Native puts it.

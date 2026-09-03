@@ -1409,19 +1409,88 @@ static void fixture_abs_static_per_axis(void)
 }
 
 /**
- * @brief FLOW child, reversed main axis + asymmetric margins: Pass 5 mirrors the wrong margin.
+ * @brief Lays out two asymmetric-margin children on a reversed main axis and checks both rects.
  *
- * Not about absolutes — found while giving them Yoga-correct static positions, which surfaced the
- * rule: a reversed axis leads with the margin on the edge it starts from. `column-reverse` starts at
- * the bottom, so a 40px child with marginBottom 3 sits 3px off the bottom (y = 20+160-3-40 = 137).
- * Pass 5 instead adds the LEADING margin and then mirrors the result, landing at 133.
+ * The container is the issue's shape: 200x200 with padding 20, so the content box is
+ * (20, 20, 160, 160). Child A is 40 long with main-axis margins 7 (start) / 3 (end); child B is 30
+ * long with 1 / 5. The margins are deliberately unequal — equal ones cancel out under the mirror and
+ * hide the bug entirely. Both children are 50 on the cross axis so alignItems never enters into it.
  *
- * The absolute path (abs-static rev-col-margin) already does this correctly, so an uninset absolute
- * and an identical flow child currently disagree in a reversed parent — closing this gap makes them
- * agree again. Fixing it means moving Pass 5's reverse mirror to use margin_main_end. Issue #193.
+ * @param[in] name     Fixture name for the output.
+ * @param[in] dir      ER_FLEX_COL_REVERSE or ER_FLEX_ROW_REVERSE.
+ * @param[in] justify  justifyContent mode.
+ * @param[in] gap      Main-axis gap, or 0 for none.
+ * @param[in] ax       Expected x of child A.
+ * @param[in] ay       Expected y of child A.
+ * @param[in] bx       Expected x of child B.
+ * @param[in] by       Expected y of child B.
+ */
+static void rev_pair_case(const char* name, uint8_t dir, uint8_t justify, int16_t gap, int ax, int ay, int bx, int by)
+{
+    const bool is_row = (dir == ER_FLEX_ROW_REVERSE);
+
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = dir;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    rp.justify_content = justify;
+    if (gap)
+        rp.gap = gap;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra, rb;
+    ERProps ap = props_default();
+    ap.width = is_row ? 40 : 50;
+    ap.height = is_row ? 50 : 40;
+    ap.margin_left = is_row ? 7 : ER_LAYOUT_AUTO;
+    ap.margin_right = is_row ? 3 : ER_LAYOUT_AUTO;
+    ap.margin_top = is_row ? ER_LAYOUT_AUTO : 7;
+    ap.margin_bottom = is_row ? ER_LAYOUT_AUTO : 3;
+    ERNode* a = mk(ap, &ra);
+
+    ERProps bp = props_default();
+    bp.width = is_row ? 30 : 50;
+    bp.height = is_row ? 50 : 30;
+    bp.margin_left = is_row ? 1 : ER_LAYOUT_AUTO;
+    bp.margin_right = is_row ? 5 : ER_LAYOUT_AUTO;
+    bp.margin_top = is_row ? ER_LAYOUT_AUTO : 1;
+    bp.margin_bottom = is_row ? ER_LAYOUT_AUTO : 5;
+    ERNode* b = mk(bp, &rb);
+
+    er_tree_append_child(root, a);
+    er_tree_append_child(root, b);
+    er_tree_set_root(root);
+    er_commit();
+
+    pcheck(name, "a", EXPECT, ra, ax, ay, ap.width, ap.height);
+    pcheck(name, "b", EXPECT, rb, bx, by, bp.width, bp.height);
+
+    kill_child(root, a);
+    kill_child(root, b);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief FLOW child, reversed main axis + asymmetric margins: the reversed axis picks the margin.
+ *
+ * A reversed axis leads with the margin on the edge it starts from. `column-reverse` starts at the
+ * bottom, so a 40px child with marginBottom 3 sits 3px off the bottom of a (20, 20, 160, 160) content
+ * box: y = 20 + 160 - 3 - 40 = 137. Pass 5 used to add the LEADING margin and then mirror the item
+ * alone, landing at 133 — off by exactly marginTop - marginBottom, so symmetric margins hid it.
+ *
+ * Fixed in #193 by mirroring the item's outer (margin) box and re-seating the item inside it, which
+ * is the rule the absolute path's static position already followed (abs-static rev-col-margin). An
+ * uninset absolute child and an identical flow child now agree inside a reversed parent again.
+ *
+ * Multi-child cases matter because the mirror has to keep the packing order and the between-item
+ * gaps right as well: adjacent children are separated by the sum of their facing margins, and the
+ * run as a whole still honours justifyContent. All values from the real `yoga-layout` package.
  */
 static void fixture_flow_reverse_margin(void)
 {
+    /* The issue's exact repro: one child, column-reverse, flex-start. */
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1441,10 +1510,49 @@ static void fixture_flow_reverse_margin(void)
     er_tree_append_child(root, c);
     er_tree_set_root(root);
     er_commit();
-    pcheck("flow-reverse-margin", "c", XFAIL, rc, 20, 137, 50, 40);
+    pcheck("flow-reverse-margin", "c", EXPECT, rc, 20, 137, 50, 40);
 
     kill_child(root, c);
     er_node_destroy(root);
+
+    /* Overflow: a child taller than the content box hangs off the reversed start edge, keeping its
+     * 3px marginBottom against the bottom. 20 + 160 - 3 - 200 = -23. */
+    rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL_REVERSE;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    root = mk(rp, NULL);
+
+    cp.height = 200;
+    c = mk(cp, &rc);
+    er_tree_append_child(root, c);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-reverse-overflow", "c", EXPECT, rc, 20, -23, 50, 200);
+
+    kill_child(root, c);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Reversed main axis + asymmetric margins across every justifyContent mode and both axes.
+ *
+ * space-evenly is left out on purpose: its offset is remaining/3, which the engine truncates and
+ * Yoga keeps in floats, so it lands 1px apart for the systemic rounding reason noted at the bottom of
+ * this file rather than for anything to do with reversal.
+ */
+static void fixture_flow_reverse_margin_justify(void)
+{
+    rev_pair_case("rev-pair-start", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 20, 137, 20, 95);
+    rev_pair_case("rev-pair-end", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 20, 63, 20, 21);
+    rev_pair_case("rev-pair-between", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 20, 137, 20, 21);
+    rev_pair_case("rev-pair-around", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 20, 119, 20, 40);
+    rev_pair_case("rev-pair-gap", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 10, 20, 137, 20, 85);
+
+    rev_pair_case("rev-row-pair-start", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_FLEX_START, 0, 137, 20, 95, 20);
+    rev_pair_case("rev-row-pair-between", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 137, 20, 21, 20);
 }
 
 /**
@@ -1683,6 +1791,7 @@ int main(void)
     fixture_abs_static_per_axis();
     fixture_abs_static_ignores_siblings();
     fixture_flow_reverse_margin();
+    fixture_flow_reverse_margin_justify();
     fixture_flow_wrap_reverse_anchor();
     fixture_flow_wrap_reverse_align_content();
     fixture_flow_wrap_reverse_overflow();
@@ -1719,12 +1828,13 @@ int main(void)
  *     assertion would be required rather than the exact-rect compare used here.)
  *   - alignItems: baseline: no baseline alignment.
  *   - cross-axis margins under wrap-reverse: Pass 5 places a child with its LEADING cross margin and
- *     then mirrors, so the mirrored child is held off the far edge by the wrong margin. Not pinned
- *     because the two references disagree on the answer: for a 50px child with marginLeft 7 /
- *     marginRight 3 in the fixture_flow_wrap_reverse_anchor container, Chrome says x=127 (the axis
- *     flips wholesale, so marginRight leads) while Yoga says x=130 (its wrap path drops the leading
- *     cross margin altogether — plain `wrap` + marginLeft 7 is x=20 there and x=27 in Chrome). The
- *     engine says 123. Same root cause as the flow-reverse-margin XFAIL, one axis over.
+ *     then mirrors, so the mirrored child is held off the far edge by the wrong margin. This is the
+ *     main-axis bug of #193 one axis over, but it is deliberately NOT fixed alongside it, because the
+ *     two references disagree on the answer: for a 50px child with marginLeft 7 / marginRight 3 in
+ *     the fixture_flow_wrap_reverse_anchor container, Chrome says x=127 (the axis flips wholesale, so
+ *     marginRight leads) while Yoga says x=130 (its wrap path drops the leading cross margin
+ *     altogether — plain `wrap` + marginLeft 7 is x=20 there and x=27 in Chrome). The engine says
+ *     123. Pinning it means first choosing which reference wins.
  *   - half-pixel rounding: positions are integer arithmetic and truncate, where Yoga computes in
  *     floats and rounds to the pixel grid. Centring a 51px child in a 160px content box puts it at
  *     74 here and 75 in Yoga. Systemic (it applies to flow and absolute children alike), so it is
