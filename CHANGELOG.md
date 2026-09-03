@@ -149,7 +149,7 @@ See the README for the release process.
 
 ### Fixed
 
-- `flexWrap: 'wrap-reverse'` now moves the wrap lines to the far cross edge, not just reverses their
+- `flexWrap: 'wrap-reverse'` now moves the wrap lines to the far cross edge, not just reverse their
   order. They stayed packed against the cross-start, so every child was off by the leftover cross
   space — a single line in a 160px-wide column sat 110px from where React Native puts it.
 - An absolutely positioned child now measures from its parent's padding edge, as in CSS and React
