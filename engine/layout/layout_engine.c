@@ -127,8 +127,9 @@ static int16_t clamp_size(int16_t v, const int16_t mn, const int16_t mx)
  * Layout positions round the way Yoga does: a coordinate on a half pixel goes up. Plain C division
  * truncates instead, which lands a pixel short.
  *
- * Callers pass only the fractional part of a position, never the whole-pixel part. A position is
- * often the sum of several fractions, and only their total may be rounded.
+ * Round a position ONCE, after everything that shifts it — including the mirror a reversed axis
+ * applies. `num` may carry the whole-pixel part of the position or only the fraction; Pass 5 leaves
+ * it out just to keep the operands small.
  *
  * @param[in] num  Numerator. May be negative: an item wider than the box it is centred in overhangs.
  * @param[in] den  Denominator. Must be > 0.
