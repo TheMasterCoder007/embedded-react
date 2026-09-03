@@ -29,11 +29,10 @@
 // lay out against the <View> as if it weren't there, and they paint over it because the engine paints
 // in tree order.
 //
-// Two deliberate differences from upstream, both because our <Image> is a plain scene node:
-//   - RN re-proxies the container's width/height onto the image to undo <Image>'s own sizing. Ours
-//     doesn't size itself, so the inset alone fills the box.
-//   - the fill really is the top/left/right/bottom inset, which resolves against the container's
-//     CONTENT box (padding on the container insets the picture too).
+// One deliberate difference from upstream, because our <Image> is a plain scene node: RN re-proxies
+// the container's width/height onto the image to undo <Image>'s own sizing. Ours doesn't size itself,
+// so the inset alone fills the box — and since an absolute child resolves its insets against the
+// container's PADDING box, as in RN, the picture fills the whole container even when it has padding.
 import {createElement, forwardRef} from 'react';
 import {View, Image} from './components.js';
 import {StyleSheet} from './StyleSheet.js';

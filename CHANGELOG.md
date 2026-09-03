@@ -149,6 +149,13 @@ See the README for the release process.
 
 ### Fixed
 
+- An absolutely positioned child now measures from its parent's padding edge, as in CSS and React
+  Native, instead of being pushed inward by the parent's padding. `left: 0` means the parent's edge,
+  and percentage sizes are a fraction of the whole parent. The thermostat's settings sheet was the
+  visible case: its full-screen overlay hung 18px off the right and bottom of the display.
+- An absolute child with no `left`/`right` (or no `top`/`bottom`) now lands where it would have sat
+  in flow, so the parent's `justifyContent` and `alignItems` place it — centring a parent centres an
+  uninset overlay instead of parking it in the top-left corner.
 - An absolutely positioned node with no explicit size on an axis now grows to fit its content, like a
   flow node. It collapsed to 0 — invisible on screen, since children still painted, but hit-testing
   skipped the whole subtree and every touch inside it fell through to whatever was behind. `width`

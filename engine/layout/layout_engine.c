@@ -145,6 +145,91 @@ static bool is_reverse_dir(const uint8_t d)
     return d == ER_FLEX_ROW_REVERSE || d == ER_FLEX_COL_REVERSE;
 }
 
+/**
+ * @brief Main-axis offset of a SOLE flex item under justifyContent, for a static position.
+ *
+ * CSS defines the static position of an absolutely positioned flex child as the spot it would take
+ * "as if it were the sole flex item", and Yoga agrees — in-flow siblings never move it. That makes
+ * every distribution mode collapse: with nothing to distribute between, space-between degenerates to
+ * flex-start, and space-around / space-evenly both put the whole free space either side of the item,
+ * i.e. centre it. These are Pass 5's own formulas evaluated at count == 1.
+ *
+ * @param[in] justify    ERFlexJustify value from the parent.
+ * @param[in] remaining  Free main-axis space: available - item - its main margins. May be NEGATIVE.
+ *
+ * @return Offset from the content-box main start, before the item's own leading margin.
+ */
+static int16_t solo_main_offset(const uint8_t justify, const int16_t remaining)
+{
+    switch (justify)
+    {
+        case ER_JUSTIFY_CENTER:
+        case ER_JUSTIFY_SPACE_AROUND:
+        case ER_JUSTIFY_SPACE_EVENLY:
+            return (int16_t)(remaining / 2);
+        case ER_JUSTIFY_FLEX_END:
+            return remaining;
+        default: /* ER_JUSTIFY_FLEX_START, ER_JUSTIFY_SPACE_BETWEEN */
+            return 0;
+    }
+}
+
+/**
+ * @brief Cross-axis offset of a SOLE flex item under a resolved alignSelf, for a static position.
+ *
+ * STRETCH lands with FLEX_START on purpose: an absolute is never stretched to its containing block,
+ * so `alignItems: 'stretch'` (the default) leaves an auto-sized absolute at its content size in the
+ * cross-start corner. Only the placement modes move it.
+ *
+ * @param[in] align      ERFlexAlign value, already resolved through align_self / align_items.
+ * @param[in] remaining  Free cross-axis space: available - item - its cross margins. May be NEGATIVE.
+ *
+ * @return Offset from the content-box cross start, before the item's own leading margin.
+ */
+static int16_t solo_cross_offset(const uint8_t align, const int16_t remaining)
+{
+    switch (align)
+    {
+        case ER_ALIGN_CENTER:
+            return (int16_t)(remaining / 2);
+        case ER_ALIGN_FLEX_END:
+            return remaining;
+        default: /* ER_ALIGN_FLEX_START, ER_ALIGN_STRETCH */
+            return 0;
+    }
+}
+
+/**
+ * @brief Turns a solo_*_offset() into a screen coordinate on one axis.
+ *
+ * A reversed axis (flexDirection: *-reverse on the main axis, flexWrap: wrap-reverse on the cross)
+ * measures from the far edge, and the margin that leads is the one on THAT side — so the trailing
+ * margin becomes the gap the item sits behind. `remaining` is deliberately not clamped at 0 by the
+ * caller: an item larger than the space it is centred in overhangs both edges symmetrically, which
+ * is what Yoga does and what makes a too-big centred overlay stay centred instead of sticking.
+ *
+ * @param[in] start    Screen coordinate of the content box on this axis.
+ * @param[in] avail    Content-box extent on this axis.
+ * @param[in] size     The item's resolved size on this axis.
+ * @param[in] m_lead   Margin on the axis-start side.
+ * @param[in] m_trail  Margin on the axis-end side.
+ * @param[in] offset   Offset from solo_main_offset() / solo_cross_offset().
+ * @param[in] reversed Whether this axis runs from the far edge.
+ *
+ * @return The item's screen origin on this axis.
+ */
+static int16_t solo_axis_pos(const int16_t start,
+                             const int16_t avail,
+                             const int16_t size,
+                             const int16_t m_lead,
+                             const int16_t m_trail,
+                             const int16_t offset,
+                             const bool reversed)
+{
+    const int16_t pos = reversed ? (int16_t)(avail - offset - m_trail - size) : (int16_t)(offset + m_lead);
+    return (int16_t)(start + pos);
+}
+
 static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h);
 
 /**
@@ -968,27 +1053,33 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             const int16_t mt = edge_or(cl->margin_top, cl->margin);
             const int16_t mb = edge_or(cl->margin_bottom, cl->margin);
 
-            /* Size each axis from whatever the style actually pins it to: an explicit length, a
-             * percentage of the containing block (the parent's content box, which is also what the
-             * insets resolve against), or a pair of opposing insets. An axis none of those answer is
-             * left unresolved for the aspect-ratio and content fallbacks below. */
+            /* The containing block is the parent's PADDING box -- this node's own border box, since
+             * layout reserves no border width -- NOT the content box the flow children
+             * are placed in. That is what CSS and React Native resolve against: `left: 0` sits at the
+             * padding edge and ignores the parent's padding, and a percentage is a fraction of the
+             * whole box. Padding returns only for an axis with no inset at all, whose
+             * static position is the flow position the child would have had.
+             *
+             * Size each axis from whatever the style actually pins it to: an explicit length, a
+             * percentage of the containing block, or a pair of opposing insets. An axis none of those
+             * answer is left unresolved for the aspect-ratio and content fallbacks below. */
             int16_t cw = 0, ach = 0;
             bool have_w = true, have_h = true;
             if (cl->width != ER_LAYOUT_AUTO)
                 cw = cl->width;
             else if (cl->width_pct > 0.0f)
-                cw = (int16_t)((float)content_w * cl->width_pct / 100.0f + 0.5f);
+                cw = (int16_t)((float)w * cl->width_pct / 100.0f + 0.5f);
             else if (cl->left != ER_LAYOUT_AUTO && cl->right != ER_LAYOUT_AUTO)
-                cw = (int16_t)(content_w - cl->left - cl->right - ml - mr);
+                cw = (int16_t)(w - cl->left - cl->right - ml - mr);
             else
                 have_w = false;
 
             if (cl->height != ER_LAYOUT_AUTO)
                 ach = cl->height;
             else if (cl->height_pct > 0.0f)
-                ach = (int16_t)((float)content_h * cl->height_pct / 100.0f + 0.5f);
+                ach = (int16_t)((float)h * cl->height_pct / 100.0f + 0.5f);
             else if (cl->top != ER_LAYOUT_AUTO && cl->bottom != ER_LAYOUT_AUTO)
-                ach = (int16_t)(content_h - cl->top - cl->bottom - mt - mb);
+                ach = (int16_t)(h - cl->top - cl->bottom - mt - mb);
             else
                 have_h = false;
 
@@ -1027,21 +1118,54 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             cw = clamp_size(cw, cl->min_width, cl->max_width);
             ach = clamp_size(ach, cl->min_height, cl->max_height);
 
+            /* An axis with NO inset falls back to its static position: where this child would have sat
+             * had it stayed in flow, which is inside the CONTENT box and honours the parent's
+             * justifyContent / alignItems (the child's own alignSelf winning, as in Pass 1). Resolved
+             * per axis, so `left: 10` with no `top` pins x and still aligns y. */
+            uint8_t self_align = (cl->align_self != ER_ALIGN_AUTO) ? cl->align_self : L->align_items;
+            if (self_align == ER_ALIGN_AUTO)
+                self_align = ER_ALIGN_STRETCH;
+
+            const int16_t s_main = is_row ? cw : ach;
+            const int16_t s_cross = is_row ? ach : cw;
+            const int16_t mm_lead = is_row ? ml : mt;
+            const int16_t mm_trail = is_row ? mr : mb;
+            const int16_t mc_lead = is_row ? mt : ml;
+            const int16_t mc_trail = is_row ? mb : mr;
+
+            const int16_t main_static =
+                solo_axis_pos(is_row ? content_x : content_y,
+                              main_size,
+                              s_main,
+                              mm_lead,
+                              mm_trail,
+                              solo_main_offset(L->justify_content, (int16_t)(main_size - s_main - mm_lead - mm_trail)),
+                              is_reverse_dir(L->flex_direction));
+            const int16_t cross_static =
+                solo_axis_pos(is_row ? content_y : content_x,
+                              cross_avail,
+                              s_cross,
+                              mc_lead,
+                              mc_trail,
+                              solo_cross_offset(self_align, (int16_t)(cross_avail - s_cross - mc_lead - mc_trail)),
+                              L->flex_wrap == ER_WRAP_WRAP_REVERSE);
+
+            /* Insets measure from the padding box; an axis pinned by neither takes the static position. */
             int16_t cx;
             if (cl->left != ER_LAYOUT_AUTO)
-                cx = (int16_t)(content_x + cl->left + ml);
+                cx = (int16_t)(x + cl->left + ml);
             else if (cl->right != ER_LAYOUT_AUTO)
-                cx = (int16_t)(content_x + content_w - cl->right - cw - mr);
+                cx = (int16_t)(x + w - cl->right - cw - mr);
             else
-                cx = (int16_t)(content_x + ml);
+                cx = is_row ? main_static : cross_static;
 
             int16_t cy;
             if (cl->top != ER_LAYOUT_AUTO)
-                cy = (int16_t)(content_y + cl->top + mt);
+                cy = (int16_t)(y + cl->top + mt);
             else if (cl->bottom != ER_LAYOUT_AUTO)
-                cy = (int16_t)(content_y + content_h - cl->bottom - ach - mb);
+                cy = (int16_t)(y + h - cl->bottom - ach - mb);
             else
-                cy = (int16_t)(content_y + mt);
+                cy = is_row ? cross_static : main_static;
 
             compute_layout(ct, cw, ach, cx, cy);
         }
