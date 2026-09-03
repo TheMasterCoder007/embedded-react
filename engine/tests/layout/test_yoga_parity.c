@@ -33,6 +33,9 @@
  * ER_EVENT_LAYOUT handler, commits, calls pcheck() per node, and tears the tree down. Then call it
  * from main(). Keep expected values authoritative (hand-verifiable or copied from Chrome/Yoga).
  *
+ * Positions round to Yoga's pixel grid, so a half pixel goes up. Expected values can be taken from
+ * `yoga-layout` verbatim.
+ *
  * Known divergences not yet expressible through ERProps (so not testable here yet) are listed at
  * the bottom of this file.
  */
@@ -1539,9 +1542,8 @@ static void fixture_flow_reverse_margin(void)
 /**
  * @brief Reversed main axis + asymmetric margins across every justifyContent mode and both axes.
  *
- * space-evenly is left out on purpose: its offset is remaining/3, which the engine truncates and
- * Yoga keeps in floats, so it lands 1px apart for the systemic rounding reason noted at the bottom of
- * this file rather than for anything to do with reversal.
+ * space-evenly and centre divide the 74px of free space by 3 and by 2, so both land on a fraction
+ * that the reversed axis then has to mirror.
  */
 static void fixture_flow_reverse_margin_justify(void)
 {
@@ -1549,6 +1551,8 @@ static void fixture_flow_reverse_margin_justify(void)
     rev_pair_case("rev-pair-end", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 20, 63, 20, 21);
     rev_pair_case("rev-pair-between", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 20, 137, 20, 21);
     rev_pair_case("rev-pair-around", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 20, 119, 20, 40);
+    rev_pair_case("rev-pair-evenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 20, 112, 20, 46);
+    rev_pair_case("rev-pair-center", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 20, 100, 20, 58);
     rev_pair_case("rev-pair-gap", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 10, 20, 137, 20, 85);
 
     rev_pair_case("rev-row-pair-start", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_FLEX_START, 0, 137, 20, 95, 20);
@@ -1739,6 +1743,314 @@ static void fixture_abs_static_ignores_siblings(void)
     er_node_destroy(root);
 }
 
+/**
+ * @brief Centring an ODD amount of free space: the half pixel rounds up, it does not truncate.
+ *
+ * Free space of 109 halves to 54.5, which Yoga rounds to 55. Every placement route has to agree —
+ * flow, absolute static position, and a reversed axis. The overhang rows pin the negative side.
+ */
+static void fixture_half_pixel_center(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+
+    ERProps cp = props_default();
+    cp.width = 51;
+    cp.height = 41;
+
+    static const struct
+    {
+        const char* name;
+        uint8_t dir;
+        int16_t w, h; /**< Child size. */
+        int16_t x, y; /**< Expected origin. */
+    } k_cases[] = {
+        /* The issue's exact repro, then the same thing with the axes swapped. */
+        {"half-center-col", ER_FLEX_COL, 51, 41, 75, 80},
+        {"half-center-row", ER_FLEX_ROW, 51, 41, 75, 80},
+        /* A reversed axis measures from the far edge but must still round to the same pixel. */
+        {"half-center-colrev", ER_FLEX_COL_REVERSE, 51, 41, 75, 80},
+        {"half-center-rowrev", ER_FLEX_ROW_REVERSE, 51, 41, 75, 80},
+    };
+
+    for (size_t c = 0; c < sizeof(k_cases) / sizeof(k_cases[0]); c++)
+    {
+        rp.flex_direction = k_cases[c].dir;
+        cp.width = k_cases[c].w;
+        cp.height = k_cases[c].h;
+
+        ERNode* root = mk(rp, NULL);
+        ERRect rc;
+        ERNode* c0 = mk(cp, &rc);
+        er_tree_append_child(root, c0);
+        er_tree_set_root(root);
+        er_commit();
+        pcheck(k_cases[c].name, "c", EXPECT, rc, k_cases[c].x, k_cases[c].y, k_cases[c].w, k_cases[c].h);
+        kill_child(root, c0);
+        er_node_destroy(root);
+
+        /* An uninset ABSOLUTE child takes the same static position, so it must round the same way. */
+        rp.flex_direction = k_cases[c].dir;
+        ERProps abp = cp;
+        abp.position = ER_POS_ABSOLUTE;
+        root = mk(rp, NULL);
+        ERNode* a0 = mk(abp, &rc);
+        er_tree_append_child(root, a0);
+        er_tree_set_root(root);
+        er_commit();
+        pcheck(k_cases[c].name, "abs", EXPECT, rc, k_cases[c].x, k_cases[c].y, k_cases[c].w, k_cases[c].h);
+        kill_child(root, a0);
+        er_node_destroy(root);
+    }
+
+    /* A 201x171 child centred in a 160x160 content box overhangs both edges evenly: -20.5 rounds up
+     * to -20, same rule. The absolute path does this on both axes.
+     *
+     * The flow path only matches on the cross axis, because Pass 5 clamps negative main-axis free
+     * space to 0 and packs the child at the start instead. That is a clamping divergence rather than
+     * a rounding one, so it is pinned separately as an XFAIL. */
+    rp.flex_direction = ER_FLEX_COL;
+    cp.width = 201;
+    cp.height = 171;
+
+    ERProps ovp = cp;
+    ovp.position = ER_POS_ABSOLUTE;
+    ERNode* root = mk(rp, NULL);
+    ERRect ro;
+    ERNode* ov = mk(ovp, &ro);
+    er_tree_append_child(root, ov);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("half-overhang", "abs", EXPECT, ro, 0, 15, 201, 171);
+    kill_child(root, ov);
+    er_node_destroy(root);
+
+    root = mk(rp, NULL);
+    ERNode* fl = mk(cp, &ro);
+    er_tree_append_child(root, fl);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("half-overhang", "flow", XFAIL, ro, 0, 15, 201, 171);
+    kill_child(root, fl);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Builds `n` identical 50 x item children in a padded 200x200 column and checks each position.
+ *
+ * @param[in] name     Assertion label.
+ * @param[in] dir      ER_FLEX_COL or ER_FLEX_COL_REVERSE.
+ * @param[in] justify  justifyContent under test.
+ * @param[in] n        Child count (<= 8).
+ * @param[in] item     Child main-axis size.
+ * @param[in] want_y   Expected y per child, in tree order.
+ */
+static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, int16_t item, const int16_t* want_y)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = dir;
+    rp.justify_content = justify;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERNode* kids[8];
+    ERRect r[8];
+    for (int i = 0; i < n; i++)
+    {
+        ERProps cp = props_default();
+        cp.width = 50;
+        cp.height = item;
+        kids[i] = mk(cp, &r[i]);
+        er_tree_append_child(root, kids[i]);
+    }
+    er_tree_set_root(root);
+    er_commit();
+
+    for (int i = 0; i < n; i++)
+    {
+        char lbl[8];
+        snprintf(lbl, sizeof lbl, "i%d", i);
+        pcheck(name, lbl, EXPECT, r[i], 20, want_y[i], 50, item);
+    }
+    for (int i = 0; i < n; i++)
+        kill_child(root, kids[i]);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Distributing free space that does not divide evenly: no truncation, and no drift.
+ *
+ * Three 17px children in a 160px content box leave 109 to share — odd, and awkward to divide by 2, 3,
+ * 4 and 6 — so every mode lands on a fraction. Each item is placed from one exact fraction of the
+ * free space rather than from a rounded step added up along the line, which would drift.
+ *
+ * The reversed rows are the same layout measured from the far edge. Values from `yoga-layout`.
+ */
+static void fixture_half_pixel_justify(void)
+{
+    /* 3 x 17 = 51 used, 109 free. */
+    static const int16_t k_between3[] = {20, 92, 163};
+    static const int16_t k_around3[] = {38, 92, 145};
+    static const int16_t k_evenly3[] = {47, 92, 136};
+    static const int16_t k_center3[] = {75, 92, 109};
+    /* Reversed: the same three positions, read from the other end. */
+    static const int16_t k_rbetween3[] = {163, 92, 20};
+    static const int16_t k_raround3[] = {145, 92, 38};
+    static const int16_t k_revenly3[] = {136, 92, 47};
+    static const int16_t k_rcenter3[] = {109, 92, 75};
+    /* 4 x 17 = 68 used, 92 free -- 92/3 and 92/8 both land off the grid. */
+    static const int16_t k_between4[] = {20, 68, 115, 163};
+    static const int16_t k_around4[] = {32, 72, 112, 152};
+    static const int16_t k_evenly4[] = {38, 74, 109, 145};
+    static const int16_t k_center4[] = {66, 83, 100, 117};
+
+    stack_case("half-between3", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_between3);
+    stack_case("half-around3", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_around3);
+    stack_case("half-evenly3", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_evenly3);
+    stack_case("half-center3", ER_FLEX_COL, ER_JUSTIFY_CENTER, 3, 17, k_center3);
+
+    stack_case("half-rbetween3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_rbetween3);
+    stack_case("half-raround3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_raround3);
+    stack_case("half-revenly3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_revenly3);
+    stack_case("half-rcenter3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 3, 17, k_rcenter3);
+
+    stack_case("half-between4", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 4, 17, k_between4);
+    stack_case("half-around4", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 4, 17, k_around4);
+    stack_case("half-evenly4", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 4, 17, k_evenly4);
+    stack_case("half-center4", ER_FLEX_COL, ER_JUSTIFY_CENTER, 4, 17, k_center4);
+}
+
+/**
+ * @brief Nine 40px children in a padded 200x200 column, wrapped, checking one child per line.
+ *
+ * Four fit per line on the main axis (4 x 40 = 160), giving lines of 4 / 4 / 1, so children 0, 4 and
+ * 8 report where their line landed on the cross axis.
+ *
+ * @param[in] name           Assertion label.
+ * @param[in] wrap           ER_WRAP_WRAP or ER_WRAP_WRAP_REVERSE.
+ * @param[in] align_content  alignContent under test.
+ * @param[in] align_items    alignItems under test.
+ * @param[in] item_w         Child cross-axis size.
+ * @param[in] want_x         Expected x for lines 0, 1, 2.
+ */
+static void wrap_line_case(
+    const char* name, uint8_t wrap, uint8_t align_content, uint8_t align_items, int16_t item_w, const int16_t* want_x)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.flex_wrap = wrap;
+    rp.align_content = align_content;
+    rp.align_items = align_items;
+    ERNode* root = mk(rp, NULL);
+
+    ERNode* kids[9];
+    ERRect r[9];
+    for (int i = 0; i < 9; i++)
+    {
+        ERProps cp = props_default();
+        cp.width = item_w;
+        cp.height = 40;
+        kids[i] = mk(cp, &r[i]);
+        er_tree_append_child(root, kids[i]);
+    }
+    er_tree_set_root(root);
+    er_commit();
+
+    pcheck(name, "l0", EXPECT, r[0], want_x[0], 20, item_w, 40);
+    pcheck(name, "l1", EXPECT, r[4], want_x[1], 20, item_w, 40);
+    pcheck(name, "l2", EXPECT, r[8], want_x[2], 20, item_w, 40);
+
+    for (int i = 0; i < 9; i++)
+        kill_child(root, kids[i]);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief alignContent over three lines whose leftover cross space does not divide by three.
+ *
+ * Three lines of 50 in a 160 content box leave 10 to share, so space-around and stretch both work in
+ * thirds. The stretch rows matter most, since stretch is the default alignContent.
+ *
+ * The `ai-*` rows compound two fractions: a 21px child centred in a 53.33-wide line lands on exactly
+ * 89.5, which only rounds right if the line offset and the centring half are summed first. The
+ * wrap-reverse rows check the same numbers through the mirror. Values from `yoga-layout`.
+ */
+static void fixture_half_pixel_align_content(void)
+{
+    static const struct
+    {
+        const char* name;
+        uint8_t wrap;
+        uint8_t align_content;
+        uint8_t align_items;
+        int16_t item_w;
+        int16_t want_x[3];
+    } k_cases[] = {
+        /* 3 lines of 50 in 160 -> 10 free. */
+        {"half-ac-center", ER_WRAP_WRAP, ER_ALIGN_CONTENT_CENTER, ER_ALIGN_FLEX_START, 50, {25, 75, 125}},
+        {"half-ac-between", ER_WRAP_WRAP, ER_ALIGN_CONTENT_SPACE_BETWEEN, ER_ALIGN_FLEX_START, 50, {20, 75, 130}},
+        {"half-ac-around", ER_WRAP_WRAP, ER_ALIGN_CONTENT_SPACE_AROUND, ER_ALIGN_FLEX_START, 50, {22, 75, 128}},
+        {"half-ac-stretch", ER_WRAP_WRAP, ER_ALIGN_CONTENT_STRETCH, ER_ALIGN_FLEX_START, 50, {20, 73, 127}},
+        {"half-ac-end", ER_WRAP_WRAP, ER_ALIGN_CONTENT_FLEX_END, ER_ALIGN_FLEX_START, 50, {30, 80, 130}},
+
+        /* Same through the wrap-reverse mirror, which also has to run before the rounding. */
+        {"half-acrev-center", ER_WRAP_WRAP_REVERSE, ER_ALIGN_CONTENT_CENTER, ER_ALIGN_FLEX_START, 50, {125, 75, 25}},
+        {"half-acrev-around",
+         ER_WRAP_WRAP_REVERSE,
+         ER_ALIGN_CONTENT_SPACE_AROUND,
+         ER_ALIGN_FLEX_START,
+         50,
+         {128, 75, 22}},
+        {"half-acrev-stretch", ER_WRAP_WRAP_REVERSE, ER_ALIGN_CONTENT_STRETCH, ER_ALIGN_FLEX_START, 50, {130, 77, 23}},
+        {"half-acrev-end", ER_WRAP_WRAP_REVERSE, ER_ALIGN_CONTENT_FLEX_END, ER_ALIGN_FLEX_START, 50, {120, 70, 20}},
+
+        /* 3 lines of 21 in 160 -> 97 free, so a stretched line is 53.33 and a centred 21px child
+         * inside line 1 sits on exactly 89.5. */
+        {"half-ai-stretch", ER_WRAP_WRAP, ER_ALIGN_CONTENT_STRETCH, ER_ALIGN_CENTER, 21, {36, 90, 143}},
+        {"half-ai-around", ER_WRAP_WRAP, ER_ALIGN_CONTENT_SPACE_AROUND, ER_ALIGN_CENTER, 21, {36, 90, 143}},
+        {"half-ai-end", ER_WRAP_WRAP, ER_ALIGN_CONTENT_STRETCH, ER_ALIGN_FLEX_END, 21, {52, 106, 159}},
+    };
+
+    for (size_t c = 0; c < sizeof(k_cases) / sizeof(k_cases[0]); c++)
+        wrap_line_case(k_cases[c].name,
+                       k_cases[c].wrap,
+                       k_cases[c].align_content,
+                       k_cases[c].align_items,
+                       k_cases[c].item_w,
+                       k_cases[c].want_x);
+
+    /* A single line with no wrap fills the cross axis, so alignItems centre halves 160 - 21 = 139 and
+     * has to round 69.5 up. The plainest form of the whole fixture. */
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_CENTER;
+    ERNode* root = mk(rp, NULL);
+    ERRect rc;
+    ERProps cp = props_default();
+    cp.width = 21;
+    cp.height = 40;
+    ERNode* c0 = mk(cp, &rc);
+    er_tree_append_child(root, c0);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("half-ai-nowrap", "c", EXPECT, rc, 90, 20, 21, 40);
+    kill_child(root, c0);
+    er_node_destroy(root);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1795,6 +2107,9 @@ int main(void)
     fixture_flow_wrap_reverse_anchor();
     fixture_flow_wrap_reverse_align_content();
     fixture_flow_wrap_reverse_overflow();
+    fixture_half_pixel_center();
+    fixture_half_pixel_justify();
+    fixture_half_pixel_align_content();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -1835,8 +2150,8 @@ int main(void)
  *     marginRight leads) while Yoga says x=130 (its wrap path drops the leading cross margin
  *     altogether — plain `wrap` + marginLeft 7 is x=20 there and x=27 in Chrome). The engine says
  *     123. Pinning it means first choosing which reference wins.
- *   - half-pixel rounding: positions are integer arithmetic and truncate, where Yoga computes in
- *     floats and rounds to the pixel grid. Centring a 51px child in a 160px content box puts it at
- *     74 here and 75 in Yoga. Systemic (it applies to flow and absolute children alike), so it is
- *     noted rather than pinned — every centring fixture would diverge if the convention changed.
+ *   - half-pixel SIZES: positions are on Yoga's pixel grid (the half-* fixtures), but distributing a
+ *     leftover that does not divide evenly still truncates where Yoga takes the difference of two
+ *     rounded edges — three flex:1 children in a 100px row are 33/34/33 there and 33/33/33 here. Same
+ *     for the per-line growth of alignContent: 'stretch', whose contents are still placed exactly.
  *--------------------------------------------------------------------------------------------------------------------*/
