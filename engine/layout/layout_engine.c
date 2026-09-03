@@ -959,13 +959,24 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         line_cross_offset = (int16_t)(line_cross_offset + this_cross + cross_gap + ac_between);
     }
 
-    /* wrap-reverse: mirror all lines along the cross-axis. */
+    /* wrap-reverse: mirror the cross axis about the CONTENT box, not about the lines' own extent.
+     *
+     * `total_cross` is only how much cross space the lines occupy, so mirroring about it reverses
+     * their order but leaves the block parked at the cross-start -- the far edge it should travel to
+     * is `cross_avail`. The two agree only when the lines happen to fill the cross axis exactly,
+     * which is why the block never moving went unnoticed.
+     *
+     * alignContent has already placed the block inside `cross_avail`, so the mirror simply carries it
+     * along: flex-start lands against the far edge, flex-end against the near one, exactly as a
+     * flipped axis should. Lines that overflow the cross axis mirror to negative positions, matching
+     * Yoga and CSS. Same convention as the absolute path's static position, which mirrors against the
+     * full cross extent too. */
     if (L->flex_wrap == ER_WRAP_WRAP_REVERSE && n_inflow > 0)
     {
         for (int i = 0; i < n_inflow; i++)
         {
             const int16_t end = (int16_t)(s_scratch[i].cross_pos + s_scratch[i].cross);
-            s_scratch[i].cross_pos = (int16_t)(total_cross - end);
+            s_scratch[i].cross_pos = (int16_t)(cross_avail - end);
         }
     }
 
