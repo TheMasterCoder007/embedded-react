@@ -149,6 +149,10 @@ See the README for the release process.
 
 ### Fixed
 
+- An absolutely positioned node with no explicit size on an axis now grows to fit its content, like a
+  flow node. It collapsed to 0 — invisible on screen, since children still painted, but hit-testing
+  skipped the whole subtree and every touch inside it fell through to whatever was behind. `width`
+  and `height` percentages and `aspectRatio` now resolve on absolutes too.
 - Flow A now rounds fractional style dimensions to the nearest pixel instead of truncating them, so a
   layout built from a scale factor lands where Flow B's AOT already put it. The thermostat's dial and
   center readout drew a pixel off between the two flows because of it.

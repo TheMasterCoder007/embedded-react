@@ -968,22 +968,63 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             const int16_t mt = edge_or(cl->margin_top, cl->margin);
             const int16_t mb = edge_or(cl->margin_bottom, cl->margin);
 
-            int16_t cw;
+            /* Size each axis from whatever the style actually pins it to: an explicit length, a
+             * percentage of the containing block (the parent's content box, which is also what the
+             * insets resolve against), or a pair of opposing insets. An axis none of those answer is
+             * left unresolved for the aspect-ratio and content fallbacks below. */
+            int16_t cw = 0, ach = 0;
+            bool have_w = true, have_h = true;
             if (cl->width != ER_LAYOUT_AUTO)
                 cw = cl->width;
+            else if (cl->width_pct > 0.0f)
+                cw = (int16_t)((float)content_w * cl->width_pct / 100.0f + 0.5f);
             else if (cl->left != ER_LAYOUT_AUTO && cl->right != ER_LAYOUT_AUTO)
                 cw = (int16_t)(content_w - cl->left - cl->right - ml - mr);
             else
-                cw = 0;
-            cw = clamp_size(cw, cl->min_width, cl->max_width);
+                have_w = false;
 
-            int16_t ach;
             if (cl->height != ER_LAYOUT_AUTO)
                 ach = cl->height;
+            else if (cl->height_pct > 0.0f)
+                ach = (int16_t)((float)content_h * cl->height_pct / 100.0f + 0.5f);
             else if (cl->top != ER_LAYOUT_AUTO && cl->bottom != ER_LAYOUT_AUTO)
                 ach = (int16_t)(content_h - cl->top - cl->bottom - mt - mb);
             else
-                ach = 0;
+                have_h = false;
+
+            /* aspect_ratio (= width / height) fills an axis from the one already resolved, exactly as
+             * Pass 1 derives a flow child's cross size from its main. */
+            if (cl->aspect_ratio > 0.0f && have_w != have_h)
+            {
+                if (have_w)
+                {
+                    ach = (int16_t)((float)cw / cl->aspect_ratio + 0.5f);
+                    have_h = true;
+                }
+                else
+                {
+                    cw = (int16_t)((float)ach * cl->aspect_ratio + 0.5f);
+                    have_w = true;
+                }
+            }
+
+            /* Still unresolved: size to content, the same max-content measurement a flow child falls
+             * back on, instead of collapsing to 0. A zero-sized box paints its children fine (nothing
+             * clips them), so the collapse was invisible on screen but fatal to input: hit_test_node
+             * gates entry on the node's own rect, so an empty one turned the whole subtree into a dead
+             * zone and let every touch fall through to what was behind it. measure_content
+             * is memoised per layout pass, so this costs one measurement per absolute node. */
+            if (!have_w || !have_h)
+            {
+                int16_t intr_w = 0, intr_h = 0;
+                measure_content(ct, &intr_w, &intr_h);
+                if (!have_w)
+                    cw = intr_w;
+                if (!have_h)
+                    ach = intr_h;
+            }
+
+            cw = clamp_size(cw, cl->min_width, cl->max_width);
             ach = clamp_size(ach, cl->min_height, cl->max_height);
 
             int16_t cx;

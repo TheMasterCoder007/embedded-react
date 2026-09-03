@@ -32,9 +32,8 @@
 // Two deliberate differences from upstream, both because our <Image> is a plain scene node:
 //   - RN re-proxies the container's width/height onto the image to undo <Image>'s own sizing. Ours
 //     doesn't size itself, so the inset alone fills the box.
-//   - `%` sizing does not apply to an absolutely-positioned node here, so the fill really is the
-//     top/left/right/bottom inset — which resolves against the container's CONTENT box (padding on
-//     the container insets the picture too).
+//   - the fill really is the top/left/right/bottom inset, which resolves against the container's
+//     CONTENT box (padding on the container insets the picture too).
 import {createElement, forwardRef} from 'react';
 import {View, Image} from './components.js';
 import {StyleSheet} from './StyleSheet.js';

@@ -722,6 +722,245 @@ static void fixture_pct_content_box(void)
     er_node_destroy(root);
 }
 
+/**
+ * @brief Absolute with left/top/width and no height sizes to its content (issue #94).
+ *
+ * Yoga lays an auto axis of an absolute child out at its max-content size, exactly as it does for a
+ * flow child; the engine used to collapse it to 0, which painted correctly but made the whole subtree
+ * untouchable.
+ */
+static void fixture_abs_auto_height(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra, rk;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 20;
+    ap.top = 30;
+    ap.width = 100;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 80;
+    kp.height = 40;
+    ERNode* kid = mk(kp, &rk);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-auto-height", "abs", EXPECT, ra, 20, 30, 100, 40);
+    pcheck("abs-auto-height", "kid", EXPECT, rk, 20, 30, 80, 40);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Absolute with neither width nor height sizes both axes to content (70 wide, 20+30 tall). */
+static void fixture_abs_auto_both(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 10;
+    ap.top = 10;
+    ap.flex_direction = ER_FLEX_COL;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 60;
+    kp.height = 20;
+    ERNode* k0 = mk(kp, NULL);
+    kp.width = 70;
+    kp.height = 30;
+    ERNode* k1 = mk(kp, NULL);
+
+    er_tree_append_child(abs, k0);
+    er_tree_append_child(abs, k1);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-auto-both", "abs", EXPECT, ra, 10, 10, 70, 50);
+
+    kill_child(abs, k0);
+    kill_child(abs, k1);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Percentage width/height on an absolute resolve against the containing block: 50%/25% of 200x100. */
+static void fixture_abs_pct(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 10;
+    ap.top = 5;
+    ap.width_pct = 50.0f;
+    ap.height_pct = 25.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct", "abs", EXPECT, ra, 10, 5, 100, 25);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief aspectRatio fills an absolute's auto axis from the resolved one: width 100, ratio 2 → height 50. */
+static void fixture_abs_aspect_ratio(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ap.width = 100;
+    ap.aspect_ratio = 2.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-aspect-ratio", "abs", EXPECT, ra, 0, 0, 100, 50);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief aspectRatio needs one axis already pinned; with both auto it is ignored and content wins.
+ *
+ * Yoga derives the missing axis from aspectRatio only when exactly one of width/height is resolved by
+ * an explicit length, a percentage, or opposing insets. With both auto there is nothing to derive
+ * from, so the node takes its max-content size on both axes and the ratio never applies.
+ */
+static void fixture_abs_aspect_ratio_both_auto(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ap.aspect_ratio = 2.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 60;
+    kp.height = 25;
+    ERNode* kid = mk(kp, NULL);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-aspect-both-auto", "abs", EXPECT, ra, 0, 0, 60, 25);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
+static void fixture_abs_content_overflows(void)
+{
+    ERProps rp = props_default();
+    rp.width = 100;
+    rp.height = 50;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 40;
+    kp.height = 120;
+    ERNode* kid = mk(kp, NULL);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-overflow", "abs", EXPECT, ra, 0, 0, 40, 120);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief An absolute's containing block: Yoga uses the parent's PADDING box, the engine its CONTENT box.
+ *
+ * With padding 20 on a 200x200 parent, Yoga puts `left:0` at the padding edge (0,0) and resolves
+ * `width:50%` against the full 200 → (0,0,100,25). The engine offsets by the padding and resolves
+ * against the 160px content width → (20,20,80,25). Insets and percentages agree with each other, so
+ * the divergence is consistent; it is deliberate (see ImageBackground.js) and predates issue #94.
+ */
+static void fixture_abs_containing_block(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ap.width_pct = 50.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 30;
+    kp.height = 25;
+    ERNode* kid = mk(kp, NULL);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-containing-block", "abs", XFAIL, ra, 0, 0, 100, 25);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -753,6 +992,13 @@ int main(void)
     fixture_pct_height_main();
     fixture_pct_width_cross();
     fixture_pct_content_box();
+    fixture_abs_auto_height();
+    fixture_abs_auto_both();
+    fixture_abs_pct();
+    fixture_abs_aspect_ratio();
+    fixture_abs_aspect_ratio_both_auto();
+    fixture_abs_content_overflows();
+    fixture_abs_containing_block();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
