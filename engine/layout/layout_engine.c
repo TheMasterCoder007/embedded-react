@@ -903,8 +903,9 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             {
                 if (s_scratch[i].line != ln)
                     continue;
-                const int16_t end = (int16_t)(s_scratch[i].main_pos + s_scratch[i].main);
-                s_scratch[i].main_pos = (int16_t)(main_size - end);
+                const int16_t outer_start = (int16_t)(s_scratch[i].main_pos - s_scratch[i].margin_main_start);
+                s_scratch[i].main_pos =
+                    (int16_t)(main_size - outer_start - s_scratch[i].margin_main_end - s_scratch[i].main);
             }
         }
 
