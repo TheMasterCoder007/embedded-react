@@ -33,8 +33,9 @@
  * ER_EVENT_LAYOUT handler, commits, calls pcheck() per node, and tears the tree down. Then call it
  * from main(). Keep expected values authoritative (hand-verifiable or copied from Chrome/Yoga).
  *
- * Positions round to Yoga's pixel grid, so a half pixel goes up. Expected values can be taken from
- * `yoga-layout` verbatim.
+ * Positions and sizes both land on Yoga's pixel grid: a coordinate on a half pixel goes up, and a
+ * size is the difference of its two rounded edges. Expected values can be taken from `yoga-layout`
+ * verbatim.
  *
  * Known divergences not yet expressible through ERProps (so not testable here yet) are listed at
  * the bottom of this file.
@@ -2224,6 +2225,297 @@ static void fixture_half_pixel_align_content(void)
     er_node_destroy(root);
 }
 
+/** @brief One child's main-axis flex inputs for flex_case(). A 0 min/max means "no bound". */
+typedef struct
+{
+    int16_t basis;  /**< flex_basis: the base main size before grow/shrink. */
+    int16_t grow;   /**< flexGrow. */
+    int16_t shrink; /**< flexShrink. */
+    int16_t bmin;   /**< Min main size, 0 for none. */
+    int16_t bmax;   /**< Max main size, 0 for none. */
+} FlexKid;
+
+/**
+ * @brief A single flex line, checking every child's main-axis position AND size.
+ *
+ * The cross axis is a fixed 40px the children stretch into, so the only interesting numbers are on
+ * the main axis. Sizes come off the same pixel grid as positions -- a child spans from one rounded
+ * edge to the next -- so a share that does not divide evenly lands on the child straddling the half
+ * pixel rather than being dropped at the end of the line.
+ *
+ * @param[in] name       Assertion label.
+ * @param[in] dir        flexDirection under test.
+ * @param[in] box        Container size on the main axis, padding included.
+ * @param[in] pad        Padding on all four edges.
+ * @param[in] gap        Gap between children.
+ * @param[in] n          Child count (<= 7).
+ * @param[in] kid        Per-child flex inputs, in tree order.
+ * @param[in] want_pos   Expected main-axis position per child.
+ * @param[in] want_size  Expected main-axis size per child.
+ */
+static void flex_case(const char* name,
+                      uint8_t dir,
+                      int16_t box,
+                      int16_t pad,
+                      int16_t gap,
+                      int n,
+                      const FlexKid* kid,
+                      const int16_t* want_pos,
+                      const int16_t* want_size)
+{
+    const bool is_row = (dir == ER_FLEX_ROW || dir == ER_FLEX_ROW_REVERSE);
+
+    ERProps rp = props_default();
+    rp.width = is_row ? box : 40;
+    rp.height = is_row ? 40 : box;
+    rp.padding = pad;
+    rp.gap = gap;
+    rp.flex_direction = dir;
+    ERNode* root = mk(rp, NULL);
+
+    ERNode* kids[7];
+    ERRect r[7];
+    for (int i = 0; i < n; i++)
+    {
+        ERProps cp = props_default();
+        cp.flex_basis = kid[i].basis;
+        cp.flex_grow = kid[i].grow;
+        cp.flex_shrink = kid[i].shrink;
+        if (kid[i].bmin)
+        {
+            if (is_row)
+                cp.min_width = kid[i].bmin;
+            else
+                cp.min_height = kid[i].bmin;
+        }
+        if (kid[i].bmax)
+        {
+            if (is_row)
+                cp.max_width = kid[i].bmax;
+            else
+                cp.max_height = kid[i].bmax;
+        }
+        kids[i] = mk(cp, &r[i]);
+        er_tree_append_child(root, kids[i]);
+    }
+    er_tree_set_root(root);
+    er_commit();
+
+    /* The cross axis is whatever padding leaves of the 40. */
+    const int16_t cp_pos = pad;
+    const int16_t cp_size = (int16_t)(40 - 2 * pad);
+    for (int i = 0; i < n; i++)
+    {
+        char lbl[8];
+        snprintf(lbl, sizeof(lbl), "c%d", i);
+        pcheck(name,
+               lbl,
+               EXPECT,
+               r[i],
+               is_row ? want_pos[i] : cp_pos,
+               is_row ? cp_pos : want_pos[i],
+               is_row ? want_size[i] : cp_size,
+               is_row ? cp_size : want_size[i]);
+    }
+
+    for (int i = 0; i < n; i++)
+        kill_child(root, kids[i]);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Free space that does not divide evenly: the leftover is spread, not dropped off the end.
+ *
+ * Yoga never distributes a size directly -- it carries floats through layout and then derives each
+ * size from two rounded edges, so three `flex: 1` children in 100px are 33/34/33 rather than 33/33/33
+ * with the row ending a pixel short. Both flexGrow and flexShrink land on the same rule, and so does
+ * the min/max clamping that runs between the two: a bound has to be tested against the exact size,
+ * since a truncated one sits inside a max the real one already exceeds.
+ *
+ * The `*-half` rows put an edge exactly on a half pixel, which is the only place the direction of the
+ * axis changes the answer -- a reversed row measures the edges from the far end, so the mirror has to
+ * run before the rounding. Values from `yoga-layout`.
+ */
+static void fixture_half_pixel_flex_sizes(void)
+{
+    static const FlexKid k_g1[] = {{0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0},
+                                   {0, 1, 0, 0, 0}};
+
+    /* 100 over three children: 33.33 each, so the middle one straddles the half pixel. */
+    static const int16_t k_g3_pos[] = {0, 33, 67};
+    static const int16_t k_g3_size[] = {33, 34, 33};
+    flex_case("flexsz-grow3", ER_FLEX_ROW, 100, 0, 0, 3, k_g1, k_g3_pos, k_g3_size);
+    flex_case("flexsz-col3", ER_FLEX_COL, 100, 0, 0, 3, k_g1, k_g3_pos, k_g3_size);
+
+    /* Padding shifts every edge by a whole pixel, so it cannot change which child takes the leftover;
+     * 80 over three is 26.67, and this time it is the OUTER two that round up. */
+    static const int16_t k_pad_pos[] = {10, 37, 63};
+    static const int16_t k_pad_size[] = {27, 26, 27};
+    flex_case("flexsz-pad", ER_FLEX_ROW, 100, 10, 0, 3, k_g1, k_pad_pos, k_pad_size);
+
+    /* A gap is a whole pixel too: 92 over three is 30.67. */
+    static const int16_t k_gap_pos[] = {0, 35, 69};
+    static const int16_t k_gap_size[] = {31, 30, 31};
+    flex_case("flexsz-gap4", ER_FLEX_ROW, 100, 0, 4, 3, k_g1, k_gap_pos, k_gap_size);
+
+    /* 100 over seven: 14.29 each, so the leftover accumulates and two children take a pixel. */
+    static const int16_t k_g7_pos[] = {0, 14, 29, 43, 57, 71, 86};
+    static const int16_t k_g7_size[] = {14, 15, 14, 14, 14, 15, 14};
+    flex_case("flexsz-grow7", ER_FLEX_ROW, 100, 0, 0, 7, k_g1, k_g7_pos, k_g7_size);
+
+    /* Unequal factors, and a non-zero basis the growth is added to. */
+    static const FlexKid k_g12[] = {{0, 1, 0, 0, 0}, {0, 2, 0, 0, 0}};
+    static const int16_t k_g12_pos[] = {0, 33};
+    static const int16_t k_g12_size[] = {33, 67};
+    flex_case("flexsz-grow1-2", ER_FLEX_ROW, 100, 0, 0, 2, k_g12, k_g12_pos, k_g12_size);
+
+    static const FlexKid k_basis[] = {{10, 1, 0, 0, 0}, {10, 1, 0, 0, 0}, {10, 1, 0, 0, 0}};
+    flex_case("flexsz-basis10", ER_FLEX_ROW, 100, 0, 0, 3, k_basis, k_g3_pos, k_g3_size);
+
+    /* Bounds. A child frozen at its bound leaves a new remainder for the rest to share, and the
+     * bound has to be tested against the exact size: 200/3 is 66.67, which a max of 66 clamps even
+     * though the truncated 66 would have fitted. */
+    static const FlexKid k_max66a[] = {{0, 1, 0, 0, 66}, {0, 1, 0, 0, 0}, {0, 1, 0, 0, 0}};
+    static const int16_t k_max66a_pos[] = {0, 66, 133};
+    static const int16_t k_max66a_size[] = {66, 67, 67};
+    flex_case("flexsz-max66a", ER_FLEX_ROW, 200, 0, 0, 3, k_max66a, k_max66a_pos, k_max66a_size);
+
+    static const FlexKid k_max66b[] = {{0, 1, 0, 0, 0}, {0, 1, 0, 0, 66}, {0, 1, 0, 0, 0}};
+    static const int16_t k_max66b_pos[] = {0, 67, 133};
+    static const int16_t k_max66b_size[] = {67, 66, 67};
+    flex_case("flexsz-max66b", ER_FLEX_ROW, 200, 0, 0, 3, k_max66b, k_max66b_pos, k_max66b_size);
+
+    /* 100 with the first child pinned at 25: the other two share 75, i.e. 37.5 each. */
+    static const FlexKid k_max25[] = {{0, 1, 0, 0, 25}, {0, 1, 0, 0, 0}, {0, 1, 0, 0, 0}};
+    static const int16_t k_max25_pos[] = {0, 25, 63};
+    static const int16_t k_max25_size[] = {25, 38, 37};
+    flex_case("flexsz-max25", ER_FLEX_ROW, 100, 0, 0, 3, k_max25, k_max25_pos, k_max25_size);
+
+    /* A min bounds the BASIS before the free space is measured, so 60 (not 100) is shared. */
+    static const FlexKid k_min40[] = {{0, 1, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 1, 0, 40, 0}};
+    static const int16_t k_min40_pos[] = {0, 20, 40};
+    static const int16_t k_min40_size[] = {20, 20, 60};
+    flex_case("flexsz-min40", ER_FLEX_ROW, 100, 0, 0, 3, k_min40, k_min40_pos, k_min40_size);
+
+    /* Shrink is the same rule with the free space negative: 120 into 100 is 33.33 each. */
+    static const FlexKid k_s40[] = {{40, 0, 1, 0, 0}, {40, 0, 1, 0, 0}, {40, 0, 1, 0, 0}};
+    flex_case("flexsz-shrink3", ER_FLEX_ROW, 100, 0, 0, 3, k_s40, k_g3_pos, k_g3_size);
+
+    /* Shrink scales by the base size, so 80 into 60 takes 12.5 off the 50 and 7.5 off the 30. */
+    static const FlexKid k_s2[] = {{50, 0, 1, 0, 0}, {30, 0, 1, 0, 0}};
+    static const int16_t k_s2_pos[] = {0, 38};
+    static const int16_t k_s2_size[] = {38, 22};
+    flex_case("flexsz-shrink2", ER_FLEX_ROW, 60, 0, 0, 2, k_s2, k_s2_pos, k_s2_size);
+
+    static const FlexKid k_sun[] = {{50, 0, 1, 0, 0}, {30, 0, 1, 0, 0}, {40, 0, 2, 0, 0}};
+    static const int16_t k_sun_pos[] = {0, 44, 70};
+    static const int16_t k_sun_size[] = {44, 26, 30};
+    flex_case("flexsz-shrink-un", ER_FLEX_ROW, 100, 0, 0, 3, k_sun, k_sun_pos, k_sun_size);
+
+    /* Reversed: the same sizes read from the other end, since neither edge lands on a half pixel. */
+    static const int16_t k_rev3_pos[] = {67, 33, 0};
+    flex_case("flexsz-rgrow3", ER_FLEX_ROW_REVERSE, 100, 0, 0, 3, k_g1, k_rev3_pos, k_g3_size);
+    flex_case("flexsz-rshrink3", ER_FLEX_ROW_REVERSE, 100, 0, 0, 3, k_s40, k_rev3_pos, k_g3_size);
+
+    /* Two children in 5px sit on exactly 2.5, the one case where the direction of the axis decides
+     * which of them gets the pixel. */
+    static const int16_t k_half_pos[] = {0, 3};
+    static const int16_t k_half_size[] = {3, 2};
+    static const int16_t k_rhalf_pos[] = {3, 0};
+    static const int16_t k_rhalf_size[] = {2, 3};
+    flex_case("flexsz-half", ER_FLEX_ROW, 5, 0, 0, 2, k_g1, k_half_pos, k_half_size);
+    flex_case("flexsz-rhalf", ER_FLEX_ROW_REVERSE, 5, 0, 0, 2, k_g1, k_rhalf_pos, k_rhalf_size);
+}
+
+/**
+ * @brief Wrapped 40px-tall children with no width, each stretched to fill its line.
+ *
+ * With no width of their own the children take their line's cross extent, so their rects report how
+ * alignContent: 'stretch' shared the leftover cross space between the lines.
+ *
+ * @param[in] name    Assertion label.
+ * @param[in] w       Container width (the cross axis).
+ * @param[in] h       Container height (the main axis).
+ * @param[in] pad     Padding on all four edges.
+ * @param[in] wrap    ER_WRAP_WRAP or ER_WRAP_WRAP_REVERSE.
+ * @param[in] n_kids  Child count (<= 9).
+ * @param[in] want_x  Expected x per line.
+ * @param[in] want_w  Expected width per line.
+ */
+static void stretch_line_case(const char* name,
+                              int16_t w,
+                              int16_t h,
+                              int16_t pad,
+                              uint8_t wrap,
+                              int n_kids,
+                              const int16_t* want_x,
+                              const int16_t* want_w)
+{
+    ERProps rp = props_default();
+    rp.width = w;
+    rp.height = h;
+    rp.padding = pad;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.flex_wrap = wrap;
+    rp.align_content = ER_ALIGN_CONTENT_STRETCH;
+    rp.align_items = ER_ALIGN_STRETCH;
+    ERNode* root = mk(rp, NULL);
+
+    ERNode* kids[9];
+    ERRect r[9];
+    for (int i = 0; i < n_kids; i++)
+    {
+        ERProps cp = props_default();
+        cp.height = 40;
+        kids[i] = mk(cp, &r[i]);
+        er_tree_append_child(root, kids[i]);
+    }
+    er_tree_set_root(root);
+    er_commit();
+
+    const int per_line = (h - 2 * pad) / 40;
+    for (int ln = 0; ln * per_line < n_kids; ln++)
+    {
+        char lbl[8];
+        snprintf(lbl, sizeof(lbl), "l%d", ln);
+        pcheck(name, lbl, EXPECT, r[ln * per_line], want_x[ln], pad, want_w[ln], 40);
+    }
+
+    for (int i = 0; i < n_kids; i++)
+        kill_child(root, kids[i]);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief alignContent: 'stretch' growth that does not divide evenly by the line count.
+ *
+ * A line's extent is the difference of its two rounded cross edges, exactly like a flex child's size,
+ * so the leftover goes to the line straddling the half pixel instead of being dropped at the far
+ * edge. wrap-reverse measures those edges from the other end. Values from `yoga-layout`.
+ */
+static void fixture_half_pixel_stretch_lines(void)
+{
+    /* Three lines with nothing of their own in a 160 content box: 53.33 each. */
+    static const int16_t k_x[] = {20, 73, 127};
+    static const int16_t k_w[] = {53, 54, 53};
+    static const int16_t k_rx[] = {127, 73, 20};
+    stretch_line_case("acs-3lines", 200, 200, 20, ER_WRAP_WRAP, 9, k_x, k_w);
+    stretch_line_case("acs-r3lines", 200, 200, 20, ER_WRAP_WRAP_REVERSE, 9, k_rx, k_w);
+
+    /* Two lines in 5px sit on exactly 2.5, so the mirror decides which line takes the pixel. */
+    static const int16_t k_hx[] = {0, 3};
+    static const int16_t k_hw[] = {3, 2};
+    static const int16_t k_rhx[] = {3, 0};
+    static const int16_t k_rhw[] = {2, 3};
+    stretch_line_case("acs-half", 5, 100, 0, ER_WRAP_WRAP, 4, k_hx, k_hw);
+    stretch_line_case("acs-rhalf", 5, 100, 0, ER_WRAP_WRAP_REVERSE, 4, k_rhx, k_rhw);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -2284,6 +2576,8 @@ int main(void)
     fixture_half_pixel_justify();
     fixture_flow_justify_overflow();
     fixture_half_pixel_align_content();
+    fixture_half_pixel_flex_sizes();
+    fixture_half_pixel_stretch_lines();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -2324,8 +2618,4 @@ int main(void)
  *     marginRight leads) while Yoga says x=130 (its wrap path drops the leading cross margin
  *     altogether — plain `wrap` + marginLeft 7 is x=20 there and x=27 in Chrome). The engine says
  *     123. Pinning it means first choosing which reference wins.
- *   - half-pixel SIZES: positions are on Yoga's pixel grid (the half-* fixtures), but distributing a
- *     leftover that does not divide evenly still truncates where Yoga takes the difference of two
- *     rounded edges — three flex:1 children in a 100px row are 33/34/33 there and 33/33/33 here. Same
- *     for the per-line growth of alignContent: 'stretch', whose contents are still placed exactly.
  *--------------------------------------------------------------------------------------------------------------------*/
