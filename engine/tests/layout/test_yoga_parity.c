@@ -922,12 +922,10 @@ static void fixture_abs_content_overflows(void)
 }
 
 /**
- * @brief An absolute's containing block: Yoga uses the parent's PADDING box, the engine its CONTENT box.
+ * @brief An absolute's containing block is the parent's PADDING box, not its content box.
  *
- * With padding 20 on a 200x200 parent, Yoga puts `left:0` at the padding edge (0,0) and resolves
- * `width:50%` against the full 200 → (0,0,100,25). The engine offsets by the padding and resolves
- * against the 160px content width → (20,20,80,25). Insets and percentages agree with each other, so
- * the divergence is consistent; it is deliberate (see ImageBackground.js) and predates issue #94.
+ * With padding 20 on a 200x200 parent, `left:0` sits at the padding edge (0,0) -- the parent's padding
+ * does not inset it -- and `width:50%` is half the full 200, not half the 160px content width.
  */
 static void fixture_abs_containing_block(void)
 {
@@ -954,9 +952,573 @@ static void fixture_abs_containing_block(void)
     er_tree_append_child(root, abs);
     er_tree_set_root(root);
     er_commit();
-    pcheck("abs-containing-block", "abs", XFAIL, ra, 0, 0, 100, 25);
+    pcheck("abs-containing-block", "abs", EXPECT, ra, 0, 0, 100, 25);
 
     kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Every edge of the containing block is a padding edge -- checked against asymmetric padding.
+ *
+ * Padding 10/5/30/15 (l/t/r/b) on a 200x200 parent: `left:0/top:0` lands at (0,0); `right:0/bottom:0`
+ * measures from the far padding edge at 200, so a 20px box lands at 180; and `50%` is 100 on both axes.
+ * The percentage node pins no inset, so its ORIGIN falls back to the static position -- the flow
+ * position it would have had, which is inside the content box at (10,5).
+ */
+static void fixture_abs_padding_box_edges(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding_left = 10;
+    rp.padding_top = 5;
+    rp.padding_right = 30;
+    rp.padding_bottom = 15;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra, rb, rc;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 0;
+    ap.top = 0;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* a = mk(ap, &ra);
+
+    ERProps bp = props_default();
+    bp.position = ER_POS_ABSOLUTE;
+    bp.right = 0;
+    bp.bottom = 0;
+    bp.width = 20;
+    bp.height = 20;
+    ERNode* b = mk(bp, &rb);
+
+    ERProps cp = props_default();
+    cp.position = ER_POS_ABSOLUTE;
+    cp.width_pct = 50.0f;
+    cp.height_pct = 50.0f;
+    ERNode* c = mk(cp, &rc);
+
+    er_tree_append_child(root, a);
+    er_tree_append_child(root, b);
+    er_tree_append_child(root, c);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-padding-edges", "left/top", EXPECT, ra, 0, 0, 20, 20);
+    pcheck("abs-padding-edges", "rt/bot", EXPECT, rb, 180, 180, 20, 20);
+    pcheck("abs-padding-edges", "pct", EXPECT, rc, 10, 5, 100, 100);
+
+    kill_child(root, a);
+    kill_child(root, b);
+    kill_child(root, c);
+    er_node_destroy(root);
+}
+
+/** @brief Opposing insets size against the padding box too: 200 - 10 - 30 = 160 wide, x = 10. */
+static void fixture_abs_inset_pair_padding(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 10;
+    ap.right = 30;
+    ap.top = 0;
+    ap.bottom = 0;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-inset-pair-pad", "abs", EXPECT, ra, 10, 0, 160, 200);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Margin still shifts an inset-positioned absolute, measured from the padding edge: 0 + 10 + 5. */
+static void fixture_abs_margin_inset_padding(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left = 10;
+    ap.top = 10;
+    ap.width = 50;
+    ap.height = 40;
+    ap.margin = 5;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-margin-inset-pad", "abs", EXPECT, ra, 15, 15, 50, 40);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief An absolute with NO insets keeps the parent's padding -- its static position is the flow one.
+ *
+ * The counterpart to abs-containing-block: padding is irrelevant to an inset, but it still applies when
+ * there is no inset to measure from, so an unpinned absolute starts where a flow child would.
+ */
+static void fixture_abs_static_position_padding(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.width = 50;
+    ap.height = 40;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-static-pos-pad", "abs", EXPECT, ra, 20, 20, 50, 40);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Static position honours justifyContent / alignItems: a 50x40 box centres at (75,80).
+ *
+ * The counterpart to abs-static-pos-pad. With no inset on either axis the child takes the spot it
+ * would have had in flow, so a centring parent centres it in its 160x160 content box.
+ */
+static void fixture_abs_static_position_align(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.width = 50;
+    ap.height = 40;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-static-pos-align", "abs", EXPECT, ra, 75, 80, 50, 40);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Builds a padded parent holding one uninset absolute and checks where it lands.
+ *
+ * The static-position fixtures below differ only in a couple of style fields, so they share this
+ * builder rather than repeating the same twelve lines. Parent is always 200x200 with padding 20, so
+ * the content box is (20,20,160,160); the child is 50x40 unless auto_size asks for a measured one.
+ *
+ * @param[in] lbl        Assertion label.
+ * @param[in] st         EXPECT or XFAIL.
+ * @param[in] rp         Parent props (already carrying the direction / justify / align under test).
+ * @param[in] ap         Absolute child props (position and size are filled in here).
+ * @param[in] auto_size  true to leave width/height auto and give the child a 24x18 child to measure.
+ * @param[in] x,y,w,h    Expected (Yoga) rect.
+ */
+static void
+static_pos_case(const char* lbl, ParityStatus st, ERProps rp, ERProps ap, bool auto_size, int x, int y, int w, int h)
+{
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ap.position = ER_POS_ABSOLUTE;
+    if (!auto_size)
+    {
+        ap.width = 50;
+        ap.height = 40;
+    }
+    ERNode* abs = mk(ap, &ra);
+
+    ERNode* kid = NULL;
+    if (auto_size)
+    {
+        ERProps kp = props_default();
+        kp.width = 24;
+        kp.height = 18;
+        kid = mk(kp, NULL);
+        er_tree_append_child(abs, kid);
+    }
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-static", lbl, st, ra, x, y, w, h);
+
+    if (kid)
+        kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Every justifyContent mode places the uninset absolute as the SOLE flex item.
+ *
+ * With nothing to distribute against, space-between collapses to flex-start and space-around /
+ * space-evenly both centre — which is what Yoga produces, and what makes the static position
+ * independent of however many in-flow siblings the parent happens to have.
+ */
+static void fixture_abs_static_justify(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    ERProps ap = props_default();
+
+    rp.justify_content = ER_JUSTIFY_FLEX_START;
+    static_pos_case("just-start", EXPECT, rp, ap, false, 20, 20, 50, 40);
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    static_pos_case("just-center", EXPECT, rp, ap, false, 20, 80, 50, 40);
+    rp.justify_content = ER_JUSTIFY_FLEX_END;
+    static_pos_case("just-end", EXPECT, rp, ap, false, 20, 140, 50, 40);
+    rp.justify_content = ER_JUSTIFY_SPACE_BETWEEN;
+    static_pos_case("just-between", EXPECT, rp, ap, false, 20, 20, 50, 40);
+    rp.justify_content = ER_JUSTIFY_SPACE_AROUND;
+    static_pos_case("just-around", EXPECT, rp, ap, false, 20, 80, 50, 40);
+    rp.justify_content = ER_JUSTIFY_SPACE_EVENLY;
+    static_pos_case("just-evenly", EXPECT, rp, ap, false, 20, 80, 50, 40);
+
+    /* Row swaps the axes: the same modes now move x instead of y. */
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    static_pos_case("just-center-row", EXPECT, rp, ap, false, 75, 20, 50, 40);
+    rp.justify_content = ER_JUSTIFY_FLEX_END;
+    static_pos_case("just-end-row", EXPECT, rp, ap, false, 130, 20, 50, 40);
+}
+
+/** @brief alignItems places the uninset absolute on the cross axis; alignSelf overrides it. */
+static void fixture_abs_static_align(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    ERProps ap = props_default();
+
+    rp.align_items = ER_ALIGN_FLEX_START;
+    static_pos_case("align-start", EXPECT, rp, ap, false, 20, 20, 50, 40);
+    rp.align_items = ER_ALIGN_CENTER;
+    static_pos_case("align-center", EXPECT, rp, ap, false, 75, 20, 50, 40);
+    rp.align_items = ER_ALIGN_FLEX_END;
+    static_pos_case("align-end", EXPECT, rp, ap, false, 130, 20, 50, 40);
+
+    /* Row swaps the axes: alignItems now moves y. */
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_CENTER;
+    static_pos_case("align-center-row", EXPECT, rp, ap, false, 20, 80, 50, 40);
+
+    /* alignSelf wins over the parent's alignItems, exactly as it does for a flow child. */
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_CENTER;
+    ap.align_self = ER_ALIGN_FLEX_END;
+    static_pos_case("align-self-end", EXPECT, rp, ap, false, 130, 20, 50, 40);
+    ap.align_self = ER_ALIGN_FLEX_START;
+    static_pos_case("align-self-start", EXPECT, rp, ap, false, 20, 20, 50, 40);
+}
+
+/**
+ * @brief alignItems 'stretch' does NOT stretch an absolute — it lands at the cross start, content-sized.
+ *
+ * Stretch is the DEFAULT alignItems, so this is the case that matters most: an auto-sized absolute in
+ * an ordinary parent keeps its measured 24x18 rather than being grown to the 160px content width.
+ */
+static void fixture_abs_static_stretch(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_STRETCH;
+    ERProps ap = props_default();
+    static_pos_case("stretch-auto", EXPECT, rp, ap, true, 20, 20, 24, 18);
+
+    /* Same for an explicitly sized child: stretch places it like flex-start. */
+    static_pos_case("stretch-sized", EXPECT, rp, ap, false, 20, 20, 50, 40);
+}
+
+/**
+ * @brief A reversed axis measures the static position from the far edge, using the TRAILING margin.
+ *
+ * column-reverse turns flex-start into "against the bottom", and the margin that holds the child off
+ * that edge is marginBottom, not marginTop. wrap-reverse does the same to the cross axis.
+ */
+static void fixture_abs_static_reverse(void)
+{
+    ERProps rp = props_default();
+    ERProps ap = props_default();
+
+    rp.flex_direction = ER_FLEX_COL_REVERSE;
+    static_pos_case("rev-col-start", EXPECT, rp, ap, false, 20, 140, 50, 40);
+    rp.justify_content = ER_JUSTIFY_FLEX_END;
+    static_pos_case("rev-col-end", EXPECT, rp, ap, false, 20, 20, 50, 40);
+
+    rp = props_default();
+    rp.flex_direction = ER_FLEX_ROW_REVERSE;
+    static_pos_case("rev-row-start", EXPECT, rp, ap, false, 130, 20, 50, 40);
+    rp.align_items = ER_ALIGN_FLEX_END;
+    static_pos_case("rev-row-align-end", EXPECT, rp, ap, false, 130, 140, 50, 40);
+
+    /* Reversed main axis + margins: marginBottom is the one that leads. */
+    rp = props_default();
+    rp.flex_direction = ER_FLEX_COL_REVERSE;
+    ap.margin_top = 7;
+    ap.margin_bottom = 3;
+    static_pos_case("rev-col-margin", EXPECT, rp, ap, false, 20, 137, 50, 40);
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    static_pos_case("rev-col-margin-ctr", EXPECT, rp, ap, false, 20, 82, 50, 40);
+
+    /* wrap-reverse mirrors the CROSS axis, against the full content extent. */
+    rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    rp.flex_wrap = ER_WRAP_WRAP_REVERSE;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ap = props_default();
+    static_pos_case("wrap-rev-start", EXPECT, rp, ap, false, 130, 20, 50, 40);
+    rp.align_items = ER_ALIGN_FLEX_END;
+    static_pos_case("wrap-rev-end", EXPECT, rp, ap, false, 20, 20, 50, 40);
+}
+
+/**
+ * @brief Margins take part in the static position, on both axes and in every mode.
+ *
+ * Symmetric margins hide the rule (they cancel out when centring), so these are asymmetric: centring
+ * splits what is left AFTER both margins, while flex-start/flex-end use only the margin on their own
+ * edge and ignore the other.
+ */
+static void fixture_abs_static_margins(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+
+    ERProps ap = props_default();
+    ap.margin_left = 5;
+    ap.margin_right = 25;
+    static_pos_case("margin-ctr-cross", EXPECT, rp, ap, false, 65, 80, 50, 40);
+
+    ap = props_default();
+    ap.margin_top = 5;
+    ap.margin_bottom = 25;
+    static_pos_case("margin-ctr-main", EXPECT, rp, ap, false, 75, 70, 50, 40);
+
+    rp.justify_content = ER_JUSTIFY_FLEX_START;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ap = props_default();
+    ap.margin_left = 5;
+    ap.margin_top = 9;
+    static_pos_case("margin-start", EXPECT, rp, ap, false, 25, 29, 50, 40);
+
+    /* flex-start ignores the trailing margins entirely. */
+    ap = props_default();
+    ap.margin_right = 99;
+    ap.margin_bottom = 99;
+    static_pos_case("margin-start-unused", EXPECT, rp, ap, false, 20, 20, 50, 40);
+
+    rp.justify_content = ER_JUSTIFY_FLEX_END;
+    rp.align_items = ER_ALIGN_FLEX_END;
+    ap = props_default();
+    ap.margin_right = 5;
+    ap.margin_bottom = 9;
+    static_pos_case("margin-end", EXPECT, rp, ap, false, 125, 131, 50, 40);
+}
+
+/**
+ * @brief A child too big for the content box overhangs both edges instead of being pinned at 0.
+ *
+ * Free space goes negative and stays negative — centring a 200x200 child in a 160x160 content box
+ * puts it at -20 relative to that box, i.e. 0 on screen. Clamping the free space at 0 (as Pass 5 does
+ * for flow children) would stick it at the padding corner instead.
+ */
+static void fixture_abs_static_overflow(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+
+    ERProps ap = props_default();
+    ap.width = 200;
+    ap.height = 200;
+
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ap.position = ER_POS_ABSOLUTE;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-static", "overflow-ctr", EXPECT, ra, 0, 0, 200, 200);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief Insets and static positions resolve PER AXIS: `left` with no `top` pins x and aligns y.
+ */
+static void fixture_abs_static_per_axis(void)
+{
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_COL;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+
+    ERProps ap = props_default();
+    ap.left = 7;
+    static_pos_case("axis-left-only", EXPECT, rp, ap, false, 7, 80, 50, 40);
+
+    ap = props_default();
+    ap.top = 7;
+    static_pos_case("axis-top-only", EXPECT, rp, ap, false, 75, 7, 50, 40);
+}
+
+/**
+ * @brief FLOW child, reversed main axis + asymmetric margins: Pass 5 mirrors the wrong margin.
+ *
+ * Not about absolutes — found while giving them Yoga-correct static positions, which surfaced the
+ * rule: a reversed axis leads with the margin on the edge it starts from. `column-reverse` starts at
+ * the bottom, so a 40px child with marginBottom 3 sits 3px off the bottom (y = 20+160-3-40 = 137).
+ * Pass 5 instead adds the LEADING margin and then mirrors the result, landing at 133.
+ *
+ * The absolute path (abs-static rev-col-margin) already does this correctly, so an uninset absolute
+ * and an identical flow child currently disagree in a reversed parent — closing this gap makes them
+ * agree again. Fixing it means moving Pass 5's reverse mirror to use margin_main_end. Issue #193.
+ */
+static void fixture_flow_reverse_margin(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL_REVERSE;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect rc;
+    ERProps cp = props_default();
+    cp.width = 50;
+    cp.height = 40;
+    cp.margin_top = 7;
+    cp.margin_bottom = 3;
+    ERNode* c = mk(cp, &rc);
+
+    er_tree_append_child(root, c);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-reverse-margin", "c", XFAIL, rc, 20, 137, 50, 40);
+
+    kill_child(root, c);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief FLOW children, wrap-reverse: the lines reverse but never travel to the far cross edge.
+ *
+ * Also not about absolutes — the absolute path mirrors against the full cross extent and matches Yoga
+ * (abs-static wrap-rev-*), while Pass 5 mirrors about `total_cross`, the lines' OWN extent. That
+ * reverses their order but leaves the block parked at the cross start, so a single 50px line in a
+ * 160px content box sits at x=20 instead of x=130. The two agree only when the lines happen to fill
+ * the cross axis exactly. Issue #192.
+ */
+static void fixture_flow_wrap_reverse_anchor(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.flex_wrap = ER_WRAP_WRAP_REVERSE;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect rc;
+    ERProps cp = props_default();
+    cp.width = 50;
+    cp.height = 40;
+    ERNode* c = mk(cp, &rc);
+
+    er_tree_append_child(root, c);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-wrap-reverse", "c", XFAIL, rc, 130, 20, 50, 40);
+
+    kill_child(root, c);
+    er_node_destroy(root);
+}
+
+/** @brief In-flow siblings never move the static position — it is the SOLE-item spot, not a slot. */
+static void fixture_abs_static_ignores_siblings(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding = 20;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.justify_content = ER_JUSTIFY_CENTER;
+    rp.align_items = ER_ALIGN_CENTER;
+    ERNode* root = mk(rp, NULL);
+
+    ERProps sp = props_default();
+    sp.width = 30;
+    sp.height = 30;
+    ERNode* s0 = mk(sp, NULL);
+    ERNode* s1 = mk(sp, NULL);
+    ERNode* s2 = mk(sp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.width = 50;
+    ap.height = 40;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, s0);
+    er_tree_append_child(root, s1);
+    er_tree_append_child(root, s2);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-static", "siblings", EXPECT, ra, 75, 80, 50, 40);
+
+    kill_child(root, s0);
+    kill_child(root, s1);
+    kill_child(root, s2);
     kill_child(root, abs);
     er_node_destroy(root);
 }
@@ -999,6 +1561,21 @@ int main(void)
     fixture_abs_aspect_ratio_both_auto();
     fixture_abs_content_overflows();
     fixture_abs_containing_block();
+    fixture_abs_padding_box_edges();
+    fixture_abs_inset_pair_padding();
+    fixture_abs_margin_inset_padding();
+    fixture_abs_static_position_padding();
+    fixture_abs_static_position_align();
+    fixture_abs_static_justify();
+    fixture_abs_static_align();
+    fixture_abs_static_stretch();
+    fixture_abs_static_reverse();
+    fixture_abs_static_margins();
+    fixture_abs_static_overflow();
+    fixture_abs_static_per_axis();
+    fixture_abs_static_ignores_siblings();
+    fixture_flow_reverse_margin();
+    fixture_flow_wrap_reverse_anchor();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -1031,4 +1608,8 @@ int main(void)
  *     width-aware measure pass; the expected height is font-dependent, so a tolerance-based
  *     assertion would be required rather than the exact-rect compare used here.)
  *   - alignItems: baseline: no baseline alignment.
+ *   - half-pixel rounding: positions are integer arithmetic and truncate, where Yoga computes in
+ *     floats and rounds to the pixel grid. Centring a 51px child in a 160px content box puts it at
+ *     74 here and 75 in Yoga. Systemic (it applies to flow and absolute children alike), so it is
+ *     noted rather than pinned — every centring fixture would diverge if the convention changed.
  *--------------------------------------------------------------------------------------------------------------------*/
