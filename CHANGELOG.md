@@ -149,6 +149,10 @@ See the README for the release process.
 
 ### Fixed
 
+- Flex sizes now land on the same pixel grid as positions, so a row of `flex: 1` children fills its
+  parent exactly instead of ending a pixel short. A leftover that does not divide evenly is spread
+  across the children the way Yoga spreads it — three equal children in 100px are 33/34/33, not
+  33/33/33 — and the same rule now sizes `alignContent: 'stretch'` wrap lines.
 - A child too big for its parent now overhangs under `justifyContent: 'center'` / `'flex-end'`, as it
   does in React Native, instead of packing against the start edge. Negative free space was clamped to
   zero before `justifyContent` saw it, so the overflow lost its sign.

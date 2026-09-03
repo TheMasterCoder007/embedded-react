@@ -154,6 +154,50 @@ static int32_t div_round(const int32_t num, const int32_t den)
 }
 
 /**
+ * @brief Rounds a cumulative edge held as `carry + rem / den` to a whole pixel.
+ *
+ * Sizes ride the same pixel grid as positions: an item spans from one rounded edge to the next, so a
+ * leftover that does not divide evenly lands on whichever item straddles the half pixel instead of
+ * being dropped at the end. Splitting the edge into a whole part and a fraction keeps the running sum
+ * small enough to stay exact no matter how many items share the line.
+ *
+ * @param[in] carry     Whole pixels of the edge.
+ * @param[in] rem       Fraction of a pixel still outstanding, in [0, den).
+ * @param[in] den       Denominator of the fraction. Must be > 0.
+ * @param[in] reversed  Whether the axis measures this edge from its far end.
+ *
+ * @return The edge rounded to a whole pixel.
+ */
+static int32_t edge_round(const int32_t carry, const int64_t rem, const int64_t den, const bool reversed)
+{
+    /* A reversed axis mirrors the edge before rounding it, and mirroring flips which way a value
+     * sitting exactly on a half pixel goes: round(C - v) is C - v rounded DOWN there. */
+    const int64_t twice = 2 * rem;
+    return carry + ((reversed ? (twice > den) : (twice >= den)) ? 1 : 0);
+}
+
+/**
+ * @brief One flex item's exact share of a line's free space, as a numerator over a shared denominator.
+ *
+ * The denominator is the line's `total_grow` when growing and its `total_shrink_scaled` when
+ * shrinking, so every item on the line is measured against the same scale and their shares add up
+ * exactly. Yoga carries this as a float all the way to the end; keeping it as a fraction is how the
+ * integer engine does the same.
+ *
+ * @param[in] c          The item.
+ * @param[in] remaining  Free main-axis space on the line: positive when growing, negative when shrinking.
+ * @param[in] growing    Whether the line is growing (flex_grow) rather than shrinking (flex_shrink).
+ *
+ * @return The share's numerator. Negative when shrinking.
+ */
+static int64_t flex_share_num(const FlexChild* c, const int32_t remaining, const bool growing)
+{
+    if (growing)
+        return (int64_t)remaining * c->flex_grow;
+    return (int64_t)remaining * ((int64_t)c->flex_shrink * c->main);
+}
+
+/**
  * @brief Returns true when d is a row-based flex direction.
  *
  * @param[in] d  ERFlexDirection value.
@@ -523,6 +567,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     const int16_t content_y = (int16_t)(y + pt);
 
     const bool is_row = is_row_dir(L->flex_direction);
+    const bool rev_main = is_reverse_dir(L->flex_direction);
     const int16_t main_size = is_row ? content_w : content_h;
     const int16_t cross_avail = is_row ? content_h : content_w;
     const int16_t main_gap = is_row ? edge_or(L->column_gap, L->gap) : edge_or(L->row_gap, L->gap);
@@ -741,25 +786,33 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 if (!growing && total_shrink_scaled == 0)
                     break;
 
-                /* First pass: detect and freeze min/max violations without committing the others. */
+                /* Shares stay exact fractions over one denominator per line, so neither loop below
+                 * truncates: a size is only ever rounded once, off the pixel grid. */
+                const int64_t den = growing ? (int64_t)total_grow : total_shrink_scaled;
+
+                /* First pass: detect and freeze min/max violations without committing the others.
+                 * The bounds are compared against the EXACT size, scaled by den — a truncated size
+                 * sits inside a max bound that the real one exceeds, which would leave the item
+                 * flexible and hand it a size past its bound. */
                 bool froze_one = false;
                 for (int i = 0; i < n_inflow; i++)
                 {
                     if (s_scratch[i].line != ln || s_scratch[i].frozen)
                         continue;
-                    int32_t delta;
-                    if (growing)
-                        delta = (remaining * s_scratch[i].flex_grow) / total_grow;
-                    else
-                        delta = (int32_t)(((int64_t)remaining * ((int64_t)s_scratch[i].flex_shrink * s_scratch[i].main))
-                                          / total_shrink_scaled);
-                    int32_t v = s_scratch[i].main + delta;
-                    if (v < 0)
-                        v = 0;
-                    const int16_t clamped = clamp_size((int16_t)v, s_scratch[i].main_min, s_scratch[i].main_max);
-                    if (clamped != v)
+                    const int64_t want = (int64_t)s_scratch[i].main * den + flex_share_num(&s_scratch[i], remaining, growing);
+                    int64_t bounded = want;
+                    if (bounded < 0)
+                        bounded = 0;
+                    if (s_scratch[i].main_min != ER_LAYOUT_AUTO && bounded < (int64_t)s_scratch[i].main_min * den)
+                        bounded = (int64_t)s_scratch[i].main_min * den;
+                    if (s_scratch[i].main_max != ER_LAYOUT_AUTO && bounded > (int64_t)s_scratch[i].main_max * den)
+                        bounded = (int64_t)s_scratch[i].main_max * den;
+                    if (bounded < 0)
+                        bounded = 0;
+                    if (bounded != want)
                     {
-                        s_scratch[i].main = clamped;
+                        /* A bound is a whole pixel, so the frozen size divides out exactly. */
+                        s_scratch[i].main = (int16_t)(bounded / den);
                         s_scratch[i].frozen = 1U;
                         froze_one = true;
                     }
@@ -767,18 +820,37 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 if (froze_one)
                     continue;
 
-                /* No violations: commit the distributed sizes to every remaining flexible item. */
+                /* No violations: commit the distributed sizes to every remaining flexible item.
+                 *
+                 * Each item spans from one rounded edge to the next, so a leftover that does not
+                 * divide evenly lands on whichever item straddles the half pixel rather than being
+                 * dropped at the end of the line. `carry`/`rem` track the running edge exactly; the
+                 * frozen items in between are whole pixels and never move the fraction. */
+                int32_t carry = 0;
+                int64_t rem = 0;
+                int32_t prev_edge = 0;
                 for (int i = 0; i < n_inflow; i++)
                 {
                     if (s_scratch[i].line != ln || s_scratch[i].frozen)
                         continue;
-                    int32_t delta;
-                    if (growing)
-                        delta = (remaining * s_scratch[i].flex_grow) / total_grow;
-                    else
-                        delta = (int32_t)(((int64_t)remaining * ((int64_t)s_scratch[i].flex_shrink * s_scratch[i].main))
-                                          / total_shrink_scaled);
-                    int32_t v = s_scratch[i].main + delta;
+                    const int64_t num = flex_share_num(&s_scratch[i], remaining, growing);
+                    int64_t q = num / den;
+                    int64_t r = num % den; /* Same sign as num; renormalise to a floor division. */
+                    if (r < 0)
+                    {
+                        q--;
+                        r += den;
+                    }
+                    carry += (int32_t)q;
+                    rem += r;
+                    if (rem >= den)
+                    {
+                        rem -= den;
+                        carry++;
+                    }
+                    const int32_t edge = edge_round(carry, rem, den, rev_main);
+                    int32_t v = s_scratch[i].main + (edge - prev_edge);
+                    prev_edge = edge;
                     if (v < 0)
                         v = 0;
                     s_scratch[i].main = clamp_size((int16_t)v, s_scratch[i].main_min, s_scratch[i].main_max);
@@ -868,15 +940,9 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         }
     }
 
-    /* A line's extent grows by whole pixels only; the remainder rides along in the numerators below,
-     * so what sits inside a stretched line is still placed exactly. */
-    const int16_t ac_stretch_int = (int16_t)(ac_stretch / ac_den);
-    const int32_t ac_stretch_rem = ac_stretch - (int32_t)ac_stretch_int * ac_den;
-
     /*--------------------------------------------------------------------------
      * Pass 5 — main-axis positions (justifyContent) + cross-axis (alignSelf).
      *------------------------------------------------------------------------*/
-    const bool rev_main = is_reverse_dir(L->flex_direction);
     const bool rev_cross = (L->flex_wrap == ER_WRAP_WRAP_REVERSE);
     const int32_t cross_den = 2 * ac_den; /* The 2 is alignSelf: center halves the leftover. */
     int32_t line_cross_int = 0;           /* Whole-pixel cross start of line ln (unstretched). */
@@ -974,7 +1040,17 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
         /* Cross-axis positions via alignSelf. Three fractions share cross_den — the line's
          * alignContent offset, the remainder of a stretched line's growth, and the half that centring
          * takes — and are rounded together at the end of the loop body. */
-        const int16_t this_cross = (int16_t)(s_line_cross[ln] + ac_stretch_int);
+        /* A stretched line's SIZE comes off the pixel grid the way a flex item's does — the
+         * difference of its two rounded cross edges — so the leftover lands on the line that
+         * straddles the half pixel instead of being dropped at the far edge. What that rounding left
+         * over rides along in the numerators below, so what sits INSIDE the line is still placed
+         * exactly. wrap-reverse measures the edges from the far side, so it mirrors them first. */
+        const int32_t grow_lo = rev_cross ? -(int32_t)(ln + 1) * ac_stretch : (int32_t)ln * ac_stretch;
+        const int32_t grow_hi = rev_cross ? -(int32_t)ln * ac_stretch : (int32_t)(ln + 1) * ac_stretch;
+        const int16_t grow_px = (int16_t)(div_round(grow_hi, ac_den) - div_round(grow_lo, ac_den));
+        const int32_t grow_rem = ac_stretch - (int32_t)grow_px * ac_den;
+
+        const int16_t this_cross = (int16_t)(s_line_cross[ln] + grow_px);
         const int32_t line_num = 2 * (ac_a + (int32_t)ln * ac_b);
         for (int i = 0; i < n_inflow; i++)
         {
@@ -1009,11 +1085,11 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 case ER_ALIGN_FLEX_START:
                     break;
                 case ER_ALIGN_CENTER:
-                    num = (int32_t)(inner - s_scratch[i].cross) * ac_den + ac_stretch_rem;
+                    num = (int32_t)(inner - s_scratch[i].cross) * ac_den + grow_rem;
                     break;
                 case ER_ALIGN_FLEX_END:
                     pos = this_cross - s_scratch[i].margin_cross_end - s_scratch[i].cross;
-                    num = 2 * ac_stretch_rem;
+                    num = 2 * grow_rem;
                     break;
                 default:
                     break;
