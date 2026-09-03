@@ -799,7 +799,8 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 {
                     if (s_scratch[i].line != ln || s_scratch[i].frozen)
                         continue;
-                    const int64_t want = (int64_t)s_scratch[i].main * den + flex_share_num(&s_scratch[i], remaining, growing);
+                    const int64_t want =
+                        (int64_t)s_scratch[i].main * den + flex_share_num(&s_scratch[i], remaining, growing);
                     int64_t bounded = want;
                     if (bounded < 0)
                         bounded = 0;
