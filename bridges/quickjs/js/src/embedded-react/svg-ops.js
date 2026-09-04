@@ -822,6 +822,10 @@ let _warnedSvgChild = false;
  * <Svg> owns its subtree, so React never renders it) and a non-shape host tag; both used to vanish
  * with no output at all. Once per app, like the other commit-path warnings: an <Svg> recompiles its
  * tape on every update, and one bad child would otherwise print on every frame.
+ *
+ * The way out of the component case is to CALL it — `{needle()}` puts whatever it returns (an element
+ * or an array of them) straight into children, where the walk sees it. Having it return an array does
+ * nothing for `<Needle/>`: that form is never invoked at all.
  */
 function warnSvgChild(c) {
   if (_warnedSvgChild) return;
@@ -834,9 +838,10 @@ function warnSvgChild(c) {
       ? `<${c.type.displayName || c.type.name || 'Component'}>, a component`
       : `<${String(c.type)}>`;
   console.warn(
-    `embedded-react: <Svg> can't draw ${what} and skipped it. Children must be ${SVG_TAGS.join('/')} ` +
-      `elements (arrays and fragments are unwrapped); a component's shapes have to be inlined or ` +
-      `returned as an array, since <Svg> flattens its subtree instead of mounting it.`,
+    `embedded-react: <Svg> can't draw ${what}, and skipped it. Children must be ${SVG_TAGS.join('/')} ` +
+      `elements (arrays and fragments around them are unwrapped). <Svg> flattens its subtree instead of ` +
+      `mounting it, so a component is never rendered — inline its shapes, or call it as a plain ` +
+      `function: {needle()}.`,
   );
 }
 

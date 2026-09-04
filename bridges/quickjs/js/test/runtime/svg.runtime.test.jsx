@@ -242,34 +242,39 @@ NativeUI.setVectorOps = function (handle, ops, paints, grads) {
   uploads.push(paints ? paints.length / PAINT_STRIDE : 0);
   return realSetVectorOps.call(this, handle, ops, paints, grads);
 };
-root.render(
-  <View style={{width: 200, height: 200}}>
-    <Svg style={{width: 200, height: 200}}>
-      <>
-        <Circle
-          cx={100}
-          cy={100}
-          r={90}
-          fill="none"
-          stroke="#2c3a4f"
-          strokeWidth={4}
-        />
-      </>
-      {[0, 1, 2, 3].map(i => (
-        <Line
-          key={i}
-          x1={100}
-          y1={10 + i * 4}
-          x2={100}
-          y2={30 + i * 4}
-          stroke="#f4a261"
-          strokeWidth={4}
-        />
-      ))}
-    </Svg>
-  </View>,
-);
-NativeUI.setVectorOps = realSetVectorOps;
+// finally, not a trailing assignment: a throw inside render would otherwise leave the bridge patched
+// for everything after this point, turning one failure into a cascade.
+try {
+  root.render(
+    <View style={{width: 200, height: 200}}>
+      <Svg style={{width: 200, height: 200}}>
+        <>
+          <Circle
+            cx={100}
+            cy={100}
+            r={90}
+            fill="none"
+            stroke="#2c3a4f"
+            strokeWidth={4}
+          />
+        </>
+        {[0, 1, 2, 3].map(i => (
+          <Line
+            key={i}
+            x1={100}
+            y1={10 + i * 4}
+            x2={100}
+            y2={30 + i * 4}
+            stroke="#f4a261"
+            strokeWidth={4}
+          />
+        ))}
+      </Svg>
+    </View>,
+  );
+} finally {
+  NativeUI.setVectorOps = realSetVectorOps;
+}
 const shapes = uploads.length ? uploads[uploads.length - 1] : -1;
 check(
   shapes === 5,
