@@ -289,6 +289,8 @@ static void test_pool_exhaustion_and_recovery(void)
  */
 static void test_dirty_rect_noop_commit(void)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
 
@@ -325,6 +327,8 @@ static void test_dirty_rect_noop_commit(void)
  */
 static void test_dirty_rect_union_coverage(void)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
     ERProps rp = test_props_default();
@@ -399,6 +403,8 @@ static int drain_anim_values(void)
  */
 static void test_reset(void)
 {
+    er_reset();
+
     /* Build a non-trivial scene: a committed tree plus a live Animated.Value. */
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);

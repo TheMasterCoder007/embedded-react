@@ -338,6 +338,8 @@ int main(void)
         static const EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
         embedded_renderer_set_backend(&be); /* re-inits worker contexts; workers stay installed */
 
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = {0};
         rp.left = rp.top = rp.right = rp.bottom = ER_LAYOUT_AUTO;

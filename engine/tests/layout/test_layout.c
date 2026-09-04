@@ -196,6 +196,8 @@ int main(void)
 
     static const char* k_long = "This is a long string that must wrap across multiple lines when constrained";
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)FB_W;
@@ -247,6 +249,8 @@ int main(void)
      * Container: row 200×200.  Child: width=100, aspect_ratio=2.0 → height=50.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ar_root = er_node_create(ER_NODE_VIEW);
         ERProps ap = props_default();
         ap.width = 200;
@@ -282,6 +286,8 @@ int main(void)
      * Container: row 200×80.  Child: flex_basis_pct=50 → width=100.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* pct_root = er_node_create(ER_NODE_VIEW);
         ERProps pp = props_default();
         pp.width = 200;
@@ -314,6 +320,8 @@ int main(void)
      * Container: col 200×200.  Child: marginHorizontal=20 → x=20, width=160.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* mh_root = er_node_create(ER_NODE_VIEW);
         ERProps mp = props_default();
         mp.width = 200;
@@ -349,6 +357,8 @@ int main(void)
      * Container: col 200×200, paddingHorizontal=15. Child: stretch → x=15, w=170.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ph_root = er_node_create(ER_NODE_VIEW);
         ERProps php = props_default();
         php.width = 200;
@@ -393,6 +403,8 @@ int main(void)
      * -----------------------------------------------------------------------*/
     {
         static const char* k_word = "Save";
+
+        er_reset();
 
         ERNode* tp_root = er_node_create(ER_NODE_VIEW);
         ERProps trp = props_default();
@@ -486,6 +498,8 @@ int main(void)
      * be reported as 180 px.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
         ERProps sp = props_default();
         sp.width = 200;
@@ -540,6 +554,8 @@ int main(void)
      * and animation-only frames must skip the flex + text-measure pass.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* d_root = er_node_create(ER_NODE_VIEW);
         ERProps dp = props_default();
         dp.width = 200;
@@ -642,6 +658,8 @@ int main(void)
      * every drag move): a ~5.7 ms pass on ~90% of drag frames on an ESP32-S3.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ts_root = er_node_create(ER_NODE_VIEW);
         ERProps tsp = props_default();
         tsp.width = 200;
@@ -718,6 +736,8 @@ int main(void)
      * land within the row's vertical bounds.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ac_root = er_node_create(ER_NODE_VIEW);
         ERProps acp = props_default();
         acp.width = 200;
@@ -781,6 +801,8 @@ int main(void)
      * y positions of a column's children.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ib_root = er_node_create(ER_NODE_VIEW);
         ERProps ibp = props_default();
         ibp.width = 100;
@@ -845,6 +867,8 @@ int main(void)
      * and its 20px items spread to ~106px each).
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* ne_root = er_node_create(ER_NODE_VIEW);
         ERProps nep = props_default();
         nep.width = 480;
@@ -914,6 +938,8 @@ int main(void)
      * -----------------------------------------------------------------------*/
     {
 #define MC_DEPTH 8
+        er_reset();
+
         ERNode* mc_root = er_node_create(ER_NODE_VIEW);
         ERProps mcp = props_default();
         mcp.width = 200;
@@ -977,6 +1003,8 @@ int main(void)
      * -----------------------------------------------------------------------*/
     {
 #define MC_WIDE_COUNT 6
+        er_reset();
+
         ERNode* mw_root = er_node_create(ER_NODE_VIEW);
         ERProps mwp = props_default();
         mwp.width = 300;
@@ -1025,6 +1053,8 @@ int main(void)
      * calls for the whole commit.
      * -----------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* mf_root = er_node_create(ER_NODE_VIEW);
         ERProps mfp = props_default();
         mfp.width = 200;

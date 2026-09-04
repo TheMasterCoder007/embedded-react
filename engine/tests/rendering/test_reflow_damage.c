@@ -111,6 +111,8 @@ static ERProps bar_props(int16_t padding_left, uint32_t bg)
 /** @brief root(white, 200x200) → bar(grey, full-width strip) → kid(orange 20x20). */
 static void build(ERNode** out_bar)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = SCREEN;

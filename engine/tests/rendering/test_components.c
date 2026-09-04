@@ -153,6 +153,8 @@ static void test_activity_indicator_renders(void)
 {
     init_backend();
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_auto();
     p.left = p.top = p.right = p.bottom = -32768;
@@ -214,6 +216,8 @@ static void test_activity_indicator_renders(void)
 static void test_switch_renders(void)
 {
     init_backend();
+
+    er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_auto();
@@ -291,6 +295,8 @@ static void test_text_input_keyboard(void)
     s_change_count = 0;
     s_last_text[0] = '\0';
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_auto();
     p.left = p.top = p.right = p.bottom = -32768;
@@ -365,6 +371,8 @@ static void test_modal_visible(void)
 {
     init_backend();
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_auto();
     p.left = p.top = p.right = p.bottom = -32768;
@@ -418,6 +426,8 @@ static void test_modal_visible(void)
 static void test_flatlist_scrolls(void)
 {
     init_backend();
+
+    er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_auto();

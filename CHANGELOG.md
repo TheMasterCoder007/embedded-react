@@ -154,6 +154,12 @@ See the README for the release process.
   child and handed it the touch anyway — so an overlay wrapping a plain `<Text>` stole presses, raw
   touch events, and responder claims from whatever sat behind it. The node's own handlers are now
   skipped on that walk; its ancestors still receive the touch as before.
+- A `ScrollView` with `pointerEvents="box-none"` no longer takes the pan. Auto-scroll was the one grant
+  path that never checked pointer events; it now skips such a scroller and lets an outer scrollable
+  ancestor scroll instead.
+- Each host engine test now starts from an empty node pool. `er_tree_set_root()` only swaps the root,
+  so every scenario's tree used to outlive it — a ScrollView flicked in one test kept coasting into
+  later ones, firing callbacks into a stack frame that had already returned.
 - Flex sizes now land on the same pixel grid as positions, so a row of `flex: 1` children fills its
   parent exactly instead of ending a pixel short. A leftover that does not divide evenly is spread
   across the children the way Yoga spreads it — three equal children in 100px are 33/34/33, not

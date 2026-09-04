@@ -335,6 +335,8 @@ static void set_transform(ERProps* p, const Xform* x)
  */
 static int check_singular_crossing(const Scenario* s)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = SCREEN;

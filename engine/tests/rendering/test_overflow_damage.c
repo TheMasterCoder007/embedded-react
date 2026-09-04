@@ -285,6 +285,8 @@ static int reported_covers(int x, int y)
 
 static void build_scene(void)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = SW;

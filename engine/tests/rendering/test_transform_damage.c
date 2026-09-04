@@ -130,6 +130,8 @@ static int fail(const char* msg)
 /* Scenario 1: an animated scale damages only its own box, not the whole screen. */
 static int check_pulse_bounded(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;
@@ -200,6 +202,8 @@ static int check_pulse_bounded(int screen)
  * node, it was repainted; if it stops at the sibling, the node was dropped. */
 static int check_reflow_moved_no_trail(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW); /* default flex column */
     ERProps rp = props_default();
     rp.width = screen;
@@ -279,6 +283,8 @@ static int check_reflow_moved_no_trail(int screen)
  */
 static int check_activity_indicator_translate(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)screen;
@@ -375,6 +381,8 @@ static int check_activity_indicator_translate(int screen)
  */
 static int check_spinner_bounded(int screen, float sx, float sy, const char* label)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)screen;
@@ -496,6 +504,8 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
                                      "raw-box fallback too and covers nothing extra"
                                    : "oversized node still fits the transform scratch");
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;
@@ -591,6 +601,8 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
  */
 static int check_nested_transform_no_damage(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;
@@ -682,6 +694,8 @@ static int check_nested_transform_no_damage(int screen)
  * the full-repaint fallback on every animated frame. */
 static int check_3d_rotate_bounded(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = screen;

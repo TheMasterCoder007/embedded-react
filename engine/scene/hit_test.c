@@ -445,24 +445,6 @@ static void accumulate_scroll_offsets(const ERNode* node, int* out_x, int* out_y
 }
 
 /**
- * @brief Finds the nearest ScrollView ancestor of a node (inclusive of the node itself).
- *
- * @param[in] node  Starting node.
- *
- * @return The first ScrollView found walking up the ancestor chain, or NULL.
- */
-static ERNode* find_scroll_view_ancestor(ERNode* node)
-{
-    while (node)
-    {
-        if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
-            return node;
-        node = er_get_node(node->parent_tag);
-    }
-    return NULL;
-}
-
-/**
  * @brief Recursively finds the topmost deepest hittable node under a point.
  *
  * Respects pointer_events, hitSlop, and overflow:hidden / overflow:scroll clipping.
@@ -616,6 +598,27 @@ static ERNode* nearest_press_target(ERNode* node)
             && (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS)
                 || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT)
                 || node->type == ER_NODE_TEXT_INPUT || node->type == ER_NODE_SWITCH))
+            return node;
+        node = er_get_node(node->parent_tag);
+    }
+    return NULL;
+}
+
+/**
+ * @brief Finds the nearest ScrollView ancestor eligible to auto-scroll (inclusive of the node itself).
+ *
+ * A scroller declared box-none or none is transparent to touches aimed at itself, so it is passed
+ * over and the search continues outward — an outer scroller is still free to take the pan.
+ *
+ * @param[in] node  Starting node.
+ *
+ * @return The first eligible ScrollView found walking up the ancestor chain, or NULL.
+ */
+static ERNode* find_scroll_view_ancestor(ERNode* node)
+{
+    while (node)
+    {
+        if ((node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST) && node_takes_own_touches(node))
             return node;
         node = er_get_node(node->parent_tag);
     }

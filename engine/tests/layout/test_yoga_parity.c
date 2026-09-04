@@ -246,6 +246,8 @@ static void kill_child(ERNode* parent, ERNode* child)
 /** @brief Column stacks two fixed-size children top to bottom. */
 static void fixture_column_stack(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 100;
@@ -277,6 +279,8 @@ static void fixture_column_stack(void)
 /** @brief Row with two flex:1 children splits the main axis evenly and stretches on cross. */
 static void fixture_row_flex_even(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 40;
@@ -307,6 +311,8 @@ static void fixture_row_flex_even(void)
 /** @brief justifyContent: space-between pushes children to the edges. */
 static void fixture_justify_between(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 40;
@@ -338,6 +344,8 @@ static void fixture_justify_between(void)
 /** @brief alignItems: center centers a child on the cross axis. */
 static void fixture_align_center(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 40;
@@ -364,6 +372,8 @@ static void fixture_align_center(void)
 /** @brief Padding insets the content box; a stretch child fills it. */
 static void fixture_padding_stretch(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 100;
@@ -389,6 +399,8 @@ static void fixture_padding_stretch(void)
 /** @brief gap inserts space between row children. */
 static void fixture_gap_row(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 40;
@@ -420,6 +432,8 @@ static void fixture_gap_row(void)
 /** @brief A row with no explicit height grows to its children's height (auto cross-size). */
 static void fixture_auto_cross_row(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 100;
@@ -458,6 +472,8 @@ static void fixture_auto_cross_row(void)
 /** @brief A column with no explicit height grows to the sum of its children's heights. */
 static void fixture_auto_main_column(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 100;
@@ -501,6 +517,8 @@ static void fixture_auto_main_column(void)
  */
 static void fixture_flex_max_redistribute(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 40;
@@ -547,6 +565,8 @@ static void fixture_flex_max_redistribute(void)
 static void
 build_wrap3(uint8_t align_content, int16_t height, int16_t item_h, ERNode** root_out, ERNode** kids_out, ERRect* rects)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 50;
     rp.height = height;
@@ -628,6 +648,8 @@ static void fixture_align_content_stretch(void)
 /** @brief Percentage width on the main axis: 50% of a 200px row → 100px. */
 static void fixture_pct_width_main(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 80;
@@ -653,6 +675,8 @@ static void fixture_pct_width_main(void)
 /** @brief Percentage height on the main axis: 25% of a 200px column → 50px. */
 static void fixture_pct_height_main(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 200;
@@ -678,6 +702,8 @@ static void fixture_pct_height_main(void)
 /** @brief Percentage width on the cross axis: 50% of a 200px-wide column → 100px. */
 static void fixture_pct_width_cross(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -703,6 +729,8 @@ static void fixture_pct_width_cross(void)
 /** @brief Percentages resolve against the parent's content box: 50% of (200 − 2×20 padding) = 80. */
 static void fixture_pct_content_box(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 80;
@@ -735,6 +763,8 @@ static void fixture_pct_content_box(void)
  */
 static void fixture_abs_auto_height(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -770,6 +800,8 @@ static void fixture_abs_auto_height(void)
 /** @brief Absolute with neither width nor height sizes both axes to content (70 wide, 20+30 tall). */
 static void fixture_abs_auto_both(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -807,6 +839,8 @@ static void fixture_abs_auto_both(void)
 /** @brief Percentage width/height on an absolute resolve against the containing block: 50%/25% of 200x100. */
 static void fixture_abs_pct(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -833,6 +867,8 @@ static void fixture_abs_pct(void)
 /** @brief aspectRatio fills an absolute's auto axis from the resolved one: width 100, ratio 2 → height 50. */
 static void fixture_abs_aspect_ratio(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -865,6 +901,8 @@ static void fixture_abs_aspect_ratio(void)
  */
 static void fixture_abs_aspect_ratio_both_auto(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -897,6 +935,8 @@ static void fixture_abs_aspect_ratio_both_auto(void)
 /** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
 static void fixture_abs_content_overflows(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 100;
     rp.height = 50;
@@ -933,6 +973,8 @@ static void fixture_abs_content_overflows(void)
  */
 static void fixture_abs_containing_block(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -973,6 +1015,8 @@ static void fixture_abs_containing_block(void)
  */
 static void fixture_abs_padding_box_edges(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1023,6 +1067,8 @@ static void fixture_abs_padding_box_edges(void)
 /** @brief Opposing insets size against the padding box too: 200 - 10 - 30 = 160 wide, x = 10. */
 static void fixture_abs_inset_pair_padding(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1050,6 +1096,8 @@ static void fixture_abs_inset_pair_padding(void)
 /** @brief Percentage insets on an absolute measure from the padding box: left 10% and top 25% of 200. */
 static void fixture_abs_pct_inset(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1080,6 +1128,8 @@ static void fixture_abs_pct_inset(void)
 /** @brief Each percentage inset takes its OWN axis: left 50% of 200, top 50% of 100. */
 static void fixture_abs_pct_inset_axis(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1106,6 +1156,8 @@ static void fixture_abs_pct_inset_axis(void)
 /** @brief Percentage right/bottom anchor the far edges: 200 - 20 - 20 and 100 - 20 - 20. */
 static void fixture_abs_pct_inset_far(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1132,6 +1184,8 @@ static void fixture_abs_pct_inset_far(void)
 /** @brief A pair of percentage insets sizes the axis: 200 - 20 - 50 wide, 100 - 10 - 30 tall. */
 static void fixture_abs_pct_inset_pair(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1158,6 +1212,8 @@ static void fixture_abs_pct_inset_pair(void)
 /** @brief A negative percentage inset pushes the node outside its containing block: -10% of 200. */
 static void fixture_abs_pct_inset_negative(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1184,6 +1240,8 @@ static void fixture_abs_pct_inset_negative(void)
 /** @brief Margin still shifts a percentage-inset absolute: 10% of 200 + marginLeft 5. */
 static void fixture_abs_pct_inset_margin(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1217,6 +1275,8 @@ static void fixture_abs_pct_inset_margin(void)
  */
 static void fixture_abs_pct_inset_half_pixel(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 201;
     rp.height = 100;
@@ -1246,6 +1306,8 @@ static void fixture_abs_pct_inset_half_pixel(void)
  */
 static void fixture_abs_pct_pair_half_pixel(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 201;
     rp.height = 101;
@@ -1272,6 +1334,8 @@ static void fixture_abs_pct_pair_half_pixel(void)
 /** @brief right/bottom alone still size the node from its content: 60x40 pinned 30/10 off the far edges. */
 static void fixture_abs_far_inset_auto_size(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1310,6 +1374,8 @@ static void fixture_abs_far_inset_auto_size(void)
  */
 static void fixture_abs_pct_saturates(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 480;
     rp.height = 320;
@@ -1340,6 +1406,8 @@ static void fixture_abs_pct_saturates(void)
  */
 static void fixture_rel_pct_offset(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1369,6 +1437,8 @@ static void fixture_rel_pct_offset(void)
 /** @brief A relative right/bottom percentage shifts the flow position back: (10, 5) - (16, 20). */
 static void fixture_rel_pct_offset_far(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 100;
@@ -1398,6 +1468,8 @@ static void fixture_rel_pct_offset_far(void)
 /** @brief Margin still shifts an inset-positioned absolute, measured from the padding edge: 0 + 10 + 5. */
 static void fixture_abs_margin_inset_padding(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1431,6 +1503,8 @@ static void fixture_abs_margin_inset_padding(void)
  */
 static void fixture_abs_static_position_padding(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1461,6 +1535,8 @@ static void fixture_abs_static_position_padding(void)
  */
 static void fixture_abs_static_position_align(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1503,6 +1579,8 @@ static void fixture_abs_static_position_align(void)
 static void
 static_pos_case(const char* lbl, ParityStatus st, ERProps rp, ERProps ap, bool auto_size, int x, int y, int w, int h)
 {
+    er_reset();
+
     rp.width = 200;
     rp.height = 200;
     rp.padding = 20;
@@ -1714,6 +1792,8 @@ static void fixture_abs_static_margins(void)
  */
 static void fixture_abs_static_overflow(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.flex_direction = ER_FLEX_COL;
     rp.justify_content = ER_JUSTIFY_CENTER;
@@ -1779,6 +1859,8 @@ static void fixture_abs_static_per_axis(void)
  */
 static void rev_pair_case(const char* name, uint8_t dir, uint8_t justify, int16_t gap, int ax, int ay, int bx, int by)
 {
+    er_reset();
+
     const bool is_row = (dir == ER_FLEX_ROW_REVERSE);
 
     ERProps rp = props_default();
@@ -1843,6 +1925,8 @@ static void rev_pair_case(const char* name, uint8_t dir, uint8_t justify, int16_
 static void fixture_flow_reverse_margin(void)
 {
     /* The issue's exact repro: one child, column-reverse, flex-start. */
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -1923,6 +2007,8 @@ static void build_wrap_rev(int n,
                            ERNode** kids_out,
                            ERRect* rects)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -2054,6 +2140,8 @@ static void fixture_flow_wrap_reverse_overflow(void)
 /** @brief In-flow siblings never move the static position — it is the SOLE-item spot, not a slot. */
 static void fixture_abs_static_ignores_siblings(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -2100,6 +2188,8 @@ static void fixture_abs_static_ignores_siblings(void)
  */
 static void fixture_half_pixel_center(void)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -2204,6 +2294,8 @@ static void fixture_half_pixel_center(void)
 static void stack_sizes_case(
     const char* name, uint8_t dir, uint8_t justify, int16_t gap, int n, const int16_t* item, const int16_t* want)
 {
+    er_reset();
+
     const bool is_row = (dir == ER_FLEX_ROW || dir == ER_FLEX_ROW_REVERSE);
 
     ERProps rp = props_default();
@@ -2279,6 +2371,8 @@ static void stack_case(const char* name, uint8_t dir, uint8_t justify, int n, in
  */
 static void wrap_overflow_case(const char* name, uint8_t justify, const int16_t* want_y)
 {
+    er_reset();
+
     static const int16_t k_h[3] = {100, 90, 171};
 
     ERProps rp = props_default();
@@ -2465,6 +2559,8 @@ static void fixture_half_pixel_justify(void)
 static void wrap_line_case(
     const char* name, uint8_t wrap, uint8_t align_content, uint8_t align_items, int16_t item_w, const int16_t* want_x)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = 200;
     rp.height = 200;
@@ -2509,6 +2605,8 @@ static void wrap_line_case(
  */
 static void fixture_half_pixel_align_content(void)
 {
+    er_reset();
+
     static const struct
     {
         const char* name;
@@ -2804,6 +2902,8 @@ static void stretch_line_case(const char* name,
                               const int16_t* want_x,
                               const int16_t* want_w)
 {
+    er_reset();
+
     ERProps rp = props_default();
     rp.width = w;
     rp.height = h;

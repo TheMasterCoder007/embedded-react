@@ -205,6 +205,8 @@ static ERProps props_default(void)
  */
 static void render_padded_text(int16_t pad_left, int16_t pad_top, DrawBox* out)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)FB_W;

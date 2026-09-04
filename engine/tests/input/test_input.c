@@ -106,6 +106,16 @@ typedef struct
 } RenderCounts;
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Scroll counter that deliberately outlives its scene, so a scroller leaked out of one
+ *        scenario can be caught still firing into the next.
+ */
+static int s_orphan_scroll_events = 0;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -582,7 +592,13 @@ static void tap(int x, int y)
 }
 
 /**
- * @brief Creates a root node of a given size and installs it as the scene root.
+ * @brief Starts a fresh scene: empties the node pool, then creates and installs a sized root.
+ *
+ * er_tree_set_root() only swaps the root tag — it never destroys the tree it replaces. Without the
+ * reset every scenario's nodes would stay in the pool for the rest of the run, and the pool is what
+ * the per-frame sweeps walk: an orphan left animating or coasting keeps firing its callbacks into a
+ * stack frame that has already returned. Every scenario therefore starts here, before it creates any
+ * node of its own.
  *
  * @param[in] w  Root width in pixels.
  * @param[in] h  Root height in pixels.
@@ -591,6 +607,8 @@ static void tap(int x, int y)
  */
 static ERNode* create_root_sized(int16_t w, int16_t h)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_default();
     p.width = w;
@@ -1810,6 +1828,182 @@ static int test_pointer_events_box_none_passes_through(void)
 }
 
 /**
+ * @brief Builds a horizontally scrollable ScrollView holding one inert (handler-less) child.
+ *
+ * @param[in] parent          Node to append the ScrollView to.
+ * @param[in] pointer_events  Pointer-events mode for the ScrollView itself.
+ * @param[in] width           Viewport width; the content child is made four times as wide.
+ * @param[in] scroll_events   Counter wired to ER_EVENT_SCROLL.
+ *
+ * @return The ScrollView node.
+ */
+static ERNode* create_scroll_view(ERNode* parent, ERPointerEvents pointer_events, int16_t width, int* scroll_events)
+{
+    ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
+    ERProps sp = props_default();
+    sp.position = ER_POS_ABSOLUTE;
+    sp.left = 0;
+    sp.top = 0;
+    sp.width = width;
+    sp.height = 100;
+    sp.pointer_events = (uint8_t)pointer_events;
+    er_node_set_props(sv, &sp);
+    er_event_set(sv, ER_EVENT_SCROLL, count_scroll, scroll_events);
+
+    ERNode* content = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.width = (int16_t)(width * 4); /* wider than the viewport so horizontal scrolling has range */
+    cp.height = 100;
+    er_node_set_props(content, &cp);
+
+    er_tree_append_child(sv, content);
+    er_tree_append_child(parent, sv);
+    return sv;
+}
+
+/**
+ * @brief Drags finger 0 leftwards across a ScrollView, well past ER_SCROLL_SLOP.
+ */
+static void drag_past_slop(void)
+{
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 80, 50);
+    embedded_renderer_tick(16U);
+    touch_move(70, 50);
+    embedded_renderer_tick(16U);
+    touch_move(60, 50);
+    embedded_renderer_tick(16U);
+    touch_move(50, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
+}
+
+/**
+ * @brief Checks that the auto-scroll grant honours pointer_events: a ScrollView declared
+ *        box-none or none is transparent to a pan aimed at itself, while a plain one scrolls.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_none_scroll_view(void)
+{
+    /* Control: a plain ScrollView takes the pan. */
+    {
+        ERNode* root = create_root();
+        int scroll_events = 0;
+        create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
+        er_commit();
+
+        drag_past_slop();
+
+        if (scroll_events == 0)
+            return fail("plain ScrollView did not auto-scroll on a pan past the slop");
+    }
+
+    {
+        ERNode* root = create_root();
+        int scroll_events = 0;
+        create_scroll_view(root, ER_POINTER_EVENTS_BOX_NONE, 100, &scroll_events);
+        er_commit();
+
+        drag_past_slop();
+
+        if (scroll_events != 0)
+            return fail("pointer_events:box-none ScrollView was auto-granted the pan");
+    }
+
+    {
+        ERNode* root = create_root();
+        int scroll_events = 0;
+        create_scroll_view(root, ER_POINTER_EVENTS_NONE, 100, &scroll_events);
+        er_commit();
+
+        drag_past_slop();
+
+        if (scroll_events != 0)
+            return fail("pointer_events:none ScrollView was auto-granted the pan");
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that skipping a box-none ScrollView does not swallow the pan: the search keeps
+ *        climbing and an outer scrollable ancestor takes it instead.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_box_none_scroll_view_defers_to_outer(void)
+{
+    ERNode* root = create_root();
+    int outer_events = 0;
+    int inner_events = 0;
+
+    ERNode* outer = er_node_create(ER_NODE_SCROLL_VIEW);
+    ERProps op = props_default();
+    op.position = ER_POS_ABSOLUTE;
+    op.left = 0;
+    op.top = 0;
+    op.width = 100;
+    op.height = 100;
+    er_node_set_props(outer, &op);
+    er_event_set(outer, ER_EVENT_SCROLL, count_scroll, &outer_events);
+    er_tree_append_child(root, outer);
+
+    /* The inner scroller is box-none and overflows the outer, so the pan should pass it by and
+     * scroll the outer one instead. */
+    create_scroll_view(outer, ER_POINTER_EVENTS_BOX_NONE, 400, &inner_events);
+    er_commit();
+
+    drag_past_slop();
+
+    if (inner_events != 0)
+        return fail("box-none inner ScrollView took the pan");
+    if (outer_events == 0)
+        return fail("box-none inner ScrollView swallowed the pan instead of deferring outward");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that starting a new scene stops the previous one's ScrollView dead.
+ *
+ * er_tree_set_root() only swaps the root tag, so without the pool reset in create_root_sized() a
+ * ScrollView lifted mid-flick would keep coasting for the rest of the run — firing ER_EVENT_SCROLL
+ * into whatever its user_data still points at, long after that scenario's stack frame has gone.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_new_scene_stops_orphan_scroller(void)
+{
+    ERNode* root = create_root();
+    s_orphan_scroll_events = 0;
+    create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &s_orphan_scroll_events);
+    er_commit();
+
+    /* Lift mid-flick, with no pause before the release, so the scroller keeps real momentum. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 80, 50);
+    embedded_renderer_tick(16U);
+    touch_move(70, 50);
+    embedded_renderer_tick(16U);
+    touch_move(60, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 60, 50);
+
+    embedded_renderer_tick(16U);
+    if (s_orphan_scroll_events == 0)
+        return fail("the flicked ScrollView never scrolled");
+
+    create_root(); /* new scene: the flicked scroller is gone from the pool */
+    er_commit();
+
+    const int before = s_orphan_scroll_events;
+    for (int i = 0; i < 30; i++)
+        embedded_renderer_tick(16U);
+
+    if (s_orphan_scroll_events != before)
+        return fail("a ScrollView from the previous scene kept coasting into the next one");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks that pointer_events:box-only delivers touches to the node but not its children.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
@@ -2617,6 +2811,12 @@ int main(void)
     if (test_pointer_events_box_none_responder() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_none_passes_through() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_none_scroll_view() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_box_none_scroll_view_defers_to_outer() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_new_scene_stops_orphan_scroller() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;

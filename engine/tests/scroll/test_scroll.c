@@ -291,6 +291,8 @@ static void build_scene(ERNode** sv, ERNode** child0, ERNode** child1, ERNode** 
 {
     ERProps p;
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     p = make_props();
     p.width = 200;

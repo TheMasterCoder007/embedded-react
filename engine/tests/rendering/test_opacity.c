@@ -257,6 +257,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -281,6 +283,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -329,6 +333,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -378,6 +384,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -418,6 +426,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -479,6 +489,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -567,6 +579,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -631,6 +645,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -703,6 +719,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;

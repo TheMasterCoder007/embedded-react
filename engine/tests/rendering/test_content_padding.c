@@ -242,6 +242,8 @@ static void pin_box(ERProps* p, bool padded)
  */
 static void render_leaf(const ERProps* leaf_props, ERNodeType type, void (*configure)(ERNode*), DrawBox* out)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)FB_W;
@@ -450,6 +452,8 @@ int main(void)
      * above, which never take the sub-region path.
      *----------------------------------------------------------------------------------------------*/
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = (int16_t)FB_W;
