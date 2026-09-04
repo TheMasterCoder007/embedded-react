@@ -1678,6 +1678,138 @@ static int test_pointer_events_box_none(void)
 }
 
 /**
+ * @brief Builds a box-none overlay holding one inert (handler-less) child.
+ *
+ * @param[in]  parent     Node to append the overlay to.
+ * @param[out] out_child  Receives the inert child (may be NULL).
+ * @return The overlay node.
+ */
+static ERNode* create_box_none_overlay(ERNode* parent, ERNode** out_child)
+{
+    ERNode* overlay = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 120;
+    p.height = 120;
+    p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+    er_node_set_props(overlay, &p);
+
+    ERNode* child = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.position = ER_POS_ABSOLUTE;
+    cp.left = 40;
+    cp.top = 40;
+    cp.width = 40;
+    cp.height = 40;
+    er_node_set_props(child, &cp);
+
+    er_tree_append_child(overlay, child);
+    er_tree_append_child(parent, overlay);
+    if (out_child)
+        *out_child = child;
+    return overlay;
+}
+
+/**
+ * @brief Checks that a box-none node stays touch-transparent when the hit lands on an inert
+ *        descendant, so the walk up from that descendant does not hand it the touch anyway.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_none_inert_child(void)
+{
+    ERNode* root = create_root();
+    EventCounts overlay_counts = {0};
+
+    ERNode* overlay = create_box_none_overlay(root, NULL);
+    er_event_set(overlay, ER_EVENT_PRESS, on_press, &overlay_counts);
+    er_event_set(overlay, ER_EVENT_TOUCH_START, on_touch_start, &overlay_counts);
+    er_commit();
+
+    /* The inert child is the hit; the overlay must receive neither the press nor the raw touch. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 50, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
+
+    if (overlay_counts.press_count != 0)
+        return fail("pointer_events:box-none node received press via an inert child");
+    if (overlay_counts.touch_start_count != 0)
+        return fail("pointer_events:box-none node received a raw touch via an inert child");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that a box-none node cannot claim the gesture responder.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_none_responder(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord rec = {0};
+    rec.should_claim = true;
+
+    ERNode* overlay = create_box_none_overlay(root, NULL);
+    wire_responder(overlay, &rec);
+    er_responder_query_set(overlay, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 50, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
+
+    if (rec.grant_count != 0)
+        return fail("pointer_events:box-none node claimed the responder");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that a box-none node excludes only itself: a touch landing on its inert child still
+ *        reaches an interactive ancestor, and one landing on its bare area still reaches the sibling
+ *        painted behind it.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_pointer_events_box_none_passes_through(void)
+{
+    /* An interactive ancestor above the box-none wrapper still gets the press. */
+    {
+        ERNode* root = create_root();
+        EventCounts outer_counts = {0};
+        ERNode* pressable = create_pressable(0, 0, 120, 120, &outer_counts);
+        create_box_none_overlay(pressable, NULL);
+        er_tree_append_child(root, pressable);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 50, 50);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
+
+        if (outer_counts.press_count != 1)
+            return fail("pointer_events:box-none blocked an interactive ancestor");
+    }
+
+    /* A sibling behind the overlay gets touches aimed at the overlay's bare area. */
+    {
+        ERNode* root = create_root();
+        EventCounts behind_counts = {0};
+        ERNode* behind = create_pressable(0, 0, 120, 120, &behind_counts);
+        er_tree_append_child(root, behind);
+        create_box_none_overlay(root, NULL);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
+
+        if (behind_counts.press_count != 1)
+            return fail("pointer_events:box-none did not pass a touch to the sibling behind it");
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks that pointer_events:box-only delivers touches to the node but not its children.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
@@ -2479,6 +2611,12 @@ int main(void)
     if (test_pointer_events_none() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_none() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_none_inert_child() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_none_responder() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_pointer_events_box_none_passes_through() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;
