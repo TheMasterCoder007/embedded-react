@@ -156,6 +156,9 @@ See the README for the release process.
   engine clock ran off the browser's animation frames, which stop while the page is hidden and cap each
   step at 100 ms — so time crawled or stopped, and nothing scheduled ever came due. The simulator now
   advances the clock by real elapsed time, and keeps pumping when the browser stops drawing.
+- A decay (fling) animation no longer does an unbounded amount of physics when a frame runs long. Its
+  integrator caps its step count, as the spring ones already did, so a fling caught by a stall coasts on
+  for a few frames instead of jumping to where it would have landed.
 - `<Svg>` no longer drops shapes wrapped in a fragment (both flows) or in a `{list.map(...)}` (Flow A).
   It only walked direct children, so a mapped list of shapes silently drew nothing. A child it still
   cannot draw now says so instead of vanishing: Flow A warns in the console, an AOT build fails.

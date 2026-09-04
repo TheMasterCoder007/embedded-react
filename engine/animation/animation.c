@@ -59,6 +59,9 @@
 /** @brief Default decay deceleration per millisecond (≈ RN 0.998 per 60fps frame). */
 #define DECAY_DEFAULT_DECELERATION 0.998f
 
+/** @brief Maximum spring/decay integration steps per tick, to bound the cost of a long frame. */
+#define ANIM_MAX_STEPS 200u
+
 /** @brief Group type values stored in ERAnimGroup::type. */
 #define GROUP_TYPE_SEQUENCE 0
 #define GROUP_TYPE_PARALLEL 1
@@ -1043,7 +1046,7 @@ static void spring_step(float* pos, float* vel, float stiffness, float damping, 
 }
 
 /**
- * @brief Integrates spring physics for delta_ms milliseconds (max 200 steps).
+ * @brief Integrates spring physics for delta_ms milliseconds (max ANIM_MAX_STEPS steps).
  *
  * @param[in,out] anim       Animation slot to update.
  * @param[in]     delta_ms   Elapsed time in milliseconds.
@@ -1053,8 +1056,8 @@ static void spring_step(float* pos, float* vel, float stiffness, float damping, 
 static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
-    if (steps > 200)
-        steps = 200;
+    if (steps > ANIM_MAX_STEPS)
+        steps = ANIM_MAX_STEPS;
 
     const float k = anim->spring_stiffness > 0.0f ? anim->spring_stiffness : SPRING_DEFAULT_STIFFNESS;
     const float c = anim->spring_damping > 0.0f ? anim->spring_damping : SPRING_DEFAULT_DAMPING;
@@ -1069,7 +1072,10 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
 }
 
 /**
- * @brief Advances decay physics for delta_ms milliseconds.
+ * @brief Advances decay physics for delta_ms milliseconds (max ANIM_MAX_STEPS steps).
+ *
+ * Capping the step count keeps a long frame cheap. A decay caught by one coasts for a few more ticks
+ * instead of jumping to where it would have landed, which is how the spring integrator already behaves.
  *
  * @param[in,out] anim       Animation slot to update.
  * @param[in]     delta_ms   Elapsed time in milliseconds.
@@ -1078,9 +1084,13 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
  */
 static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
 {
+    uint32_t steps = delta_ms;
+    if (steps > ANIM_MAX_STEPS)
+        steps = ANIM_MAX_STEPS;
+
     const float decel = anim->decay_deceleration > 0.0f ? anim->decay_deceleration : DECAY_DEFAULT_DECELERATION;
 
-    for (uint32_t i = 0; i < delta_ms; i++)
+    for (uint32_t i = 0; i < steps; i++)
     {
         anim->decay_pos += anim->decay_velocity;
         anim->decay_velocity *= decel;
