@@ -1301,6 +1301,39 @@ static void fixture_abs_far_inset_auto_size(void)
 }
 
 /**
+ * @brief A percentage wild enough to saturate the pixel grid still yields a sane box.
+ *
+ * Each edge clamps into int16 on its own, so a left edge pinned far off one end and a width running far
+ * off the other leave a difference twice as wide as an int16 — which used to wrap the subtraction into a
+ * NEGATIVE width. Yoga has no int16 to overflow, so there is no reference rect here: the assertion is
+ * that the box stays a box.
+ */
+static void fixture_abs_pct_saturates(void)
+{
+    ERProps rp = props_default();
+    rp.width = 480;
+    rp.height = 320;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = -10000.0f;  /* -48000 px, clamped to the int16 floor. */
+    ap.width_pct = 20000.0f;  /* 96000 px, so the far edge clamps to the ceiling. */
+    ap.top_pct = 0.0f / 0.0f; /* A style may spell a percentage "NaN%". */
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-saturate", "abs", EXPECT, ra, -32768, 0, 32767, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
  * @brief A RELATIVE percentage offset measures against the parent's CONTENT box, not its padding box.
  *
  * Content is 160x80, so left 10% = 16 and top 25% = 20 shift the flow position (10, 5) to (26, 25).
@@ -2879,6 +2912,7 @@ int main(void)
     fixture_abs_pct_inset_margin();
     fixture_abs_pct_inset_half_pixel();
     fixture_abs_pct_pair_half_pixel();
+    fixture_abs_pct_saturates();
     fixture_abs_far_inset_auto_size();
     fixture_rel_pct_offset();
     fixture_rel_pct_offset_far();

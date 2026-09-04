@@ -54,6 +54,13 @@ function App() {
         bottom: '30%',
       })}
       {box('rel', {left: '10%', top: '50%', width: 20, height: 20})}
+      {box('zero', {
+        position: 'absolute',
+        left: '0%',
+        right: '0%',
+        top: '0%',
+        bottom: '0%',
+      })}
     </View>
   );
 }
@@ -81,6 +88,10 @@ check(
 check(
   rect('rel') === '28,50,20,20',
   `a relative percent offset measures the content box (${rect('rel')})`,
+);
+check(
+  rect('zero') === '0,0,200,100',
+  `0% insets pin all four edges rather than reading as unset (${rect('zero')})`,
 );
 
 report('pct-inset');

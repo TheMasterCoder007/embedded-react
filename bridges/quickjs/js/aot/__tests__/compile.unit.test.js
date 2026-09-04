@@ -948,6 +948,23 @@ describe('AOT responsive layout', () => {
     expect(c).toContain('p.bottom_pct = -5.0f;');
   });
 
+  // 0% means 0px, and 0.0 is the engine's "not set" sentinel for a percentage field — so an authored
+  // 0% has to land on the pixel field, or the inset would read as absent and fall back elsewhere.
+  it('lowers a 0% inset onto the pixel field', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (
+          <View style={{ position: 'absolute', left: '0%', right: '0%', flexBasis: '0%' }}>
+            <Text>x</Text>
+          </View>
+        );
+      }`);
+    expect(c).toContain('p.left = 0;');
+    expect(c).toContain('p.right = 0;');
+    expect(c).toContain('p.flex_basis = 0;');
+    expect(c).not.toContain('_pct');
+  });
+
   it('keeps absolute pixel widths on the pixel field', () => {
     const c = gen(`${PRE}
       export function App() {

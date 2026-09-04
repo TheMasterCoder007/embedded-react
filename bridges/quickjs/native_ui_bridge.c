@@ -1395,9 +1395,18 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
         {
             char* end = NULL;
             const double pct = strtod(s, &end);
-            if (end != s && *end == '%')
+            if (end != s && *end == '%' && !isnan(pct))
             {
-                p->flex_basis_pct = (float)pct;
+                /* `flexBasis: '0%'` is the CSS `flex: 1 1 0%` idiom, and 0.0 is the percentage field's
+                 * "not set" sentinel — so it lowers to the pixel field, which means the same thing. */
+                if (pct == 0.0)
+                {
+                    p->flex_basis = 0;
+                }
+                else
+                {
+                    p->flex_basis_pct = (float)pct;
+                }
             }
             JS_FreeCString(ctx, s);
         }
@@ -1437,9 +1446,18 @@ static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pc
         {
             char* end = NULL;
             const double p = strtod(s, &end);
-            if (end != s && *end == '%')
+            if (end != s && *end == '%' && !isnan(p))
             {
-                *pct = (float)p;
+                /* 0% of any box is 0 px, and 0.0 is the percentage field's "not set" sentinel — so an
+                 * authored `'0%'` goes to the pixel field, where it still pins the edge. */
+                if (p == 0.0)
+                {
+                    *px = 0;
+                }
+                else
+                {
+                    *pct = (float)p;
+                }
             }
             JS_FreeCString(ctx, s);
         }

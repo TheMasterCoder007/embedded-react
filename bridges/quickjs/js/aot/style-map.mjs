@@ -131,6 +131,9 @@ const pctOrPx = (pxField, pctField) => v => {
       throw new Error(
         `expected a percentage like '50%', got ${JSON.stringify(v)}`,
       );
+    // 0% of any box is 0px, and the engine reads 0.0 in a percentage field as "not set" — so lower an
+    // authored 0% onto the pixel field, where it still means the same thing.
+    if (n === 0) return [{field: pxField, expr: '0'}];
     // A valid C float literal needs a decimal point — `50f` is a syntax error, `50.0f` is not.
     const lit = Number.isInteger(n) ? `${n}.0f` : `${n}f`;
     return [{field: pctField, expr: lit}];

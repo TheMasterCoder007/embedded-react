@@ -136,6 +136,10 @@ static int16_t clamp_size(int16_t v, const int16_t mn, const int16_t mx)
  */
 static float clamp_sizef(float v, const int16_t mn, const int16_t mx)
 {
+    /* Settled first, because every comparison below is false for a NaN — it would sail through the
+     * clamps untouched and break the contract this function exists to enforce. */
+    if (v != v)
+        v = 0.0f;
     if (mn != ER_LAYOUT_AUTO && v < (float)mn)
         v = (float)mn;
     if (mx != ER_LAYOUT_AUTO && v > (float)mx)
@@ -176,11 +180,35 @@ static int16_t round_px(const float v)
 }
 
 /**
+ * @brief The whole-pixel distance between two rounded edges — a size on the pixel grid.
+ *
+ * round_px() clamps each edge into int16 separately, so a wild percentage can saturate one edge to each
+ * end of that range and leave a difference twice as wide as an int16, or a reversed one. A size is
+ * never negative and never leaves int16, so it is settled here rather than wrapping on the cast.
+ *
+ * @param[in] lo  Rounded near edge.
+ * @param[in] hi  Rounded far edge.
+ *
+ * @return hi - lo, clamped to [0, 32767].
+ */
+static int16_t span_px(const int16_t lo, const int16_t hi)
+{
+    const int32_t d = (int32_t)hi - (int32_t)lo;
+    if (d < 0)
+        return 0;
+    if (d > 32767)
+        return 32767;
+    return (int16_t)d;
+}
+
+/**
  * @brief Resolves one inset edge — left, top, right or bottom — to pixels.
  *
  * A percentage measures against `base`, the containing block's extent on the edge's OWN axis: left and
  * right take its width, top and bottom its height. It wins over the pixel field the way width_pct wins
- * over width, and may be negative. `0%` reads as unset, as it does for every percentage field here.
+ * over width, and may be negative. `0.0` is the "not set" sentinel, so the bindings lower an authored
+ * `0%` onto the PIXEL field instead — 0% of any box is 0 px, so it pins the edge either way.
+ * A NaN percentage is not a value and reads as unset.
  *
  * The result stays fractional so the caller can round the edge it lands on exactly once.
  *
@@ -193,7 +221,10 @@ static int16_t round_px(const float v)
  */
 static bool inset_px(const int16_t px, const float pct, const int16_t base, float* out)
 {
-    if (pct != 0.0f)
+    /* `pct == pct` is the NaN test: a percentage is spelled as text, so `'NaN%'` parses. A NaN is not a
+     * value, so the edge falls back to the pixel field rather than poisoning the whole axis — a NaN
+     * position would take the node's size down with it. */
+    if (pct != 0.0f && pct == pct)
     {
         *out = (float)base * pct / 100.0f;
         return true;
@@ -1413,7 +1444,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
              * straddling a half pixel keeps it instead of losing it to a rounded-down size. */
             const int16_t cx = round_px(ex);
             const int16_t cy = round_px(ey);
-            compute_layout(ct, (int16_t)(round_px(ex + cw) - cx), (int16_t)(round_px(ey + ach) - cy), cx, cy);
+            compute_layout(ct, span_px(cx, round_px(ex + cw)), span_px(cy, round_px(ey + ach)), cx, cy);
         }
         ct = c->next_sibling_tag;
     }
