@@ -154,6 +154,9 @@ See the README for the release process.
   child and handed it the touch anyway — so an overlay wrapping a plain `<Text>` stole presses, raw
   touch events, and responder claims from whatever sat behind it. The node's own handlers are now
   skipped on that walk; its ancestors still receive the touch as before.
+- A `ScrollView` with `pointerEvents="box-none"` no longer takes the pan. Auto-scroll was the one grant
+  path that never checked pointer events; it now skips such a scroller and lets an outer scrollable
+  ancestor scroll instead.
 - Flex sizes now land on the same pixel grid as positions, so a row of `flex: 1` children fills its
   parent exactly instead of ending a pixel short. A leftover that does not divide evenly is spread
   across the children the way Yoga spreads it — three equal children in 100px are 33/34/33, not
