@@ -3158,6 +3158,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->hit_slop_top = props->hit_slop_top;
     node->hit_slop_right = props->hit_slop_right;
     node->hit_slop_bottom = props->hit_slop_bottom;
+    node->long_press_ms = props->long_press_ms;
 
     /* Copy transform props. */
     node->tp_translate_x = props->transform_translate_x;

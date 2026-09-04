@@ -343,6 +343,7 @@ export interface PressEventProps {
   onLongPress?: (event: NativeEvent<'longPress'>) => void;
   onPressIn?: (event: NativeEvent<'pressIn'>) => void;
   onPressOut?: (event: NativeEvent<'pressOut'>) => void;
+  delayLongPress?: number;
 }
 
 // --- Components ------------------------------------------------------------

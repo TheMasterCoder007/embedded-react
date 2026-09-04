@@ -994,10 +994,69 @@ static int test_long_press(void)
         return fail("long press did not preserve latest coordinates");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 12, 14);
-    if (counts.press_count != 1 || counts.press_out_count != 1)
+    if (counts.press_out_count != 1)
         return fail("long press sequence did not finish normally");
-    if (strcmp(counts.log, "SILEOP") != 0)
+    if (counts.press_count != 0)
+        return fail("a delivered long press must replace onPress, not run alongside it");
+    if (strcmp(counts.log, "SILEO") != 0)
         return fail("long press event order was wrong");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks delayLongPress replaces the default hold time for that node alone.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_long_press_delay(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 0;
+    p.top = 0;
+    p.width = 80;
+    p.height = 80;
+    p.long_press_ms = 150U;
+    er_node_set_props(pressable, &p);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 12, 14);
+    embedded_renderer_tick(149U);
+    if (counts.long_press_count != 0)
+        return fail("a shortened long press fired before its own threshold");
+
+    embedded_renderer_tick(1U);
+    if (counts.long_press_count != 1)
+        return fail("delayLongPress did not shorten the hold time");
+    embedded_renderer_touch(0, ER_TOUCH_UP, 12, 14);
+
+    /* A longer threshold must equally hold the event back past the 500 ms default. */
+    EventCounts slow = {0};
+    ERNode* patient = create_pressable(0, 100, 80, 80, &slow);
+    ERProps q = props_default();
+    q.position = ER_POS_ABSOLUTE;
+    q.left = 0;
+    q.top = 100;
+    q.width = 80;
+    q.height = 80;
+    q.long_press_ms = 1200U;
+    er_node_set_props(patient, &q);
+    er_tree_append_child(root, patient);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 12, 114);
+    embedded_renderer_tick(1000U);
+    if (slow.long_press_count != 0)
+        return fail("a lengthened long press fired at the default threshold");
+    embedded_renderer_tick(200U);
+    if (slow.long_press_count != 1)
+        return fail("a lengthened long press never fired");
+    embedded_renderer_touch(0, ER_TOUCH_UP, 12, 114);
 
     return EXIT_SUCCESS;
 }
@@ -2773,6 +2832,8 @@ int main(void)
     if (test_cancel() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_long_press() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_long_press_delay() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_long_press_cancelled_by_exit() != EXIT_SUCCESS)
         return EXIT_FAILURE;

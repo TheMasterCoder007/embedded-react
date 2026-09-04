@@ -976,6 +976,7 @@ typedef enum
     PROP_DISPLAY,
     PROP_OVERFLOW,
     PROP_POINTER_EVENTS,
+    PROP_DELAY_LONG_PRESS,
     PROP_ASPECT_RATIO,
     PROP_BACKGROUND_COLOR,
     PROP_OPACITY,
@@ -1097,6 +1098,7 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_DISPLAY] = "display",
     [PROP_OVERFLOW] = "overflow",
     [PROP_POINTER_EVENTS] = "pointerEvents",
+    [PROP_DELAY_LONG_PRESS] = "delayLongPress",
     [PROP_ASPECT_RATIO] = "aspectRatio",
     [PROP_BACKGROUND_COLOR] = "backgroundColor",
     [PROP_OPACITY] = "opacity",
@@ -1921,6 +1923,20 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_ENUM(PROP_DISPLAY, display, map_display);
     ER_ENUM(PROP_OVERFLOW, overflow, map_overflow);
     ER_ENUM(PROP_POINTER_EVENTS, pointer_events, map_pointer_events);
+
+    /* delayLongPress: how long the finger has to rest before onLongPress fires. 0 is the engine's
+       "no preference" sentinel, so an app asking for 0 (RN's "fire on the next tick") gets 1 ms. */
+    {
+        JSValueConst v = s_prop_slots[PROP_DELAY_LONG_PRESS];
+        if (!JS_IsUndefined(v))
+        {
+            int32_t n = 0;
+            if (JS_ToInt32(ctx, &n, v) == 0)
+            {
+                p.long_press_ms = (uint16_t)(n < 1 ? 1 : (n > 65535 ? 65535 : n));
+            }
+        }
+    }
 
     {
         JSValueConst v = s_prop_slots[PROP_ASPECT_RATIO];
