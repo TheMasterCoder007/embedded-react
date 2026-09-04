@@ -92,6 +92,9 @@ See the README for the release process.
 
 ### Changed
 
+- Every AOT compile error now ends with the screen size the build folded its layout at, and says when
+  that was the default. A responsive app picks its branch from `screen`, so compiling at the wrong size
+  fails somewhere in a branch meant for another board with nothing pointing back at the cause.
 - Anti-aliased vector edges no longer reach the display one run at a time. A row's AA pixels are built
   up in fast RAM and handed over a stretch at a time, with a long solid run still going out as a plain
   fill. Same picture pixel for pixel, 4-12x fewer driver calls, and a quarter off the render time of a

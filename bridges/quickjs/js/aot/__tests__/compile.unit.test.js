@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {describe, it, expect} from 'vitest';
+import {describe, it, expect, vi} from 'vitest';
 import {compileSource} from '../compile.mjs';
 import {flattenSvg} from '../../src/embedded-react/svg-ops.js';
 
@@ -1632,6 +1632,50 @@ describe('AOT diagnostics', () => {
     expect(err.message).toContain('demos/demo/App.jsx:'); // file:line:col
     expect(err.aotLoc).toBeTruthy(); // structured location preserved
     expect(err.message).toContain('^'); // code-frame caret
+  });
+
+  // A responsive app folds its layout from `screen`, so the size baked into the build picks the branch
+  // the compiler walks. Compile the thermostat at the default 800x480 and it walks the split layout —
+  // Flow A only — and reports whatever unsupported thing lives there, with nothing tying the failure
+  // back to the size. Every located error names the size now.
+  // SCREEN_W/H are read once at import, so each case re-imports the compiler under a stubbed env —
+  // which also keeps these from depending on what ER_AOT_SCREEN_W/H happen to be in the shell.
+  const errAtScreen = async (w, h) => {
+    vi.stubEnv('ER_AOT_SCREEN_W', w);
+    vi.stubEnv('ER_AOT_SCREEN_H', h);
+    vi.resetModules();
+    const {compileSource: compileAtScreen} = await import('../compile.mjs');
+    try {
+      compileAtScreen(
+        `${PRE}\nexport function App() { const [n, setN] = useState(0); return (<Pressable onPress={() => setN(window.x)}><Text>{n}</Text></Pressable>); }`,
+        'demo',
+      );
+    } catch (e) {
+      return e;
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  };
+
+  it('names the screen size the layout was folded at, and flags the default', async () => {
+    const err = await errAtScreen(undefined, undefined);
+    expect(err.message).toContain('screen: 800×480');
+    expect(err.message).toMatch(/did not supply both dimensions/);
+    expect(err.message).toMatch(/branch meant for another board/);
+    expect(err.message.trimEnd().endsWith('another board.')).toBe(true); // a footer, below the hint
+  });
+
+  it('credits ER_AOT_SCREEN_W/H when the size came from the environment', async () => {
+    const err = await errAtScreen('240', '320');
+    expect(err.message).toContain('screen: 240×320 (from ER_AOT_SCREEN_W/H).');
+    expect(err.message).not.toMatch(/did not supply both dimensions/);
+  });
+
+  it('does not credit the environment when only one dimension is usable', async () => {
+    const err = await errAtScreen('nonsense', '320');
+    expect(err.message).toContain('screen: 800×320'); // width fell back, height did not
+    expect(err.message).toMatch(/did not supply both dimensions/);
   });
 
   it('attaches a rewrite hint to a known error', () => {
