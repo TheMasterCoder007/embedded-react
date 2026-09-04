@@ -149,9 +149,9 @@ See the README for the release process.
 
 ### Fixed
 
-- `<Svg>` now draws shapes that come from a `{list.map(...)}` or sit inside a fragment. It only walked
-  direct children, so a mapped list of shapes silently drew nothing. Children it still cannot draw — a
-  component, a non-shape tag — now say so in the console instead of vanishing.
+- `<Svg>` no longer drops shapes wrapped in a fragment (both flows) or in a `{list.map(...)}` (Flow A).
+  It only walked direct children, so a mapped list of shapes silently drew nothing. A child it still
+  cannot draw now says so instead of vanishing: Flow A warns in the console, an AOT build fails.
 - `pointerEvents="box-none"` no longer swallows touches that land on one of its own inert children.
   The hit test already skipped the node. However, every dispatch path then walked back up from the hit
   child and handed it the touch anyway — so an overlay wrapping a plain `<Text>` stole presses, raw

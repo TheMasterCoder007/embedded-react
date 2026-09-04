@@ -3262,6 +3262,32 @@ function emitChildren(children, parentVar, scope, out, env, state) {
 // Flow A uses), giving a flat {ops, paints}. We bake those into C const arrays + er_node_set_vector_ops.
 // ---------------------------------------------------------------------------------------------------
 
+/**
+ * Yields an <Svg> subtree's shape children in source order, inlining any `<>…</>` in place: a fragment
+ * carries no paint and no transform, so it is transparent to the tape (the Flow A walk in flattenSvg
+ * treats it the same way). Whitespace between elements and JSX comments are skipped; anything else
+ * that has no shape to contribute throws, rather than vanishing from the generated C.
+ */
+function* svgShapeChildren(children) {
+  for (const c of children) {
+    if (c.type === 'JSXElement') yield c;
+    else if (c.type === 'JSXFragment') yield* svgShapeChildren(c.children);
+    else if (c.type === 'JSXText') {
+      if (c.value.trim())
+        throw new Error(
+          `AOT: <Svg> cannot draw text — remove ${JSON.stringify(c.value.trim())} from the subtree`,
+        );
+    } else if (c.type === 'JSXExpressionContainer') {
+      if (c.expression.type !== 'JSXEmptyExpression')
+        throw new Error(
+          'AOT: dynamic <Svg> children ({…}) not yet supported — use literal shape elements',
+        );
+    } else {
+      throw new Error(`AOT: unsupported <Svg> child (${c.type})`);
+    }
+  }
+}
+
 /** Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
  *  statically evaluating every attribute. Dynamic attrs/children throw (a state-driven Svg is not supported). */
 function jsxToSvgElement(node, scope) {
@@ -3286,16 +3312,8 @@ function jsxToSvgElement(node, scope) {
       );
   }
   const children = [];
-  for (const c of node.children) {
-    if (c.type === 'JSXElement') children.push(jsxToSvgElement(c, scope));
-    else if (
-      c.type === 'JSXExpressionContainer' &&
-      c.expression.type !== 'JSXEmptyExpression'
-    )
-      throw new Error(
-        'AOT: dynamic <Svg> children ({…}) not yet supported — use literal shape elements',
-      );
-  }
+  for (const c of svgShapeChildren(node.children))
+    children.push(jsxToSvgElement(c, scope));
   if (children.length) props.children = children;
   return {type, props};
 }
@@ -3790,6 +3808,11 @@ const SHAPE_ENTRIES = {
 function svgHasDynamic(el, scope) {
   let dyn = false;
   const walk = node => {
+    // A fragment holds no attributes of its own but its shapes' attributes still count.
+    if (node.type === 'JSXFragment') {
+      for (const c of node.children) walk(c);
+      return;
+    }
     if (node.type !== 'JSXElement') return;
     for (const attr of node.openingElement.attributes) {
       if (
@@ -3997,8 +4020,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   const entries = [];
   const decls = []; // C locals the shapes need declared ahead of the tape (rounded-rect radii)
   const specs = [];
-  for (const c of el.children) {
-    if (c.type !== 'JSXElement') continue;
+  for (const c of svgShapeChildren(el.children)) {
     const type = c.openingElement.name.name;
     const fn = SHAPE_ENTRIES[type];
     if (!fn)

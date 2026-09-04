@@ -1108,6 +1108,104 @@ describe('AOT inline-Svg gradients', () => {
   });
 });
 
+// <Svg> children are shape descriptions, not nodes, so the compiler walks the JSX itself — and used to
+// see only direct JSXElements. A fragment around a shape matched nothing and was dropped from the
+// generated C without a word, on both the static and the state-driven path.
+describe('AOT <Svg> child unwrapping', () => {
+  const svg = body => `${PRE}
+    import { Svg, Circle, Line, Arc, G } from 'embedded-react';
+    export function App() {
+      const [t, setT] = useState(0);
+      return (
+        <Pressable onPress={() => setT(t + 1)}>
+          <Svg width={100} height={100}>${body}</Svg>
+        </Pressable>
+      );
+    }`;
+
+  it('inlines a fragment in a static <Svg>, in source order', () => {
+    const c = gen(
+      svg(`
+        <><Circle cx={50} cy={50} r={40} fill="#ff0000" /></>
+        <Line x1={0} y1={0} x2={10} y2={10} stroke="#00ff00" />
+      `),
+    );
+    // Both shapes reach the paint table — the fragment used to cost the Circle.
+    expect(c).toContain('static const float s_svg0_ops[]'); // the static path (jsxToSvgElement)
+    expect(c).toMatch(/s_svg0_paints, 2, NULL, 0\);/);
+    expect(c).toContain('.fill = 4294901760u'); // the fragment's Circle (#ff0000)
+    expect(c).toContain('.stroke = 4278255360u'); // the Line after it (#00ff00)
+    expect(c.indexOf('4294901760u')).toBeLessThan(c.indexOf('4278255360u'));
+  });
+
+  it('inlines nested fragments, and one inside a <G>', () => {
+    const c = gen(
+      svg(`
+        <><><Circle cx={10} cy={10} r={5} fill="#ff0000" /></></>
+        <G fill="#0000ff"><><Circle cx={20} cy={20} r={5} /></></G>
+      `),
+    );
+    expect(c).toContain('static const float s_svg0_ops[]');
+    expect(c).toMatch(/s_svg0_paints, 2, NULL, 0\);/);
+    expect(c).toContain('.fill = 4278190335u'); // the <G> fill inherited through the fragment
+  });
+
+  it('a fragment does not hide a state-driven attribute from the dynamic-path check', () => {
+    // svgHasDynamic decides static vs state-driven; if it cannot see into the fragment the <Svg> goes
+    // down the static path and evalStatic throws on the state reference.
+    const c = gen(
+      svg(
+        `<><Arc cx={50} cy={50} r={40} startAngle={-135} endAngle={t * 2} stroke="#f4a261" strokeWidth={8} /></>`,
+      ),
+    );
+    expect(c).toContain('static void build_svg0(void)');
+    expect(c).toMatch(/static float s_svg0_ops\[\d+\];/); // mutable tape → the dynamic path ran
+    expect(c).toContain('(s_state.t * 2)');
+  });
+
+  it('inlines a fragment in a state-driven <Svg>', () => {
+    const c = gen(
+      svg(`
+        <Arc cx={50} cy={50} r={40} startAngle={-135} endAngle={t * 2} stroke="#f4a261" strokeWidth={8} />
+        <><Line x1={0} y1={0} x2={10} y2={10} stroke="#00ff00" /></>
+      `),
+    );
+    expect(c).toContain('static void build_svg0(void)');
+    expect(c).toMatch(/s_svg0_paints, 2, NULL, 0\);/); // the fragment's Line is in the table
+    expect(c).toContain('.stroke = 4278255360u');
+  });
+
+  it('throws on a child it cannot lower instead of dropping it', () => {
+    const dynamic = /dynamic <Svg> children/;
+    // static path
+    expect(() =>
+      gen(svg(`{[1, 2].map(i => <Circle cx={i} cy={i} r={1} fill="#fff" />)}`)),
+    ).toThrow(dynamic);
+    // state-driven path (a `t`-driven sibling forces it) — used to compile, silently short a shape
+    expect(() =>
+      gen(
+        svg(`
+          <Arc cx={50} cy={50} r={40} startAngle={-135} endAngle={t * 2} stroke="#f4a261" strokeWidth={8} />
+          {[1, 2].map(i => <Circle cx={i} cy={i} r={1} fill="#fff" />)}
+        `),
+      ),
+    ).toThrow(dynamic);
+    expect(() =>
+      gen(svg(`hello<Circle cx={1} cy={1} r={1} fill="#fff" />`)),
+    ).toThrow(/cannot draw text/);
+  });
+
+  it('still skips whitespace and JSX comments', () => {
+    const c = gen(
+      svg(`
+        {/* the dial face */}
+        <Circle cx={50} cy={50} r={40} fill="#ff0000" />
+      `),
+    );
+    expect(c).toMatch(/s_svg0_paints, 1, NULL, 0\);/);
+  });
+});
+
 describe('AOT arithmetic semantics', () => {
   // JS `/` is always floating point. Emitting it verbatim gave C INTEGER division whenever both sides
   // happened to be ints, which silently zeroed every ratio built from integer state: a dial driven by
