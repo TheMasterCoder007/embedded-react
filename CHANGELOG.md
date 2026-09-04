@@ -174,6 +174,10 @@ See the README for the release process.
 - An absolute child with no `left`/`right` (or no `top`/`bottom`) now lands where it would have sat
   in flow, so the parent's `justifyContent` and `alignItems` place it — centring a parent centres an
   uninset overlay instead of parking it in the top-left corner.
+- `left`, `top`, `right` and `bottom` now take a percentage (`left: '50%'`), in **both flows**. Only
+  `width` and `height` did, so a percent-positioned overlay silently stacked in the corner.
+- A percentage size on `<Dial>`, `<Switch>` or `<ActivityIndicator>` now beats their built-in default
+  box in Flow B, instead of being overwritten by it.
 - An absolutely positioned node with no explicit size on an axis now grows to fit its content, like a
   flow node. It collapsed to 0 — invisible on screen, since children still painted, but hit-testing
   skipped the whole subtree and every touch inside it fell through to whatever was behind. `width`

@@ -47,12 +47,14 @@ collect in-flow children with hypothetical sizes → wrap into lines → resolve
 `flexGrow`/`flexShrink` against free space (iterative, like Yoga's resolve-flexible-lengths
 loop, so min/max-frozen children redistribute) → compute per-line cross-size → place along
 the main axis (`justifyContent`) and cross axis (`alignSelf`/`alignItems`) → write back and
-recurse → lay out absolutely positioned children against the parent's content box. An
+recurse → lay out absolutely positioned children against the parent's padding box. An
 absolute axis is pinned by an explicit length, a percentage, or a pair of opposing insets;
 `aspectRatio` then derives the other axis from it, but only when exactly one of the two is
 pinned (with both auto, or both already pinned, it does nothing — as in Yoga). Any axis still
-unresolved sizes to the node's own content, like a flow child. Scratch arrays are static at
-module scope, sized to `ERUI_MAX_NODES`.
+unresolved sizes to the node's own content, like a flow child. `left`/`top`/`right`/`bottom`
+take a percentage as well as a length — of the containing block's width on the horizontal
+edges and its height on the vertical ones, or of the parent's content box for a node still in
+flow. Scratch arrays are static at module scope, sized to `ERUI_MAX_NODES`.
 
 ### Pixel format — premultiplied ARGB8888
 

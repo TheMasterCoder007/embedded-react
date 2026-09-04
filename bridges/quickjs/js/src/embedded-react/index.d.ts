@@ -92,11 +92,12 @@ export interface ViewStyle {
   maxHeight?: number;
   aspectRatio?: number;
 
-  // Insets (with `position: 'absolute'`).
-  top?: number;
-  left?: number;
-  right?: number;
-  bottom?: number;
+  // Insets (with `position: 'absolute'`). A percentage measures against the containing block:
+  // left/right against its width, top/bottom against its height.
+  top?: DimensionValue;
+  left?: DimensionValue;
+  right?: DimensionValue;
+  bottom?: DimensionValue;
 
   // Margin.
   margin?: number;

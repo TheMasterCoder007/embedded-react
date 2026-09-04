@@ -114,10 +114,11 @@ const tap = box => {
     seen.image != null,
     'ImageBackground mounted its Image (onLayout fired)',
   );
-  // The absolute fill resolves against the container's CONTENT box, so padding insets it.
+  // The absolute fill resolves against the container's PADDING box, as in RN, so the picture covers
+  // the whole container, and the padding only insets the children laid out over it.
   check(
-    seen.image && seen.image.width === 180 && seen.image.height === 100,
-    `the image fills the container's content box (got ${seen.image && seen.image.width}x${seen.image && seen.image.height}, want 180x100)`,
+    seen.image && seen.image.width === 200 && seen.image.height === 120,
+    `the image fills the whole container (got ${seen.image && seen.image.width}x${seen.image && seen.image.height}, want 200x120)`,
   );
   check(
     seen.child != null && seen.child.width === 180,

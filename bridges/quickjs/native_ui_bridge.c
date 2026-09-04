@@ -1407,8 +1407,9 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
 /**
  * @brief Reads a dimension value that may be a number (pixels) or a percentage string.
  *
- * A numeric value sets the px field; a `"N%"` string sets the percent field (which the engine
- * resolves against the parent's content size and which takes precedence over the px field).
+ * A numeric value sets the px field; a `"N%"` string sets the percent field, which takes precedence
+ * over the px field. The engine resolves the percentage against whichever box that prop measures
+ * from — the parent's content size for a size, its containing block for an inset.
  *
  * @param[in]  ctx  QuickJS context.
  * @param[in]  v    Pre-fetched value (e.g. `width`), JS_UNDEFINED if absent.
@@ -1865,10 +1866,10 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_DIM(PROP_MAX_WIDTH, max_width);
     ER_DIM(PROP_MIN_HEIGHT, min_height);
     ER_DIM(PROP_MAX_HEIGHT, max_height);
-    ER_DIM(PROP_TOP, top);
-    ER_DIM(PROP_LEFT, left);
-    ER_DIM(PROP_RIGHT, right);
-    ER_DIM(PROP_BOTTOM, bottom);
+    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &p.top, &p.top_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &p.left, &p.left_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &p.right, &p.right_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &p.bottom, &p.bottom_pct);
     ER_DIM(PROP_MARGIN, margin);
     ER_DIM(PROP_MARGIN_TOP, margin_top);
     ER_DIM(PROP_MARGIN_RIGHT, margin_right);

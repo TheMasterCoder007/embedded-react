@@ -155,6 +155,7 @@ static void init_layout_defaults(ERLayoutSpec* L)
     L->flex_basis_pct = 0.0f;
     L->width_pct = 0.0f;
     L->height_pct = 0.0f;
+    L->left_pct = L->top_pct = L->right_pct = L->bottom_pct = 0.0f;
 }
 
 /**
@@ -3147,6 +3148,10 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     L->flex_basis_pct = props->flex_basis_pct;
     L->width_pct = props->width_pct;
     L->height_pct = props->height_pct;
+    L->left_pct = props->left_pct;
+    L->top_pct = props->top_pct;
+    L->right_pct = props->right_pct;
+    L->bottom_pct = props->bottom_pct;
     node->z_index = props->z_index;
     node->pointer_events = props->pointer_events;
     node->hit_slop_left = props->hit_slop_left;

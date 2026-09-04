@@ -932,6 +932,22 @@ describe('AOT responsive layout', () => {
     expect(c).not.toMatch(/p\.width = \(int16_t\)50;/);
   });
 
+  // Insets take percentages too, and on their own axis: left/right of the width, top/bottom of the height.
+  it('lowers percentage insets to the *_pct fields', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        return (
+          <View style={{ position: 'absolute', left: '10%', top: '25%', right: 4, bottom: '-5%' }}>
+            <Text>x</Text>
+          </View>
+        );
+      }`);
+    expect(c).toContain('p.left_pct = 10.0f;');
+    expect(c).toContain('p.top_pct = 25.0f;');
+    expect(c).toContain('p.right = 4;');
+    expect(c).toContain('p.bottom_pct = -5.0f;');
+  });
+
   it('keeps absolute pixel widths on the pixel field', () => {
     const c = gen(`${PRE}
       export function App() {
@@ -1720,6 +1736,19 @@ describe('AOT Dial', () => {
     expect(c).toContain('p.gradient_stops[1].color = 0xFFFF0000u;');
     expect(c).toContain('p.gradient_stops[1].position = 1.0f;');
     expect(c).toContain('p.width = 120;'); // default box
+  });
+
+  // A percentage size lowers to width_pct, so the built-in 120x120 default must stand down for it —
+  // the engine reads the pixel field first, and an injected default would win over the percentage.
+  it('does not inject its default box over a percentage size', () => {
+    const c = gen(`${PRE}
+      import { Dial } from 'embedded-react';
+      export function App() {
+        return (<Dial value={50} style={{ width: '50%', height: '50%' }} />);
+      }`);
+    expect(c).toContain('p.width_pct = 50.0f;');
+    expect(c).not.toContain('p.width = 120;');
+    expect(c).not.toContain('p.height = 120;');
   });
 
   it('lowers RANGE mode: two ends, a state-driven knob/range, and a two-arg onChange', () => {
