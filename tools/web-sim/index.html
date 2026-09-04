@@ -4,7 +4,8 @@
   Licensed under the Apache License, Version 2.0 (see LICENSE).
 
   WASM simulator host page. Loads embedded-react.wasm and runs a requestAnimationFrame loop:
-  er_web_pump(dt) -> read the RGBA framebuffer -> putImageData. The canvas fills the whole viewport, so in
+  er_web_pump(dt) -> read the RGBA framebuffer -> putImageData, where dt is elapsed wall-clock time and an
+  interval keeps pumping when the browser stops calling rAF. The canvas fills the whole viewport, so in
   "Fit to window" mode the board size IS the viewport — set the browser's device toolbar to 240x320 and the
   app renders at exactly 240x320 (same workflow as a responsive web project). The size controls are a small
   floating, collapsible chip so they never steal render space. You can also lock to a real panel size. It
@@ -369,18 +370,43 @@
         canvas.addEventListener('pointerup', release);
         canvas.addEventListener('pointercancel', release);
 
+        // The engine clock advances by elapsed wall-clock time, the way a device host drives it (from
+        // esp_timer_get_time / SDL_GetTicks deltas). Frame cadence is not a clock: the browser throttles
+        // requestAnimationFrame when the window is occluded and stops it entirely while the page is hidden,
+        // which stalls the clock that setTimeout, setInterval and Animated completions all hang off.
+        // A frozen page (sleep, discarded tab) fast-forwards rather than replaying its whole absence.
+        const MAX_STEP_MS = 1000;
+        // No frame for this long means rAF is stalled and the interval below takes over the pump.
+        const RAF_IDLE_MS = 250;
+
         let prev = performance.now();
-        const frame = (now) => {
-          const dt = Math.min(100, now - prev);
+        let lastFrame = performance.now();
+
+        const step = (paint) => {
+          const now = performance.now();
+          const dt = Math.min(MAX_STEP_MS, now - prev);
           prev = now;
           pump(Math.round(dt));
+          if (!paint) return;
           // HEAPU8 may detach when WASM memory grows, so wrap a fresh view each frame, then copy into the
           // persistent ImageData (robust against detach during the copy).
           image.data.set(new Uint8ClampedArray(Module.HEAPU8.buffer, framebuffer(), len));
           ctx.putImageData(image, 0, 0);
+        };
+
+        const frame = () => {
+          lastFrame = performance.now();
+          step(true);
           requestAnimationFrame(frame);
         };
         requestAnimationFrame(frame);
+
+        // Background pump; no-ops while rAF is healthy. Browsers clamp interval timers in a hidden tab (to
+        // ~1s, and far less often once it has been hidden for minutes), which the wall-clock delta absorbs:
+        // callbacks land late rather than the app sitting frozen until the tab is focused again.
+        setInterval(() => {
+          if (performance.now() - lastFrame >= RAF_IDLE_MS) step(!document.hidden);
+        }, RAF_IDLE_MS);
       })();
     </script>
   </body>
