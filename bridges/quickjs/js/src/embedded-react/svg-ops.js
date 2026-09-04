@@ -793,20 +793,65 @@ function transformOps(ops, T) {
   return out;
 }
 
-function asArray(children) {
-  if (children == null || children === false || children === true) return [];
-  return Array.isArray(children) ? children : [children];
-}
-
 function isElement(c) {
   return c && typeof c === 'object' && c.type != null && c.props != null;
+}
+
+// React's fragment tag. Read from the global symbol registry rather than importing React, which this
+// module deliberately does not depend on; `Symbol.for` returns the very symbol React itself uses.
+const REACT_FRAGMENT = Symbol.for('react.fragment');
+
+/** Children JSX produces for "draw nothing": a bare `{cond && <Path/>}` that failed, a hole in a
+ *  list, and the whitespace JSX leaves between elements. Skipped without a word. */
+function isEmptyChild(c) {
+  return (
+    c == null ||
+    typeof c === 'boolean' ||
+    (typeof c === 'string' && c.trim() === '')
+  );
+}
+
+// Shape/grouping tags flattenSvg knows. A tag outside this set is a mistake worth reporting; a known
+// tag that produces no geometry (a <Path> with no `d`, a zero-radius <Circle>) is not.
+const SVG_TAGS = ['Path', 'Circle', 'Ellipse', 'Rect', 'Line', 'Arc', 'G'];
+
+let _warnedSvgChild = false;
+
+/**
+ * Warns ONCE about a child <Svg> cannot draw. The two common cases are a component (`<Needle/>` —
+ * <Svg> owns its subtree, so React never renders it) and a non-shape host tag; both used to vanish
+ * with no output at all. Once per app, like the other commit-path warnings: an <Svg> recompiles its
+ * tape on every update, and one bad child would otherwise print on every frame.
+ *
+ * The way out of the component case is to CALL it — `{needle()}` puts whatever it returns (an element
+ * or an array of them) straight into children, where the walk sees it. Having it return an array does
+ * nothing for `<Needle/>`: that form is never invoked at all.
+ */
+function warnSvgChild(c) {
+  if (_warnedSvgChild) return;
+  _warnedSvgChild = true;
+  const what = !isElement(c)
+    ? typeof c === 'string'
+      ? `the text ${JSON.stringify(c)}`
+      : `a ${typeof c} child`
+    : typeof c.type === 'function'
+      ? `<${c.type.displayName || c.type.name || 'Component'}>, a component`
+      : `<${String(c.type)}>`;
+  console.warn(
+    `embedded-react: <Svg> can't draw ${what}, and skipped it. Children must be ${SVG_TAGS.join('/')} ` +
+      `elements (arrays and fragments around them are unwrapped). <Svg> flattens its subtree instead of ` +
+      `mounting it, so a component is never rendered — inline its shapes, or call it as a plain ` +
+      `function: {needle()}.`,
+  );
 }
 
 /**
  * Flattens an <Svg> element's props into {ops, paints, gradients} flat arrays for NativeUI.setVectorOps.
  * Handles Path/Circle/Ellipse/Rect/Line shapes, <G> grouping (inherited paint + translate/scale), and
- * a root viewBox -> width/height scale. A shape's fillGrad/strokeGrad descriptor lands in `gradients`
- * and is referenced 1-based from its paint record. Returns empty arrays when there is nothing to draw.
+ * a root viewBox -> width/height scale. Arrays and fragments are unwrapped at any depth, so a mapped
+ * list of shapes draws like an inline one. A shape's fillGrad/strokeGrad descriptor lands in
+ * `gradients` and is referenced 1-based from its paint record. Returns empty arrays when there is
+ * nothing to draw.
  */
 export function flattenSvg(props) {
   const ops = [];
@@ -827,46 +872,54 @@ export function flattenSvg(props) {
     }
   }
 
-  const walk = (child, paint, T) => {
-    for (const c of asArray(child)) {
-      if (!isElement(c)) continue;
-      const p = c.props || {};
-      const merged = mergePaint(paint, p);
-      if (c.type === 'G') {
-        // Compose a translate/scale for the group, then recurse.
-        const s = num(p.scale, 1);
-        const gx = num(p.x ?? p.translateX, 0);
-        const gy = num(p.y ?? p.translateY, 0);
-        const childT = {
-          sx: T.sx * s,
-          sy: T.sy * s,
-          tx: gx * T.sx + T.tx,
-          ty: gy * T.sy + T.ty,
-        };
-        walk(p.children, merged, childT);
-        continue;
-      }
-      let shapeOps = null;
-      if (c.type === 'Path' && p.d) shapeOps = parsePath(p.d);
-      else if (c.type === 'Circle') shapeOps = circleOps(p);
-      else if (c.type === 'Ellipse') shapeOps = ellipseOps(p);
-      else if (c.type === 'Rect') shapeOps = rectOps(p);
-      else if (c.type === 'Line') shapeOps = lineOps(p);
-      else if (c.type === 'Arc')
-        shapeOps = arcOpsCW(
-          num(p.cx, 0),
-          num(p.cy, 0),
-          num(p.r, 0),
-          num(p.startAngle, 0),
-          num(p.endAngle, 0),
-        );
-      if (!shapeOps || shapeOps.length === 0) continue;
-
-      const paintIndex = paints.length / PAINT_STRIDE;
-      const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
-      paints.push(...paintRecord(merged, scale, gradients));
-      ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
+  // One child at a time, recursing through the wrappers, JSX inserts around shapes: an array (every
+  // `{shapes.map(...)}`, and arrays of arrays when those nest) and a fragment, either of which can
+  // sit anywhere a shape can. Both are transparent — they carry no paint and no transform.
+  const walk = (c, paint, T) => {
+    if (isEmptyChild(c)) return;
+    if (Array.isArray(c)) {
+      for (const item of c) walk(item, paint, T);
+      return;
     }
+    if (!isElement(c)) return warnSvgChild(c);
+    const p = c.props || {};
+    if (c.type === REACT_FRAGMENT) return walk(p.children, paint, T);
+    const merged = mergePaint(paint, p);
+    if (c.type === 'G') {
+      // Compose a translate/scale for the group, then recurse.
+      const s = num(p.scale, 1);
+      const gx = num(p.x ?? p.translateX, 0);
+      const gy = num(p.y ?? p.translateY, 0);
+      const childT = {
+        sx: T.sx * s,
+        sy: T.sy * s,
+        tx: gx * T.sx + T.tx,
+        ty: gy * T.sy + T.ty,
+      };
+      return walk(p.children, merged, childT);
+    }
+    if (!SVG_TAGS.includes(c.type)) return warnSvgChild(c);
+
+    let shapeOps = null;
+    if (c.type === 'Path' && p.d) shapeOps = parsePath(p.d);
+    else if (c.type === 'Circle') shapeOps = circleOps(p);
+    else if (c.type === 'Ellipse') shapeOps = ellipseOps(p);
+    else if (c.type === 'Rect') shapeOps = rectOps(p);
+    else if (c.type === 'Line') shapeOps = lineOps(p);
+    else if (c.type === 'Arc')
+      shapeOps = arcOpsCW(
+        num(p.cx, 0),
+        num(p.cy, 0),
+        num(p.r, 0),
+        num(p.startAngle, 0),
+        num(p.endAngle, 0),
+      );
+    if (!shapeOps || shapeOps.length === 0) return;
+
+    const paintIndex = paints.length / PAINT_STRIDE;
+    const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
+    paints.push(...paintRecord(merged, scale, gradients));
+    ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
   };
 
   walk(props.children, PAINT_DEFAULT, root);

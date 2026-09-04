@@ -131,7 +131,8 @@ function withLoc(fn) {
   };
 }
 
-/** Re-throws an AOT error with `file:line:col`, a code-frame, and any hint folded into the message. */
+/** Re-throws an AOT error with `file:line:col`, a code-frame, any hint, and the screen size this build
+ *  folded its layout at — all folded into the message. */
 function formatAotError(e, src, filename) {
   if (!e || !e.aotLoc) return e; // nothing to locate — leave the bare message
   const {line, column} = e.aotLoc;
@@ -143,8 +144,16 @@ function formatAotError(e, src, filename) {
     /* code-frame is best-effort */
   }
   const hint = e.aotHint ? `\n\nhint: ${e.aotHint}` : '';
+  // A responsive app folds its layout from `screen`, so the size baked into THIS build decides which
+  // branch the compiler walks. Compile at the wrong one and the error points at whatever unsupported
+  // thing the unintended branch happens to hold, with nothing on screen tying it back to the size.
+  const screen = SCREEN_FROM_ENV
+    ? `\n\nscreen: ${SCREEN_W}×${SCREEN_H} (from ER_AOT_SCREEN_W/H).`
+    : `\n\nscreen: ${SCREEN_W}×${SCREEN_H} — ER_AOT_SCREEN_W/H did not supply both dimensions, so the ` +
+      `default filled in. A responsive app picks its layout from \`screen\`, so this may be compiling a ` +
+      `branch meant for another board.`;
   const out = new Error(
-    `${e.message}\n  at ${filename}:${line}:${column + 1}\n\n${frame}${hint}`,
+    `${e.message}\n  at ${filename}:${line}:${column + 1}\n\n${frame}${hint}${screen}`,
   );
   out.aotLoc = e.aotLoc;
   if (e.aotHint) out.aotHint = e.aotHint;
@@ -562,6 +571,11 @@ function findComponent(program) {
 // e.g. ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 for the CYD; defaults to a wide 800×480.
 const SCREEN_W = Number(process.env.ER_AOT_SCREEN_W) || 800;
 const SCREEN_H = Number(process.env.ER_AOT_SCREEN_H) || 480;
+// Whether BOTH dimensions above came from the environment. A blank or unparsable override falls back to
+// the default for that axis alone, so this asks what was actually used, not whether the vars are set.
+const SCREEN_FROM_ENV =
+  Number(process.env.ER_AOT_SCREEN_W) > 0 &&
+  Number(process.env.ER_AOT_SCREEN_H) > 0;
 
 function moduleScope(program, screen, seed = {}) {
   // `seed` pre-populates the scope (e.g. image imports as their asset-name strings) BEFORE module consts are
@@ -3262,6 +3276,32 @@ function emitChildren(children, parentVar, scope, out, env, state) {
 // Flow A uses), giving a flat {ops, paints}. We bake those into C const arrays + er_node_set_vector_ops.
 // ---------------------------------------------------------------------------------------------------
 
+/**
+ * Yields an <Svg> subtree's shape children in source order, inlining any `<>…</>` in place: a fragment
+ * carries no paint and no transform, so it is transparent to the tape (the Flow A walk in flattenSvg
+ * treats it the same way). Whitespace between elements and JSX comments are skipped; anything else
+ * that has no shape to contribute throws, rather than vanishing from the generated C.
+ */
+function* svgShapeChildren(children) {
+  for (const c of children) {
+    if (c.type === 'JSXElement') yield c;
+    else if (c.type === 'JSXFragment') yield* svgShapeChildren(c.children);
+    else if (c.type === 'JSXText') {
+      if (c.value.trim())
+        throw new Error(
+          `AOT: <Svg> cannot draw text — remove ${JSON.stringify(c.value.trim())} from the subtree`,
+        );
+    } else if (c.type === 'JSXExpressionContainer') {
+      if (c.expression.type !== 'JSXEmptyExpression')
+        throw new Error(
+          'AOT: dynamic <Svg> children ({…}) not yet supported — use literal shape elements',
+        );
+    } else {
+      throw new Error(`AOT: unsupported <Svg> child (${c.type})`);
+    }
+  }
+}
+
 /** Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
  *  statically evaluating every attribute. Dynamic attrs/children throw (a state-driven Svg is not supported). */
 function jsxToSvgElement(node, scope) {
@@ -3286,16 +3326,8 @@ function jsxToSvgElement(node, scope) {
       );
   }
   const children = [];
-  for (const c of node.children) {
-    if (c.type === 'JSXElement') children.push(jsxToSvgElement(c, scope));
-    else if (
-      c.type === 'JSXExpressionContainer' &&
-      c.expression.type !== 'JSXEmptyExpression'
-    )
-      throw new Error(
-        'AOT: dynamic <Svg> children ({…}) not yet supported — use literal shape elements',
-      );
-  }
+  for (const c of svgShapeChildren(node.children))
+    children.push(jsxToSvgElement(c, scope));
   if (children.length) props.children = children;
   return {type, props};
 }
@@ -3790,6 +3822,11 @@ const SHAPE_ENTRIES = {
 function svgHasDynamic(el, scope) {
   let dyn = false;
   const walk = node => {
+    // A fragment holds no attributes of its own but its shapes' attributes still count.
+    if (node.type === 'JSXFragment') {
+      for (const c of node.children) walk(c);
+      return;
+    }
     if (node.type !== 'JSXElement') return;
     for (const attr of node.openingElement.attributes) {
       if (
@@ -3997,8 +4034,7 @@ function emitSvgDynamic(el, scope, out, env, state) {
   const entries = [];
   const decls = []; // C locals the shapes need declared ahead of the tape (rounded-rect radii)
   const specs = [];
-  for (const c of el.children) {
-    if (c.type !== 'JSXElement') continue;
+  for (const c of svgShapeChildren(el.children)) {
     const type = c.openingElement.name.name;
     const fn = SHAPE_ENTRIES[type];
     if (!fn)

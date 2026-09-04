@@ -21,8 +21,9 @@
 // Pixels aren't observable from JS, so we assert layout + no-crash across renders.
 import {useRef} from 'react';
 import {createRoot} from '../../src/renderer.js';
-import {View, Svg, Path, Circle, updateVector} from 'embedded-react';
+import {View, Svg, Path, Circle, Line, updateVector} from 'embedded-react';
 import {NativeUI} from '../../src/native-ui.js';
+import {PAINT_STRIDE} from '../../src/embedded-react/svg-ops.js';
 import {check, report} from './harness.js';
 
 const layouts = {};
@@ -230,5 +231,54 @@ root.render(
   </View>,
 );
 check(true, '<Svg source> raster fallback re-sized did not crash');
+
+// Shapes reached through a fragment and through a `{list.map(...)}` — the wrappers JSX puts around
+// anything not written inline. <Svg> flattens its own subtree, so neither becomes a node and the only
+// observable is the tape that goes over the bridge: tap setVectorOps for this one render and count
+// the paint records (one per shape). Dropping the wrappers' shapes shows up here as a short count.
+const uploads = [];
+const realSetVectorOps = NativeUI.setVectorOps;
+NativeUI.setVectorOps = function (handle, ops, paints, grads) {
+  uploads.push(paints ? paints.length / PAINT_STRIDE : 0);
+  return realSetVectorOps.call(this, handle, ops, paints, grads);
+};
+// finally, not a trailing assignment: a throw inside render would otherwise leave the bridge patched
+// for everything after this point, turning one failure into a cascade.
+try {
+  root.render(
+    <View style={{width: 200, height: 200}}>
+      <Svg style={{width: 200, height: 200}}>
+        <>
+          <Circle
+            cx={100}
+            cy={100}
+            r={90}
+            fill="none"
+            stroke="#2c3a4f"
+            strokeWidth={4}
+          />
+        </>
+        {[0, 1, 2, 3].map(i => (
+          <Line
+            key={i}
+            x1={100}
+            y1={10 + i * 4}
+            x2={100}
+            y2={30 + i * 4}
+            stroke="#f4a261"
+            strokeWidth={4}
+          />
+        ))}
+      </Svg>
+    </View>,
+  );
+} finally {
+  NativeUI.setVectorOps = realSetVectorOps;
+}
+const shapes = uploads.length ? uploads[uploads.length - 1] : -1;
+check(
+  shapes === 5,
+  `fragment + mapped-list children all reached the op-tape (5 shapes, got ${shapes})`,
+);
 
 report('svg');

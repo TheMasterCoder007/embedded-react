@@ -92,6 +92,9 @@ See the README for the release process.
 
 ### Changed
 
+- Every AOT compile error now ends with the screen size the build folded its layout at, and says when
+  that was the default. A responsive app picks its branch from `screen`, so compiling at the wrong size
+  fails somewhere in a branch meant for another board with nothing pointing back at the cause.
 - Anti-aliased vector edges no longer reach the display one run at a time. A row's AA pixels are built
   up in fast RAM and handed over a stretch at a time, with a long solid run still going out as a plain
   fill. Same picture pixel for pixel, 4-12x fewer driver calls, and a quarter off the render time of a
@@ -149,6 +152,9 @@ See the README for the release process.
 
 ### Fixed
 
+- `<Svg>` no longer drops shapes wrapped in a fragment (both flows) or in a `{list.map(...)}` (Flow A).
+  It only walked direct children, so a mapped list of shapes silently drew nothing. A child it still
+  cannot draw now says so instead of vanishing: Flow A warns in the console, an AOT build fails.
 - `pointerEvents="box-none"` no longer swallows touches that land on one of its own inert children.
   The hit test already skipped the node. However, every dispatch path then walked back up from the hit
   child and handed it the touch anyway — so an overlay wrapping a plain `<Text>` stole presses, raw

@@ -15,6 +15,7 @@
  */
 
 import {describe, it, expect, vi} from 'vitest';
+import {createElement, Fragment} from 'react';
 import {
   parseColor,
   parsePath,
@@ -278,6 +279,112 @@ describe('flattenSvg', () => {
     const moveIdx = ops.indexOf(MOVE);
     expect(ops[moveIdx + 1]).toBe(10); // translated x
     expect(ops[moveIdx + 2]).toBe(20); // translated y
+  });
+});
+
+// <Svg> owns its subtree instead of mounting it, so the walk sees raw JSX children — and every child
+// not written inline arrives wrapped: a `{items.map(...)}` is an array, a `<>…</>` is a
+// fragment element. Both used to fall through the shape branches and drop their shapes with no output.
+describe('flattenSvg child unwrapping', () => {
+  it('ignores null/false/whitespace children without warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const {ops, paints} = flattenSvg({
+      children: [
+        null,
+        undefined,
+        false,
+        true,
+        '\n  ',
+        el('Line', {x1: 0, y1: 0, x2: 10, y2: 10}),
+      ],
+    });
+    expect(paints.length / PAINT_STRIDE).toBe(1);
+    expect(shapeIndices(ops)).toEqual([0]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('draws a mapped list of shapes alongside an inline sibling', () => {
+    const bars = [1, 2, 3].map(i =>
+      el('Rect', {x: i * 10, y: 0, width: 5, height: 5}),
+    );
+    const {ops, paints} = flattenSvg({
+      children: [el('Circle', {cx: 0, cy: 0, r: 4}), bars],
+    });
+    expect(paints.length / PAINT_STRIDE).toBe(4);
+    expect(shapeIndices(ops)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('flattens arrays at any depth (two sibling maps, nested groups of them)', () => {
+    const line = n => el('Line', {x1: n, y1: 0, x2: n, y2: 10});
+    const {ops, paints} = flattenSvg({
+      children: [
+        [line(0), line(1)],
+        [[line(2)], [[line(3)]]],
+      ],
+    });
+    expect(paints.length / PAINT_STRIDE).toBe(4);
+    expect(shapeIndices(ops)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('unwraps a fragment, and one nested in a mapped array', () => {
+    const {ops, paints} = flattenSvg({
+      children: createElement(
+        Fragment,
+        null,
+        el('Line', {x1: 0, y1: 0, x2: 1, y2: 1}),
+        [1, 2].map(i =>
+          createElement(
+            Fragment,
+            {key: i},
+            el('Line', {x1: i, y1: 0, x2: i, y2: 1}),
+            el('Circle', {cx: i, cy: 0, r: 2}),
+          ),
+        ),
+      ),
+    });
+    expect(paints.length / PAINT_STRIDE).toBe(5);
+    expect(shapeIndices(ops)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('a fragment is transparent: shapes inside it keep the <G> paint and transform', () => {
+    const {ops, paints} = flattenSvg({
+      children: [
+        el('G', {
+          fill: '#ff0000',
+          x: 10,
+          y: 20,
+          children: createElement(
+            Fragment,
+            null,
+            el('Rect', {x: 0, y: 0, width: 5, height: 5}),
+          ),
+        }),
+      ],
+    });
+    expect(paints[0] >>> 0).toBe(0xffff0000); // inherited fill, as if written inline
+    const moveIdx = ops.indexOf(MOVE);
+    expect(ops[moveIdx + 1]).toBe(10); // group translate
+    expect(ops[moveIdx + 2]).toBe(20);
+  });
+
+  it('warns once about a child it cannot draw, and still draws the siblings', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const Needle = () => null;
+    const {paints} = flattenSvg({
+      children: [
+        createElement(Needle, null),
+        el('Text', {}), // a host tag, but not one <Svg> can flatten
+        el('Line', {x1: 0, y1: 0, x2: 10, y2: 10}),
+      ],
+    });
+    expect(paints.length / PAINT_STRIDE).toBe(1); // the Line still drew
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/<Needle>, a component/);
+    // warn-once: an <Svg> recompiles its tape on every update
+    flattenSvg({children: [createElement(Needle, null)]});
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });
 

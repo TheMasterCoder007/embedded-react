@@ -627,6 +627,9 @@ export const Dial: (props: DialProps) => JSX.Element;
 // <Svg> is the only host node (an engine vector node). The shape tags are descriptive children that the
 // renderer flattens into that node's op-tape — like raw text inside <Text>, they are never mounted on
 // their own, so they take no style, no events and no ref. Use them only inside an <Svg>.
+// Arrays and fragments around them are unwrapped, so a mapped list of shapes works. A component is never
+// rendered — flattening the subtree means it is not mounted, so `<Needle/>` draws nothing whatever it
+// returns; inline its shapes, or call it as a plain function ({needle()}) to put them in children.
 
 /** An SVG geometry attribute: a number, or a numeric string as in the SVG markup ('12', '1.5'). */
 export type SvgNumber = number | string;
