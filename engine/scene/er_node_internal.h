@@ -63,6 +63,10 @@ typedef struct
     float flex_basis_pct;    /**< flex_basis as % of parent main-axis; 0.0 = not set. */
     float width_pct;         /**< width as % of parent content width; 0.0 = not set. */
     float height_pct;        /**< height as % of parent content height; 0.0 = not set. */
+    float left_pct;          /**< left as % of the containing block's width; 0.0 = not set. */
+    float top_pct;           /**< top as % of the containing block's height; 0.0 = not set. */
+    float right_pct;         /**< right as % of the containing block's width; 0.0 = not set. */
+    float bottom_pct;        /**< bottom as % of the containing block's height; 0.0 = not set. */
 } ERLayoutSpec;
 
 /**

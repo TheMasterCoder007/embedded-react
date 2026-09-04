@@ -634,6 +634,13 @@ extern "C"
                                  Takes precedence over width. */
         float height_pct;     /**< height as a percentage of the parent's content height [0.0–100.0]; 0.0 = not set.
                                  Takes precedence over height. */
+        float left_pct;   /**< left as a percentage of the containing block's width; 0.0 = not set. Wins over left. */
+        float top_pct;    /**< top as a percentage of the containing block's height; 0.0 = not set. Wins over top. */
+        float right_pct;  /**< right as a percentage of the containing block's width; 0.0 = not set. Wins over right. */
+        float bottom_pct; /**< bottom as a percentage of the containing block's height; 0.0 = not set. Wins over
+                             bottom. */
+        /* A 0% inset is expressed as 0 in the pixel field above, not as 0.0 here: the two mean the same
+           pixel, and 0.0 is this field's "not set" sentinel. */
 
         /* --- View visual --- */
         uint32_t background_color;          /**< ARGB8888; 0x00000000 = transparent. */

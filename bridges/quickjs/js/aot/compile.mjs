@@ -1371,6 +1371,23 @@ function lowerDynamicStyleValue(key, valueNode, env) {
 }
 
 /**
+ * Whether a style already writes `field`, counting its percentage twin: `width: '50%'` lowers to
+ * `width_pct`, and the author has still set the width. Used by the components that fall back to a
+ * built-in size or inset when the style leaves one out — without the twin they inject a pixel default
+ * ALONGSIDE the percentage, and the engine prefers the pixel value for a size.
+ *
+ * @param {{field: string}[]} staticAssigns  Static field writes from collectStyleAssigns().
+ * @param {{field: string}[]} dynAssigns     State-driven field writes from collectStyleAssigns().
+ * @param {string} field                     ERProps field to look for.
+ */
+const styleWrites = (staticAssigns, dynAssigns, field) =>
+  [field, `${field}_pct`].some(
+    f =>
+      staticAssigns.some(a => a.field === f) ||
+      dynAssigns.some(a => a.field === f),
+  );
+
+/**
  * Collects an element's merged style into static field assigns and dynamic (state-driven) field assigns.
  * Inline object values are tried statically first; a value that references state becomes a dynAssign.
  * Later style sources override earlier ones per field (RN merge), kept in `fields` by ERProps field.
@@ -4189,9 +4206,7 @@ function emitDial(el, scope, out, env, state) {
     scope,
     env,
   );
-  const hasField = f =>
-    staticAssigns.some(a => a.field === f) ||
-    dynAssigns.some(a => a.field === f);
+  const hasField = f => styleWrites(staticAssigns, dynAssigns, f);
   if (!hasField('width')) staticAssigns.push({field: 'width', expr: '120'});
   if (!hasField('height')) staticAssigns.push({field: 'height', expr: '120'});
 
@@ -4435,9 +4450,7 @@ function emitSwitch(el, scope, out, env, state) {
     scope,
     env,
   );
-  const hasField = f =>
-    staticAssigns.some(a => a.field === f) ||
-    dynAssigns.some(a => a.field === f);
+  const hasField = f => styleWrites(staticAssigns, dynAssigns, f);
   if (!hasField('width')) staticAssigns.push({field: 'width', expr: '51'});
   if (!hasField('height')) staticAssigns.push({field: 'height', expr: '31'});
 
@@ -4685,9 +4698,7 @@ function emitActivityIndicator(el, scope, out, env) {
     scope,
     env,
   );
-  const hasField = f =>
-    staticAssigns.some(a => a.field === f) ||
-    dynAssigns.some(a => a.field === f);
+  const hasField = f => styleWrites(staticAssigns, dynAssigns, f);
   let size = 36;
   for (const attr of el.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute')
@@ -4764,9 +4775,7 @@ function emitModal(el, scope, out, env, state) {
     scope,
     env,
   );
-  const hasField = f =>
-    staticAssigns.some(a => a.field === f) ||
-    dynAssigns.some(a => a.field === f);
+  const hasField = f => styleWrites(staticAssigns, dynAssigns, f);
   // Overlay defaults: absolute, fill the parent via four 0 insets (the robust "stretch" for an absolute
   // node), centre the content. The user's style overrides any of these.
   const DEFAULTS = [

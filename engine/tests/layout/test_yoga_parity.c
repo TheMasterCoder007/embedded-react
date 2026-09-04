@@ -1047,6 +1047,354 @@ static void fixture_abs_inset_pair_padding(void)
     er_node_destroy(root);
 }
 
+/** @brief Percentage insets on an absolute measure from the padding box: left 10% and top 25% of 200. */
+static void fixture_abs_pct_inset(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.padding_left = 10;
+    rp.padding_top = 5;
+    rp.padding_right = 30;
+    rp.padding_bottom = 15;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = 10.0f;
+    ap.top_pct = 25.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-inset", "abs", EXPECT, ra, 20, 50, 20, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Each percentage inset takes its OWN axis: left 50% of 200, top 50% of 100. */
+static void fixture_abs_pct_inset_axis(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = 50.0f;
+    ap.top_pct = 50.0f;
+    ap.width = 10;
+    ap.height = 10;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-axis", "abs", EXPECT, ra, 100, 50, 10, 10);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Percentage right/bottom anchor the far edges: 200 - 20 - 20 and 100 - 20 - 20. */
+static void fixture_abs_pct_inset_far(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.right_pct = 10.0f;
+    ap.bottom_pct = 20.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-far", "abs", EXPECT, ra, 160, 60, 20, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief A pair of percentage insets sizes the axis: 200 - 20 - 50 wide, 100 - 10 - 30 tall. */
+static void fixture_abs_pct_inset_pair(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = 10.0f;
+    ap.right_pct = 25.0f;
+    ap.top_pct = 10.0f;
+    ap.bottom_pct = 30.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-pair", "abs", EXPECT, ra, 20, 10, 130, 60);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief A negative percentage inset pushes the node outside its containing block: -10% of 200. */
+static void fixture_abs_pct_inset_negative(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = -10.0f;
+    ap.top_pct = -20.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-negative", "abs", EXPECT, ra, -20, -20, 20, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief Margin still shifts a percentage-inset absolute: 10% of 200 + marginLeft 5. */
+static void fixture_abs_pct_inset_margin(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = 10.0f;
+    ap.top_pct = 10.0f;
+    ap.margin_left = 5;
+    ap.margin_top = 7;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-margin", "abs", EXPECT, ra, 25, 27, 20, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief A percentage inset on a half pixel rounds once, at the edge it lands on.
+ *
+ * right is 50% of 201 = 100.5, so the left edge is 201 - 100.5 - 20 = 80.5 and rounds UP to 81.
+ * Rounding the inset first (to 101) would put the node a pixel early.
+ */
+static void fixture_abs_pct_inset_half_pixel(void)
+{
+    ERProps rp = props_default();
+    rp.width = 201;
+    rp.height = 100;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.right_pct = 50.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-half-px", "abs", EXPECT, ra, 81, 0, 20, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief A half-pixel percentage PAIR spans one rounded edge to the next.
+ *
+ * x runs 100.5 -> 150.75 and y 50.5 -> 75.75, so the rounded edges are 101/151 and 51/76: 50x25.
+ */
+static void fixture_abs_pct_pair_half_pixel(void)
+{
+    ERProps rp = props_default();
+    rp.width = 201;
+    rp.height = 101;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = 50.0f;
+    ap.right_pct = 25.0f;
+    ap.top_pct = 50.0f;
+    ap.bottom_pct = 25.0f;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-pair-half", "abs", EXPECT, ra, 101, 51, 50, 25);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/** @brief right/bottom alone still size the node from its content: 60x40 pinned 30/10 off the far edges. */
+static void fixture_abs_far_inset_auto_size(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.right = 30;
+    ap.bottom = 10;
+    ERNode* abs = mk(ap, &ra);
+
+    ERProps kp = props_default();
+    kp.width = 60;
+    kp.height = 40;
+    ERNode* kid = mk(kp, NULL);
+
+    er_tree_append_child(abs, kid);
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-far-auto", "abs", EXPECT, ra, 110, 150, 60, 40);
+
+    kill_child(abs, kid);
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief A percentage wild enough to saturate the pixel grid still yields a sane box.
+ *
+ * Each edge clamps into int16 on its own, so a left edge pinned far off one end and a width running far
+ * off the other leave a difference twice as wide as an int16 — which used to wrap the subtraction into a
+ * NEGATIVE width. Yoga has no int16 to overflow, so there is no reference rect here: the assertion is
+ * that the box stays a box.
+ */
+static void fixture_abs_pct_saturates(void)
+{
+    ERProps rp = props_default();
+    rp.width = 480;
+    rp.height = 320;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.position = ER_POS_ABSOLUTE;
+    ap.left_pct = -10000.0f;  /* -48000 px, clamped to the int16 floor. */
+    ap.width_pct = 20000.0f;  /* 96000 px, so the far edge clamps to the ceiling. */
+    ap.top_pct = 0.0f / 0.0f; /* A style may spell a percentage "NaN%". */
+    ap.height = 20;
+    ERNode* abs = mk(ap, &ra);
+
+    er_tree_append_child(root, abs);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("abs-pct-saturate", "abs", EXPECT, ra, -32768, 0, 32767, 20);
+
+    kill_child(root, abs);
+    er_node_destroy(root);
+}
+
+/**
+ * @brief A RELATIVE percentage offset measures against the parent's CONTENT box, not its padding box.
+ *
+ * Content is 160x80, so left 10% = 16 and top 25% = 20 shift the flow position (10, 5) to (26, 25).
+ */
+static void fixture_rel_pct_offset(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    rp.padding_left = 10;
+    rp.padding_top = 5;
+    rp.padding_right = 30;
+    rp.padding_bottom = 15;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.left_pct = 10.0f;
+    ap.top_pct = 25.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* a = mk(ap, &ra);
+
+    er_tree_append_child(root, a);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("rel-pct-offset", "a", EXPECT, ra, 26, 25, 20, 20);
+
+    kill_child(root, a);
+    er_node_destroy(root);
+}
+
+/** @brief A relative right/bottom percentage shifts the flow position back: (10, 5) - (16, 20). */
+static void fixture_rel_pct_offset_far(void)
+{
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 100;
+    rp.padding_left = 10;
+    rp.padding_top = 5;
+    rp.padding_right = 30;
+    rp.padding_bottom = 15;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps ap = props_default();
+    ap.right_pct = 10.0f;
+    ap.bottom_pct = 25.0f;
+    ap.width = 20;
+    ap.height = 20;
+    ERNode* a = mk(ap, &ra);
+
+    er_tree_append_child(root, a);
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("rel-pct-far", "a", EXPECT, ra, -6, -15, 20, 20);
+
+    kill_child(root, a);
+    er_node_destroy(root);
+}
+
 /** @brief Margin still shifts an inset-positioned absolute, measured from the padding edge: 0 + 10 + 5. */
 static void fixture_abs_margin_inset_padding(void)
 {
@@ -2556,6 +2904,18 @@ int main(void)
     fixture_abs_containing_block();
     fixture_abs_padding_box_edges();
     fixture_abs_inset_pair_padding();
+    fixture_abs_pct_inset();
+    fixture_abs_pct_inset_axis();
+    fixture_abs_pct_inset_far();
+    fixture_abs_pct_inset_pair();
+    fixture_abs_pct_inset_negative();
+    fixture_abs_pct_inset_margin();
+    fixture_abs_pct_inset_half_pixel();
+    fixture_abs_pct_pair_half_pixel();
+    fixture_abs_pct_saturates();
+    fixture_abs_far_inset_auto_size();
+    fixture_rel_pct_offset();
+    fixture_rel_pct_offset_far();
     fixture_abs_margin_inset_padding();
     fixture_abs_static_position_padding();
     fixture_abs_static_position_align();

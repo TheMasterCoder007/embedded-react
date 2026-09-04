@@ -1395,9 +1395,18 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
         {
             char* end = NULL;
             const double pct = strtod(s, &end);
-            if (end != s && *end == '%')
+            if (end != s && *end == '%' && !isnan(pct))
             {
-                p->flex_basis_pct = (float)pct;
+                /* `flexBasis: '0%'` is the CSS `flex: 1 1 0%` idiom, and 0.0 is the percentage field's
+                 * "not set" sentinel — so it lowers to the pixel field, which means the same thing. */
+                if (pct == 0.0)
+                {
+                    p->flex_basis = 0;
+                }
+                else
+                {
+                    p->flex_basis_pct = (float)pct;
+                }
             }
             JS_FreeCString(ctx, s);
         }
@@ -1407,8 +1416,9 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
 /**
  * @brief Reads a dimension value that may be a number (pixels) or a percentage string.
  *
- * A numeric value sets the px field; a `"N%"` string sets the percent field (which the engine
- * resolves against the parent's content size and which takes precedence over the px field).
+ * A numeric value sets the px field; a `"N%"` string sets the percent field, which takes precedence
+ * over the px field. The engine resolves the percentage against whichever box that prop measures
+ * from — the parent's content size for a size, its containing block for an inset.
  *
  * @param[in]  ctx  QuickJS context.
  * @param[in]  v    Pre-fetched value (e.g. `width`), JS_UNDEFINED if absent.
@@ -1436,9 +1446,18 @@ static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pc
         {
             char* end = NULL;
             const double p = strtod(s, &end);
-            if (end != s && *end == '%')
+            if (end != s && *end == '%' && !isnan(p))
             {
-                *pct = (float)p;
+                /* 0% of any box is 0 px, and 0.0 is the percentage field's "not set" sentinel — so an
+                 * authored `'0%'` goes to the pixel field, where it still pins the edge. */
+                if (p == 0.0)
+                {
+                    *px = 0;
+                }
+                else
+                {
+                    *pct = (float)p;
+                }
             }
             JS_FreeCString(ctx, s);
         }
@@ -1865,10 +1884,10 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_DIM(PROP_MAX_WIDTH, max_width);
     ER_DIM(PROP_MIN_HEIGHT, min_height);
     ER_DIM(PROP_MAX_HEIGHT, max_height);
-    ER_DIM(PROP_TOP, top);
-    ER_DIM(PROP_LEFT, left);
-    ER_DIM(PROP_RIGHT, right);
-    ER_DIM(PROP_BOTTOM, bottom);
+    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &p.top, &p.top_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &p.left, &p.left_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &p.right, &p.right_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &p.bottom, &p.bottom_pct);
     ER_DIM(PROP_MARGIN, margin);
     ER_DIM(PROP_MARGIN_TOP, margin_top);
     ER_DIM(PROP_MARGIN_RIGHT, margin_right);

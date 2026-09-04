@@ -122,6 +122,120 @@ static int16_t clamp_size(int16_t v, const int16_t mn, const int16_t mx)
 }
 
 /**
+ * @brief Clamps a fractional size to [mn, mx], treating ER_LAYOUT_AUTO bounds as unconstrained.
+ *
+ * The float twin of clamp_size(), for the one place a size is still fractional: an absolute's size can
+ * be a percentage, or the gap left between two percentage insets, and it is not rounded until both of
+ * its edges are — clamping it as an integer here would round it a second time.
+ *
+ * @param[in] v   Value to clamp.
+ * @param[in] mn  Minimum bound (ER_LAYOUT_AUTO = no minimum).
+ * @param[in] mx  Maximum bound (ER_LAYOUT_AUTO = no maximum).
+ *
+ * @return The clamped value, never negative.
+ */
+static float clamp_sizef(float v, const int16_t mn, const int16_t mx)
+{
+    /* Settled first, because every comparison below is false for a NaN — it would sail through the
+     * clamps untouched and break the contract this function exists to enforce. */
+    if (v != v)
+        v = 0.0f;
+    if (mn != ER_LAYOUT_AUTO && v < (float)mn)
+        v = (float)mn;
+    if (mx != ER_LAYOUT_AUTO && v > (float)mx)
+        v = (float)mx;
+    if (v < 0.0f)
+        v = 0.0f;
+    return v;
+}
+
+/**
+ * @brief Rounds a fractional pixel coordinate half up, the way div_round() rounds an exact fraction.
+ *
+ * `(int)(v + 0.5f)` truncates toward zero, which rounds a negative coordinate the wrong way — and a
+ * coordinate here is routinely negative, since an inset may be negative and an absolute is free to sit
+ * outside its containing block.
+ *
+ * @param[in] v  Coordinate in pixels.
+ *
+ * @return floor(v + 1/2).
+ */
+static int16_t round_px(const float v)
+{
+    /* Float-to-int is undefined past int16 and for a NaN, and both are reachable from a style: a
+     * percentage is spelled as text, so `'NaN%'` parses and `'100000%'` of a full screen does not fit.
+     * Settle them here rather than letting a coordinate wrap into the opposite corner. */
+    if (v != v)
+        return 0;
+    if (v >= 32767.0f)
+        return 32767;
+    if (v <= -32768.0f)
+        return -32768;
+
+    const float t = v + 0.5f;
+    int32_t i = (int32_t)t;
+    if ((float)i > t)
+        i--;
+    return (int16_t)i;
+}
+
+/**
+ * @brief The whole-pixel distance between two rounded edges — a size on the pixel grid.
+ *
+ * round_px() clamps each edge into int16 separately, so a wild percentage can saturate one edge to each
+ * end of that range and leave a difference twice as wide as an int16, or a reversed one. A size is
+ * never negative and never leaves int16, so it is settled here rather than wrapping on the cast.
+ *
+ * @param[in] lo  Rounded near edge.
+ * @param[in] hi  Rounded far edge.
+ *
+ * @return hi - lo, clamped to [0, 32767].
+ */
+static int16_t span_px(const int16_t lo, const int16_t hi)
+{
+    const int32_t d = (int32_t)hi - (int32_t)lo;
+    if (d < 0)
+        return 0;
+    if (d > 32767)
+        return 32767;
+    return (int16_t)d;
+}
+
+/**
+ * @brief Resolves one inset edge — left, top, right or bottom — to pixels.
+ *
+ * A percentage measures against `base`, the containing block's extent on the edge's OWN axis: left and
+ * right take its width, top and bottom its height. It wins over the pixel field the way width_pct wins
+ * over width, and may be negative. `0.0` is the "not set" sentinel, so the bindings lower an authored
+ * `0%` onto the PIXEL field instead — 0% of any box is 0 px, so it pins the edge either way.
+ * A NaN percentage is not a value and reads as unset.
+ *
+ * The result stays fractional so the caller can round the edge it lands on exactly once.
+ *
+ * @param[in]  px    Pixel field (ER_LAYOUT_AUTO = not set).
+ * @param[in]  pct   Percentage field (0.0 = not set).
+ * @param[in]  base  Containing-block extent the percentage measures against.
+ * @param[out] out   Receives the resolved inset; untouched when the edge is not set.
+ *
+ * @return true when the edge is set.
+ */
+static bool inset_px(const int16_t px, const float pct, const int16_t base, float* out)
+{
+    /* `pct == pct` is the NaN test: a percentage is spelled as text, so `'NaN%'` parses. A NaN is not a
+     * value, so the edge falls back to the pixel field rather than poisoning the whole axis — a NaN
+     * position would take the node's size down with it. */
+    if (pct != 0.0f && pct == pct)
+    {
+        *out = (float)base * pct / 100.0f;
+        return true;
+    }
+    if (px == ER_LAYOUT_AUTO)
+        return false;
+    *out = (float)px;
+    return true;
+}
+
+/**
  * @brief Divides and rounds a half up, matching Yoga's pixel grid.
  *
  * Layout positions round the way Yoga does: a coordinate on a half pixel goes up. Plain C division
@@ -1148,16 +1262,18 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             ch = s_scratch[i].main;
         }
 
-        /* Relative-position offsets (left/right/top/bottom shift in flow). */
+        /* Relative-position offsets (left/right/top/bottom shift in flow). A percentage measures against
+         * this parent's CONTENT box, not the padding box an absolute's insets resolve against. */
         const ERLayoutSpec* cl = &c->layout;
-        if (cl->left != ER_LAYOUT_AUTO)
-            cx = (int16_t)(cx + cl->left);
-        else if (cl->right != ER_LAYOUT_AUTO)
-            cx = (int16_t)(cx - cl->right);
-        if (cl->top != ER_LAYOUT_AUTO)
-            cy = (int16_t)(cy + cl->top);
-        else if (cl->bottom != ER_LAYOUT_AUTO)
-            cy = (int16_t)(cy - cl->bottom);
+        float d = 0.0f;
+        if (inset_px(cl->left, cl->left_pct, content_w, &d))
+            cx = round_px((float)cx + d);
+        else if (inset_px(cl->right, cl->right_pct, content_w, &d))
+            cx = round_px((float)cx - d);
+        if (inset_px(cl->top, cl->top_pct, content_h, &d))
+            cy = round_px((float)cy + d);
+        else if (inset_px(cl->bottom, cl->bottom_pct, content_h, &d))
+            cy = round_px((float)cy - d);
 
         c->computed.x = cx;
         c->computed.y = cy;
@@ -1208,24 +1324,33 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
              *
              * Size each axis from whatever the style actually pins it to: an explicit length, a
              * percentage of the containing block, or a pair of opposing insets. An axis none of those
-             * answer is left unresolved for the aspect-ratio and content fallbacks below. */
-            int16_t cw = 0, ach = 0;
+             * answer is left unresolved for the aspect-ratio and content fallbacks below.
+             *
+             * Insets and sizes stay FRACTIONAL through all of this. A percentage rarely lands on a whole
+             * pixel, and rounding one before it is combined with the rest would round twice. */
+            float il = 0.0f, ir = 0.0f, it = 0.0f, ib = 0.0f;
+            const bool has_l = inset_px(cl->left, cl->left_pct, w, &il);
+            const bool has_r = inset_px(cl->right, cl->right_pct, w, &ir);
+            const bool has_t = inset_px(cl->top, cl->top_pct, h, &it);
+            const bool has_b = inset_px(cl->bottom, cl->bottom_pct, h, &ib);
+
+            float cw = 0.0f, ach = 0.0f;
             bool have_w = true, have_h = true;
             if (cl->width != ER_LAYOUT_AUTO)
-                cw = cl->width;
+                cw = (float)cl->width;
             else if (cl->width_pct > 0.0f)
-                cw = (int16_t)((float)w * cl->width_pct / 100.0f + 0.5f);
-            else if (cl->left != ER_LAYOUT_AUTO && cl->right != ER_LAYOUT_AUTO)
-                cw = (int16_t)(w - cl->left - cl->right - ml - mr);
+                cw = (float)w * cl->width_pct / 100.0f;
+            else if (has_l && has_r)
+                cw = (float)(w - ml - mr) - il - ir;
             else
                 have_w = false;
 
             if (cl->height != ER_LAYOUT_AUTO)
-                ach = cl->height;
+                ach = (float)cl->height;
             else if (cl->height_pct > 0.0f)
-                ach = (int16_t)((float)h * cl->height_pct / 100.0f + 0.5f);
-            else if (cl->top != ER_LAYOUT_AUTO && cl->bottom != ER_LAYOUT_AUTO)
-                ach = (int16_t)(h - cl->top - cl->bottom - mt - mb);
+                ach = (float)h * cl->height_pct / 100.0f;
+            else if (has_t && has_b)
+                ach = (float)(h - mt - mb) - it - ib;
             else
                 have_h = false;
 
@@ -1235,12 +1360,12 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             {
                 if (have_w)
                 {
-                    ach = (int16_t)((float)cw / cl->aspect_ratio + 0.5f);
+                    ach = cw / cl->aspect_ratio;
                     have_h = true;
                 }
                 else
                 {
-                    cw = (int16_t)((float)ach * cl->aspect_ratio + 0.5f);
+                    cw = ach * cl->aspect_ratio;
                     have_w = true;
                 }
             }
@@ -1256,13 +1381,13 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 int16_t intr_w = 0, intr_h = 0;
                 measure_content(ct, &intr_w, &intr_h);
                 if (!have_w)
-                    cw = intr_w;
+                    cw = (float)intr_w;
                 if (!have_h)
-                    ach = intr_h;
+                    ach = (float)intr_h;
             }
 
-            cw = clamp_size(cw, cl->min_width, cl->max_width);
-            ach = clamp_size(ach, cl->min_height, cl->max_height);
+            cw = clamp_sizef(cw, cl->min_width, cl->max_width);
+            ach = clamp_sizef(ach, cl->min_height, cl->max_height);
 
             /* An axis with NO inset falls back to its static position: where this child would have sat
              * had it stayed in flow, which is inside the CONTENT box and honours the parent's
@@ -1272,8 +1397,11 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (self_align == ER_ALIGN_AUTO)
                 self_align = ER_ALIGN_STRETCH;
 
-            const int16_t s_main = is_row ? cw : ach;
-            const int16_t s_cross = is_row ? ach : cw;
+            /* The static position places a whole node, so it works off the rounded size. */
+            const int16_t rw = round_px(cw);
+            const int16_t rh = round_px(ach);
+            const int16_t s_main = is_row ? rw : rh;
+            const int16_t s_cross = is_row ? rh : rw;
             const int16_t mm_lead = is_row ? ml : mt;
             const int16_t mm_trail = is_row ? mr : mb;
             const int16_t mc_lead = is_row ? mt : ml;
@@ -1297,23 +1425,26 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                               L->flex_wrap == ER_WRAP_WRAP_REVERSE);
 
             /* Insets measure from the padding box; an axis pinned by neither takes the static position. */
-            int16_t cx;
-            if (cl->left != ER_LAYOUT_AUTO)
-                cx = (int16_t)(x + cl->left + ml);
-            else if (cl->right != ER_LAYOUT_AUTO)
-                cx = (int16_t)(x + w - cl->right - cw - mr);
+            float ex, ey;
+            if (has_l)
+                ex = (float)(x + ml) + il;
+            else if (has_r)
+                ex = (float)(x + w - mr) - ir - cw;
             else
-                cx = is_row ? main_static : cross_static;
+                ex = (float)(is_row ? main_static : cross_static);
 
-            int16_t cy;
-            if (cl->top != ER_LAYOUT_AUTO)
-                cy = (int16_t)(y + cl->top + mt);
-            else if (cl->bottom != ER_LAYOUT_AUTO)
-                cy = (int16_t)(y + h - cl->bottom - ach - mb);
+            if (has_t)
+                ey = (float)(y + mt) + it;
+            else if (has_b)
+                ey = (float)(y + h - mb) - ib - ach;
             else
-                cy = is_row ? cross_static : main_static;
+                ey = (float)(is_row ? cross_static : main_static);
 
-            compute_layout(ct, cw, ach, cx, cy);
+            /* Both edges land on the pixel grid and the size is the distance between them, so a box
+             * straddling a half pixel keeps it instead of losing it to a rounded-down size. */
+            const int16_t cx = round_px(ex);
+            const int16_t cy = round_px(ey);
+            compute_layout(ct, span_px(cx, round_px(ex + cw)), span_px(cy, round_px(ey + ach)), cx, cy);
         }
         ct = c->next_sibling_tag;
     }

@@ -118,7 +118,8 @@ const dim = v => {
 
 /**
  * A dimension that may be a percentage. `'50%'` → the engine's float `*_pct` field (% of the parent);
- * a number → the pixel field. Used for width / height / flexBasis, which the engine resolves at layout.
+ * a number → the pixel field. Used for width / height / flexBasis and the four insets, all of which the
+ * engine resolves at layout.
  *
  * @param {string} pxField   ERProps pixel field (e.g. 'width').
  * @param {string} pctField  ERProps percentage field (e.g. 'width_pct').
@@ -130,6 +131,9 @@ const pctOrPx = (pxField, pctField) => v => {
       throw new Error(
         `expected a percentage like '50%', got ${JSON.stringify(v)}`,
       );
+    // 0% of any box is 0px, and the engine reads 0.0 in a percentage field as "not set" — so lower an
+    // authored 0% onto the pixel field, where it still means the same thing.
+    if (n === 0) return [{field: pxField, expr: '0'}];
     // A valid C float literal needs a decimal point — `50f` is a syntax error, `50.0f` is not.
     const lit = Number.isInteger(n) ? `${n}.0f` : `${n}f`;
     return [{field: pctField, expr: lit}];
@@ -185,10 +189,10 @@ const KEYS = {
   // Positioning: `position: 'absolute'` takes a node out of flow; left/top/right/bottom are its anchors.
   position: v => [{field: 'position', expr: enumKey(POSITION, 'position')(v)}],
   display: v => [{field: 'display', expr: enumKey(DISPLAY, 'display')(v)}],
-  left: v => [{field: 'left', expr: dim(v)}],
-  top: v => [{field: 'top', expr: dim(v)}],
-  right: v => [{field: 'right', expr: dim(v)}],
-  bottom: v => [{field: 'bottom', expr: dim(v)}],
+  left: pctOrPx('left', 'left_pct'),
+  top: pctOrPx('top', 'top_pct'),
+  right: pctOrPx('right', 'right_pct'),
+  bottom: pctOrPx('bottom', 'bottom_pct'),
   // `flex: n` → grow=n, shrink=1, basis=0 (RN semantics; matches native_ui_bridge apply_flex).
   flex: v => {
     const n = Number(v);
