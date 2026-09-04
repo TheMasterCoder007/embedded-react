@@ -670,6 +670,7 @@ extern "C"
         int16_t hit_slop_top;    /**< Extend hit area beyond top edge in pixels. */
         int16_t hit_slop_right;  /**< Extend hit area beyond right edge in pixels. */
         int16_t hit_slop_bottom; /**< Extend hit area beyond bottom edge in pixels. */
+        uint16_t long_press_ms;  /**< Hold time before ER_EVENT_LONG_PRESS fires; 0 = the 500 ms default. */
 
         /* --- Text --- */
         char text[ER_TEXT_MAX + 1];               /**< Null-terminated UTF-8 string. */

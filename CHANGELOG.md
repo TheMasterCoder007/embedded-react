@@ -149,9 +149,14 @@ See the README for the release process.
   drawing.
 - The thermostat demo's dial is a `<Dial>` now, in both flows. That removed about 800 lines of op-tape
   building, per-touch repainting, and hand-expanded trig.
+- `delayLongPress` sets the hold time before `onLongPress` fires, per node, in **both flows**. It was
+  fixed at 500 ms for every press on the screen.
 
 ### Fixed
 
+- A long press no longer fires `onPress` as well when the finger lifts. React Native treats the long
+  press as replacing the tap, and an app that acted on both ran two actions for one gesture. A node
+  with no `onLongPress` handler is unaffected — a long hold there is still an ordinary press.
 - `setTimeout`, `setInterval` and `Animated` completion callbacks now fire in the WASM simulator. Its
   engine clock ran off the browser's animation frames, which stop while the page is hidden and cap each
   step at 100 ms — so time crawled or stopped, and nothing scheduled ever came due. The simulator now

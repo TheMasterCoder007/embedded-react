@@ -20,6 +20,7 @@
 // Top-level props NativeUI understands directly (not part of `style`). Everything else style-ish is
 // expected inside props.style. Event handlers (on*) are routed separately via setEvent.
 export const PASSTHROUGH = [
+  'delayLongPress',
   'numberOfLines',
   'ellipsizeMode',
   'value',

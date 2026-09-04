@@ -356,6 +356,7 @@ struct ERNode
     int16_t hit_slop_top;    /**< Pixels by which the top hit edge extends beyond the computed rect. */
     int16_t hit_slop_right;  /**< Pixels by which the right hit edge extends beyond the computed rect. */
     int16_t hit_slop_bottom; /**< Pixels by which the bottom hit edge extends beyond the computed rect. */
+    uint16_t long_press_ms;  /**< Hold time before a long press fires; 0 = the engine default. */
     ERLayoutSpec layout;
     ERLayoutRect computed;
     ERLayoutRect prev_computed;   /**< Computed rect from the previous commit, used to detect layout changes. */

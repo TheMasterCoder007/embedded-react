@@ -5334,6 +5334,29 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
     }
   }
 
+  // `delayLongPress` is the hold time before onLongPress fires (RN's prop, same 500 ms default). It has
+  // to fold: the value is baked into the node's props at build time. 0 is the engine's "no preference"
+  // sentinel, so an app asking for 0 gets 1 ms — the next tick, which is what RN's setTimeout(0) means.
+  const delayAttr = namedAttr(el.openingElement, 'delayLongPress');
+  if (delayAttr) {
+    const bad = aotError(
+      `AOT: <${tag} delayLongPress> must fold to a number`,
+      'pass a literal or a module-level constant in milliseconds, e.g. delayLongPress={800}.',
+    );
+    if (delayAttr.value == null) throw bad;
+    let ms;
+    try {
+      ms = Number(evalStatic(attrExpr(delayAttr), scope));
+    } catch {
+      throw bad;
+    }
+    if (!Number.isFinite(ms)) throw bad;
+    staticAssigns.push({
+      field: 'long_press_ms',
+      expr: String(Math.min(65535, Math.max(1, Math.round(ms)))),
+    });
+  }
+
   // `displayCode` toggles show/hide for a state-driven conditional: the node is always built, its
   // `display` flips between flex and none in app_update (joining any state-driven style assigns).
   // Pushed last so an enclosing conditional beats the element's own visible/display — app_update

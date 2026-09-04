@@ -27,7 +27,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_MAX_TOUCHES 5U
-#define ER_LONG_PRESS_MS 500U
+#define ER_LONG_PRESS_MS 500U     /**< Long-press hold time when a node sets no delayLongPress of its own. */
 #define ER_SCROLL_SLOP 5          /**< Minimum cumulative pan distance in pixels before auto-scroll claims. */
 #define ER_SCROLL_FRICTION 0.002f /**< Velocity decay per millisecond (≈ React Native deceleration:0.998/frame). */
 #define ER_SCROLL_VEL_STOP 0.001f /**< Velocity magnitude below which momentum scrolling stops. */
@@ -49,6 +49,7 @@ typedef struct
     bool active;
     bool inside;
     bool long_press_fired;
+    bool long_press_dispatched; /**< A handler actually received the long press, so the release skips onPress. */
     bool long_press_cancelled;
     uint32_t elapsed_ms;
     int last_x;
@@ -1061,9 +1062,16 @@ void er_input_tick(uint32_t delta_ms)
         else
             touch->elapsed_ms += delta_ms;
 
-        if (touch->elapsed_ms >= ER_LONG_PRESS_MS)
+        /* The hold time is the target's own delayLongPress when it set one, otherwise the default. */
+        ERNode* press_target = er_get_node(touch->press_target_tag);
+        const uint32_t threshold =
+            (press_target && press_target->long_press_ms) ? press_target->long_press_ms : ER_LONG_PRESS_MS;
+
+        if (touch->elapsed_ms >= threshold)
         {
-            ERNode* press_target = er_get_node(touch->press_target_tag);
+            /* Remember whether a handler was actually there: a node without one holds an ordinary press,
+             * and its release must still fire onPress (React Native's isPressCanceledByLongPress). */
+            touch->long_press_dispatched = has_handler(press_target, ER_EVENT_LONG_PRESS);
             dispatch_to_node(press_target, ER_EVENT_LONG_PRESS, touch->last_x, touch->last_y);
             touch->long_press_fired = true;
         }
@@ -1177,6 +1185,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 touch->inside = false;
             }
             touch->long_press_fired = false;
+            touch->long_press_dispatched = false;
             touch->long_press_cancelled = false;
             touch->elapsed_ms = 0U;
             touch->last_x = x;
@@ -1422,7 +1431,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                             press_target = er_get_node(press_tag);
                         }
                     }
-                    if (press_target)
+                    /* A long press that reached a handler REPLACES the tap: the gesture already did its
+                     * job, so releasing must not also run onPress. */
+                    if (press_target && !touch->long_press_dispatched)
                         dispatch_to_node(press_target, ER_EVENT_PRESS, x, y);
                 }
             }

@@ -2846,3 +2846,46 @@ export function App() { const [n] = useState(0); return (<Text>{Math.round(n * M
     expect(c).toContain('#define M_PI 3.14159');
   });
 });
+
+describe('AOT delayLongPress', () => {
+  const D = `import { View, Text, Pressable, TouchableOpacity } from 'embedded-react';
+`;
+
+  it('bakes the hold time into the node props', () => {
+    const c = gen(`${D}
+      export function App() {
+        return (<Pressable delayLongPress={800} onLongPress={() => {}}><Text>x</Text></Pressable>);
+      }`);
+    expect(c).toContain('p.long_press_ms = 800;');
+    expect(c).toContain('er_event_set(n0, ER_EVENT_LONG_PRESS');
+  });
+
+  it('folds a module-level constant, and takes the prop on a TouchableOpacity too', () => {
+    const c = gen(`${D}
+      const HOLD = 250;
+      export function App() {
+        return (<TouchableOpacity delayLongPress={HOLD} onLongPress={() => {}}><Text>x</Text></TouchableOpacity>);
+      }`);
+    expect(c).toContain('p.long_press_ms = 250;');
+  });
+
+  // 0 is the engine's "no delayLongPress set" sentinel, so it cannot mean zero — 1 ms is the next tick,
+  // which is what RN's setTimeout(0) amounts to.
+  it('clamps 0 up to the next tick rather than reading as unset', () => {
+    const c = gen(`${D}
+      export function App() {
+        return (<Pressable delayLongPress={0} onLongPress={() => {}}><Text>x</Text></Pressable>);
+      }`);
+    expect(c).toContain('p.long_press_ms = 1;');
+  });
+
+  it('rejects a value that does not fold', () => {
+    expect(() =>
+      gen(`${D}import { useState } from 'react';
+      export function App() {
+        const [ms] = useState(700);
+        return (<Pressable delayLongPress={ms} onLongPress={() => {}}><Text>x</Text></Pressable>);
+      }`),
+    ).toThrow(/delayLongPress> must fold to a number/);
+  });
+});
