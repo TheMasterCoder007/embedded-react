@@ -187,7 +187,7 @@ static void on_complete(bool finished, void* user_data)
  *   - Timing: linear interpolation, dirty flag, cancellation, zero-duration snap.
  *   - Easing: quad-in produces a value lower than linear at t=0.5.
  *   - Spring: settles at the target within a reasonable time.
- *   - Decay: velocity decreases each tick.
+ *   - Decay: velocity decreases each tick; an over-long frame integrates a bounded number of steps.
  *   - Delay: animation value unchanged until delay expires.
  *   - Completion callback: fires with finished=true on natural end.
  *   - Sequence: three animations run in order.
@@ -357,6 +357,41 @@ int main(void)
             return fail("decay: velocity did not decelerate — position grew unexpectedly");
 
         er_node_destroy(dn);
+    }
+
+    /* -----------------------------------------------------------------------
+     * DECAY: an over-long frame integrates a bounded number of steps
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* bn = er_node_create(ER_NODE_VIEW);
+        ERProps bp2 = props_default();
+        bp2.width = 10;
+        bp2.height = 10;
+        bp2.opacity = 0U;
+        er_node_set_props(bn, &bp2);
+
+        s_complete_count = 0;
+        s_complete_finished = false;
+
+        ERAnimConfig bc = {0};
+        bc.type = ER_ANIM_DECAY;
+        bc.velocity = 0.1f; /* ~3.4s at the default deceleration before it falls below DECAY_VEL_STOP */
+        bc.on_complete = on_complete;
+
+        er_anim_start(bn, ER_PROP_OPACITY, 1.0f, &bc);
+
+        /* An hour in one frame must not buy an hour of physics — the decay keeps coasting instead. */
+        embedded_renderer_tick(3600000U);
+        if (s_complete_count != 0)
+            return fail("decay: an over-long frame ran the decay to completion instead of capping its steps");
+
+        /* The cap must not stall it either: it still settles over the frames that follow. */
+        for (int i = 0; i < 40 && s_complete_count == 0; i++)
+            embedded_renderer_tick(200U);
+        if (s_complete_count != 1)
+            return fail("decay: did not settle in the frames after a capped one");
+
+        er_node_destroy(bn);
     }
 
     /* -----------------------------------------------------------------------
