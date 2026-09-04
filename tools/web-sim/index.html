@@ -374,8 +374,11 @@
         // esp_timer_get_time / SDL_GetTicks deltas). Frame cadence is not a clock: the browser throttles
         // requestAnimationFrame when the window is occluded and stops it entirely while the page is hidden,
         // which stalls the clock that setTimeout, setInterval and Animated completions all hang off.
-        // A frozen page (sleep, discarded tab) fast-forwards rather than replaying its whole absence.
-        const MAX_STEP_MS = 1000;
+        // A pump hands over the whole elapsed delta, however long the gap, so a page that comes back from
+        // minutes of throttling is immediately at the right time. Catching up is cheap: springs cap their
+        // own step count, timing animations clamp to their duration, and each timer fires once per pass —
+        // only decay integrates per millisecond, and that is ~40 ms of work for an overnight sleep, once.
+        const MAX_DT_MS = 86400000; // 24h — guards er_web_pump's int parameter, not a behavioral clamp
         // No frame for this long means rAF is stalled and the interval below takes over the pump.
         const RAF_IDLE_MS = 250;
 
@@ -384,7 +387,7 @@
 
         const step = (paint) => {
           const now = performance.now();
-          const dt = Math.min(MAX_STEP_MS, now - prev);
+          const dt = Math.min(MAX_DT_MS, now - prev);
           prev = now;
           pump(Math.round(dt));
           if (!paint) return;
