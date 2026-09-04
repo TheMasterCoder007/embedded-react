@@ -378,7 +378,7 @@
         // minutes of throttling is immediately at the right time. Catching up is cheap however long it was:
         // the physics integrators cap their step count, timing animations clamp to their duration, and each
         // timer fires once per pass rather than once per period it missed.
-        const MAX_DT_MS = 86400000; // 24h — guards er_web_pump's int parameter, not a behavioral clamp
+        const MAX_DT_MS = 2147483647; // INT32_MAX: er_web_pump takes an int, and that is the only bound needed
         // No frame for this long means rAF is stalled and the interval below takes over the pump.
         const RAF_IDLE_MS = 250;
 
@@ -398,8 +398,8 @@
         };
 
         const frame = () => {
-          lastFrame = performance.now();
           step(true);
+          lastFrame = performance.now();
           requestAnimationFrame(frame);
         };
         requestAnimationFrame(frame);
