@@ -580,6 +580,25 @@ static bool has_handler(const ERNode* node, EREventType event)
 }
 
 /**
+ * @brief Returns whether a node may receive touch events aimed at itself.
+ *
+ * The hit test already refuses to return a box-none node, but every dispatch path then walks up from
+ * the hit node — for a press target, to bubble raw touches, to negotiate the responder — and those
+ * walks would hand the node the very touches it opted out of. A box-none node with an inert child is
+ * the case that bites: the child is hit, has no handler, and the climb lands on the parent.
+ *
+ * Only the node's own eligibility is decided here; its ancestors are still free to handle the touch.
+ *
+ * @param[in] node  Node to test.
+ *
+ * @return true when the node itself is a legal touch target.
+ */
+static bool node_takes_own_touches(const ERNode* node)
+{
+    return node && node->pointer_events != ER_POINTER_EVENTS_BOX_NONE && node->pointer_events != ER_POINTER_EVENTS_NONE;
+}
+
+/**
  * @brief Finds the nearest ancestor with any press-related handler.
  *
  * @param[in] node  Starting node.
@@ -593,9 +612,10 @@ static ERNode* nearest_press_target(ERNode* node)
         /* TextInput and Switch nodes act as press targets even without explicit press
          * callbacks so that auto-focus / built-in toggle behavior works without
          * requiring the caller to register a handler on every instance. */
-        if (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS)
-            || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT)
-            || node->type == ER_NODE_TEXT_INPUT || node->type == ER_NODE_SWITCH)
+        if (node_takes_own_touches(node)
+            && (has_handler(node, ER_EVENT_PRESS) || has_handler(node, ER_EVENT_LONG_PRESS)
+                || has_handler(node, ER_EVENT_PRESS_IN) || has_handler(node, ER_EVENT_PRESS_OUT)
+                || node->type == ER_NODE_TEXT_INPUT || node->type == ER_NODE_SWITCH))
             return node;
         node = er_get_node(node->parent_tag);
     }
@@ -647,7 +667,8 @@ static void dispatch_bubble_data(ERNode* target, EREventType event, const EREven
     ERNode* node = target;
     while (node)
     {
-        dispatch_to_node_data(node, event, data);
+        if (node_takes_own_touches(node))
+            dispatch_to_node_data(node, event, data);
         node = er_get_node(node->parent_tag);
     }
 }
@@ -754,7 +775,7 @@ static ERNode* negotiate_responder(const uint16_t* chain,
     for (int i = chain_len - 1; i >= 0; i--)
     {
         ERNode* node = er_get_node(chain[i]);
-        if (!node)
+        if (!node_takes_own_touches(node))
             continue;
         const ERResponderQueryHandler* h = &node->queries[(uint8_t)capture_query];
         if (h->fn && h->fn(node, data, h->user_data))
@@ -764,7 +785,7 @@ static ERNode* negotiate_responder(const uint16_t* chain,
     for (int i = 0; i < chain_len; i++)
     {
         ERNode* node = er_get_node(chain[i]);
-        if (!node)
+        if (!node_takes_own_touches(node))
             continue;
         const ERResponderQueryHandler* h = &node->queries[(uint8_t)bubble_query];
         if (h->fn && h->fn(node, data, h->user_data))
@@ -898,7 +919,7 @@ static ERNode* nearest_arc_drag_target(ERNode* hit, int x, int y)
             if (!n->props.arc.adjustable)
                 return NULL;
 
-            if (n->pointer_events == ER_POINTER_EVENTS_BOX_NONE || n->pointer_events == ER_POINTER_EVENTS_NONE)
+            if (!node_takes_own_touches(n))
                 return NULL;
             int qx, qy;
             if (!arc_local_point(n, x, y, &qx, &qy))

@@ -149,6 +149,11 @@ See the README for the release process.
 
 ### Fixed
 
+- `pointerEvents="box-none"` no longer swallows touches that land on one of its own inert children.
+  The hit test already skipped the node. However, every dispatch path then walked back up from the hit
+  child and handed it the touch anyway — so an overlay wrapping a plain `<Text>` stole presses, raw
+  touch events, and responder claims from whatever sat behind it. The node's own handlers are now
+  skipped on that walk; its ancestors still receive the touch as before.
 - Flex sizes now land on the same pixel grid as positions, so a row of `flex: 1` children fills its
   parent exactly instead of ending a pixel short. A leftover that does not divide evenly is spread
   across the children the way Yoga spreads it — three equal children in 100px are 33/34/33, not
