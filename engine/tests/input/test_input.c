@@ -1680,9 +1680,8 @@ static int test_pointer_events_box_none(void)
 /**
  * @brief Builds a box-none overlay holding one inert (handler-less) child.
  *
- * @param[in]  parent  Node to append the overlay to.
- * @param[out] out     Receives the inert child.
- *
+ * @param[in]  parent     Node to append the overlay to.
+ * @param[out] out_child  Receives the inert child (may be NULL).
  * @return The overlay node.
  */
 static ERNode* create_box_none_overlay(ERNode* parent, ERNode** out_child)
