@@ -428,7 +428,7 @@ import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.12.0
+  GIT_TAG        v0.13.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -448,7 +448,7 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 needs from us (`npx embedded-react build --aot` emits the C):
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.12.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.13.0"
 ```
 
 **Flow A** uses `FetchContent`, not the component registry: it additionally needs QuickJS, which is a
@@ -458,7 +458,7 @@ plain CMake project (not an ESP-IDF component), so the registry's managed-depend
 **PlatformIO** — the engine (Flow B) installs as a library:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.12.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.13.0
 ```
 
 Flow A on PlatformIO is best-effort (add the bridge + QuickJS as extra git `lib_deps`); the ESP-IDF +
