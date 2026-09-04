@@ -106,6 +106,16 @@ typedef struct
 } RenderCounts;
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Scroll counter that deliberately outlives its scene, so a scroller leaked out of one
+ *        scenario can be caught still firing into the next.
+ */
+static int s_orphan_scroll_events = 0;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -582,7 +592,13 @@ static void tap(int x, int y)
 }
 
 /**
- * @brief Creates a root node of a given size and installs it as the scene root.
+ * @brief Starts a fresh scene: empties the node pool, then creates and installs a sized root.
+ *
+ * er_tree_set_root() only swaps the root tag — it never destroys the tree it replaces. Without the
+ * reset every scenario's nodes would stay in the pool for the rest of the run, and the pool is what
+ * the per-frame sweeps walk: an orphan left animating or coasting keeps firing its callbacks into a
+ * stack frame that has already returned. Every scenario therefore starts here, before it creates any
+ * node of its own.
  *
  * @param[in] w  Root width in pixels.
  * @param[in] h  Root height in pixels.
@@ -591,6 +607,8 @@ static void tap(int x, int y)
  */
 static ERNode* create_root_sized(int16_t w, int16_t h)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_default();
     p.width = w;
@@ -1844,11 +1862,7 @@ static ERNode* create_scroll_view(ERNode* parent, ERPointerEvents pointer_events
 }
 
 /**
- * @brief Drags finger 0 leftwards across a ScrollView, well past ER_SCROLL_SLOP, and lifts at rest.
- *
- * The pause before the lift matters: a release that still carries velocity starts momentum
- * scrolling, and er_tree_set_root leaves the previous tree in the node pool, so a coasting
- * ScrollView would keep firing ER_EVENT_SCROLL into a later test's stack.
+ * @brief Drags finger 0 leftwards across a ScrollView, well past ER_SCROLL_SLOP.
  */
 static void drag_past_slop(void)
 {
@@ -1859,7 +1873,6 @@ static void drag_past_slop(void)
     touch_move(60, 50);
     embedded_renderer_tick(16U);
     touch_move(50, 50);
-    embedded_renderer_tick(16U);
     embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
 }
 
@@ -1945,6 +1958,47 @@ static int test_box_none_scroll_view_defers_to_outer(void)
         return fail("box-none inner ScrollView took the pan");
     if (outer_events == 0)
         return fail("box-none inner ScrollView swallowed the pan instead of deferring outward");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Checks that starting a new scene stops the previous one's ScrollView dead.
+ *
+ * er_tree_set_root() only swaps the root tag, so without the pool reset in create_root_sized() a
+ * ScrollView lifted mid-flick would keep coasting for the rest of the run — firing ER_EVENT_SCROLL
+ * into whatever its user_data still points at, long after that scenario's stack frame has gone.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_new_scene_stops_orphan_scroller(void)
+{
+    ERNode* root = create_root();
+    s_orphan_scroll_events = 0;
+    create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &s_orphan_scroll_events);
+    er_commit();
+
+    /* Lift mid-flick, with no pause before the release, so the scroller keeps real momentum. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 80, 50);
+    embedded_renderer_tick(16U);
+    touch_move(70, 50);
+    embedded_renderer_tick(16U);
+    touch_move(60, 50);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 60, 50);
+
+    embedded_renderer_tick(16U);
+    if (s_orphan_scroll_events == 0)
+        return fail("the flicked ScrollView never scrolled");
+
+    create_root(); /* new scene: the flicked scroller is gone from the pool */
+    er_commit();
+
+    const int before = s_orphan_scroll_events;
+    for (int i = 0; i < 30; i++)
+        embedded_renderer_tick(16U);
+
+    if (s_orphan_scroll_events != before)
+        return fail("a ScrollView from the previous scene kept coasting into the next one");
 
     return EXIT_SUCCESS;
 }
@@ -2761,6 +2815,8 @@ int main(void)
     if (test_pointer_events_box_none_scroll_view() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_box_none_scroll_view_defers_to_outer() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_new_scene_stops_orphan_scroller() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;

@@ -327,6 +327,8 @@ static void set_outer_transform(ERProps* p, const Scenario* s, bool on)
  */
 static int check_ancestor_flip(const Scenario* s, Flip flip)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = SCREEN;

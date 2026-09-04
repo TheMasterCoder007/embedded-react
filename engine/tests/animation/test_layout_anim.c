@@ -155,6 +155,8 @@ int main(void)
     /* -----------------------------------------------------------------------
      * Setup: a 200×200 root with one 60×60 child at an explicit position.
      * ---------------------------------------------------------------------- */
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps p = props_default();
     p.width = 200;

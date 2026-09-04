@@ -210,6 +210,8 @@ int main(void)
     /* -----------------------------------------------------------------------
      * Scene: a single full-framebuffer View with a two-stop gradient.
      * ----------------------------------------------------------------------- */
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp;
     memset(&rp, 0, sizeof(rp));

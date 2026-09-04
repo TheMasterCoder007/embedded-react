@@ -188,6 +188,8 @@ static int fail(const char* msg)
  */
 static void build(const ERProps* cover_props, ERNode** out_inner, ERNode** out_cover)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = box(0, 0, SCREEN, SCREEN, C_ROOT);
     rp.position = ER_POS_RELATIVE;
@@ -339,6 +341,8 @@ static int check_buried_change_retires(void)
  */
 static int check_transformed_sibling_not_buried(void)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = box(0, 0, SCREEN, SCREEN, C_ROOT);
     rp.position = ER_POS_RELATIVE;

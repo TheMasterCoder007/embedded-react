@@ -661,6 +661,8 @@ int main(void)
     EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &counts};
     embedded_renderer_set_backend(&be);
 
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     p = props_default();
     p.width = 120;

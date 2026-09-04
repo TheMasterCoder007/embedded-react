@@ -276,6 +276,8 @@ typedef enum
  */
 static int check_inner_mutation(int ox, int oy, float rot, Mutation mut, const char* label)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = SCREEN;
@@ -418,6 +420,8 @@ static int check_inner_mutation(int ox, int oy, float rot, Mutation mut, const c
  */
 static int check_noninvertible_outer(int screen)
 {
+    er_reset();
+
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps rp = props_default();
     rp.width = (int16_t)screen;

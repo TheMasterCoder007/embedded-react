@@ -285,6 +285,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -316,6 +318,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -354,6 +358,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -401,6 +407,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -441,6 +449,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -484,6 +494,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -538,6 +550,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -580,6 +594,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -635,6 +651,8 @@ int main(void)
         };
         er_image_load("translucent2x2", img_tl, 2, 2);
 
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -672,6 +690,8 @@ int main(void)
     {
         static const uint16_t img565[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
         er_image_load_rgb565("test565", img565, 2, 2);
+
+        er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
@@ -757,6 +777,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -813,6 +835,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
@@ -850,6 +874,8 @@ int main(void)
      * ---------------------------------------------------------------------- */
     reset(&tc);
     {
+        er_reset();
+
         ERNode* root = er_node_create(ER_NODE_VIEW);
         ERProps rp = props_default();
         rp.width = FB_W;
