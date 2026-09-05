@@ -50,6 +50,11 @@ extern "C"
      * `embedded_renderer_tick`. `NativeUI.tick()` performs the same pump for JS-driven loops
      * and tests, so a host that only ticks via JS need not call this directly.
      *
+     * Everything the pump runs shares one batch scope: however many callbacks change state, the
+     * frame ends in a single `er_commit()` (and, with the reconciler's batcher installed, a single
+     * render). A commit still runs eagerly outside the pump — an event dispatched straight from the
+     * panel driver, or the app's first render — so layout and hit areas are never stale.
+     *
      * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
      */
     void er_bridge_pump(JSContext* ctx);
