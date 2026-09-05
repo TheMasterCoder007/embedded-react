@@ -136,6 +136,55 @@ static bool s_anim_complete_active[ER_BRIDGE_MAX_ANIM_COMPLETIONS];
  */
 static JSValue s_anim_complete_handlers;
 
+/**
+ * @brief Slots in the batch registry (s_batch_slots).
+ */
+enum
+{
+    ER_BATCH_SLOT_WRAP = 0, /**< JS batcher installed by NativeUI.setBatcher, or undefined. */
+    ER_BATCH_SLOT_RUN = 1,  /**< C function the batcher calls to run the pump body. */
+};
+
+/**
+ * @brief JS object holding the batcher and the pump-body callable. Same ownership trick as the
+ *        event/timer registries: owned by NativeUI, GC-rooted, freed at teardown. Borrowed, so it is
+ *        only valid once er_bridge_install has run — like every other registry here.
+ */
+static JSValue s_batch_slots = JS_UNDEFINED;
+
+/**
+ * @brief Depth of the open batch scopes (frame pump, event dispatch); 0 = none.
+ *
+ * A commit asked for inside a scope is remembered rather than run, and the outermost scope runs one
+ * at the end. React drives one commit per state update, so without this a frame with three timers
+ * firing pays three full engine commits — each one a layout check plus two whole-node-pool walks —
+ * to paint what one commit paints.
+ */
+static int s_batch_depth = 0;
+
+/** @brief A commit was asked for while a batch scope was open, and still owes a run. */
+static bool s_commit_pending = false;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private — batch scopes
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Opens a batch scope: NativeUI.commit() is folded into the close instead of running now. */
+static void batch_enter(void)
+{
+    s_batch_depth++;
+}
+
+/** @brief Closes a batch scope, committing once if anything inside it asked to. */
+static void batch_leave(void)
+{
+    if (s_batch_depth > 0 && --s_batch_depth == 0 && s_commit_pending)
+    {
+        s_commit_pending = false;
+        er_commit();
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — handle table
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -2234,6 +2283,42 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
 }
 
 /**
+ * @brief Calls a JS callback inside the installed batcher, or directly when there is none.
+ *
+ * The batcher (NativeUI.setBatcher) is React's batchedUpdates, so a callback that sets three pieces
+ * of state renders once instead of three times. Takes at most two arguments — every callback the
+ * bridge dispatches this way carries one (an event object, a changed string, a finished flag) or
+ * two (a Dial's value and the low end of its band).
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] fn    Callback to invoke.
+ * @param[in] argc  Argument count (0..2).
+ * @param[in] argv  Arguments.
+ *
+ * @return The callback's return value, or an exception (caller frees either way).
+ */
+static JSValue bridge_call_batched(JSContext* ctx, JSValueConst fn, int argc, JSValueConst* argv)
+{
+    if (!JS_IsObject(s_batch_slots))
+    {
+        return JS_Call(ctx, fn, JS_UNDEFINED, argc, argv); /* before er_bridge_install */
+    }
+    JSValue wrap = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_WRAP);
+    JSValue ret;
+    if (JS_IsFunction(ctx, wrap))
+    {
+        JSValueConst callv[3] = {fn, (argc > 0) ? argv[0] : JS_UNDEFINED, (argc > 1) ? argv[1] : JS_UNDEFINED};
+        ret = JS_Call(ctx, wrap, JS_UNDEFINED, argc + 1, callv);
+    }
+    else
+    {
+        ret = JS_Call(ctx, fn, JS_UNDEFINED, argc, argv);
+    }
+    JS_FreeValue(ctx, wrap);
+    return ret;
+}
+
+/**
  * @brief Engine event callback: dispatches to the JS handler registered for (node, type).
  *
  * The (handle, type) pair is encoded in user_data and the JS function is looked up in the
@@ -2257,6 +2342,9 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
     JSValue cb = JS_GetPropertyUint32(ctx, s_event_handlers, key);
     if (JS_IsFunction(ctx, cb))
     {
+        /* Native events arrive outside any React batch, so without this scope a handler that sets
+           two pieces of state renders and paints twice. */
+        batch_enter();
         JSValue ev2 = JS_UNDEFINED;
         int argc2 = 1;
         /* onChangeText receives the new TEXT directly (RN convention, matching Flow B's AOT lowering);
@@ -2282,7 +2370,7 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
             ev = build_event_object(ctx, type, data);
         }
         JSValue argv2[2] = {ev, ev2};
-        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, argc2, argv2);
+        JSValue ret = bridge_call_batched(ctx, cb, argc2, argv2);
         if (JS_IsException(ret))
         {
             JSValue exc = JS_GetException(ctx);
@@ -2297,6 +2385,7 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, ev);
         JS_FreeValue(ctx, ev2);
+        batch_leave();
     }
     JS_FreeValue(ctx, cb);
 }
@@ -2599,6 +2688,40 @@ static void bridge_fire_due_timers(JSContext* ctx)
         }
         JS_FreeValue(ctx, bundle);
     }
+}
+
+/**
+ * @brief The frame's JS work: pending touch-moves, then microtasks, timers and microtasks again.
+ *
+ * Split out of er_bridge_pump so the installed batcher can run it (see js_run_pump_body).
+ *
+ * @param[in] ctx  QuickJS context.
+ */
+static void bridge_pump_body(JSContext* ctx)
+{
+    embedded_renderer_flush_touch();
+    bridge_run_microtasks(ctx);
+    bridge_fire_due_timers(ctx);
+    bridge_run_microtasks(ctx);
+}
+
+/**
+ * @brief The callable handed to the batcher; runs one pump body.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count (unused).
+ * @param[in] argv  Arguments (unused).
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_run_pump_body(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    bridge_pump_body(ctx);
+    return JS_UNDEFINED;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -3406,6 +3529,10 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
 /**
  * @brief NativeUI.commit() — runs layout + paint for all pending mutations.
  *
+ * Inside an open batch scope (a frame pump, an event dispatch) the commit is only remembered; the
+ * scope runs a single one as it closes. The reconciler commits per state update, so this is what
+ * keeps a frame that changed three things to one engine commit instead of three.
+ *
  * @param[in] ctx   QuickJS context (unused).
  * @param[in] this  JS this (unused).
  * @param[in] argc  Argument count (unused).
@@ -3419,7 +3546,35 @@ static JSValue js_commit(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     (void)this_val;
     (void)argc;
     (void)argv;
+    if (s_batch_depth > 0)
+    {
+        s_commit_pending = true;
+        return JS_UNDEFINED;
+    }
     er_commit();
+    return JS_UNDEFINED;
+}
+
+/**
+ * @brief NativeUI.setBatcher(wrap) — installs the function the frame pump runs its work inside.
+ *
+ * `wrap(run)` must call `run()` once, synchronously; the renderer passes React's batchedUpdates, so
+ * every state update a frame produces — a coalesced touch move, a timer, a promise continuation —
+ * lands in one render pass and one commit rather than one of each per callback. Pass null to remove
+ * it (the pump then runs its work directly). A host with no React on it never installs one.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = wrapper function, or null/undefined to clear.
+ *
+ * @return JS_UNDEFINED.
+ */
+static JSValue js_set_batcher(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    const bool set = argc >= 1 && JS_IsFunction(ctx, argv[0]);
+    JS_SetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_WRAP, set ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
@@ -4129,14 +4284,16 @@ static void bridge_anim_complete_trampoline(bool finished, void* user_data)
 
     if (JS_IsFunction(ctx, cb))
     {
+        batch_enter();
         JSValue arg = JS_NewBool(ctx, finished);
-        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &arg);
+        JSValue ret = bridge_call_batched(ctx, cb, 1, &arg);
         if (JS_IsException(ret))
         {
             bridge_report_exception(ctx, "animation completion callback");
         }
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, arg);
+        batch_leave();
     }
     JS_FreeValue(ctx, cb);
 }
@@ -4255,6 +4412,10 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  * than at er_commit() lets whatever the handler schedules — a Promise continuation, a timer — settle
  * inside the same pump, so a drag never pays a frame of latency for being coalesced.
  *
+ * The whole pump is one batch scope, and runs inside the batcher when one is installed
+ * (NativeUI.setBatcher), so a frame's state updates cost one render and one commit however many
+ * callbacks produced them.
+ *
  * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
  */
 void er_bridge_pump(JSContext* ctx)
@@ -4263,10 +4424,27 @@ void er_bridge_pump(JSContext* ctx)
     {
         return;
     }
-    embedded_renderer_flush_touch();
-    bridge_run_microtasks(ctx);
-    bridge_fire_due_timers(ctx);
-    bridge_run_microtasks(ctx);
+    /* One batch scope over the whole frame's JS, so the commits every callback in it asks for
+       collapse into the single one batch_leave() runs. */
+    batch_enter();
+    if (JS_IsObject(s_batch_slots))
+    {
+        JSValue run = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_RUN);
+        JSValue ret = bridge_call_batched(ctx, run, 0, NULL);
+        if (JS_IsException(ret))
+        {
+            /* The frame's callbacks report their own throws; what reaches here is the batched
+               render React runs as the batch closes. */
+            bridge_report_exception(ctx, "batched render");
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, run);
+    }
+    else
+    {
+        bridge_pump_body(ctx); /* pumped before er_bridge_install: nothing to batch through */
+    }
+    batch_leave();
 }
 
 /**
@@ -4319,6 +4497,10 @@ void er_bridge_install(JSContext* ctx)
     {
         s_anim_complete_active[i] = false;
     }
+    /* No scope is open on a fresh context — an unbalanced enter from the old one must not
+       swallow the new app's first commit. */
+    s_batch_depth = 0;
+    s_commit_pending = false;
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native_ui = JS_NewObject(ctx);
@@ -4341,6 +4523,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "maxVectorGrads", JS_NewInt32(ctx, VEC_BRIDGE_MAX_GRADS));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
+    JS_SetPropertyStr(ctx, native_ui, "setBatcher", JS_NewCFunction(ctx, js_set_batcher, "setBatcher", 1));
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
     JS_SetPropertyStr(ctx, native_ui, "tick", JS_NewCFunction(ctx, js_tick, "tick", 1));
     JS_SetPropertyStr(ctx,
@@ -4390,6 +4573,13 @@ void er_bridge_install(JSContext* ctx)
     JSValue anim_complete_handlers = JS_NewObject(ctx);
     s_anim_complete_handlers = anim_complete_handlers;
     JS_SetPropertyStr(ctx, native_ui, "__er_anim_complete_handlers", anim_complete_handlers);
+
+    /* Frame-batching slots (the installed batcher + the pump body it runs); same ownership trick. */
+    JSValue batch_slots = JS_NewObject(ctx);
+    s_batch_slots = batch_slots;
+    JS_SetPropertyUint32(ctx, batch_slots, ER_BATCH_SLOT_WRAP, JS_UNDEFINED);
+    JS_SetPropertyUint32(ctx, batch_slots, ER_BATCH_SLOT_RUN, JS_NewCFunction(ctx, js_run_pump_body, "runPumpBody", 0));
+    JS_SetPropertyStr(ctx, native_ui, "__er_batch_slots", batch_slots);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);
