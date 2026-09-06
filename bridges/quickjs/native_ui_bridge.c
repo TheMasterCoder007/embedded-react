@@ -2706,6 +2706,40 @@ static void bridge_pump_body(JSContext* ctx)
 }
 
 /**
+ * @brief True when the pump will run JS: a parked touch-move, a queued job, or a due timer.
+ *
+ * The batcher only earns its keep when a frame runs callbacks — it is what makes their renders one
+ * render. Entering it costs a JS call and a closure, which on an idle frame buys nothing, and an
+ * idle frame is the common one on a static screen.
+ *
+ * The touch check has to be asked BEFORE the flush, not inferred from it: a move handler that
+ * resolves a promise or arms a 0 ms timer adds work the flush itself creates, and a frame that had
+ * already decided to skip the batcher would then render the handler and its continuation
+ * separately.
+ *
+ * @param[in] ctx  QuickJS context.
+ *
+ * @return true if the frame has callbacks to coalesce.
+ */
+static bool bridge_pump_has_js_work(JSContext* ctx)
+{
+    if (embedded_renderer_has_pending_touch() || JS_IsJobPending(JS_GetRuntime(ctx)))
+    {
+        return true;
+    }
+    const uint32_t now = er_now_ms();
+    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    {
+        /* Wrap-safe "due_ms <= now", as in bridge_fire_due_timers. */
+        if (s_timers[i].active && (int32_t)(now - s_timers[i].due_ms) >= 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * @brief The callable handed to the batcher; runs one pump body.
  *
  * @param[in] ctx   QuickJS context.
@@ -4435,7 +4469,7 @@ void er_bridge_pump(JSContext* ctx)
     /* One batch scope over the whole frame's JS, so the commits every callback in it asks for
        collapse into the single one batch_leave() runs. */
     batch_enter();
-    if (JS_IsObject(s_batch_slots))
+    if (JS_IsObject(s_batch_slots) && bridge_pump_has_js_work(ctx))
     {
         JSValue run = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_RUN);
         JSValue ret = bridge_call_batched(ctx, run, 0, NULL);
@@ -4450,7 +4484,9 @@ void er_bridge_pump(JSContext* ctx)
     }
     else
     {
-        bridge_pump_body(ctx); /* pumped before er_bridge_install: nothing to batch through */
+        /* Nothing to coalesce (or pumped before er_bridge_install): run the body directly and keep
+           an idle frame free. Any event it dispatches still batches itself. */
+        bridge_pump_body(ctx);
     }
     batch_leave();
 }

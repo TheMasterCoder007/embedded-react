@@ -223,6 +223,20 @@ extern "C"
     void embedded_renderer_flush_touch(void);
 
     /**
+     * @brief Reports whether embedded_renderer_flush_touch() has anything to dispatch.
+     *
+     * Answers "will flushing run a handler?" without running one, for a host that wants to prepare
+     * for the JS a flush is about to trigger (the QuickJS bridge uses it to decide whether the frame
+     * is worth opening a React batch for). Cheap: a scan of the per-finger parked slots.
+     *
+     * A finger held still answers false. Its panel keeps reporting moves, but each one repeats the
+     * position already dispatched and the flush drops it, so nothing would run.
+     *
+     * @return true when at least one finger has a move waiting that would be dispatched.
+     */
+    bool embedded_renderer_has_pending_touch(void);
+
+    /**
      * @brief Turns touch-move coalescing on or off (on by default).
      *
      * Off restores the pre-coalescing behaviour: every move passed to embedded_renderer_touch() is

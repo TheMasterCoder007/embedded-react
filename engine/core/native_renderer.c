@@ -707,6 +707,11 @@ void embedded_renderer_flush_touch(void)
     er_input_flush_moves();
 }
 
+bool embedded_renderer_has_pending_touch(void)
+{
+    return er_input_has_pending_moves();
+}
+
 void embedded_renderer_set_touch_coalescing(bool enabled)
 {
     er_input_set_move_coalescing(enabled);
