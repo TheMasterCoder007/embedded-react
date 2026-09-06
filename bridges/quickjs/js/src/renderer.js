@@ -27,6 +27,14 @@ const reconciler = Reconciler(hostConfig);
 
 const LegacyRoot = 0;
 
+// Host-initiated updates — a native event, a timer, a promise continuation — are outside any React
+// batch, so in LegacyRoot mode each setState renders and commits on its own: three animations
+// ticking on the same frame cost three renders and three engine commits to paint one frame. The
+// bridge runs the frame pump — and each native event — inside this wrapper, which puts everything a
+// frame does in one batch and leaves it as one render and one commit. Installed here rather than at
+// createRoot() so the reconciler that batches is the one that renders.
+NativeUI.setBatcher?.((fn, a, b) => reconciler.batchedUpdates(() => fn(a, b)));
+
 /**
  * Creates a root bound to a screen-sized container node.
  *

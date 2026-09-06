@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Flow A now renders and paints a frame **once**, however many callbacks changed state in it. Timers,
+  promise continuations and native events each used to run their own render and engine commit, so N
+  animations on a frame cost N of both; they now share one.
 
 ## [0.13.0] - 2026-09-04
 ### Added

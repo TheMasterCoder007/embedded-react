@@ -141,10 +141,25 @@ static JSValue rt_touch(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+/**
+ * @brief __layoutPasses(): the engine's executed-layout-pass count (er_layout_pass_count).
+ *
+ * One per commit that re-solved layout, so a test that changes something sized can read it before
+ * and after a frame to count the commits that frame actually paid for. Test runner only.
+ */
+static JSValue rt_layout_passes(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, er_layout_pass_count());
+}
+
 static void rt_install_globals(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__touch", JS_NewCFunction(ctx, rt_touch, "__touch", 4));
+    JS_SetPropertyStr(ctx, global, "__layoutPasses", JS_NewCFunction(ctx, rt_layout_passes, "__layoutPasses", 0));
 
     JSValue console = JS_NewObject(ctx);
     JSValue log = JS_NewCFunction(ctx, rt_console_log, "log", 1);
