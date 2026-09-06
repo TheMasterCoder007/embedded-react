@@ -457,6 +457,10 @@ static void install_render_workers(void)
 /**
  * @brief Boots the engine + er_runtime, loads the config from flash, then drives the frame loop.
  */
+/** @brief Display verdict, re-logged from the frame loop once the USB console is back. */
+static const char* s_display_report = NULL;
+static char s_display_report_buf[192];
+
 static void run_app(void)
 {
     er_perf_set_clock(er_prof_now_us); /* frame instrumentation clock; no-op when ER_PERF_STATS is off */
@@ -475,6 +479,25 @@ static void run_app(void)
         ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
         embedded_renderer_set_backend(&k_noop_backend);
     }
+    /* Nothing above this point reaches the console: bring-up flips the CH422G's USB_SEL mux and the
+       native-USB CDC is re-enumerating for about a second. Repeat the verdict from the frame loop,
+       where the console is back. */
+    if (display)
+    {
+        snprintf(s_display_report_buf,
+                 sizeof(s_display_report_buf),
+                 "backend active%s%s",
+                 board_display_last_note()[0] ? ", " : "",
+                 board_display_last_note());
+    }
+    else
+    {
+        snprintf(s_display_report_buf,
+                 sizeof(s_display_report_buf),
+                 "%s",
+                 board_display_last_error()[0] ? board_display_last_error() : "init failed (no reason latched)");
+    }
+    s_display_report = s_display_report_buf;
 
 #if ERUI_RENDER_WORKERS > 1
     /* Fork render passes across both CPU cores (after display init so its heap needs come first). */
@@ -643,6 +666,11 @@ static void run_app(void)
 
         if ((++frame % 30U) == 0U)
         {
+            if (s_display_report)
+            {
+                ESP_LOGI(TAG, "display: %s", s_display_report);
+                s_display_report = NULL; /* once is enough */
+            }
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
             static int s_pie_diag_logged = 0;
             if (!s_pie_diag_logged && !er_esp32_lcd_pie_enabled())

@@ -16,6 +16,13 @@ See the README for the release process.
   promise continuations and native events each used to run their own render and engine commit, so N
   animations on a frame cost N of both; they now share one.
 
+### Fixed
+
+- The ESP32-S3 example now brings its panel up instead of falling back to headless when the RGB
+  bounce buffers cannot get 10 scanlines of internal DMA RAM — it tries smaller ones first. The
+  reason a panel did not come up is also readable now: bring-up flips the board's USB mux, so those
+  errors were logged while the console was down, and they are repeated once it is back.
+
 ## [0.13.0] - 2026-09-04
 ### Added
 
