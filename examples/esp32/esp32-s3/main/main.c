@@ -500,12 +500,13 @@ static void run_app(void)
     }
     else if (panel_up)
     {
-        /* The panel itself came up — the renderer backend refused it, so the board layer has no
-           error to report and asking it for one would say "no reason latched" about the wrong
-           subsystem. */
+        /* The panel came up — the renderer backend refused it, so the board layer has no error to
+           report and asking it for one would say "no reason latched" about the wrong subsystem.
+           Past tense on purpose: this line prints from the frame loop, seconds after the handle was
+           deleted above, so saying the panel "is up" would send a reader looking for a live one. */
         snprintf(s_display_report_buf,
                  sizeof(s_display_report_buf),
-                 "panel is up (%s) but the renderer backend failed to attach to it",
+                 "panel init succeeded (%s) but the renderer backend failed to attach; panel released",
                  board_display_last_note()[0] ? board_display_last_note() : "no note");
     }
     else

@@ -159,6 +159,13 @@ static void display_fail(const char* step, esp_err_t err)
 
 bool board_display_init(esp_lcd_panel_handle_t* out_panel)
 {
+    if (out_panel == NULL)
+    {
+        ESP_LOGE(TAG, "board_display_init: out_panel is NULL");
+        return false;
+    }
+
+    *out_panel = NULL;
     s_display_err[0] = '\0';
     s_display_note[0] = '\0';
     const esp_err_t io_err = board_io_init();
