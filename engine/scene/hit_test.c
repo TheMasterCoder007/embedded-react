@@ -120,11 +120,6 @@ static void reset_touch(ERTouchState* touch)
 }
 
 /**
- * @brief Dispatches this finger's parked move, if it still says anything new, and clears it.
- *
- * @param[in] finger_id  Finger index; must be below ER_MAX_TOUCHES.
- */
-/**
  * @brief True when this finger's parked move would actually reach a handler.
  *
  * A move that lands on the position already dispatched tells the app nothing, and a finger resting
@@ -141,6 +136,11 @@ static bool finger_move_dispatches(const ERPendingMove* pm)
     return pm->pending && !(pm->has_last && pm->x == pm->last_x && pm->y == pm->last_y);
 }
 
+/**
+ * @brief Dispatches this finger's parked move, if it still says anything new, and clears it.
+ *
+ * @param[in] finger_id  Finger index; must be below ER_MAX_TOUCHES.
+ */
 static void flush_finger_move(uint8_t finger_id)
 {
     ERPendingMove* pm = &s_pending_moves[finger_id];
