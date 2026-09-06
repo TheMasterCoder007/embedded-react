@@ -32,10 +32,16 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "esp_heap_caps.h"
+
+#include <stdio.h>
+#include <string.h>
 
 static const char* TAG = "board";
 
@@ -128,19 +134,52 @@ static esp_err_t board_io_init(void)
     return ESP_OK;
 }
 
+/** @brief Latched reason for the last board_display_init() failure (see board_display_last_error). */
+static char s_display_err[160] = "";
+
+/** @brief Latched detail for a SUCCESSFUL bring-up (see board_display_last_note). */
+static char s_display_note[64] = "";
+
+const char* board_display_last_error(void)
+{
+    return s_display_err;
+}
+
+const char* board_display_last_note(void)
+{
+    return s_display_note;
+}
+
+/** @brief Logs a bring-up failure AND latches it, since the console is down while this runs. */
+static void display_fail(const char* step, esp_err_t err)
+{
+    snprintf(s_display_err, sizeof(s_display_err), "%s: %s", step, esp_err_to_name(err));
+    ESP_LOGE(TAG, "%s", s_display_err);
+}
+
 bool board_display_init(esp_lcd_panel_handle_t* out_panel)
 {
-    if (board_io_init() != ESP_OK)
+    if (out_panel == NULL)
     {
-        ESP_LOGE(TAG, "CH422G / I2C init failed");
+        ESP_LOGE(TAG, "board_display_init: out_panel is NULL");
+        return false;
+    }
+
+    *out_panel = NULL;
+    s_display_err[0] = '\0';
+    s_display_note[0] = '\0';
+    const esp_err_t io_err = board_io_init();
+    if (io_err != ESP_OK)
+    {
+        display_fail("CH422G / I2C init failed", io_err);
         return false;
     }
 
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT,
-        .data_width = 16,                              /* RGB565 */
-        .num_fbs = 1,                                  /* Single framebuffer, drawn incrementally. */
-        .bounce_buffer_size_px = 10 * BOARD_LCD_WIDTH, /* smooth PSRAM-fb DMA, avoids tearing/underrun */
+        .data_width = 16, /* RGB565 */
+        .num_fbs = 1,     /* Single framebuffer, drawn incrementally. */
+        /* .bounce_buffer_size_px is chosen by the sizing ladder below. */
         .dma_burst_size = 64,
         .hsync_gpio_num = 46,
         .vsync_gpio_num = 3,
@@ -182,15 +221,65 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
         .flags.fb_in_psram = true,
     };
 
+    /* Bounce-buffer sizes to try, in scanlines, largest first. They are DMA-capable INTERNAL RAM —
+       the framebuffer living in PSRAM does nothing to relieve that — and internal RAM is both scarce
+       and fragmented by the time the panel comes up (the 64 KB main-task stack is the other big
+       tenant). 10 lines is what this panel wants for a smooth PSRAM-fb DMA; the smaller sizes refill
+       more often and a slow bus can underrun, but a slightly flickery panel beats the headless
+       fallback a single failed allocation used to cause. */
+    static const int k_bounce_lines[] = {10, 6, 4};
+    const size_t k_bounce_count = sizeof(k_bounce_lines) / sizeof(k_bounce_lines[0]);
+
     esp_lcd_panel_handle_t panel = NULL;
-    if (esp_lcd_new_rgb_panel(&panel_config, &panel) != ESP_OK)
+    esp_err_t err = ESP_ERR_NO_MEM;
+    for (size_t i = 0; i < k_bounce_count; i++)
     {
-        ESP_LOGE(TAG, "esp_lcd_new_rgb_panel failed");
+        panel_config.bounce_buffer_size_px = (size_t)k_bounce_lines[i] * BOARD_LCD_WIDTH;
+        err = esp_lcd_new_rgb_panel(&panel_config, &panel);
+        if (err == ESP_OK)
+        {
+            /* Latched, not just logged: a downgrade here is invisible on the console (see
+               board_display_last_error) and a silently flickery panel is a bad thing to hide. */
+            snprintf(s_display_note,
+                     sizeof(s_display_note),
+                     "bounce %d lines%s",
+                     k_bounce_lines[i],
+                     (i > 0) ? " (reduced to fit internal DMA RAM)" : "");
+            break;
+        }
+        if (err != ESP_ERR_NO_MEM)
+        {
+            break; /* not a sizing problem — a smaller buffer will not help */
+        }
+    }
+    if (err != ESP_OK)
+    {
+        display_fail("esp_lcd_new_rgb_panel failed", err);
+        if (err == ESP_ERR_NO_MEM)
+        {
+            snprintf(s_display_err + strlen(s_display_err),
+                     sizeof(s_display_err) - strlen(s_display_err),
+                     " (even %d bounce lines; DMA free %u, largest %u)",
+                     k_bounce_lines[k_bounce_count - 1],
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+        }
         return false;
     }
-    if (esp_lcd_panel_reset(panel) != ESP_OK || esp_lcd_panel_init(panel) != ESP_OK)
+    err = esp_lcd_panel_reset(panel);
+    if (err == ESP_OK)
     {
-        ESP_LOGE(TAG, "panel reset/init failed");
+        err = esp_lcd_panel_init(panel);
+    }
+    if (err != ESP_OK)
+    {
+        /* The panel object was created, so it owns the bounce buffers and DMA descriptors the
+           sizing ladder just fought for — release them rather than leaving them held by a handle
+           nobody will ever use again. The note the ladder latched described a bring-up that has
+           not happened, so it goes too. */
+        esp_lcd_panel_del(panel);
+        s_display_note[0] = '\0';
+        display_fail("panel reset/init failed", err);
         return false;
     }
 

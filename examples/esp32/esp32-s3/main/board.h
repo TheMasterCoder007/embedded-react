@@ -44,6 +44,25 @@ extern "C"
     bool board_display_init(esp_lcd_panel_handle_t* out_panel);
 
     /**
+     * @brief Why the last board_display_init() failed, or "" if it succeeded / has not run.
+     *
+     * Bring-up flips the CH422G's USB_SEL mux, which drops the native-USB console for about a second
+     * — the exact window every panel error is logged in, so on this board those ESP_LOGEs reach
+     * nobody. The reason is latched here as well so the host can print it once the console is back.
+     *
+     * @return Static NUL-terminated string owned by the board layer.
+     */
+    const char* board_display_last_error(void);
+
+    /**
+     * @brief Detail about the last SUCCESSFUL bring-up (e.g. the bounce-buffer size settled on),
+     *        or "" if none. Latched for the same reason as board_display_last_error().
+     *
+     * @return Static NUL-terminated string owned by the board layer.
+     */
+    const char* board_display_last_note(void);
+
+    /**
      * @brief Brings up the GT911 capacitive touch controller on the shared I2C bus.
      *
      * Must be called after board_display_init() (which creates the I2C bus + CH422G). Runs the GT911
