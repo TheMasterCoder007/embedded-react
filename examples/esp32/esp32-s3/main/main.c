@@ -468,8 +468,8 @@ static void run_app(void)
     /* Bring up the RGB panel and draw to it; fall back to the no-op backend if it fails so the JS
        stack still runs (and logs why) over UART. */
     esp_lcd_panel_handle_t panel = NULL;
-    const bool display =
-        board_display_init(&panel) && er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION);
+    const bool panel_up = board_display_init(&panel);
+    const bool display = panel_up && er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION);
     if (display)
     {
         ESP_LOGI(TAG, "display backend active");
@@ -478,6 +478,14 @@ static void run_app(void)
     {
         ESP_LOGW(TAG, "display init failed — falling back to no-op backend (headless)");
         embedded_renderer_set_backend(&k_noop_backend);
+        if (panel_up)
+        {
+            /* The panel came up and the backend refused it. The panel object owns the internal DMA
+               bounce buffers this board has to fight for, and the backend frees nothing on its way
+               out, so nothing would ever release them. We created it, so we release it. */
+            esp_lcd_panel_del(panel);
+            panel = NULL;
+        }
     }
     /* Nothing above this point reaches the console: bring-up flips the CH422G's USB_SEL mux and the
        native-USB CDC is re-enumerating for about a second. Repeat the verdict from the frame loop,
@@ -490,7 +498,7 @@ static void run_app(void)
                  board_display_last_note()[0] ? ", " : "",
                  board_display_last_note());
     }
-    else if (panel != NULL)
+    else if (panel_up)
     {
         /* The panel itself came up — the renderer backend refused it, so the board layer has no
            error to report and asking it for one would say "no reason latched" about the wrong
