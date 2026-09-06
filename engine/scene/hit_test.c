@@ -1129,6 +1129,18 @@ void er_input_queue_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
     er_dispatch_touch(finger_id, phase, x, y);
 }
 
+bool er_input_has_pending_moves(void)
+{
+    for (int i = 0; i < ER_MAX_TOUCHES; i++)
+    {
+        if (s_pending_moves[i].pending)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void er_input_flush_moves(void)
 {
     if (s_flushing_moves)

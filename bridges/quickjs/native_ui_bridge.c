@@ -2706,13 +2706,16 @@ static void bridge_pump_body(JSContext* ctx)
 }
 
 /**
- * @brief True when the pump has JS to run: a queued job (Promise reaction) or a due timer.
+ * @brief True when the pump will run JS: a parked touch-move, a queued job, or a due timer.
  *
- * The batcher only earns its keep when a frame runs SEVERAL callbacks — it is what makes their
- * renders one render. Entering it costs a JS call and a closure, which on an idle frame buys
- * nothing, and an idle frame is the common one on a static screen. Touch is deliberately not
- * counted: an event dispatch wraps itself in the batcher (bridge_call_batched), so a touch-only
- * frame is batched either way.
+ * The batcher only earns its keep when a frame runs callbacks — it is what makes their renders one
+ * render. Entering it costs a JS call and a closure, which on an idle frame buys nothing, and an
+ * idle frame is the common one on a static screen.
+ *
+ * The touch check has to be asked BEFORE the flush, not inferred from it: a move handler that
+ * resolves a promise or arms a 0 ms timer adds work the flush itself creates, and a frame that had
+ * already decided to skip the batcher would then render the handler and its continuation
+ * separately.
  *
  * @param[in] ctx  QuickJS context.
  *
@@ -2720,7 +2723,7 @@ static void bridge_pump_body(JSContext* ctx)
  */
 static bool bridge_pump_has_js_work(JSContext* ctx)
 {
-    if (JS_IsJobPending(JS_GetRuntime(ctx)))
+    if (embedded_renderer_has_pending_touch() || JS_IsJobPending(JS_GetRuntime(ctx)))
     {
         return true;
     }
