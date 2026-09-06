@@ -124,17 +124,32 @@ static void reset_touch(ERTouchState* touch)
  *
  * @param[in] finger_id  Finger index; must be below ER_MAX_TOUCHES.
  */
+/**
+ * @brief True when this finger's parked move would actually reach a handler.
+ *
+ * A move that lands on the position already dispatched tells the app nothing, and a finger resting
+ * on a panel that reports at 100 Hz produces a stream of exactly those — so the flush drops them.
+ * Being parked is therefore not the same as being about to dispatch, and er_input_has_pending_moves()
+ * shares this predicate so it cannot answer differently from the flush it is describing.
+ *
+ * @param[in] pm  The finger's coalescing slot.
+ *
+ * @return true if flushing this finger now would dispatch a move.
+ */
+static bool finger_move_dispatches(const ERPendingMove* pm)
+{
+    return pm->pending && !(pm->has_last && pm->x == pm->last_x && pm->y == pm->last_y);
+}
+
 static void flush_finger_move(uint8_t finger_id)
 {
     ERPendingMove* pm = &s_pending_moves[finger_id];
     if (!pm->pending)
         return;
 
-    pm->pending = false;
-
-    /* A move that lands on the position already dispatched tells the app nothing, and a finger resting
-     * on a panel that reports at 100 Hz produces a stream of exactly those. Drop them. */
-    if (pm->has_last && pm->x == pm->last_x && pm->y == pm->last_y)
+    const bool dispatches = finger_move_dispatches(pm);
+    pm->pending = false; /* consumed either way — a dropped repeat must not stay parked */
+    if (!dispatches)
         return;
 
     pm->last_x = pm->x;
@@ -1133,7 +1148,7 @@ bool er_input_has_pending_moves(void)
 {
     for (int i = 0; i < ER_MAX_TOUCHES; i++)
     {
-        if (s_pending_moves[i].pending)
+        if (finger_move_dispatches(&s_pending_moves[i]))
         {
             return true;
         }

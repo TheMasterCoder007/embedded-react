@@ -429,9 +429,10 @@ void er_input_flush_moves(void);
  * @brief True when any finger has a parked move that er_input_flush_moves() would dispatch.
  *
  * Lets a caller know a flush will run JS before it runs one — the QuickJS bridge decides whether
- * the frame is worth opening a React batch for.
+ * the frame is worth opening a React batch for. A parked move that repeats the last dispatched
+ * position does NOT count: the flush drops those, so it would run no handler.
  *
- * @return true if at least one finger has a move parked.
+ * @return true if at least one finger would dispatch a move.
  */
 bool er_input_has_pending_moves(void);
 

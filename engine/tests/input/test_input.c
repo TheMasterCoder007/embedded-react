@@ -849,6 +849,49 @@ static int test_move_coalescing_drops_repeat_position(void)
 }
 
 /**
+ * @brief Checks embedded_renderer_has_pending_touch() agrees with what the flush will actually do.
+ *
+ * The point of the query is "will flushing run a handler?", so a parked move the flush would DROP —
+ * a finger held still on a panel that keeps reporting — has to answer false. Answering "something is
+ * parked" instead would have a host prepare for JS on every frame of a resting finger.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_has_pending_touch_matches_dispatch(void)
+{
+    ERNode* root = create_root();
+    EventCounts counts = {0};
+    ERNode* pressable = create_pressable(20, 20, 80, 60, &counts);
+    er_tree_append_child(root, pressable);
+    er_commit();
+
+    if (embedded_renderer_has_pending_touch())
+        return fail("nothing parked must answer false");
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 30, 30);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 35);
+    if (!embedded_renderer_has_pending_touch())
+        return fail("a move to a new position must answer true");
+
+    embedded_renderer_flush_touch();
+    if (embedded_renderer_has_pending_touch())
+        return fail("a flushed move must answer false");
+    if (counts.touch_move_count != 1)
+        return fail("the move should have dispatched");
+
+    /* The case the query used to get wrong: parked, but the flush would drop it. */
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 40, 35);
+    if (embedded_renderer_has_pending_touch())
+        return fail("a move repeating the last dispatched position must answer false");
+    embedded_renderer_flush_touch();
+    if (counts.touch_move_count != 1)
+        return fail("...and must not dispatch either");
+
+    embedded_renderer_touch(0, ER_TOUCH_UP, 40, 35);
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks each finger coalesces independently and both flush together.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
@@ -2898,6 +2941,8 @@ int main(void)
     if (test_responder_termination_accepted() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_responder_termination_rejected() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_has_pending_touch_matches_dispatch() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
         return EXIT_FAILURE;

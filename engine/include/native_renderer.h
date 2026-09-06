@@ -229,7 +229,10 @@ extern "C"
      * for the JS a flush is about to trigger (the QuickJS bridge uses it to decide whether the frame
      * is worth opening a React batch for). Cheap: a scan of the per-finger parked slots.
      *
-     * @return true when at least one finger has a coalesced move waiting.
+     * A finger held still answers false. Its panel keeps reporting moves, but each one repeats the
+     * position already dispatched and the flush drops it, so nothing would run.
+     *
+     * @return true when at least one finger has a move waiting that would be dispatched.
      */
     bool embedded_renderer_has_pending_touch(void);
 
