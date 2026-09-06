@@ -32,6 +32,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -265,6 +266,12 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
     }
     if (err != ESP_OK)
     {
+        /* The panel object was created, so it owns the bounce buffers and DMA descriptors the
+           sizing ladder just fought for — release them rather than leaving them held by a handle
+           nobody will ever use again. The note the ladder latched described a bring-up that has
+           not happened, so it goes too. */
+        esp_lcd_panel_del(panel);
+        s_display_note[0] = '\0';
         display_fail("panel reset/init failed", err);
         return false;
     }

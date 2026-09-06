@@ -490,6 +490,16 @@ static void run_app(void)
                  board_display_last_note()[0] ? ", " : "",
                  board_display_last_note());
     }
+    else if (panel != NULL)
+    {
+        /* The panel itself came up — the renderer backend refused it, so the board layer has no
+           error to report and asking it for one would say "no reason latched" about the wrong
+           subsystem. */
+        snprintf(s_display_report_buf,
+                 sizeof(s_display_report_buf),
+                 "panel is up (%s) but the renderer backend failed to attach to it",
+                 board_display_last_note()[0] ? board_display_last_note() : "no note");
+    }
     else
     {
         snprintf(s_display_report_buf,
