@@ -3556,12 +3556,19 @@ static JSValue js_commit(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 }
 
 /**
- * @brief NativeUI.setBatcher(wrap) — installs the function the frame pump runs its work inside.
+ * @brief NativeUI.setBatcher(wrap) — installs the function the bridge runs host-driven JS inside.
  *
- * `wrap(run)` must call `run()` once, synchronously; the renderer passes React's batchedUpdates, so
- * every state update a frame produces — a coalesced touch move, a timer, a promise continuation —
- * lands in one render pass and one commit rather than one of each per callback. Pass null to remove
- * it (the pump then runs its work directly). A host with no React on it never installs one.
+ * The contract is `wrap(fn, a, b)`: call `fn(a, b)` exactly once, synchronously, and forward both
+ * arguments — they are the callback's payload (an event object, a changed string, a finished flag,
+ * or a Dial's value and the low end of its band), so a wrapper that drops them delivers events with
+ * no payload. Two is the maximum; nothing the bridge batches this way passes more. The return value
+ * is discarded. The renderer installs `(fn, a, b) => batchedUpdates(() => fn(a, b))`, which is what
+ * makes every state update a frame produces — a coalesced touch move, a timer, a promise
+ * continuation — land in one render pass and one commit rather than one of each per callback.
+ *
+ * What runs inside it: the frame pump's whole body (passed as a zero-argument `fn`), each native
+ * event dispatch, and each Animated completion callback. Pass null to remove it — the bridge then
+ * calls those directly, which is also what a host with no React on it gets, having installed none.
  *
  * @param[in] ctx   QuickJS context.
  * @param[in] this  JS this (unused).
@@ -4414,7 +4421,8 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  *
  * The whole pump is one batch scope, and runs inside the batcher when one is installed
  * (NativeUI.setBatcher), so a frame's state updates cost one render and one commit however many
- * callbacks produced them.
+ * callbacks produced them. That commit runs as the pump returns: a callback part-way through the
+ * frame still sees the rects the last commit computed, not the ones its own setState implies.
  *
  * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
  */

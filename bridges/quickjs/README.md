@@ -36,8 +36,9 @@ commit on its own, and three animations ticking on one frame would pay three ful
 paint one. `er_bridge_pump()` runs the whole frame inside one batch scope, and inside the batcher the
 renderer installs (`NativeUI.setBatcher` — React's `batchedUpdates`), so the frame ends in one render
 and one `er_commit()`. Events dispatched straight from a panel driver get the same scope around the
-handler, and a render outside a frame (the app's first one) still commits on the spot, so layout and
-hit areas are never stale.
+handler. A render outside a frame (the app's first one) still commits on the spot — so layout and
+hit areas are current every time control returns to the host, though a callback part-way through a
+frame still reads the previous commit's rects.
 
 **JS heap + GC accounting** (`er_js_alloc.{c,h}`): QuickJS decides when to collect garbage — and
 enforces `ErRuntimeConfig.memory_limit` — purely from what `js_malloc_usable_size()` reports for each

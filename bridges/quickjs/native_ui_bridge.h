@@ -52,8 +52,10 @@ extern "C"
      *
      * Everything the pump runs shares one batch scope: however many callbacks change state, the
      * frame ends in a single `er_commit()` (and, with the reconciler's batcher installed, a single
-     * render). A commit still runs eagerly outside the pump — an event dispatched straight from the
-     * panel driver, or the app's first render — so layout and hit areas are never stale.
+     * render). Layout and hit areas are therefore current whenever control returns to you — the
+     * scope closes before this call does, and an event dispatched straight from a panel driver
+     * commits as its handler returns, as does the app's first render. Inside a scope they are not:
+     * a callback that runs after another one changed state still reads the previous commit's rects.
      *
      * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
      */
