@@ -3740,11 +3740,14 @@ static bool vec_diff_dirty_rect(const float* o,
             continue;
         }
         i++; /* consume opcode (identical in both tapes) */
+        const bool pen_moved = have_pen && (opx != npx || opy != npy);
         if (code == (int)ER_VOP_MOVE || code == (int)ER_VOP_LINE)
         {
             if (i + 2 > on)
                 return false;
-            if (o[i] != nw[i] || o[i + 1] != nw[i + 1])
+
+            const bool ch = (o[i] != nw[i] || o[i + 1] != nw[i + 1]);
+            if (ch || (code == (int)ER_VOP_LINE && pen_moved))
             {
                 if (code == (int)ER_VOP_LINE)
                     VANCHOR(); /* the segment sweeps from the pen, not just between the endpoints */
@@ -3769,7 +3772,7 @@ static bool vec_diff_dirty_rect(const float* o,
         {
             if (i + 4 > on)
                 return false;
-            bool ch = false;
+            bool ch = pen_moved; /* the pen is the curve's first hull point: moving it moves the curve */
             for (int k = 0; k < 4; k++)
                 if (o[i + k] != nw[i + k])
                     ch = true;
@@ -3792,7 +3795,7 @@ static bool vec_diff_dirty_rect(const float* o,
         {
             if (i + 6 > on)
                 return false;
-            bool ch = false;
+            bool ch = pen_moved;
             for (int k = 0; k < 6; k++)
                 if (o[i + k] != nw[i + k])
                     ch = true;
@@ -3819,17 +3822,23 @@ static bool vec_diff_dirty_rect(const float* o,
             const float ocx = o[i], ocy = o[i + 1], orr = o[i + 2], oa0 = o[i + 3], oa1 = o[i + 4], occw = o[i + 5];
             const float ncx = nw[i], ncy = nw[i + 1], nrr = nw[i + 2], na0 = nw[i + 3], na1 = nw[i + 4],
                         nccw = nw[i + 5];
-            if (ocx != ncx || ocy != ncy || orr != nrr || oa0 != na0 || oa1 != na1 || occw != nccw)
+            const bool same_circle = (ocx == ncx && ocy == ncy && orr == nrr && occw == nccw);
+            const bool arc_moved = !same_circle || oa0 != na0 || oa1 != na1;
+            const bool lead_in_moved = pen_moved || !same_circle || oa0 != na0;
+            if (arc_moved || pen_moved)
             {
-                if (ocx == ncx && ocy == ncy && orr == nrr && occw == nccw)
+                if (same_circle)
                 {
-                    /* Same circle, only swept angles moved (the value arc) → damage just the changed sub-arcs.
-                     * A moved START angle also drags the segment that runs from the pen to it. */
-                    if (oa0 != na0)
+                    /* Same circle, only swept angles moved (the value arc) → damage just the changed
+                     * sub-arcs, which is what keeps a dial's repaint small. */
+                    if (lead_in_moved)
                     {
                         VANCHOR();
-                        vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
+                        VADD(ocx + orr * cosf(oa0), ocy + orr * sinf(oa0));
+                        VADD(ncx + nrr * cosf(na0), ncy + nrr * sinf(na0));
                     }
+                    if (oa0 != na0)
+                        vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
                     if (oa1 != na1)
                         vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy);
                     any = true;

@@ -309,33 +309,37 @@ export function parsePath(d) {
 // Parsed `d` strings, keyed on the string itself. An <Svg> recompiles its whole tape whenever any
 // part of it changes, so without this a moving needle re-runs the tokenizer and the arc->cubic
 // conversion over every static path beside it, only for the engine to memcmp the result and throw
-// the identical bytes away. Bounded by both total ops and entry count, so neither one huge path nor
-// a stream of tiny ones can grow it without limit; an entry also holds one transformed copy (see
-// xf), so the real footprint is ~2x the op budget. The bridge caps a single <Svg> at 1024 ops and
-// 16 shapes, so this holds several screens' worth.
+// the identical bytes away. Held to both an op budget and an entry count, and a path too big to fit
+// the budget on its own is never stored, so nothing can push it over; an entry also holds one
+// transformed copy (see xf), so the real footprint is ~2x the op budget. The bridge caps a single
+// <Svg> at 1024 ops and 16 shapes, so this holds several screens' worth.
 const PATH_CACHE = new Map();
 const PATH_CACHE_MAX_OPS = 4096;
 const PATH_CACHE_MAX_ENTRIES = 128;
 let _pathCacheOps = 0;
 
 /** Cache record for one `d` string: `ops` are the parsed path ops, `xf` the last transform applied
- *  to them (see transformCached). */
+ *  to them (see transformCached). Coerces its key, so a non-string `d` still hits the cache instead
+ *  of keying a fresh entry off object identity every call. */
 function pathEntry(d) {
-  const hit = PATH_CACHE.get(d);
+  const key = typeof d === 'string' ? d : String(d);
+  const hit = PATH_CACHE.get(key);
   if (hit !== undefined) {
     // A Map iterates oldest-first, so re-inserting on a hit makes eviction LRU — which is what keeps
     // a static face cached next to a needle whose `d` is rebuilt every frame.
-    PATH_CACHE.delete(d);
-    PATH_CACHE.set(d, hit);
+    PATH_CACHE.delete(key);
+    PATH_CACHE.set(key, hit);
     return hit;
   }
-  const entry = {ops: parsePathUncached(d), xf: null};
-  PATH_CACHE.set(d, entry);
+  const entry = {ops: parsePathUncached(key), xf: null};
+  // A path that alone exceeds the whole budget is parsed but not stored: caching it would blow the
+  // bound it is measured against, and at that size it is already past the bridge's per-<Svg> op cap.
+  if (entry.ops.length > PATH_CACHE_MAX_OPS) return entry;
+  PATH_CACHE.set(key, entry);
   _pathCacheOps += entry.ops.length;
   while (
-    (_pathCacheOps > PATH_CACHE_MAX_OPS ||
-      PATH_CACHE.size > PATH_CACHE_MAX_ENTRIES) &&
-    PATH_CACHE.size > 1
+    _pathCacheOps > PATH_CACHE_MAX_OPS ||
+    PATH_CACHE.size > PATH_CACHE_MAX_ENTRIES
   ) {
     const oldest = PATH_CACHE.keys().next().value;
     _pathCacheOps -= PATH_CACHE.get(oldest).ops.length;
@@ -975,7 +979,8 @@ export function flattenSvg(props) {
     // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
     let entry = null;
     let shapeOps = null;
-    if (c.type === 'Path' && p.d) entry = pathEntry(String(p.d));
+    if (c.type === 'Path' && p.d)
+      entry = pathEntry(p.d); // pathEntry coerces the key
     else if (c.type === 'Ellipse') entry = pathEntry(ellipsePathD(p));
     else if (c.type === 'Circle') shapeOps = circleOps(p);
     else if (c.type === 'Rect') shapeOps = rectOps(p);

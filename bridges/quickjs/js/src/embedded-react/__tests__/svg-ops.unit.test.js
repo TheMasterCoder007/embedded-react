@@ -161,6 +161,28 @@ describe('parsePath cache', () => {
     ds.forEach((d, i) => expect(parsePath(d)).toEqual(expected[i]));
   });
 
+  it('hits the cache for a `d` that is not a plain string', () => {
+    clearPathCache();
+    const d = 'M0 0 L10 0 Z';
+    const first = parsePath(d);
+    // eslint-disable-next-line no-new-wrappers
+    expect(parsePath(new String(d))).toBe(first);
+  });
+
+  it('does not store a path too big for the whole budget', () => {
+    clearPathCache();
+    const small = 'M1 1 L2 2';
+    const cached = parsePath(small);
+    // Comfortably over PATH_CACHE_MAX_OPS (3 ops per segment).
+    let huge = 'M0 0';
+    for (let i = 0; i < 2000; i++) huge += ` L${i} ${i % 7}`;
+    const hugeOps = parsePath(huge);
+    expect(hugeOps.length).toBeGreaterThan(4096);
+    // Storing it would have evicted everything else to make room; it must not be stored at all.
+    expect(parsePath(small)).toBe(cached);
+    expect(parsePath(huge)).not.toBe(hugeOps); // re-parsed, never cached
+  });
+
   it('rebuilds a tape whose shapes changed and leaves the unchanged ones identical', () => {
     const face = {type: 'Path', props: {d: 'M0 0 L10 0 Z', fill: '#111'}};
     const svg = angle => ({

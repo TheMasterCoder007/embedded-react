@@ -23,7 +23,8 @@
  *   - rotating needle: a line whose far endpoint moves — the whole segment sweeps, not just the tip,
  *   - closed needle: the same with a trailing Z, whose closing segment sweeps too,
  *   - curved pointer: a cubic whose end control points move,
- *   - unchanged shapes: a tape where nothing moved must not repaint at all.
+ *   - pivoting line / cubic / arc: the mirror image, where a segment's own coordinates are untouched
+ *     and its ANCHOR moves instead — the shape still sweeps, about its far end.
  */
 
 #include "er_scene.h"
@@ -191,24 +192,112 @@ static void build_scene(ERNode** out_root, ERNode** out_svg)
 }
 
 /**
- * @brief Uploads a needle tape at @p angle, commits, and returns the resulting framebuffer.
+ * @brief Builds one frame of a tape. @p step advances the animation; 0 is the resting pose.
  *
- * @p closed adds a trailing CLOSE, the shape a `<Path d="M.. L.. Z">` produces.
+ * The `needle`/`curve` builders move a segment's own coordinates and hold its anchor still; the
+ * `pivot` builders do the opposite, moving the anchor and holding the segment's coordinates. Both
+ * sweep the shape, and both must be damaged in full.
  */
-static void needle_tape(float angle, bool closed, float* ops, int* n_ops)
+typedef void (*TapeFn)(int step, float* ops, int* n_ops);
+
+/* Local coordinates inside the 160x160 <Svg> box. */
+#define HUB_X 80.0f
+#define HUB_Y 80.0f
+#define NEEDLE_R 60.0f
+
+static void tape_needle_open(int step, float* ops, int* n_ops)
 {
-    const float cx = 80.0f, cy = 80.0f, r = 60.0f;
+    const float a = 0.12f * (float)step;
     int i = 0;
     ops[i++] = (float)ER_VOP_SHAPE;
     ops[i++] = 0.0f;
     ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = cx;
-    ops[i++] = cy;
+    ops[i++] = HUB_X;
+    ops[i++] = HUB_Y;
     ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = cx + r * cosf(angle);
-    ops[i++] = cy + r * sinf(angle);
-    if (closed)
-        ops[i++] = (float)ER_VOP_CLOSE;
+    ops[i++] = HUB_X + NEEDLE_R * cosf(a);
+    ops[i++] = HUB_Y + NEEDLE_R * sinf(a);
+    *n_ops = i;
+}
+
+static void tape_needle_closed(int step, float* ops, int* n_ops)
+{
+    int i = 0;
+    tape_needle_open(step, ops, &i);
+    ops[i++] = (float)ER_VOP_CLOSE;
+    *n_ops = i;
+}
+
+static void tape_curve(int step, float* ops, int* n_ops)
+{
+    const float a = 0.12f * (float)step;
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = HUB_X;
+    ops[i++] = HUB_Y;
+    ops[i++] = (float)ER_VOP_CUBIC;
+    ops[i++] = HUB_X + 30.0f * cosf(a);
+    ops[i++] = HUB_Y + 30.0f * sinf(a);
+    ops[i++] = HUB_X + 50.0f * cosf(a);
+    ops[i++] = HUB_Y + 50.0f * sinf(a);
+    ops[i++] = HUB_X + NEEDLE_R * cosf(a);
+    ops[i++] = HUB_Y + NEEDLE_R * sinf(a);
+    *n_ops = i;
+}
+
+/** @brief The anchor slides down the left edge; the far endpoint never moves, so the line pivots. */
+static void tape_pivot_line(int step, float* ops, int* n_ops)
+{
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 30.0f;
+    ops[i++] = 40.0f + 8.0f * (float)step;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 140.0f;
+    ops[i++] = 80.0f;
+    *n_ops = i;
+}
+
+/** @brief Same pivot, with every cubic control point held fixed. */
+static void tape_pivot_cubic(int step, float* ops, int* n_ops)
+{
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 30.0f;
+    ops[i++] = 40.0f + 8.0f * (float)step;
+    ops[i++] = (float)ER_VOP_CUBIC;
+    ops[i++] = 70.0f;
+    ops[i++] = 30.0f;
+    ops[i++] = 110.0f;
+    ops[i++] = 30.0f;
+    ops[i++] = 140.0f;
+    ops[i++] = 80.0f;
+    *n_ops = i;
+}
+
+/** @brief Same pivot into an arc: the segment from the pen to the arc's start point sweeps, while the
+ *         arc's own parameters never change. */
+static void tape_pivot_arc(int step, float* ops, int* n_ops)
+{
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 30.0f;
+    ops[i++] = 40.0f + 8.0f * (float)step;
+    ops[i++] = (float)ER_VOP_ARC;
+    ops[i++] = HUB_X;
+    ops[i++] = HUB_Y;
+    ops[i++] = 40.0f;
+    ops[i++] = 0.0f;
+    ops[i++] = 1.2f;
+    ops[i++] = 0.0f;
     *n_ops = i;
 }
 
@@ -221,7 +310,7 @@ static int check_matches_full_repaint(const char* what)
     frame();
 
     /* A backend with no blend_rect draws no anti-aliased vector output at all, which would make every
-     * assertion below pass against a blank screen. Prove the needle actually inked something first. */
+     * assertion below pass against a blank screen. Prove the shape actually inked something first. */
     long ink = 0;
     for (int i = 0; i < SCREEN * SCREEN; i++)
         if (s_fb[i] != 0xFF101820U)
@@ -241,68 +330,30 @@ static int check_matches_full_repaint(const char* what)
     return EXIT_SUCCESS;
 }
 
-/** @brief A line's far endpoint moves: the WHOLE segment sweeps, so all of it must be repainted. */
-static int check_rotating_needle(bool closed)
+/** @brief Animates @p fn for a few frames, then asserts the incremental result is pixel-exact. */
+static int check_sweep(const char* label, TapeFn fn)
 {
     ERNode *root, *svg;
     build_scene(&root, &svg);
-    float ops[16];
+    float ops[24];
     int n = 0;
 
-    needle_tape(0.0f, closed, ops, &n);
+    fn(0, ops, &n);
     er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
     frame();
     frame();
 
-    /* Sweep it the way an animation does: a few degrees per frame, several frames. */
     for (int step = 1; step <= 6; step++)
     {
-        needle_tape(0.12f * (float)step, closed, ops, &n);
+        fn(step, ops, &n);
         er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
         frame();
     }
 
-    const int rc = check_matches_full_repaint(closed ? "a closed rotating needle left stale pixels"
-                                                     : "a rotating needle left stale pixels");
+    const int rc = check_matches_full_repaint(label);
     er_node_destroy(root);
     if (rc == EXIT_SUCCESS)
-        printf("PASS: rotating needle (%s) matches a full repaint\n", closed ? "closed" : "open");
-    return rc;
-}
-
-/** @brief A cubic whose end control points move — the curve body sweeps with them. */
-static int check_curved_pointer(void)
-{
-    ERNode *root, *svg;
-    build_scene(&root, &svg);
-    float ops[16];
-
-    for (int step = 0; step <= 6; step++)
-    {
-        const float a = 0.12f * (float)step;
-        int i = 0;
-        ops[i++] = (float)ER_VOP_SHAPE;
-        ops[i++] = 0.0f;
-        ops[i++] = (float)ER_VOP_MOVE;
-        ops[i++] = 80.0f;
-        ops[i++] = 80.0f;
-        ops[i++] = (float)ER_VOP_CUBIC;
-        ops[i++] = 80.0f + 30.0f * cosf(a);
-        ops[i++] = 80.0f + 30.0f * sinf(a);
-        ops[i++] = 80.0f + 50.0f * cosf(a);
-        ops[i++] = 80.0f + 50.0f * sinf(a);
-        ops[i++] = 80.0f + 60.0f * cosf(a);
-        ops[i++] = 80.0f + 60.0f * sinf(a);
-        er_node_set_vector_ops(svg, ops, i, &g_paint, 1, NULL, 0);
-        frame();
-        if (step == 0)
-            frame();
-    }
-
-    const int rc = check_matches_full_repaint("a rotating cubic left stale pixels");
-    er_node_destroy(root);
-    if (rc == EXIT_SUCCESS)
-        printf("PASS: curved pointer matches a full repaint\n");
+        printf("PASS: %s matches a full repaint\n", label);
     return rc;
 }
 
@@ -317,20 +368,32 @@ int main(void)
     embedded_renderer_set_backend(&k_backend);
     paint_init();
 
-    int rc = check_rotating_needle(false);
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    er_reset();
+    static const struct
+    {
+        const char* label;
+        TapeFn fn;
+    } k_cases[] = {
+        {"rotating needle", tape_needle_open},
+        {"closed rotating needle", tape_needle_closed},
+        {"curved pointer", tape_curve},
+        {"pivoting line (anchor moves)", tape_pivot_line},
+        {"pivoting cubic (anchor moves)", tape_pivot_cubic},
+        {"pivoting arc (anchor moves)", tape_pivot_arc},
+    };
 
-    rc = check_rotating_needle(true);
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    er_reset();
-
-    rc = check_curved_pointer();
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    er_reset();
+    /* Every case runs even after one fails: the set of failures says which shape kinds lost damage. */
+    int failures = 0;
+    for (size_t k = 0; k < sizeof(k_cases) / sizeof(k_cases[0]); k++)
+    {
+        if (check_sweep(k_cases[k].label, k_cases[k].fn) != EXIT_SUCCESS)
+            failures++;
+        er_reset();
+    }
+    if (failures > 0)
+    {
+        fprintf(stderr, "%d vector damage case(s) failed\n", failures);
+        return EXIT_FAILURE;
+    }
 
     printf("All vector damage tests passed\n");
     return EXIT_SUCCESS;
