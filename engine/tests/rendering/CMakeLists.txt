@@ -116,6 +116,12 @@ target_link_libraries(test_vector PRIVATE embedded-react)
 target_include_directories(test_vector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering)
 add_test(NAME rendering_vector COMMAND test_vector)
 
+add_executable(test_vector_damage test_vector_damage.c)
+target_link_libraries(test_vector_damage PRIVATE embedded-react)
+# test_vector_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
+target_include_directories(test_vector_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_vector_damage COMMAND test_vector_damage)
+
 add_executable(test_vector_cache test_vector_cache.c)
 target_link_libraries(test_vector_cache PRIVATE embedded-react)
 # test_vector_cache needs engine/rendering for vector.h (a private engine header).

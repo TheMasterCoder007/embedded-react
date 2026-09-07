@@ -19,6 +19,7 @@ import {createElement, Fragment} from 'react';
 import {
   parseColor,
   parsePath,
+  clearPathCache,
   flattenSvg,
   shapesToVector,
   scaleVectorArtifact,
@@ -138,6 +139,89 @@ describe('parsePath', () => {
       i += 7;
     }
     expect(cubics).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('parsePath cache', () => {
+  it('returns the same ops for a repeated `d`, and re-parses after a clear', () => {
+    const d = 'M0 0 L10 0 A 4 4 0 0 1 20 0 Z';
+    const first = parsePath(d);
+    expect(parsePath(d)).toBe(first); // cached: same array, not just an equal one
+    clearPathCache();
+    const fresh = parsePath(d);
+    expect(fresh).not.toBe(first);
+    expect(fresh).toEqual(first);
+  });
+
+  it('keeps each `d` distinct as the cache evicts', () => {
+    clearPathCache();
+    const ds = [];
+    for (let i = 0; i < 400; i++) ds.push(`M${i} 0 L${i + 1} 1`);
+    const expected = ds.map(d => parsePath(d).slice());
+    ds.forEach((d, i) => expect(parsePath(d)).toEqual(expected[i]));
+  });
+
+  it('hits the cache for a `d` that is not a plain string', () => {
+    clearPathCache();
+    const d = 'M0 0 L10 0 Z';
+    const first = parsePath(d);
+    // eslint-disable-next-line no-new-wrappers
+    expect(parsePath(new String(d))).toBe(first);
+  });
+
+  it('does not store a path too big for the whole budget', () => {
+    clearPathCache();
+    const small = 'M1 1 L2 2';
+    const cached = parsePath(small);
+    // Comfortably over PATH_CACHE_MAX_OPS (3 ops per segment).
+    let huge = 'M0 0';
+    for (let i = 0; i < 2000; i++) huge += ` L${i} ${i % 7}`;
+    const hugeOps = parsePath(huge);
+    expect(hugeOps.length).toBeGreaterThan(4096);
+    // Storing it would have evicted everything else to make room; it must not be stored at all.
+    expect(parsePath(small)).toBe(cached);
+    expect(parsePath(huge)).not.toBe(hugeOps); // re-parsed, never cached
+  });
+
+  it('rebuilds a tape whose shapes changed and leaves the unchanged ones identical', () => {
+    const face = {type: 'Path', props: {d: 'M0 0 L10 0 Z', fill: '#111'}};
+    const svg = angle => ({
+      children: [face, {type: 'Path', props: {d: `M5 5 L5 ${angle}`}}],
+    });
+    const a = flattenSvg(svg(9));
+    const b = flattenSvg(svg(9));
+    expect(b.ops).toEqual(a.ops);
+    const c = flattenSvg(svg(12));
+    expect(c.ops.slice(0, 9)).toEqual(a.ops.slice(0, 9)); // the face segment
+    expect(c.ops).not.toEqual(a.ops);
+  });
+
+  it('applies the right transform when one `d` is drawn under two of them', () => {
+    const shared = {type: 'Path', props: {d: 'M0 0 L10 0'}};
+    const {ops} = flattenSvg({
+      children: [
+        {type: 'G', props: {x: 100, children: shared}},
+        {type: 'G', props: {x: 200, children: shared}},
+      ],
+    });
+    expect(ops).toEqual([
+      SHAPE,
+      0,
+      MOVE,
+      100,
+      0,
+      LINE,
+      110,
+      0,
+      SHAPE,
+      1,
+      MOVE,
+      200,
+      0,
+      LINE,
+      210,
+      0,
+    ]);
   });
 });
 

@@ -17,7 +17,18 @@ See the README for the release process.
   animations on a frame cost N of both; they now share one. Measured on an ESP32-S3, each additional
   thing updating on a frame now costs 9.9 ms instead of 16.6 ms.
 
+- `<Svg>` no longer reparses path data it has already seen. An `<Svg>` recompiles its whole op-tape
+  whenever any part of it changes, so a moving needle re-ran the SVG `d` parser over every static
+  shape beside it; parsed paths (and their transformed geometry) are now cached by `d` string.
+  Measured on an ESP32-S3, re-rendering a 14-shape gauge dropped from 100 ms to 47 ms of JS per
+  frame. Output is unchanged.
+
 ### Fixed
+
+- A moving `<Svg>` shape no longer leaves part of itself behind. The incremental damage rect for a
+  re-uploaded op-tape covered only the control points that changed, not the point each segment starts
+  from — so a rotating needle repainted its tip and left the body stale, and the end appeared to
+  detach from the rest for a few frames. Segments and curves are now bounded by their anchor too.
 
 - The ESP32-S3 example now brings its panel up instead of falling back to headless when the RGB
   bounce buffers cannot get 10 scanlines of internal DMA RAM — it tries smaller ones first. The
