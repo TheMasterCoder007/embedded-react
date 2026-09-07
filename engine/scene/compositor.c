@@ -3631,6 +3631,14 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
  * upload, different length/opcodes/paint-index, or a paint-table change) falls back to a full-box repaint,
  * so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change (same geometry, e.g.
  * a mode recolor) also falls back to full, which is correct (every pixel of the shape changes colour).
+ *
+ * A segment is bounded by its ANCHOR (the pen position it starts from) as well as by its own points: a
+ * rotating needle `M cx cy L tip` moves only `tip` in the tape, but the whole line sweeps, so damaging
+ * the two tip positions alone repaints the tip and leaves the body stale — the needle's end visibly
+ * detaches. Curves lie inside the convex hull of anchor + control points, so the same rule bounds them.
+ * An arc is the exception worth keeping tight: its leading segment runs from the pen to the arc's start
+ * point, which does not move when only the swept END angle changes (the value-arc case above), so the
+ * anchor is folded in only when the arc's start actually moves.
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
@@ -3698,6 +3706,21 @@ static bool vec_diff_dirty_rect(const float* o,
         any = true;                                                                                                    \
     } while (0)
 
+    /* The pen, tracked through BOTH tapes: a moved segment is only bounded once the point it starts
+     * from is in the box too. `have_pen` is false until the shape's first MOVE. */
+    float opx = 0.0f, opy = 0.0f, npx = 0.0f, npy = 0.0f; /* current point */
+    float osx = 0.0f, osy = 0.0f, nsx = 0.0f, nsy = 0.0f; /* subpath start, for CLOSE */
+    bool have_pen = false;
+#define VANCHOR()                                                                                                      \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (have_pen)                                                                                                  \
+        {                                                                                                              \
+            VADD(opx, opy);                                                                                            \
+            VADD(npx, npy);                                                                                            \
+        }                                                                                                              \
+    } while (0)
+
     int i = 0;
     while (i < on)
     {
@@ -3713,6 +3736,7 @@ static bool vec_diff_dirty_rect(const float* o,
                     return false; /* paint-index swap on a shape */
                 i++;
             }
+            have_pen = false; /* a new shape starts a new pen path */
             continue;
         }
         i++; /* consume opcode (identical in both tapes) */
@@ -3722,9 +3746,23 @@ static bool vec_diff_dirty_rect(const float* o,
                 return false;
             if (o[i] != nw[i] || o[i + 1] != nw[i + 1])
             {
+                if (code == (int)ER_VOP_LINE)
+                    VANCHOR(); /* the segment sweeps from the pen, not just between the endpoints */
                 VADD(o[i], o[i + 1]);
                 VADD(nw[i], nw[i + 1]);
             }
+            opx = o[i];
+            opy = o[i + 1];
+            npx = nw[i];
+            npy = nw[i + 1];
+            if (code == (int)ER_VOP_MOVE)
+            {
+                osx = opx;
+                osy = opy;
+                nsx = npx;
+                nsy = npy;
+            }
+            have_pen = true;
             i += 2;
         }
         else if (code == (int)ER_VOP_QUAD)
@@ -3737,11 +3775,17 @@ static bool vec_diff_dirty_rect(const float* o,
                     ch = true;
             if (ch)
             {
+                VANCHOR(); /* the curve lies inside the hull of pen + control points */
                 VADD(o[i], o[i + 1]);
                 VADD(o[i + 2], o[i + 3]);
                 VADD(nw[i], nw[i + 1]);
                 VADD(nw[i + 2], nw[i + 3]);
             }
+            opx = o[i + 2];
+            opy = o[i + 3];
+            npx = nw[i + 2];
+            npy = nw[i + 3];
+            have_pen = true;
             i += 4;
         }
         else if (code == (int)ER_VOP_CUBIC)
@@ -3753,11 +3797,19 @@ static bool vec_diff_dirty_rect(const float* o,
                 if (o[i + k] != nw[i + k])
                     ch = true;
             if (ch)
+            {
+                VANCHOR();
                 for (int k = 0; k < 6; k += 2)
                 {
                     VADD(o[i + k], o[i + k + 1]);
                     VADD(nw[i + k], nw[i + k + 1]);
                 }
+            }
+            opx = o[i + 4];
+            opy = o[i + 5];
+            npx = nw[i + 4];
+            npy = nw[i + 5];
+            have_pen = true;
             i += 6;
         }
         else if (code == (int)ER_VOP_ARC)
@@ -3771,9 +3823,13 @@ static bool vec_diff_dirty_rect(const float* o,
             {
                 if (ocx == ncx && ocy == ncy && orr == nrr && occw == nccw)
                 {
-                    /* Same circle, only swept angles moved (the value arc) → damage just the changed sub-arcs. */
+                    /* Same circle, only swept angles moved (the value arc) → damage just the changed sub-arcs.
+                     * A moved START angle also drags the segment that runs from the pen to it. */
                     if (oa0 != na0)
+                    {
+                        VANCHOR();
                         vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
+                    }
                     if (oa1 != na1)
                         vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy);
                     any = true;
@@ -3781,23 +3837,42 @@ static bool vec_diff_dirty_rect(const float* o,
                 else
                 {
                     /* Centre/radius moved (e.g. the handle knob) → full-circle bbox of old + new. */
+                    VANCHOR();
                     VADD(ocx - orr, ocy - orr);
                     VADD(ocx + orr, ocy + orr);
                     VADD(ncx - nrr, ncy - nrr);
                     VADD(ncx + nrr, ncy + nrr);
                 }
             }
+            opx = ocx + orr * cosf(oa1);
+            opy = ocy + orr * sinf(oa1);
+            npx = ncx + nrr * cosf(na1);
+            npy = ncy + nrr * sinf(na1);
+            have_pen = true;
             i += 6;
         }
         else if (code == (int)ER_VOP_CLOSE)
         {
-            /* no coordinates */
+            /* No coordinates of its own, but it draws pen -> subpath start, which sweeps when either end
+             * moved — the `Z` on a rotating `M cx cy L tip Z` needle. */
+            if (have_pen && (opx != npx || opy != npy || osx != nsx || osy != nsy))
+            {
+                VADD(opx, opy);
+                VADD(npx, npy);
+                VADD(osx, osy);
+                VADD(nsx, nsy);
+            }
+            opx = osx;
+            opy = osy;
+            npx = nsx;
+            npy = nsy;
         }
         else
         {
             return false; /* unknown opcode — bail to a full repaint */
         }
     }
+#undef VANCHOR
 #undef VADD
 
     if (!any)

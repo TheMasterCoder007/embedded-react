@@ -299,8 +299,58 @@ function arcToCubics(x0, y0, rx, ry, phiDeg, largeArc, sweep, x, y) {
 /**
  * Parses an SVG `d` string into engine path ops (a flat number array, NO leading SHAPE op). Supports
  * M/L/H/V/C/S/Q/T/A/Z and their relative (lowercase) forms; arcs are converted to cubics.
+ *
+ * Results are cached by `d` string, so the returned array is SHARED — read it, never mutate it.
  */
 export function parsePath(d) {
+  return pathEntry(d).ops;
+}
+
+// Parsed `d` strings, keyed on the string itself. An <Svg> recompiles its whole tape whenever any
+// part of it changes, so without this a moving needle re-runs the tokenizer and the arc->cubic
+// conversion over every static path beside it, only for the engine to memcmp the result and throw
+// the identical bytes away. Bounded by both total ops and entry count, so neither one huge path nor
+// a stream of tiny ones can grow it without limit; an entry also holds one transformed copy (see
+// xf), so the real footprint is ~2x the op budget. The bridge caps a single <Svg> at 1024 ops and
+// 16 shapes, so this holds several screens' worth.
+const PATH_CACHE = new Map();
+const PATH_CACHE_MAX_OPS = 4096;
+const PATH_CACHE_MAX_ENTRIES = 128;
+let _pathCacheOps = 0;
+
+/** Cache record for one `d` string: `ops` are the parsed path ops, `xf` the last transform applied
+ *  to them (see transformCached). */
+function pathEntry(d) {
+  const hit = PATH_CACHE.get(d);
+  if (hit !== undefined) {
+    // A Map iterates oldest-first, so re-inserting on a hit makes eviction LRU — which is what keeps
+    // a static face cached next to a needle whose `d` is rebuilt every frame.
+    PATH_CACHE.delete(d);
+    PATH_CACHE.set(d, hit);
+    return hit;
+  }
+  const entry = {ops: parsePathUncached(d), xf: null};
+  PATH_CACHE.set(d, entry);
+  _pathCacheOps += entry.ops.length;
+  while (
+    (_pathCacheOps > PATH_CACHE_MAX_OPS ||
+      PATH_CACHE.size > PATH_CACHE_MAX_ENTRIES) &&
+    PATH_CACHE.size > 1
+  ) {
+    const oldest = PATH_CACHE.keys().next().value;
+    _pathCacheOps -= PATH_CACHE.get(oldest).ops.length;
+    PATH_CACHE.delete(oldest);
+  }
+  return entry;
+}
+
+/** Drops every cached path. Only for tests that measure parse work. */
+export function clearPathCache() {
+  PATH_CACHE.clear();
+  _pathCacheOps = 0;
+}
+
+function parsePathUncached(d) {
   const ops = [];
   const toks = tokenizePath(d);
   let cx = 0;
@@ -452,14 +502,14 @@ function circleOps(p) {
   ];
 }
 
-function ellipseOps(p) {
-  // Approximate via an arc-free path: four cubic beziers (kappa) — reuse parsePath by emitting an A path.
+/** An ellipse as a `d` string: an arc-free path of four cubic Béziers (kappa) once parsePath lowers
+ *  the two `A` commands. Returned as a string so it goes through the same parse cache as <Path d>. */
+function ellipsePathD(p) {
   const cx = num(p.cx, 0);
   const cy = num(p.cy, 0);
   const rx = num(p.rx, 0);
   const ry = num(p.ry, 0);
-  const d = `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
-  return parsePath(d);
+  return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
 }
 
 /**
@@ -793,6 +843,27 @@ function transformOps(ops, T) {
   return out;
 }
 
+/**
+ * transformOps against a cached path, reusing the last result when the transform is unchanged. One
+ * slot per path: a shape's transform is the root viewBox scale composed with its <G>s, which almost
+ * never moves between commits, so an untouched shape costs a compare instead of a rebuild. The same
+ * `d` drawn under several different transforms just misses and pays the full transform.
+ */
+function transformCached(entry, T) {
+  const xf = entry.xf;
+  if (
+    xf &&
+    xf.sx === T.sx &&
+    xf.sy === T.sy &&
+    xf.tx === T.tx &&
+    xf.ty === T.ty
+  )
+    return xf.out;
+  const out = transformOps(entry.ops, T);
+  entry.xf = {sx: T.sx, sy: T.sy, tx: T.tx, ty: T.ty, out};
+  return out;
+}
+
 function isElement(c) {
   return c && typeof c === 'object' && c.type != null && c.props != null;
 }
@@ -900,10 +971,13 @@ export function flattenSvg(props) {
     }
     if (!SVG_TAGS.includes(c.type)) return warnSvgChild(c);
 
+    // Path/Ellipse geometry comes from a `d` string and is cached (parse + transform) by that string;
+    // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
+    let entry = null;
     let shapeOps = null;
-    if (c.type === 'Path' && p.d) shapeOps = parsePath(p.d);
+    if (c.type === 'Path' && p.d) entry = pathEntry(String(p.d));
+    else if (c.type === 'Ellipse') entry = pathEntry(ellipsePathD(p));
     else if (c.type === 'Circle') shapeOps = circleOps(p);
-    else if (c.type === 'Ellipse') shapeOps = ellipseOps(p);
     else if (c.type === 'Rect') shapeOps = rectOps(p);
     else if (c.type === 'Line') shapeOps = lineOps(p);
     else if (c.type === 'Arc')
@@ -914,12 +988,17 @@ export function flattenSvg(props) {
         num(p.startAngle, 0),
         num(p.endAngle, 0),
       );
-    if (!shapeOps || shapeOps.length === 0) return;
+    const baseOps = entry ? entry.ops : shapeOps;
+    if (!baseOps || baseOps.length === 0) return;
 
+    const seg = entry ? transformCached(entry, T) : transformOps(baseOps, T);
     const paintIndex = paints.length / PAINT_STRIDE;
     const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
     paints.push(...paintRecord(merged, scale, gradients));
-    ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, T));
+    // Appended one at a time: `seg` can be a long cached tape, and spreading it into push() both
+    // copies it into an argument list and risks the call-argument limit.
+    ops.push(VOP_SHAPE, paintIndex);
+    for (let k = 0; k < seg.length; k++) ops.push(seg[k]);
   };
 
   walk(props.children, PAINT_DEFAULT, root);
