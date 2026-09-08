@@ -37,6 +37,18 @@ static bool s_phase_open[ER_PERF_PHASE_COUNT];
 static uint32_t s_sub_start[ER_PERF_RASTER_COUNT];
 static bool s_sub_open[ER_PERF_RASTER_COUNT];
 
+/* The JS sub-split is a nesting stack rather than a set of independent spans: the bridge's marks sit
+ * inside one another (marshalling inside the mutation pass inside the batched render), and each
+ * begin/end charges the time since the last mark to whichever bucket is innermost. That yields
+ * exclusive times directly, with no subtraction pass to get wrong. 8 is far above the three levels
+ * the bridge actually nests; s_js_over keeps a begin dropped at the ceiling from unbalancing the
+ * stack when its end arrives. */
+#define ER_PERF_JS_STACK_MAX 8
+static uint8_t s_js_stack[ER_PERF_JS_STACK_MAX];
+static int s_js_depth = 0;
+static int s_js_over = 0;
+static uint32_t s_js_mark = 0U; /* clock at the last bucket switch */
+
 static ERPerfFrame s_cur;   /* accumulating: the frame currently open */
 static ERPerfFrame s_last;  /* the most recently completed frame */
 static ERPerfFrame s_worst; /* the longest frame since the last reset — the spike we are hunting */
@@ -76,6 +88,8 @@ void er_perf_frame_begin(void)
     memset(&s_cur, 0, sizeof(s_cur));
     memset(s_phase_open, 0, sizeof(s_phase_open));
     memset(s_sub_open, 0, sizeof(s_sub_open));
+    s_js_depth = 0;
+    s_js_over = 0;
     s_cur.index = s_next_index++;
     s_frame_start = perf_now();
     s_frame_open = true;
@@ -129,6 +143,47 @@ void er_perf_raster_end(ERPerfRasterSub sub)
     }
     s_cur.raster_us[sub] += perf_now() - s_sub_start[sub];
     s_sub_open[sub] = false;
+}
+
+void er_perf_js_begin(ERPerfJsSub sub)
+{
+    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_JS_COUNT)
+    {
+        return;
+    }
+    if (s_js_depth >= ER_PERF_JS_STACK_MAX)
+    {
+        s_js_over++; /* remembered so the matching end() pops nothing rather than someone else's frame */
+        return;
+    }
+    const uint32_t now = perf_now();
+    if (s_js_depth > 0)
+    {
+        s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
+    }
+    s_js_mark = now;
+    s_js_stack[s_js_depth++] = (uint8_t)sub;
+}
+
+void er_perf_js_end(ERPerfJsSub sub)
+{
+    if (!s_frame_open)
+    {
+        return;
+    }
+    if (s_js_over > 0)
+    {
+        s_js_over--;
+        return;
+    }
+    if (s_js_depth == 0 || s_js_stack[s_js_depth - 1] != (uint8_t)sub)
+    {
+        return; /* never begun, or crossed with another span: contribute nothing rather than misattribute */
+    }
+    const uint32_t now = perf_now();
+    s_cur.js_us[sub] += now - s_js_mark;
+    s_js_mark = now;
+    s_js_depth--;
 }
 
 void er_perf_note_blit(uint32_t us, uint32_t px)
@@ -199,6 +254,34 @@ void er_perf_frame_end(void)
             s_cur.raster_us[i] += perf_now() - s_sub_start[i];
             s_sub_open[i] = false;
         }
+    }
+
+    /* Same for the JS stack: charge what the innermost bucket has run so far and unwind, so a bridge
+     * call that threw part-way through costs its own bucket rather than the whole frame.
+     *
+     * ONE timestamp for the whole unwind, deliberately. The outer buckets were paused when their
+     * child opened, so no time is theirs to claim; re-reading the clock per pop would hand each of
+     * them a slice of this loop's own cost instead of zero. */
+    if (s_js_depth > 0)
+    {
+        const uint32_t now = perf_now();
+        s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
+        s_js_mark = now;
+        s_js_depth = 0;
+    }
+    s_js_over = 0;
+
+    /* The reconciler commits from inside the pump, so that er_commit() ran inside the host's JS span
+     * AND reported itself as LAYOUT + RASTER. Counted in both, the phases sum past the frame and
+     * other_us collapses to 0. Take it out of JS — LAYOUT + RASTER is where commit time belongs, and
+     * js_us[COMMIT] still says the pump was what asked for it. */
+    if (s_cur.phase_us[ER_PERF_PHASE_JS] > s_cur.js_us[ER_PERF_JS_COMMIT])
+    {
+        s_cur.phase_us[ER_PERF_PHASE_JS] -= s_cur.js_us[ER_PERF_JS_COMMIT];
+    }
+    else
+    {
+        s_cur.phase_us[ER_PERF_PHASE_JS] = 0U;
     }
 
     /* The composite passes were timed as one span WITH the backend blits they emitted inside it;
@@ -380,6 +463,23 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
              ER_PERF_MS(w->raster_us[ER_PERF_RASTER_SWEEP]),
              blit_worst);
 
+    /* The JS split, last frame then peak. D/R/M are slices of the JS phase; C is the commit the pump
+     * drove — reported here (not in JS) because its time lives in the L and R fields above. */
+    snprintf(s_lines[7],
+             sizeof(s_lines[7]),
+             "JSS D%u.%u R%u.%u M%u.%u C%u.%u",
+             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_DISPATCH]),
+             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_RECONCILE]),
+             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_MARSHAL]),
+             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_COMMIT]));
+    snprintf(s_lines[8],
+             sizeof(s_lines[8]),
+             "PKJ D%u R%u M%u C%u",
+             ER_PERF_MS(w->js_us[ER_PERF_JS_DISPATCH]),
+             ER_PERF_MS(w->js_us[ER_PERF_JS_RECONCILE]),
+             ER_PERF_MS(w->js_us[ER_PERF_JS_MARSHAL]),
+             ER_PERF_MS(w->js_us[ER_PERF_JS_COMMIT]));
+
     const int n = (max_lines < ER_PERF_OVERLAY_LINES) ? max_lines : ER_PERF_OVERLAY_LINES;
     for (int i = 0; i < n; i++)
     {
@@ -417,6 +517,16 @@ void er_perf_raster_begin(ERPerfRasterSub sub)
 }
 
 void er_perf_raster_end(ERPerfRasterSub sub)
+{
+    (void)sub;
+}
+
+void er_perf_js_begin(ERPerfJsSub sub)
+{
+    (void)sub;
+}
+
+void er_perf_js_end(ERPerfJsSub sub)
 {
     (void)sub;
 }

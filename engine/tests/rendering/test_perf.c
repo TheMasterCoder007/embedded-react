@@ -29,6 +29,8 @@
  *   - the four phases plus other_us always reconstruct frame_us,
  *   - the raster split attributes the phase to pre-pass / composite / blit / sweep, and blit_px
  *     counts exactly the pixels handed to the backend,
+ *   - the JS split attributes the phase to dispatch / reconcile / marshalling, with the commit the
+ *     pump drove taken back OUT of the JS phase so it is not counted there and in layout+raster too,
  *   - the worst frame is retained with its whole split, so a spike minutes ago is still attributable,
  *   - the dirty-rect / vector-slot / image-slot counters track the scene.
  */
@@ -262,6 +264,87 @@ static int check_raster_split(int screen)
     return EXIT_SUCCESS;
 }
 
+/* The JS phase's own split, as the QuickJS bridge marks it: a batched render (RECONCILE) with the
+ * frame's callbacks (DISPATCH) and the reconciler's prop writes (MARSHAL) nested inside it, then the
+ * commit the reconciler asks for on the way out (COMMIT).
+ *
+ * Two things have to hold. The buckets are EXCLUSIVE — a nested mark stops its parent's clock rather
+ * than running two at once — so the split can be read as "where the JS went" instead of a set of
+ * overlapping spans. And the nested commit is removed from the JS phase, which is what stops it
+ * being charged to JS and to layout+raster at the same time and pushing the phase total past the
+ * frame. */
+static int check_js_split(int screen)
+{
+    ERNode* root;
+    ERNode* box = build_scene(screen, &root);
+    frame(); /* mount, so the frame under test is an ordinary repaint */
+
+    /* One bridge-shaped frame. Timed with the fake clock, the exact step counts are predictable:
+     * DISPATCH and MARSHAL are one begin/end pair each; RECONCILE keeps the three stretches of the
+     * batched call that its children did not claim. */
+    recolour(box, 0xFF4488CCU);
+    er_perf_frame_begin();
+    er_perf_phase_begin(ER_PERF_PHASE_JS);
+    er_perf_js_begin(ER_PERF_JS_RECONCILE); /* batchedUpdates(...) */
+    er_perf_js_begin(ER_PERF_JS_DISPATCH);  /* the pump body: touch flush, timers, microtasks */
+    er_perf_js_end(ER_PERF_JS_DISPATCH);
+    er_perf_js_begin(ER_PERF_JS_MARSHAL); /* the mutation pass: setProps & friends */
+    er_perf_js_end(ER_PERF_JS_MARSHAL);
+    er_perf_js_end(ER_PERF_JS_RECONCILE);
+    er_perf_js_begin(ER_PERF_JS_COMMIT); /* resetAfterCommit -> NativeUI.commit(), as the batch closes */
+    er_commit();
+    er_perf_js_end(ER_PERF_JS_COMMIT);
+    er_perf_phase_end(ER_PERF_PHASE_JS);
+    er_perf_frame_end();
+
+    ERPerfFrame f;
+    if (!er_perf_get_last(&f))
+        return fail("no frame recorded for the bridge-shaped frame");
+    if (f.js_us[ER_PERF_JS_DISPATCH] != g_step)
+        return fail("the dispatch span was not timed as exactly one step");
+    if (f.js_us[ER_PERF_JS_MARSHAL] != g_step)
+        return fail("the marshalling span was not timed as exactly one step");
+    if (f.js_us[ER_PERF_JS_RECONCILE] != 3U * g_step)
+        return fail("reconcile did not keep exactly the time its nested spans left it");
+
+    /* The commit ran inside the pump, so it is layout + raster (plus er_commit's own bookkeeping). */
+    if (f.js_us[ER_PERF_JS_COMMIT] < f.phase_us[ER_PERF_PHASE_LAYOUT] + f.phase_us[ER_PERF_PHASE_RASTER])
+        return fail("the pump-driven commit measured less than the layout+raster it contains");
+
+    /* The three in-JS buckets fit inside the phase; the frame still adds up. */
+    if (f.js_us[ER_PERF_JS_DISPATCH] + f.js_us[ER_PERF_JS_RECONCILE] + f.js_us[ER_PERF_JS_MARSHAL]
+        > f.phase_us[ER_PERF_PHASE_JS])
+        return fail("the JS sub-steps sum to more than the JS phase");
+    uint32_t sum = f.other_us;
+    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
+        sum += f.phase_us[i];
+    if (sum != f.frame_us)
+        return fail("phases + other_us do not add up on a frame that committed from inside the pump");
+    if (f.other_us == 0U)
+        return fail("the phases still claim the whole frame (the nested commit was not taken out of JS)");
+
+    /* And the bug this exists to close: leave the commit in the JS phase and the four phases claim
+     * more time than the frame lasted, which is what used to pin other_us at 0. */
+    if (f.phase_us[ER_PERF_PHASE_JS] + f.js_us[ER_PERF_JS_COMMIT] + f.phase_us[ER_PERF_PHASE_LAYOUT]
+            + f.phase_us[ER_PERF_PHASE_RASTER]
+        <= f.frame_us)
+        return fail("setup: this frame does not reproduce the double count, so the fix is untested");
+
+    /* A commit the HOST runs, outside the pump, is nobody's JS: the bucket stays empty and the JS
+     * phase keeps every microsecond the host measured. */
+    recolour(box, 0xFF991144U);
+    frame();
+    er_perf_get_last(&f);
+    if (f.js_us[ER_PERF_JS_COMMIT] != 0U)
+        return fail("a host-driven commit was attributed to the JS phase");
+    if (f.phase_us[ER_PERF_PHASE_JS] != g_step)
+        return fail("a host-driven commit was subtracted from the JS phase");
+
+    er_node_destroy(root);
+    printf("PASS: JS split — dispatch/reconcile/marshal exclusive, pump-driven commit not double-counted\n");
+    return EXIT_SUCCESS;
+}
+
 /* The point of the module: a single 2-second-style spike is retained with its full split long after
  * the frames that followed it were fast. */
 static int check_worst_frame_is_retained(int screen)
@@ -489,6 +572,12 @@ static int check_overlay_lines(void)
     if (strchr(lines[5], 'W') == NULL || strchr(lines[6], 'W') == NULL)
         return fail("a raster-split line dropped the blit-pixel field");
 
+    /* The JS-split lines: same pairing, last frame then peak. */
+    if (strncmp(lines[7], "JSS D", 5) != 0)
+        return fail("the last-frame JS-split line is missing");
+    if (strncmp(lines[8], "PKJ D", 5) != 0)
+        return fail("the peak JS-split line is missing");
+
     /* A smaller request must be honoured (a host merging its own metrics has limited room). */
     const char* two[2] = {NULL, NULL};
     if (er_perf_overlay_lines(two, 2) != 2 || !two[0] || !two[1])
@@ -525,6 +614,28 @@ static int check_degrades_safely(int screen)
     if (f.phase_us[ER_PERF_PHASE_JS] != g_step)
         return fail("an unbalanced phase leaked into the following frame");
 
+    /* The JS stack: a stray end, a crossed end, and a span left open at frame end. None of them may
+     * move time into a bucket that did not run — the split is read as an attribution, so a wrong
+     * number here is worse than a missing one. */
+    er_perf_js_end(ER_PERF_JS_MARSHAL); /* outside a frame */
+    er_perf_frame_begin();
+    er_perf_phase_begin(ER_PERF_PHASE_JS);
+    er_perf_js_end(ER_PERF_JS_DISPATCH);    /* never begun */
+    er_perf_js_begin(ER_PERF_JS_RECONCILE); /* left open: frame_end must close it */
+    er_perf_js_end(ER_PERF_JS_MARSHAL);     /* crossed with the open reconcile: ignored */
+    er_perf_phase_end(ER_PERF_PHASE_JS);
+    er_perf_frame_end();
+    er_perf_get_last(&f);
+    if (f.js_us[ER_PERF_JS_DISPATCH] != 0U || f.js_us[ER_PERF_JS_MARSHAL] != 0U)
+        return fail("an unbalanced JS mark charged time to a bucket that never ran");
+    if (f.js_us[ER_PERF_JS_RECONCILE] == 0U)
+        return fail("a JS span left open at frame end was dropped instead of closed");
+
+    frame();
+    er_perf_get_last(&f);
+    if (f.js_us[ER_PERF_JS_RECONCILE] != 0U)
+        return fail("an unbalanced JS span leaked into the following frame");
+
     /* No clock: timings go to zero, counters keep working — including blit_px, which must keep
      * counting pixels while the blit TIME correctly collapses to zero. */
     er_perf_set_clock(NULL);
@@ -556,6 +667,8 @@ int main(void)
     er_perf_phase_end(ER_PERF_PHASE_JS);
     er_perf_raster_begin(ER_PERF_RASTER_BLIT);
     er_perf_raster_end(ER_PERF_RASTER_BLIT);
+    er_perf_js_begin(ER_PERF_JS_MARSHAL);
+    er_perf_js_end(ER_PERF_JS_MARSHAL);
     er_perf_note_blit(123U, 456U);
     er_perf_frame_end();
     if (er_perf_now_us() != 0U)
@@ -565,6 +678,8 @@ int main(void)
         return fail("ER_PERF_STATS=0 reported a frame");
     if (f.frame_us != 0U || f.raster_us[ER_PERF_RASTER_BLIT] != 0U || f.blit_px != 0U)
         return fail("ER_PERF_STATS=0 did not zero the out struct");
+    if (f.js_us[ER_PERF_JS_MARSHAL] != 0U)
+        return fail("ER_PERF_STATS=0 recorded a JS sub-step");
     const char* lines[ER_PERF_OVERLAY_LINES];
     if (er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES) != 0)
         return fail("ER_PERF_STATS=0 produced overlay lines");
@@ -585,6 +700,12 @@ int main(void)
     er_perf_reset();
 
     rc = check_raster_split(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+    er_reset();
+    er_perf_reset();
+
+    rc = check_js_split(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
     er_reset();

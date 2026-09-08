@@ -25,3 +25,12 @@ idf_component_register(
 # Same rationale as the engine component: don't let IDF's -Werror fail on the bridge's
 # (warning-level) diagnostics under the stricter xtensa GCC 14.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error)
+
+# The bridge marks the JS phase's own split (dispatch / reconcile / marshalling / commit, er_perf.h),
+# and those marks compile out unless ER_PERF_STATS reaches THIS component too — the engine component
+# sets it only on itself. Same ER_PERF_DETAIL switch, so `idf.py -DER_PERF_DETAIL=1` lights up the
+# whole frame split at once and the default build carries none of it.
+if(NOT DEFINED ER_PERF_DETAIL)
+    set(ER_PERF_DETAIL 0)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_PERF_STATS=${ER_PERF_DETAIL})

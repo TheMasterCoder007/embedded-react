@@ -10,6 +10,13 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- The frame instrumentation now splits the JS phase the way it already split raster: dispatch,
+  reconcile, prop/tape marshaling, and the commit the pump drove, with `JSS`/`PKJ` overlay lines.
+  Turning "JS is 40 ms" into "React is 30 of it" is what the bridge-performance work needs to be
+  ranked by measurement instead of by reading the code.
+
 ### Changed
 
 - Flow A now renders and paints a frame **once**, however many callbacks changed state in it. Timers,
@@ -31,6 +38,10 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- The frame split no longer counts the same commit twice. React commits from inside the pump, so that
+  `er_commit()` landed in the JS phase *and* in layout+raster — the four phases claimed more time than
+  the frame lasted and `other_us` sat at 0. JS now reports JS alone.
 
 - A moving `<Svg>` shape no longer leaves part of itself behind. The incremental damage rect for a
   re-uploaded op-tape covered only the control points that changed, not the point each segment starts

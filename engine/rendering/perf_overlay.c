@@ -36,7 +36,7 @@
 #define ER_PERF_FG 0xFF7CF08CU /* light-green metric text */
 /* Clamp so a stray count can't run away. Sized to fit a host's own metrics (FPS/CPU/heap) plus the
  * ER_PERF_OVERLAY_LINES frame-instrumentation lines from er_perf_overlay_lines(). */
-#define ER_PERF_MAX_LINES 12
+#define ER_PERF_MAX_LINES 16
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public

@@ -16,6 +16,7 @@
 
 #include "native_ui_bridge.h"
 
+#include "er_perf.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 
@@ -50,6 +51,29 @@
  */
 #ifndef ER_BRIDGE_MAX_TIMERS
 #define ER_BRIDGE_MAX_TIMERS 64
+#endif
+
+/**
+ * @brief Declares a NativeUI method whose body is charged to ER_PERF_JS_MARSHAL.
+ *
+ * The prop/tape/tree calls are what "marshalling" costs, and they have too many early returns to
+ * bracket by hand — so the macro renames the body and puts a timed shim in front of it. With the
+ * instrumentation compiled out it expands to the plain signature and nothing is generated at all.
+ */
+#if ER_PERF_STATS
+#define ER_BRIDGE_MARSHAL_FN(name)                                                                                     \
+    static JSValue name##_body(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);                   \
+    static JSValue name(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)                           \
+    {                                                                                                                  \
+        er_perf_js_begin(ER_PERF_JS_MARSHAL);                                                                          \
+        JSValue ret = name##_body(ctx, this_val, argc, argv);                                                          \
+        er_perf_js_end(ER_PERF_JS_MARSHAL);                                                                            \
+        return ret;                                                                                                    \
+    }                                                                                                                  \
+    static JSValue name##_body(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+#else
+#define ER_BRIDGE_MARSHAL_FN(name)                                                                                     \
+    static JSValue name(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 #endif
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -181,7 +205,9 @@ static void batch_leave(void)
     if (s_batch_depth > 0 && --s_batch_depth == 0 && s_commit_pending)
     {
         s_commit_pending = false;
+        ER_PERF_JS_BEGIN(ER_PERF_JS_COMMIT);
         er_commit();
+        ER_PERF_JS_END(ER_PERF_JS_COMMIT);
     }
 }
 
@@ -2801,10 +2827,21 @@ static void bridge_fire_due_timers(JSContext* ctx)
  */
 static void bridge_pump_body(JSContext* ctx)
 {
+    /* The body is callback delivery, so it opens one DISPATCH span — but React's render is NOT part
+     * of that. React schedules its synchronous flush as a MICROTASK, so the render happens inside the
+     * job drain below rather than at any batch boundary C can bracket; measured on an S3 knob drag,
+     * the touch flush is ~20 us against ~1 ms of drain. So the drains carry the RECONCILE span, and
+     * DISPATCH keeps what is left: the touch flush, the timers, and the app callbacks they run. */
+    ER_PERF_JS_BEGIN(ER_PERF_JS_DISPATCH);
     embedded_renderer_flush_touch();
+    ER_PERF_JS_BEGIN(ER_PERF_JS_RECONCILE);
     bridge_run_microtasks(ctx);
+    ER_PERF_JS_END(ER_PERF_JS_RECONCILE);
     bridge_fire_due_timers(ctx);
+    ER_PERF_JS_BEGIN(ER_PERF_JS_RECONCILE);
     bridge_run_microtasks(ctx);
+    ER_PERF_JS_END(ER_PERF_JS_RECONCILE);
+    ER_PERF_JS_END(ER_PERF_JS_DISPATCH);
 }
 
 /**
@@ -2864,6 +2901,83 @@ static JSValue js_run_pump_body(JSContext* ctx, JSValueConst this_val, int argc,
  - Functions: Private — NativeUI methods
  ---------------------------------------------------------------------------------------------------------------------*/
 
+#if ER_PERF_STATS
+/*
+ * Splitting the JS phase into "the callback" and "React's render" cannot be done from C: the render
+ * runs whenever React decides to flush, which is not reliably the batcher call this code can see
+ * around it. The renderer's batcher IS that boundary — `fn(a, b)` is the callback and everything
+ * batchedUpdates does around it is React — so these four let it mark the split from where it sits.
+ * Published only on an instrumented build, so the renderer installs a plain batcher otherwise and
+ * an ordinary build carries no marking cost at all.
+ */
+
+/** @brief NativeUI.perfCallbackBegin() — the batcher is entering the callback itself. */
+static JSValue js_perf_callback_begin(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_begin(ER_PERF_JS_DISPATCH);
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.perfCallbackEnd() — the callback returned; what follows in the batch is React. */
+static JSValue js_perf_callback_end(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_end(ER_PERF_JS_DISPATCH);
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.perfMarshalBegin() — React's mutation phase started (host config prepareForCommit). */
+static JSValue js_perf_marshal_begin(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_begin(ER_PERF_JS_MARSHAL);
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.perfMarshalEnd() — mutation phase finished (host config resetAfterCommit). */
+static JSValue js_perf_marshal_end(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_end(ER_PERF_JS_MARSHAL);
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.perfRenderBegin() — opening a batch scope; React may render before it closes. */
+static JSValue js_perf_render_begin(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_begin(ER_PERF_JS_RECONCILE);
+    return JS_UNDEFINED;
+}
+
+/** @brief NativeUI.perfRenderEnd() — the batch scope closed. */
+static JSValue js_perf_render_end(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_perf_js_end(ER_PERF_JS_RECONCILE);
+    return JS_UNDEFINED;
+}
+#endif
+
 /**
  * @brief NativeUI.createNode(typeString) — creates a node and returns its handle.
  *
@@ -2874,7 +2988,7 @@ static JSValue js_run_pump_body(JSContext* ctx, JSValueConst this_val, int argc,
  *
  * @return Integer handle, or 0 on failure.
  */
-static JSValue js_create_node(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_create_node)
 {
     (void)this_val;
     if (argc < 1)
@@ -2982,7 +3096,7 @@ static void destroy_node_and_subtree(JSContext* ctx, ERNode* node)
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_destroy_node(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_destroy_node)
 {
     (void)this_val;
     if (argc < 1)
@@ -3013,7 +3127,7 @@ static JSValue js_destroy_node(JSContext* ctx, JSValueConst this_val, int argc, 
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_append_child(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_append_child)
 {
     (void)this_val;
     if (argc < 2)
@@ -3039,7 +3153,7 @@ static JSValue js_append_child(JSContext* ctx, JSValueConst this_val, int argc, 
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_insert_before(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_insert_before)
 {
     (void)this_val;
     if (argc < 3)
@@ -3066,7 +3180,7 @@ static JSValue js_insert_before(JSContext* ctx, JSValueConst this_val, int argc,
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_remove_child(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_remove_child)
 {
     (void)this_val;
     if (argc < 2)
@@ -3092,7 +3206,7 @@ static JSValue js_remove_child(JSContext* ctx, JSValueConst this_val, int argc, 
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_set_root(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_set_root)
 {
     (void)this_val;
     if (argc < 1)
@@ -3117,7 +3231,7 @@ static JSValue js_set_root(JSContext* ctx, JSValueConst this_val, int argc, JSVa
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_set_props(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_set_props)
 {
     (void)this_val;
     if (argc < 2)
@@ -3147,7 +3261,7 @@ static JSValue js_set_props(JSContext* ctx, JSValueConst this_val, int argc, JSV
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_set_text_spans(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_set_text_spans)
 {
     (void)this_val;
     if (argc < 1)
@@ -3598,7 +3712,7 @@ static int vec_read_tape(JSContext* ctx, JSValueConst v, float* out, int max)
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
 {
     (void)this_val;
     if (argc < 1)
@@ -3722,7 +3836,9 @@ static JSValue js_commit(JSContext* ctx, JSValueConst this_val, int argc, JSValu
         s_commit_pending = true;
         return JS_UNDEFINED;
     }
+    ER_PERF_JS_BEGIN(ER_PERF_JS_COMMIT);
     er_commit();
+    ER_PERF_JS_END(ER_PERF_JS_COMMIT);
     return JS_UNDEFINED;
 }
 
@@ -3788,7 +3904,7 @@ static JSValue js_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
  *
  * @return JS_UNDEFINED.
  */
-static JSValue js_set_event(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+ER_BRIDGE_MARSHAL_FN(js_set_event)
 {
     (void)this_val;
     if (argc < 3)
@@ -4705,6 +4821,18 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "setBatcher", JS_NewCFunction(ctx, js_set_batcher, "setBatcher", 1));
+#if ER_PERF_STATS
+    JS_SetPropertyStr(
+        ctx, native_ui, "perfCallbackBegin", JS_NewCFunction(ctx, js_perf_callback_begin, "perfCallbackBegin", 0));
+    JS_SetPropertyStr(
+        ctx, native_ui, "perfCallbackEnd", JS_NewCFunction(ctx, js_perf_callback_end, "perfCallbackEnd", 0));
+    JS_SetPropertyStr(
+        ctx, native_ui, "perfRenderBegin", JS_NewCFunction(ctx, js_perf_render_begin, "perfRenderBegin", 0));
+    JS_SetPropertyStr(ctx, native_ui, "perfRenderEnd", JS_NewCFunction(ctx, js_perf_render_end, "perfRenderEnd", 0));
+    JS_SetPropertyStr(
+        ctx, native_ui, "perfMarshalBegin", JS_NewCFunction(ctx, js_perf_marshal_begin, "perfMarshalBegin", 0));
+    JS_SetPropertyStr(ctx, native_ui, "perfMarshalEnd", JS_NewCFunction(ctx, js_perf_marshal_end, "perfMarshalEnd", 0));
+#endif
     JS_SetPropertyStr(ctx, native_ui, "now", JS_NewCFunction(ctx, js_now, "now", 0));
     JS_SetPropertyStr(ctx, native_ui, "tick", JS_NewCFunction(ctx, js_tick, "tick", 1));
     JS_SetPropertyStr(ctx,
