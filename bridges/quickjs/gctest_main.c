@@ -62,11 +62,11 @@
 /** @brief Headroom allowed above the pre-churn heap once SRC_CYCLES has run under the automatic GC. */
 #define AUTO_GC_MAX_RETAINED (2 * 1024 * 1024)
 
-/** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
 /** @brief Screen the test runtimes are configured for (the siblings name theirs the same way). */
 #define GC_SCREEN_W 240
 #define GC_SCREEN_H 240
 
+/** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
 #define GC_FLOOR_BYTES (4u * 1024u * 1024u)
 
 /** @brief Growth expected from SRC_CYCLES once automatic collection is switched off entirely. */

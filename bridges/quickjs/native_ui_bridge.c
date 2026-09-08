@@ -1332,11 +1332,7 @@ static void prop_atoms_init(JSContext* ctx)
 }
 
 /**
- * @brief Maps a JS own-property atom to the PropId apply_props() knows it by.
- *
- * @param[in] atom  Atom from JS_GetOwnPropertyNames() on the props object.
- *
- * @return The matching PropId, or PROP_COUNT_ if apply_props() doesn't read this key.
+ * @brief Drops the bridge state cached against the current JSRuntime.
  */
 void er_bridge_release_runtime(void)
 {
@@ -1345,6 +1341,13 @@ void er_bridge_release_runtime(void)
     s_prop_atoms_rt = NULL;
 }
 
+/**
+ * @brief Maps a JS own-property atom to the PropId apply_props() knows it by.
+ *
+ * @param[in] atom  Atom from JS_GetOwnPropertyNames() on the props object.
+ *
+ * @return The matching PropId, or PROP_COUNT_ if apply_props() doesn't read this key.
+ */
 static PropId prop_id_from_atom(JSAtom atom)
 {
     const PropAtomEntry key = {.atom = atom, .id = PROP_COUNT_};
@@ -3558,13 +3561,15 @@ static int vec_read_tape(JSContext* ctx, JSValueConst v, float* out, int max)
         {
             return 0; /* Detached buffer — treat as an empty tape. */
         }
-        int n = (int)(bytes / sizeof(float));
-        if (n > max)
+        /* Bound in size_t first: narrowing a huge element count to int could go negative, skip the
+         * clamp, and turn the memcpy size back into an enormous size_t. */
+        size_t n = bytes / sizeof(float);
+        if (n > (size_t)max)
         {
-            n = max;
+            n = (size_t)max;
         }
-        memcpy(out, base + off, (size_t)n * sizeof(float));
-        return n;
+        memcpy(out, base + off, n * sizeof(float));
+        return (int)n;
     }
     if (!JS_IsArray(v))
     {
