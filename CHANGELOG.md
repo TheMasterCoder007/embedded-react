@@ -23,12 +23,24 @@ See the README for the release process.
   Measured on an ESP32-S3, re-rendering a 14-shape gauge dropped from 100 ms to 47 ms of JS per
   frame. Output is unchanged.
 
+- Applying props is 1.2-2.4x faster. The bridge was re-hashing, reparsing, and re-comparing the same
+  style on every commit: colors are now parsed once per string, enum tokens mapped once per value, and
+  the change-detection hash over the ~1 KB prop bag reads a word at a time instead of a byte. Measured
+  on an ESP32-S3, a `setProps` carrying three `rgba()` colors dropped from 114 us to 48 us and an
+  unchanged one from 54 us to 38 us. Uploading an `<Svg>` op-tape is ~1.2x faster too, or ~13x on a
+  build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
+
 ### Fixed
 
 - A moving `<Svg>` shape no longer leaves part of itself behind. The incremental damage rect for a
   re-uploaded op-tape covered only the control points that changed, not the point each segment starts
   from — so a rotating needle repainted its tip and left the body stale, and the end appeared to
   detach from the rest for a few frames. Segments and curves are now bounded by their anchor too.
+
+- A host that tore down its JS runtime and started another could have the second one inherit the
+  first's cached prop names and parsed styles, because a fresh `JSRuntime` is often allocated at the
+  freed one's address. `er_runtime_shutdown()` now drops that state; a host driving QuickJS directly
+  can call `er_bridge_release_runtime()` itself.
 
 - The ESP32-S3 example now brings its panel up instead of falling back to headless when the RGB
   bounce buffers cannot get 10 scanlines of internal DMA RAM — it tries smaller ones first. The

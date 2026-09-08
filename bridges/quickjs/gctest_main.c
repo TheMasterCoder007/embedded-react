@@ -63,6 +63,10 @@
 #define AUTO_GC_MAX_RETAINED (2 * 1024 * 1024)
 
 /** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
+/** @brief Screen the test runtimes are configured for (the siblings name theirs the same way). */
+#define GC_SCREEN_W 240
+#define GC_SCREEN_H 240
+
 #define GC_FLOOR_BYTES (4u * 1024u * 1024u)
 
 /** @brief Growth expected from SRC_CYCLES once automatic collection is switched off entirely. */
@@ -257,6 +261,22 @@ static int64_t tracked_bytes(JSRuntime* rt)
 
 /** @brief Evaluates a script, reporting any exception. @param ctx Context. @param src Source. @param name Trace name.
  */
+/** @brief Reads an integer global out of a context (how a test observes what the scene did). */
+static int32_t read_int_global(JSContext* ctx, const char* name)
+{
+    if (!ctx)
+    {
+        return -1;
+    }
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue v = JS_GetPropertyStr(ctx, g, name);
+    int32_t out = -1;
+    JS_ToInt32(ctx, &out, v);
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, g);
+    return out;
+}
+
 static bool run_js(JSContext* ctx, const char* src, const char* name)
 {
     JSValue result = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_GLOBAL);
@@ -396,8 +416,8 @@ int main(void)
     {
         ErRuntimeConfig cfg;
         memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = 240;
-        cfg.screen_height = 240;
+        cfg.screen_width = GC_SCREEN_W;
+        cfg.screen_height = GC_SCREEN_H;
 
         /* malloc_functions = NULL is the path every host copies from the README. It must be safe on
            EVERY platform, which is why er_runtime never calls JS_NewRuntime(). */
@@ -420,12 +440,59 @@ int main(void)
               "er_runtime: a failed init does not report the previous runtime's verdict");
     }
 
+    /* --- 4b. Bridge state cached against a runtime does not outlive it ---------------------------- */
+    {
+        /* The bridge interns prop names and remembers the last string it parsed for each enum/color
+           prop, keyed on the JSRuntime pointer — and a fresh JSRuntime is routinely handed the address
+           of the one just freed (this test's own section 4 does exactly that sequence). Nothing else
+           installs the bridge on two runtimes, so this is the only place a stale cache would show up. */
+        ErRuntimeConfig cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.screen_width = GC_SCREEN_W;
+        cfg.screen_height = GC_SCREEN_H;
+
+        /* Same scene both times, differing only in the token and color. 'relative' and 'absolute' are
+           the same length on purpose, so the second runtime's token is a candidate to land exactly where
+           the first one's did. The SIBLING's y says which token was applied: an absolute node leaves the
+           flow (y = 0), a relative one still occupies it (y = 50). */
+#define BRIDGE_SCENE(TOKEN, COLOR)                                                                                     \
+    "const r = NativeUI.createNode('View');"                                                                           \
+    "NativeUI.setRoot(r);"                                                                                             \
+    "NativeUI.setProps(r, {width: 200, height: 200});"                                                                 \
+    "const a = NativeUI.createNode('View');"                                                                           \
+    "NativeUI.appendChild(r, a);"                                                                                      \
+    "NativeUI.setProps(a, {width: 50, height: 50, position: '" TOKEN "', backgroundColor: '" COLOR "'});"              \
+    "const b = NativeUI.createNode('View');"                                                                           \
+    "NativeUI.appendChild(r, b);"                                                                                      \
+    "NativeUI.setEvent(b, 'onLayout', e => { globalThis.__y = e.layout.y; });"                                         \
+    "NativeUI.setProps(b, {width: 50, height: 50});"                                                                   \
+    "NativeUI.commit();"
+
+        int32_t y = -1;
+        check(er_runtime_init(&cfg), "bridge lifecycle: first runtime up");
+        check(er_runtime_load_source(
+                  BRIDGE_SCENE("relative", "#ff0000"), strlen(BRIDGE_SCENE("relative", "#ff0000")), "<r1>"),
+              "bridge lifecycle: first runtime's scene ran");
+        y = read_int_global(er_runtime_context(), "__y");
+        check(y == 50, "bridge lifecycle: position 'relative' kept the sibling in flow");
+        er_runtime_shutdown();
+
+        check(er_runtime_init(&cfg), "bridge lifecycle: second runtime up");
+        check(er_runtime_load_source(
+                  BRIDGE_SCENE("absolute", "#00ff00"), strlen(BRIDGE_SCENE("absolute", "#00ff00")), "<r2>"),
+              "bridge lifecycle: second runtime's scene ran");
+        y = read_int_global(er_runtime_context(), "__y");
+        check(y == 0, "bridge lifecycle: the second runtime read its OWN token, not the freed one's");
+        er_runtime_shutdown();
+#undef BRIDGE_SCENE
+    }
+
     /* --- 5. The GC floor survives QuickJS's recompute-after-every-collection ----------------------- */
     {
         ErRuntimeConfig cfg;
         memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = 240;
-        cfg.screen_height = 240;
+        cfg.screen_width = GC_SCREEN_W;
+        cfg.screen_height = GC_SCREEN_H;
 
         /* Control: with no floor, the threshold is whatever the last collection left behind — live x 1.5,
            which on a small live set is a fraction of the floor the next case asks for. */
@@ -479,8 +546,8 @@ int main(void)
     {
         ErRuntimeConfig cfg;
         memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = 240;
-        cfg.screen_height = 240;
+        cfg.screen_width = GC_SCREEN_W;
+        cfg.screen_height = GC_SCREEN_H;
         cfg.log = counting_log;
         cfg.memory_limit = 1024 * 1024;
 

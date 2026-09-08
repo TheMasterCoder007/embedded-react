@@ -2986,17 +2986,54 @@ void er_node_destroy(ERNode* node)
         s_free_list[s_free_count++] = node->tag;
 }
 
-/** @brief 32-bit FNV-1a over a byte range (ERProps is zero-initialised by the bridge, so equal props hash equal). */
+/** @brief FNV-1a 32-bit parameters, as published. */
+#define FNV1A32_OFFSET_BASIS 2166136261U
+#define FNV1A32_PRIME 16777619U
+
+/** @brief Independent accumulators in the word-wise loop, and the bytes one pass therefore consumes. */
+#define FNV1A32_LANES 2U
+#define FNV1A32_PASS_BYTES (FNV1A32_LANES * sizeof(uint32_t))
+
+/** @brief Mixes one value into an FNV-1a accumulator. */
+#define FNV1A32_MIX(h, v) (((h) ^ (uint32_t)(v)) * FNV1A32_PRIME)
+
+/**
+ * @brief 32-bit FNV-1a over a byte range (ERProps is zero-initialised by the bridge, so equal props hash equal).
+ *
+ * Mixes a word at a time rather than a byte at a time. ERProps is ~1 KB and this runs twice on every
+ * setProps, so the byte-wise loop was the bulk of an unchanged node's update cost. Two accumulators
+ * keep the multiplies off one dependency chain; trailing bytes fold into the first.
+ *
+ * The word is read through a uint32_t*, guarded by an alignment test, rather than memcpy'd: on a
+ * target without unaligned loads (Xtensa, Cortex-M0+) the compiler turns a 4-byte memcpy into an
+ * out-of-line call, and the wide version measured 1.8x SLOWER on an ESP32-S3 than the byte loop it
+ * replaced.
+ */
 static uint32_t fnv1a32(const void* data, size_t len)
 {
     const uint8_t* b = (const uint8_t*)data;
-    uint32_t h = 2166136261U;
-    for (size_t i = 0; i < len; i++)
+    uint32_t h0 = FNV1A32_OFFSET_BASIS;
+    uint32_t h1 = FNV1A32_OFFSET_BASIS;
+    /* Always aligned for ERProps; the tail loop below covers any range that is not. */
+    if (((uintptr_t)b % sizeof(uint32_t)) == 0U)
     {
-        h ^= b[i];
-        h *= 16777619U;
+        const uint32_t* w = (const uint32_t*)(const void*)b;
+        size_t passes = len / FNV1A32_PASS_BYTES;
+        len -= passes * FNV1A32_PASS_BYTES;
+        while (passes-- > 0U)
+        {
+            h0 = FNV1A32_MIX(h0, w[0]);
+            h1 = FNV1A32_MIX(h1, w[1]);
+            w += FNV1A32_LANES;
+        }
+        b = (const uint8_t*)(const void*)w;
     }
-    return h;
+    while (len-- > 0U)
+    {
+        h0 = FNV1A32_MIX(h0, *b++);
+    }
+    /* Fold the lanes together so a change in either one always moves the result. */
+    return FNV1A32_MIX(h0, h1 * FNV1A32_PRIME);
 }
 
 /* ERProps is laid out as one contiguous Yoga layout block followed by everything else, so the

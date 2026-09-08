@@ -556,6 +556,32 @@ static bool parse_css_color(const char* s, uint32_t* out)
     return false;
 }
 
+/** @brief True when two JS values are the same string object (identity, not content). */
+static inline bool same_js_string(JSValueConst a, JSValueConst b)
+{
+    return JS_VALUE_GET_TAG(a) == JS_VALUE_GET_TAG(b) && JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+}
+
+/** @brief Entries in the parsed-color cache. Direct-mapped, so a power of two. */
+#define ER_COLOR_CACHE_N 16
+
+/** @brief Low pointer bits the allocator keeps constant, dropped so the cache index uses bits that vary. */
+#define ER_COLOR_CACHE_PTR_SHIFT 4
+
+/**
+ * @brief Colors already parsed out of a CSS string, keyed by the string object itself.
+ *
+ * A style's colors are literals in the bundle, so the identical string comes back every commit while
+ * rgb()/rgba() parsing runs strtod four times. Each entry owns a reference to its key, which is what
+ * makes comparing identity sound: the string cannot be freed and its address reused while it is
+ * cached. Emptied by prop_atoms_init() when the runtime changes.
+ */
+static struct
+{
+    JSValue key;
+    uint32_t argb;
+} s_color_cache[ER_COLOR_CACHE_N];
+
 /**
  * @brief Coerces a JS color value (number or CSS string) to straight-alpha ARGB8888.
  *
@@ -577,18 +603,33 @@ static bool to_color(JSContext* ctx, JSValueConst v, uint32_t* out)
         *out = (uint32_t)n;
         return true;
     }
-    if (JS_IsString(v))
+    if (!JS_IsString(v))
     {
-        const char* s = JS_ToCString(ctx, v);
-        if (!s)
-        {
-            return false;
-        }
-        const bool ok = parse_css_color(s, out);
-        JS_FreeCString(ctx, s);
-        return ok;
+        return false;
     }
-    return false;
+
+    const unsigned slot =
+        ((unsigned)((uintptr_t)JS_VALUE_GET_PTR(v) >> ER_COLOR_CACHE_PTR_SHIFT)) & (ER_COLOR_CACHE_N - 1U);
+    if (same_js_string(v, s_color_cache[slot].key))
+    {
+        *out = s_color_cache[slot].argb;
+        return true;
+    }
+
+    const char* s = JS_ToCString(ctx, v);
+    if (!s)
+    {
+        return false;
+    }
+    const bool ok = parse_css_color(s, out);
+    JS_FreeCString(ctx, s);
+    if (ok)
+    {
+        JS_FreeValue(ctx, s_color_cache[slot].key);
+        s_color_cache[slot].key = JS_DupValue(ctx, v);
+        s_color_cache[slot].argb = *out;
+    }
+    return ok;
 }
 
 /**
@@ -1237,6 +1278,17 @@ static PropAtomEntry s_prop_atoms[PROP_COUNT_];
 /** @brief Runtime s_prop_atoms was built against; atoms are runtime-scoped, not context-scoped. */
 static JSRuntime* s_prop_atoms_rt = NULL;
 
+/**
+ * @brief The last token seen for each enum-valued prop, and the enum it mapped to.
+ *
+ * These values are literals in the bundle (`flexDirection: 'row'`), so the identical string comes back
+ * every commit and a pointer compare replaces JS_ToCString (which copies the string out) plus a strcmp
+ * ladder. Like the color cache, the entry owns a reference to its key so identity stays meaningful.
+ * Emptied by prop_atoms_init() when the runtime changes.
+ */
+static JSValue s_enum_memo_str[PROP_COUNT_];
+static uint8_t s_enum_memo_val[PROP_COUNT_];
+
 static int prop_atom_entry_cmp(const void* a, const void* b)
 {
     const JSAtom aa = ((const PropAtomEntry*)a)->atom;
@@ -1246,6 +1298,9 @@ static int prop_atom_entry_cmp(const void* a, const void* b)
 
 /**
  * @brief Interns every apply_props() key into s_prop_atoms, sorted for prop_id_from_atom()'s bsearch.
+ *
+ * Also empties the two marshalling caches (enum tokens, parsed colors), whose keys are strings from
+ * the runtime that is going away.
  *
  * Atoms live in the JSRuntime, not the JSContext, and er_bridge_install() runs on every hot-reload
  * (see its doc comment: the simulator's live reload frees the JSContext but keeps the JSRuntime, so
@@ -1265,6 +1320,12 @@ static void prop_atoms_init(JSContext* ctx)
     {
         s_prop_atoms[i].atom = JS_NewAtom(ctx, k_prop_names[i]);
         s_prop_atoms[i].id = (PropId)i;
+        /* Strings held against the old runtime died with it — drop the keys, don't unref them. */
+        s_enum_memo_str[i] = JS_UNDEFINED;
+    }
+    for (int i = 0; i < ER_COLOR_CACHE_N; i++)
+    {
+        s_color_cache[i].key = JS_UNDEFINED;
     }
     qsort(s_prop_atoms, PROP_COUNT_, sizeof(s_prop_atoms[0]), prop_atom_entry_cmp);
     s_prop_atoms_rt = rt;
@@ -1277,6 +1338,13 @@ static void prop_atoms_init(JSContext* ctx)
  *
  * @return The matching PropId, or PROP_COUNT_ if apply_props() doesn't read this key.
  */
+void er_bridge_release_runtime(void)
+{
+    /* Forget, don't unref: every cached atom and string belongs to the runtime being torn down.
+     * The next prop_atoms_init() re-interns and empties the caches. */
+    s_prop_atoms_rt = NULL;
+}
+
 static PropId prop_id_from_atom(JSAtom atom)
 {
     const PropAtomEntry key = {.atom = atom, .id = PROP_COUNT_};
@@ -1291,6 +1359,42 @@ static PropId prop_id_from_atom(JSAtom atom)
  * NOTE: Static storage is safe because the bridge is single-threaded and apply_props() is not re-entrant.
  */
 static JSValue s_prop_slots[PROP_COUNT_];
+
+/**
+ * @brief Maps an enum-valued prop's JS string to its engine enum, memoised per prop id.
+ *
+ * @param[in]  ctx  QuickJS context.
+ * @param[in]  v    The slot value (already known to be present).
+ * @param[in]  id   Prop this value belongs to — the memo key.
+ * @param[in]  fn   Mapper for this prop's token set.
+ * @param[out] out  Receives the mapped enum.
+ *
+ * @return true when @p v produced a value; false leaves @p out alone.
+ */
+static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*fn)(const char*), uint8_t* out)
+{
+    const bool cacheable = JS_IsString(v);
+    if (cacheable && same_js_string(v, s_enum_memo_str[id]))
+    {
+        *out = s_enum_memo_val[id];
+        return true;
+    }
+
+    const char* s = JS_ToCString(ctx, v);
+    if (!s)
+    {
+        return false;
+    }
+    *out = fn(s);
+    JS_FreeCString(ctx, s);
+    if (cacheable)
+    {
+        JS_FreeValue(ctx, s_enum_memo_str[id]);
+        s_enum_memo_str[id] = JS_DupValue(ctx, v);
+        s_enum_memo_val[id] = *out;
+    }
+    return true;
+}
 
 /* Marshalling convenience macros — each reads one slot (populated from the object's own keys by
    apply_props()) into the ERProps `p`. They share the locals (ctx, p) of apply_props() and are
@@ -1330,12 +1434,7 @@ static JSValue s_prop_slots[PROP_COUNT_];
         JSValueConst _v = s_prop_slots[id];                                                                            \
         if (!JS_IsUndefined(_v))                                                                                       \
         {                                                                                                              \
-            const char* _s = JS_ToCString(ctx, _v);                                                                    \
-            if (_s)                                                                                                    \
-            {                                                                                                          \
-                p.field = fn(_s);                                                                                      \
-                JS_FreeCString(ctx, _s);                                                                               \
-            }                                                                                                          \
+            enum_from_slot(ctx, _v, id, fn, &p.field);                                                                 \
         }                                                                                                              \
     } while (0)
 
@@ -3403,6 +3502,86 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
  * [type, stop_count, (color, position) × ER_VGRAD_MAX_STOPS, ax, ay, bx, by, r]. */
 #define VEC_GRAD_STRIDE (2 + ER_VGRAD_MAX_STOPS * 2 + 5)
 
+/** @brief Reads an array-like's `length` as an int (0 when it has none). */
+static int vec_array_len(JSContext* ctx, JSValueConst v)
+{
+    int64_t n = 0;
+    if (JS_GetLength(ctx, v, &n) != 0 || n < 0)
+    {
+        return 0;
+    }
+    return n > INT32_MAX ? INT32_MAX : (int)n;
+}
+
+/**
+ * @brief Reads arr[idx] as a double.
+ *
+ * Decodes the two number tags inline: the general JS_ToFloat64 is an out-of-line call, and these
+ * arrays are read element by element on every geometry upload.
+ */
+static double vec_num_at(JSContext* ctx, JSValueConst arr, uint32_t idx)
+{
+    JSValue e = JS_GetPropertyUint32(ctx, arr, idx);
+    const int tag = JS_VALUE_GET_TAG(e);
+    if (tag == JS_TAG_INT)
+    {
+        return (double)JS_VALUE_GET_INT(e); /* No refcount on a number, so nothing to free. */
+    }
+    if (JS_TAG_IS_FLOAT64(tag))
+    {
+        return JS_VALUE_GET_FLOAT64(e);
+    }
+    double d = 0.0;
+    JS_ToFloat64(ctx, &d, e);
+    JS_FreeValue(ctx, e);
+    return d;
+}
+
+/**
+ * @brief Reads the op-tape argument into @p out.
+ *
+ * A Float32Array arrives as one memcpy — the tape is already float on both sides, so nothing is lost.
+ * Builds without the typed-array intrinsic pass a plain Array and it is read element by element.
+ *
+ * @return Floats written (clamped to @p max), or -1 when @p v is neither array kind.
+ */
+static int vec_read_tape(JSContext* ctx, JSValueConst v, float* out, int max)
+{
+    if (JS_GetTypedArrayType(v) == JS_TYPED_ARRAY_FLOAT32)
+    {
+        size_t off = 0, bytes = 0, elem = 0;
+        JSValue bufv = JS_GetTypedArrayBuffer(ctx, v, &off, &bytes, &elem);
+        size_t bufsz = 0;
+        const uint8_t* base = JS_IsException(bufv) ? NULL : JS_GetArrayBuffer(ctx, &bufsz, bufv);
+        JS_FreeValue(ctx, bufv);
+        if (!base)
+        {
+            return 0; /* Detached buffer — treat as an empty tape. */
+        }
+        int n = (int)(bytes / sizeof(float));
+        if (n > max)
+        {
+            n = max;
+        }
+        memcpy(out, base + off, (size_t)n * sizeof(float));
+        return n;
+    }
+    if (!JS_IsArray(v))
+    {
+        return -1;
+    }
+    int n = vec_array_len(ctx, v);
+    if (n > max)
+    {
+        n = max;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        out[i] = (float)vec_num_at(ctx, v, (uint32_t)i);
+    }
+    return n;
+}
+
 /**
  * @brief NativeUI.setVectorOps(handle, ops, paints, gradients, dirtyRect) — sets the path geometry on an Svg.
  *
@@ -3426,34 +3605,13 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     {
         return JS_UNDEFINED;
     }
-    if (argc < 2 || !JS_IsArray(argv[1]))
-    {
-        er_node_set_vector_ops(node, NULL, 0, NULL, 0, NULL, 0);
-        return JS_UNDEFINED;
-    }
-
     /* Op-tape. Static (the bridge is single-threaded) to keep it off the stack. */
     static float ops[VEC_BRIDGE_MAX_OPS];
-    JSValue olv = JS_GetPropertyStr(ctx, argv[1], "length");
-    int32_t olen = 0;
-    JS_ToInt32(ctx, &olen, olv);
-    JS_FreeValue(ctx, olv);
+    const int olen = argc < 2 ? -1 : vec_read_tape(ctx, argv[1], ops, VEC_BRIDGE_MAX_OPS);
     if (olen <= 0)
     {
         er_node_set_vector_ops(node, NULL, 0, NULL, 0, NULL, 0);
         return JS_UNDEFINED;
-    }
-    if (olen > VEC_BRIDGE_MAX_OPS)
-    {
-        olen = VEC_BRIDGE_MAX_OPS;
-    }
-    for (int32_t i = 0; i < olen; i++)
-    {
-        JSValue e = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
-        double d = 0.0;
-        JS_ToFloat64(ctx, &d, e);
-        ops[i] = (float)d;
-        JS_FreeValue(ctx, e);
     }
 
     /* Paint table: 7 numbers per entry. */
@@ -3461,11 +3619,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     int np = 0;
     if (argc >= 3 && JS_IsArray(argv[2]))
     {
-        JSValue plv = JS_GetPropertyStr(ctx, argv[2], "length");
-        int32_t plen = 0;
-        JS_ToInt32(ctx, &plen, plv);
-        JS_FreeValue(ctx, plv);
-        np = plen / VEC_PAINT_STRIDE;
+        np = vec_array_len(ctx, argv[2]) / VEC_PAINT_STRIDE;
         if (np > VEC_BRIDGE_MAX_PAINTS)
         {
             np = VEC_BRIDGE_MAX_PAINTS;
@@ -3475,11 +3629,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             double f[VEC_PAINT_STRIDE];
             for (int j = 0; j < VEC_PAINT_STRIDE; j++)
             {
-                JSValue e = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)(i * VEC_PAINT_STRIDE + j));
-                double d = 0.0;
-                JS_ToFloat64(ctx, &d, e);
-                f[j] = d;
-                JS_FreeValue(ctx, e);
+                f[j] = vec_num_at(ctx, argv[2], (uint32_t)(i * VEC_PAINT_STRIDE + j));
             }
             /* Colors fit a double exactly, so (uint32_t)double is bit-accurate ARGB8888. */
             paints[i].fill = (uint32_t)f[0];
@@ -3499,11 +3649,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     int ngr = 0;
     if (argc >= 4 && JS_IsArray(argv[3]))
     {
-        JSValue glv = JS_GetPropertyStr(ctx, argv[3], "length");
-        int32_t glen = 0;
-        JS_ToInt32(ctx, &glen, glv);
-        JS_FreeValue(ctx, glv);
-        ngr = glen / VEC_GRAD_STRIDE;
+        ngr = vec_array_len(ctx, argv[3]) / VEC_GRAD_STRIDE;
         if (ngr > VEC_BRIDGE_MAX_GRADS)
         {
             ngr = VEC_BRIDGE_MAX_GRADS;
@@ -3513,11 +3659,7 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
             double g[VEC_GRAD_STRIDE];
             for (int j = 0; j < VEC_GRAD_STRIDE; j++)
             {
-                JSValue e = JS_GetPropertyUint32(ctx, argv[3], (uint32_t)(i * VEC_GRAD_STRIDE + j));
-                double d = 0.0;
-                JS_ToFloat64(ctx, &d, e);
-                g[j] = d;
-                JS_FreeValue(ctx, e);
+                g[j] = vec_num_at(ctx, argv[3], (uint32_t)(i * VEC_GRAD_STRIDE + j));
             }
             grads[i].type = (uint8_t)g[0];
             grads[i].stop_count = (uint8_t)g[1];
@@ -3538,24 +3680,14 @@ static JSValue js_set_vector_ops(JSContext* ctx, JSValueConst this_val, int argc
     er_node_set_vector_ops(node, ops, olen, paints, np, grads, ngr);
 
     /* Optional 5th arg: a [x, y, w, h] node-local sub-rect to restrict this commit's damage to. */
-    if (argc >= 5 && JS_IsArray(argv[4]))
+    if (argc >= 5 && JS_IsArray(argv[4]) && vec_array_len(ctx, argv[4]) >= 4)
     {
-        JSValue dlv = JS_GetPropertyStr(ctx, argv[4], "length");
-        int32_t dlen = 0;
-        JS_ToInt32(ctx, &dlen, dlv);
-        JS_FreeValue(ctx, dlv);
-        if (dlen >= 4)
+        double d[4];
+        for (int k = 0; k < 4; k++)
         {
-            double d[4];
-            for (int k = 0; k < 4; k++)
-            {
-                JSValue e = JS_GetPropertyUint32(ctx, argv[4], (uint32_t)k);
-                d[k] = 0.0;
-                JS_ToFloat64(ctx, &d[k], e);
-                JS_FreeValue(ctx, e);
-            }
-            er_node_set_vector_dirty_rect(node, (int)d[0], (int)d[1], (int)d[2], (int)d[3]);
+            d[k] = vec_num_at(ctx, argv[4], (uint32_t)k);
         }
+        er_node_set_vector_dirty_rect(node, (int)d[0], (int)d[1], (int)d[2], (int)d[3]);
     }
     return JS_UNDEFINED;
 }
