@@ -114,7 +114,7 @@ void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row,
  *
  * Signed-distance coverage sampled at the pixel centre, matching the arc er_rrect_row() reports.
  * Walk k upward from 0, stop at the first non-positive result, and bound the loop with
- * ER_RRECT_FRINGE_MAX — several places walk a fringe, and none of them should be one monotonicity
+ * er_rrect_fringe_max() — several places walk a fringe, and none of them should be one monotonicity
  * bug away from spinning forever.
  *
  * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r).
@@ -133,8 +133,20 @@ float er_rrect_fringe_cov(int r, int dx, int dy, int k);
  * The fringe starts at the solid edge — already at least @p r's half-width from the arc centre — and
  * dies once the sample passes the radius, so it can never reach r + 1 steps. Every walk carries this
  * as its loop bound and still breaks on the first non-positive coverage, which is the real stop.
+ *
+ * A straight edge (r == 0) has no fringe at all and bounds to zero, so the walk does not run. That
+ * case is the common one, not an edge case: on any rounded rect every row between the corners is a
+ * straight edge on both sides, and on a square one every row is — entering the loop even once there
+ * would spend a sqrtf per row per side to learn what the radius already says.
+ *
+ * @param[in] r  Corner arc radius (ERRRectRow::l_r / r_r).
+ *
+ * @return Maximum steps the walk may take.
  */
-#define ER_RRECT_FRINGE_MAX(r) ((r) + 1)
+static inline int er_rrect_fringe_max(int r)
+{
+    return r > 0 ? r + 1 : 0;
+}
 
 /**
  * @brief Number of anti-aliased fringe pixels stepping outward from a corner's solid edge.

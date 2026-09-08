@@ -128,7 +128,7 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
             fill_span(argb, bot_py, x0, x1);
 
 #if ERUI_BORDER_AA
-        for (int k = 0; k < ER_RRECT_FRINGE_MAX(r); k++)
+        for (int k = 0, kmax = er_rrect_fringe_max(r); k < kmax; k++)
         {
             const float cov = er_rrect_fringe_cov(r, dx, dy, k);
             if (cov <= 0.0f)
@@ -299,7 +299,7 @@ int er_rrect_fringe_len(int r, int dx, int dy)
     if (r <= 0)
         return 0;
     int k = 0;
-    while (k < ER_RRECT_FRINGE_MAX(r) && er_rrect_fringe_cov(r, dx, dy, k) > 0.0f)
+    while (k < er_rrect_fringe_max(r) && er_rrect_fringe_cov(r, dx, dy, k) > 0.0f)
         k++;
     return k;
 #else
@@ -326,7 +326,7 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
 
 #if ERUI_BORDER_AA
         /* AA fringe on the left corner edge. */
-        for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.l_r); k++)
+        for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
         {
             const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
             if (cov <= 0.0f)
@@ -340,7 +340,7 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
         }
 
         /* AA fringe on the right corner edge. */
-        for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.r_r); k++)
+        for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
         {
             const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
             if (cov <= 0.0f)
@@ -820,7 +820,7 @@ void er_rrect_fill_ring_edges(
 #if ERUI_BORDER_AA
         /* Outer edge: the same fringe a filled rounded rect lays down, so the ring's silhouette
          * matches a solid fill's exactly. */
-        for (int k = 0; k < ER_RRECT_FRINGE_MAX(o.l_r); k++)
+        for (int k = 0, kmax = er_rrect_fringe_max(o.l_r); k < kmax; k++)
         {
             const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
             if (cov <= 0.0f)
@@ -832,7 +832,7 @@ void er_rrect_fill_ring_edges(
             if (fc >> 24)
                 er_blit_fill(scale_straight_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
         }
-        for (int k = 0; k < ER_RRECT_FRINGE_MAX(o.r_r); k++)
+        for (int k = 0, kmax = er_rrect_fringe_max(o.r_r); k < kmax; k++)
         {
             const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
             if (cov <= 0.0f)

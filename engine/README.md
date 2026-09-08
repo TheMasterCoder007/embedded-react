@@ -450,8 +450,9 @@ component sets `ERUI_MAX_VECTOR_NODES=32`.
 
 **Overflow is silent truncation, not a crash** — an over-complex shape is clipped or dropped.
 A debug build (or `-DERUI_DIAGNOSTICS=2`) prints a one-line `stderr` warning naming the
-macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a
-release MCU pulls in no `<stdio.h>`.
+macro to raise on the first overflow of each pool; `NDEBUG` compiles those out. It does not
+remove `<stdio.h>`, though — the release-level warning below survives it. Only
+`-DERUI_DIAGNOSTICS=0` drops stdio entirely.
 
 **`ERUI_MAX_VECTOR_NODES` is the exception, and warns in release builds too.** The other caps
 truncate one shape, so the screen shows something recognisably wrong, and the culprit is the shape

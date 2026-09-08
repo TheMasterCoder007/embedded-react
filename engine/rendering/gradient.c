@@ -192,7 +192,7 @@ static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, 
 
 #if ERUI_BORDER_AA
     /* Fringe pixels take the gradient colour at their own column, faded by the arc's coverage. */
-    for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.l_r); k++)
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
     {
         const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
         if (cov <= 0.0f)
@@ -204,7 +204,7 @@ static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, 
             er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
         }
     }
-    for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.r_r); k++)
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
     {
         const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
         if (cov <= 0.0f)

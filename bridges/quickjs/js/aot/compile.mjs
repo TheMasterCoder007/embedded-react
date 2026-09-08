@@ -6232,8 +6232,8 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
  * another produces firmware that compiles, links, boots, and lays out wrong. Boards \`_Static_assert\` these
  * against their own panel size to turn that into a compile error; see each board example's main.c.
  */
-#define ER_AOT_SCREEN_W ${SCREEN_W}
-#define ER_AOT_SCREEN_H ${SCREEN_H}
+#define ER_AOT_SCREEN_W ${screen.width}
+#define ER_AOT_SCREEN_H ${screen.height}
 #define ER_AOT_DEMO "${demo}"
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
