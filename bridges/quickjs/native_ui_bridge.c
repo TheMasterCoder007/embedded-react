@@ -691,7 +691,8 @@ static bool to_angle(JSContext* ctx, JSValueConst v, float* out)
         bool ok = end != s;
         if (ok && strstr(end, "rad") != NULL)
         {
-            d = d * 180.0 / 3.14159265358979323846;
+            /* er_scene.h's constant, so this is the exact inverse of the deg->rad the engine applies. */
+            d = d * (double)ER_RAD2DEG;
         }
         JS_FreeCString(ctx, s);
         if (ok)
@@ -1643,6 +1644,43 @@ static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pc
     }
 }
 
+/** @brief CSS weight at or above which text uses the engine's bold face — the "semibold" cutoff. */
+#define ER_FONT_WEIGHT_BOLD_MIN 600
+
+/**
+ * @brief Resolves a JS `fontWeight` (number, "bold", or a numeric string) to the engine's 0/1 flag.
+ *
+ * Shared by the node-prop parser and the text-span parser, which sit ~1700 lines apart: a span has to
+ * reach the same verdict as the Text node it lives in, or one line of a paragraph comes out bold and
+ * the rest does not.
+ *
+ * @param[in] ctx  QuickJS context.
+ * @param[in] v    A present (non-undefined) `fontWeight` value.
+ * @param[in] dflt Value to keep when the JS value cannot be read at all.
+ *
+ * @return 1 for bold, 0 otherwise.
+ */
+static uint8_t to_font_weight(JSContext* ctx, JSValueConst v, uint8_t dflt)
+{
+    if (JS_IsNumber(v))
+    {
+        int32_t n = 0;
+        if (JS_ToInt32(ctx, &n, v) != 0)
+        {
+            return dflt;
+        }
+        return n >= ER_FONT_WEIGHT_BOLD_MIN ? 1U : 0U;
+    }
+    const char* s = JS_ToCString(ctx, v);
+    if (!s)
+    {
+        return dflt;
+    }
+    const uint8_t bold = (strcmp(s, "bold") == 0 || atoi(s) >= ER_FONT_WEIGHT_BOLD_MIN) ? 1U : 0U;
+    JS_FreeCString(ctx, s);
+    return bold;
+}
+
 /**
  * @brief Reads `fontWeight` (string keyword, numeric, or numeric string) into a 0/1 weight.
  *
@@ -1656,23 +1694,7 @@ static void apply_font_weight(JSContext* ctx, JSValueConst v, ERProps* p)
     {
         return;
     }
-    if (JS_IsNumber(v))
-    {
-        int32_t n = 0;
-        if (JS_ToInt32(ctx, &n, v) == 0)
-        {
-            p->font_weight = n >= 600 ? 1 : 0;
-        }
-    }
-    else
-    {
-        const char* s = JS_ToCString(ctx, v);
-        if (s)
-        {
-            p->font_weight = (strcmp(s, "bold") == 0 || atoi(s) >= 600) ? 1 : 0;
-            JS_FreeCString(ctx, s);
-        }
-    }
+    p->font_weight = to_font_weight(ctx, v, p->font_weight);
 }
 
 /**
@@ -2110,7 +2132,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
             int32_t n = 0;
             if (JS_ToInt32(ctx, &n, v) == 0)
             {
-                p.long_press_ms = (uint16_t)(n < 1 ? 1 : (n > 65535 ? 65535 : n));
+                p.long_press_ms = (uint16_t)(n < 1 ? 1 : (n > UINT16_MAX ? UINT16_MAX : n));
             }
         }
     }
@@ -3343,21 +3365,7 @@ ER_BRIDGE_MARSHAL_FN(js_set_text_spans)
         }
         if (prop_get(ctx, seg, "fontWeight", &v))
         {
-            if (JS_IsNumber(v))
-            {
-                int32_t w = 0;
-                JS_ToInt32(ctx, &w, v);
-                sp->font_weight = w >= 600 ? 1U : 0U;
-            }
-            else
-            {
-                const char* s = JS_ToCString(ctx, v);
-                if (s)
-                {
-                    sp->font_weight = (strcmp(s, "bold") == 0 || atoi(s) >= 600) ? 1U : 0U;
-                    JS_FreeCString(ctx, s);
-                }
-            }
+            sp->font_weight = to_font_weight(ctx, v, sp->font_weight);
             JS_FreeValue(ctx, v);
         }
         if (prop_get(ctx, seg, "fontStyle", &v))
@@ -3601,18 +3609,24 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
-/* Bridge-side caps; the engine clamps again to its own storage limits. Overridable (e.g. for large
- * imported SVGs) — keep these >= the engine's ERUI_VECTOR_TAPE_MAX / ERUI_VECTOR_PAINTS_MAX, or the bridge
- * truncates the op-tape before the engine ever sees it. */
+/* Bridge-side staging caps; the engine clamps again to its own storage limits. They default TO the engine's
+ * caps rather than repeating the numbers, because a bridge that stages less truncates the op-tape before the
+ * engine ever sees it — the shape just goes missing, with no pool ever reporting an overflow. Overridable
+ * (e.g. to stage a large imported SVG on a build whose engine caps were raised separately); the asserts hold
+ * the "at least the engine's" rule either way. */
 #ifndef VEC_BRIDGE_MAX_OPS
-#define VEC_BRIDGE_MAX_OPS 1024
+#define VEC_BRIDGE_MAX_OPS ERUI_VECTOR_TAPE_MAX
 #endif
 #ifndef VEC_BRIDGE_MAX_PAINTS
-#define VEC_BRIDGE_MAX_PAINTS 16
+#define VEC_BRIDGE_MAX_PAINTS ERUI_VECTOR_PAINTS_MAX
 #endif
 #ifndef VEC_BRIDGE_MAX_GRADS
-#define VEC_BRIDGE_MAX_GRADS 16
+#define VEC_BRIDGE_MAX_GRADS ERUI_VECTOR_GRADS_MAX
 #endif
+_Static_assert(VEC_BRIDGE_MAX_OPS >= ERUI_VECTOR_TAPE_MAX, "VEC_BRIDGE_MAX_OPS must be >= ERUI_VECTOR_TAPE_MAX");
+_Static_assert(VEC_BRIDGE_MAX_PAINTS >= ERUI_VECTOR_PAINTS_MAX,
+               "VEC_BRIDGE_MAX_PAINTS must be >= ERUI_VECTOR_PAINTS_MAX");
+_Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADS_MAX, "VEC_BRIDGE_MAX_GRADS must be >= ERUI_VECTOR_GRADS_MAX");
 /* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
 #define VEC_PAINT_STRIDE 9
 /* JS gradient record width (kept in sync with svg-ops.js encodeVectorGradients):
@@ -4110,7 +4124,7 @@ static void marshal_anim_config(JSContext* ctx, JSValueConst obj, ERAnimConfig* 
     memset(cfg, 0, sizeof(*cfg));
     cfg->type = ER_ANIM_TIMING;
     cfg->easing = ER_EASE_EASE;
-    cfg->duration_ms = 300U;
+    cfg->duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
 
     if (!JS_IsObject(obj))
     {
@@ -4211,7 +4225,7 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
     memset(&cfg, 0, sizeof(cfg));
     cfg.type = ER_ANIM_TIMING;
     cfg.easing = ER_EASE_EASE_IN_OUT;
-    cfg.duration_ms = 300U;
+    cfg.duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
 
     JSValueConst obj = (argc > 0) ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(obj))
@@ -4235,7 +4249,7 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
             int32_t n = 0;
             if (JS_ToInt32(ctx, &n, v) == 0 && n > 0)
             {
-                cfg.duration_ms = (uint16_t)(n > 65535 ? 65535 : n);
+                cfg.duration_ms = (uint16_t)(n > UINT16_MAX ? UINT16_MAX : n);
             }
             JS_FreeValue(ctx, v);
         }

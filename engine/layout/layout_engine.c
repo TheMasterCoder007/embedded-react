@@ -15,13 +15,10 @@
  */
 
 #include "layout_engine.h"
+#include "er_limits.h" /* ERUI_MAX_NODES — the same pool compositor.c allocates and hit_test.c walks */
 #include "text_renderer.h"
 #include <stdint.h>
 #include <string.h>
-
-#ifndef ERUI_MAX_NODES
-#define ERUI_MAX_NODES 512
-#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -167,10 +164,10 @@ static int16_t round_px(const float v)
      * Settle them here rather than letting a coordinate wrap into the opposite corner. */
     if (v != v)
         return 0;
-    if (v >= 32767.0f)
-        return 32767;
-    if (v <= -32768.0f)
-        return -32768;
+    if (v >= (float)INT16_MAX)
+        return INT16_MAX;
+    if (v <= (float)INT16_MIN)
+        return INT16_MIN;
 
     const float t = v + 0.5f;
     int32_t i = (int32_t)t;
@@ -189,15 +186,15 @@ static int16_t round_px(const float v)
  * @param[in] lo  Rounded near edge.
  * @param[in] hi  Rounded far edge.
  *
- * @return hi - lo, clamped to [0, 32767].
+ * @return hi - lo, clamped to [0, INT16_MAX].
  */
 static int16_t span_px(const int16_t lo, const int16_t hi)
 {
     const int32_t d = (int32_t)hi - (int32_t)lo;
     if (d < 0)
         return 0;
-    if (d > 32767)
-        return 32767;
+    if (d > INT16_MAX)
+        return INT16_MAX;
     return (int16_t)d;
 }
 

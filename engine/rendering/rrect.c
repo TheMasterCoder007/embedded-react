@@ -25,14 +25,18 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Scales the alpha channel of a straight-alpha ARGB8888 color by a coverage byte.
+ * @brief Scales ONLY the alpha channel of a straight-alpha ARGB8888 color by a coverage byte.
+ *
+ * The straight-alpha counterpart of er_px_scale_premul(): the colour channels are left alone because
+ * they are not premultiplied. Applying the premultiplied variant here would darken the colour as well
+ * as fade it.
  *
  * @param[in] argb      Straight-alpha ARGB8888 color.
  * @param[in] coverage  Multiplier in the range [0, 255].
  *
  * @return Color with its alpha channel scaled by coverage/255.
  */
-static uint32_t scale_alpha(uint32_t argb, uint8_t coverage)
+static uint32_t scale_straight_alpha(uint32_t argb, uint8_t coverage)
 {
     uint32_t a = ((argb >> 24) * (uint32_t)coverage + 127U) / 255U;
     return (argb & 0x00FFFFFFU) | (a << 24);
@@ -124,33 +128,28 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
             fill_span(argb, bot_py, x0, x1);
 
 #if ERUI_BORDER_AA
+        for (int k = 0; k < ER_RRECT_FRINGE_MAX(r); k++)
         {
-            float cy = (float)dy - 0.5f;
-            for (int k = 0;; k++)
+            const float cov = er_rrect_fringe_cov(r, dx, dy, k);
+            if (cov <= 0.0f)
+                break;
+            if (cov < 1.0f)
             {
-                float cx = (float)dx + (float)k + 0.5f;
-                float dist = sqrtf(cx * cx + cy * cy);
-                float cov = (float)r + 0.5f - dist;
-                if (cov <= 0.0f)
-                    break;
-                if (cov < 1.0f)
-                {
-                    uint32_t aa = scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
-                    int ax_l = x0 - 1 - k;
-                    int ax_r = x1 + k;
+                uint32_t aa = scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
+                int ax_l = x0 - 1 - k;
+                int ax_r = x1 + k;
 
-                    if (ax_l >= x)
-                    {
-                        er_blit_fill(aa, ax_l, top_py, 1, 1);
-                        if (bot_py != top_py)
-                            er_blit_fill(aa, ax_l, bot_py, 1, 1);
-                    }
-                    if (ax_r < x + w)
-                    {
-                        er_blit_fill(aa, ax_r, top_py, 1, 1);
-                        if (bot_py != top_py)
-                            er_blit_fill(aa, ax_r, bot_py, 1, 1);
-                    }
+                if (ax_l >= x)
+                {
+                    er_blit_fill(aa, ax_l, top_py, 1, 1);
+                    if (bot_py != top_py)
+                        er_blit_fill(aa, ax_l, bot_py, 1, 1);
+                }
+                if (ax_r < x + w)
+                {
+                    er_blit_fill(aa, ax_r, top_py, 1, 1);
+                    if (bot_py != top_py)
+                        er_blit_fill(aa, ax_r, bot_py, 1, 1);
                 }
             }
         }
@@ -294,6 +293,23 @@ float er_rrect_fringe_cov(int r, int dx, int dy, int k)
     return (float)r + 0.5f - sqrtf(cx * cx + cy * cy);
 }
 
+int er_rrect_fringe_len(int r, int dx, int dy)
+{
+#if ERUI_BORDER_AA
+    if (r <= 0)
+        return 0;
+    int k = 0;
+    while (k < ER_RRECT_FRINGE_MAX(r) && er_rrect_fringe_cov(r, dx, dy, k) > 0.0f)
+        k++;
+    return k;
+#else
+    (void)r;
+    (void)dx;
+    (void)dy;
+    return 0;
+#endif
+}
+
 void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
 {
     if (w <= 0 || h <= 0 || (argb >> 24) == 0)
@@ -310,69 +326,34 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
 
 #if ERUI_BORDER_AA
         /* AA fringe on the left corner edge. */
-        if (rr.l_r > 0)
+        for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.l_r); k++)
         {
-            for (int k = 0;; k++)
+            const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
+            if (cov <= 0.0f)
+                break;
+            if (cov < 1.0f)
             {
-                const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
-                if (cov <= 0.0f)
-                    break;
-                if (cov < 1.0f)
-                {
-                    const int ax = x + rr.x0 - 1 - k;
-                    if (ax >= x)
-                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
-                }
+                const int ax = x + rr.x0 - 1 - k;
+                if (ax >= x)
+                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
             }
         }
 
         /* AA fringe on the right corner edge. */
-        if (rr.r_r > 0)
+        for (int k = 0; k < ER_RRECT_FRINGE_MAX(rr.r_r); k++)
         {
-            for (int k = 0;; k++)
+            const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
+            if (cov <= 0.0f)
+                break;
+            if (cov < 1.0f)
             {
-                const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
-                if (cov <= 0.0f)
-                    break;
-                if (cov < 1.0f)
-                {
-                    const int ax = x + rr.x1 + k;
-                    if (ax < x + w)
-                        er_blit_fill(scale_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
-                }
+                const int ax = x + rr.x1 + k;
+                if (ax < x + w)
+                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
             }
         }
 #endif
     }
-}
-
-/**
- * @brief Counts the anti-aliased fringe pixels stepping outward from a corner's solid edge.
- *
- * The ring needs this up front: its solid band has to stop where the inset shape's fringe begins,
- * which the fill paths never need to know because they walk the fringe after painting their span.
- *
- * @param[in] r   Corner arc radius; 0 (a straight edge) has no fringe.
- * @param[in] dx  Solid half-width at this row.
- * @param[in] dy  Row distance from the arc centre.
- *
- * @return Number of fringe pixels, 0 when ERUI_BORDER_AA is off.
- */
-static int fringe_len(int r, int dx, int dy)
-{
-#if ERUI_BORDER_AA
-    if (r <= 0)
-        return 0;
-    int k = 0;
-    while (er_rrect_fringe_cov(r, dx, dy, k) > 0.0f) /* strictly decreasing in k, so this terminates */
-        k++;
-    return k;
-#else
-    (void)r;
-    (void)dx;
-    (void)dy;
-    return 0;
-#endif
 }
 
 /** @brief Subtracts an inset from a corner radius without going negative. */
@@ -385,8 +366,6 @@ static int inset_radius(int r, int a, int b)
 /*----------------------------------------------------------------------------------------------------------------------
  - Band shading: which edge owns a pixel, and whether a dash pattern paints it there
  ---------------------------------------------------------------------------------------------------------------------*/
-
-#define ER_RRECT_HALF_PI 1.57079632679f
 
 /**
  * @brief Everything a band pixel needs to be shaded: its owning edge, and the dash phase there.
@@ -486,11 +465,11 @@ static float mitre_norm(int a, int b)
 static float atan_ratio(float a, float b)
 {
     if (b <= 0.0f)
-        return (a > 0.0f) ? ER_RRECT_HALF_PI : 0.0f;
+        return (a > 0.0f) ? ER_HALF_PI : 0.0f;
     const bool steep = (a > b);
     const float z = steep ? (b / a) : (a / b);
     const float t = z * (0.7853981634f - (z - 1.0f) * (0.2447f + 0.0663f * z));
-    return steep ? (ER_RRECT_HALF_PI - t) : t;
+    return steep ? (ER_HALF_PI - t) : t;
 }
 
 /**
@@ -541,15 +520,15 @@ static void band_init(BandCtx* c, const ERRRectBorder* b, int w, int h, int r_tl
     const float left = (float)(h - r_bl - r_tl) > 0.0f ? (float)(h - r_bl - r_tl) : 0.0f;
 
     /* Clockwise from the top edge's left end. */
-    c->seg[0] = 0.0f;                                       /* top edge, left -> right */
-    c->seg[1] = c->seg[0] + top;                            /* top-right arc */
-    c->seg[2] = c->seg[1] + ER_RRECT_HALF_PI * (float)r_tr; /* right edge, top -> bottom */
-    c->seg[3] = c->seg[2] + right;                          /* bottom-right arc */
-    c->seg[4] = c->seg[3] + ER_RRECT_HALF_PI * (float)r_br; /* bottom edge, right -> left */
-    c->seg[5] = c->seg[4] + bottom;                         /* bottom-left arc */
-    c->seg[6] = c->seg[5] + ER_RRECT_HALF_PI * (float)r_bl; /* left edge, bottom -> top */
-    c->seg[7] = c->seg[6] + left;                           /* top-left arc */
-    const float perim = c->seg[7] + ER_RRECT_HALF_PI * (float)r_tl;
+    c->seg[0] = 0.0f;                                 /* top edge, left -> right */
+    c->seg[1] = c->seg[0] + top;                      /* top-right arc */
+    c->seg[2] = c->seg[1] + ER_HALF_PI * (float)r_tr; /* right edge, top -> bottom */
+    c->seg[3] = c->seg[2] + right;                    /* bottom-right arc */
+    c->seg[4] = c->seg[3] + ER_HALF_PI * (float)r_br; /* bottom edge, right -> left */
+    c->seg[5] = c->seg[4] + bottom;                   /* bottom-left arc */
+    c->seg[6] = c->seg[5] + ER_HALF_PI * (float)r_bl; /* left edge, bottom -> top */
+    c->seg[7] = c->seg[6] + left;                     /* top-left arc */
+    const float perim = c->seg[7] + ER_HALF_PI * (float)r_tl;
 
     const float on = (style == 1) ? 8.0f : 3.0f;
     const float off = (style == 1) ? 6.0f : 3.0f;
@@ -803,11 +782,11 @@ void er_rrect_fill_ring_edges(
             in.x1 += bl;
 
             /* Left band: outer edge inward, stopping short of the interior's own fringe. */
-            const int nl = fringe_len(in.l_r, in.l_dx, in.l_dy);
+            const int nl = er_rrect_fringe_len(in.l_r, in.l_dx, in.l_dy);
             band_run(&band, x, y + row, row, o.x0, in.x0 - nl);
 
             /* Right band: mirror. */
-            const int nr = fringe_len(in.r_r, in.r_dx, in.r_dy);
+            const int nr = er_rrect_fringe_len(in.r_r, in.r_dx, in.r_dy);
             band_run(&band, x, y + row, row, in.x1 + nr, o.x1);
 
 #if ERUI_BORDER_AA
@@ -821,7 +800,8 @@ void er_rrect_fill_ring_edges(
                     continue;
                 const uint32_t fc = band_color(&band, ax, row);
                 if (fc >> 24)
-                    er_blit_fill(scale_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+                    er_blit_fill(
+                        scale_straight_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
             for (int k = 0; k < nr; k++)
             {
@@ -831,7 +811,8 @@ void er_rrect_fill_ring_edges(
                     continue;
                 const uint32_t fc = band_color(&band, ax, row);
                 if (fc >> 24)
-                    er_blit_fill(scale_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+                    er_blit_fill(
+                        scale_straight_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
             }
 #endif
         }
@@ -839,35 +820,29 @@ void er_rrect_fill_ring_edges(
 #if ERUI_BORDER_AA
         /* Outer edge: the same fringe a filled rounded rect lays down, so the ring's silhouette
          * matches a solid fill's exactly. */
-        if (o.l_r > 0)
+        for (int k = 0; k < ER_RRECT_FRINGE_MAX(o.l_r); k++)
         {
-            for (int k = 0;; k++)
-            {
-                const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
-                if (cov <= 0.0f)
-                    break;
-                const int ax = o.x0 - 1 - k;
-                if (cov >= 1.0f || ax < 0 || !dash_on(&band, ax, row))
-                    continue;
-                const uint32_t fc = band_color(&band, ax, row);
-                if (fc >> 24)
-                    er_blit_fill(scale_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-            }
+            const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
+            if (cov <= 0.0f)
+                break;
+            const int ax = o.x0 - 1 - k;
+            if (cov >= 1.0f || ax < 0 || !dash_on(&band, ax, row))
+                continue;
+            const uint32_t fc = band_color(&band, ax, row);
+            if (fc >> 24)
+                er_blit_fill(scale_straight_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
         }
-        if (o.r_r > 0)
+        for (int k = 0; k < ER_RRECT_FRINGE_MAX(o.r_r); k++)
         {
-            for (int k = 0;; k++)
-            {
-                const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
-                if (cov <= 0.0f)
-                    break;
-                const int ax = o.x1 + k;
-                if (cov >= 1.0f || ax >= w || !dash_on(&band, ax, row))
-                    continue;
-                const uint32_t fc = band_color(&band, ax, row);
-                if (fc >> 24)
-                    er_blit_fill(scale_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
-            }
+            const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
+            if (cov <= 0.0f)
+                break;
+            const int ax = o.x1 + k;
+            if (cov >= 1.0f || ax >= w || !dash_on(&band, ax, row))
+                continue;
+            const uint32_t fc = band_color(&band, ax, row);
+            if (fc >> 24)
+                er_blit_fill(scale_straight_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
         }
 #endif
     }

@@ -39,9 +39,6 @@
  - Macros
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define ARC_DEG2RAD 0.017453292519943295f
-#define ARC_RAD2DEG 57.29577951308232f
-
 /** @brief Minimum touch slop either side of the ring (px) — fingers are wider than a 4 px track. */
 #define ARC_HIT_SLOP_MIN 8
 
@@ -197,7 +194,7 @@ float er_arc_value_angle(const ERArcGeom* g, float value)
 
 void er_arc_knob_center(const ERArcGeom* g, float value, float* kx, float* ky)
 {
-    const float a = er_arc_value_angle(g, value) * ARC_DEG2RAD;
+    const float a = er_arc_value_angle(g, value) * ER_DEG2RAD;
     *kx = g->cx + g->r_mid * cosf(a);
     *ky = g->cy + g->r_mid * sinf(a);
 }
@@ -550,9 +547,9 @@ bool er_arc_hit(const ERNode* n, int x, int y)
         return true;
 
     /* Inside the sweep (plus the slop expressed as an angle at this radius)? */
-    float rel = atan2f(dy, dx) * ARC_RAD2DEG - g.a0;
+    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
     rel -= 360.0f * floorf(rel / 360.0f);
-    const float eps = (g.r_mid > 1.0f) ? (asinf(clampf(slop / g.r_mid, 0.0f, 1.0f)) * ARC_RAD2DEG) : 180.0f;
+    const float eps = (g.r_mid > 1.0f) ? (asinf(clampf(slop / g.r_mid, 0.0f, 1.0f)) * ER_RAD2DEG) : 180.0f;
     return (rel <= g.sweep + eps) || (rel >= 360.0f - eps);
 }
 
@@ -561,7 +558,7 @@ float er_arc_value_at(ERNode* n, int x, int y, bool anti_wrap)
     ERArcGeom g;
     er_arc_geom(n, (int)n->computed.x, (int)n->computed.y, (int)n->computed.w, (int)n->computed.h, &g);
     const float dx = (float)x + 0.5f - g.cx, dy = (float)y + 0.5f - g.cy;
-    float rel = atan2f(dy, dx) * ARC_RAD2DEG - g.a0;
+    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
     rel -= 360.0f * floorf(rel / 360.0f); /* [0, 360) past the start */
 
     /* A point ON the ring is unambiguous — use it, however far it is from the last sample (a fast finger,
@@ -593,7 +590,7 @@ bool er_arc_grab_low(const ERNode* n, int x, int y)
     /* Compare in SWEEP FRACTION rather than value units so the choice is the visually nearer knob
      * regardless of the range's scale. */
     const float dx = (float)x + 0.5f - g.cx, dy = (float)y + 0.5f - g.cy;
-    float rel = atan2f(dy, dx) * ARC_RAD2DEG - g.a0;
+    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
     rel -= 360.0f * floorf(rel / 360.0f);
     const float f = (rel <= g.sweep) ? (rel / g.sweep) : (((rel - g.sweep) < (360.0f - rel)) ? 1.0f : 0.0f);
     const float f_hi = er_arc_value_frac(&g, n->arc_value);

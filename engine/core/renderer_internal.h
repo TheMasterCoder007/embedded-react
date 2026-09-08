@@ -17,13 +17,92 @@
 #ifndef EMBEDDED_REACT_RENDERER_INTERNAL_H
 #define EMBEDDED_REACT_RENDERER_INTERNAL_H
 
+#include "er_scene.h" /* ER_DEG2RAD / ER_RAD2DEG — the ABI's angle units */
 #include "native_renderer.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 /* Forward declaration (full definition in er_node_internal.h) */
 struct ERNode;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Shared render math
+ *
+ * Small helpers the rasterizers must agree on exactly, rather than each keeping its own copy: two paths that
+ * quantize the same angle differently leave a seam where they meet, and two spellings of the same pixel scale
+ * invite reaching for the wrong one.
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#define ER_PI 3.14159265358979323846f
+#define ER_HALF_PI 1.57079632679489661923f
+
+/** @brief Below this magnitude in BOTH arguments, atan2 has no defined direction and answers 0. */
+#define ER_ATAN2_DEGENERATE_EPS 1e-12f
+
+/**
+ * @brief Scales a PREMULTIPLIED ARGB8888 pixel by an 8-bit coverage.
+ *
+ * All four channels scale, not just alpha: the value is premultiplied, so leaving the colour channels alone
+ * would brighten the fringe instead of fading it. For a STRAIGHT-alpha colour use the alpha-only variant in
+ * rrect.c instead — applying this one to a straight-alpha pixel darkens it.
+ *
+ * @param[in] p    Premultiplied ARGB8888 pixel.
+ * @param[in] cov  Coverage in [0, 255].
+ *
+ * @return The pixel scaled by cov/255, still premultiplied.
+ */
+static inline uint32_t er_px_scale_premul(uint32_t p, uint32_t cov)
+{
+    if (cov >= 255U)
+    {
+        return p;
+    }
+    const uint32_t a = (((p >> 24) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t r = (((p >> 16) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t g = (((p >> 8) & 0xFFU) * cov + 127U) / 255U;
+    const uint32_t b = ((p & 0xFFU) * cov + 127U) / 255U;
+    return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/**
+ * @brief atan2 approximation (max error ~0.0015 rad) for the per-pixel conic samplers. Range (-PI, PI].
+ *
+ * Shared by the arc widget's analytic sector and the vector rasterizer's conic gradient so both quantize an
+ * angle to the same colour-LUT entry — an arc gradient and a vector gradient covering the same pixels would
+ * otherwise meet on a visible seam. Same argument order as atan2f(y, x). Avoids the soft-float atan2f call
+ * on the per-pixel path; the LUT's own ~1.4-degree steps swallow the error.
+ *
+ * @param[in] y  Numerator (as for atan2f).
+ * @param[in] x  Denominator (as for atan2f).
+ *
+ * @return The angle in radians.
+ */
+static inline float er_fast_atan2(float y, float x)
+{
+    const float ax = fabsf(x), ay = fabsf(y);
+    if (ax < ER_ATAN2_DEGENERATE_EPS && ay < ER_ATAN2_DEGENERATE_EPS)
+    {
+        return 0.0f;
+    }
+    const float a = (ax > ay) ? (ay / ax) : (ax / ay); /* ratio in [0,1] */
+    const float s = a * a;
+    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a; /* atan(a) */
+    if (ay > ax)
+    {
+        r = 1.57079637f - r; /* PI/2 - r */
+    }
+    if (x < 0.0f)
+    {
+        r = 3.14159274f - r;
+    }
+    if (y < 0.0f)
+    {
+        r = -r;
+    }
+    return r;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Render workers
@@ -163,10 +242,12 @@ bool er_band_active(int* oy, int* h);
 bool er_get_clip_rect(int* x, int* y, int* w, int* h);
 
 /**
- * @brief Forces the next er_commit() to repaint the whole screen (no damage clipping).
+ * @brief Forces a full-screen repaint (no damage clipping) instead of an incremental one.
  *
- * Call after anything that invalidates the persistent framebuffer's contents — e.g. installing a
- * new render backend — so the first commit fully redraws instead of only the changed region.
+ * Call after anything that invalidates what the display already holds — e.g. installing a new render
+ * backend — so the next commit fully redraws rather than only the changed region. With
+ * er_set_display_buffer_count() above 1 this marks EVERY rotating buffer as owing a full frame, so
+ * each one redraws the next time it comes round, not just the one about to be rendered.
  */
 void er_force_full_repaint(void);
 

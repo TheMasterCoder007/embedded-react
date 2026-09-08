@@ -115,9 +115,10 @@ set(ERUI_IMAGE_REGISTRY_MAX "128" CACHE STRING "Concurrently registered images (
 set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
 set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
 
-# Vector (SVG / <Svg>) rasterizer static pools — see engine/README.md "Vector pools". Internal to
-# rendering/vector.c (they do NOT affect public struct layout), so they are PRIVATE below. Overflow is
-# silently truncated; build a debug config (or -DERUI_VECTOR_DIAGNOSTICS=1) to get a stderr warning that
+# Vector (SVG / <Svg>) rasterizer static pools — see engine/README.md "Vector pools". The rasterizer's own
+# scratch is internal to rendering/vector.c (it does NOT affect public struct layout), so those are PRIVATE
+# below; the three per-node STORAGE caps go out PUBLIC because callers marshal into them. Overflow is
+# silently truncated; build a debug config (or -DERUI_DIAGNOSTICS=2) to get a stderr warning that
 # names the pool to raise.
 set(ERUI_VECTOR_MAX_PTS "2048" CACHE STRING "Vector: flattened vertices per shape")
 set(ERUI_VECTOR_MAX_SUBPATHS "256" CACHE STRING "Vector: subpaths (contours/holes) per shape")
@@ -182,12 +183,9 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_FADE_CACHE_W=${ERUI_FADE_CACHE_W}
         ERUI_FADE_CACHE_H=${ERUI_FADE_CACHE_H}
         ERUI_IMAGE_REGISTRY_MAX=${ERUI_IMAGE_REGISTRY_MAX}
-        # Only emit this when the force-on option is actually set. Emitting it unconditionally (even
-        # as 0) beats er_perf.h's own "#ifndef ER_PERF_STATS -> follow ER_PERF_OVERLAY" fallback to
-        # the punch: the header sees ER_PERF_STATS already defined by the compiler command line and
-        # never falls through, so a consumer that sets ER_PERF_OVERLAY=1 without also opting into
-        # ERUI_PERF_STATS gets a fully stubbed er_perf (every entry point a no-op, the overlay frozen
-        # at zero) instead of the instrumentation the option's own docstring promises it would follow.
+        ERUI_VECTOR_TAPE_MAX=${ERUI_VECTOR_TAPE_MAX}
+        ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
+        ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
         $<$<BOOL:${ERUI_PERF_STATS}>:ER_PERF_STATS=1>
 )
 
@@ -201,9 +199,6 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_VECTOR_MAX_EDGES=${ERUI_VECTOR_MAX_EDGES}
         ERUI_VECTOR_MAX_ROW=${ERUI_VECTOR_MAX_ROW}
         ERUI_MAX_VECTOR_NODES=${ERUI_MAX_VECTOR_NODES}
-        ERUI_VECTOR_TAPE_MAX=${ERUI_VECTOR_TAPE_MAX}
-        ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
-        ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
         ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
         ERUI_VECTOR_CACHE_NODES=${ERUI_VECTOR_CACHE_NODES}
         ERUI_VECTOR_CACHE_EDGES=${ERUI_VECTOR_CACHE_EDGES}

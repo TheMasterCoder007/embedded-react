@@ -369,7 +369,7 @@ that, registration is **refused**, and a refused image simply never draws — no
 layout change, just a hole where the art should be, on whichever assets happened to load
 last. An icon-heavy app runs well past a hundred images, so the old fixed 32 was well
 under a real asset set. The default is now 128; a diagnostics build warns once on the
-first refusal (`ERUI_IMAGE_DIAGNOSTICS`, on unless `NDEBUG`), and the perf overlay's
+first refusal (see `ERUI_DIAGNOSTICS` below), and the perf overlay's
 `IMG n/n` counter reads full.
 
 Each slot is ~80 B on a 32-bit target — the 64-byte name field is most of it — so the
@@ -449,7 +449,7 @@ the geometry — put it wherever the RAM budget allows. See `examples/esp32/esp3
 component sets `ERUI_MAX_VECTOR_NODES=32`.
 
 **Overflow is silent truncation, not a crash** — an over-complex shape is clipped or dropped.
-A debug build (or `-DERUI_VECTOR_DIAGNOSTICS=1`) prints a one-line `stderr` warning naming the
+A debug build (or `-DERUI_DIAGNOSTICS=2`) prints a one-line `stderr` warning naming the
 macro to raise on the first overflow of each pool; it is compiled out under `NDEBUG` so a
 release MCU pulls in no `<stdio.h>`.
 
@@ -462,8 +462,22 @@ first refusal prints one `stderr` line even under `NDEBUG`, and raises a sticky 
 overlay shows as `!FULL` on its `VEC` field (`VEC 8/8!FULL`) — the counter alone can't carry this,
 since a screen that exactly fills the pool renders perfectly well. Hosts can read the same flag
 from `ERPerfFrame::vector_slots_overflow`. The flag clears on `er_reset()`; the warning is
-one-shot per process. Set `-DERUI_VECTOR_STORE_WARN=0` on a target that must not link `<stdio.h>`
+one-shot per process. Set `-DERUI_DIAGNOSTICS=0` on a target that must not link `<stdio.h>`
 (the flag and the overlay marker keep working).
+
+### `ERUI_DIAGNOSTICS`
+
+One knob for every one-shot developer warning the engine emits, because the reason to turn them off
+is almost always "this target must not link `<stdio.h>`" — and that has to be answerable in one
+place, not per subsystem.
+
+| Value | What it emits |
+|---|---|
+| `0` | Nothing. No `<stdio.h>`, no strings, no code. |
+| `1` | Only failures that leave no usable trace on a real panel — today, `ERUI_MAX_VECTOR_NODES` above. |
+| `2` | Everything, including pool-overflow and image-registration warnings. |
+
+Defaults to `1` under `NDEBUG` and `2` otherwise.
 
 Override from CMake (`-DERUI_VECTOR_MAX_PTS=4096`), or in an ESP-IDF build from your project's
 `CMakeLists.txt`:

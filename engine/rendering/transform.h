@@ -379,4 +379,52 @@ void er_transform_source_end_blit(int src_x,
                                   int dst_w,
                                   int dst_h);
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - The capture-eligibility rule, in one place
+ *
+ * Lives here rather than in er_node_internal.h because it is composed OF the tests declared above, and the
+ * whole point is that the damage pre-pass, the render pass and hit-testing answer with exactly the same rule
+ * (see the notes on er_transform_source_fits and node_map_point). When they disagree, damage is computed for
+ * the transformed AABB while paint lands on the raw box: the two can never match, `moved` latches, and the
+ * node re-damages itself on every commit for as long as it exists.
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Whether a node carries a transform the plain-offset fast path cannot express.
+ *
+ * True for scale/rotate/skew (and, in 3D builds, rotateX/rotateY/perspective) — the transforms that are
+ * painted by capturing the subtree into the transform source and mapping it back out. A pure translate is
+ * false: it is a pixel offset, no capture involved.
+ *
+ * The ActivityIndicator is excluded whatever its props say. Its tp_rotate_z is the internal spin angle that
+ * render_activity_indicator() bakes into the ring of dots, not an affine render, so it is non-zero on every
+ * commit of a spinning indicator — and capturing it would rasterize the whole node into a scratch buffer
+ * and distort the spin.
+ *
+ * @param[in] n  Node to inspect.
+ *
+ * @return true when the node's transform needs the capture path.
+ */
+static inline bool er_node_has_complex_transform(const ERNode* n)
+{
+    return n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(n);
+}
+
+/**
+ * @brief Whether a node could hold the transform capture — the geometry half of the admission test.
+ *
+ * er_node_has_complex_transform() plus the source-size limit: the two things about a node ITSELF that decide
+ * whether render_tree captures it. The two remaining reasons a capture fails are not properties of the node
+ * — a singular matrix (er_transform_is_invertible) and a capture already active for a transformed ancestor —
+ * so a caller that needs the exact answer asks those separately.
+ *
+ * @param[in] n  Node to inspect.
+ *
+ * @return true when nothing about this node's own geometry rules out a capture.
+ */
+static inline bool er_node_can_capture_transform(const ERNode* n)
+{
+    return er_node_has_complex_transform(n) && er_transform_source_fits((int)n->animated.w, (int)n->animated.h);
+}
+
 #endif /* EMBEDDED_REACT_TRANSFORM_H */

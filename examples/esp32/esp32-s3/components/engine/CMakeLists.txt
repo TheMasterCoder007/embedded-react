@@ -80,7 +80,11 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_MAX_IMG_ROW_PIXELS=800
 )
 
-# Vector (SVG) pools — PRIVATE (internal to vector.c / vector_store.c; no public struct impact). The
+# Vector (SVG) pools — PRIVATE (internal to vector.c / vector_store.c; no public struct impact). NOTE: the
+# per-node STORAGE caps (ERUI_VECTOR_TAPE_MAX / _PAINTS_MAX / _GRADS_MAX) are NOT in this list, and if you
+# add them they must go in the PUBLIC block above: er_scene.h documents them as the sizes a caller marshals
+# into, and the bridge component stages an <Svg> against them — set here they would leave the bridge sized
+# to the header defaults, truncating the op-tape before the engine ever saw it. The
 # per-node op-tape STORAGE pool (vector_store.o) is mapped to PSRAM by linker_psram.lf, so
 # ERUI_MAX_VECTOR_NODES can be raised well past the internal-RAM-bound default of 8 — handy for icon- or
 # vector-heavy screens. The hot rasterize scratch (vector.o) stays in internal DRAM, so its caps

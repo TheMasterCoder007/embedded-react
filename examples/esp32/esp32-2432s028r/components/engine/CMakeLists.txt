@@ -88,11 +88,17 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ERUI_VECTOR_MAX_ROW=224      # coverage row buffer in px. MUST be >= the widest vector node.
     ERUI_MAX_VECTOR_NODES=2      # the dial is a native <Dial> now and uses NO vector node; this whole
                                  # pool is spare headroom for an app that adds an <Svg>
+    ERUI_VECTOR_EDGE_CACHE=0     # cached edge lists for static <Svg> nodes: ~85 KB/node of .bss this
+                                 # board does not have; the thermostat's dial is a native <Dial> anyway
+)
+
+# The per-node STORAGE caps are PUBLIC, unlike the rasterizer scratch above: er_scene.h documents them as
+# the sizes a CALLER marshals into, so anything linking the engine has to see the values this board was
+# actually built with rather than the header's defaults.
+target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_VECTOR_TAPE_MAX=256     # op-tape floats per node (the dial is ~45)
     ERUI_VECTOR_PAINTS_MAX=16    # paints per node (the dial uses 4)
     ERUI_VECTOR_GRADS_MAX=2      # gradient entries per node (the dial uses none; default 8 → trim RAM)
-    ERUI_VECTOR_EDGE_CACHE=0     # cached edge lists for static <Svg> nodes: ~85 KB/node of .bss this
-                                 # board does not have; the thermostat's dial is a native <Dial> anyway
 )
 
 # Perf overlay off (saves code/RAM); the host doesn't gather metrics either.

@@ -31,10 +31,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-#if ERUI_VECTOR_STORE_WARN
-#include <stdio.h>
-#endif
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Tunables (the storage pool's caps; the rasterizer's caps live in vector.c)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -42,15 +38,8 @@
 #ifndef ERUI_MAX_VECTOR_NODES
 #define ERUI_MAX_VECTOR_NODES 8 /**< Concurrent vector nodes that can hold geometry. */
 #endif
-#ifndef ERUI_VECTOR_TAPE_MAX
-#define ERUI_VECTOR_TAPE_MAX 1024 /**< Op-tape floats stored per vector node. */
-#endif
-#ifndef ERUI_VECTOR_PAINTS_MAX
-#define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries stored per vector node. */
-#endif
-#ifndef ERUI_VECTOR_GRADS_MAX
-#define ERUI_VECTOR_GRADS_MAX 8 /**< Gradient entries stored per vector node (ERUI_GRADIENT only). */
-#endif
+/* ERUI_VECTOR_TAPE_MAX / _PAINTS_MAX / _GRADS_MAX are declared in er_scene.h (via vector.h): callers
+ * marshal into them, so they are published rather than private to this pool. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Pool
@@ -79,22 +68,14 @@ static bool s_pool_overflowed = false;
  * @brief Records pool exhaustion: raises the sticky flag and warns once per process.
  *
  * Unlike the per-shape caps, this one warns in RELEASE builds too — the symptom (a node with no
- * geometry, so nothing drawn) carries no hint of its cause. @see ERUI_VECTOR_STORE_WARN.
+ * geometry, so nothing drawn) carries no hint of its cause. @see ERUI_DIAGNOSTICS.
  */
 static void note_pool_overflow(void)
 {
     s_pool_overflowed = true;
-#if ERUI_VECTOR_STORE_WARN
-    static bool warned = false;
-    if (!warned)
-    {
-        warned = true;
-        fprintf(stderr,
-                "embedded-react vector: ERUI_MAX_VECTOR_NODES (%d) exhausted - this <Svg> node and any "
-                "further one will draw NOTHING until a slot frees; raise it.\n",
-                (int)ERUI_MAX_VECTOR_NODES);
-    }
-#endif
+    ERUI_WARN_ONCE_RELEASE("embedded-react vector: ERUI_MAX_VECTOR_NODES (%d) exhausted - this <Svg> node and any "
+                           "further one will draw NOTHING until a slot frees; raise it.\n",
+                           (int)ERUI_MAX_VECTOR_NODES);
 }
 
 int er_vector_store(int slot,

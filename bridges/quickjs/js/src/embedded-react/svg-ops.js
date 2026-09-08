@@ -1109,7 +1109,7 @@ export function warnVectorCaps(
     console.warn(
       `embedded-react: an <Svg> op-tape is too long (${opsLen} > ${maxOps} floats) and will be truncated — ` +
         `the shape gets cut off. Simplify the path (fewer/coarser curves) or split it across <Svg> nodes; ` +
-        `raising the limit needs VEC_BRIDGE_MAX_OPS + ERUI_VECTOR_TAPE_MAX.`,
+        `raising the limit needs ERUI_VECTOR_TAPE_MAX.`,
     );
   }
   const shapes = (paintsLen / PAINT_STRIDE) | 0;
@@ -1117,7 +1117,7 @@ export function warnVectorCaps(
     _warnedVecPaints = true;
     console.warn(
       `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
-        `Split them across multiple <Svg> nodes; raising the limit needs VEC_BRIDGE_MAX_PAINTS + ERUI_VECTOR_PAINTS_MAX.`,
+        `Split them across multiple <Svg> nodes; raising the limit needs ERUI_VECTOR_PAINTS_MAX.`,
     );
   }
   if (!_warnedVecGrads && maxGrads > 0 && gradsLen > maxGrads) {
@@ -1125,7 +1125,7 @@ export function warnVectorCaps(
     console.warn(
       `embedded-react: an <Svg> references ${gradsLen} gradients (> ${maxGrads}) — the extra gradients are ` +
         `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
-        `shapes; raising the limit needs VEC_BRIDGE_MAX_GRADS + ERUI_VECTOR_GRADS_MAX.`,
+        `shapes; raising the limit needs ERUI_VECTOR_GRADS_MAX.`,
     );
   }
 }

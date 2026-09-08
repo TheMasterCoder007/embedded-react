@@ -28,6 +28,7 @@
 
 #include "er_runtime.h" /* er_js_new_context — the device's lite intrinsic profile */
 #include "er_scene.h"
+#include "host_harness.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
 #include "quickjs.h"
@@ -284,42 +285,6 @@ static void rt_install_globals(JSContext* ctx)
 }
 
 /**
- * @brief Reads a whole file into a newly allocated, null-terminated buffer.
- *
- * @param[in]  path     File path.
- * @param[out] out_len  Receives the byte length (excluding the appended terminator).
- *
- * @return Heap buffer the caller must free(), or NULL on failure.
- */
-static char* read_file(const char* path, size_t* out_len)
-{
-    FILE* f = fopen(path, "rb");
-    if (!f)
-    {
-        return NULL;
-    }
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    char* buf = (char*)malloc((size_t)n + 1);
-    if (!buf)
-    {
-        fclose(f);
-        return NULL;
-    }
-    const size_t rd = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    buf[rd] = '\0';
-    *out_len = rd;
-    return buf;
-}
-
-/**
  * @brief Returns true when a path ends in ".qbc" (a compiled bytecode blob).
  *
  * @param[in] path  File path.
@@ -366,7 +331,7 @@ int main(int argc, char** argv)
     }
 
     size_t src_len = 0;
-    char* src = read_file(path, &src_len);
+    char* src = er_host_read_file(path, &src_len);
     if (!src)
     {
         fprintf(stderr, "could not read '%s'\n", path);

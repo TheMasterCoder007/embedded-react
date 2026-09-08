@@ -19,6 +19,24 @@ See the README for the release process.
 
 ### Changed
 
+- Building a board example against an AOT app generated for a *different* board is now a compiler
+  error instead of firmware that boots and lays out wrong. All three examples consume the same
+  `dist/app.gen.c`, and a responsive demo folds its layout to the screen size at generate time, so
+  `app.gen.h` now records what it was generated for and each board asserts it. The desktop AOT host
+  also sizes its window from that, instead of defaulting to 800x600 whatever the app expects.
+
+- One `ERUI_DIAGNOSTICS` knob replaces `ERUI_VECTOR_DIAGNOSTICS`, `ERUI_IMAGE_DIAGNOSTICS` and
+  `ERUI_VECTOR_STORE_WARN`. A target that must not link `<stdio.h>` can now say so once: `0` drops
+  every warning, `1` keeps the ones invisible on a real panel, `2` is everything. Defaults are
+  unchanged.
+
+- Constants that two places must agree on now live in one place: the shared engine pool sizes, the
+  degrees/radians conversion the bridge and the engine apply in opposite directions, the CRC-32 the
+  container and the hot-reload frame share, the spring timestep the two animation systems integrate
+  at, and the bridge's vector staging caps — which now derive from the engine's and `_Static_assert`
+  the ordering. Also named the unexplained tuning values around them (arc bbox sampling, keyboard row
+  height, stroke tessellation, elevation shadows).
+
 - Flow A now renders and paints a frame **once**, however many callbacks changed state in it. Timers,
   promise continuations and native events each used to run their own render and engine commit, so N
   animations on a frame cost N of both; they now share one. Measured on an ESP32-S3, each additional
@@ -38,6 +56,17 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- Paint order and hit order can no longer drift apart: the compositor and hit-testing had
+  byte-identical copies of the child-collection and z-order sort that define the relationship, and
+  now share one. Same for the "can this node capture a transform" rule, spelled out by hand at seven
+  sites, and the shadow/gradient prop copy — whose duplicated half of the multi-worker safety counter
+  meant a fix to one branch either left parallel rendering off for good or raced on a modal's shadow.
+
+- The four LCD backends disagreed about whether their dirty box was inclusive or exclusive while
+  using identical function and field names, so lifting a flush loop from one into another left a
+  one-pixel column of stale panel content. They are all exclusive now, matching `ERRect`, with the
+  convention in the field names.
 
 - The frame split no longer counts the same commit twice. React commits from inside the pump, so that
   `er_commit()` landed in the JS phase *and* in layout+raster — the four phases claimed more time than

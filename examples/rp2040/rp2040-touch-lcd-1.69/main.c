@@ -38,6 +38,19 @@
 
 #include <stdio.h>
 
+/* Stringify for the screen-size assert below (two levels so the macro's VALUE is what lands in the text). */
+#define ER_STR2(x) #x
+#define ER_STR(x) ER_STR2(x)
+
+/* The generated app is shared: bridges/quickjs/js/dist/app.gen.c is one file that every board example
+ * links, and a responsive demo folds its layout to the screen size at GENERATE time. Building this board
+ * against an app.gen.c generated for another one otherwise compiles, links, boots — and lays out wrong.
+ * app.gen.h records what it was generated for, so the mismatch is a compile error instead. */
+_Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LCD_HEIGHT,
+               "dist/app.gen.c was generated for a different screen than this board's panel. Regenerate it: "
+               "cd bridges/quickjs/js && ER_AOT_SCREEN_W=" ER_STR(BOARD_LCD_WIDTH) " ER_AOT_SCREEN_H=" ER_STR(
+                   BOARD_LCD_HEIGHT) " npm run aot -- watch-face");
+
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
 #define ER_TARGET_FRAME_MS 16U

@@ -17,6 +17,7 @@
 #include "arc.h"
 #include "arc_widget.h"
 #include "er_damage_internal.h"
+#include "er_limits.h"
 #include "er_node_internal.h"
 #include "er_perf.h"
 #include "gradient.h"
@@ -35,16 +36,29 @@
 #include <stddef.h>
 #include <string.h>
 
-#ifndef ERUI_MAX_NODES
-#define ERUI_MAX_NODES 512
-#endif
-
 /* Occlusion culling: skip layers that a fully opaque node painted on top of them completely covers.
  * On by default (the engine CMake plumbs the option through); the fallback keeps consumers that
  * compile the sources directly — the ESP-IDF / Pico components — from having to know about it. */
 #ifndef ERUI_OCCLUSION_CULLING
 #define ERUI_OCCLUSION_CULLING 1
 #endif
+
+/**
+ * @brief Text-input cursor blink period in milliseconds; the cursor shows for the first half of each.
+ *
+ * The half is derived, not written down twice, because the two uses are far apart and must agree
+ * exactly: er_commit dirties the focused input when the phase FLIPS, and the render pass decides
+ * whether to draw the caret. If they ever disagreed the caret would change state on frames nothing
+ * repainted (or repaint on frames it did not change) — which surfaces as flicker, not as a blink
+ * with the wrong timing.
+ */
+#define ER_CURSOR_BLINK_MS 1000U
+
+/** @brief Whether the text cursor is in the visible half of its blink cycle at @p now_ms. */
+static inline bool cursor_blink_on(uint32_t now_ms)
+{
+    return (now_ms % ER_CURSOR_BLINK_MS) < (ER_CURSOR_BLINK_MS / 2U);
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -158,16 +172,8 @@ static void init_layout_defaults(ERLayoutSpec* L)
     L->left_pct = L->top_pct = L->right_pct = L->bottom_pct = 0.0f;
 }
 
-/**
- * @brief Collects child tags into an array in append order.
- *
- * @param[in] parent    Parent node whose children should be collected.
- * @param[out] tags     Output child tag buffer.
- * @param[in] max_tags  Capacity of tags.
- *
- * @return Number of child tags written.
- */
-static int collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
+/* Documented in er_node_internal.h — hit_test.c walks the same ordering the render pass paints. */
+int er_collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
 {
     int count = 0;
     uint16_t child_tag = parent->first_child_tag;
@@ -185,13 +191,7 @@ static int collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
     return count;
 }
 
-/**
- * @brief Sorts child tags by zIndex while preserving append order for equal zIndex.
- *
- * @param[in,out] tags   Child tag array to sort.
- * @param[in] count      Number of tags in the array.
- */
-static void sort_children_by_z_index(uint16_t* tags, int count)
+void er_sort_children_by_z_index(uint16_t* tags, int count)
 {
     for (int i = 1; i < count; i++)
     {
@@ -278,7 +278,7 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
     for (int i = 0; i < ACTIND_DOT_COUNT; i++)
     {
         const float angle_deg = angle_offset_deg + (float)i * (360.0f / ACTIND_DOT_COUNT);
-        const float angle_rad = angle_deg * (float)(3.14159265358979323846 / 180.0);
+        const float angle_rad = angle_deg * ER_DEG2RAD;
         const int dot_cx = cx + (int)((float)ring_r * cosf(angle_rad) + 0.5f);
         const int dot_cy = cy + (int)((float)ring_r * sinf(angle_rad) + 0.5f);
         const int dot_px = dot_cx - dot_size / 2;
@@ -394,15 +394,6 @@ static void union_dirty_rect(int x, int y, int w, int h)
     cc()->dirty_rect.h = (ny2 > y2 ? ny2 : y2) - cc()->dirty_rect.y;
 }
 
-/**
- * @brief Marks a node and all ancestors dirty so stale child pixels are repainted.
- *
- * The renderer currently paints into a persistent framebuffer. If a child changes
- * shape or text, the parent background must be redrawn before the child is painted
- * again, otherwise old pixels can remain visible.
- *
- * @param[in,out] node  Node whose ancestor chain should be invalidated.
- */
 void er_force_full_repaint(void)
 {
     s_force_full_repaint = true;
@@ -711,8 +702,7 @@ static ERNode* capturing_transform_ancestor(const ERNode* n)
     ERNode* cap = NULL;
     for (ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
     {
-        if (!a->has_transform || a->type == ER_NODE_ACTIVITY_INDICATOR || er_transform_is_translate_only(a)
-            || !er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+        if (!er_node_can_capture_transform(a))
             continue;
         /* The same pre-transform origin render_tree hands the matrix: layout position minus ancestor
          * scroll and the keyboard shift. Only the 3D homography's pivot actually depends on it, but
@@ -758,8 +748,7 @@ static bool capture_candidate_above(const ERNode* n)
 {
     for (const ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
     {
-        if (a->has_transform && a->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(a)
-            && er_transform_source_fits((int)a->animated.w, (int)a->animated.h))
+        if (er_node_can_capture_transform(a))
             return true;
     }
     return false;
@@ -1025,9 +1014,9 @@ static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
  * whose painted bounding box this fast path can't reproduce — the caller then repaints in full.
  *
  * The ActivityIndicator is the one node that answers here whatever its transform props say, because it
- * is the one node render_tree never captures: `can_capture` is false for it, so its transform block
- * always falls through to the translate fast path and it paints untransformed at box+translate, which
- * is exactly what this helper measures. Its tp_rotate_z is an internal spin angle that
+ * is the one node render_tree never captures: er_node_has_complex_transform() excludes it, so its
+ * transform block always falls through to the translate fast path and it paints untransformed at
+ * box+translate, which is exactly what this helper measures. Its tp_rotate_z is an internal spin angle that
  * render_activity_indicator() bakes into the ring of dots, not an affine render — so it is non-zero on
  * every commit of a spinning indicator, and without this exception a spinner that also carries a real
  * transform (a translate is enough) reads as a non-translate transform, is refused by both rect helpers,
@@ -1041,7 +1030,7 @@ static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
 static bool node_screen_rect(const ERNode* n, int* rx, int* ry, int* rw, int* rh)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (n->has_transform && !er_transform_is_translate_only(n) && n->type != ER_NODE_ACTIVITY_INDICATOR)
+    if (er_node_has_complex_transform(n))
         return false;
 #endif
     int sx, sy;
@@ -1209,7 +1198,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
      * does not paint. It is node_screen_rect()'s node — it paints untransformed at box+translate — so
      * in practice the pre-pass has already bounded it and never reaches here; this keeps the helper's
      * contract true for any other caller. */
-    if (!n->has_transform || er_transform_is_translate_only(n) || n->type == ER_NODE_ACTIVITY_INDICATOR)
+    if (!er_node_has_complex_transform(n))
         return false;
 
     /* One walk, shared by both helpers below. */
@@ -1578,7 +1567,10 @@ static void fade_cache_invalidate(void)
 }
 
 #if ER_PROF
-/* TEMP on-device profiling: phase accumulators printed every 30 commits (host provides the clock). */
+/* TEMP on-device profiling: phase accumulators printed every ER_PROF_INTERVAL commits (host provides
+ * the clock). The interval is named because the line it prints states it — a literal in both the
+ * condition and the format string is one edit away from a log that lies about its own window. */
+#define ER_PROF_INTERVAL 30U
 #include <stdio.h>
 extern uint32_t er_prof_now_us(void);
 static uint32_t s_prof_content_us = 0; /* subtree render time inside composites */
@@ -2108,21 +2100,20 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     float xf_inv_H[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 #endif
 
-    /* ActivityIndicator uses tp_rotate_z as its internal spin angle — keep it off the capture path,
-     * which would rasterize the whole node into a scratch buffer and distort the spin. Only the
-     * CAPTURE is skipped: a translate still moves it, the way node_screen_rect() and hit-testing both
-     * already place it. Gating the whole block on the type dropped the offset instead, so a translated
-     * spinner painted at its raw box while the pre-pass measured it at the offset one — the two never
-     * agreed, `moved` latched, and it re-damaged itself on every commit for as long as it existed. */
+    /* Only the CAPTURE is skipped for the nodes er_node_has_complex_transform() excludes: a translate
+     * still moves them, the way node_screen_rect() and hit-testing both already place them. Gating the
+     * whole block on the type dropped the offset instead, so a translated spinner painted at its raw box
+     * while the pre-pass measured it at the offset one — the two never agreed, `moved` latched, and it
+     * re-damaged itself on every commit for as long as it existed. */
 #if ERUI_TRANSFORMS_FULL
-    const bool can_capture = n->type != ER_NODE_ACTIVITY_INDICATOR;
+    const bool complex_xf = er_node_has_complex_transform(n);
 #endif
     /* An occluded node never captures a transform source: the scratch render would be thrown away,
      * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
     if (n->has_transform && !occluded)
     {
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
-        if (can_capture && er_transform_is_3d(n))
+        if (complex_xf && er_transform_is_3d(n))
         {
             /* 3D perspective path: compute homography, render into scratch, back-project blit. */
             float H[9];
@@ -2147,7 +2138,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         else
 #endif
 #if ERUI_TRANSFORMS_FULL
-            if (can_capture && !er_transform_is_translate_only(n))
+            if (complex_xf)
         {
             /* Full affine: render into scratch, then inverse-map blit. */
             float a, b, c, d, ftx, fty;
@@ -2401,8 +2392,8 @@ static void render_node_content(
     const int child_ty = is_scroller ? translate_y + (int)n->scroll_offset_y : translate_y;
 
     uint16_t child_tags[ERUI_MAX_NODES];
-    const int child_count = collect_children(n, child_tags, ERUI_MAX_NODES);
-    sort_children_by_z_index(child_tags, child_count);
+    const int child_count = er_collect_children(n, child_tags, ERUI_MAX_NODES);
+    er_sort_children_by_z_index(child_tags, child_count);
 
     /* --- Occlusion cull -------------------------------------------------------------------------
      * Painting is bottom-up, so everything inside the repaint region is drawn even where a later,
@@ -2661,7 +2652,7 @@ static void render_node_content(
                 er_text_render(&par);
 
                 /* Blinking cursor when focused and not showing placeholder. */
-                if (n->is_focused && !show_ph && (s_now_ms % 1000U < 500U))
+                if (n->is_focused && !show_ph && cursor_blink_on(s_now_ms))
                 {
                     int text_w = 0, text_h = 0;
                     er_text_measure(
@@ -2673,7 +2664,7 @@ static void render_node_content(
                     const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
                     er_rrect_fill_bordered(cc, 0x00000000U, 0, cursor_x, py + pad_t, 2, tin_h, 0);
                 }
-                else if (n->is_focused && show_ph && (s_now_ms % 1000U < 500U))
+                else if (n->is_focused && show_ph && cursor_blink_on(s_now_ms))
                 {
                     /* Cursor at start when field is empty. */
                     const uint32_t cc = tip->cursor_color ? tip->cursor_color : (tip->color ? tip->color : 0xFFFFFFFFU);
@@ -3104,6 +3095,43 @@ void er_props_default(ERProps* props)
     props->shadow_color = 0xFF000000U; /* Opaque black shadow unless overridden. */
 }
 
+/**
+ * @brief Copies the shadow and gradient props into a node's view props, keeping the parallel-render count true.
+ *
+ * Every node type that stores ERViewProps goes through here — the View family and Modal — because the two
+ * halves are not independent. s_parallel_unsafe counts shadow CASTERS as a running transition tally, so a
+ * branch that copied the shadow props without it either leaks a count (multi-worker rendering stays off for
+ * good) or under-counts one (a shadow-casting modal renders racily in parallel). Sharing the block also means
+ * a gradient prop added here reaches <Modal> instead of quietly applying only to <View>.
+ *
+ * @param[in,out] node   Node whose view props receive the values.
+ * @param[in]     props  Incoming props.
+ */
+static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
+{
+    node->props.view.shadow_color = props->shadow_color;
+    node->props.view.shadow_offset_x = props->shadow_offset_x;
+    node->props.view.shadow_offset_y = props->shadow_offset_y;
+#if ERUI_SHADOWS
+    {
+        const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
+        if (casts != node->casts_shadow)
+        {
+            s_parallel_unsafe += casts ? 1 : -1;
+            node->casts_shadow = casts;
+        }
+    }
+#endif
+    node->props.view.shadow_opacity = props->shadow_opacity;
+    node->props.view.shadow_radius = props->shadow_radius;
+    node->props.view.elevation = props->elevation;
+    node->props.view.gradient_type = props->gradient_type;
+    node->props.view.gradient_angle = props->gradient_angle;
+    node->props.view.gradient_stop_count = props->gradient_stop_count;
+    for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
+        node->props.view.gradient_stops[gi] = props->gradient_stops[gi];
+}
+
 void er_node_set_props(ERNode* node, const ERProps* props)
 {
     if (!node || !props)
@@ -3244,28 +3272,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.border_bottom_color = props->border_bottom_color;
             node->props.view.border_style = props->border_style;
             node->props.view.opacity = props->opacity;
-            node->props.view.shadow_color = props->shadow_color;
-            node->props.view.shadow_offset_x = props->shadow_offset_x;
-            node->props.view.shadow_offset_y = props->shadow_offset_y;
-#if ERUI_SHADOWS
-            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
-            {
-                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
-                if (casts != node->casts_shadow)
-                {
-                    s_parallel_unsafe += casts ? 1 : -1;
-                    node->casts_shadow = casts;
-                }
-            }
-#endif
-            node->props.view.shadow_opacity = props->shadow_opacity;
-            node->props.view.shadow_radius = props->shadow_radius;
-            node->props.view.elevation = props->elevation;
-            node->props.view.gradient_type = props->gradient_type;
-            node->props.view.gradient_angle = props->gradient_angle;
-            node->props.view.gradient_stop_count = props->gradient_stop_count;
-            for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
-                node->props.view.gradient_stops[gi] = props->gradient_stops[gi];
+            copy_view_shadow_and_gradient(node, props);
             break;
         case ER_NODE_TEXT:
             strncpy(node->props.text.text, props->text, ER_TEXT_MAX);
@@ -3438,28 +3445,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->modal_backdrop_color = props->backdrop_color;
             /* Propagate visibility to the layout so the modal takes no space when hidden. */
             node->layout.display = props->modal_visible ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE;
-            node->props.view.shadow_color = props->shadow_color;
-            node->props.view.shadow_offset_x = props->shadow_offset_x;
-            node->props.view.shadow_offset_y = props->shadow_offset_y;
-#if ERUI_SHADOWS
-            /* Track shadow-casting transitions for the multi-core safety count (see s_parallel_unsafe). */
-            {
-                const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
-                if (casts != node->casts_shadow)
-                {
-                    s_parallel_unsafe += casts ? 1 : -1;
-                    node->casts_shadow = casts;
-                }
-            }
-#endif
-            node->props.view.shadow_opacity = props->shadow_opacity;
-            node->props.view.shadow_radius = props->shadow_radius;
-            node->props.view.elevation = props->elevation;
-            node->props.view.gradient_type = props->gradient_type;
-            node->props.view.gradient_angle = props->gradient_angle;
-            node->props.view.gradient_stop_count = props->gradient_stop_count;
-            for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)
-                node->props.view.gradient_stops[gi] = props->gradient_stops[gi];
+            copy_view_shadow_and_gradient(node, props);
             break;
         default:
             break;
@@ -3684,6 +3670,20 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
  * anchor is folded in only when the arc's start actually moves.
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/**
+ * @brief Samples along an arc at this angular step (radians) to bound it — a full turn in
+ *        VEC_BBOX_ARC_STEPS samples.
+ *
+ * Sets how tight the damage around an animated arc is: too coarse and the bbox cuts inside the curve,
+ * leaving under-damaged pixels behind a moving needle. 32 samples per turn keeps the chord sag under a
+ * pixel for the radii a panel this size can hold.
+ */
+#define VEC_BBOX_ARC_STEPS 32
+#define VEC_BBOX_ARC_STEP (2.0f * ER_PI / (float)VEC_BBOX_ARC_STEPS)
+
+/** @brief Hard cap on samples for one arc, so a many-turn sweep cannot walk the bbox forever. */
+#define VEC_BBOX_ARC_MAX_SAMPLES 64
+
 /** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
 static void
 vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
@@ -3691,9 +3691,9 @@ vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float
     float span = a1 - a0;
     if (span < 0.0f)
         span = -span;
-    int n = (int)(span / 0.196f) + 1; /* ~ one sample per 11.25 deg */
-    if (n > 64)
-        n = 64;
+    int n = (int)(span / VEC_BBOX_ARC_STEP) + 1;
+    if (n > VEC_BBOX_ARC_MAX_SAMPLES)
+        n = VEC_BBOX_ARC_MAX_SAMPLES;
     for (int k = 0; k <= n; k++)
     {
         const float a = a0 + (a1 - a0) * (float)k / (float)n;
@@ -4201,16 +4201,26 @@ static int er_kbd_rows(void)
     return m ? m : 1;
 }
 
-/** @brief Per-row height: configured, else ≈1/11 of screen height; clamped so the strip stays ≤ half-screen. */
+/* Keyboard row sizing, in the order the clamps apply. The default divisor leaves a four-row keyboard a
+ * little over a third of the screen, which is roughly where a phone keyboard sits. The floor is a
+ * fingertip: below it the keys stop being reliably hittable on the small panels this runs on, and it
+ * wins over the divisor on a short screen. The ceiling then wins over both — a keyboard past half the
+ * screen leaves nothing to type into. */
+#define ER_KBD_ROW_H_DIVISOR 11
+#define ER_KBD_ROW_H_MIN 24
+#define ER_KBD_MAX_SCREEN_FRACTION 2 /* strip height <= screen_h / this */
+
+/** @brief Per-row height: configured, else a fraction of the screen; floored for touch, capped for room. */
 static int er_kbd_row_h(int screen_h)
 {
     const ERKeyboardConfig* c = er_kbd_cfg();
-    int rh = c->row_height_px ? (int)c->row_height_px : (screen_h / 11);
-    if (rh < 24)
-        rh = 24;
+    int rh = c->row_height_px ? (int)c->row_height_px : (screen_h / ER_KBD_ROW_H_DIVISOR);
+    if (rh < ER_KBD_ROW_H_MIN)
+        rh = ER_KBD_ROW_H_MIN;
     const int rows = er_kbd_rows();
-    if (rh * rows > screen_h / 2)
-        rh = (screen_h / 2) / rows;
+    const int max_strip = screen_h / ER_KBD_MAX_SCREEN_FRACTION;
+    if (rh * rows > max_strip)
+        rh = max_strip / rows;
     return rh;
 }
 
@@ -4660,15 +4670,15 @@ void er_commit(void)
         s_comp_ctx[i].xf_capturing = false;
     }
 
-    /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the
-     * 500 ms blink phase has changed since the last commit. This keeps the render
-     * cost negligible (one re-render every half-second) instead of every frame. */
+    /* Blinking cursor: if there is a focused TextInput, mark it dirty whenever the blink phase has
+     * changed since the last commit. This keeps the render cost negligible (one re-render per half
+     * period) instead of every frame. */
     if (s_focused_input_tag != ER_INVALID_TAG)
     {
         ERNode* focus = er_get_node(s_focused_input_tag);
         if (focus && focus->type == ER_NODE_TEXT_INPUT && focus->is_focused)
         {
-            const uint8_t cursor_phase = (s_now_ms % 1000U < 500U) ? 1U : 0U;
+            const uint8_t cursor_phase = cursor_blink_on(s_now_ms) ? 1U : 0U;
             if (cursor_phase != s_last_cursor_phase)
             {
                 er_mark_dirty_upward(focus);
@@ -5447,14 +5457,15 @@ void er_commit(void)
 #if ER_PROF
     {
         static uint32_t s_prof_commits = 0;
-        if (++s_prof_commits >= 30U)
+        if (++s_prof_commits >= ER_PROF_INTERVAL)
         {
-            printf("ERPROF: passes=%u composites=%u push_us=%u content_us=%u blend_us=%u (per 30 commits)\n",
+            printf("ERPROF: passes=%u composites=%u push_us=%u content_us=%u blend_us=%u (per %u commits)\n",
                    (unsigned)s_prof_passes,
                    (unsigned)s_prof_composites,
                    (unsigned)s_prof_push_us,
                    (unsigned)s_prof_content_us,
-                   (unsigned)s_prof_blend_us);
+                   (unsigned)s_prof_blend_us,
+                   (unsigned)ER_PROF_INTERVAL);
             s_prof_commits = 0;
             s_prof_passes = s_prof_composites = 0;
             s_prof_push_us = s_prof_content_us = s_prof_blend_us = 0;

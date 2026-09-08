@@ -6223,6 +6223,19 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
 #ifndef ER_APP_GEN_H
 #define ER_APP_GEN_H
 
+/*
+ * What this file was generated FOR. er_app_build() takes the screen size at runtime, but a responsive app
+ * folds its \`screen.width\`/\`screen.height\` branching at GENERATE time — so the layout in here is already
+ * committed to these dimensions and no runtime argument can change it.
+ *
+ * Every board example consumes the same dist/app.gen.c, so generating for one board and then building
+ * another produces firmware that compiles, links, boots, and lays out wrong. Boards \`_Static_assert\` these
+ * against their own panel size to turn that into a compile error; see each board example's main.c.
+ */
+#define ER_AOT_SCREEN_W ${SCREEN_W}
+#define ER_AOT_SCREEN_H ${SCREEN_H}
+#define ER_AOT_DEMO "${demo}"
+
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
 

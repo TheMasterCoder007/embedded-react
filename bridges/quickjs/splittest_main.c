@@ -30,6 +30,7 @@
 
 #include "er_hotreload.h"
 #include "er_runtime.h"
+#include "host_harness.h"
 #include "native_renderer.h"
 #include "quickjs.h"
 
@@ -41,69 +42,10 @@
 #define ST_SCREEN_W 480
 #define ST_SCREEN_H 320
 
-/** @brief No-op render backend — the engine's paint path runs without a window. */
-static void noop_fill(uint32_t a, int x, int y, int w, int h, void* c)
-{
-    (void)a;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)c;
-}
-static void noop_copy(const void* s, int st, int x, int y, int w, int h, void* c)
-{
-    (void)s;
-    (void)st;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)c;
-}
-static void noop_blend(const void* s, int st, uint8_t a, int x, int y, int w, int h, void* c)
-{
-    (void)s;
-    (void)st;
-    (void)a;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)c;
-}
-
 /** @brief Runtime log sink → stdout (one line per call). */
 static void log_line(const char* line)
 {
     printf("%s\n", line);
-}
-
-/** @brief Reads a whole file into a malloc'd buffer. @param path p. @param out_len receives length. */
-static uint8_t* read_file(const char* path, size_t* out_len)
-{
-    FILE* f = fopen(path, "rb");
-    if (!f)
-    {
-        return NULL;
-    }
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    uint8_t* buf = (uint8_t*)malloc((size_t)n);
-    if (!buf)
-    {
-        fclose(f);
-        return NULL;
-    }
-    *out_len = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    return buf;
 }
 
 /** @brief Reads globalThis.__probe.{build,n}. @return 0 on success, -1 if __probe is missing. */
@@ -142,15 +84,15 @@ int main(int argc, char** argv)
     }
 
     size_t boot_len = 0, frame_len = 0;
-    uint8_t* boot = read_file(argv[1], &boot_len);
-    uint8_t* frame = read_file(argv[2], &frame_len);
+    uint8_t* boot = er_host_read_file(argv[1], &boot_len);
+    uint8_t* frame = er_host_read_file(argv[2], &frame_len);
     if (!boot || !frame)
     {
         fprintf(stderr, "could not read container(s)\n");
         return 2;
     }
 
-    static const EmbeddedRenderBackend backend = {noop_fill, noop_copy, noop_blend, NULL, NULL, NULL};
+    static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
 
     ErRuntimeConfig cfg = {0};

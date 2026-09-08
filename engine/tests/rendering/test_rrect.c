@@ -673,6 +673,39 @@ int main(void)
         if (aa_alpha < 200 || aa_alpha > 254)
             return fail("AA edge pixel alpha outside expected range [200, 254]");
     }
+
+    /* --- the fringe is a RAMP, and it ends --- */
+    /*                                                                          */
+    /* The check above only ever reads the first fringe pixel, so it holds even  */
+    /* if the walk stops after one step. Pin the whole ramp instead.             */
+    /*                                                                          */
+    /* 60x60 at r=20, row y=0: dy=r, so dx=0 and the solid span is [20,40).      */
+    /* The fringe runs six pixels outward on each side with strictly falling     */
+    /* coverage (0.994 .. 0.239), and the seventh sample goes negative — so      */
+    /* x=13 and x=46 must stay untouched.                                        */
+    reset(&tc);
+    er_rrect_fill(0xFF000000, 0, 0, 60, 60, 20);
+    {
+        uint8_t prev = 255U;
+        for (int k = 0; k < 6; k++)
+        {
+            const uint8_t la = (uint8_t)(px(&tc, 19 - k, 0) >> 24);
+            const uint8_t ra = (uint8_t)(px(&tc, 40 + k, 0) >> 24);
+            if (la == 0U)
+                return fail("AA fringe: the ramp stopped short on the left of the arc");
+            if (ra == 0U)
+                return fail("AA fringe: the ramp stopped short on the right of the arc");
+            if (la != ra)
+                return fail("AA fringe: the two sides of the arc are not mirrored");
+            if (la >= prev)
+                return fail("AA fringe: coverage did not fall as the walk stepped outward");
+            prev = la;
+        }
+        if (px(&tc, 13, 0) != 0U || px(&tc, 46, 0) != 0U)
+            return fail("AA fringe: the walk painted past the end of the arc");
+        if (tc.out_of_bounds != 0)
+            return fail("AA fringe: produced out-of-bounds fills");
+    }
 #endif
 
     return EXIT_SUCCESS;

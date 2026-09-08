@@ -39,6 +39,7 @@
  * which restores line numbers in stack traces (useful when a .qbc is being debugged on the desktop host).
  */
 
+#include "host_harness.h"
 #include "quickjs.h"
 
 #include <stdint.h>
@@ -49,42 +50,6 @@
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/**
- * @brief Reads an entire file into a newly allocated, null-terminated buffer.
- *
- * @param[in]  path     Filesystem path to read.
- * @param[out] out_len  Receives the byte length (excluding the appended terminator).
- *
- * @return Heap buffer the caller must free(), or NULL if the file could not be read.
- */
-static char* read_file(const char* path, size_t* out_len)
-{
-    FILE* f = fopen(path, "rb");
-    if (!f)
-    {
-        return NULL;
-    }
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0)
-    {
-        fclose(f);
-        return NULL;
-    }
-    char* buf = (char*)malloc((size_t)n + 1);
-    if (!buf)
-    {
-        fclose(f);
-        return NULL;
-    }
-    const size_t rd = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    buf[rd] = '\0';
-    *out_len = rd;
-    return buf;
-}
 
 /**
  * @brief Writes bytecode as a raw binary blob.
@@ -201,7 +166,7 @@ int main(int argc, char** argv)
     const char* array_name = (argc - arg >= 3) ? argv[arg + 2] : NULL;
 
     size_t src_len = 0;
-    char* src = read_file(in_path, &src_len);
+    char* src = er_host_read_file(in_path, &src_len);
     if (!src)
     {
         fprintf(stderr, "could not read '%s'\n", in_path);

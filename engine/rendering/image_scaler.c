@@ -15,18 +15,11 @@
  */
 
 #include "image_scaler.h"
+#include "er_limits.h"
 #include "image_registry.h"
 #include "renderer_internal.h"
 #include <math.h>
 #include <stddef.h>
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Constants
- ---------------------------------------------------------------------------------------------------------------------*/
-
-#ifndef ERUI_MAX_IMG_ROW_PIXELS
-#define ERUI_MAX_IMG_ROW_PIXELS 800
-#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
