@@ -20,7 +20,7 @@
 // test recorded any failures (globalThis.__runtime_failed) or threw.
 import {build} from 'esbuild';
 import {execFileSync} from 'node:child_process';
-import {readdirSync, existsSync, mkdirSync} from 'node:fs';
+import {readdirSync, existsSync, mkdirSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 
@@ -89,11 +89,20 @@ for (const test of tests) {
     execFileSync(compileExe, [bundle, runArg]);
   }
 
+  // The harness runs the device's lite intrinsic profile so a bundle that needs a stripped intrinsic
+  // fails here rather than on hardware. A test that is specifically about an opt-in intrinsic asks for
+  // it with a marker comment, and only that test gets it.
+  const flags = readFileSync(path.join(here, test), 'utf8').includes(
+    '@runtime-intrinsics: typed-arrays',
+  )
+    ? ['--typed-arrays']
+    : [];
+
   process.stdout.write(
     `\n=== ${test}${bytecodeMode ? ' [bytecode]' : ''} ===\n`,
   );
   try {
-    const out = execFileSync(exe, [runArg], {encoding: 'utf8'});
+    const out = execFileSync(exe, [...flags, runArg], {encoding: 'utf8'});
     process.stdout.write(out);
   } catch (e) {
     if (e.stdout) process.stdout.write(e.stdout);

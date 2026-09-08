@@ -42,6 +42,20 @@ extern "C"
     void er_bridge_install(JSContext* ctx);
 
     /**
+     * @brief Drops the bridge state cached against the current JSRuntime.
+     *
+     * The bridge interns prop names and remembers the last string it parsed for each enum/color prop,
+     * all scoped to one JSRuntime, and it recognises "still the same runtime" by pointer. A fresh
+     * JSRuntime very often lands on a freed one's address, so without this a new runtime would inherit
+     * the dead one's cache — and unref its strings. Call it before freeing the JSRuntime the bridge was
+     * installed on. er_runtime_shutdown() already does; only a host driving QuickJS itself needs to.
+     *
+     * Not needed between contexts on the SAME runtime (er_runtime_reset / hot reload) — the cached
+     * strings stay valid, and keeping them is what makes a reload cheap.
+     */
+    void er_bridge_release_runtime(void);
+
+    /**
      * @brief Services the JS event loop for one host frame.
      *
      * Drains the QuickJS job queue (Promise reactions / microtasks) and fires any

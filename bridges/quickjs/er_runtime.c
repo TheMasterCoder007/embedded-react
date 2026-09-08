@@ -957,6 +957,9 @@ void er_runtime_shutdown(void)
     }
     if (s_rt)
     {
+        /* Before the runtime goes: the bridge caches state against it, and the next JSRuntime can be
+         * handed the same address (see er_bridge_release_runtime). */
+        er_bridge_release_runtime();
         JS_FreeRuntime(s_rt);
         s_rt = NULL;
     }
