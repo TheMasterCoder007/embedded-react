@@ -683,6 +683,23 @@ static void run_app(void)
         s_tr_present += (uint32_t)(t_present_us - t_commit_us);
         s_tr_n++;
 
+#if ER_PERF_DETAIL
+        /* The JS split over the wire, so a drag can be read without a camera on the panel. Averaged
+           over the frames React actually re-rendered on — every frame runs the pump, so folding the
+           idle ones in would divide an interaction's cost by however long the window was quiet. */
+        static uint32_t s_js_sum[ER_PERF_JS_COUNT] = {0};
+        static uint32_t s_js_n = 0;
+        ERPerfFrame pf;
+        if (er_perf_get_last(&pf) && (pf.js_us[ER_PERF_JS_RECONCILE] + pf.js_us[ER_PERF_JS_MARSHAL]) > 0U)
+        {
+            for (int i = 0; i < (int)ER_PERF_JS_COUNT; i++)
+            {
+                s_js_sum[i] += pf.js_us[i];
+            }
+            s_js_n++;
+        }
+#endif
+
         if ((++frame % 30U) == 0U)
         {
             if (s_display_report)
@@ -715,6 +732,27 @@ static void run_app(void)
                      (int)er_esp32_lcd_pie_enabled(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
             s_tr_pump = s_tr_commit = s_tr_present = s_tr_n = 0;
+#if ER_PERF_DETAIL
+            if (s_js_n)
+            {
+                ERPerfFrame pk;
+                er_perf_get_worst(&pk);
+                ESP_LOGI(
+                    TAG,
+                    "JSS avg over %u render frames (of 30): D=%u R=%u M=%u C=%u us | peak frame: D=%u R=%u M=%u C=%u",
+                    (unsigned)s_js_n,
+                    (unsigned)(s_js_sum[ER_PERF_JS_DISPATCH] / s_js_n),
+                    (unsigned)(s_js_sum[ER_PERF_JS_RECONCILE] / s_js_n),
+                    (unsigned)(s_js_sum[ER_PERF_JS_MARSHAL] / s_js_n),
+                    (unsigned)(s_js_sum[ER_PERF_JS_COMMIT] / s_js_n),
+                    (unsigned)pk.js_us[ER_PERF_JS_DISPATCH],
+                    (unsigned)pk.js_us[ER_PERF_JS_RECONCILE],
+                    (unsigned)pk.js_us[ER_PERF_JS_MARSHAL],
+                    (unsigned)pk.js_us[ER_PERF_JS_COMMIT]);
+                memset(s_js_sum, 0, sizeof(s_js_sum));
+                s_js_n = 0;
+            }
+#endif
         }
 
         /* Adaptive pacing: sleep only the remainder up to ER_TARGET_FRAME_MS so heavy frames are not

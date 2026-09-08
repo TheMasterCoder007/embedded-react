@@ -33,7 +33,30 @@ const LegacyRoot = 0;
 // bridge runs the frame pump — and each native event — inside this wrapper, which puts everything a
 // frame does in one batch and leaves it as one render and one commit. Installed here rather than at
 // createRoot() so the reconciler that batches is the one that renders.
-NativeUI.setBatcher?.((fn, a, b) => reconciler.batchedUpdates(() => fn(a, b)));
+// On an instrumented build the batcher is also where the JS phase's split gets drawn (er_perf.h):
+// `fn(a, b)` is the callback, and whatever batchedUpdates does around it is React's render. That
+// boundary is only visible from here — React flushes when it decides to, not reliably at the batch
+// call the C side can see — so marking it in C measured the call overhead and left reconcile at ~0.
+// The instrumented wrapper is chosen ONCE, here, so an ordinary build runs the plain one.
+NativeUI.setBatcher?.(
+  NativeUI.perfRenderBegin
+    ? (fn, a, b) => {
+        NativeUI.perfRenderBegin();
+        try {
+          return reconciler.batchedUpdates(() => {
+            NativeUI.perfCallbackBegin();
+            try {
+              return fn(a, b);
+            } finally {
+              NativeUI.perfCallbackEnd();
+            }
+          });
+        } finally {
+          NativeUI.perfRenderEnd();
+        }
+      }
+    : (fn, a, b) => reconciler.batchedUpdates(() => fn(a, b)),
+);
 
 /**
  * Creates a root bound to a screen-sized container node.

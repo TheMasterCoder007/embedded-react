@@ -228,7 +228,7 @@ retained with its whole split** (`er_perf_get_worst`) until you `er_perf_reset()
 
 | Phase | Marked by | Covers |
 |---|---|---|
-| `ER_PERF_PHASE_JS` | host | JS pump + React's commit into the scene graph |
+| `ER_PERF_PHASE_JS` | host | JS pump + React's commit into the scene graph, net of any `er_commit()` the pump drove |
 | `ER_PERF_PHASE_LAYOUT` | engine | The flex solve + text measurement inside `er_commit()` |
 | `ER_PERF_PHASE_RASTER` | engine | The rest of `er_commit()` — damage pre-pass, composite, blits |
 | `ER_PERF_PHASE_PRESENT` | host | Backend flush / panel transfer |
@@ -254,6 +254,24 @@ The buckets are disjoint and sum to at most `phase_us[ER_PERF_PHASE_RASTER]`. Al
 `blit_px` counts the pixels actually handed to the backend (each call's post-clip `w*h`): read it
 against `dirty_px` for the frame's write amplification — overlapping layers, erase-then-repaint,
 and multi-buffer debt replay all push it above the damage area.
+
+JS gets the same treatment (`ERPerfFrame.js_us`, indexed by `ERPerfJsSub`), marked by the QuickJS
+bridge — "JS is 40 ms" doesn't say whether the cost is delivering the event, re-rendering, or
+shoveling the result into the engine:
+
+| Sub-step | Marked at | Covers |
+|---|---|---|
+| `ER_PERF_JS_DISPATCH` | the pump body | The coalesced touch flush and its hit test, due timers, drained microtasks, and the app handler bodies they run |
+| `ER_PERF_JS_RECONCILE` | the batched call | React's render pass — component functions, hooks, the prop diff. 0 without a batcher, where renders run inside the handler and land in DISPATCH |
+| `ER_PERF_JS_MARSHAL` | every NativeUI tree/prop/tape call | `createNode` / `setProps` / `setVectorOps` / `appendChild` — the bridge cost per changed node |
+| `ER_PERF_JS_COMMIT` | `NativeUI.commit()` | The `er_commit()` the reconciler asks for as the batch closes |
+
+The marks nest and the buckets hold **exclusive** time, so `DISPATCH + RECONCILE + MARSHAL` fit
+inside `phase_us[ER_PERF_PHASE_JS]` with no subtraction pass. `COMMIT` is the exception: its time is
+already reported by LAYOUT + RASTER, and `frame_end` takes it back out of the JS phase — without
+that the pump-driven commit is counted twice, the phases claim more than the frame lasted, and
+`other_us` sits pinned at 0. A host that pumps JS some other way (no bridge, or Flow B's
+ahead-of-time app) marks none of these and every bucket reads 0.
 
 The engine has no clock of its own, so timing is opt-in: hand it one with
 `er_perf_set_clock()` (without one the phase times read 0 and the counters still work).
@@ -286,6 +304,9 @@ RST P0.4 C7.2 B22.1 S0.9 W96k   last frame's raster split (pre-pass, composite, 
                        + backend pixels — the line to watch during a steady drag, where the
                        PK lines are stuck on the mount frame
 PKR P2 C11 B16 S1 W96k the WORST frame's raster split + backend pixels (pairs with PK)
+JSS D2.1 R7.4 M3.8 C9.0 last frame's JS split (dispatch, reconcile, marshal, the commit the
+                       pump drove) — whether a slow frame is React or the bridge
+PKJ D3 R40 M12 C31     the WORST frame's JS split (pairs with PK)
 ```
 
 The same `ERPerfFrame.dirty_*` data supports three region policies, and the overlay only has room

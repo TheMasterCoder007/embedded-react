@@ -367,10 +367,15 @@ export const hostConfig = {
   },
 
   // --- Commit lifecycle ---
+  // These two bracket React's mutation phase exactly, which is the only place the reconciler touches
+  // the bridge — so on an instrumented build they are what makes the marshaling bucket cover the JS
+  // glue (applyProps, style flattening) and not just the NativeUI calls it ends up making.
   prepareForCommit() {
+    NativeUI.perfMarshalBegin?.();
     return null;
   },
   resetAfterCommit() {
+    NativeUI.perfMarshalEnd?.();
     NativeUI.commit();
   },
 

@@ -39,6 +39,17 @@
  * raster phase reports its own split (ERPerfRasterSub, disjoint by construction) plus the pixel count
  * actually pushed through the backend — blit_px against dirty_px is the write-amplification ratio.
  *
+ * JS gets the same treatment, for the same reason: "JS is 40 ms" says nothing about whether the cost
+ * is delivering the event, re-rendering the component tree, pushing the resulting props into the
+ * engine, or the engine commit the reconciler asked for on the way out. The bridge marks its own
+ * split (ERPerfJsSub) as those four steps run.
+ *
+ * That last one also fixes an accounting bug: the reconciler commits from INSIDE the pump, so the
+ * er_commit() it drives used to be counted twice — once in the host's JS span and again in
+ * LAYOUT + RASTER, which pushed the phase total past the frame and left other_us pinned at 0.
+ * js_us[ER_PERF_JS_COMMIT] measures that nested commit and frame_end subtracts it back out of
+ * phase_us[ER_PERF_PHASE_JS], so JS means JS alone and the phases add up again.
+ *
  * Anything in the frame outside those four (input polling, animation tick, the host's own work) lands
  * in `other_us`, so the four phases plus `other_us` always account for the whole frame.
  *
@@ -75,6 +86,21 @@
 #endif
 
 /**
+ * @brief er_perf_js_begin/end that vanish when the instrumentation is compiled out.
+ *
+ * The JS sub-split is marked from the bridge's hot paths — every setProps, every appendChild — where
+ * even a call to a stub is worth avoiding on an MCU. Every other entry point here can be called
+ * unconditionally; these two get macros.
+ */
+#if ER_PERF_STATS
+#define ER_PERF_JS_BEGIN(sub) er_perf_js_begin(sub)
+#define ER_PERF_JS_END(sub) er_perf_js_end(sub)
+#else
+#define ER_PERF_JS_BEGIN(sub) ((void)0)
+#define ER_PERF_JS_END(sub) ((void)0)
+#endif
+
+/**
  * @brief Longest formatted overlay line, including the null terminator.
  *
  * Sized so no line can be truncated even at the widest values every field can hold (a 32-bit
@@ -85,7 +111,7 @@
 #define ER_PERF_LINE_MAX 64U
 
 /** @brief Number of lines er_perf_overlay_lines() can produce. */
-#define ER_PERF_OVERLAY_LINES 7
+#define ER_PERF_OVERLAY_LINES 9
 
 #ifdef __cplusplus
 extern "C"
@@ -100,7 +126,8 @@ extern "C"
      */
     typedef enum
     {
-        ER_PERF_PHASE_JS = 0,  /**< JS pump + React commit into the scene graph (host-marked). */
+        ER_PERF_PHASE_JS = 0,  /**< JS pump + React commit into the scene graph (host-marked), net of any
+                                    er_commit() the pump itself drove — see ER_PERF_JS_COMMIT. */
         ER_PERF_PHASE_LAYOUT,  /**< Flex solve + text measurement inside er_commit(). */
         ER_PERF_PHASE_RASTER,  /**< Damage pre-pass + composite + backend blits inside er_commit(). */
         ER_PERF_PHASE_PRESENT, /**< Backend flush / panel transfer (host-marked). */
@@ -137,6 +164,46 @@ extern "C"
     } ERPerfRasterSub;
 
     /**
+     * @brief The sub-steps the JS phase is split into (all marked by the QuickJS bridge).
+     *
+     * The buckets hold EXCLUSIVE time: the marks nest (marshalling happens inside the reconciler's
+     * mutation pass, which happens inside the batched render), and each begin/end charges the elapsed
+     * time to whichever bucket is innermost at that moment. So they never double-count, and the gap
+     * between their sum and phase_us[ER_PERF_PHASE_JS] is bridge glue nothing claimed — left as a gap
+     * rather than guessed at, exactly like the raster split.
+     *
+     * COMMIT is the odd one out: its time is NOT part of phase_us[ER_PERF_PHASE_JS] (frame_end
+     * subtracts it) and is already reported by LAYOUT + RASTER. It is here to answer "did the pump
+     * drive that commit, or did the host?" — the question the double-counted JS bucket used to hide.
+     *
+     * DISPATCH and RECONCILE are marked from the renderer's batcher (the only place the boundary
+     * between "the callback" and "React" exists); MARSHAL and COMMIT are marked in the bridge's C.
+     * A host that pumps JS some other way (no bridge, or Flow B's ahead-of-time app) marks none of
+     * these and every bucket reads 0, leaving the JS phase exactly as opaque as it was before.
+     */
+    typedef enum
+    {
+        ER_PERF_JS_DISPATCH = 0, /**< Delivering the frame's callbacks: the coalesced touch flush and its
+                                      hit test, due timers, drained microtasks, and the app handler bodies
+                                      they run. The floor a frame pays before React does anything. */
+        ER_PERF_JS_RECONCILE,    /**< React's render pass: component functions, hooks, the prop diff.
+                                      Marked by the renderer's batcher, not from C — React flushes when it
+                                      decides to, which is NOT reliably the batcher call the bridge can
+                                      bracket, so a C-side mark caught the call overhead and left this at
+                                      ~0 while whole-tree re-renders were landing in DISPATCH. Reads 0 for
+                                      an app whose bundle predates the marking, or with no batcher
+                                      installed, where renders run inside the handler that caused them. */
+        ER_PERF_JS_MARSHAL,      /**< Pushing the result into the engine: the NativeUI tree/prop/tape
+                                      calls (createNode, setProps, setVectorOps, appendChild, ...). This
+                                      is the bridge cost per changed node, separate from the JS that
+                                      decided what changed. */
+        ER_PERF_JS_COMMIT,       /**< er_commit() run from inside the pump, because the reconciler asks
+                                      for one as it finishes. Accounted in LAYOUT + RASTER, and removed
+                                      from the JS phase so it is not counted in both. */
+        ER_PERF_JS_COUNT
+    } ERPerfJsSub;
+
+    /**
      * @brief One frame's timing split and resource counters.
      *
      * All times are microseconds. The clock is only sampled between er_perf_frame_begin() and
@@ -151,6 +218,9 @@ extern "C"
         uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSub): disjoint; may exceed
                                                        the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is summed
                                                      across workers. */
+        uint32_t js_us[ER_PERF_JS_COUNT];         /**< JS's own split (see ERPerfJsSub): exclusive times. DISPATCH +
+                                                       RECONCILE + MARSHAL fit inside phase_us[ER_PERF_PHASE_JS];
+                                                       COMMIT sits outside it, in LAYOUT + RASTER. */
         uint32_t blit_px;                         /**< Pixels pushed through the backend blit callbacks this
                                                        frame (sum of each call's w*h, post-clip). Against
                                                        dirty_px this is the write amplification: overlapping
@@ -243,6 +313,30 @@ extern "C"
     void er_perf_raster_end(ERPerfRasterSub sub);
 
     /**
+     * @brief Starts timing JS sub-step @p sub within the open frame (called by the bridge).
+     *
+     * Unlike the phase and raster marks these NEST, and the innermost open bucket is the one being
+     * charged: opening a bucket first closes out the time its parent has run so far. So a MARSHAL span
+     * inside a RECONCILE span leaves RECONCILE with the render time alone, with no subtraction pass.
+     *
+     * Call through ER_PERF_JS_BEGIN() rather than directly, so the call disappears with the
+     * instrumentation on a build that compiled it out — these sit on the bridge's hottest paths.
+     *
+     * @param[in] sub  JS sub-step to start.
+     */
+    void er_perf_js_begin(ERPerfJsSub sub);
+
+    /**
+     * @brief Stops timing JS sub-step @p sub and charges the elapsed time to it (called by the bridge).
+     *
+     * Ignored unless @p sub is the innermost open bucket, so a stray or crossed end cannot shuffle
+     * time into the wrong one — the mismatched span simply contributes nothing.
+     *
+     * @param[in] sub  JS sub-step to stop.
+     */
+    void er_perf_js_end(ERPerfJsSub sub);
+
+    /**
      * @brief Adds already-measured backend-blit time and pixels to this frame (called by the engine).
      *
      * The blit layer accumulates per-worker (its callbacks run on render-worker threads, where the
@@ -327,6 +421,10 @@ extern "C"
      *                            line to watch during a steady drag, where the peak lines are stuck
      *                            on the mount frame
      *     PKR P2 C11 B16 S1 W96k the WORST frame's raster split + blit pixels (pairs with PK)
+     *     JSS D2.1 R7.4 M3.8 C9.0 last frame's JS split (ERPerfJsSub): dispatch, reconcile, marshal,
+     *                            and the commit the pump drove — the line that says whether a slow
+     *                            frame is React's render or the bridge shovelling props
+     *     PKJ D3 R40 M12 C31     the WORST frame's JS split (pairs with PK)
      *
      * The VEC field gains a `!FULL` marker (`VEC 8/8!FULL`) once a vector node has been denied a
      * storage slot, because a full pool and a pool that has already turned a node away look the same
