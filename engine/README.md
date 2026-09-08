@@ -474,7 +474,7 @@ place, not per subsystem.
 
 | Value | What it emits |
 |---|---|
-| `0` | Nothing. No `<stdio.h>`, no strings, no code. |
+| `0` | Nothing: no diagnostic `<stdio.h>`, strings or code. (`ERUI_PERF_STATS` has its own `snprintf` — this knob does not cover it.) |
 | `1` | Only failures that leave no usable trace on a real panel — today, `ERUI_MAX_VECTOR_NODES` above. |
 | `2` | Everything, including pool-overflow and image-registration warnings. |
 

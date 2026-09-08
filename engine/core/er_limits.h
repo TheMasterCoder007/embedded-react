@@ -75,8 +75,10 @@
 /**
  * @brief Static row-buffer width for the per-row rasterizers.
  *
- * rendering/image_scaler.c and rendering/gradient.c each assemble one row here and chunk anything wider, so
- * the two must be sized alike or one of them chunks against a buffer it does not own.
+ * rendering/image_scaler.c and rendering/gradient.c both assemble one row here, but they do NOT handle an
+ * over-wide row alike: the image scaler chunks across it, while the gradient renders only the first
+ * ERUI_MAX_IMG_ROW_PIXELS columns and truncates the rest. So size this to cover the widest GRADIENT on the
+ * screen, not just the widest scaled image — below that, wide gradients lose their right-hand side.
  */
 #ifndef ERUI_MAX_IMG_ROW_PIXELS
 #define ERUI_MAX_IMG_ROW_PIXELS 800

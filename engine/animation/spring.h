@@ -30,20 +30,20 @@
  * configured identically.
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Integration timestep in milliseconds. One step per elapsed millisecond of the frame. */
-#define ER_SPRING_DT_MS 0.001f
+/** @brief Integration timestep in SECONDS — one step per elapsed millisecond of the frame. */
+#define ER_SPRING_DT_SECONDS 0.001f
 
 /**
  * @brief Maximum integration steps per tick, bounding the cost of a long frame.
  *
- * At ER_SPRING_DT_MS this is 200 ms of physics. An animation caught by the cap coasts for a few more ticks
+ * At one step per millisecond this is 200 ms of physics. An animation caught by the cap coasts for a few more ticks
  * rather than jumping to where it would have landed. Also bounds animation.c's decay integrator, which steps
  * on the same one-per-millisecond schedule.
  */
 #define ER_SPRING_MAX_STEPS 200u
 
 /**
- * @brief Integrates one ER_SPRING_DT_MS step of spring physics toward the normalised target 1.0.
+ * @brief Integrates one ER_SPRING_DT_SECONDS step of spring physics toward the normalised target 1.0.
  *
  * @param[in,out] pos        Current normalised spring position.
  * @param[in,out] vel        Current normalised velocity.
@@ -55,8 +55,8 @@ static inline void er_spring_step(float* pos, float* vel, float stiffness, float
 {
     const float disp = *pos - 1.0f;
     const float accel = (-stiffness * disp - damping * (*vel)) / mass;
-    *vel += accel * ER_SPRING_DT_MS;
-    *pos += (*vel) * ER_SPRING_DT_MS;
+    *vel += accel * ER_SPRING_DT_SECONDS;
+    *pos += (*vel) * ER_SPRING_DT_SECONDS;
 }
 
 #endif

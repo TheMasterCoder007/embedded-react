@@ -87,10 +87,10 @@ int main(void)
     const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
     const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
 
-    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
-    if (env_flag("ER_NO_HIDPI"))
+    Uint32 window_flags = SDL_WINDOW_SHOWN;
+    if (env_flag("ER_HIDPI") && !env_flag("ER_NO_HIDPI"))
     {
-        window_flags &= ~(Uint32)SDL_WINDOW_ALLOW_HIGHDPI;
+        window_flags |= SDL_WINDOW_ALLOW_HIGHDPI;
     }
 
     SDL_Window* window = SDL_CreateWindow("embedded-react — desktop (Flow B / AOT)",
