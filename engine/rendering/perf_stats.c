@@ -257,13 +257,17 @@ void er_perf_frame_end(void)
     }
 
     /* Same for the JS stack: charge what the innermost bucket has run so far and unwind, so a bridge
-     * call that threw part-way through costs its own bucket rather than the whole frame. */
-    while (s_js_depth > 0)
+     * call that threw part-way through costs its own bucket rather than the whole frame.
+     *
+     * ONE timestamp for the whole unwind, deliberately. The outer buckets were paused when their
+     * child opened, so no time is theirs to claim; re-reading the clock per pop would hand each of
+     * them a slice of this loop's own cost instead of zero. */
+    if (s_js_depth > 0)
     {
         const uint32_t now = perf_now();
         s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
         s_js_mark = now;
-        s_js_depth--;
+        s_js_depth = 0;
     }
     s_js_over = 0;
 

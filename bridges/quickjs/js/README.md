@@ -224,6 +224,58 @@ public on every component for gestures that don't fit the pan shape. Only RN's A
 `onShouldBlockNativeResponder` is unsupported — holding the responder already blocks the native one
 (the built-in adjustable-Arc drag deliberately still wins). Passing it, or a typo, warns.
 
+### Dragging faster than React — `updateVector` / `updateText`
+
+A render per pointer move is the expensive way to drive a gesture. Measured on an ESP32-S3 dragging a
+JS-drawn knob (a `<Path d>` rebuilt every move, state at the root), one frame cost ~103 ms of JS —
+roughly half React's render and half re-marshaling the tree — plus ~51 ms of engine commit. Pushing
+the same geometry straight at the node instead costs **~10 µs of JS**, and about a third of the
+raster, because only that node is dirtied rather than the whole tree.
+
+Take a handle from a ref on the `<Svg>` and write to it during the gesture:
+
+```jsx
+const arc = useRef(0);
+
+const pan = useRef(
+  PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderMove: (e, g) => {
+      const deg = angleFor(g.moveX, g.moveY);
+      updateVector(arc.current, [
+        {arc: [CX, CY, R, 0, deg], stroke: '#f4a261', strokeWidth: 14, cap: 'round'},
+        {circle: [handleX(deg), handleY(deg), 8], fill: '#fff'},
+      ]);
+    },
+    onPanResponderRelease: (e, g) => setValue(valueFor(g.moveX, g.moveY)), // re-sync React
+  }),
+).current;
+
+<View {...pan.panHandlers} style={{width: W, height: H}}>
+  <Svg ref={h => (arc.current = h)} width={W} height={H} />
+</View>;
+```
+
+Each shape is **one geometry key plus its paint** — `arc`/`circle`/`line`/`rect`/`path`, with
+`fill`, `stroke`, `strokeWidth`, `cap`, `join`, `miter`, `fillRule`, `fillGrad`, `strokeGrad`. Note the
+short paint spellings: this is the allocation-free path, not the JSX attribute set. `path` takes a `d`
+string but pays the parser, so prefer the primitives on a hot path. **Arc angles are degrees clockwise
+from 12 o'clock**, which is not the convention an SVG `A` command uses.
+
+The optional third argument is a node-local `[x, y, w, h]` bounding the change — give it and only that
+region repaints and flushes, which is a large win for a small update on a big vector node.
+
+`updateText(handle, text)` is the same idea for a `<Text>`: it sets the content through a single
+inherited span, so the node's own color/size are untouched.
+
+This is a **write-through**, not a new source of truth: the node keeps what you pushed until React next
+renders that element, which overwrites it cleanly. So commit the final value to state when the gesture
+ends — the release handler above — and the declarative tree takes over again. Both flows compile it;
+the AOT lowers `updateVector` the same way.
+
+If the shape you are drawing is a dial, reach for `<Dial>` first — it tracks the finger and repaints
+the arc in C, with no JS per move at all.
+
 ## Build
 
 ```
