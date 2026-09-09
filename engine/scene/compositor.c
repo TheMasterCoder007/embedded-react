@@ -107,6 +107,9 @@ static ERDamageSet s_removed_set;
  * so a static or purely animation-driven frame skips the entire layout pass. Initialised true
  * so the first commit always lays out. */
 static bool s_layout_dirty = true;
+/* Cached subtree paint bounds (sub_* / subtree_prunable) need recomputing, but nothing moved: set by
+ * er_request_subtree_bounds_pass() so an animation-only frame can refresh them without a layout pass. */
+static bool s_subtree_bounds_dirty = false;
 
 /* Diagnostic: number of times the layout pass has actually run inside er_commit(). Exposed via
  * er_layout_pass_count() so callers (and tests) can confirm static frames skip layout. */
@@ -508,6 +511,11 @@ static void mark_layout_dirty(void)
 void er_request_layout_pass(void)
 {
     mark_layout_dirty();
+}
+
+void er_request_subtree_bounds_pass(void)
+{
+    s_subtree_bounds_dirty = true;
 }
 
 /**
@@ -1467,8 +1475,9 @@ static bool s_prune_ok = false;
  * box — so render_tree() never prunes such a subtree.
  *
  * Bounds are in computed (pre-scroll) space; render_tree() subtracts the running scroll
- * translation before testing them against the damage clip. Refreshed only on layout commits;
- * during a static drag the previous layout's bounds remain valid because positions do not move.
+ * translation before testing them against the damage clip. Refreshed on layout commits and whenever
+ * er_request_subtree_bounds_pass() asks; otherwise the previous layout's bounds remain valid because
+ * positions do not move.
  *
  * @param[in,out] n  Node whose subtree bounds to (re)compute.
  */
@@ -4595,6 +4604,7 @@ void er_reset(void)
     er_damage_set_clear(&s_last_paint_set);
     s_force_full_repaint = true;
     s_layout_dirty = true;
+    s_subtree_bounds_dirty = false; /* the next commit's layout pass recomputes them */
 
     /* Reset the multi-buffer debt: every rotating buffer owes a full frame again (new scene). */
     s_cur_buf = 0;
@@ -4744,9 +4754,23 @@ void er_commit(void)
         er_layout_anim_post_layout(root);
         dispatch_layout_events(root);
         compute_subtree_bounds(root); /* refresh cached prune bounds; stay valid through static frames */
+        s_subtree_bounds_dirty = false;
 
         s_layout_dirty = false;
         s_layout_pass_count++;
+        ER_PERF_END(ER_PERF_PHASE_LAYOUT);
+    }
+    else if (s_subtree_bounds_dirty)
+    {
+        /* An animation added or removed a transform without moving a computed rect, so the layout pass
+         * above is skipped. subtree_prunable still has to be refreshed, or render_tree keeps pruning by
+         * a box the node no longer paints in.
+         *
+         * Timed as layout — it is the layout pass's own bookkeeping and walks every node — but the pass
+         * COUNT deliberately does not move: that counts solver runs, and the solver did not run. */
+        ER_PERF_BEGIN(ER_PERF_PHASE_LAYOUT);
+        compute_subtree_bounds(root);
+        s_subtree_bounds_dirty = false;
         ER_PERF_END(ER_PERF_PHASE_LAYOUT);
     }
 

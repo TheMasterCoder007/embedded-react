@@ -533,4 +533,13 @@ void er_mark_dirty_upward_visual(ERNode* node);
  */
 void er_request_layout_pass(void);
 
+/**
+ * @brief Requests a refresh of the cached subtree paint bounds on the next er_commit().
+ *
+ * For subsystems whose state change alters what a node can paint outside its computed box — today an
+ * animation adding or removing a transform — without moving any rect, so a layout pass would be
+ * wasted but the cached bounds and their prune flag are stale.
+ */
+void er_request_subtree_bounds_pass(void);
+
 #endif

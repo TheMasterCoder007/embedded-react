@@ -355,9 +355,14 @@ static bool read_color_value(const ERNode* node, ERAnimProp prop, uint32_t* colo
  */
 static void update_has_transform(ERNode* node)
 {
+    const bool was = node->has_transform;
     node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
                            || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
                            || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
+    /* The compositor caches a prune flag derived from this one, normally refreshed by a layout pass an
+     * animation-only frame skips. Nothing moved, so ask for the bounds refresh alone. */
+    if (node->has_transform != was)
+        er_request_subtree_bounds_pass();
 }
 
 /**
