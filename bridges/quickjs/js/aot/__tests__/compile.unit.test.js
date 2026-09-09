@@ -3116,6 +3116,79 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", "");');
   });
 
+  // The AOT stores a boolean in an int slot, so the type alone cannot tell useState(false) from
+  // useState(0). JS prints a boolean as "true"/"false"; React draws nothing for one as a child.
+  it('prints a boolean operand the way JS does', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{'enabled: ' + on}</Text>);
+      }`);
+    expect(c).toContain('"enabled: %s", ((s_state.on) ? "true" : "false")');
+  });
+
+  it('draws nothing for a boolean as a standalone child, like React', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<View><Text>{on}</Text><Text>{false}</Text></View>);
+      }`);
+    expect(c).not.toContain('%d');
+    expect(c.match(/snprintf\(p\.text[^\n]*/g)).toEqual([
+      'snprintf(p.text, sizeof(p.text), "%s", "");',
+      'snprintf(p.text, sizeof(p.text), "%s", "");',
+    ]);
+  });
+
+  it.each([
+    ['a comparison', 'n > 5'],
+    ['a negation', '!on'],
+    ['a ternary of booleans', 'n ? on : !on'],
+    ['&& of two booleans', 'on && n > 5'],
+  ])('treats %s as a boolean', (_name, expr) => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [on, setOn] = useState(false);
+        return (<Text>{'v: ' + (${expr})}</Text>);
+      }`);
+    expect(c).toContain('? "true" : "false"');
+  });
+
+  // `cond && 'label'` returns the STRING in JS, not a boolean, and the generated C already collapses it
+  // to 0/1. Relabelling it "true" would be a different wrong answer, so it stays as it was.
+  it('leaves a non-boolean && alone', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{'x: ' + (on && 'yes')}</Text>);
+      }`);
+    expect(c).not.toContain('? "true" : "false"');
+  });
+
+  it('keeps a boolean local through a handler const', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('');
+        return (<Pressable onPress={() => { const hot = n > 5; setLabel('hot: ' + hot); }}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('"hot: %s", ((l_hot) ? "true" : "false")');
+  });
+
+  it('still prints numbers, floats and strings by type', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(1.5);
+        const [s, setS] = useState('x');
+        return (<View><Text>{'a' + n}</Text><Text>{'b' + f}</Text><Text>{'c' + s}</Text></View>);
+      }`);
+    expect(c).toContain('"a%d", s_state.n');
+    expect(c).toContain('"b%g", s_state.f');
+    expect(c).toContain('"c%s", s_state.s');
+  });
+
   it('escapes a literal % so it survives the format string', () => {
     const c = gen(`${D}
       export function App() {

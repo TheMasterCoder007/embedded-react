@@ -308,7 +308,7 @@ function emitExprImpl(node, env) {
     case 'StringLiteral':
       return {code: cstr(node.value), cType: 'string'};
     case 'BooleanLiteral':
-      return {code: node.value ? '1' : '0', cType: 'int'};
+      return {code: node.value ? '1' : '0', cType: 'int', isBool: true};
     case 'Identifier': {
       if (env.locals.has(node.name)) return env.locals.get(node.name);
       if (env.state.has(node.name)) {
@@ -317,7 +317,7 @@ function emitExprImpl(node, env) {
           throw new Error(
             `AOT: a list state ("${node.name}") can only be used via .length or .map`,
           );
-        return {code: s.cMember, cType: s.cType};
+        return {code: s.cMember, cType: s.cType, isBool: s.isBool};
       }
       if (node.name in env.consts) {
         const v = env.consts[node.name];
@@ -326,6 +326,8 @@ function emitExprImpl(node, env) {
             ? {code: String(v), cType: 'int'}
             : {code: `${v}f`, cType: 'float'};
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
+        if (typeof v === 'boolean')
+          return {code: v ? '1' : '0', cType: 'int', isBool: true};
       }
       throw new Error(
         `AOT: cannot resolve identifier "${node.name}" in a dynamic expression`,
@@ -342,6 +344,7 @@ function emitExprImpl(node, env) {
         return {
           code: `(${node.operator}(${a.code}))`,
           cType: node.operator === '!' ? 'int' : a.cType,
+          isBool: node.operator === '!' ? true : a.isBool,
         };
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
@@ -380,6 +383,7 @@ function emitExprImpl(node, env) {
           return {
             code: `(strcmp(${l.code}, ${r.code}) ${eqOp} 0)`,
             cType: 'int',
+            isBool: true,
           };
         const op =
           node.operator === '==='
@@ -387,7 +391,11 @@ function emitExprImpl(node, env) {
             : node.operator === '!=='
               ? '!='
               : node.operator;
-        return {code: `(${l.code} ${op} ${r.code})`, cType: 'int'};
+        return {
+          code: `(${l.code} ${op} ${r.code})`,
+          cType: 'int',
+          isBool: true,
+        };
       }
       throw new Error(`AOT: unsupported binary operator "${node.operator}"`);
     }
@@ -398,7 +406,11 @@ function emitExprImpl(node, env) {
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
       const l = emitExpr(node.left, env);
       const r = emitExpr(node.right, env);
-      return {code: `(${l.code} ${op} ${r.code})`, cType: 'int'};
+      return {
+        code: `(${l.code} ${op} ${r.code})`,
+        cType: 'int',
+        isBool: Boolean(l.isBool && r.isBool),
+      };
     }
     case 'ConditionalExpression': {
       const t = emitExpr(node.test, env);
@@ -410,7 +422,11 @@ function emitExprImpl(node, env) {
           : c.cType === a.cType
             ? c.cType
             : 'int';
-      return {code: `(${t.code} ? ${c.code} : ${a.code})`, cType};
+      return {
+        code: `(${t.code} ? ${c.code} : ${a.code})`,
+        cType,
+        isBool: Boolean(c.isBool && a.isBool),
+      };
     }
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g. a .map item's `.key`).
@@ -421,7 +437,8 @@ function emitExprImpl(node, env) {
             ? {code: String(v), cType: 'int'}
             : {code: `${v}f`, cType: 'float'};
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
-        if (typeof v === 'boolean') return {code: v ? '1' : '0', cType: 'int'};
+        if (typeof v === 'boolean')
+          return {code: v ? '1' : '0', cType: 'int', isBool: true};
       } catch {
         /* not static — fall through to the dynamic member forms below */
       }
@@ -561,6 +578,14 @@ const cTypeOfValue = v =>
       : 'int';
 
 /**
+ * Text a constant renders as a standalone JSX child. React draws nothing for null, undefined or a
+ * boolean (see flattenTextChildren in Flow A), which is not how `+` treats the same values — a
+ * concatenation operand goes through String() instead.
+ */
+const jsxChildText = v =>
+  v === undefined || v === null || typeof v === 'boolean' ? '' : String(v);
+
+/**
  * Splits a string-building `+` chain into printf parts, following JS's own left-to-right typing: a `+`
  * is a concatenation only once one of its sides is a string, so `n + 1 + ' ms'` still adds before it
  * appends. Parts are either a `literal` (folded into the format) or a `{spec, code}` pair (a runtime arg).
@@ -570,12 +595,9 @@ const cTypeOfValue = v =>
 function concatParts(node, env, scope, operand = false) {
   try {
     const v = evalStatic(node, scope);
-    // null/undefined is nothing as a standalone {…} child (React draws no text), but JS stringifies it
-    // as a `+` operand — `label + null` is "…null", not "…".
-    const nullish = v === undefined || v === null;
     return {
       isString: typeof v === 'string',
-      parts: [{literal: nullish && !operand ? '' : String(v)}],
+      parts: [{literal: operand ? String(v) : jsxChildText(v)}],
     };
   } catch {
     /* not a compile-time constant — split it below */
@@ -587,6 +609,14 @@ function concatParts(node, env, scope, operand = false) {
       return {isString: true, parts: [...l.parts, ...r.parts]};
   }
   const e = emitExpr(node, env);
+  // A boolean draws nothing as a child but stringifies as an operand — same split as the constants above.
+  if (e.isBool)
+    return operand
+      ? {
+          isString: true,
+          parts: [{spec: '%s', code: `((${e.code}) ? "true" : "false")`}],
+        }
+      : {isString: false, parts: [{literal: ''}]};
   return {
     isString: e.cType === 'string',
     parts: [{spec: printfSpec(e.cType), code: e.code}],
@@ -795,6 +825,9 @@ function collectState(fnBody, scope, prefix = '') {
             'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, strings, and objects are not supported.',
           );
         let cType = cTypeOfValue(initVal);
+        // JS prints a boolean as "true"/"false" and React renders one as nothing, so text lowering has
+        // to tell useState(false) from useState(0) — cTypeOfValue funnels both to 'int'.
+        const isBool = typeof initVal === 'boolean';
         // A numeric literal written with a decimal point or exponent (e.g. useState(70.0)) forces a FLOAT
         // slot even though the value is integral — lets the state hold sub-integer values (a smooth drag)
         // while the UI shows Math.round(value). (70.0 === 70 in JS, so we read the raw source to tell them apart.)
@@ -819,6 +852,7 @@ function collectState(fnBody, scope, prefix = '') {
           setter,
           kind: 'scalar',
           cType,
+          isBool,
           cMember: `s_state.${cField}`,
           initCode,
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
@@ -2331,7 +2365,7 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
       );
     if (args[i]) {
       const e = emitExpr(args[i], env);
-      locals.set(p.name, {code: e.code, cType: e.cType});
+      locals.set(p.name, {code: e.code, cType: e.cType, isBool: e.isBool});
     }
   });
   const body = fn.body;
@@ -2512,6 +2546,7 @@ function compileStmts(list, env, state, ctx, indent) {
           locals: new Map(env.locals).set(decl.id.name, {
             code: cName,
             cType: e.cType,
+            isBool: e.isBool,
           }),
         };
       }
@@ -3293,7 +3328,11 @@ function emitComponent(el, scope, out, env, state, opts) {
       childScope[name] = evalStatic(expr, childScope);
     } catch {
       const e = emitExpr(expr, childEnv);
-      childLocals.set(name, {code: `(${e.code})`, cType: e.cType});
+      childLocals.set(name, {
+        code: `(${e.code})`,
+        cType: e.cType,
+        isBool: e.isBool,
+      });
     }
   }
   for (const eff of collectEffects(fn.body)) {
@@ -6027,7 +6066,11 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
       scope[name] = evalStatic(expr, scope);
     } catch {
       const e = emitExpr(expr, env);
-      env.locals.set(name, {code: `(${e.code})`, cType: e.cType});
+      env.locals.set(name, {
+        code: `(${e.code})`,
+        cType: e.cType,
+        isBool: e.isBool,
+      });
     }
   }
   const out = {

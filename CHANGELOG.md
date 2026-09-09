@@ -68,6 +68,9 @@ See the README for the release process.
 - An AOT style key with no lowering is now reported as unsupported instead of as "a state-driven
   value ... (static only)", advice that could not be followed when the value was already a literal.
 
+- Booleans in AOT text now read the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, and a
+  bare `{flag}` child draws nothing (React's rule). Flow B printed `1` for both.
+
 - A board example built against an AOT app generated from a different *demo* is now a compiler error
   naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
   generated.

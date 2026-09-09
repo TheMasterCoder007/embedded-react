@@ -430,11 +430,15 @@ describe('AOT generated C compiles', () => {
            const [hit, setHit] = useState('none');
            const [ratio, setRatio] = useState(0.5);
            const [label, setLabel] = useState('');
+           const [on, setOn] = useState(false);
            return (
              <View style={{ flex: 1 }}>
                <Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>
                <Text>{'hit: ' + hit}</Text>
                <Text onPress={() => setLabel('page ' + page)}>{ratio + '% of ' + PAGES}</Text>
+               {/* A boolean lowers to %s over a ternary of string literals — a pairing only -Wformat checks. */}
+               <Text>{'on: ' + on + ' hot: ' + (page > 2)}</Text>
+               <Text>{'nul: ' + label + null}</Text>
                <TextInput value={'#' + page} />
              </View>
            );
