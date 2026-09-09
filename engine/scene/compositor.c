@@ -4764,9 +4764,14 @@ void er_commit(void)
     {
         /* An animation added or removed a transform without moving a computed rect, so the layout pass
          * above is skipped. subtree_prunable still has to be refreshed, or render_tree keeps pruning by
-         * a box the node no longer paints in. */
+         * a box the node no longer paints in.
+         *
+         * Timed as layout — it is the layout pass's own bookkeeping and walks every node — but the pass
+         * COUNT deliberately does not move: that counts solver runs, and the solver did not run. */
+        ER_PERF_BEGIN(ER_PERF_PHASE_LAYOUT);
         compute_subtree_bounds(root);
         s_subtree_bounds_dirty = false;
+        ER_PERF_END(ER_PERF_PHASE_LAYOUT);
     }
 
     /* Everything from here to the end of the commit is the paint pipeline: the damage pre-pass that

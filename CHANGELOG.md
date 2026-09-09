@@ -58,7 +58,7 @@ See the README for the release process.
 ### Fixed
 
 - A node moved by a native-driver transform animation no longer vanishes on hosts that repaint only
-  the damage rect. Whether a subtree may be pruned is decided from a flag the layout pass caches. 
+  the damage rect. Whether a subtree may be pruned is decided from a flag the layout pass caches.
   An animation-only frame skips that pass — so a translate that appeared after the last layout left
   the node prunable, and it was pruned away as soon as it slid clear of its layout box.
 

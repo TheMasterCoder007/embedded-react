@@ -143,6 +143,61 @@ static void recolour(ERNode* box, uint32_t argb)
     er_node_set_props(box, &bp);
 }
 
+/* The bounds-only refresh path: a transform appearing mid-animation runs no solver, but it does walk
+ * every node, so it has to be attributed — and it has to happen ONCE, not on every animated frame. */
+static int check_bounds_refresh_is_timed(int screen)
+{
+    ERNode* root;
+    ERNode* box = build_scene(screen, &root);
+
+    frame(); /* mount frame: layout runs */
+
+    ERAnimValueHandle v = er_anim_value_create(0.0f);
+    er_anim_value_bind(v, box, ER_PROP_TRANSLATE_X);
+    ERAnimConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = 320U;
+    cfg.easing = ER_EASE_LINEAR;
+    er_anim_value_animate(v, 60.0f, &cfg);
+
+    const uint32_t passes = er_layout_pass_count();
+
+    /* First animated frame: the node gains a transform, so the cached prune bounds are refreshed. */
+    embedded_renderer_tick(16U);
+    frame();
+
+    ERPerfFrame f;
+    if (!er_perf_get_last(&f))
+        return fail("no frame recorded for the first animated frame");
+    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
+        return fail("the subtree-bounds refresh was not attributed to the layout phase");
+    if (er_layout_pass_count() != passes)
+        return fail("the subtree-bounds refresh ran the layout solver");
+
+    uint32_t sum = f.other_us;
+    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
+        sum += f.phase_us[i];
+    if (sum != f.frame_us)
+        return fail("phases + other_us do not add up on a bounds-refresh frame");
+
+    /* Every later frame of the same animation: the transform is already there, nothing to refresh.
+     * Exactly 0 is the assertion worth making — the refresh is per toggle, not per frame. */
+    embedded_renderer_tick(16U);
+    frame();
+    if (!er_perf_get_last(&f))
+        return fail("no frame recorded for the second animated frame");
+    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
+        return fail("a mid-animation frame refreshed the subtree bounds again");
+    if (er_layout_pass_count() != passes)
+        return fail("a mid-animation frame ran the layout solver");
+
+    /* Left for er_reset() to tear down: the box is still animating, and destroying the root alone
+     * would orphan it mid-animation. */
+    (void)root;
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Tests
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -694,6 +749,12 @@ int main(void)
     const int screen = 200;
 
     int rc = check_phase_split(screen);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+    er_reset();
+    er_perf_reset();
+
+    rc = check_bounds_refresh_is_timed(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
     er_reset();
