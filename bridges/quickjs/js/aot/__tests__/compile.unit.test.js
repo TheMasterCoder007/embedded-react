@@ -1804,6 +1804,69 @@ describe('AOT effects & timers', () => {
     expect(c).not.toContain('er_timer_add');
   });
 
+  it('lowers an early return in a dependency-driven useEffect to a real `return`', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [page, setPage] = useState(0);
+        const [t, setT] = useState(0);
+        useEffect(() => {
+          if (page !== 2) return undefined;
+          const id = setInterval(() => setT((v) => (v + 1) % 24), 90);
+          return () => clearInterval(id);
+        }, [page]);
+        return (<Pressable onPress={() => setPage(page + 1)}><Text>{t}</Text></Pressable>);
+      }`);
+    // The guard has to exit the effect — an empty `if` would start the timer on every page.
+    expect(c).toMatch(
+      /if \(\(s_state\.page != 2\)\)\n    \{\n        return;\n    \}/,
+    );
+    expect(c).toContain('er_timer_add((int)(90), true, er_timer_fn_0)');
+  });
+
+  it('gives an early-returning mount effect a C function of its own', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        useEffect(() => { if (n > 1) return; setN(2); }, []);
+        useEffect(() => { setN(3); }, []);
+        return (<Text>{n}</Text>);
+      }`);
+    // A mount body is inlined into er_app_build, where a bare `return` would skip the second effect.
+    expect(c).toContain('static void er_effect_0(void)');
+    expect(c).toMatch(
+      /er_effect_0\(\);\n    app_update\(\);\n    s_state\.n = 3;/,
+    );
+  });
+
+  it('keeps a plain mount effect inlined in er_app_build', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        useEffect(() => { const id = setInterval(() => setN((v) => v + 1), 250); return () => clearInterval(id); }, []);
+        return (<Text>{n}</Text>);
+      }`);
+    expect(c).not.toContain('static void er_effect_0(void)'); // a tail cleanup return needs no function
+    expect(c).toMatch(/run once on mount\. \*\/\n    int l_id = er_timer_add/);
+  });
+
+  it('rejects an early return in an event handler with a located error', () => {
+    let err;
+    try {
+      gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<Pressable onPress={() => { if (n > 1) return; setN(n + 1); }}><Text>{n}</Text></Pressable>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(
+      /`return` is only supported inside a useEffect body/,
+    );
+    expect(err.message).toContain('demos/test/App.jsx:');
+    expect(err.message).toContain('hint:');
+  });
+
   it('re-runs a dependency-driven useEffect from app_update when the dep changes', () => {
     const c = gen(`${PRE}
       export function App() {

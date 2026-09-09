@@ -57,6 +57,10 @@ See the README for the release process.
 
 ### Fixed
 
+- The AOT no longer drops an early `return` from a `useEffect` body — the guard is lowered, so the
+  code after it stops running unconditionally. A `return` anywhere else (a handler, a timer or
+  animation callback, an inlined helper) is now a located error rather than silence.
+
 - A node moved by a native-driver transform animation no longer vanishes on hosts that repaint only
   the damage rect. Whether a subtree may be pruned is decided from a flag the layout pass caches.
   An animation-only frame skips that pass — so a translate that appeared after the last layout left

@@ -2225,7 +2225,12 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
   ctx.inlining.add(name);
+  // The helper's statements are spliced into the CALLER, so its `return` is not the caller's return —
+  // reject it here even when the caller is an effect body, where a `return` would otherwise be allowed.
+  const outerAllowReturn = ctx.allowReturn;
+  ctx.allowReturn = false;
   const lines = compileStmts(list, {...env, locals}, state, ctx, indent);
+  ctx.allowReturn = outerAllowReturn;
   ctx.inlining.delete(name);
   return lines;
 }
@@ -2336,11 +2341,14 @@ const compileHandlerExpr = withLoc(compileHandlerExprImpl);
 /**
  * Compiles a list of handler statements to C lines. Supports: `const x = expr` (a C local, visible to
  * later statements), `if (cond) {...} else {...}`, state setters, and Animated.*(...).start(). `ctx`
- * accumulates `stateChanged` (→ trailing app_update) and `animIdx` (unique ERAnimConfig locals).
+ * accumulates `stateChanged` (→ trailing app_update), `animIdx` (unique ERAnimConfig locals) and
+ * `usedReturn` (an early `return` was lowered, so the body needs a C function of its own). `ctx.allowReturn`
+ * and `ctx.bodyList` mark which body a `return` may exit and which statement of it is the tail.
  */
 function compileStmts(list, env, state, ctx, indent) {
   const lines = [];
-  for (const st of list) {
+  for (let si = 0; si < list.length; si++) {
+    const st = list[si];
     if (st.type === 'VariableDeclaration') {
       for (const decl of st.declarations) {
         if (decl.id.type !== 'Identifier')
@@ -2385,11 +2393,23 @@ function compileStmts(list, env, state, ctx, indent) {
       }
       continue;
     }
-    // An effect's cleanup `return () => …` — not run on an MCU (the app never unmounts), so drop it. (A
-    // dep-driven effect that needs cleanup on re-run isn't supported yet; mount-only effects use this.)
+    // A `return` in an effect body. The LAST statement of the body is the cleanup `return () => …` (or a
+    // bare `return`): the body is over either way, and a cleanup never runs on an MCU because the app
+    // never unmounts, so it lowers to nothing. Any EARLIER return is a guard that has to actually exit —
+    // it emits `return;` and flags the body so compileEffect gives it a C function of its own.
     if (st.type === 'ReturnStatement') {
-      if (ctx.allowReturn) continue;
-      throw new Error('AOT: `return` is only allowed as an effect cleanup');
+      if (!ctx.allowReturn) {
+        const e = aotError(
+          'AOT: `return` is only supported inside a useEffect body',
+          'a handler, timer, animation or inlined-helper body cannot return early — flatten the logic into if/else.',
+        );
+        if (st.loc) e.aotLoc = st.loc.start;
+        throw e;
+      }
+      if (list === ctx.bodyList && si === list.length - 1) continue;
+      ctx.usedReturn = true;
+      lines.push(`${indent}return;`);
+      continue;
     }
     if (st.type === 'IfStatement') {
       lines.push(`${indent}if (${emitExpr(st.test, env).code})`, `${indent}{`);
@@ -2421,7 +2441,7 @@ function compileStmts(list, env, state, ctx, indent) {
     if (st.type !== 'ExpressionStatement')
       throw aotError(
         `AOT: unsupported statement "${st.type}" in event handler`,
-        'a handler supports only `const x = …` locals, `if (…) { … } else { … }`, and expression statements (setters / ref writes / updateVector / Animated…start). Loops (for/while), switch, try/catch, and early return are not lowered — precompute values or flatten the logic into if/else.',
+        'a handler supports only `const x = …` locals, `if (…) { … } else { … }`, and expression statements (setters / ref writes / updateVector / Animated…start). Loops (for/while), switch and try/catch are not lowered — precompute values or flatten the logic into if/else.',
       );
     lines.push(...compileHandlerExpr(st.expression, env, state, ctx, indent));
   }
@@ -2446,10 +2466,26 @@ function compileEffect(eff, env, state, out) {
     !eff.deps ||
     (eff.deps.type === 'ArrayExpression' && eff.deps.elements.length === 0);
   if (isMount) {
-    const ctx = {stateChanged: false, animIdx: 0, out, allowReturn: true};
+    const ctx = {
+      stateChanged: false,
+      animIdx: 0,
+      out,
+      allowReturn: true,
+      bodyList: stmts,
+    };
     const lines = compileStmts(stmts, env, state, ctx, '    ');
-    if (ctx.stateChanged) lines.push('    app_update();');
-    out.mountEffects.push(...lines);
+    if (!ctx.usedReturn) {
+      if (ctx.stateChanged) lines.push('    app_update();');
+      out.mountEffects.push(...lines);
+      return;
+    }
+    // A mount body is normally inlined into er_app_build, where a `return` would skip every later mount
+    // effect — so one with an early return gets a C function of its own, and the app_update it may owe
+    // moves to the call site (past the return, it would otherwise be dead code).
+    const name = `er_effect_${out.effN++}`;
+    out.effectFns.push({name, body: lines});
+    out.mountEffects.push(`    ${name}();`);
+    if (ctx.stateChanged) out.mountEffects.push('    app_update();');
     return;
   }
   if (eff.deps.type !== 'ArrayExpression')
@@ -2469,7 +2505,13 @@ function compileEffect(eff, env, state, out) {
       );
     return e;
   });
-  const ctx = {stateChanged: false, animIdx: 0, out, allowReturn: true};
+  const ctx = {
+    stateChanged: false,
+    animIdx: 0,
+    out,
+    allowReturn: true,
+    bodyList: stmts,
+  };
   out.effectFns.push({
     name,
     body: compileStmts(stmts, env, state, ctx, '    '),
