@@ -215,6 +215,54 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `early-returning useEffects pass the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // An early return hoists a mount effect out of er_app_build into a function of its own — a shape
+      // nothing else emits, and one that needs its own forward declaration to compile.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [page, setPage] = useState(0);
+           const [t, setT] = useState(0);
+           useEffect(() => { if (page > 1) return; setPage(1); }, []);
+           useEffect(() => {
+             if (page !== 2) return undefined;
+             const id = setInterval(() => setT((v) => (v + 1) % 24), 90);
+             return () => clearInterval(id);
+           }, [page]);
+           return (<View style={{ flex: 1 }}><Text>{t}</Text></View>);
+         }`,
+        'effret',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-effret-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        // The timer table always defines er_timer_clear, and this app never clears a timer.
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wno-unused-function',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `a PanResponder pager passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // The responder lowering generates two callback SHAPES the rest of the codegen never emits — a
