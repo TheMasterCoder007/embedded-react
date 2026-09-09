@@ -71,6 +71,10 @@ See the README for the release process.
 - Booleans in AOT text now read the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, and a
   bare `{flag}` child draws nothing (React's rule). Flow B printed `1` for both.
 
+- AOT text refuses `{cond && 'yes'}` with a located error instead of printing `1`. JS evaluates `&&`
+  and `||` to one of their operands, which the emitted C has no way to reproduce; write the branch out
+  as `{cond ? 'yes' : ''}`. A logical whose sides are both boolean still lowers.
+
 - A board example built against an AOT app generated from a different *demo* is now a compiler error
   naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
   generated.

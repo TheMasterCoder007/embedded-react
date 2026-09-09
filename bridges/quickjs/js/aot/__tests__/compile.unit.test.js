@@ -3155,15 +3155,72 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('? "true" : "false"');
   });
 
-  // `cond && 'label'` returns the STRING in JS, not a boolean, and the generated C already collapses it
-  // to 0/1. Relabelling it "true" would be a different wrong answer, so it stays as it was.
-  it('leaves a non-boolean && alone', () => {
+  // `on && 'yes'` is 'yes' or false in JS, and C's && only has 0/1 — neither value survives. Printing
+  // "1" (or relabelling it "true") is a wrong answer either way, so text refuses the shape instead.
+  const textErr = body => {
+    try {
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [m, setM] = useState(1);
+        const [on, setOn] = useState(false);
+        return (${body});
+      }`);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+
+  it.each([
+    ['&& yielding a string', `<Text>{'x: ' + (on && 'yes')}</Text>`],
+    ['&& as a bare child', `<Text>{on && 'yes'}</Text>`],
+    ['|| yielding a string', `<Text>{'x: ' + (on || 'no')}</Text>`],
+    ['&& of two numbers', `<Text>{'x: ' + (n && m)}</Text>`],
+  ])('refuses %s in text, with a location', (_name, body) => {
+    const e = textErr(body);
+    expect(e.message).toMatch(/evaluates to one of its operands/);
+    expect(e.aotLoc).toBeTruthy();
+    expect(e.message).toContain('^');
+  });
+
+  it('refuses a ternary mixing a boolean branch with a non-boolean one', () => {
+    const e = textErr(`<Text>{'x: ' + (on ? on : 5)}</Text>`);
+    expect(e.message).toMatch(/mixes a boolean branch/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('still lowers a logical whose operands are both boolean', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [on, setOn] = useState(false);
+        return (<Text>{'x: ' + (on && n > 1)}</Text>);
+      }`);
+    expect(c).toContain('? "true" : "false"');
+  });
+
+  // Unary +/- are numeric coercions: `+flag` is 0 or 1 in JS, never true/false.
+  it.each([
+    ['+', `+on`],
+    ['-', `-on`],
+  ])('does not carry boolean-ness through unary %s', (_op, expr) => {
     const c = gen(`${D}
       export function App() {
         const [on, setOn] = useState(false);
-        return (<Text>{'x: ' + (on && 'yes')}</Text>);
+        return (<Text>{'v=' + (${expr})}</Text>);
       }`);
+    expect(c).toContain('"v=%d"');
     expect(c).not.toContain('? "true" : "false"');
+  });
+
+  it('renders a coerced boolean as a number child, not an empty one', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{+on}</Text>);
+      }`);
+    expect(c).toContain('"%d", (+(s_state.on))');
   });
 
   it('keeps a boolean local through a handler const', () => {

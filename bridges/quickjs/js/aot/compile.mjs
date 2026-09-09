@@ -341,10 +341,12 @@ function emitExprImpl(node, env) {
         node.operator === '+' ||
         node.operator === '!'
       )
+        // Only `!` yields a boolean. Unary +/- are numeric coercions — `+flag` is 0 or 1 in JS, so the
+        // operand's boolean-ness must not survive them.
         return {
           code: `(${node.operator}(${a.code}))`,
           cType: node.operator === '!' ? 'int' : a.cType,
-          isBool: node.operator === '!' ? true : a.isBool,
+          isBool: node.operator === '!',
         };
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
@@ -577,6 +579,13 @@ const cTypeOfValue = v =>
       ? 'float'
       : 'int';
 
+/** An aotError pinned to the expression that cannot be lowered to text (concatParts is not withLoc-wrapped). */
+function textShapeError(node, message, hint) {
+  const e = aotError(message, hint);
+  if (node.loc) e.aotLoc = node.loc.start;
+  return e;
+}
+
 /**
  * Text a constant renders as a standalone JSX child. React draws nothing for null, undefined or a
  * boolean (see flattenTextChildren in Flow A), which is not how `+` treats the same values — a
@@ -609,6 +618,25 @@ function concatParts(node, env, scope, operand = false) {
       return {isString: true, parts: [...l.parts, ...r.parts]};
   }
   const e = emitExpr(node, env);
+  // JS `&&`/`||` evaluate to one of their OPERANDS, and a ternary to one of its BRANCHES. The generated C
+  // collapses a logical to 0/1 and gives a ternary a single slot, so text can only reproduce JS when the
+  // operands agree in kind. Refuse rather than print a value the app never computed.
+  if (node.type === 'LogicalExpression' && !e.isBool)
+    throw textShapeError(
+      node,
+      `AOT: "${node.operator}" in text evaluates to one of its operands, not to true/false`,
+      `\`a ${node.operator} b\` is a or b unless both sides are already booleans — the generated C only has 0/1. Write the branch out instead: {cond ? 'yes' : ''}.`,
+    );
+  if (
+    node.type === 'ConditionalExpression' &&
+    Boolean(emitExpr(node.consequent, env).isBool) !==
+      Boolean(emitExpr(node.alternate, env).isBool)
+  )
+    throw textShapeError(
+      node,
+      'AOT: a ternary in text mixes a boolean branch with a non-boolean one',
+      'JS renders those differently (`cond ? true : 5` is "true" or "5") but they share one C slot here. Make both branches the same kind.',
+    );
   // A boolean draws nothing as a child but stringifies as an operand — same split as the constants above.
   if (e.isBool)
     return operand
