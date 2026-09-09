@@ -105,6 +105,13 @@ const [PKG_MAJOR, PKG_MINOR] = PKG_VERSION.split('.');
 // DEEPEST node that failed pins the location; compileSource formats it at the top.
 // ---------------------------------------------------------------------------------------------------
 
+/**
+ * The `#ifndef` marker a board example guards on, from a demo name: every character outside [A-Za-z0-9_]
+ * becomes '_' so the name is a valid C identifier. Shared by the app.gen.h emission and the CLI's
+ * collision check below — two demos that sanitise to the same marker would defeat the guard.
+ */
+const demoMarker = demo => `ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')}`;
+
 /** Throws an AOT error carrying an optional `hint` (a "rewrite it like this" suggestion shown to the user). */
 function aotError(message, hint) {
   const e = new Error(message.startsWith('AOT:') ? message : `AOT: ${message}`);
@@ -560,19 +567,22 @@ const cTypeOfValue = v =>
  *
  * @returns {{isString: boolean, parts: Array<{literal?: string, spec?: string, code?: string}>}}
  */
-function concatParts(node, env, scope) {
+function concatParts(node, env, scope, operand = false) {
   try {
     const v = evalStatic(node, scope);
+    // null/undefined is nothing as a standalone {…} child (React draws no text), but JS stringifies it
+    // as a `+` operand — `label + null` is "…null", not "…".
+    const nullish = v === undefined || v === null;
     return {
       isString: typeof v === 'string',
-      parts: [{literal: v === undefined || v === null ? '' : String(v)}],
+      parts: [{literal: nullish && !operand ? '' : String(v)}],
     };
   } catch {
     /* not a compile-time constant — split it below */
   }
   if (node.type === 'BinaryExpression' && node.operator === '+') {
-    const l = concatParts(node.left, env, scope);
-    const r = concatParts(node.right, env, scope);
+    const l = concatParts(node.left, env, scope, true);
+    const r = concatParts(node.right, env, scope, true);
     if (l.isString || r.isString)
       return {isString: true, parts: [...l.parts, ...r.parts]};
   }
@@ -1449,7 +1459,9 @@ function lowerStyleChecked(key, value) {
 
 /** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
 function lowerDynamicStyleValue(key, valueNode, env) {
-  const meta = DYN_FIELDS[key];
+  // Own-property only: `DYN_FIELDS.toString` would otherwise hand back Object.prototype's method, look
+  // like a known key, and emit `p.undefined = ...`.
+  const meta = Object.hasOwn(DYN_FIELDS, key) ? DYN_FIELDS[key] : undefined;
   // An unknown key is unsupported outright — telling the author to "make it static" would only move
   // them on to the unknown-key error.
   if (!meta && !isStyleKey(key)) throw unknownStyleKey(key);
@@ -6447,7 +6459,7 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
 #define ER_AOT_SCREEN_W ${screen.width}
 #define ER_AOT_SCREEN_H ${screen.height}
 #define ER_AOT_DEMO "${demo}"
-#define ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')} 1
+#define ${demoMarker(demo)} 1
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
@@ -6499,14 +6511,28 @@ if (
 ) {
   const demo = process.argv[2] || process.env.DEMO || 'thermostat';
   const appPath = resolve(demosDir, demo, 'App.jsx');
+  const avail = existsSync(demosDir)
+    ? readdirSync(demosDir, {withFileTypes: true})
+        .filter(d => d.isDirectory())
+        .map(d => d.name)
+    : [];
   if (!existsSync(appPath)) {
-    const avail = existsSync(demosDir)
-      ? readdirSync(demosDir, {withFileTypes: true})
-          .filter(d => d.isDirectory())
-          .map(d => d.name)
-      : [];
     console.error(
       `AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`,
+    );
+    process.exit(1);
+  }
+  // Names differing only in characters the marker flattens (e.g. `watch-face` / `watch_face`) share one
+  // ER_AOT_DEMO_* macro, so a board guarded on either would accept an app built from the other — the very
+  // mismatch the marker exists to catch. Refuse rather than emit an ambiguous guard.
+  const clash = avail.filter(
+    d => d !== demo && demoMarker(d) === demoMarker(demo),
+  );
+  if (clash.length) {
+    console.error(
+      `AOT: demo "${demo}" and ${clash.map(d => `"${d}"`).join(', ')} both map to ${demoMarker(demo)}, ` +
+        `so a board example could not tell their generated apps apart. Rename one so the demo names differ ` +
+        `by more than "-" vs "_".`,
     );
     process.exit(1);
   }

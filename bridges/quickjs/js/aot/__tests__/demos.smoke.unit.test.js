@@ -63,3 +63,24 @@ describe('AOT demo compile smoke', () => {
     expect(r.handlers).toBeGreaterThan(0);
   });
 });
+
+// Each board example pins the demo its app.gen.c must come from, in two places that have to agree: the
+// `#ifndef ER_AOT_DEMO_<demo>` guard and the regenerate command in its own error text. Point the guard at
+// a scratch demo while testing on hardware, and the example stops building for everyone — with an error
+// telling them to run the command that does not satisfy it.
+describe('board example demo guards', () => {
+  const exampleSrc = rel =>
+    readFileSync(resolve(demosDir, '..', 'examples', rel), 'utf8');
+
+  it.each([
+    ['esp32/esp32-2432s028r/main/main.c', 'thermostat'],
+    ['rp2040/rp2040-touch-lcd-1.69/main.c', 'watch-face'],
+  ])('%s guards on the %s marker', (rel, demo) => {
+    const src = exampleSrc(rel);
+    const marker = src.match(/#ifndef (ER_AOT_DEMO_\w+)/)?.[1];
+    const command = src.match(/npm run aot -- ([\w-]+)/)?.[1];
+    expect(command).toBe(demo);
+    // The marker is the demo name with every non-identifier character mapped to '_' (see app.gen.h).
+    expect(marker).toBe(`ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')}`);
+  });
+});

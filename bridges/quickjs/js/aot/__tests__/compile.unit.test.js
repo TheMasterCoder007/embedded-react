@@ -3104,6 +3104,18 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('"a%d2", s_state.n');
   });
 
+  // `"a" + null === "anull"` in JS, but a standalone {null} child draws nothing. The two contexts need
+  // different handling of the same value.
+  it('stringifies a nullish concat operand, but not a standalone child', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        return (<View><Text>{label + null}</Text><Text>{null}</Text></View>);
+      }`);
+    expect(c).toContain('"%snull", s_state.label');
+    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", "");');
+  });
+
   it('escapes a literal % so it survives the format string', () => {
     const c = gen(`${D}
       export function App() {
@@ -3252,6 +3264,38 @@ import { View, StyleSheet } from 'embedded-react';
     expect(e.message).toMatch(/unsupported value for style "alignItems"/);
     expect(e.message).toMatch(/one of auto, flex-start/);
     expect(e.aotLoc).toBeTruthy();
+  });
+
+  // DYN_FIELDS/KEYS are plain objects, so `style={{toString: n}}` used to find Object.prototype's method,
+  // look like a known key, and emit `p.undefined = …` — invalid C, from the compiler that is supposed to
+  // reject unsupported styles up front.
+  it.each(['toString', 'constructor', 'valueOf', 'hasOwnProperty'])(
+    'rejects the inherited Object.prototype key "%s" as an unknown style',
+    key => {
+      const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{${key}: n}} />);
+      }`);
+      expect(e.message).toMatch(new RegExp(`style "${key}" is not supported`));
+    },
+  );
+
+  it('does not emit an undefined ERProps field for a prototype key', () => {
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{toString: n}} />);
+      }`),
+    ).toThrow();
+    // And the static path too, which goes through lowerStyle's own key lookup.
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        return (<View style={{valueOf: 4}} />);
+      }`),
+    ).toThrow(/style "valueOf" is not supported/);
   });
 
   it('locates an unknown key that arrived through a StyleSheet', () => {

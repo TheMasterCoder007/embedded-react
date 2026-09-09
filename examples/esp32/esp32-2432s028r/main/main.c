@@ -58,7 +58,7 @@ _Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LC
 /* app.gen.h also records WHICH demo it came from. A different demo's app.gen.c can still match this
  * panel size and link, leaving a board that boots someone else's UI (or fails on host setters it never
  * generated). Name the real cause instead. */
-#ifndef ER_AOT_DEMO_aot_probe
+#ifndef ER_AOT_DEMO_thermostat
 #error "dist/app.gen.c came from a different demo than this board expects (app.gen.h records which in "\
        "ER_AOT_DEMO). Regenerate it with the ER_AOT_SCREEN_W/H command above, ending: npm run aot -- thermostat"
 #endif

@@ -261,7 +261,7 @@ export function lowerStyle(style) {
   const out = [];
   for (const [key, value] of Object.entries(style)) {
     if (value === undefined || value === null) continue;
-    const fn = KEYS[key];
+    const fn = Object.hasOwn(KEYS, key) ? KEYS[key] : undefined;
     if (!fn)
       throw new Error(
         `AOT: unsupported style key "${key}" (not yet lowered to ERProps)`,
