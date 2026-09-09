@@ -44,6 +44,18 @@ extern "C"
  */
 #define ER_LAYOUT_AUTO INT16_MIN
 
+/**
+ * @brief Degrees to radians, and back.
+ *
+ * Every angle-valued prop on this ABI (transform rotate, gradient_angle, the Arc widget's sweep) is in
+ * DEGREES, so the conversion runs in both directions across the boundary: a host or language binding
+ * converts an incoming radian angle to the degrees the prop stores, and the engine converts back to
+ * radians to evaluate it. Defined once because the two have to be exact inverses — a hand-written
+ * PI/180 on one side and 180/PI on the other lets an angle drift by round-tripping.
+ */
+#define ER_DEG2RAD 0.017453292519943295f
+#define ER_RAD2DEG 57.29577951308232f
+
 /** @brief Maximum length of ERProps::text, excluding the null terminator. */
 #define ER_TEXT_MAX 255
 
@@ -369,6 +381,25 @@ extern "C"
 
 /** @brief Maximum length of a single text span's content, excluding the null terminator. */
 #define ER_SPAN_TEXT_MAX 63
+
+/*
+ * Per-node vector STORAGE caps — how much of an er_node_set_vector_ops() call the engine keeps. Anything
+ * past them is truncated (with a diagnostics warning naming the pool). They are part of the ABI rather
+ * than an engine detail because a caller marshals into them: a bridge or a language binding sizes its own
+ * staging buffers from these, and one that stages LESS truncates the op-tape before the engine ever sees
+ * it — a shape silently missing from the drawing, with the engine's own cap never reached. The engine
+ * CMake publishes whatever values that build was configured with, so a consumer derives rather than
+ * guesses; these fallbacks are what a direct-source build (no CMake) gets.
+ */
+#ifndef ERUI_VECTOR_TAPE_MAX
+#define ERUI_VECTOR_TAPE_MAX 1024 /**< Op-tape floats stored per vector node. */
+#endif
+#ifndef ERUI_VECTOR_PAINTS_MAX
+#define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries (shapes) stored per vector node. */
+#endif
+#ifndef ERUI_VECTOR_GRADS_MAX
+#define ERUI_VECTOR_GRADS_MAX 8 /**< Gradient entries stored per vector node (ERUI_GRADIENT only). */
+#endif
 
     /**
      * @brief Type of gradient fill applied to a View-family node background.
@@ -777,6 +808,16 @@ extern "C"
         ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */
     } ERProps;
 
+/**
+ * @brief The duration a caller should fill in for a timing animation that names none.
+ *
+ * The engine itself has no default — a duration_ms of 0 simply finishes at once — so the value lives
+ * here for everyone who has to supply one: the built-in ERLayoutAnimConfig presets, and any binding
+ * that marshals a config object with the duration left out. They must agree, or a
+ * `LayoutAnimation.configureNext({})` runs at a different speed than the preset it is meant to match.
+ */
+#define ER_ANIM_DEFAULT_DURATION_MS 300U
+
     /**
      * @brief Animation configuration passed to er_anim_start() and group functions.
      *
@@ -787,7 +828,7 @@ extern "C"
     {
         ERAnimType type;              /**< Animation algorithm (default ER_ANIM_TIMING). */
         ERAnimEasing easing;          /**< Easing curve for ER_ANIM_TIMING (default ER_EASE_LINEAR). */
-        uint32_t duration_ms;         /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. */
+        uint32_t duration_ms;         /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. 0 finishes at once. */
         uint32_t delay_ms;            /**< Delay before the animation begins; 0 = start immediately. */
         float stiffness;              /**< Spring stiffness k (ER_ANIM_SPRING; default 100). */
         float damping;                /**< Spring damping coefficient c (ER_ANIM_SPRING; default 10). */
@@ -821,7 +862,7 @@ extern "C"
     typedef struct ERLayoutAnimConfig
     {
         ERAnimType type;      /**< ER_ANIM_TIMING or ER_ANIM_SPRING. */
-        uint16_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring. */
+        uint16_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring. 0 finishes at once. */
         ERAnimEasing easing;  /**< Easing curve for ER_ANIM_TIMING; ignored for spring. */
         float stiffness;      /**< Spring stiffness k (ER_ANIM_SPRING; 0 = default 100). */
         float damping;        /**< Spring damping c (ER_ANIM_SPRING; 0 = default 10). */

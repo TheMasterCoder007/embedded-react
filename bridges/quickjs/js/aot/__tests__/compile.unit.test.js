@@ -999,6 +999,23 @@ describe('AOT responsive layout', () => {
     expect(c).not.toContain('"wide"');
   });
 
+  it('stamps the header with the screen it actually folded against', () => {
+    // The board examples _Static_assert ER_AOT_SCREEN_W/H against their panel, so this metadata has to
+    // come from the size the layout was folded at — not from the environment default, which would make a
+    // correctly generated app fail the board's check.
+    const src = `${PRE}
+      export function App() {
+        const compact = screen.width < 400;
+        if (compact) return (<View><Text>small</Text></View>);
+        return (<View><Text>wide</Text></View>);
+      }`;
+    const res = compileSource(src, 'test', {screen: {width: 240, height: 320}});
+    expect(res.c).toContain('"small"');
+    expect(res.h).toContain('#define ER_AOT_SCREEN_W 240');
+    expect(res.h).toContain('#define ER_AOT_SCREEN_H 320');
+    expect(res.h).toContain('#define ER_AOT_DEMO "test"');
+  });
+
   it('throws on a top-level if whose test is not compile-time constant', () => {
     const src = `${PRE}
       export function App() {

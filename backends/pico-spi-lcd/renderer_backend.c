@@ -91,9 +91,10 @@ typedef struct
     ErPicoLcdPanelOps ops;
     int w;
     int h;
-    uint16_t* fb;           /**< Canonical framebuffer, panel byte order. */
-    int dx0, dy0, dx1, dy1; /**< Dirty bounding box (inclusive); x1 < x0 means empty. */
-    bool first;             /**< First present pushes the whole frame. */
+    uint16_t* fb;       /**< Canonical framebuffer, panel byte order. */
+    int dx0, dy0;       /**< Dirty box, inclusive min corner. */
+    int dx_end, dy_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dx_end <= dx0 means empty. */
+    bool first;         /**< First present pushes the whole frame. */
 } ErPicoLcdBackend;
 
 static ErPicoLcdBackend s_be;
@@ -129,10 +130,10 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dx0 = x;
     if (y < s_be.dy0)
         s_be.dy0 = y;
-    if (x + w - 1 > s_be.dx1)
-        s_be.dx1 = x + w - 1;
-    if (y + h - 1 > s_be.dy1)
-        s_be.dy1 = y + h - 1;
+    if (x + w > s_be.dx_end)
+        s_be.dx_end = x + w;
+    if (y + h > s_be.dy_end)
+        s_be.dy_end = y + h;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -308,12 +309,13 @@ void er_pico_spi_lcd_present(void)
         y1 = s_be.h - 1;
         s_be.first = false;
     }
-    else if (s_be.dy1 >= s_be.dy0 && s_be.dx1 >= s_be.dx0)
+    else if (s_be.dy_end > s_be.dy0 && s_be.dx_end > s_be.dx0)
     {
+        /* set_window takes an INCLUSIVE panel window (CASET/RASET), so convert on the way out. */
         x0 = s_be.dx0;
         y0 = s_be.dy0;
-        x1 = s_be.dx1;
-        y1 = s_be.dy1;
+        x1 = s_be.dx_end - 1;
+        y1 = s_be.dy_end - 1;
     }
     else
     {
@@ -337,8 +339,8 @@ void er_pico_spi_lcd_present(void)
 
     s_be.dx0 = s_be.w;
     s_be.dy0 = s_be.h;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
 }
 
 bool er_pico_spi_lcd_backend_init(const ErPicoLcdPanelOps* ops, int width, int height)
@@ -352,8 +354,8 @@ bool er_pico_spi_lcd_backend_init(const ErPicoLcdPanelOps* ops, int width, int h
     s_be.h = height;
     s_be.dx0 = width;
     s_be.dy0 = height;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
     s_be.first = true;
 
     const size_t bytes = (size_t)width * (size_t)height * sizeof(uint16_t);

@@ -123,11 +123,16 @@ target_compile_definitions(er_engine PRIVATE
     ERUI_VECTOR_MAX_EDGES=256
     ERUI_VECTOR_MAX_ROW=240
     ERUI_MAX_VECTOR_NODES=1
+    ERUI_VECTOR_EDGE_CACHE=0     # cached <Svg> edge lists: this face uses no vector nodes, save the RAM
+    ER_PERF_OVERLAY=0
+)
+# The per-node STORAGE caps are PUBLIC, unlike the rasterizer scratch above: er_scene.h documents them as
+# the sizes a CALLER marshals into, so anything linking the engine has to see the values this board was
+# actually built with rather than the header's defaults.
+target_compile_definitions(er_engine PUBLIC
     ERUI_VECTOR_TAPE_MAX=64
     ERUI_VECTOR_PAINTS_MAX=8
     ERUI_VECTOR_GRADS_MAX=1
-    ERUI_VECTOR_EDGE_CACHE=0     # cached <Svg> edge lists: this face uses no vector nodes, save the RAM
-    ER_PERF_OVERLAY=0
 )
 
 # --- firmware --------------------------------------------------------------------------------------

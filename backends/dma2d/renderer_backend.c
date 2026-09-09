@@ -59,11 +59,11 @@ typedef struct
     ErDma2dBackendConfig cfg;
     ErDma2dRegs* regs;
     uint8_t* fb;
-    int bpp;       /**< Bytes per framebuffer pixel. */
-    int stride_px; /**< Row pitch in pixels. */
-    bool pending;  /**< A DMA2D transfer was started and not yet waited on. */
-    int dx0, dy0;  /**< Dirty box (inclusive min corner). */
-    int dx1, dy1;  /**< Dirty box (exclusive max corner); dx1 <= dx0 means empty. */
+    int bpp;            /**< Bytes per framebuffer pixel. */
+    int stride_px;      /**< Row pitch in pixels. */
+    bool pending;       /**< A DMA2D transfer was started and not yet waited on. */
+    int dx0, dy0;       /**< Dirty box, inclusive min corner. */
+    int dx_end, dy_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dx_end <= dx0 means empty. */
 } Dma2dCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -176,22 +176,22 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint3
 /** @brief Grows the dirty bounding box to include a written rectangle. */
 static void mark_dirty(int x, int y, int w, int h)
 {
-    if (s_ctx.dx1 <= s_ctx.dx0)
+    if (s_ctx.dx_end <= s_ctx.dx0)
     {
         s_ctx.dx0 = x;
         s_ctx.dy0 = y;
-        s_ctx.dx1 = x + w;
-        s_ctx.dy1 = y + h;
+        s_ctx.dx_end = x + w;
+        s_ctx.dy_end = y + h;
         return;
     }
     if (x < s_ctx.dx0)
         s_ctx.dx0 = x;
     if (y < s_ctx.dy0)
         s_ctx.dy0 = y;
-    if (x + w > s_ctx.dx1)
-        s_ctx.dx1 = x + w;
-    if (y + h > s_ctx.dy1)
-        s_ctx.dy1 = y + h;
+    if (x + w > s_ctx.dx_end)
+        s_ctx.dx_end = x + w;
+    if (y + h > s_ctx.dy_end)
+        s_ctx.dy_end = y + h;
 }
 
 /** @brief Clips a rectangle to the framebuffer, advancing the source origin to match. */
@@ -621,17 +621,17 @@ void er_dma2d_backend_wait(void)
 
 bool er_dma2d_backend_take_dirty(int* x, int* y, int* w, int* h)
 {
-    if (s_ctx.dx1 <= s_ctx.dx0)
+    if (s_ctx.dx_end <= s_ctx.dx0)
         return false;
     if (x)
         *x = s_ctx.dx0;
     if (y)
         *y = s_ctx.dy0;
     if (w)
-        *w = s_ctx.dx1 - s_ctx.dx0;
+        *w = s_ctx.dx_end - s_ctx.dx0;
     if (h)
-        *h = s_ctx.dy1 - s_ctx.dy0;
-    s_ctx.dx0 = s_ctx.dy0 = s_ctx.dx1 = s_ctx.dy1 = 0;
+        *h = s_ctx.dy_end - s_ctx.dy0;
+    s_ctx.dx0 = s_ctx.dy0 = s_ctx.dx_end = s_ctx.dy_end = 0;
     return true;
 }
 

@@ -38,3 +38,15 @@ void my_backend_init(void) {
 
 That's it. The engine never includes any platform header — it only calls through the
 struct.
+
+### Dirty-rectangle convention
+
+A backend that accumulates a dirty box for its flush tracks it as **inclusive min corner, exclusive
+max corner** — the same convention as `ERRect` — and names the fields `dx0/dy0` and `dx_end/dy_end`
+so the convention is visible at every use. Empty is `dx_end <= dx0`.
+
+Backends are exactly where code gets copied from one board to the next, and an inclusive box lifted
+into an exclusive flush loop (or the reverse) leaves a one-pixel column of stale panel content — a
+defect that survives every review because both versions look right in isolation. Convert at the panel
+call instead: `esp_lcd_panel_draw_bitmap` takes exclusive bounds, an ST7789-style `set_window` takes
+inclusive ones.

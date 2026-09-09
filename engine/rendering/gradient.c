@@ -15,19 +15,14 @@
  */
 
 #include "gradient.h"
+#include "er_limits.h"
 #include "renderer_internal.h"
 #include "rrect.h" /* rounded-corner geometry, shared so the mask matches the fill pixel for pixel */
 #include <math.h>
 
-#ifndef ERUI_MAX_IMG_ROW_PIXELS
-#define ERUI_MAX_IMG_ROW_PIXELS 800
-#endif
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-#define GRAD_PI 3.14159265358979323846f
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -167,26 +162,6 @@ static void mask_init(GradMask* m, const ERViewProps* vp, int w, int h)
 }
 
 /**
- * @brief Scales a premultiplied ARGB8888 pixel by an anti-aliasing coverage byte.
- *
- * Every channel scales, not just alpha: the value is premultiplied, so leaving the colour channels
- * alone would brighten the fringe instead of fading it.
- *
- * @param[in] p    Premultiplied ARGB8888 pixel.
- * @param[in] cov  Coverage in [0, 255].
- *
- * @return The pixel scaled by cov/255, still premultiplied.
- */
-static uint32_t premul_scale(uint32_t p, uint32_t cov)
-{
-    const uint32_t a = (((p >> 24) & 0xFFu) * cov + 127u) / 255u;
-    const uint32_t r = (((p >> 16) & 0xFFu) * cov + 127u) / 255u;
-    const uint32_t g = (((p >> 8) & 0xFFu) * cov + 127u) / 255u;
-    const uint32_t b = ((p & 0xFFu) * cov + 127u) / 255u;
-    return (a << 24) | (r << 16) | (g << 8) | b;
-}
-
-/**
  * @brief Blits one assembled gradient row, clipped to the rounded-rect silhouette.
  *
  * Rows clear of the corner arcs blit whole; rows the arcs cut into blit only their covered span, then
@@ -217,34 +192,28 @@ static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, 
 
 #if ERUI_BORDER_AA
     /* Fringe pixels take the gradient colour at their own column, faded by the arc's coverage. */
-    if (rr.l_r > 0)
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
     {
-        for (int k = 0;; k++)
+        const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
+        if (cov <= 0.0f)
+            break;
+        const int ax = rr.x0 - 1 - k;
+        if (cov < 1.0f && ax >= 0 && ax < capped_w)
         {
-            const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
-            if (cov <= 0.0f)
-                break;
-            const int ax = rr.x0 - 1 - k;
-            if (cov < 1.0f && ax >= 0 && ax < capped_w)
-            {
-                const uint32_t p = premul_scale(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
-                er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
-            }
+            const uint32_t p = er_px_scale_premul(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
+            er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
         }
     }
-    if (rr.r_r > 0)
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
     {
-        for (int k = 0;; k++)
+        const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
+        if (cov <= 0.0f)
+            break;
+        const int ax = rr.x1 + k;
+        if (cov < 1.0f && ax >= 0 && ax < capped_w && ax < m->w)
         {
-            const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
-            if (cov <= 0.0f)
-                break;
-            const int ax = rr.x1 + k;
-            if (cov < 1.0f && ax >= 0 && ax < capped_w && ax < m->w)
-            {
-                const uint32_t p = premul_scale(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
-                er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
-            }
+            const uint32_t p = er_px_scale_premul(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
+            er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
         }
     }
 #endif
@@ -273,7 +242,7 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
     GradMask mask;
     mask_init(&mask, vp, w, h);
 
-    const float angle_rad = vp->gradient_angle * (GRAD_PI / 180.0f);
+    const float angle_rad = vp->gradient_angle * ER_DEG2RAD;
     const float ddx = sinf(angle_rad);
     const float ddy = cosf(angle_rad);
 

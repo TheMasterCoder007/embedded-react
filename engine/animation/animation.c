@@ -17,6 +17,7 @@
 #include "arc_widget.h"
 #include "er_node_internal.h"
 #include "renderer_internal.h"
+#include "spring.h"
 #include <math.h>
 #include <string.h>
 
@@ -58,9 +59,6 @@
 
 /** @brief Default decay deceleration per millisecond (≈ RN 0.998 per 60fps frame). */
 #define DECAY_DEFAULT_DECELERATION 0.998f
-
-/** @brief Maximum spring/decay integration steps per tick, to bound the cost of a long frame. */
-#define ANIM_MAX_STEPS 200u
 
 /** @brief Group type values stored in ERAnimGroup::type. */
 #define GROUP_TYPE_SEQUENCE 0
@@ -1028,25 +1026,7 @@ void er_anim_cancel_node(uint16_t node_tag)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Integrates one millisecond of spring physics.
- *
- * @param[in,out] pos        Current spring position.
- * @param[in,out] vel        Current spring velocity.
- * @param[in]     stiffness  Spring constant k.
- * @param[in]     damping    Damping coefficient c.
- * @param[in]     mass       Spring mass m.
- */
-static void spring_step(float* pos, float* vel, float stiffness, float damping, float mass)
-{
-    const float dt = 0.001f;
-    const float disp = *pos - 1.0f;
-    const float accel = (-stiffness * disp - damping * (*vel)) / mass;
-    *vel += accel * dt;
-    *pos += (*vel) * dt;
-}
-
-/**
- * @brief Integrates spring physics for delta_ms milliseconds (max ANIM_MAX_STEPS steps).
+ * @brief Integrates spring physics for delta_ms milliseconds (max ER_SPRING_MAX_STEPS steps).
  *
  * @param[in,out] anim       Animation slot to update.
  * @param[in]     delta_ms   Elapsed time in milliseconds.
@@ -1056,15 +1036,15 @@ static void spring_step(float* pos, float* vel, float stiffness, float damping, 
 static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
-    if (steps > ANIM_MAX_STEPS)
-        steps = ANIM_MAX_STEPS;
+    if (steps > ER_SPRING_MAX_STEPS)
+        steps = ER_SPRING_MAX_STEPS;
 
     const float k = anim->spring_stiffness > 0.0f ? anim->spring_stiffness : SPRING_DEFAULT_STIFFNESS;
     const float c = anim->spring_damping > 0.0f ? anim->spring_damping : SPRING_DEFAULT_DAMPING;
     const float m = anim->spring_mass > 0.0f ? anim->spring_mass : SPRING_DEFAULT_MASS;
 
     for (uint32_t i = 0; i < steps; i++)
-        spring_step(&anim->spring_pos, &anim->spring_vel, k, c, m);
+        er_spring_step(&anim->spring_pos, &anim->spring_vel, k, c, m);
 
     const float disp = anim->spring_pos - 1.0f;
     return (disp > -SPRING_SETTLE_DISP && disp < SPRING_SETTLE_DISP)
@@ -1072,7 +1052,7 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
 }
 
 /**
- * @brief Advances decay physics for delta_ms milliseconds (max ANIM_MAX_STEPS steps).
+ * @brief Advances decay physics for delta_ms milliseconds (max ER_SPRING_MAX_STEPS steps).
  *
  * Capping the step count keeps a long frame cheap. A decay caught by one coasts for a few more ticks
  * instead of jumping to where it would have landed, which is how the spring integrator already behaves.
@@ -1085,8 +1065,8 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
 static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
-    if (steps > ANIM_MAX_STEPS)
-        steps = ANIM_MAX_STEPS;
+    if (steps > ER_SPRING_MAX_STEPS)
+        steps = ER_SPRING_MAX_STEPS;
 
     const float decel = anim->decay_deceleration > 0.0f ? anim->decay_deceleration : DECAY_DEFAULT_DECELERATION;
 

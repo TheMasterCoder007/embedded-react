@@ -56,8 +56,6 @@
 /** @brief Hard cap on segment count (each gap costs two cross products per pixel). */
 #define ARC_MAX_SEGMENTS 32
 
-#define ARC_DEG2RAD 0.017453292519943295f
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -100,39 +98,6 @@ static uint32_t s_lut[ERUI_RENDER_WORKERS][ARC_GRAD_LUT];
 static inline float clamp01(float v)
 {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-}
-
-/** @brief Scales a premultiplied pixel by an 8-bit coverage (all four channels). */
-static inline uint32_t scale_premul(uint32_t p, uint32_t cov)
-{
-    if (cov >= 255U)
-        return p;
-    const uint32_t a = (((p >> 24) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t r = (((p >> 16) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t g = (((p >> 8) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t b = ((p & 0xFFU) * cov + 127U) / 255U;
-    return (a << 24) | (r << 16) | (g << 8) | b;
-}
-
-/**
- * @brief Fast atan2 (max error ~0.0015 rad) for the per-pixel conic sampler — same polynomial the vector
- *        rasterizer's conic gradient uses, so both paths quantize an angle identically. Range (-PI, PI].
- */
-static inline float fast_atan2(float y, float x)
-{
-    const float ax = fabsf(x), ay = fabsf(y);
-    if (ax < 1e-12f && ay < 1e-12f)
-        return 0.0f;
-    const float a = (ax > ay) ? (ay / ax) : (ax / ay);
-    const float s = a * a;
-    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a;
-    if (ay > ax)
-        r = 1.57079637f - r;
-    if (x < 0.0f)
-        r = 3.14159274f - r;
-    if (y < 0.0f)
-        r = -r;
-    return r;
 }
 
 /** @brief Exact half-chord (no cache). */
@@ -247,8 +212,8 @@ void er_arc_sector_bbox(float cx,
         if (_y > *y1)                                                                                                  \
             *y1 = _y;                                                                                                  \
     } while (0)
-    const float c0 = cosf(a0 * ARC_DEG2RAD), s0 = sinf(a0 * ARC_DEG2RAD);
-    const float c1 = cosf(a1 * ARC_DEG2RAD), s1 = sinf(a1 * ARC_DEG2RAD);
+    const float c0 = cosf(a0 * ER_DEG2RAD), s0 = sinf(a0 * ER_DEG2RAD);
+    const float c1 = cosf(a1 * ER_DEG2RAD), s1 = sinf(a1 * ER_DEG2RAD);
     ADD(cx + r_in * c0, cy + r_in * s0);
     ADD(cx + r_out * c0, cy + r_out * s0);
     ADD(cx + r_in * c1, cy + r_in * s1);
@@ -257,7 +222,7 @@ void er_arc_sector_bbox(float cx,
     const float k0 = ceilf(a0 / 90.0f);
     for (float k = k0; k * 90.0f <= a1; k += 1.0f)
     {
-        const float a = k * 90.0f * ARC_DEG2RAD;
+        const float a = k * 90.0f * ER_DEG2RAD;
         ADD(cx + r_out * cosf(a), cy + r_out * sinf(a));
     }
 #undef ADD
@@ -303,7 +268,7 @@ void er_arc_fill_sector(const ERArcSector* s)
     const float thick = ro - ri;
 
     /* Boundary rays. */
-    const float a0r = s->a0 * ARC_DEG2RAD, a1r = s->a1 * ARC_DEG2RAD;
+    const float a0r = s->a0 * ER_DEG2RAD, a1r = s->a1 * ER_DEG2RAD;
     const float c0 = cosf(a0r), sn0 = sinf(a0r), c1 = cosf(a1r), sn1 = sinf(a1r);
     const bool wedge_and = (sweep <= 180.0f);
 
@@ -331,10 +296,10 @@ void er_arc_fill_sector(const ERArcSector* s)
             {
                 const float g0 = s->seg_a0 + (float)k * (seg_len + s->gap_deg) - s->gap_deg;
                 const float g1 = g0 + s->gap_deg;
-                gc0[ngaps] = cosf(g0 * ARC_DEG2RAD);
-                gs0[ngaps] = sinf(g0 * ARC_DEG2RAD);
-                gc1[ngaps] = cosf(g1 * ARC_DEG2RAD);
-                gs1[ngaps] = sinf(g1 * ARC_DEG2RAD);
+                gc0[ngaps] = cosf(g0 * ER_DEG2RAD);
+                gs0[ngaps] = sinf(g0 * ER_DEG2RAD);
+                gc1[ngaps] = cosf(g1 * ER_DEG2RAD);
+                gs1[ngaps] = sinf(g1 * ER_DEG2RAD);
                 ngaps++;
             }
         }
@@ -486,7 +451,7 @@ void er_arc_fill_sector(const ERArcSector* s)
                     uint32_t pm;
                     if (conic)
                     {
-                        float ang = fast_atan2(dy, dx) * (1.0f / ARC_DEG2RAD) - grad_a0;
+                        float ang = er_fast_atan2(dy, dx) * ER_RAD2DEG - grad_a0;
                         ang -= 360.0f * floorf(ang / 360.0f); /* [0, 360) past the ramp's start */
                         /* Outside the ramp (a round cap, the AA fringe of a boundary ray): pin to the nearer
                          * end instead of wrapping the last stop's colour onto the first cap. */
@@ -514,7 +479,7 @@ void er_arc_fill_sector(const ERArcSector* s)
                     {
                         pm = solid;
                     }
-                    *out = scale_premul(pm, (uint32_t)(cov * 255.0f + 0.5f));
+                    *out = er_px_scale_premul(pm, (uint32_t)(cov * 255.0f + 0.5f));
                     any = true;
                 }
                 if (any)

@@ -17,7 +17,8 @@
 #ifndef EMBEDDED_REACT_VECTOR_H
 #define EMBEDDED_REACT_VECTOR_H
 
-#include "er_scene.h" /* ERVectorPaint + the ER_VOP / ER_VCAP / ER_VJOIN / ER_VFILL contract */
+#include "er_diagnostics.h" /* ERUI_WARN_ONCE — the pool-overflow warnings below */
+#include "er_scene.h"       /* ERVectorPaint + the ER_VOP / ER_VCAP / ER_VJOIN / ER_VFILL contract */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,49 +38,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /* When a static pool is exhausted the vector code silently drops geometry — correct and memory-safe, but a
- * truncated shape is easy to mistake for a bug. With diagnostics on, the first overflow of each pool prints
- * a one-line warning naming the macro to raise. Defaults ON for debug builds and OFF when NDEBUG is defined,
- * so a release MCU pulls in no <stdio.h> and pays no code; force it with -DERUI_VECTOR_DIAGNOSTICS=0/1. */
-#ifndef ERUI_VECTOR_DIAGNOSTICS
-#ifdef NDEBUG
-#define ERUI_VECTOR_DIAGNOSTICS 0
-#else
-#define ERUI_VECTOR_DIAGNOSTICS 1
-#endif
-#endif
-
-#if ERUI_VECTOR_DIAGNOSTICS
-#include <stdio.h>
-/* Warn once per call site per process: an overflow can recur every frame, and one line is enough to act on.
- * The latch is static to each macro expansion, so each pool warns independently. */
+ * truncated shape is easy to mistake for a bug. The first overflow of each pool prints a one-line warning
+ * naming the macro to raise. One wording, one latch, one knob (ERUI_DIAGNOSTICS — see er_diagnostics.h). */
 #define ERUI_VEC_WARN_ONCE(macro_name, cap)                                                                            \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        static bool er_vec_warned_ = false;                                                                            \
-        if (!er_vec_warned_)                                                                                           \
-        {                                                                                                              \
-            er_vec_warned_ = true;                                                                                     \
-            fprintf(stderr,                                                                                            \
-                    "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n",                         \
-                    macro_name,                                                                                        \
-                    (int)(cap));                                                                                       \
-        }                                                                                                              \
-    } while (0)
-#else
-#define ERUI_VEC_WARN_ONCE(macro_name, cap) ((void)0)
-#endif
-
-/* Running the STORAGE pool out of slots is the one overflow that stays hidden in a release build, so it
- * gets its own always-on knob. The caps above truncate a single shape — the screen shows something
- * recognisably wrong, and the shape that broke is the one you were editing. Exhausting the slot pool
- * instead denies a whole node its geometry: it draws nothing, and because slots are handed out in mount
- * order, WHICH nodes go missing shifts as screens mount and unmount. That reads on a panel as random
- * glitching with no obvious culprit and cost a full debugging cycle to trace, so it warns once per
- * process even under NDEBUG (and raises a flag the perf overlay shows). One fprintf on a path that has
- * already failed; force it off with -DERUI_VECTOR_STORE_WARN=0 on a target that must not link stdio. */
-#ifndef ERUI_VECTOR_STORE_WARN
-#define ERUI_VECTOR_STORE_WARN 1
-#endif
+    ERUI_WARN_ONCE("embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name, (int)(cap))
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Edge cache (per-node cached rasterizer geometry; pool lives in vector_cache.c)

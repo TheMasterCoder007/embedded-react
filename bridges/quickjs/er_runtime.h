@@ -253,6 +253,25 @@ bool er_runtime_container_has_vendor(const void* buf, size_t len);
 const char* er_runtime_container_status_str(ErContainerStatus status);
 
 /**
+ * @brief CRC-32/IEEE (zlib polynomial 0xEDB88320), table-free.
+ *
+ * The ONE checksum of the delivery pipeline: the hot-reload transport frame, the host-built container and
+ * the container as the device verifies it are all this function. It is declared here, rather than kept
+ * privately by each of them, because a divergence does not fail loudly — a frame or container simply
+ * stops loading with a CRC mismatch and nothing says why.
+ *
+ * The JS side (bridges/quickjs/js/assets/emit-container.mjs, which hotreload/protocol.mjs imports) is the
+ * fourth copy and cannot share this one; it carries a note pointing back here, and container.unit.test.js
+ * pins both to the standard "123456789" -> 0xCBF43926 check vector.
+ *
+ * @param[in] p  Bytes to checksum.
+ * @param[in] n  Byte count.
+ *
+ * @return The CRC as an unsigned 32-bit value.
+ */
+uint32_t er_crc32(const uint8_t* p, size_t n);
+
+/**
  * @brief Evaluates an app from a compiled QuickJS bytecode blob (JS_ReadObject), then pumps once.
  *
  * @param[in] buf  Bytecode bytes (caller-owned; may point into flash).

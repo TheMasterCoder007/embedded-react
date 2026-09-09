@@ -15,6 +15,7 @@
  */
 
 #include "arc_widget.h"
+#include "er_limits.h"
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include "transform.h"
@@ -32,10 +33,6 @@
 #define ER_SCROLL_FRICTION 0.002f /**< Velocity decay per millisecond (≈ React Native deceleration:0.998/frame). */
 #define ER_SCROLL_VEL_STOP 0.001f /**< Velocity magnitude below which momentum scrolling stops. */
 #define ER_SCROLL_VEL_WINDOW 200U /**< Maximum age in ms of the last recorded move used for velocity estimation. */
-
-#ifndef ERUI_MAX_NODES
-#define ERUI_MAX_NODES 512
-#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -257,8 +254,8 @@ static bool point_inside_node_with_slop(const ERNode* node, int x, int y)
  * the one the last paint took. On the affine path the determinant does not depend on the origin at all;
  * on the 3D one the pivot does, and following node_map_point() is what keeps the two in step.
  *
- * Asked only of a node render_tree would put on the capture path at all; the ActivityIndicator, which
- * it never does, is settled by the caller.
+ * Asked only of a node er_node_has_complex_transform() already admitted, so the size test below is the
+ * remaining half of er_node_can_capture_transform()'s rule; the ActivityIndicator is settled there.
  *
  * @param[in] node  Node carrying a transform that is not translate-only.
  *
@@ -299,13 +296,10 @@ static bool node_transform_reaches_screen(const ERNode* node)
 static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* out_y)
 {
     int qx = x, qy = y;
-#if ERUI_TRANSFORMS_FULL
-    const bool can_capture = node->type != ER_NODE_ACTIVITY_INDICATOR;
-#endif
     if (node->has_transform)
     {
 #if ERUI_TRANSFORMS_FULL
-        if (can_capture && !er_transform_is_translate_only(node))
+        if (er_node_has_complex_transform(node))
         {
             /* Degraded to the raw-box paint — too large, an ancestor holds the capture, or the matrix
              * does not invert: the drawn pixels carry no transform, so neither may the touch. The
@@ -372,62 +366,6 @@ static bool point_inside_transformed_with_slop(const ERNode* node, int x, int y)
     if (!node_map_point(node, x, y, &qx, &qy))
         return false;
     return point_inside_node_with_slop(node, qx, qy);
-}
-
-/**
- * @brief Collects child tags into an array in append order.
- *
- * @param[in] parent    Parent node whose children should be collected.
- * @param[out] tags     Output child tag buffer.
- * @param[in] max_tags  Capacity of tags.
- *
- * @return Number of child tags written.
- */
-static int collect_children(const ERNode* parent, uint16_t* tags, int max_tags)
-{
-    int count = 0;
-    uint16_t child_tag = parent->first_child_tag;
-
-    while (child_tag != ER_INVALID_TAG && count < max_tags)
-    {
-        ERNode* child = er_get_node(child_tag);
-        if (!child)
-            break;
-
-        tags[count++] = child_tag;
-        child_tag = child->next_sibling_tag;
-    }
-
-    return count;
-}
-
-/**
- * @brief Sorts child tags by zIndex while preserving append order for equal zIndex.
- *
- * @param[in,out] tags   Child tag array to sort.
- * @param[in] count      Number of tags in the array.
- */
-static void sort_children_by_z_index(uint16_t* tags, int count)
-{
-    for (int i = 1; i < count; i++)
-    {
-        const uint16_t key = tags[i];
-        const ERNode* key_node = er_get_node(key);
-        const int16_t key_z = key_node ? key_node->z_index : 0;
-        int j = i - 1;
-
-        while (j >= 0)
-        {
-            const ERNode* node = er_get_node(tags[j]);
-            const int16_t z = node ? node->z_index : 0;
-            if (z <= key_z)
-                break;
-            tags[j + 1] = tags[j];
-            j--;
-        }
-
-        tags[j + 1] = key;
-    }
 }
 
 /**
@@ -523,8 +461,8 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
             const int child_y = node_scrolls ? qy + (int)node->scroll_offset_y : qy;
 
             uint16_t child_tags[ERUI_MAX_NODES];
-            const int child_count = collect_children(node, child_tags, ERUI_MAX_NODES);
-            sort_children_by_z_index(child_tags, child_count);
+            const int child_count = er_collect_children(node, child_tags, ERUI_MAX_NODES);
+            er_sort_children_by_z_index(child_tags, child_count);
 
             for (int i = child_count - 1; i >= 0; i--)
             {

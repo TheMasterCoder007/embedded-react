@@ -39,6 +39,7 @@
 
 #include "er_js_alloc.h"
 #include "er_runtime.h"
+#include "host_harness.h"
 #include "native_renderer.h"
 #include "quickjs.h"
 
@@ -186,45 +187,6 @@ static const JSMallocFunctions MF_ALLOCATION_FAILS = {
  - Functions: Private — no-op backend (the font registry needs one; nothing is painted here)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief No-op fill. @param argb Color. @param x X. @param y Y. @param w Width. @param h Height. @param ctx Context.
- */
-static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
-{
-    (void)argb;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
-
-/** @brief No-op copy. @param src Source. @param stride Stride. @param x X. @param y Y. @param w Width. @param h Height.
- * @param ctx Context. */
-static void noop_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
-{
-    (void)src;
-    (void)stride;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
-
-/** @brief No-op blend. @param src Source. @param stride Stride. @param a Alpha. @param x X. @param y Y. @param w Width.
- * @param h Height. @param ctx Context. */
-static void noop_blend(const void* src, int stride, uint8_t a, int x, int y, int w, int h, void* ctx)
-{
-    (void)src;
-    (void)stride;
-    (void)a;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — harness
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -342,7 +304,7 @@ static int64_t measure_growth(const JSMallocFunctions* mf)
  */
 int main(void)
 {
-    static const EmbeddedRenderBackend backend = {noop_fill, noop_copy, noop_blend, NULL, NULL, NULL};
+    static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
 
     printf("JS heap accounting mode: %s\n", er_js_usable_size_mode());

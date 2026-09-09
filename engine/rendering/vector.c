@@ -76,14 +76,18 @@
 #define VEC_SUBSAMPLES 4   /**< Vertical AA sub-scanlines per pixel row. */
 #define VEC_FLAT_TOL 0.18f /**< Bezier flatness tolerance (px²). Coarser = fewer edges (AA hides facets). */
 #define VEC_ARC_TOL                                                                                                    \
-    0.10f                   /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:            \
-                               the rasterize cost is clip-area bound, not edge-count bound, and a coarse               \
-                               value visibly facets small curves (0.25f measures ~13% faster on a stroked              \
-                               ring and shifts its edge by a visible quarter pixel — not worth it). */
-#define VEC_JOIN_TOL 0.05f  /**< How far (px) a merged stroke corner may stray from the join it replaces. */
-#define VEC_CLOSE_EPS 0.05f /**< Under this gap, a CLOSE that misses its start point counts as landing on it. */
-#define VEC_PI 3.14159265358979323846f
-#define VEC_RAD2DEG 57.29577951308232f
+    0.10f                  /**< Arc chord-error tolerance (px). Geometry build is ~1ms, so keep this fine:             \
+                              the rasterize cost is clip-area bound, not edge-count bound, and a coarse                \
+                              value visibly facets small curves (0.25f measures ~13% faster on a stroked               \
+                              ring and shifts its edge by a visible quarter pixel — not worth it). */
+#define VEC_JOIN_TOL 0.05f /**< How far (px) a merged stroke corner may stray from the join it replaces. */
+/* Round caps and round joins are polygons, and their vertex counts are what keeps a stroke inside
+ * ERUI_VECTOR_MAX_EDGES: a path with many round joins spends its edge budget here first. */
+#define VEC_DISC_SEGS_PER_PX 1.5f /**< Cap-disc segments per pixel of radius, before the clamps. */
+#define VEC_DISC_SEGS_MIN 8       /**< Below this a small cap reads as a visible polygon. */
+#define VEC_DISC_SEGS_MAX 28      /**< Above this a large cap costs edges without looking rounder. */
+#define VEC_JOIN_ARC_STEP 0.4f    /**< Round-join fan step in radians (~23 deg); one triangle per step. */
+#define VEC_CLOSE_EPS 0.05f       /**< Under this gap, a CLOSE that misses its start point counts as landing on it. */
 
 /* Coverage at or above which a pixel quantizes to alpha 255 ((uint32)(c * 255 + 0.5f) == 255) — i.e.
  * where a row stops being an AA fringe and becomes solid paint. */
@@ -104,7 +108,8 @@
 #define ERUI_VECTOR_ANALYTIC_ARC 1
 #endif
 
-/* ERUI_VECTOR_DIAGNOSTICS + ERUI_VEC_WARN_ONCE live in vector.h (shared with vector_store.c). */
+/* ERUI_VEC_WARN_ONCE lives in vector.h (shared with vector_store.c); the knob behind it is
+ * ERUI_DIAGNOSTICS in er_diagnostics.h. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Working state (static, reused per render)
@@ -249,15 +254,15 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
     if (ccw)
     {
         while (da > 0.0f)
-            da -= 2.0f * VEC_PI;
+            da -= 2.0f * ER_PI;
     }
     else
     {
         while (da < 0.0f)
-            da += 2.0f * VEC_PI;
+            da += 2.0f * ER_PI;
     }
     /* Step angle so the chord deviation r*(1-cos(step/2)) stays under VEC_ARC_TOL px. */
-    float step = (r > 0.5f) ? 2.0f * acosf(1.0f - VEC_ARC_TOL / r) : VEC_PI;
+    float step = (r > 0.5f) ? 2.0f * acosf(1.0f - VEC_ARC_TOL / r) : ER_PI;
     if (step <= 0.0f || step != step) /* NaN/0 guard */
         step = 0.2f;
     int n = (int)ceilf(fabsf(da) / step);
@@ -394,30 +399,6 @@ static inline uint32_t vgrad_scale(uint32_t p, uint32_t cov)
     return (a << 24) | (r << 16) | (gg << 8) | b;
 }
 
-#if ERUI_GRADIENT_CONIC
-/**
- * @brief Fast atan2 approximation (max error ~0.0015 rad), to avoid the soft-float atan2f libm call in the
- *        per-pixel conic sampler. Same argument order as atan2f(y, x); range (-PI, PI]. A 256-entry colour
- *        LUT quantizes the angle to ~1.4° steps anyway, so this error is invisible.
- */
-static inline float vgrad_fast_atan2(float y, float x)
-{
-    const float ax = fabsf(x), ay = fabsf(y);
-    if (ax < 1e-12f && ay < 1e-12f)
-        return 0.0f;
-    const float a = (ax > ay) ? (ay / ax) : (ax / ay); /* ratio in [0,1] */
-    const float s = a * a;
-    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a; /* atan(a) */
-    if (ay > ax)
-        r = 1.57079637f - r; /* PI/2 - r */
-    if (x < 0.0f)
-        r = 3.14159274f - r;
-    if (y < 0.0f)
-        r = -r;
-    return r;
-}
-#endif
-
 /** @brief True if a gradient type is supported in this build (radial gated on ERUI_GRADIENT_RADIAL). */
 static int vgrad_supported(int type)
 {
@@ -454,7 +435,7 @@ static float vgrad_t(const ERVectorGradient* g, float fx, float fy)
     {
         /* atan2(dx, -dy): 0 at the top, increasing clockwise. Subtract the start angle, wrap to [0,1).
          * Uses the polynomial atan2 approximation — this runs per covered pixel on the drag hot path. */
-        float a = (vgrad_fast_atan2(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * VEC_PI);
+        float a = (er_fast_atan2(fx - g->ax, -(fy - g->ay)) - g->r) / (2.0f * ER_PI);
         a -= floorf(a);
         return a;
     }
@@ -832,18 +813,10 @@ static bool record_pass(uint8_t kind, int paint_idx)
         return true; /* nothing painted, nothing to replay */
     if (e->n_passes >= ERUI_VECTOR_CACHE_PASSES || e->n_edges + s_nedges > ERUI_VECTOR_CACHE_EDGES)
     {
-#if ERUI_VECTOR_DIAGNOSTICS
-        static bool warned = false;
-        if (!warned)
-        {
-            warned = true;
-            fprintf(stderr,
-                    "embedded-react vector: edge cache entry full (ERUI_VECTOR_CACHE_EDGES %d / "
-                    "ERUI_VECTOR_CACHE_PASSES %d) - node repaints uncached; raise them.\n",
-                    (int)ERUI_VECTOR_CACHE_EDGES,
-                    (int)ERUI_VECTOR_CACHE_PASSES);
-        }
-#endif
+        ERUI_WARN_ONCE("embedded-react vector: edge cache entry full (ERUI_VECTOR_CACHE_EDGES %d / "
+                       "ERUI_VECTOR_CACHE_PASSES %d) - node repaints uncached; raise them.\n",
+                       (int)ERUI_VECTOR_CACHE_EDGES,
+                       (int)ERUI_VECTOR_CACHE_PASSES);
         return false;
     }
     ERVecPass* p = &e->passes[e->n_passes++];
@@ -949,15 +922,15 @@ static void add_disc(float cx, float cy, float r)
 {
     if (r <= 0.0f)
         return;
-    int n = (int)(r * 1.5f);
-    if (n < 8)
-        n = 8;
-    if (n > 28)
-        n = 28;
+    int n = (int)(r * VEC_DISC_SEGS_PER_PX);
+    if (n < VEC_DISC_SEGS_MIN)
+        n = VEC_DISC_SEGS_MIN;
+    if (n > VEC_DISC_SEGS_MAX)
+        n = VEC_DISC_SEGS_MAX;
     float px = cx + r, py = cy;
     for (int i = 1; i <= n; i++)
     {
-        const float t = -2.0f * VEC_PI * (float)i / (float)n;
+        const float t = -2.0f * ER_PI * (float)i / (float)n;
         const float qx = cx + r * cosf(t);
         const float qy = cy + r * sinf(t);
         edge_add(px, py, qx, qy);
@@ -1061,11 +1034,11 @@ static void add_join(float vx, float vy, float u0x, float u0y, float u1x, float 
         const float a0 = atan2f(p0y - vy, p0x - vx);
         const float a1 = atan2f(p1y - vy, p1x - vx);
         float da = a1 - a0;
-        while (da > VEC_PI)
-            da -= 2.0f * VEC_PI;
-        while (da < -VEC_PI)
-            da += 2.0f * VEC_PI;
-        int steps = (int)ceilf(fabsf(da) / 0.4f); /* ~23 degrees per step */
+        while (da > ER_PI)
+            da -= 2.0f * ER_PI;
+        while (da < -ER_PI)
+            da += 2.0f * ER_PI;
+        int steps = (int)ceilf(fabsf(da) / VEC_JOIN_ARC_STEP);
         if (steps < 1)
             steps = 1;
         float pax = p0x, pay = p0y;
@@ -1497,12 +1470,12 @@ static bool arc_run_match(const float* ops, int i, int n_ops, int px, int py, Ve
             if (ccw)
             {
                 while (da > 0.0f)
-                    da -= 2.0f * VEC_PI;
+                    da -= 2.0f * ER_PI;
             }
             else
             {
                 while (da < 0.0f)
-                    da += 2.0f * VEC_PI;
+                    da += 2.0f * ER_PI;
             }
             const float sweep = (da < 0.0f) ? -da : da;
             if (!(sweep > 0.0f))
@@ -1510,9 +1483,9 @@ static bool arc_run_match(const float* ops, int i, int n_ops, int px, int py, Ve
             out->cx = acx;
             out->cy = acy;
             out->r = ar;
-            out->a0_deg = ((da < 0.0f) ? (a0 + da) : a0) * VEC_RAD2DEG;
-            out->sweep_deg = sweep * VEC_RAD2DEG;
-            out->full = (sweep >= 2.0f * VEC_PI - 1e-4f);
+            out->a0_deg = ((da < 0.0f) ? (a0 + da) : a0) * ER_RAD2DEG;
+            out->sweep_deg = sweep * ER_RAD2DEG;
+            out->full = (sweep >= 2.0f * ER_PI - 1e-4f);
             sx = acx + ar * cosf(a0);
             sy = acy + ar * sinf(a0);
             have_arc = true;

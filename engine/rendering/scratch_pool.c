@@ -15,21 +15,9 @@
  */
 
 #include "scratch_pool.h"
+#include "er_limits.h"
 #include "renderer_internal.h"
 #include <string.h>
-
-#ifndef ERUI_SCRATCH_W
-#define ERUI_SCRATCH_W 240
-#endif
-#ifndef ERUI_SCRATCH_H
-#define ERUI_SCRATCH_H 240
-#endif
-#ifndef ERUI_SCRATCH_BAND_H
-#define ERUI_SCRATCH_BAND_H ERUI_SCRATCH_H
-#endif
-#ifndef ERUI_MAX_OPACITY_DEPTH
-#define ERUI_MAX_OPACITY_DEPTH 4
-#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private

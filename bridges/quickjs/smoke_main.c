@@ -28,6 +28,7 @@
 
 #include "er_runtime.h" /* er_js_new_context — the device's lite intrinsic profile */
 #include "er_scene.h"
+#include "host_harness.h"
 #include "native_renderer.h"
 #include "native_ui_bridge.h"
 #include "quickjs.h"
@@ -45,45 +46,6 @@
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — no-op backend
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/** @brief No-op fill callback. @param argb Color. @param x X. @param y Y. @param w Width. @param h Height. @param ctx
- * Context. */
-static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
-{
-    (void)argb;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
-
-/** @brief No-op copy callback. @param src Source. @param stride Stride. @param x X. @param y Y. @param w Width. @param
- * h Height. @param ctx Context. */
-static void noop_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
-{
-    (void)src;
-    (void)stride;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
-
-/** @brief No-op blend callback. @param src Source. @param stride Stride. @param a Alpha. @param x X. @param y Y. @param
- * w Width. @param h Height. @param ctx Context. */
-static void noop_blend(const void* src, int stride, uint8_t a, int x, int y, int w, int h, void* ctx)
-{
-    (void)src;
-    (void)stride;
-    (void)a;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)ctx;
-}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — console shim
@@ -145,7 +107,7 @@ int main(void)
 {
     /* Install a no-op backend first: this initialises the font registry that text
        measurement relies on, and lets the paint path run without a window. */
-    static const EmbeddedRenderBackend backend = {noop_fill, noop_copy, noop_blend, NULL, NULL, NULL};
+    static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
 
     JSRuntime* rt = JS_NewRuntime();

@@ -615,8 +615,8 @@ static uint32_t rd_le32(const uint8_t* p)
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-/** @brief Standard CRC-32 (IEEE / zlib polynomial 0xEDB88320), branchless inner loop. */
-static uint32_t crc32_bytes(const uint8_t* p, size_t n)
+/* Declared in er_runtime.h — the one CRC the hot-reload receiver shares. */
+uint32_t er_crc32(const uint8_t* p, size_t n)
 {
     uint32_t crc = 0xFFFFFFFFu;
     for (size_t i = 0; i < n; i++)
@@ -776,7 +776,7 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
     const size_t payload_end = off; /* exact end of the container within the (possibly larger) buffer */
 
     /* Integrity, then version compatibility — both before touching the engine. */
-    if (stored_crc != crc32_bytes(buf + 12, payload_end - 12u))
+    if (stored_crc != er_crc32(buf + 12, payload_end - 12u))
     {
         return ER_CONTAINER_BAD_CRC;
     }

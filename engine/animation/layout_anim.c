@@ -17,6 +17,7 @@
 #include "er_node_internal.h"
 #include "er_scene.h"
 #include "renderer_internal.h"
+#include "spring.h"
 #include <math.h>
 #include <string.h>
 
@@ -43,9 +44,6 @@
 
 /** @brief Default spring mass m (matches React Native Animated.spring() default). */
 #define LA_SPRING_DEFAULT_MASS 1.0f
-
-/** @brief Maximum spring integration steps per tick to bound CPU cost. */
-#define LA_SPRING_MAX_STEPS 200
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -113,13 +111,13 @@ void er_layout_anim_cancel_node(uint16_t node_tag)
 
 const ERLayoutAnimConfig ER_LAYOUT_ANIM_EASE_IN_EASE_OUT = {
     .type = ER_ANIM_TIMING,
-    .duration_ms = 300U,
+    .duration_ms = ER_ANIM_DEFAULT_DURATION_MS,
     .easing = ER_EASE_EASE_IN_OUT,
 };
 
 const ERLayoutAnimConfig ER_LAYOUT_ANIM_LINEAR = {
     .type = ER_ANIM_TIMING,
-    .duration_ms = 300U,
+    .duration_ms = ER_ANIM_DEFAULT_DURATION_MS,
     .easing = ER_EASE_LINEAR,
 };
 
@@ -321,24 +319,6 @@ static float la_apply_easing(float t, ERAnimEasing ease, float bx1, float by1, f
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Integrates one millisecond of spring physics toward the normalised target 1.0.
- *
- * @param[in,out] pos        Current normalised spring position.
- * @param[in,out] vel        Current normalised velocity.
- * @param[in]     stiffness  Spring constant k.
- * @param[in]     damping    Damping coefficient c.
- * @param[in]     mass       Spring mass m.
- */
-static void la_spring_step(float* pos, float* vel, float stiffness, float damping, float mass)
-{
-    const float dt = 0.001f;
-    const float disp = *pos - 1.0f;
-    const float accel = (-stiffness * disp - damping * (*vel)) / mass;
-    *vel += accel * dt;
-    *pos += (*vel) * dt;
-}
-
-/**
  * @brief Integrates spring physics for delta_ms milliseconds and checks for settlement.
  *
  * @param[in,out] la        Layout animation slot whose spring state is updated.
@@ -349,15 +329,15 @@ static void la_spring_step(float* pos, float* vel, float stiffness, float dampin
 static bool la_tick_spring(ERLayoutAnim* la, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
-    if (steps > (uint32_t)LA_SPRING_MAX_STEPS)
-        steps = (uint32_t)LA_SPRING_MAX_STEPS;
+    if (steps > ER_SPRING_MAX_STEPS)
+        steps = ER_SPRING_MAX_STEPS;
 
     const float k = la->stiffness > 0.0f ? la->stiffness : LA_SPRING_DEFAULT_STIFFNESS;
     const float c = la->damping > 0.0f ? la->damping : LA_SPRING_DEFAULT_DAMPING;
     const float m = la->mass > 0.0f ? la->mass : LA_SPRING_DEFAULT_MASS;
 
     for (uint32_t i = 0; i < steps; i++)
-        la_spring_step(&la->spring_pos, &la->spring_vel, k, c, m);
+        er_spring_step(&la->spring_pos, &la->spring_vel, k, c, m);
 
     const float disp = la->spring_pos - 1.0f;
     return (disp > -LA_SPRING_SETTLE_DISP && disp < LA_SPRING_SETTLE_DISP)

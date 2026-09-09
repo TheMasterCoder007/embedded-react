@@ -22,23 +22,6 @@
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/* Standard CRC-32 (IEEE / zlib polynomial 0xEDB88320), branchless inner loop. Byte-for-byte identical
- * to crc32_bytes() in er_runtime.c and crc32() in emit-container.mjs/protocol.mjs — all three CRCs in
- * the pipeline (host frame, host container, device container) are the one algorithm. */
-static uint32_t er_hr_crc32(const uint8_t* p, size_t n)
-{
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < n; i++)
-    {
-        crc ^= p[i];
-        for (int b = 0; b < 8; b++)
-        {
-            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1u)));
-        }
-    }
-    return ~crc;
-}
-
 static uint32_t er_hr_rd_le32(const uint8_t* p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -157,7 +140,7 @@ ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t
         {
             continue;
         }
-        const uint32_t got = er_hr_crc32(hr->buf, hr->payload_len);
+        const uint32_t got = er_crc32(hr->buf, hr->payload_len);
         const size_t len = hr->payload_len;
         const bool ok = (got == hr->payload_crc);
         er_hr_rescan(hr);

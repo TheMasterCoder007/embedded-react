@@ -198,10 +198,12 @@ typedef struct
                                       no present copy. Requires RGB565 canonical format, rotation 0, and 2+ panel fbs. */
     SemaphoreHandle_t flip_done; /**< Given at each frame boundary: all earlier flips have taken effect. */
     int pending_flips;           /**< Flips requested since the last confirmed frame boundary. */
-    /* Current dirty bounding box (inclusive); x1 < x0 means "empty". */
-    int dx0, dy0, dx1, dy1;
+    /* Current dirty box: inclusive min corner, EXCLUSIVE max corner (matches ERRect). dx_end <= dx0
+     * means "empty". The panel's own draw_bitmap window is exclusive too; the inclusive locals in
+     * present() exist only because rot_box()/present_region() work in inclusive corners. */
+    int dx0, dy0, dx_end, dy_end;
     /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
-    int pdx0, pdy0, pdx1, pdy1;
+    int pdx0, pdy0, pdx_end, pdy_end;
     int present_count; /**< First two presents draw full-screen to initialise both framebuffers. */
     /* Persistent overlay: an RGB565 snapshot (see er_esp32_lcd_overlay_capture) re-composited on top
      * of every present, so a small always-on overlay stays consistent across both framebuffers and is
@@ -213,7 +215,7 @@ typedef struct
     /* Saved dirty box around an overlay draw (er_esp32_lcd_overlay_begin): drawing the overlay into
      * the framebuffer to snapshot it must not leave the overlay's rect in the APP dirty box, or it
      * would balloon the app's per-frame flush (overlay corner unioned with far-away app damage). */
-    int sdx0, sdy0, sdx1, sdy1;
+    int sdx0, sdy0, sdx_end, sdy_end;
 } ERLcdBackend;
 
 static ERLcdBackend s_be;
@@ -295,10 +297,10 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dx0 = x;
     if (y < s_be.dy0)
         s_be.dy0 = y;
-    if (x + w - 1 > s_be.dx1)
-        s_be.dx1 = x + w - 1;
-    if (y + h - 1 > s_be.dy1)
-        s_be.dy1 = y + h - 1;
+    if (x + w > s_be.dx_end)
+        s_be.dx_end = x + w;
+    if (y + h > s_be.dy_end)
+        s_be.dy_end = y + h;
     taskEXIT_CRITICAL(&s_blit_mux);
 }
 
@@ -745,12 +747,12 @@ void er_esp32_lcd_present(void)
          * multi-buffer damage replay already repainted everything this buffer missed while it was
          * off-screen — the dirty box therefore covers every pixel written since this buffer was
          * last flipped, and is exactly the cache-writeback window draw_bitmap needs. */
-        bool have = (s_be.dx1 >= s_be.dx0 && s_be.dy1 >= s_be.dy0);
-        int x0 = s_be.dx0, y0 = s_be.dy0, x1 = s_be.dx1, y1 = s_be.dy1;
+        bool have = (s_be.dx_end > s_be.dx0 && s_be.dy_end > s_be.dy0);
+        int x0 = s_be.dx0, y0 = s_be.dy0, x1 = s_be.dx_end - 1, y1 = s_be.dy_end - 1;
         s_be.dx0 = s_be.w;
         s_be.dy0 = s_be.h;
-        s_be.dx1 = -1;
-        s_be.dy1 = -1;
+        s_be.dx_end = 0;
+        s_be.dy_end = 0;
         if (!have && !s_be.ov_active)
         {
             return; /* nothing changed: no flip, and the engine's buffer ring must not advance */
@@ -820,22 +822,22 @@ void er_esp32_lcd_present(void)
     }
     else
     {
-        if (s_be.dx1 >= s_be.dx0 && s_be.dy1 >= s_be.dy0)
+        if (s_be.dx_end > s_be.dx0 && s_be.dy_end > s_be.dy0)
         {
             x0 = s_be.dx0;
             y0 = s_be.dy0;
-            x1 = s_be.dx1;
-            y1 = s_be.dy1;
+            x1 = s_be.dx_end - 1;
+            y1 = s_be.dy_end - 1;
             have = true;
         }
-        if (dbl && s_be.pdx1 >= s_be.pdx0 && s_be.pdy1 >= s_be.pdy0)
+        if (dbl && s_be.pdx_end > s_be.pdx0 && s_be.pdy_end > s_be.pdy0)
         {
             if (!have)
             {
                 x0 = s_be.pdx0;
                 y0 = s_be.pdy0;
-                x1 = s_be.pdx1;
-                y1 = s_be.pdy1;
+                x1 = s_be.pdx_end - 1;
+                y1 = s_be.pdy_end - 1;
                 have = true;
             }
             else
@@ -844,10 +846,10 @@ void er_esp32_lcd_present(void)
                     x0 = s_be.pdx0;
                 if (s_be.pdy0 < y0)
                     y0 = s_be.pdy0;
-                if (s_be.pdx1 > x1)
-                    x1 = s_be.pdx1;
-                if (s_be.pdy1 > y1)
-                    y1 = s_be.pdy1;
+                if (s_be.pdx_end - 1 > x1)
+                    x1 = s_be.pdx_end - 1;
+                if (s_be.pdy_end - 1 > y1)
+                    y1 = s_be.pdy_end - 1;
             }
         }
     }
@@ -855,12 +857,12 @@ void er_esp32_lcd_present(void)
     /* Roll current → previous, then reset the current box (we've captured everything we need above). */
     s_be.pdx0 = s_be.dx0;
     s_be.pdy0 = s_be.dy0;
-    s_be.pdx1 = s_be.dx1;
-    s_be.pdy1 = s_be.dy1;
+    s_be.pdx_end = s_be.dx_end;
+    s_be.pdy_end = s_be.dy_end;
     s_be.dx0 = s_be.w;
     s_be.dy0 = s_be.h;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
     if (full)
     {
         s_be.present_count++;
@@ -954,8 +956,8 @@ void er_esp32_lcd_overlay_begin(void)
 {
     s_be.sdx0 = s_be.dx0;
     s_be.sdy0 = s_be.dy0;
-    s_be.sdx1 = s_be.dx1;
-    s_be.sdy1 = s_be.dy1;
+    s_be.sdx_end = s_be.dx_end;
+    s_be.sdy_end = s_be.dy_end;
 }
 
 /** @brief Snapshots a framebuffer rect as the persistent overlay re-composited on every present. */
@@ -968,8 +970,8 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
          * separately, so it must not enlarge the app's flush. */
         s_be.dx0 = s_be.sdx0;
         s_be.dy0 = s_be.sdy0;
-        s_be.dx1 = s_be.sdx1;
-        s_be.dy1 = s_be.sdy1;
+        s_be.dx_end = s_be.sdx_end;
+        s_be.dy_end = s_be.sdy_end;
         return;
     }
     const int need = w * h;
@@ -1004,8 +1006,8 @@ void er_esp32_lcd_overlay_capture(int x, int y, int w, int h)
      * from the cache, so it must not stay in (and balloon) the app's per-frame dirty region. */
     s_be.dx0 = s_be.sdx0;
     s_be.dy0 = s_be.sdy0;
-    s_be.dx1 = s_be.sdx1;
-    s_be.dy1 = s_be.sdy1;
+    s_be.dx_end = s_be.sdx_end;
+    s_be.dy_end = s_be.sdy_end;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1043,12 +1045,12 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     s_be.ph = (rotation == 90 || rotation == 270) ? width : height;
     s_be.dx0 = width;
     s_be.dy0 = height;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
     s_be.pdx0 = width;
     s_be.pdy0 = height;
-    s_be.pdx1 = -1;
-    s_be.pdy1 = -1;
+    s_be.pdx_end = 0;
+    s_be.pdy_end = 0;
     s_be.present_count = 0;
     s_be.ov_active = false;
 

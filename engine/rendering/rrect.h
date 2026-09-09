@@ -113,7 +113,9 @@ void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row,
  * @brief Anti-aliasing coverage of the k-th fringe pixel stepping outward from a corner's solid edge.
  *
  * Signed-distance coverage sampled at the pixel centre, matching the arc er_rrect_row() reports.
- * Walk k upward from 0 and stop at the first non-positive result.
+ * Walk k upward from 0, stop at the first non-positive result, and bound the loop with
+ * er_rrect_fringe_max() — several places walk a fringe, and none of them should be one monotonicity
+ * bug away from spinning forever.
  *
  * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r).
  * @param[in] dx  Solid half-width at this row (ERRRectRow::l_dx / r_dx).
@@ -124,6 +126,41 @@ void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row,
  *         pixel), otherwise the fraction to scale the source alpha by.
  */
 float er_rrect_fringe_cov(int r, int dx, int dy, int k);
+
+/**
+ * @brief Hard upper bound on a fringe walk, so no walk is open-ended.
+ *
+ * The fringe starts at the solid edge — already at least @p r's half-width from the arc centre — and
+ * dies once the sample passes the radius, so it can never reach r + 1 steps. Every walk carries this
+ * as its loop bound and still breaks on the first non-positive coverage, which is the real stop.
+ *
+ * A straight edge (r == 0) has no fringe at all and bounds to zero, so the walk does not run. That
+ * case is the common one, not an edge case: on any rounded rect every row between the corners is a
+ * straight edge on both sides, and on a square one every row is — entering the loop even once there
+ * would spend a sqrtf per row per side to learn what the radius already says.
+ *
+ * @param[in] r  Corner arc radius (ERRRectRow::l_r / r_r).
+ *
+ * @return Maximum steps the walk may take.
+ */
+static inline int er_rrect_fringe_max(int r)
+{
+    return r > 0 ? r + 1 : 0;
+}
+
+/**
+ * @brief Number of anti-aliased fringe pixels stepping outward from a corner's solid edge.
+ *
+ * The ring needs the count UP FRONT — its solid band has to stop where the inset shape's fringe
+ * begins — which the fill paths never do, so they walk and break instead of paying for this pass.
+ *
+ * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r); 0 — a straight edge — has no fringe.
+ * @param[in] dx  Solid half-width at this row (ERRRectRow::l_dx / r_dx).
+ * @param[in] dy  Row distance from the arc centre (ERRRectRow::l_dy / r_dy).
+ *
+ * @return Fringe pixel count; 0 when ERUI_BORDER_AA is off.
+ */
+int er_rrect_fringe_len(int r, int dx, int dy);
 
 /**
  * @brief Fills a rounded rectangle with a solid color.

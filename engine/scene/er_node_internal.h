@@ -479,6 +479,32 @@ ERNode* er_get_node(uint16_t tag);
 ERNode* er_get_root_node(void);
 
 /**
+ * @brief Collects a parent's child tags into an array in append order.
+ *
+ * @param[in]  parent    Parent node whose children should be collected.
+ * @param[out] tags      Output child tag buffer.
+ * @param[in]  max_tags  Capacity of tags.
+ *
+ * @return Number of child tags written.
+ */
+int er_collect_children(const ERNode* parent, uint16_t* tags, int max_tags);
+
+/**
+ * @brief Sorts child tags by zIndex, preserving append order among equal zIndex (a stable insertion sort).
+ *
+ * Paired with er_collect_children(), this pair DEFINES the relationship between paint order and hit
+ * order: the compositor paints the sorted list front-to-back and hit-testing walks it back-to-front, so
+ * the topmost drawn node is the one a touch lands on. Both callers share this one implementation
+ * because any divergence — stability, the er_get_node() NULL fallback, which children are skipped —
+ * silently sends touches to a node other than the one on top, which looks like a plausible UI rather
+ * than a crash.
+ *
+ * @param[in,out] tags   Child tag array to sort.
+ * @param[in]     count  Number of tags in the array.
+ */
+void er_sort_children_by_z_index(uint16_t* tags, int count);
+
+/**
  * @brief Marks a node and all ancestors dirty, recording a content change.
  *
  * Also advances the global content generation, which invalidates the compositor's fade cache

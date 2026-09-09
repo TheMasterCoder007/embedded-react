@@ -15,17 +15,20 @@
  */
 
 #include "shadow.h"
+#include "er_limits.h"
 #include "renderer_internal.h"
 #include <string.h>
 
-#ifndef ERUI_SCRATCH_W
-#define ERUI_SCRATCH_W 240
-#endif
-#ifndef ERUI_SCRATCH_H
-#define ERUI_SCRATCH_H 240
-#endif
-
 #if ERUI_SHADOWS
+
+/* Android-style `elevation`: one number stands in for offset, opacity and blur. React Native maps it to
+ * the platform's own elevation shadow, so there is no exact formula to copy — these are the slopes that
+ * make an elevation ladder (1, 2, 4, 8, ...) look like Material's, with the blur radius taken as the
+ * elevation itself. The opacity cap stops a large elevation turning the shadow into a black box. */
+#define SHADOW_ELEV_OFFSET_PER_DP 0.33f /**< Downward offset in px per unit of elevation. */
+#define SHADOW_ELEV_OPACITY_BASE 0.2f   /**< Opacity at the lowest elevation. */
+#define SHADOW_ELEV_OPACITY_SLOPE 0.01f /**< Extra opacity per unit of elevation. */
+#define SHADOW_ELEV_OPACITY_MAX 0.5f    /**< Ceiling on the synthesised opacity. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -186,10 +189,10 @@ void er_shadow_render(const ERViewProps* vp, int x, int y, int w, int h)
         /* Android-style elevation: synthesise a downward black shadow. */
         color = 0xFF000000U;
         offset_x = 0.0f;
-        offset_y = (float)vp->elevation * 0.33f;
-        opacity_f = 0.2f + (float)vp->elevation * 0.01f;
-        if (opacity_f > 0.5f)
-            opacity_f = 0.5f;
+        offset_y = (float)vp->elevation * SHADOW_ELEV_OFFSET_PER_DP;
+        opacity_f = SHADOW_ELEV_OPACITY_BASE + (float)vp->elevation * SHADOW_ELEV_OPACITY_SLOPE;
+        if (opacity_f > SHADOW_ELEV_OPACITY_MAX)
+            opacity_f = SHADOW_ELEV_OPACITY_MAX;
         radius = (int)vp->elevation;
     }
     else

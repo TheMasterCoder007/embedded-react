@@ -15,25 +15,11 @@
  */
 
 #include "transform.h"
+#include "er_limits.h"
 #include "renderer_internal.h"
 #include "scratch_pool.h"
 #include <math.h>
 #include <string.h>
-
-/* Transform-source dims default to the scratch dims so flag-only consumers that size
- * ERUI_SCRATCH_W/H keep their old transform budget; set ERUI_XFORM_W/H to decouple. */
-#ifndef ERUI_SCRATCH_W
-#define ERUI_SCRATCH_W 240
-#endif
-#ifndef ERUI_SCRATCH_H
-#define ERUI_SCRATCH_H 240
-#endif
-#ifndef ERUI_XFORM_W
-#define ERUI_XFORM_W ERUI_SCRATCH_W
-#endif
-#ifndef ERUI_XFORM_H
-#define ERUI_XFORM_H ERUI_SCRATCH_H
-#endif
 
 /* Below these the matrix is treated as singular and the node falls back to an untransformed paint.
  * Named because er_transform_is_invertible() has to answer with EXACTLY the same rule the inverting
@@ -313,9 +299,9 @@ void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, i
 {
     const float sx = (n->tp_scale_x == 0.0f) ? 1.0f : n->tp_scale_x;
     const float sy = (n->tp_scale_y == 0.0f) ? 1.0f : n->tp_scale_y;
-    const float rz = n->tp_rotate_z * (float)(3.14159265358979323846 / 180.0);
-    const float rx = n->tp_rotate_x * (float)(3.14159265358979323846 / 180.0);
-    const float ry = n->tp_rotate_y * (float)(3.14159265358979323846 / 180.0);
+    const float rz = n->tp_rotate_z * ER_DEG2RAD;
+    const float rx = n->tp_rotate_x * ER_DEG2RAD;
+    const float ry = n->tp_rotate_y * ER_DEG2RAD;
 
     const float cx_t = cosf(rx), sx_t = sinf(rx);
     const float cy_t = cosf(ry), sy_t = sinf(ry);
@@ -565,7 +551,7 @@ void er_transform_compute_matrix(
 {
     const float sx = (n->tp_scale_x == 0.0f) ? 1.0f : n->tp_scale_x;
     const float sy = (n->tp_scale_y == 0.0f) ? 1.0f : n->tp_scale_y;
-    const float theta = n->tp_rotate_z * (float)(3.14159265358979323846 / 180.0);
+    const float theta = n->tp_rotate_z * ER_DEG2RAD;
     const float cos_t = cosf(theta);
     const float sin_t = sinf(theta);
 

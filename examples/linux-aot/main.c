@@ -36,8 +36,11 @@
 
 #include <SDL2/SDL.h>
 
-#define SCREEN_W_DEFAULT 800
-#define SCREEN_H_DEFAULT 600
+/* Window size defaults to the size the app was GENERATED for — app.gen.h records it, and a responsive
+ * demo's layout is already folded to it, so a differently-sized window shows the wrong branch letterboxed.
+ * Taking the default from the generated header means the size is stated once, at generate time. */
+#define SCREEN_W_DEFAULT ER_AOT_SCREEN_W
+#define SCREEN_H_DEFAULT ER_AOT_SCREEN_H
 
 /** @brief Reads an integer env var, returning @p fallback when unset/empty/non-positive. */
 static int env_int(const char* name, int fallback)
@@ -78,16 +81,16 @@ int main(void)
         return 1;
     }
 
-    /* Framebuffer size. Defaults to 800×600, but the parity harness (and board-size tests) override it via
-       ER_AOT_SCREEN_W/H so the window matches the size the demo's responsive layout was COMPILED for (the
-       same vars seed screen.width/height in aot/compile.mjs). */
+    /* Framebuffer size. Defaults to whatever the app was compiled for (see above); the parity harness
+       overrides it via ER_AOT_SCREEN_W/H — the same vars that seed screen.width/height in aot/compile.mjs,
+       so setting them for the generate step alone already gives a matching window. */
     const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
     const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
 
-    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
-    if (env_flag("ER_NO_HIDPI"))
+    Uint32 window_flags = SDL_WINDOW_SHOWN;
+    if (env_flag("ER_HIDPI") && !env_flag("ER_NO_HIDPI"))
     {
-        window_flags &= ~(Uint32)SDL_WINDOW_ALLOW_HIGHDPI;
+        window_flags |= SDL_WINDOW_ALLOW_HIGHDPI;
     }
 
     SDL_Window* window = SDL_CreateWindow("embedded-react — desktop (Flow B / AOT)",

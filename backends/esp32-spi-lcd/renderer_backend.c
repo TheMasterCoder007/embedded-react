@@ -225,7 +225,8 @@ typedef struct
                                  composited (banded path = bank[cur]). All draw callbacks target this. */
     uint16_t* bounce;       /**< Small DMA-capable RGB565 staging buffer (full-fb path only; NULL banded). */
     SemaphoreHandle_t done; /**< Given by the panel's color-trans-done ISR; waited on before buffer reuse. */
-    int dx0, dy0, dx1, dy1; /**< Dirty bounding box (inclusive); x1 < x0 means empty. */
+    int dx0, dy0;           /**< Dirty box, inclusive min corner. */
+    int dx_end, dy_end;     /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dx_end <= dx0 means empty. */
     bool first;             /**< First present pushes the whole frame. */
     int sx, sy, sw, sh;     /**< Banded: screen-space rect of the strip currently being composited. */
     fbpx_t* bank[2];        /**< Banded: two ping-pong band buffers — compose the next strip into one while
@@ -278,10 +279,10 @@ static void mark_dirty(int x, int y, int w, int h)
         s_be.dx0 = x;
     if (y < s_be.dy0)
         s_be.dy0 = y;
-    if (x + w - 1 > s_be.dx1)
-        s_be.dx1 = x + w - 1;
-    if (y + h - 1 > s_be.dy1)
-        s_be.dy1 = y + h - 1;
+    if (x + w > s_be.dx_end)
+        s_be.dx_end = x + w;
+    if (y + h > s_be.dy_end)
+        s_be.dy_end = y + h;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -504,10 +505,11 @@ void er_esp32_spi_lcd_present(void)
         y1 = s_be.h - 1;
         s_be.first = false;
     }
-    else if (s_be.dy1 >= s_be.dy0 && s_be.dx1 >= s_be.dx0)
+    else if (s_be.dy_end > s_be.dy0 && s_be.dx_end > s_be.dx0)
     {
+        /* The row loop below is inclusive of y1, so convert off the exclusive end here. */
         y0 = s_be.dy0;
-        y1 = s_be.dy1;
+        y1 = s_be.dy_end - 1;
     }
     else
     {
@@ -527,8 +529,8 @@ void er_esp32_spi_lcd_present(void)
 
     s_be.dx0 = s_be.w;
     s_be.dy0 = s_be.h;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
 #endif /* !ER_LCD_BANDED */
 }
 
@@ -539,8 +541,8 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
     s_be.h = height;
     s_be.dx0 = width;
     s_be.dy0 = height;
-    s_be.dx1 = -1;
-    s_be.dy1 = -1;
+    s_be.dx_end = 0;
+    s_be.dy_end = 0;
     s_be.first = true;
 
     /* Transfer-done signalling so present() can safely reuse the one bounce buffer between bands. */
