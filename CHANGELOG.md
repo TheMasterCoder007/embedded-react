@@ -57,6 +57,11 @@ See the README for the release process.
 
 ### Fixed
 
+- A node moved by a native-driver transform animation no longer vanishes on hosts that repaint only
+  the damage rect. Whether a subtree may be pruned is decided from a flag the layout pass caches. 
+  An animation-only frame skips that pass — so a translate that appeared after the last layout left
+  the node prunable, and it was pruned away as soon as it slid clear of its layout box.
+
 - Paint order and hit order can no longer drift apart: the compositor and hit-testing had
   byte-identical copies of the child-collection and z-order sort that define the relationship, and
   now share one. Same for the "can this node capture a transform" rule, spelled out by hand at seven
