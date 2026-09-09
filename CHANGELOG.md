@@ -57,6 +57,11 @@ See the README for the release process.
 
 ### Fixed
 
+- A dep-driven `useEffect` in the AOT now runs its cleanup before re-running, so a `setInterval` it
+  starts is stopped again on the next dep change instead of accumulating for the life of the app.
+  Timer ids are generation-tagged so clearing an already-finished one cannot stop an unrelated timer.
+  A cleanup returned from inside an `if` would still be dropped, and is now a located error.
+
 - The AOT no longer drops an early `return` from a `useEffect` body — the guard is lowered, so the
   code after it stops running unconditionally. A `return` anywhere else (a handler, a timer or
   animation callback, an inlined helper) is now a located error rather than silence.

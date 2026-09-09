@@ -2360,7 +2360,12 @@ function compileStmts(list, env, state, ctx, indent) {
           );
         if (!decl.init)
           throw new Error('AOT: a handler local must have an initializer');
-        const cName = `l_${decl.id.name}`;
+        // A cleanup closure outlives the call that created it, so when one is emitted (a dep-driven
+        // effect) the body's own locals become file-scope slots instead of C locals.
+        const hoist = ctx.hoist && list === ctx.bodyList;
+        const cName = hoist
+          ? `${ctx.hoist.prefix}${decl.id.name}`
+          : `l_${decl.id.name}`;
         // `const id = setInterval/setTimeout(…)` → an int timer-id local (so a later clearInterval(id) resolves).
         if (
           decl.init.type === 'CallExpression' &&
@@ -2369,8 +2374,9 @@ function compileStmts(list, env, state, ctx, indent) {
             decl.init.callee.name === 'setTimeout')
         ) {
           // The id is only needed for a later clear*(); a mount effect drops its cleanup, so mark it used.
+          if (hoist) ctx.hoist.decls.push(`static int ${cName};`);
           lines.push(
-            `${indent}int ${cName} = ${compileTimerAdd(decl.init, env, state, ctx)};`,
+            `${indent}${hoist ? '' : 'int '}${cName} = ${compileTimerAdd(decl.init, env, state, ctx)};`,
             `${indent}(void)${cName};`,
           );
           env = {
@@ -2383,9 +2389,9 @@ function compileStmts(list, env, state, ctx, indent) {
           continue;
         }
         const e = emitExpr(decl.init, env);
-        lines.push(
-          `${indent}${e.cType === 'float' ? 'float' : 'int'} ${cName} = ${e.code};`,
-        );
+        const cType = e.cType === 'float' ? 'float' : 'int';
+        if (hoist) ctx.hoist.decls.push(`static ${cType} ${cName};`);
+        lines.push(`${indent}${hoist ? '' : cType + ' '}${cName} = ${e.code};`);
         env = {
           ...env,
           locals: new Map(env.locals).set(decl.id.name, {
@@ -2397,9 +2403,10 @@ function compileStmts(list, env, state, ctx, indent) {
       continue;
     }
     // A `return` in an effect body. The LAST statement of the body is the cleanup `return () => …` (or a
-    // bare `return`): the body is over either way, and a cleanup never runs on an MCU because the app
-    // never unmounts, so it lowers to nothing. Any EARLIER return is a guard that has to actually exit —
-    // it emits `return;` and flags the body so compileEffect gives it a C function of its own.
+    // bare `return`). A mount effect drops it — the app never unmounts, so it would never run. A dep-driven
+    // effect re-runs, and React runs the previous cleanup first, so `ctx.cleanup` compiles it into a
+    // companion C function and arms it here. Any EARLIER return is a guard that has to actually exit — it
+    // emits `return;` and flags the body so compileEffect gives it a C function of its own.
     if (st.type === 'ReturnStatement') {
       if (!ctx.allowReturn) {
         const e = aotError(
@@ -2409,7 +2416,22 @@ function compileStmts(list, env, state, ctx, indent) {
         if (st.loc) e.aotLoc = st.loc.start;
         throw e;
       }
-      if (list === ctx.bodyList && si === list.length - 1) continue;
+      const isTail = list === ctx.bodyList && si === list.length - 1;
+      if (ctx.depDriven && isFn(st.argument) && !isTail) {
+        const e = aotError(
+          'AOT: a useEffect cleanup must be the last statement of the effect body',
+          'a cleanup returned from inside an `if` would be dropped. Return `undefined` from the guard and put the single `return () => …` at the end of the body.',
+        );
+        if (st.loc) e.aotLoc = st.loc.start;
+        throw e;
+      }
+      if (isTail) {
+        if (ctx.cleanup && isFn(st.argument)) {
+          ctx.cleanup.emit(st.argument, env);
+          lines.push(`${indent}${ctx.cleanup.armed} = 1;`);
+        }
+        continue;
+      }
       ctx.usedReturn = true;
       lines.push(`${indent}return;`);
       continue;
@@ -2458,6 +2480,7 @@ function compileStmts(list, env, state, ctx, indent) {
  *    then again from app_update whenever a SCALAR dep changes (compared against a stored prev). The body is
  *    compiled WITHOUT a trailing app_update — it runs INSIDE app_update / at mount, so re-applying state it
  *    sets happens on the next app_update (one-frame), and it can never re-enter app_update (no infinite loop).
+ *    A dep-driven `return () => …` becomes `er_effect_N_cleanup()`, run at the top of the next re-run.
  */
 function compileEffect(eff, env, state, out) {
   const body = eff.fn.body;
@@ -2508,16 +2531,52 @@ function compileEffect(eff, env, state, out) {
       );
     return e;
   });
+  // React runs the previous cleanup before re-running a dep-driven effect. The cleanup closes over the
+  // body's locals, which have to outlive the call, so they become file-scope slots; an `armed` flag says
+  // whether the last run actually reached its `return () => …` (a guarded run that returned early did not).
+  const tail = stmts[stmts.length - 1];
+  const hasCleanup = tail?.type === 'ReturnStatement' && isFn(tail.argument);
+  const armed = `s_eff${id}_armed`;
   const ctx = {
     stateChanged: false,
     animIdx: 0,
     out,
     allowReturn: true,
     bodyList: stmts,
+    depDriven: true,
   };
+  if (hasCleanup) {
+    ctx.hoist = {prefix: `s_eff${id}_l_`, decls: out.effectDecls};
+    ctx.cleanup = {
+      armed,
+      emit: (fn, cenv) => {
+        const cbody = fn.body;
+        const clist =
+          cbody.type === 'BlockStatement'
+            ? cbody.body
+            : [{type: 'ExpressionStatement', expression: cbody}];
+        const cctx = {stateChanged: false, animIdx: 0, out};
+        out.effectFns.push({
+          name: `${name}_cleanup`,
+          body: compileStmts(clist, cenv, state, cctx, '    '),
+        });
+      },
+    };
+    out.effectDecls.push(`static int ${armed};`);
+  }
+  const bodyLines = compileStmts(stmts, env, state, ctx, '    ');
   out.effectFns.push({
     name,
-    body: compileStmts(stmts, env, state, ctx, '    '),
+    body: hasCleanup
+      ? [
+          `    if (${armed})`,
+          '    {',
+          `        ${armed} = 0;`,
+          `        ${name}_cleanup();`,
+          '    }',
+          ...bodyLines,
+        ]
+      : bodyLines,
   });
   // A static "previous value" per dep; snapshot at mount, then app_update detects changes against it.
   deps.forEach((d, j) =>
@@ -6057,12 +6116,15 @@ typedef struct
 {
     int interval_ms;
     int remaining_ms;
+    int gen;
     bool repeat;
     bool active;
     void (*fn)(void);
 } ErTimer;
 static ErTimer s_timers[ER_AOT_MAX_TIMERS];
 
+/* An id carries the slot AND the generation that owns it, so clearing an id whose timer has already
+   finished (a one-shot, or an earlier clear) cannot kill whatever took the slot next. */
 static int er_timer_add(int ms, bool repeat, void (*fn)(void))
 {
     for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
@@ -6071,10 +6133,11 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
         {
             s_timers[i].interval_ms = ms < 1 ? 1 : ms;
             s_timers[i].remaining_ms = s_timers[i].interval_ms;
+            s_timers[i].gen = (s_timers[i].gen + 1) & 0xFFFF;
             s_timers[i].repeat = repeat;
             s_timers[i].active = true;
             s_timers[i].fn = fn;
-            return i;
+            return (s_timers[i].gen * ER_AOT_MAX_TIMERS) + i;
         }
     }
     return -1; /* table full (raise ER_AOT_MAX_TIMERS) */
@@ -6082,9 +6145,14 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
 
 static void er_timer_clear(int id)
 {
-    if (id >= 0 && id < ER_AOT_MAX_TIMERS)
+    if (id < 0)
     {
-        s_timers[id].active = false;
+        return;
+    }
+    int i = id % ER_AOT_MAX_TIMERS;
+    if (s_timers[i].active && s_timers[i].gen == id / ER_AOT_MAX_TIMERS)
+    {
+        s_timers[i].active = false;
     }
 }`
     : '';

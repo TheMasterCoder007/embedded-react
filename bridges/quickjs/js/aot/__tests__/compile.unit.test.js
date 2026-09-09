@@ -1823,6 +1823,79 @@ describe('AOT effects & timers', () => {
     expect(c).toContain('er_timer_add((int)(90), true, er_timer_fn_0)');
   });
 
+  it('runs a dependency-driven useEffect cleanup before re-running the body', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [page, setPage] = useState(0);
+        const [t, setT] = useState(0);
+        useEffect(() => {
+          if (page !== 2) return undefined;
+          const id = setInterval(() => setT((v) => (v + 1) % 24), 90);
+          return () => clearInterval(id);
+        }, [page]);
+        return (<Pressable onPress={() => setPage(page + 1)}><Text>{t}</Text></Pressable>);
+      }`);
+    // The timer id has to outlive the call the cleanup closed over, so it becomes a file-scope slot.
+    expect(c).toContain('static int s_eff0_l_id;');
+    expect(c).toContain('static void er_effect_0_cleanup(void)');
+    expect(c).toContain('er_timer_clear(s_eff0_l_id);');
+    // The re-run clears the previous timer first, and only a run that reached the return arms a cleanup.
+    expect(c).toMatch(
+      /static void er_effect_0\(void\)\n\{\n    if \(s_eff0_armed\)\n    \{\n        s_eff0_armed = 0;\n        er_effect_0_cleanup\(\);\n    \}/,
+    );
+    expect(c).toMatch(/s_eff0_l_id = er_timer_add[\s\S]*?s_eff0_armed = 1;/);
+  });
+
+  it('arms no cleanup for a dependency-driven effect that returns nothing', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [doubled, setDoubled] = useState(0);
+        useEffect(() => { setDoubled(n * 2); }, [n]);
+        return (<Pressable onPress={() => setN(n + 1)}><Text>{doubled}</Text></Pressable>);
+      }`);
+    expect(c).not.toContain('s_eff0_armed');
+    expect(c).not.toContain('er_effect_0_cleanup');
+  });
+
+  it('rejects a dependency-driven cleanup returned from inside an if', () => {
+    let err;
+    try {
+      gen(`${PRE}
+      export function App() {
+        const [page, setPage] = useState(0);
+        const [t, setT] = useState(0);
+        useEffect(() => {
+          if (page === 2) {
+            const id = setInterval(() => setT((v) => v + 1), 90);
+            return () => clearInterval(id);
+          }
+        }, [page]);
+        return (<Pressable onPress={() => setPage(page + 1)}><Text>{t}</Text></Pressable>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(
+      /cleanup must be the last statement of the effect body/,
+    );
+    expect(err.message).toContain('demos/test/App.jsx:');
+    expect(err.message).toContain('hint:');
+  });
+
+  it('tags timer ids with a generation so a stale clear cannot kill a reused slot', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        useEffect(() => { const id = setTimeout(() => setN(1), 50); return () => clearTimeout(id); }, []);
+        return (<Text>{n}</Text>);
+      }`);
+    expect(c).toContain('return (s_timers[i].gen * ER_AOT_MAX_TIMERS) + i;');
+    expect(c).toContain(
+      'if (s_timers[i].active && s_timers[i].gen == id / ER_AOT_MAX_TIMERS)',
+    );
+  });
+
   it('gives an early-returning mount effect a C function of its own', () => {
     const c = gen(`${PRE}
       export function App() {
