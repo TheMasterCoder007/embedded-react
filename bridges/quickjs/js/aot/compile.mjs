@@ -2224,15 +2224,18 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
     body.type === 'BlockStatement'
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
-  ctx.inlining.add(name);
   // The helper's statements are spliced into the CALLER, so its `return` is not the caller's return —
   // reject it here even when the caller is an effect body, where a `return` would otherwise be allowed.
+  // Both marks are scoped to this call, so they unwind with it rather than outliving a thrown error.
   const outerAllowReturn = ctx.allowReturn;
+  ctx.inlining.add(name);
   ctx.allowReturn = false;
-  const lines = compileStmts(list, {...env, locals}, state, ctx, indent);
-  ctx.allowReturn = outerAllowReturn;
-  ctx.inlining.delete(name);
-  return lines;
+  try {
+    return compileStmts(list, {...env, locals}, state, ctx, indent);
+  } finally {
+    ctx.allowReturn = outerAllowReturn;
+    ctx.inlining.delete(name);
+  }
 }
 
 function compileHandlerExprImpl(expr, env, state, ctx, indent) {
