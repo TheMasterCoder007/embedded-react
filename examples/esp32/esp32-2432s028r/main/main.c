@@ -55,6 +55,14 @@ _Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LC
                "cd bridges/quickjs/js && ER_AOT_SCREEN_W=" ER_STR(BOARD_LCD_WIDTH) " ER_AOT_SCREEN_H=" ER_STR(
                    BOARD_LCD_HEIGHT) " npm run aot -- thermostat");
 
+/* app.gen.h also records WHICH demo it came from. A different demo's app.gen.c can still match this
+ * panel size and link, leaving a board that boots someone else's UI (or fails on host setters it never
+ * generated). Name the real cause instead. */
+#ifndef ER_AOT_DEMO_aot_probe
+#error "dist/app.gen.c came from a different demo than this board expects (app.gen.h records which in "\
+       "ER_AOT_DEMO). Regenerate it with the ER_AOT_SCREEN_W/H command above, ending: npm run aot -- thermostat"
+#endif
+
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
 #define ER_TARGET_FRAME_MS 16U

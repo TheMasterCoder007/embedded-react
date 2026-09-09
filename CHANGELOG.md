@@ -57,6 +57,21 @@ See the README for the release process.
 
 ### Fixed
 
+- String concatenation in AOT text now works: `<Text>{'page ' + n + '/' + PAGES}</Text>` lowers to a
+  printf format built from the parts. It used to be typed as arithmetic and emit invalid C, so the
+  failure surfaced in the host compiler over a generated source the author never wrote. Also supported
+  in a string `useState` setter and a `<TextInput value>`; anywhere else it is a located error.
+
+- The AOT now lowers the four per-corner `border*Radius` styles, closing a gap where Flow A accepted
+  a style Flow B could not express.
+
+- An AOT style key with no lowering is now reported as unsupported instead of as "a state-driven
+  value ... (static only)", advice that could not be followed when the value was already a literal.
+
+- A board example built against an AOT app generated from a different *demo* is now a compiler error
+  naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
+  generated.
+
 - A dep-driven `useEffect` in the AOT now runs its cleanup before re-running, so a `setInterval` it
   starts is stopped again on the next dep change instead of accumulating for the life of the app.
   Timer ids are generation-tagged so clearing an already-finished one cannot stop an unrelated timer.

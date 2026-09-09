@@ -1016,6 +1016,19 @@ describe('AOT responsive layout', () => {
     expect(res.h).toContain('#define ER_AOT_DEMO "test"');
   });
 
+  // A board that calls a demo's useHostValue setters otherwise fails on implicit declarations of setters
+  // that were never generated. The marker macro lets its main.c #ifndef the mismatch by name.
+  it('stamps a demo marker macro, sanitised into a C identifier', () => {
+    const src = `${PRE}
+      export function App() { return (<View><Text>x</Text></View>); }`;
+    expect(compileSource(src, 'watch-face').h).toContain(
+      '#define ER_AOT_DEMO_watch_face 1',
+    );
+    expect(compileSource(src, 'thermostat').h).toContain(
+      '#define ER_AOT_DEMO_thermostat 1',
+    );
+  });
+
   it('throws on a top-level if whose test is not compile-time constant', () => {
     const src = `${PRE}
       export function App() {
@@ -3040,5 +3053,214 @@ describe('AOT delayLongPress', () => {
         return (<Pressable delayLongPress={ms} onLongPress={() => {}}><Text>x</Text></Pressable>);
       }`),
     ).toThrow(/delayLongPress> must fold to a number/);
+  });
+});
+
+describe('AOT string concatenation in text', () => {
+  const D = `import { useState } from 'react';
+import { View, Text, TextInput } from 'embedded-react';
+`;
+
+  it('lowers a `+` chain in a <Text> child to a printf format + args', () => {
+    const c = gen(`${D}
+      const PAGES = 4;
+      export function App() {
+        const [page, setPage] = useState(0);
+        return (<Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>);
+      }`);
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "render-check %d/4", (s_state.page + 1));',
+    );
+  });
+
+  it('picks the specifier from the part, not the chain', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [hit, setHit] = useState('none');
+        const [t, setT] = useState(0.5);
+        return (<View><Text>{'hit: ' + hit}</Text><Text>{'t=' + t}</Text></View>);
+      }`);
+    expect(c).toContain('"hit: %s", s_state.hit');
+    expect(c).toContain('"t=%g", s_state.t');
+  });
+
+  // JS types a `+` left to right, so the string only starts at the first string operand: `n + 1` still
+  // adds. Flattening the chain blindly would emit "%d%d ms" and print "51 ms" where JS prints "6 ms".
+  it('keeps arithmetic that runs before the first string operand', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(5);
+        return (<Text>{n + 1 + ' ms'}</Text>);
+      }`);
+    expect(c).toContain('"%d ms", (s_state.n + 1)');
+  });
+
+  it('appends past the first string operand, as JS does', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(5);
+        return (<Text>{'a' + n + 2}</Text>);
+      }`);
+    expect(c).toContain('"a%d2", s_state.n');
+  });
+
+  it('escapes a literal % so it survives the format string', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [pct, setPct] = useState(0);
+        return (<Text>{pct + '% full'}</Text>);
+      }`);
+    expect(c).toContain('"%d%% full", s_state.pct');
+  });
+
+  it('folds a fully static chain into the literal', () => {
+    const c = gen(`${D}
+      const NAME = 'watch';
+      export function App() {
+        return (<Text>{'demo: ' + NAME}</Text>);
+      }`);
+    expect(c).toContain('"demo: watch"');
+    expect(c).not.toContain('s_state');
+  });
+
+  it('builds a string state slot from a concatenation', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('');
+        return (<Text onPress={() => setLabel('hit ' + n)}>x</Text>);
+      }`);
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "hit %d", s_state.n);',
+    );
+  });
+
+  it('builds a <TextInput value> from a concatenation', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<TextInput value={'#' + n} />);
+      }`);
+    expect(c).toContain('"#%d", s_state.n');
+  });
+
+  // Outside a text buffer there is no format string to lower into, so it must be a located error rather
+  // than C that only the host compiler rejects.
+  it('rejects a concatenation where the value is not text', () => {
+    let err;
+    try {
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [s, setS] = useState('x');
+        return (<Text onPress={() => setN('a' + s)}>x</Text>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(/string concatenation is not supported/);
+    expect(err.aotLoc).toBeTruthy();
+    expect(err.message).toContain('^');
+  });
+});
+
+describe('AOT per-corner border radii', () => {
+  const D = `import { useState } from 'react';
+import { View, StyleSheet } from 'embedded-react';
+`;
+
+  it('lowers the four corners to their ERProps fields', () => {
+    const c = gen(`${D}
+      export function App() {
+        return (<View style={{borderTopLeftRadius: 2, borderTopRightRadius: 10,
+                              borderBottomRightRadius: 20, borderBottomLeftRadius: 0}} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = 2;');
+    expect(c).toContain('p.border_top_right_radius = 10;');
+    expect(c).toContain('p.border_bottom_right_radius = 20;');
+    expect(c).toContain('p.border_bottom_left_radius = 0;');
+  });
+
+  it('takes them state-driven too', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [r, setR] = useState(4);
+        return (<View style={{borderTopLeftRadius: r}} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = app_round_dim(s_state.r);');
+  });
+
+  it('takes them from a StyleSheet', () => {
+    const c = gen(`${D}
+      const styles = StyleSheet.create({ card: { borderTopLeftRadius: 6 } });
+      export function App() {
+        return (<View style={styles.card} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = 6;');
+  });
+});
+
+describe('AOT style diagnostics', () => {
+  const D = `import { useState } from 'react';
+import { View, StyleSheet } from 'embedded-react';
+`;
+  const err = src => {
+    try {
+      gen(src);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+
+  // A key the static lowering does not know used to fall through to the dynamic branch and be reported
+  // as state-driven, which sent the author looking for state that isn't there.
+  it('names an unknown style key as unknown, not as state-driven', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{transform: [{scale: 2}]}} />);
+      }`);
+    expect(e.message).toMatch(/style "transform" is not supported/);
+    expect(e.message).not.toMatch(/state-driven/);
+    expect(e.aotHint).toMatch(/Flow B lowers these:/);
+  });
+
+  it('says the same for an unknown key given a state-driven value', () => {
+    const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{shadowRadius: n}} />);
+      }`);
+    expect(e.message).toMatch(/style "shadowRadius" is not supported/);
+    expect(e.message).not.toMatch(/state-driven/);
+  });
+
+  it('still reports a state-driven value on a known key as state-driven', () => {
+    const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{flex: n}} />);
+      }`);
+    expect(e.message).toMatch(/state-driven value for style "flex"/);
+  });
+
+  it('reports a bad value on a known key as a bad value, with a location', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{alignItems: 'baseline'}} />);
+      }`);
+    expect(e.message).toMatch(/unsupported value for style "alignItems"/);
+    expect(e.message).toMatch(/one of auto, flex-start/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('locates an unknown key that arrived through a StyleSheet', () => {
+    const e = err(`${D}
+      const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });
+      export function App() {
+        return (<View style={styles.card} />);
+      }`);
+    expect(e.message).toMatch(/style "shadowOpacity" is not supported/);
+    expect(e.aotLoc).toBeTruthy();
   });
 });

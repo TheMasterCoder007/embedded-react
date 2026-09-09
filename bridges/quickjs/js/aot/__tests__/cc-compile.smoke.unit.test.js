@@ -415,4 +415,55 @@ describe('AOT generated C compiles', () => {
       }
     },
   );
+  (CC ? it : it.skip)(
+    `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
+    () => {
+      // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two
+      // char pointers — invalid C the AOT itself accepted. -Wformat is what proves the format string and
+      // the argument list agree, which no regex over the generated text can.
+      const r = compileSource(
+        `import { useState } from 'react';
+         import { View, Text, TextInput } from 'embedded-react';
+         const PAGES = 4;
+         export function App() {
+           const [page, setPage] = useState(0);
+           const [hit, setHit] = useState('none');
+           const [ratio, setRatio] = useState(0.5);
+           const [label, setLabel] = useState('');
+           return (
+             <View style={{ flex: 1 }}>
+               <Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>
+               <Text>{'hit: ' + hit}</Text>
+               <Text onPress={() => setLabel('page ' + page)}>{ratio + '% of ' + PAGES}</Text>
+               <TextInput value={'#' + page} />
+             </View>
+           );
+         }`,
+        'concat',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-concat-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wformat',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
 });

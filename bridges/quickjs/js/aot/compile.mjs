@@ -46,6 +46,8 @@ import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   lowerStyle,
+  isStyleKey,
+  STYLE_KEYS,
   NODE_TYPES,
   DYN_FIELDS,
   colorLiteral,
@@ -340,6 +342,16 @@ function emitExprImpl(node, env) {
       const l = emitExpr(node.left, env);
       const r = emitExpr(node.right, env);
       if (ARITH.has(node.operator)) {
+        // `+` over a string builds text, which C cannot express as one value. Where the destination is a
+        // char buffer the caller lowers it with emitFormat(); anywhere else there is nothing to lower to.
+        if (
+          node.operator === '+' &&
+          (l.cType === 'string' || r.cType === 'string')
+        )
+          throw aotError(
+            'AOT: string concatenation is not supported in this position',
+            'a `+` chain over strings lowers to a printf format, which only works where the value lands in a text buffer: a <Text> body, a string useState setter, or a <TextInput value>.',
+          );
         if (node.operator === '/')
           return {
             code: `((float)(${l.code}) / (float)(${r.code}))`,
@@ -540,6 +552,62 @@ const cTypeOfValue = v =>
     : typeof v === 'number' && !Number.isInteger(v)
       ? 'float'
       : 'int';
+
+/**
+ * Splits a string-building `+` chain into printf parts, following JS's own left-to-right typing: a `+`
+ * is a concatenation only once one of its sides is a string, so `n + 1 + ' ms'` still adds before it
+ * appends. Parts are either a `literal` (folded into the format) or a `{spec, code}` pair (a runtime arg).
+ *
+ * @returns {{isString: boolean, parts: Array<{literal?: string, spec?: string, code?: string}>}}
+ */
+function concatParts(node, env, scope) {
+  try {
+    const v = evalStatic(node, scope);
+    return {
+      isString: typeof v === 'string',
+      parts: [{literal: v === undefined || v === null ? '' : String(v)}],
+    };
+  } catch {
+    /* not a compile-time constant — split it below */
+  }
+  if (node.type === 'BinaryExpression' && node.operator === '+') {
+    const l = concatParts(node.left, env, scope);
+    const r = concatParts(node.right, env, scope);
+    if (l.isString || r.isString)
+      return {isString: true, parts: [...l.parts, ...r.parts]};
+  }
+  const e = emitExpr(node, env);
+  return {
+    isString: e.cType === 'string',
+    parts: [{spec: printfSpec(e.cType), code: e.code}],
+  };
+}
+
+/**
+ * Lowers an expression to a printf format + args for a char-buffer destination (a <Text> body, a string
+ * state slot, a <TextInput value>). A string-building `+` chain becomes one spec per dynamic part with
+ * the literals folded into the format; anything else is a single spec over its own value.
+ *
+ * @returns {{format: string, args: string[]}} `format` already has literal `%` escaped as `%%`.
+ */
+function emitFormat(node, env, scope = env.consts ?? {}) {
+  let format = '';
+  const args = [];
+  for (const part of concatParts(node, env, scope).parts) {
+    if (part.literal !== undefined) format += part.literal.replace(/%/g, '%%');
+    else {
+      format += part.spec;
+      args.push(part.code);
+    }
+  }
+  return {format, args};
+}
+
+/** Renders an emitFormat() result as snprintf's trailing arguments (a constant string keeps its `%s` form). */
+const formatArgs = ({format, args}) =>
+  args.length
+    ? `${cstr(format)}, ${args.join(', ')}`
+    : `"%s", ${cstr(format.replace(/%%/g, '%'))}`;
 
 // ---------------------------------------------------------------------------------------------------
 // AST helpers + collection passes — small predicates (isFn, fnReturnsJSX, …) and the up-front scans
@@ -1355,9 +1423,36 @@ function emitEnumExpr(node, table, env) {
   );
 }
 
+/** The diagnostic for a style key the AOT has no lowering for, static or dynamic. */
+const unknownStyleKey = key =>
+  aotError(
+    `AOT: style "${key}" is not supported by the AOT (no ERProps lowering)`,
+    `Flow A may accept it; Flow B lowers these: ${STYLE_KEYS.join(', ')}.`,
+  );
+
+/**
+ * Lowers one STATIC style key/value, telling the two failures apart: a key the AOT has no lowering for
+ * at all, and a known key whose value it rejects. Both used to be indistinguishable from a state-driven
+ * value, because a single `try` covered the constant fold and the lowering together.
+ */
+function lowerStyleChecked(key, value) {
+  if (!isStyleKey(key)) throw unknownStyleKey(key);
+  try {
+    return lowerStyle({[key]: value});
+  } catch (e) {
+    // style-map's own value errors already name the key in some cases — don't say it twice.
+    const msg = String(e.message);
+    const why = msg.startsWith(`${key}: `) ? msg.slice(key.length + 2) : msg;
+    throw aotError(`AOT: unsupported value for style "${key}": ${why}`);
+  }
+}
+
 /** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
 function lowerDynamicStyleValue(key, valueNode, env) {
   const meta = DYN_FIELDS[key];
+  // An unknown key is unsupported outright — telling the author to "make it static" would only move
+  // them on to the unknown-key error.
+  if (!meta && !isStyleKey(key)) throw unknownStyleKey(key);
   if (!meta)
     throw aotError(
       `AOT: a state-driven value for style "${key}" is not supported (static only)`,
@@ -1484,10 +1579,19 @@ function collectStyleAssigns(openingElement, scope, env) {
           if (handled) continue;
         }
 
+        // Only the FOLD may fall back to the dynamic path. Letting lowerStyle's own failure fall
+        // through too made an unknown style key surface as "state-driven value ... (static only)",
+        // which sends the author looking for state that isn't there.
+        let staticValue;
         try {
-          for (const a of lowerStyle({[key]: evalStatic(prop.value, scope)}))
-            fields.set(a.field, {dynamic: false, code: a.expr});
+          staticValue = {v: evalStatic(prop.value, scope)};
         } catch {
+          staticValue = null; // references state — lower it as a dynamic value
+        }
+        if (staticValue) {
+          for (const a of lowerStyleChecked(key, staticValue.v))
+            fields.set(a.field, {dynamic: false, code: a.expr});
+        } else {
           for (const a of lowerDynamicStyleValue(key, prop.value, env))
             fields.set(a.field, {dynamic: true, code: a.code});
         }
@@ -1495,8 +1599,11 @@ function collectStyleAssigns(openingElement, scope, env) {
       return;
     }
     // A StyleSheet reference / identifier resolving to a static style object.
-    for (const a of lowerStyle(evalStatic(expr, scope)))
-      fields.set(a.field, {dynamic: false, code: a.expr});
+    for (const [k, v] of Object.entries(evalStatic(expr, scope))) {
+      if (v === undefined || v === null) continue;
+      for (const a of lowerStyleChecked(k, v))
+        fields.set(a.field, {dynamic: false, code: a.expr});
+    }
   };
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
@@ -1542,18 +1649,11 @@ function buildText(children, scope, env) {
       format += t.replace(/%/g, '%%');
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
-      try {
-        const v = evalStatic(child.expression, scope); // constant → fold in
-        format += (v === undefined || v === null ? '' : String(v)).replace(
-          /%/g,
-          '%%',
-        );
-      } catch {
-        const e = emitExpr(child.expression, env); // references state → dynamic
-        format += printfSpec(e.cType);
-        args.push(e.code);
-        dynamic = true;
-      }
+      // Constants fold into the literal; anything referencing state contributes a spec + arg.
+      const f = emitFormat(child.expression, env, scope);
+      format += f.format;
+      args.push(...f.args);
+      if (f.args.length) dynamic = true;
     } else if (child.type === 'JSXElement') {
       throw new Error(
         'AOT: nested <Text> / element children inside <Text> not yet supported (spans)',
@@ -1705,12 +1805,14 @@ function compileListOp(rec, arg, env) {
       for (const f of struct.fields) {
         const valNode = props.get(f.key);
         if (!valNode) continue;
-        const e = emitExpr(valNode, env);
         if (f.kind === 'string')
           lines.push(
-            `        snprintf(${arr}[${cnt}].${f.key}, sizeof(${arr}[${cnt}].${f.key}), "${printfSpec(e.cType)}", ${e.code});`,
+            `        snprintf(${arr}[${cnt}].${f.key}, sizeof(${arr}[${cnt}].${f.key}), ${formatArgs(emitFormat(valNode, env))});`,
           );
-        else lines.push(`        ${arr}[${cnt}].${f.key} = ${e.code};`);
+        else
+          lines.push(
+            `        ${arr}[${cnt}].${f.key} = ${emitExpr(valNode, env).code};`,
+          );
       }
       lines.push(`        ${cnt}++;`, '    }');
     }
@@ -2039,11 +2141,12 @@ function blockList(node) {
   return node.type === 'BlockStatement' ? node.body : [node];
 }
 
-/** Emits C to write a value into a scalar state slot: snprintf for a string buffer, plain assign else. */
-function scalarAssign(rec, e, indent) {
+/** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
+ *  becomes a format + args), plain assign otherwise. */
+function scalarAssign(rec, node, env, indent) {
   if (rec.cType === 'string')
-    return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), "${printfSpec(e.cType)}", ${e.code});`;
-  return `${indent}${rec.cMember} = ${e.code};`;
+    return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), ${formatArgs(emitFormat(node, env))});`;
+  return `${indent}${rec.cMember} = ${emitExpr(node, env).code};`;
 }
 
 /** True if `node` is a `<ref>.current` member access on a known value ref. */
@@ -2335,9 +2438,9 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       throw new Error(
         'AOT: updater function must be a single expression (for now)',
       );
-    return [scalarAssign(rec, emitExpr(arg.body, {...env, locals}), indent)];
+    return [scalarAssign(rec, arg.body, {...env, locals}, indent)];
   }
-  return [scalarAssign(rec, emitExpr(arg, env), indent)];
+  return [scalarAssign(rec, arg, env, indent)];
 }
 const compileHandlerExpr = withLoc(compileHandlerExprImpl);
 
@@ -4760,17 +4863,8 @@ function emitTextInput(el, scope, out, env, state) {
   // state-driven value re-synced each app_update.
   let text = null;
   if (valueNode) {
-    try {
-      const cv = evalStatic(valueNode, scope);
-      text = {
-        dynamic: false,
-        format: (cv == null ? '' : String(cv)).replace(/%/g, '%%'),
-        args: [],
-      };
-    } catch {
-      const e = emitExpr(valueNode, env);
-      text = {dynamic: true, format: printfSpec(e.cType), args: [e.code]};
-    }
+    const f = emitFormat(valueNode, env, scope);
+    text = {dynamic: f.args.length > 0, format: f.format, args: f.args};
   }
 
   const isDynamic = dynAssigns.length > 0 || (text && text.dynamic);
@@ -6344,10 +6438,16 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
  * Every board example consumes the same dist/app.gen.c, so generating for one board and then building
  * another produces firmware that compiles, links, boots, and lays out wrong. Boards \`_Static_assert\` these
  * against their own panel size to turn that into a compile error; see each board example's main.c.
+ *
+ * WHICH demo is recorded the same way, as a marker macro named ER_AOT_DEMO_<demo> with every character
+ * outside [A-Za-z0-9_] replaced by '_' (so \`watch-face\` defines ER_AOT_DEMO_watch_face). A board that
+ * needs a particular demo's useHostValue setters guards on \`#ifndef\` of its own marker, which names the
+ * mismatch instead of leaving a pile of implicit-declaration errors for those setters.
  */
 #define ER_AOT_SCREEN_W ${screen.width}
 #define ER_AOT_SCREEN_H ${screen.height}
 #define ER_AOT_DEMO "${demo}"
+#define ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')} 1
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
