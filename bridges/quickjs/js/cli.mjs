@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {dirname, relative, resolve} from 'node:path';
+import {basename, dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildApp, runDevServer} from './sim-server.mjs';
 import {
@@ -378,7 +378,8 @@ async function buildAot(cwd, explicit, outDir, screen) {
   try {
     // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
     const svgArtifacts = await bakeSvgArtifacts(src, appDir);
-    result = compileSource(src, 'app', {filename: appPath, svgArtifacts});
+    const project = basename(resolve(cwd)) || 'app';
+    result = compileSource(src, project, {filename: appPath, svgArtifacts});
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);

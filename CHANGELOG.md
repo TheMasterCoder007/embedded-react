@@ -71,6 +71,13 @@ See the README for the release process.
 - Booleans in AOT text now read the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, and a
   bare `{flag}` child draws nothing (React's rule). Flow B printed `1` for both.
 
+- A string state setter that reads its own slot (`setLabel(label + '!')`) now builds the new value in a
+  temporary first. `snprintf` may not read and write overlapping objects, so an embedded libc was free
+  to truncate or corrupt it.
+
+- A ternary mixing a string branch with a numeric one (`{ok ? 1 : 'none'}`) is now a located AOT error
+  instead of ill-typed C for the host compiler to reject.
+
 - AOT text refuses `{cond && 'yes'}` with a located error instead of printing `1`. JS evaluates `&&`
   and `||` to one of their operands, which the emitted C has no way to reproduce; write the branch out
   as `{cond ? 'yes' : ''}`. A logical whose sides are both boolean still lowers.

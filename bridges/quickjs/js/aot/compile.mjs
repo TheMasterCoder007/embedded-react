@@ -418,6 +418,13 @@ function emitExprImpl(node, env) {
       const t = emitExpr(node.test, env);
       const c = emitExpr(node.consequent, env);
       const a = emitExpr(node.alternate, env);
+      // `(ok ? 1 : "none")` is ill-typed C (int vs char*) and has no single printf spec either, so it
+      // has to be refused here rather than handed to the host compiler.
+      if ((c.cType === 'string') !== (a.cType === 'string'))
+        throw aotError(
+          'AOT: a ternary cannot mix a string branch with a numeric one',
+          "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
+        );
       const cType =
         c.cType === 'float' || a.cType === 'float'
           ? 'float'
@@ -2215,12 +2222,28 @@ function blockList(node) {
   return node.type === 'BlockStatement' ? node.body : [node];
 }
 
+/** Matches `<member>` as a whole C lvalue, so `s_state.label` does not also match `s_state.label2`. */
+const readsMember = member =>
+  new RegExp(`(^|[^\\w.])${member.replace(/\./g, '\\.')}(?![\\w])`);
+
 /** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
  *  becomes a format + args), plain assign otherwise. */
 function scalarAssign(rec, node, env, indent) {
-  if (rec.cType === 'string')
-    return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), ${formatArgs(emitFormat(node, env))});`;
-  return `${indent}${rec.cMember} = ${emitExpr(node, env).code};`;
+  if (rec.cType !== 'string')
+    return `${indent}${rec.cMember} = ${emitExpr(node, env).code};`;
+  const f = emitFormat(node, env);
+  // snprintf's source and destination may not overlap (C11 7.21.6.6), and `setLabel(label + '!')` feeds
+  // the slot its own contents. Build the new value in a temporary first — some embedded libcs write the
+  // destination as they go, which would read back what they just overwrote.
+  if (f.args.some(a => readsMember(rec.cMember).test(a)))
+    return [
+      `${indent}{`,
+      `${indent}    char next[sizeof(${rec.cMember})];`,
+      `${indent}    snprintf(next, sizeof(next), ${formatArgs(f)});`,
+      `${indent}    memcpy(${rec.cMember}, next, sizeof(next));`,
+      `${indent}}`,
+    ].join('\n');
+  return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), ${formatArgs(f)});`;
 }
 
 /** True if `node` is a `<ref>.current` member access on a known value ref. */

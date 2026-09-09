@@ -439,6 +439,8 @@ describe('AOT generated C compiles', () => {
                {/* A boolean lowers to %s over a ternary of string literals — a pairing only -Wformat checks. */}
                <Text>{'on: ' + on + ' hot: ' + (page > 2)}</Text>
                <Text>{'nul: ' + label + null}</Text>
+               {/* Self-referential setter: builds in a temporary, so snprintf never reads its own target. */}
+               <Text onPress={() => setLabel(label + '!')}>{label}</Text>
                <TextInput value={'#' + page} />
              </View>
            );

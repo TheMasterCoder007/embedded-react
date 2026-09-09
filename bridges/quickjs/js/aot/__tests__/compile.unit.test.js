@@ -3184,6 +3184,43 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(e.message).toContain('^');
   });
 
+  // `(ok ? 1 : "none")` is ill-typed C — int against char* — and has no single printf spec either.
+  it.each([
+    ['numeric then string', `on ? 1 : 'none'`],
+    ['string then numeric', `on ? 'none' : 1`],
+  ])('refuses a ternary mixing %s', (_name, expr) => {
+    const e = textErr(`<Text>{'x: ' + (${expr})}</Text>`);
+    expect(e.message).toMatch(/cannot mix a string branch with a numeric one/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('refuses the same mix outside text, e.g. in a setter', () => {
+    let err;
+    try {
+      gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [ok, setOk] = useState(false);
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel(ok ? 1 : 'none')}><Text>{label}</Text></Pressable>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(
+      /cannot mix a string branch with a numeric one/,
+    );
+  });
+
+  it('still allows a ternary whose branches agree', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [ok, setOk] = useState(false);
+        return (<View><Text>{'a: ' + (ok ? 'x' : 'y')}</Text><Text>{'b: ' + (ok ? 1 : 2.5)}</Text></View>);
+      }`);
+    expect(c).toContain('"a: %s", (s_state.ok ? "x" : "y")');
+    expect(c).toContain('"b: %g", (s_state.ok ? 1 : 2.5f)');
+  });
+
   it('refuses a ternary mixing a boolean branch with a non-boolean one', () => {
     const e = textErr(`<Text>{'x: ' + (on ? on : 5)}</Text>`);
     expect(e.message).toMatch(/mixes a boolean branch/);
@@ -3244,6 +3281,46 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('"a%d", s_state.n');
     expect(c).toContain('"b%g", s_state.f');
     expect(c).toContain('"c%s", s_state.s');
+  });
+
+  // snprintf may not read and write overlapping objects (C11 7.21.6.6), and a self-referential setter
+  // feeds the slot its own contents.
+  it('builds a self-referential string setter in a temporary', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel(label + '!')}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('char next[sizeof(s_state.label)];');
+    expect(c).toContain('snprintf(next, sizeof(next), "%s!", s_state.label);');
+    expect(c).toContain('memcpy(s_state.label, next, sizeof(next));');
+    expect(c).not.toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "%s!"',
+    );
+  });
+
+  it('writes a non-self-referential setter straight to the slot', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel('x' + n)}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "x%d", s_state.n);',
+    );
+    expect(c).not.toContain('char next[');
+  });
+
+  // A near-miss name must not be mistaken for the destination.
+  it('does not take a different slot with a shared prefix as self-reference', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        const [label2, setLabel2] = useState('yo');
+        return (<Pressable onPress={() => setLabel(label2 + '!')}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).not.toContain('char next[');
   });
 
   it('escapes a literal % so it survives the format string', () => {

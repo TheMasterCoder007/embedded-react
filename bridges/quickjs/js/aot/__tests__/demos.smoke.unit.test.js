@@ -15,8 +15,10 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {readFileSync} from 'node:fs';
-import {resolve, dirname} from 'node:path';
+import {readFileSync, mkdtempSync, rmSync} from 'node:fs';
+import {resolve, dirname, join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {compileSource, bakeSvgArtifacts} from '../compile.mjs';
 
@@ -68,6 +70,35 @@ describe('AOT demo compile smoke', () => {
 // `#ifndef ER_AOT_DEMO_<demo>` guard and the regenerate command in its own error text. Point the guard at
 // a scratch demo while testing on hardware, and the example stops building for everyone — with an error
 // telling them to run the command that does not satisfy it.
+// The two AOT entry points must agree on the demo marker: `npm run aot -- <demo>` (aot/compile.mjs) and
+// `embedded-react build --aot` (cli.mjs), which each demo's own `build:aot` script runs. A hardcoded name
+// in either one emits a marker no board example can match.
+describe('AOT entry points agree on the demo marker', () => {
+  it.each([
+    ['thermostat', '240x320'],
+    ['watch-face', '240x280'],
+  ])('%s build:aot stamps its own name', (demo, screen) => {
+    const cwd = resolve(demosDir, demo);
+    const out = mkdtempSync(join(tmpdir(), 'er-cli-'));
+    try {
+      const cli = resolve(demosDir, '../bridges/quickjs/js/cli.mjs');
+      const r = spawnSync(
+        process.execPath,
+        [cli, 'build', '--aot', '--screen', screen, '--out', out],
+        {cwd, encoding: 'utf8'},
+      );
+      expect(r.status).toBe(0);
+      const h = readFileSync(join(out, 'app.gen.h'), 'utf8');
+      expect(h).toContain(`#define ER_AOT_DEMO "${demo}"`);
+      expect(h).toContain(
+        `#define ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')} 1`,
+      );
+    } finally {
+      rmSync(out, {recursive: true, force: true});
+    }
+  });
+});
+
 describe('board example demo guards', () => {
   const exampleSrc = rel =>
     readFileSync(resolve(demosDir, '..', 'examples', rel), 'utf8');
