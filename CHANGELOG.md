@@ -88,10 +88,16 @@ See the README for the release process.
   and consts, never the caller's locals. Previously the constant fold could quietly substitute the module
   value.
 
-- Strings in positions C cannot express are handled instead of reaching the host compiler: ordering
-  compares lower to `strcmp`, a string used as a condition tests for non-empty (a bare `char[]` compared
+- Strings in positions C cannot express are handled instead of reaching the host compiler: string
+  equality lowers to `strcmp` (ordering is refused: JS orders by UTF-16 code unit, the device holds
+  UTF-8), a string used as a condition tests for non-empty (a bare `char[]` compared
   its address, which GCC rejects), a handler `const` copied from a string state gets its own buffer, and
   arithmetic on a string — `-`, `*`, `/`, `%`, or a unary `+`/`-` — is a located error.
+
+- `undefined` behaves as it does in Flow A: a prop or style entry that is `undefined` — written out, or a
+  prop a child component was never given — is omitted, and in text `{undefined}` renders nothing while
+  `s + undefined` appends "undefined". Previously an absent prop could hide a node (`visible`) or put
+  the word "undefined" in a `placeholder`. A binding named `undefined` is a located error.
 
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the

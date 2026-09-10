@@ -248,7 +248,6 @@ function evalStatic(node, scope) {
         : evalStatic(node.alternate, scope);
     case 'Identifier':
       if (node.name in scope) return scope[node.name];
-      if (node.name === 'undefined') return undefined;
       throw new Error(
         `AOT: cannot statically resolve identifier "${node.name}"`,
       );
@@ -430,13 +429,28 @@ function emitExprImpl(node, env) {
             : node.operator === '!=='
               ? '!='
               : node.operator;
-        // Strings compare through strcmp — equality AND ordering (JS orders them lexically too). A bare
-        // `<` on two char* would compare addresses, which real GCC rejects under -Werror=address.
         if (l.cType === 'string' || r.cType === 'string') {
-          if (l.cType !== r.cType)
+          if (l.cType !== r.cType) {
+            // A strict comparison never coerces, so a string against a number is decided statically.
+            if (node.operator === '===' || node.operator === '!==')
+              return {
+                code: node.operator === '===' ? '0' : '1',
+                cType: 'int',
+                isBool: true,
+              };
             throw aotError(
               'AOT: a string cannot be compared with a number',
-              'JS would coerce one side; compare like with like instead.',
+              `\`${node.operator}\` coerces the string to a number in JS, which C cannot reproduce. Compare like with like, or use === / !== (which never coerce).`,
+            );
+          }
+          // Equality is byte-exact, which for UTF-8 is exactly JS string equality. Ordering is not: JS
+          // orders by UTF-16 code unit and strcmp by UTF-8 byte, and the two disagree once a character
+          // lies outside the Basic Multilingual Plane. Refuse rather than silently pick the other branch.
+          // (A bare `<` on two char* would compare addresses — real GCC rejects that under -Werror=address.)
+          if (op !== '==' && op !== '!=')
+            throw aotError(
+              `AOT: ordering strings with "${node.operator}" is not supported`,
+              'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can differ. Use === / !==, or compare numbers.',
             );
           return {
             code: `(strcmp(${l.code}, ${r.code}) ${op} 0)`,
@@ -660,6 +674,11 @@ const jsxChildText = v =>
  * @returns {{isString: boolean, parts: Array<{literal?: string, spec?: string, code?: string}>}}
  */
 function concatParts(node, env, scope, operand = false) {
+  // The global `undefined` (the name is reserved — see normalizeUndefined) renders as nothing for a
+  // standalone child and as "undefined" when concatenated. It is handled here, the one place it has a
+  // text meaning, rather than in the shared constant fold, where every prop reader would inherit it.
+  if (node.type === 'Identifier' && node.name === 'undefined')
+    return {isString: false, parts: [{literal: operand ? 'undefined' : ''}]};
   try {
     const v = evalStatic(node, scope);
     return {
@@ -941,9 +960,8 @@ function collectState(fnBody, scope, prefix = '') {
             `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ${JSON.stringify(initVal)}`,
             'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, strings, and objects are not supported.',
           );
-        // A scalar slot is an int, float, string or boolean. `undefined`, `null` or NaN would otherwise
-        // fold into an initializer like `.value = NaN` — invalid C, with no location — because the global
-        // `undefined` resolves in the constant fold (text needs it: `s + undefined`).
+        // A scalar slot is an int, float, string or boolean. `null` or NaN would otherwise fold into an
+        // initializer like `.value = NaN` — invalid C, with no location.
         if (
           initVal === undefined ||
           initVal === null ||
@@ -1327,10 +1345,15 @@ function collectAnims(fnBody, scope, prefix = '') {
         decl.id.type === 'Identifier'
       ) {
         const initVal = init.arguments[0]
-          ? evalStatic(init.arguments[0], scope)
+          ? evalStaticOrThrow(
+              init.arguments[0],
+              scope,
+              `AOT: the initial value of useAnimatedValue "${decl.id.name}" must be a compile-time constant`,
+              'give it a finite starting number: useAnimatedValue(0).',
+            )
           : 0;
-        // An animated value is a float slot; `undefined` folds (text needs it) and would reach C as
-        // `NaNf`. Refuse here, at the declaration, with its location.
+        // An animated value is a float slot; null or a non-finite number would reach C as `NaNf`.
+        // Refuse here, at the declaration, with its location.
         if (typeof initVal !== 'number' || !Number.isFinite(initVal)) {
           const e = aotError(
             `AOT: the initial value of useAnimatedValue "${decl.id.name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
@@ -1381,7 +1404,12 @@ function collectRefs(fnBody, scope, prefix = '') {
           });
           continue;
         }
-        const v = evalStatic(arg, scope);
+        const v = evalStaticOrThrow(
+          arg,
+          scope,
+          `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+          'a value ref needs a compile-time number: useRef(0).',
+        );
         if (typeof v !== 'number' || !Number.isFinite(v)) {
           const e = aotError(
             `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
@@ -1728,6 +1756,8 @@ function collectStyleAssigns(openingElement, scope, env) {
     return null;
   };
   const apply = expr => {
+    // RN ignores an undefined style or style-array entry; so does Flow A's flattenStyle.
+    if (expr.type === 'Identifier' && expr.name === 'undefined') return;
     if (expr.type === 'ArrayExpression') {
       for (const e of expr.elements) if (e) apply(e);
       return;
@@ -1741,6 +1771,9 @@ function collectStyleAssigns(openingElement, scope, env) {
         const key = prop.computed
           ? evalStatic(prop.key, scope)
           : (prop.key.name ?? prop.key.value);
+        // `{transform: undefined}` is a no-op in RN and Flow A.
+        if (prop.value.type === 'Identifier' && prop.value.name === 'undefined')
+          continue;
 
         // Animated value bound directly to a prop (opacity / backgroundColor / color), optionally through
         // an .interpolate({ inputRange, outputRange }) mapping.
@@ -1800,8 +1833,12 @@ function collectStyleAssigns(openingElement, scope, env) {
       }
       return;
     }
-    // A StyleSheet reference / identifier resolving to a static style object.
-    for (const [k, v] of Object.entries(evalStatic(expr, scope))) {
+    // A StyleSheet reference / identifier resolving to a static style object. `style={null}` and a false
+    // `cond && s` are valid RN and mean no style — Object.entries would throw on null.
+    const resolved = evalStatic(expr, scope);
+    if (resolved === null || resolved === undefined || resolved === false)
+      return;
+    for (const [k, v] of Object.entries(resolved)) {
       if (v === undefined || v === null) continue;
       for (const a of lowerStyleChecked(k, v))
         fields.set(a.field, {dynamic: false, code: a.expr});
@@ -3616,10 +3653,33 @@ function emitMap(call, parentVar, scope, out, env, state) {
       parentVar,
       iterScope,
       out,
-      {...env, consts: iterScope},
+      rowEnv(env, [itemName, idxName], iterScope),
       state,
     );
   });
+}
+
+/**
+ * The env for one `.map` row. Its callback params (item, index) shadow any outer state, local, ref or
+ * animated value of the same name — a JS arrow parameter always does — so those names leave the runtime
+ * maps and the row's own binding wins: in `consts`, or in `ownLocals` for a pooled row's struct item.
+ */
+function rowEnv(env, params, consts, ownLocals = null) {
+  const names = params.filter(Boolean);
+  const drop = m => {
+    if (!m || !names.some(n => m.has(n))) return m;
+    const c = new Map(m);
+    for (const n of names) c.delete(n);
+    return c;
+  };
+  return {
+    ...env,
+    consts,
+    state: drop(env.state),
+    refs: drop(env.refs),
+    anims: drop(env.anims),
+    locals: ownLocals ?? drop(env.locals),
+  };
 }
 
 /**
@@ -3641,6 +3701,7 @@ function emitDynamicMap(call, rec, parentVar, scope, out, env, state) {
     if (itemName) delete iterScope[itemName];
     if (idxName) iterScope[idxName] = k; // the index is a compile-time literal per pooled row
     const locals = new Map(env.locals);
+    if (idxName) locals.delete(idxName); // the index is a per-row literal in iterScope
     if (itemName)
       locals.set(itemName, {
         code: `${rec.arrayName}[${k}]`,
@@ -3651,7 +3712,7 @@ function emitDynamicMap(call, rec, parentVar, scope, out, env, state) {
       parentVar,
       iterScope,
       out,
-      {...env, consts: iterScope, locals},
+      rowEnv(env, [itemName, idxName], iterScope, locals),
       state,
       {
         displayCode: `(${k} < ${rec.countMember})`,
@@ -3689,7 +3750,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
           if (cond)
             emitElementInto(expr.right, parentVar, scope, out, env, state);
         } catch {
-          const code = emitExpr(expr.left, env).code;
+          const code = asCond(emitExpr(expr.left, env));
           emitElementInto(expr.right, parentVar, scope, out, env, state, {
             displayCode: code,
           });
@@ -5723,6 +5784,7 @@ function touchablePressFades(
 }
 
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
+  el = omitUndefinedAttrs(el, scope, env);
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
@@ -6015,6 +6077,34 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
   return v;
 }
+/**
+ * `el` without the attributes whose value folds to `undefined` in this scope — typically a prop a child
+ * component was never given. Flow A omits an undefined prop, so every reader has to see it as absent;
+ * read as a value, `visible` hid the node and `placeholder` printed the word "undefined". This is the one
+ * place that rule lives: every element reaches its reader through here. A copy is returned only when
+ * something is dropped, because the same JSX node is emitted once per scope (each .map row, each
+ * component instance) and one scope's answer must not leak into another's.
+ */
+function omitUndefinedAttrs(el, scope, env) {
+  const attrs = el.openingElement.attributes;
+  // Built on first use: the runtime-aware scope, plus the global `undefined` (a reserved name — see
+  // normalizeUndefined), so `SHOW ? true : undefined` with SHOW false folds too.
+  let fold = null;
+  const kept = attrs.filter(a => {
+    if (a.type !== 'JSXAttribute' || a.value?.type !== 'JSXExpressionContainer')
+      return true;
+    fold ??= Object.assign(Object.create(foldScope(env, scope)), {undefined});
+    try {
+      return evalStatic(a.value.expression, fold) !== undefined;
+    } catch {
+      return true; // not a compile-time value — its reader decides
+    }
+  });
+  return kept.length === attrs.length
+    ? el
+    : {...el, openingElement: {...el.openingElement, attributes: kept}};
+}
+
 const emitNode = withLoc(emitNodeImpl);
 
 // ---------------------------------------------------------------------------------------------------
@@ -6244,6 +6334,93 @@ function stripTypeScript(root) {
   return root;
 }
 
+/**
+ * One pass over the parsed program that fixes what `undefined` means before anything is compiled.
+ *
+ * - A JSX attribute whose value is `{undefined}` is DROPPED. Flow A's buildProps omits an undefined prop
+ *   (`props[k] !== undefined`), so the node keeps its default — `visible={undefined}` stays visible. Doing
+ *   it here gives the twenty-odd prop readers that view at once, instead of each deciding what an
+ *   undefined value means (one hid the node, one crashed on Object.entries(undefined)).
+ *   A value that only becomes undefined in some scope — a prop a child was never given — is dropped per
+ *   emission by omitUndefinedAttrs. This literal pass still matters for <Svg> shapes, which bypass it.
+ * - A BINDING named `undefined` is refused. JS allows shadowing the global, but Flow B gives `undefined`
+ *   a meaning of its own (an omitted prop, empty text), and a shadowing local would silently lose to it.
+ */
+function normalizeUndefined(ast) {
+  const reserved = id => {
+    if (id?.type !== 'Identifier' || id.name !== 'undefined') return;
+    const e = aotError(
+      'AOT: `undefined` cannot be used as a name',
+      'Flow B reads `undefined` as the global everywhere — an omitted prop, or empty text — so a binding with that name would never be read. Rename it.',
+    );
+    if (id.loc) e.aotLoc = id.loc.start;
+    throw e;
+  };
+  const pattern = p => {
+    if (!p) return;
+    if (p.type === 'Identifier') reserved(p);
+    else if (p.type === 'ArrayPattern') p.elements.forEach(pattern);
+    else if (p.type === 'ObjectPattern')
+      p.properties.forEach(q =>
+        pattern(q.type === 'RestElement' ? q.argument : q.value),
+      );
+    else if (p.type === 'AssignmentPattern') pattern(p.left);
+    else if (p.type === 'RestElement') pattern(p.argument);
+  };
+  const isUndefinedAttr = a =>
+    a.type === 'JSXAttribute' &&
+    a.value?.type === 'JSXExpressionContainer' &&
+    a.value.expression.type === 'Identifier' &&
+    a.value.expression.name === 'undefined';
+  const SKIP = new Set([
+    'loc',
+    'start',
+    'end',
+    'extra',
+    'leadingComments',
+    'trailingComments',
+    'innerComments',
+  ]);
+  const visit = node => {
+    if (!node || typeof node.type !== 'string') return;
+    switch (node.type) {
+      case 'VariableDeclarator':
+        pattern(node.id);
+        break;
+      case 'FunctionDeclaration':
+      case 'FunctionExpression':
+      case 'ArrowFunctionExpression':
+      case 'ObjectMethod':
+      case 'ClassMethod':
+        if (node.id) reserved(node.id);
+        node.params.forEach(pattern);
+        break;
+      case 'CatchClause':
+        pattern(node.param);
+        break;
+      case 'ClassDeclaration':
+      case 'ClassExpression':
+        if (node.id) reserved(node.id);
+        break;
+      case 'ImportSpecifier':
+      case 'ImportDefaultSpecifier':
+      case 'ImportNamespaceSpecifier':
+        reserved(node.local);
+        break;
+      case 'JSXOpeningElement':
+        node.attributes = node.attributes.filter(a => !isUndefinedAttr(a));
+        break;
+    }
+    for (const key of Object.keys(node)) {
+      if (SKIP.has(key)) continue;
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v && typeof v.type === 'string') visit(v);
+    }
+  };
+  visit(ast);
+}
+
 /** Parse an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .ts/.tsx. */
 function parseApp(src, opts = {}) {
   const ts = isTsEntry(opts);
@@ -6260,6 +6437,7 @@ function parseApp(src, opts = {}) {
  */
 function compileSourceImpl(src, demo = 'app', opts = {}) {
   const ast = parseApp(src, opts);
+  normalizeUndefined(ast);
 
   const screen = opts.screen ?? {width: SCREEN_W, height: SCREEN_H};
   // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
@@ -6284,7 +6462,10 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
       try {
         scope[decl.id.name] = evalStatic(decl.init, scope);
       } catch {
-        /* dynamic const — resolved later */
+        // Dynamic (state-derived, useMemo, …). A memo is re-bound below and a plain derived const is not
+        // supported — either way a same-named module const must not stay visible to the folds, or the
+        // JSX quietly renders the module value. Mirrors the child-component path.
+        delete scope[decl.id.name];
       }
     }
   }

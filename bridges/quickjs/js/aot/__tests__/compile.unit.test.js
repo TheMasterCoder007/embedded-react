@@ -3157,15 +3157,26 @@ import {View, Text, Pressable, Switch} from 'embedded-react';
     }
   });
 
-  it('orders strings with strcmp, and refuses a string-vs-number compare', () => {
+  // Equality through strcmp is exact for UTF-8. Ordering is not — JS compares UTF-16 code units, the
+  // device holds UTF-8 bytes, and they disagree outside the BMP — so it is refused. A strict compare of a
+  // string with a number never coerces, so it folds to its constant.
+  it('compares strings for equality only, and decides strict mixed compares statically', () => {
     const c = gen(`${D}export function App() {
       const [label] = useState('a');
-      return (<Text>{label < 'm' ? 'lo' : 'hi'}</Text>);
+      const [n] = useState(5);
+      return (<View><Text>{label === 'a' ? 'y' : 'n'}</Text><Text>{'v=' + (label !== n)}</Text></View>);
     }`);
-    expect(c).toContain('(strcmp(s_state.label, "m") < 0)');
+    expect(c).toContain('(strcmp(s_state.label, "a") == 0)');
+    expect(c).toContain('((1) ? "true" : "false")');
+    for (const expr of [`label < 'm'`, `label >= 'm'`])
+      expect(() =>
+        gen(
+          `${D}export function App() { const [label] = useState('a'); return (<Text>{${expr} ? 'a' : 'b'}</Text>); }`,
+        ),
+      ).toThrow(/ordering strings with/);
     expect(() =>
       gen(
-        `${D}export function App() { const [label] = useState('a'); return (<Text>{label < 5 ? 'a' : 'b'}</Text>); }`,
+        `${D}export function App() { const [label] = useState('a'); return (<Text>{label == 5 ? 'a' : 'b'}</Text>); }`,
       ),
     ).toThrow(/cannot be compared with a number/);
   });
@@ -3228,7 +3239,7 @@ import {View, Text, useAnimatedValue} from 'embedded-react';
     [
       'useState(undefined)',
       'const [n] = useState(undefined);',
-      /initial value of state "n" is undefined/,
+      /initial value of state "n" must be a compile-time constant/,
     ],
     [
       'useState(null)',
@@ -3243,7 +3254,7 @@ import {View, Text, useAnimatedValue} from 'embedded-react';
     [
       'useAnimatedValue(undefined)',
       'const v = useAnimatedValue(undefined);',
-      /useAnimatedValue "v" is undefined/,
+      /initial value of useAnimatedValue "v" must be a compile-time constant/,
     ],
     [
       'useRef(undefined)',
@@ -3359,6 +3370,155 @@ describe('AOT unary arithmetic on a string', () => {
         `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
       ),
     ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
+  });
+});
+
+describe('AOT round-7 review', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, TextInput} from 'embedded-react';
+`;
+  const err = src => {
+    try {
+      gen(src);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+
+  it('a string in {cond && <X/>} is tested for non-empty, not its address', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('');
+      return (<View>{label && <Text>x</Text>}</View>);
+    }`);
+    expect(c).toContain(`(s_state.label[0] != '\\0')`);
+    expect(c).not.toMatch(/\(\(s_state\.label\) \?/);
+  });
+
+  // A .map callback's params shadow outer runtime bindings of the same name, as a JS arrow param does.
+  it('a static .map item and index shadow a same-named state', () => {
+    const c = gen(`${D}const ITEMS = [{key: 'a'}, {key: 'b'}];
+      export function App() {
+        const [it] = useState(0);
+        const [i] = useState(7);
+        return (<View>{ITEMS.map((it, i) => (<Text>{it.key + i}</Text>))}</View>);
+      }`);
+    expect(c).toContain('"%s", "a0"');
+    expect(c).toContain('"%s", "b1"');
+    expect(c).not.toContain('s_state.i');
+  });
+
+  it('a pooled .map row index shadows a same-named state', () => {
+    const c = gen(`${D}export function App() {
+      const [items] = useState([{k: 'a'}]);
+      const [i] = useState(7);
+      return (<View>{items.map((it, i) => (<Text>{'i=' + i}</Text>))}</View>);
+    }`);
+    expect(c).toContain('"%s", "i=0"');
+    expect(c).not.toContain('s_state.i)');
+  });
+
+  it("App's dynamic const is a located error, never the module value it shadows", () => {
+    const src = use =>
+      `${D}const L = 'module';
+      export function App() { const [n] = useState(3); const L = n; return (${use}); }`;
+    for (const use of [
+      `<Text>{'L=' + L}</Text>`,
+      `<View style={{width: L}} />`,
+    ]) {
+      const e = err(src(use));
+      expect(e.message).toMatch(/cannot resolve identifier "L"/);
+    }
+  });
+
+  // Flow A omits an undefined prop; so does Flow B now — every reader sees the attribute as absent.
+  it('an attribute set to undefined is omitted, as in Flow A', () => {
+    const c = gen(`${D}export function App() {
+      const [v, setV] = useState('');
+      return (
+        <View>
+          <View visible={undefined} style={{width: 5}} />
+          <TextInput value={v} placeholder={undefined} onChangeText={t => setV(t)} />
+        </View>
+      );
+    }`);
+    expect(c).toContain('p.width = 5;');
+    expect(c).not.toContain('ER_DISPLAY_NONE');
+    expect(c).not.toContain('placeholder');
+  });
+
+  it('an undefined or null style, or style-array entry, means no style', () => {
+    expect(() =>
+      gen(`${D}export function App() { return (<View style={undefined} />); }`),
+    ).not.toThrow();
+    expect(() =>
+      gen(
+        `${D}const s = null;\nexport function App() { return (<View style={s} />); }`,
+      ),
+    ).not.toThrow();
+    expect(
+      gen(
+        `${D}const s = {width: 7};\nexport function App() { return (<View style={[s, undefined]} />); }`,
+      ),
+    ).toContain('p.width = 7;');
+  });
+
+  it('a binding named undefined is a located error', () => {
+    const e = err(`${D}export function App() {
+      const [undefined] = useState('x');
+      return (<Text>{undefined}</Text>);
+    }`);
+    expect(e.message).toMatch(/`undefined` cannot be used as a name/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+});
+
+// An attribute that FOLDS to undefined — a prop a child was never given — is omitted like a literal
+// {undefined}, as in Flow A. Read as a value, `visible` hid the node and `placeholder` printed the word
+// "undefined"; both did so on master too.
+describe('AOT props that fold to undefined are omitted', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, Pressable, TextInput} from 'embedded-react';
+`;
+  const withChild = child =>
+    gen(`${D}${child}
+      export function App() { return (<View><C /></View>); }`);
+
+  it('visible from an absent prop leaves the node visible', () => {
+    const c = withChild(
+      `function C({x}) { return (<View visible={x} style={{width: 5}} />); }`,
+    );
+    expect(c).not.toContain('ER_DISPLAY_NONE');
+    expect(c).toContain('p.width = 5;');
+  });
+
+  it('placeholder from an absent prop is not the word "undefined"', () => {
+    const c = withChild(
+      `function C({x}) { const [v, setV] = useState(''); return (<TextInput value={v} placeholder={x} onChangeText={t => setV(t)} />); }`,
+    );
+    expect(c).not.toContain('"undefined"');
+  });
+
+  it('a handler from an absent prop is simply not attached', () => {
+    const c = withChild(
+      `function C({x}) { return (<Pressable onPress={x}><Text>t</Text></Pressable>); }`,
+    );
+    expect(c).not.toContain('ER_EVENT_PRESS,');
+  });
+
+  it('a statically-decided undefined branch is omitted too', () => {
+    const c = gen(`${D}const SHOW = false;
+      export function App() { return (<View><View visible={SHOW ? true : undefined} style={{width: 5}} /></View>); }`);
+    expect(c).not.toContain('p.display');
+  });
+
+  // The rule copies the element rather than editing the shared JSX node, so one instance's answer must
+  // not leak into another's.
+  it('the same JSX in two scopes gets each its own answer', () => {
+    const c =
+      gen(`${D}function C({x}) { return (<View visible={x} style={{width: 5}} />); }
+      export function App() { return (<View><C /><C x={false} /></View>); }`);
+    expect((c.match(/p\.display = ER_DISPLAY_NONE;/g) || []).length).toBe(1);
   });
 });
 
