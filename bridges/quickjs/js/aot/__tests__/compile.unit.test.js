@@ -3293,7 +3293,7 @@ import { View, Text, TextInput } from 'embedded-react';
       }`);
     expect(c).toContain('char next[sizeof(s_state.label)];');
     expect(c).toContain('snprintf(next, sizeof(next), "%s!", s_state.label);');
-    expect(c).toContain('memcpy(s_state.label, next, sizeof(next));');
+    expect(c).toContain('memcpy(s_state.label, next, strlen(next) + 1);');
     expect(c).not.toContain(
       'snprintf(s_state.label, sizeof(s_state.label), "%s!"',
     );

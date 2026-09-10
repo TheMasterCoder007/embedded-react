@@ -78,6 +78,10 @@ See the README for the release process.
 - A ternary mixing a string branch with a numeric one (`{ok ? 1 : 'none'}`) is now a located AOT error
   instead of ill-typed C for the host compiler to reject.
 
+- A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
+  constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the
+  module value instead of the one the code uses.
+
 - AOT text refuses `{cond && 'yes'}` with a located error instead of printing `1`. JS evaluates `&&`
   and `||` to one of their operands, which the emitted C has no way to reproduce; write the branch out
   as `{cond ? 'yes' : ''}`. A logical whose sides are both boolean still lowers.

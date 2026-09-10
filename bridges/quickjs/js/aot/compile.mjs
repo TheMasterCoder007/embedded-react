@@ -246,6 +246,7 @@ function evalStatic(node, scope) {
         : evalStatic(node.alternate, scope);
     case 'Identifier':
       if (node.name in scope) return scope[node.name];
+      if (node.name === 'undefined') return undefined;
       throw new Error(
         `AOT: cannot statically resolve identifier "${node.name}"`,
       );
@@ -645,10 +646,13 @@ function concatParts(node, env, scope, operand = false) {
       'JS renders those differently (`cond ? true : 5` is "true" or "5") but they share one C slot here. Make both branches the same kind.',
     );
   // A boolean draws nothing as a child but stringifies as an operand — same split as the constants above.
+  // isString stays FALSE either way: a boolean is not a string in JS, so it must not by itself put an
+  // enclosing `+` into concatenation mode (`on + n` adds, giving 0, and only then does `+ 'x'` append).
+  // The %s form below is picked up only when some other operand of that `+` really is a string.
   if (e.isBool)
     return operand
       ? {
-          isString: true,
+          isString: false,
           parts: [{spec: '%s', code: `((${e.code}) ? "true" : "false")`}],
         }
       : {isString: false, parts: [{literal: ''}]};
@@ -666,9 +670,23 @@ function concatParts(node, env, scope, operand = false) {
  * @returns {{format: string, args: string[]}} `format` already has literal `%` escaped as `%%`.
  */
 function emitFormat(node, env, scope = env.consts ?? {}) {
+  // The constant fold must not see through a runtime binding. emitExpr resolves env.locals and env.state
+  // BEFORE env.consts, so a param, handler local or state that shadows a module const has to win here
+  // too — otherwise folding silently swaps the module value in for the one the code actually uses.
+  const shadowed = [
+    ...(env.locals?.keys() ?? []),
+    ...(env.state?.keys() ?? []),
+    ...(env.refs?.keys() ?? []),
+    ...(env.anims?.keys() ?? []),
+  ];
+  const visible = shadowed.some(k => k in scope)
+    ? Object.fromEntries(
+        Object.entries(scope).filter(([k]) => !shadowed.includes(k)),
+      )
+    : scope;
   let format = '';
   const args = [];
-  for (const part of concatParts(node, env, scope).parts) {
+  for (const part of concatParts(node, env, visible).parts) {
     if (part.literal !== undefined) format += part.literal.replace(/%/g, '%%');
     else {
       format += part.spec;
@@ -2240,7 +2258,7 @@ function scalarAssign(rec, node, env, indent) {
       `${indent}{`,
       `${indent}    char next[sizeof(${rec.cMember})];`,
       `${indent}    snprintf(next, sizeof(next), ${formatArgs(f)});`,
-      `${indent}    memcpy(${rec.cMember}, next, sizeof(next));`,
+      `${indent}    memcpy(${rec.cMember}, next, strlen(next) + 1);`,
       `${indent}}`,
     ].join('\n');
   return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), ${formatArgs(f)});`;
@@ -3332,7 +3350,12 @@ function emitComponent(el, scope, out, env, state, opts) {
       });
     else if (d.static) childScope[name] = d.value;
     else
-      childLocals.set(name, {code: d.code, cType: d.cType, struct: d.struct});
+      childLocals.set(name, {
+        code: d.code,
+        cType: d.cType,
+        struct: d.struct,
+        isBool: d.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
+      });
   }
   const children = childNodes.length
     ? {nodes: childNodes, scope, env, ref: childrenRef}
@@ -3699,6 +3722,13 @@ function svgAttrs(openingElement, scope, env) {
       try {
         out[name] = evalStatic(vn.expression, scope);
       } catch {
+        // A state-driven `d` is unsupported whatever it is built from, and pathEntries carries the
+        // diagnostic that names the fix (use Arc/Circle/Rect/Line). Emitting it first would replace that
+        // with whatever generic reason the expression itself fails for.
+        if (name === 'd') {
+          out[name] = {dyn: null, node: vn.expression};
+          continue;
+        }
         // Keep the raw expression node too: color paint attrs (fill/stroke) lower via emitColorExpr (→ ARGB),
         // not the generic numeric `dyn` code, so a dynamic color resolves to a uint, not a char*.
         out[name] = {
@@ -6552,7 +6582,7 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
  */
 #define ER_AOT_SCREEN_W ${screen.width}
 #define ER_AOT_SCREEN_H ${screen.height}
-#define ER_AOT_DEMO "${demo}"
+#define ER_AOT_DEMO ${cstr(demo)}
 #define ${demoMarker(demo)} 1
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
