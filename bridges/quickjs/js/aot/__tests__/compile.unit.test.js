@@ -3290,6 +3290,78 @@ describe('AOT demo marker encoding', () => {
   });
 });
 
+// State, refs and animated values are runtime bindings. They follow the rule every other binding already
+// did — beat a same-named module const in EVERY fold, not only the ones that consult env — which went
+// unenforced for them: a style, prop, conditional or svg attribute silently used the module value.
+describe('AOT hook bindings beat module consts', () => {
+  const D = `import {useState, useRef} from 'react';
+import {View, Text, Svg, Circle} from 'embedded-react';
+`;
+  const withState = jsx =>
+    gen(`${D}const r = 10;
+      export function App() { const [r, setR] = useState(4); return (${jsx}); }`);
+
+  it('in a style', () => {
+    const c = withState(`<View style={{width: r, borderTopLeftRadius: r}} />`);
+    expect(c).toContain('p.width = app_round_dim(s_state.r);');
+    expect(c).toContain('p.border_top_left_radius = app_round_dim(s_state.r);');
+    expect(c).not.toMatch(/p\.(width|border_top_left_radius) = 10;/);
+  });
+
+  it('in a conditional child', () => {
+    expect(withState(`<View>{r > 5 && <Text>big</Text>}</View>`)).toContain(
+      '(s_state.r > 5)',
+    );
+  });
+
+  it('as a prop into a child', () => {
+    const c = gen(`${D}const r = 10;
+      function C({v}) { return (<Text>{v}</Text>); }
+      export function App() { const [r, setR] = useState(4); return (<View><C v={r} /></View>); }`);
+    expect(c).toContain('"%d", s_state.r');
+    expect(c).not.toContain('"%s", "10"');
+  });
+
+  it('in an svg attribute', () => {
+    expect(
+      withState(
+        `<Svg width={40} height={40}><Circle cx={20} cy={20} r={r} fill="#fff" /></Svg>`,
+      ),
+    ).toContain('(float)(s_state.r)');
+  });
+
+  it('for a ref', () => {
+    const c = gen(`${D}const w = 10;
+      export function App() { const w = useRef(4); return (<View style={{width: w.current}} />); }`);
+    expect(c).toContain('p.width = app_round_dim(s_ref_w);');
+  });
+
+  // A dynamic child const is unsupported, as it is in App — so it must fail loudly, never quietly fall
+  // back to the module const it shadows.
+  it("a child's dynamic const is a located error, never the module value", () => {
+    const child = body =>
+      `${D}const k = 99;
+      function C({n}) { const k = n * 2; ${body} }
+      export function App() { const [n] = useState(3); return (<View><C n={n} /></View>); }`;
+    expect(() => gen(child(`return (<Text>{'k=' + k}</Text>);`))).toThrow(
+      /cannot resolve identifier "k"/,
+    );
+    expect(() =>
+      gen(child(`const [v] = useState(k); return (<Text>{v}</Text>);`)),
+    ).toThrow(/initial value of state "v" must be a compile-time constant/);
+  });
+});
+
+describe('AOT unary arithmetic on a string', () => {
+  it.each(['+', '-'])('rejects unary %s on a string', op => {
+    expect(() =>
+      gen(
+        `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
+      ),
+    ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
+  });
+});
+
 describe('AOT fixed-slot truncation', () => {
   // Every string the generated file writes lands in a fixed-size slot, so an over-long value truncates by
   // design. GCC reports that intent for any format mixing %s with anything else, and ESP-IDF builds with

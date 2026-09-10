@@ -91,7 +91,7 @@ See the README for the release process.
 - Strings in positions C cannot express are handled instead of reaching the host compiler: ordering
   compares lower to `strcmp`, a string used as a condition tests for non-empty (a bare `char[]` compared
   its address, which GCC rejects), a handler `const` copied from a string state gets its own buffer, and
-  `-`/`*`/`/`/`%` on a string is a located error.
+  arithmetic on a string — `-`, `*`, `/`, `%`, or a unary `+`/`-` — is a located error.
 
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the

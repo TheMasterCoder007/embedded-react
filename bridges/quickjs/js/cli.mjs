@@ -349,7 +349,10 @@ async function exportApp(args) {
 function projectIdentity(appPath) {
   let dir = dirname(appPath);
   for (let i = 0; i < 64; i++) {
-    if (existsSync(resolve(dir, 'package.json'))) return basename(dir);
+    // A package.json at a filesystem root has no directory name to report — basename('/') is '' — so
+    // treat it as absent rather than stamp an empty identity (`ER_AOT_DEMO_` with nothing after it).
+    if (existsSync(resolve(dir, 'package.json')) && basename(dir))
+      return basename(dir);
     const up = dirname(dir);
     if (up === dir) break; // filesystem root
     dir = up;

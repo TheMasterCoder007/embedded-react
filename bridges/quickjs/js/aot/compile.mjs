@@ -310,17 +310,23 @@ const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
  * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap).
  */
 function foldScope(env, scope) {
-  const bound = [
+  const bound = new Set([
     ...(env.locals?.keys() ?? []),
     ...(env.state?.keys() ?? []),
     ...(env.refs?.keys() ?? []),
     ...(env.anims?.keys() ?? []),
-  ];
-  if (env.event) bound.push(env.event);
-  if (env.gesture) bound.push(env.gesture);
-  if (!bound.some(k => k in scope)) return scope;
+  ]);
+  if (env.event) bound.add(env.event);
+  if (env.gesture) bound.add(env.gesture);
+  let shadows = false;
+  for (const k of bound)
+    if (k in scope) {
+      shadows = true;
+      break;
+    }
+  if (!shadows) return scope;
   return Object.fromEntries(
-    Object.entries(scope).filter(([k]) => !bound.includes(k)),
+    Object.entries(scope).filter(([k]) => !bound.has(k)),
   );
 }
 
@@ -366,6 +372,14 @@ function emitExprImpl(node, env) {
     }
     case 'UnaryExpression': {
       const a = emitExpr(node.argument, env);
+      if (
+        (node.operator === '-' || node.operator === '+') &&
+        a.cType === 'string'
+      )
+        throw aotError(
+          `AOT: unary "${node.operator}" on a string is not supported`,
+          'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
+        );
       // Parenthesize the operand so `-` on a negative literal emits `(-(-135))`, not `(--135)` (a decrement).
       if (
         node.operator === '-' ||
@@ -3497,7 +3511,10 @@ function emitComponent(el, scope, out, env, state, opts) {
         try {
           childScope[decl.id.name] = evalStatic(decl.init, childScope);
         } catch {
-          /* dynamic (state-derived, useMemo, …) — handled below or by emitExpr */
+          // Dynamic (state-derived, useMemo, …): the child's binding shadows any module const of the
+          // same name, so that const must not stay visible — a hook initializer or text reading it would
+          // silently get the module value. A memo re-binds it below; anything else is an unresolved name.
+          delete childScope[decl.id.name];
         }
       }
     }
@@ -3512,7 +3529,11 @@ function emitComponent(el, scope, out, env, state, opts) {
   if (usesState(fn)) {
     childState = collectState(fn.body, childScope, prefix);
     out.childStateRecords.push(...childState.byName.values());
+    for (const name of childState.byName.keys()) delete childScope[name];
   }
+  // The child's own refs and animated values are runtime bindings too (see compileSourceImpl).
+  for (const name of [...childAnims.keys(), ...childRefs.keys()])
+    delete childScope[name];
   out.childRefs.push(...childRefs.values());
   out.childAnims.push(...childAnims.values());
 
@@ -6268,10 +6289,12 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     }
   }
   const state = collectState(component.body, scope);
+  for (const name of state.byName.keys()) delete scope[name];
   const rootJSX = findReturnJSX(component.body, scope);
 
   const anims = collectAnims(component.body, scope);
   const refs = collectRefs(component.body, scope);
+  for (const name of [...anims.keys(), ...refs.keys()]) delete scope[name];
   const pans = collectPanResponders(component.body);
   const callbacks = collectCallbacks(component.body);
   const memos = collectMemos(component.body);
