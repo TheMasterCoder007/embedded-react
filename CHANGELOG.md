@@ -57,6 +57,11 @@ See the README for the release process.
 
 ### Fixed
 
+- `Date.now()` no longer throws in Flow A. The default JS profile leaves `Date` out, so any handler
+  that called it died on the spot; it now runs on the engine clock, and a host that knows the real
+  time can hand it over with `er_runtime_set_wall_clock()`. `new Date()` still needs the Date
+  intrinsic, and now says so. `performance.now()` also no longer wraps back to zero after 49.7 days.
+
 - String concatenation in AOT text now works: `<Text>{'page ' + n + '/' + PAGES}</Text>` lowers to a
   printf format built from the parts. It used to be typed as arithmetic and emit invalid C, so the
   failure surfaced in the host compiler over a generated source the author never wrote. Also supported

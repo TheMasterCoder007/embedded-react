@@ -13,9 +13,11 @@ FetchContent), and the React reconciler in `js/` drives it. See [`js/README.md`]
 for the JS layer and its per-feature status.
 
 **Lite JS profile:** the runtime creates its context with only the intrinsics the React runtime
-needs — base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now` clock — and the same
-set runs on device, desktop, simulator, and the test harnesses, so dev and hardware expose one JS
-surface. Extras (Date, Proxy, typed arrays, WeakRef, BigInt) are opt-in per host via
+needs — base objects, RegExp, JSON, Map/Set, Promise, plus `performance.now()` and `Date.now()` on
+the engine clock — and the same set runs on device, desktop, simulator, and the test harnesses, so
+dev and hardware expose one JS surface. `Date.now()` counts from boot until the host passes the real
+time to `er_runtime_set_wall_clock()` (from an RTC or an SNTP sync). Extras (full Date objects,
+Proxy, typed arrays, WeakRef, BigInt) are opt-in per host via
 `ErRuntimeConfig.extra_intrinsics`. Device firmware that only runs precompiled bytecode can also
 drop the JS parser entirely with `-DER_BRIDGE_QUICKJS_LITE=ON` (~60 KB flash); the error overlay is
 precompiled bytecode (`overlay/`) so it works there too. Release bytecode is stripped of source

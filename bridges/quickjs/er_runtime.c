@@ -27,8 +27,8 @@
 
 #include "er_assets.h"                   /* er_assets_load_pack (ERPK asset section of the container) */
 #include "er_js_alloc.h"                 /* default JS-heap allocator with working GC size accounting */
-#include "er_scene.h"                    /* er_reset, er_now_ms */
-#include "native_ui_bridge.h"            /* er_bridge_install / er_bridge_pump / er_bridge_run_bytecode */
+#include "er_scene.h"                    /* er_reset */
+#include "native_ui_bridge.h"            /* er_bridge_install / _pump / _run_bytecode / _now_ms */
 #include "overlay/message_overlay.qbc.h" /* precompiled error-overlay app (works on parser-less builds) */
 
 #include <stdint.h>
@@ -61,6 +61,10 @@ static bool s_gc_accounting_ok = true;
  *         floor can hand the schedule back. Without it, a runtime left with the automatic collector off
  *         would never collect again — nothing would ever run to recompute the threshold. */
 static size_t s_gc_threshold_default = 0;
+
+/** @brief Added to the engine clock to make Date.now(): 0, so it reads as uptime, until the host calls
+ *         er_runtime_set_wall_clock. Kept across er_runtime_reset, so the time survives a reload. */
+static int64_t s_wall_offset_ms = 0;
 
 /* The message-overlay app (RN redbox) ships as precompiled bytecode — see overlay/message_overlay.js
  * for the source, what it renders, and how to regenerate message_overlay.qbc.c. */
@@ -272,14 +276,14 @@ static JSValue rt_perf_now(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_NewFloat64(ctx, (double)er_now_ms());
+    return JS_NewFloat64(ctx, (double)er_bridge_now_ms());
 }
 
 /**
  * @brief Installs a `performance` global with `now()` on the engine clock.
  *
- * Required by the lite profile: without a `performance` global, React's scheduler falls back to
- * `Date.now` at module load and would throw on a context without the Date intrinsic.
+ * React's scheduler reads `performance.now` when it exists and only falls back to `Date.now` without
+ * it; this keeps the scheduler on the monotonic clock, which re-setting the wall clock cannot move.
  */
 static void install_performance(JSContext* ctx)
 {
@@ -287,6 +291,42 @@ static void install_performance(JSContext* ctx)
     JSValue perf = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, rt_perf_now, "now", 0));
     JS_SetPropertyStr(ctx, global, "performance", perf);
+    JS_FreeValue(ctx, global);
+}
+
+/** @brief Date.now() without the Date intrinsic — the engine clock plus the host-fed wall-clock offset. */
+static JSValue rt_date_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt64(ctx, s_wall_offset_ms + (int64_t)er_bridge_now_ms());
+}
+
+/** @brief `Date()` / `new Date()` without the Date intrinsic: throws, naming the flag that provides them. */
+static JSValue rt_date_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv)
+{
+    (void)new_target;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "Date objects need ER_JS_INTRINSIC_DATE; only Date.now() is built in");
+}
+
+/**
+ * @brief Installs a stand-in `Date` whose only member is `now()`, for a context without the Date intrinsic.
+ *
+ * Without it `Date.now()` is a ReferenceError that kills whatever handler called it. Constructing a
+ * date still throws, but says why, and `x instanceof Date` is false instead of a throw.
+ */
+static void install_date_now(JSContext* ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue date = JS_NewCFunction2(ctx, rt_date_ctor, "Date", 7, JS_CFUNC_constructor_or_func, 0);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetConstructor(ctx, date, proto);
+    JS_FreeValue(ctx, proto);
+    JS_SetPropertyStr(ctx, date, "now", JS_NewCFunction(ctx, rt_date_now, "now", 0));
+    JS_SetPropertyStr(ctx, global, "Date", date);
     JS_FreeValue(ctx, global);
 }
 
@@ -332,7 +372,16 @@ JSContext* er_js_new_context(JSRuntime* rt, uint32_t extra_intrinsics)
         JS_AddIntrinsicEval(ctx);
     }
     install_performance(ctx);
+    if (!(extra_intrinsics & ER_JS_INTRINSIC_DATE))
+    {
+        install_date_now(ctx);
+    }
     return ctx;
+}
+
+void er_runtime_set_wall_clock(int64_t epoch_ms)
+{
+    s_wall_offset_ms = epoch_ms - (int64_t)er_bridge_now_ms();
 }
 
 /** @brief Creates a fresh context and installs the bridge + host globals (used at init and reset). */

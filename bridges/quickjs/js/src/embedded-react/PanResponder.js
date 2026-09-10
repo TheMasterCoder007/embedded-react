@@ -85,7 +85,7 @@ const SUPPORTED = [
 /**
  * The engine's monotonic millisecond clock, used for velocity. `performance.now()` is installed by the
  * QuickJS runtime on every context (it is React's scheduler clock) and exists in the simulator and in
- * Node; `Date` is an opt-in intrinsic that device builds usually leave out, so it is never used here.
+ * Node; `Date.now()` jumps whenever the host sets the wall clock, so it is never used here.
  * The clock only advances when the host ticks, so a dt of 0 is normal and leaves velocity untouched.
  */
 const now = () =>
