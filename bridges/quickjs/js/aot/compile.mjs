@@ -329,6 +329,8 @@ function foldScope(env, scope) {
   );
 }
 
+const withUndefined = scope => Object.assign(Object.create(scope), {undefined});
+
 /**
  * `e` used as a C condition. JS treats a string as truthy when it is non-empty; a bare char[] in C tests
  * its ADDRESS, which is always true — and real GCC refuses that under -Werror=address.
@@ -1819,7 +1821,7 @@ function collectStyleAssigns(openingElement, scope, env) {
         // which sends the author looking for state that isn't there.
         let staticValue;
         try {
-          staticValue = {v: evalStatic(prop.value, scope)};
+          staticValue = {v: evalStatic(prop.value, withUndefined(scope))};
         } catch {
           staticValue = null; // references state — lower it as a dynamic value
         }
@@ -1835,7 +1837,7 @@ function collectStyleAssigns(openingElement, scope, env) {
     }
     // A StyleSheet reference / identifier resolving to a static style object. `style={null}` and a false
     // `cond && s` are valid RN and mean no style — Object.entries would throw on null.
-    const resolved = evalStatic(expr, scope);
+    const resolved = evalStatic(expr, withUndefined(scope));
     if (resolved === null || resolved === undefined || resolved === false)
       return;
     for (const [k, v] of Object.entries(resolved)) {
@@ -3546,7 +3548,10 @@ function emitComponent(el, scope, out, env, state, opts) {
         if (decl.id.type !== 'Identifier' || !decl.init) continue;
         if (childLocals.has(decl.id.name)) continue; // a dynamic prop of that name is already bound
         try {
-          childScope[decl.id.name] = evalStatic(decl.init, childScope);
+          childScope[decl.id.name] = evalStatic(
+            decl.init,
+            withUndefined(childScope),
+          );
         } catch {
           // Dynamic (state-derived, useMemo, …): the child's binding shadows any module const of the
           // same name, so that const must not stay visible — a hook initializer or text reading it would
@@ -3942,7 +3947,7 @@ function svgAttrs(openingElement, scope, env) {
     else if (vn.type === 'StringLiteral') out[name] = vn.value;
     else if (vn.type === 'JSXExpressionContainer') {
       try {
-        out[name] = evalStatic(vn.expression, scope);
+        out[name] = evalStatic(vn.expression, withUndefined(scope));
       } catch {
         // A state-driven `d` is unsupported whatever it is built from, and pathEntries carries the
         // diagnostic that names the fix (use Arc/Circle/Rect/Line). Emitting it first would replace that
