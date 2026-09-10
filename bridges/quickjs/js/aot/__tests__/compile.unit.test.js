@@ -1022,7 +1022,7 @@ describe('AOT responsive layout', () => {
     const src = `${PRE}
       export function App() { return (<View><Text>x</Text></View>); }`;
     expect(compileSource(src, 'watch-face').h).toContain(
-      '#define ER_AOT_DEMO_watch_face 1',
+      '#define ER_AOT_DEMO_watch_2d_face 1',
     );
     expect(compileSource(src, 'thermostat').h).toContain(
       '#define ER_AOT_DEMO_thermostat 1',
@@ -3207,6 +3207,86 @@ import {View, Text, Pressable, Switch} from 'embedded-react';
       return (<View><Switch value={on} onValueChange={v => { setOn(v); setLabel('on=' + v); }} /><Text>{label}</Text></View>);
     }`);
     expect(c).toMatch(/"on=%s", \(\(.*\) \? "true" : "false"\)/);
+  });
+});
+
+// The global `undefined` folds like any constant — text needs it (`s + undefined` is "…undefined") — so
+// every TYPED slot has to refuse it (and null / NaN) itself, with a location, or it reaches C as `NaN`.
+describe('AOT typed slots refuse nothing-values', () => {
+  const D = `import {useState, useRef} from 'react';
+import {View, Text, useAnimatedValue} from 'embedded-react';
+`;
+  const err = src => {
+    try {
+      gen(src);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+  it.each([
+    [
+      'useState(undefined)',
+      'const [n] = useState(undefined);',
+      /initial value of state "n" is undefined/,
+    ],
+    [
+      'useState(null)',
+      'const [n] = useState(null);',
+      /initial value of state "n" is null/,
+    ],
+    [
+      'useState(NaN)',
+      'const [n] = useState(0 / 0);',
+      /initial value of state "n" is NaN/,
+    ],
+    [
+      'useAnimatedValue(undefined)',
+      'const v = useAnimatedValue(undefined);',
+      /useAnimatedValue "v" is undefined/,
+    ],
+    [
+      'useRef(undefined)',
+      'const r = useRef(undefined);',
+      /useRef initial for "r"/,
+    ],
+    ['useRef(NaN)', 'const r = useRef(0 / 0);', /useRef initial for "r"/],
+  ])('%s is a located error, never C', (_n, decl, re) => {
+    const e = err(
+      `${D}export function App() { ${decl} return (<Text>x</Text>); }`,
+    );
+    expect(e.message).toMatch(re);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('a nullish style value is skipped, not judged as a key', () => {
+    const c = gen(`${D}export function App() {
+      return (<View style={{transform: undefined, width: null, height: 5}} />);
+    }`);
+    expect(c).toContain('p.height = 5;');
+    expect(c).not.toMatch(/p\.width = [0-9]/); // the root's screen_w width is expected; a literal is not
+  });
+
+  it('undefined still renders as JS does in text', () => {
+    const c = gen(`${D}export function App() {
+      const [s] = useState('a');
+      return (<View><Text>{undefined}</Text><Text>{s + undefined}</Text></View>);
+    }`);
+    expect(c).toContain('"%s", ""');
+    expect(c).toContain('"%sundefined", s_state.s');
+  });
+});
+
+describe('AOT demo marker encoding', () => {
+  it('is one-to-one: names differing only in punctuation get distinct markers', () => {
+    const h = name =>
+      compileSource(`${PRE}export function App() { return (<View />); }`, name)
+        .h;
+    expect(h('foo-bar')).toContain('#define ER_AOT_DEMO_foo_2d_bar 1');
+    expect(h('foo_bar')).toContain('#define ER_AOT_DEMO_foo_5f_bar 1');
+    expect(h('thermostat')).toContain('#define ER_AOT_DEMO_thermostat 1');
+    expect(h('my app')).toContain('#define ER_AOT_DEMO_my_20_app 1');
+    expect(h('café')).toContain('#define ER_AOT_DEMO_caf_e9_ 1');
   });
 });
 

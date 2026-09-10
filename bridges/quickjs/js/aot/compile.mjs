@@ -106,11 +106,13 @@ const [PKG_MAJOR, PKG_MINOR] = PKG_VERSION.split('.');
 // ---------------------------------------------------------------------------------------------------
 
 /**
- * The `#ifndef` marker a board example guards on, from a demo name: every character outside [A-Za-z0-9_]
- * becomes '_' so the name is a valid C identifier. Shared by the app.gen.h emission and the CLI's
- * collision check below — two demos that sanitise to the same marker would defeat the guard.
+ * The `#ifndef` marker a board example guards on, from a demo name. Every character outside [A-Za-z0-9]
+ * becomes `_<hex code point>_`, so the result is a C identifier AND the mapping is one-to-one: `foo-bar`
+ * is ER_AOT_DEMO_foo_2d_bar and `foo_bar` is ER_AOT_DEMO_foo_5f_bar. Flattening both to `foo_bar` would
+ * let a board guard accept the wrong app, from either entry point that generates one.
  */
-const demoMarker = demo => `ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')}`;
+export const demoMarker = demo =>
+  `ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9]/gu, ch => `_${ch.codePointAt(0).toString(16)}_`)}`;
 
 /** Throws an AOT error carrying an optional `hint` (a "rewrite it like this" suggestion shown to the user). */
 function aotError(message, hint) {
@@ -925,6 +927,21 @@ function collectState(fnBody, scope, prefix = '') {
             `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ${JSON.stringify(initVal)}`,
             'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, strings, and objects are not supported.',
           );
+        // A scalar slot is an int, float, string or boolean. `undefined`, `null` or NaN would otherwise
+        // fold into an initializer like `.value = NaN` — invalid C, with no location — because the global
+        // `undefined` resolves in the constant fold (text needs it: `s + undefined`).
+        if (
+          initVal === undefined ||
+          initVal === null ||
+          (typeof initVal === 'number' && !Number.isFinite(initVal))
+        ) {
+          const e = aotError(
+            `AOT: the initial value of state "${name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
+            "give it a concrete starting value: useState(0), useState(''), useState(false).",
+          );
+          if (initArg?.loc) e.aotLoc = initArg.loc.start;
+          throw e;
+        }
         let cType = cTypeOfValue(initVal);
         // JS prints a boolean as "true"/"false" and React renders one as nothing, so text lowering has
         // to tell useState(false) from useState(0) — cTypeOfValue funnels both to 'int'.
@@ -1298,6 +1315,16 @@ function collectAnims(fnBody, scope, prefix = '') {
         const initVal = init.arguments[0]
           ? evalStatic(init.arguments[0], scope)
           : 0;
+        // An animated value is a float slot; `undefined` folds (text needs it) and would reach C as
+        // `NaNf`. Refuse here, at the declaration, with its location.
+        if (typeof initVal !== 'number' || !Number.isFinite(initVal)) {
+          const e = aotError(
+            `AOT: the initial value of useAnimatedValue "${decl.id.name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
+            'give it a finite starting number: useAnimatedValue(0).',
+          );
+          if (init.arguments[0]?.loc) e.aotLoc = init.arguments[0].loc.start;
+          throw e;
+        }
         anims.set(decl.id.name, {
           cVar: `s_av_${prefix}${decl.id.name}`,
           initCode: floatLit(initVal),
@@ -1341,10 +1368,14 @@ function collectRefs(fnBody, scope, prefix = '') {
           continue;
         }
         const v = evalStatic(arg, scope);
-        if (typeof v !== 'number')
-          throw new Error(
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+          const e = aotError(
             `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+            `got ${v === undefined ? 'undefined' : String(v)}.`,
           );
+          if (arg.loc) e.aotLoc = arg.loc.start;
+          throw e;
+        }
         const cType = Number.isInteger(v) ? 'int' : 'float';
         refs.set(decl.id.name, {
           cVar,
@@ -1387,6 +1418,13 @@ const ANIM_TRANSFORM_PROPS = {
 /** Formats a number as a valid C float literal (`1` → `1.0f`, not `1f` which doesn't compile). */
 function floatLit(n) {
   const v = Number(n);
+  // `NaNf` / `Infinityf` / `undefinedf` are not C. Every numeric-literal path funnels through here, so a
+  // value that slipped past its own boundary check still fails at generate time, never in the host compiler.
+  if (!Number.isFinite(v))
+    throw aotError(
+      `AOT: a numeric constant folded to ${n === undefined ? 'undefined' : String(n)}, which has no C form`,
+      'the value must be a finite number.',
+    );
   return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
 }
 
@@ -1581,6 +1619,9 @@ const unknownStyleKey = key =>
  * value, because a single `try` covered the constant fold and the lowering together.
  */
 function lowerStyleChecked(key, value) {
+  // `{transform: undefined}` is a no-op in Flow A and in lowerStyle itself; the key is only judged when
+  // there is a value to lower.
+  if (value === undefined || value === null) return [];
   if (!isStyleKey(key)) throw unknownStyleKey(key);
   try {
     return lowerStyle({[key]: value});
@@ -6700,7 +6741,8 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
  * against their own panel size to turn that into a compile error; see each board example's main.c.
  *
  * WHICH demo is recorded the same way, as a marker macro named ER_AOT_DEMO_<demo> with every character
- * outside [A-Za-z0-9_] replaced by '_' (so \`watch-face\` defines ER_AOT_DEMO_watch_face). A board that
+ * outside [A-Za-z0-9] encoded as _<hex>_ (so \`watch-face\` defines ER_AOT_DEMO_watch_2d_face). The encoding
+ * is one-to-one, so no two app names can ever share a marker. A board that
  * needs a particular demo's useHostValue setters guards on \`#ifndef\` of its own marker, which names the
  * mismatch instead of leaving a pile of implicit-declaration errors for those setters.
  */
@@ -6767,20 +6809,6 @@ if (
   if (!existsSync(appPath)) {
     console.error(
       `AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`,
-    );
-    process.exit(1);
-  }
-  // Names differing only in characters the marker flattens (e.g. `watch-face` / `watch_face`) share one
-  // ER_AOT_DEMO_* macro, so a board guarded on either would accept an app built from the other — the very
-  // mismatch the marker exists to catch. Refuse rather than emit an ambiguous guard.
-  const clash = avail.filter(
-    d => d !== demo && demoMarker(d) === demoMarker(demo),
-  );
-  if (clash.length) {
-    console.error(
-      `AOT: demo "${demo}" and ${clash.map(d => `"${d}"`).join(', ')} both map to ${demoMarker(demo)}, ` +
-        `so a board example could not tell their generated apps apart. Rename one so the demo names differ ` +
-        `by more than "-" vs "_".`,
     );
     process.exit(1);
   }

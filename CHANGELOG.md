@@ -103,7 +103,7 @@ See the README for the release process.
 
 - A board example built against an AOT app generated from a different *demo* is now a compiler error
   naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
-  generated.
+  generated. The marker encodes the app name one-to-one, so two apps can never share one.
 
 - A dep-driven `useEffect` in the AOT now runs its cleanup before re-running, so a `setInterval` it
   starts is stopped again on the next dep change instead of accumulating for the life of the app.

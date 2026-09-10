@@ -20,7 +20,7 @@ import {resolve, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {compileSource, bakeSvgArtifacts} from '../compile.mjs';
+import {compileSource, bakeSvgArtifacts, demoMarker} from '../compile.mjs';
 
 // Regression guard: the AOT-targeted demos must keep compiling end-to-end (no thrown "AOT: …"). This is
 // the cheap counterpart to a full compile-and-screenshot harness — it would have caught any compiler change
@@ -90,9 +90,7 @@ describe('AOT entry points agree on the demo marker', () => {
       expect(r.status).toBe(0);
       const h = readFileSync(join(out, 'app.gen.h'), 'utf8');
       expect(h).toContain(`#define ER_AOT_DEMO "${demo}"`);
-      expect(h).toContain(
-        `#define ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')} 1`,
-      );
+      expect(h).toContain(`#define ${demoMarker(demo)} 1`);
     } finally {
       rmSync(out, {recursive: true, force: true});
     }
@@ -111,7 +109,7 @@ describe('board example demo guards', () => {
     const marker = src.match(/#ifndef (ER_AOT_DEMO_\w+)/)?.[1];
     const command = src.match(/npm run aot -- ([\w-]+)/)?.[1];
     expect(command).toBe(demo);
-    // The marker is the demo name with every non-identifier character mapped to '_' (see app.gen.h).
-    expect(marker).toBe(`ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9_]/g, '_')}`);
+    // The marker encodes the demo name one-to-one (see demoMarker / app.gen.h).
+    expect(marker).toBe(demoMarker(demo));
   });
 });
