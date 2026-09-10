@@ -95,6 +95,10 @@ static int s_high_water = 1;
 /** @brief Context the bridge was installed into; used by the event trampoline. */
 static JSContext* s_bridge_ctx = NULL;
 
+/** @brief er_now_ms() at the last er_bridge_now_ms() sample, and the 64-bit total it has been widened to. */
+static uint32_t s_clock_last = 0;
+static uint64_t s_clock_ms = 0;
+
 /**
  * @brief JS object mapping encoded (handle, eventType) keys to JS handler functions.
  *
@@ -3901,7 +3905,7 @@ static JSValue js_now(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_NewInt64(ctx, (int64_t)er_now_ms());
+    return JS_NewInt64(ctx, (int64_t)er_bridge_now_ms());
 }
 
 /**
@@ -4709,6 +4713,20 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief The engine clock widened past its 32-bit wrap (see header).
+ *
+ * @return Milliseconds of engine-clock time since the backend was set.
+ */
+uint64_t er_bridge_now_ms(void)
+{
+    /* Unsigned subtraction measures the step across a wrap too, as long as samples are < 2^32 ms apart. */
+    const uint32_t now = er_now_ms();
+    s_clock_ms += (uint32_t)(now - s_clock_last);
+    s_clock_last = now;
+    return s_clock_ms;
+}
+
+/**
  * @brief Runs one host pump: dispatches pending touch-moves, drains microtasks, fires due timers, then drains again.
  *
  * Drains before and after firing so a Promise that schedules a timer, and a timer callback
@@ -4729,6 +4747,8 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  */
 void er_bridge_pump(JSContext* ctx)
 {
+    /* Sampled every frame, so the widened clock never goes a whole wrap unread. */
+    (void)er_bridge_now_ms();
     if (!ctx)
     {
         return;

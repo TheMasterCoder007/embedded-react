@@ -4,7 +4,7 @@ A climate control built around a **240° arc dial** — a solid arc that fills f
 up to the setpoint, with a radial handle riding its leading edge. Touch anywhere on
 the ring to set the target. **HEAT / COOL / AUTO / OFF** each carries their own accent, and AUTO splits the
 readout into a low/high pair with two handles and a warm→cool ramp between them. A settings sheet switches
-theme and units.
+theme and units and sets the clock shown in the header.
 
 One component, three layouts, chosen from the panel size:
 
@@ -77,6 +77,10 @@ on-device examples.
   number (`updateText`), so a move costs no React work at all; state is committed once, on release.
 - **`components/weather.jsx`** is the current conditions plus a scrolling 14-day outlook, each row a baked
   `<Image>` icon and a hi/lo range bar. Static, so it never re-renders during a drag.
+- **`components/clock.jsx`** is the header clock and the settings sheet's clock setter (Flow A only). The
+  boards have no RTC, so the time is an offset you set on top of `Date.now()` — the engine clock, counting
+  from boot — and a power cycle loses it. `components/calendar.js` does the date math, since the runtime
+  has `Date.now()` but no `Date` objects.
 
 ### Where the two flows differ
 

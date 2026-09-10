@@ -260,6 +260,22 @@ static JSValue rt_pixel(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_NewUint32(ctx, s_fb[y * RT_SCREEN_W + x]);
 }
 
+/**
+ * @brief __setWallClock(ms): er_runtime_set_wall_clock, the call a device host makes after reading an RTC
+ *        or an SNTP sync. Test runner only.
+ */
+static JSValue rt_set_wall_clock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    int64_t ms = 0;
+    if (argc >= 1 && JS_ToInt64(ctx, &ms, argv[0]) < 0)
+    {
+        return JS_EXCEPTION; /* e.g. a Symbol: let the throw reach the test instead of setting 0 */
+    }
+    er_runtime_set_wall_clock(ms);
+    return JS_UNDEFINED;
+}
+
 static void rt_install_globals(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -267,6 +283,7 @@ static void rt_install_globals(JSContext* ctx)
     JS_SetPropertyStr(ctx, global, "__layoutPasses", JS_NewCFunction(ctx, rt_layout_passes, "__layoutPasses", 0));
     JS_SetPropertyStr(ctx, global, "__dirtyRect", JS_NewCFunction(ctx, rt_dirty_rect, "__dirtyRect", 0));
     JS_SetPropertyStr(ctx, global, "__pixel", JS_NewCFunction(ctx, rt_pixel, "__pixel", 2));
+    JS_SetPropertyStr(ctx, global, "__setWallClock", JS_NewCFunction(ctx, rt_set_wall_clock, "__setWallClock", 1));
 
     JSValue console = JS_NewObject(ctx);
     JSValue log = JS_NewCFunction(ctx, rt_console_log, "log", 1);

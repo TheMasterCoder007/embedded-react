@@ -76,6 +76,17 @@ extern "C"
     void er_bridge_pump(JSContext* ctx);
 
     /**
+     * @brief The engine clock (`er_now_ms`) widened to 64 bits, so it keeps counting past the 32-bit wrap
+     *        at ~49.7 days of uptime.
+     *
+     * What `performance.now()`, `Date.now()` and `NativeUI.now()` read. The widening works by sampling, so
+     * it is exact as long as it is read at least once per wrap; er_bridge_pump() reads it every frame.
+     *
+     * @return Milliseconds of engine-clock time since the backend was set.
+     */
+    uint64_t er_bridge_now_ms(void);
+
+    /**
      * @brief Loads and runs a precompiled QuickJS bytecode blob.
      *
      * Reads the blob (produced by er-bridge-quickjs-compile) with JS_ReadObject and runs it with

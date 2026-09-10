@@ -51,15 +51,16 @@
  * @brief Optional intrinsics beyond the lite profile (OR into ErRuntimeConfig.extra_intrinsics).
  *
  * The runtime creates its context with JS_NewContextRaw and installs only what the React runtime
- * needs: base objects, RegExp, JSON, Map/Set, Promise, plus a `performance.now` global (React's
- * scheduler clock). Date, Proxy, typed arrays, WeakRef/FinalizationRegistry, BigInt and JS-level
- * eval() are NOT available unless requested here — each one linked back in costs flash, which is
- * the point of the lite profile. The same set runs everywhere (device, desktop, simulator,
- * runtest), so an app that works in dev works on hardware.
+ * needs: base objects, RegExp, JSON, Map/Set, Promise, plus `performance.now()` (React's scheduler
+ * clock) and `Date.now()`, both on the engine clock (see er_runtime_set_wall_clock). Date objects,
+ * Proxy, typed arrays, WeakRef/FinalizationRegistry, BigInt and JS-level eval() are NOT available
+ * unless requested here — each one linked back in costs flash, which is the point of the lite
+ * profile. The same set runs everywhere (device, desktop, simulator, runtest), so an app that works
+ * in dev works on hardware.
  */
 enum
 {
-    ER_JS_INTRINSIC_DATE = 1u << 0,         /**< Date (the runtime itself uses performance.now, not Date). */
+    ER_JS_INTRINSIC_DATE = 1u << 0,         /**< Full Date, on the platform clock (Date.now() exists without it). */
     ER_JS_INTRINSIC_PROXY = 1u << 1,        /**< Proxy. */
     ER_JS_INTRINSIC_TYPED_ARRAYS = 1u << 2, /**< TypedArrays / ArrayBuffer / DataView. */
     ER_JS_INTRINSIC_WEAK_REF = 1u << 3,     /**< WeakRef / FinalizationRegistry. */
@@ -161,7 +162,7 @@ bool er_runtime_init(const ErRuntimeConfig* cfg);
 
 /**
  * @brief Creates a context with the lite intrinsic profile (JS_NewContextRaw + base objects, RegExp,
- *        JSON, Map/Set, Promise, `performance.now`) plus any requested extras.
+ *        JSON, Map/Set, Promise, `performance.now`, `Date.now`) plus any requested extras.
  *
  * The building block er_runtime uses internally, exposed so standalone hosts/harnesses (e.g. the
  * runtest tool) run the SAME intrinsic surface as a device — a bundle that works there works on
@@ -183,6 +184,21 @@ JSContext* er_js_new_context(JSRuntime* rt, uint32_t extra_intrinsics);
  * @return The current JSContext, or NULL before init / after shutdown.
  */
 JSContext* er_runtime_context(void);
+
+/**
+ * @brief Tells the runtime the current wall-clock time, which `Date.now()` then counts on from.
+ *
+ * `Date.now()` is the engine clock plus an offset, so it advances with the frames you tick and needs no
+ * platform clock. Until this is called it reads as uptime: right for measuring elapsed time, but 1970
+ * as a date. Call it whenever you learn the real time (an RTC read at boot, an SNTP sync); a later call
+ * re-anchors it, and it survives er_runtime_reset. `performance.now()` never moves with it, so it stays
+ * the clock for durations.
+ *
+ * No effect with ER_JS_INTRINSIC_DATE, whose full Date reads the platform clock instead.
+ *
+ * @param[in] epoch_ms  Current time, in milliseconds since the Unix epoch.
+ */
+void er_runtime_set_wall_clock(int64_t epoch_ms);
 
 /** @brief Result of er_runtime_load_container (see er_runtime_container_status_str). */
 typedef enum
