@@ -51,6 +51,14 @@ _Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LC
                "cd bridges/quickjs/js && ER_AOT_SCREEN_W=" ER_STR(BOARD_LCD_WIDTH) " ER_AOT_SCREEN_H=" ER_STR(
                    BOARD_LCD_HEIGHT) " npm run aot -- watch-face");
 
+/* app.gen.h also records WHICH demo it came from. This board's main.c calls that demo's useHostValue
+ * setters, so an app.gen.c built from another demo fails as a pile of implicit-declaration errors for
+ * functions that were simply never generated. Name the real cause instead. */
+#ifndef ER_AOT_DEMO_watch_2d_face
+#error "dist/app.gen.c came from a different demo than this board expects (app.gen.h records which in "\
+       "ER_AOT_DEMO). Regenerate it with the ER_AOT_SCREEN_W/H command above, ending: npm run aot -- watch-face"
+#endif
+
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
 #define ER_TARGET_FRAME_MS 16U

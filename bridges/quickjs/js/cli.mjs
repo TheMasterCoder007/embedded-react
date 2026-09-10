@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-import {dirname, relative, resolve} from 'node:path';
+import {basename, dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildApp, runDevServer} from './sim-server.mjs';
 import {
@@ -339,6 +339,27 @@ async function exportApp(args) {
 }
 
 /** Resolve the root component file for the AOT compiler (App.jsx), distinct from the registry entry. */
+/**
+ * The project identity stamped into app.gen.h as ER_AOT_DEMO / ER_AOT_DEMO_<name>, which a board example
+ * guards on (see the header's own comment). It is the directory of the nearest package.json at or above
+ * the App component, so `demos/watch-face/App.jsx` is `watch-face` whether the build runs from that
+ * directory or names the entry from somewhere else — and a scaffolded `src/App.jsx` reports its project
+ * folder rather than `src`. Deriving it from the cwd instead would stamp whatever directory you ran from.
+ */
+function projectIdentity(appPath) {
+  let dir = dirname(appPath);
+  for (let i = 0; i < 64; i++) {
+    // A package.json at a filesystem root has no directory name to report — basename('/') is '' — so
+    // treat it as absent rather than stamp an empty identity (`ER_AOT_DEMO_` with nothing after it).
+    if (existsSync(resolve(dir, 'package.json')) && basename(dir))
+      return basename(dir);
+    const up = dirname(dir);
+    if (up === dir) break; // filesystem root
+    dir = up;
+  }
+  return basename(dirname(appPath)) || 'app';
+}
+
 function resolveAppComponent(cwd, explicit) {
   if (explicit) {
     const p = resolve(cwd, explicit);
@@ -378,7 +399,12 @@ async function buildAot(cwd, explicit, outDir, screen) {
   try {
     // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
     const svgArtifacts = await bakeSvgArtifacts(src, appDir);
-    result = compileSource(src, 'app', {filename: appPath, svgArtifacts});
+    // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
+    // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
+    result = compileSource(src, projectIdentity(appPath), {
+      filename: appPath,
+      svgArtifacts,
+    });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);

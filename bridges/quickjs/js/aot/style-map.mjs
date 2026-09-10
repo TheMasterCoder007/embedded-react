@@ -216,6 +216,15 @@ const KEYS = {
   // View visual
   backgroundColor: v => [{field: 'background_color', expr: colorLiteral(v)}],
   borderRadius: v => [{field: 'border_radius', expr: dim(v)}],
+  // Per-corner radii; the engine reads 0 in one of these as "use borderRadius" (same as Flow A).
+  borderTopLeftRadius: v => [{field: 'border_top_left_radius', expr: dim(v)}],
+  borderTopRightRadius: v => [{field: 'border_top_right_radius', expr: dim(v)}],
+  borderBottomRightRadius: v => [
+    {field: 'border_bottom_right_radius', expr: dim(v)},
+  ],
+  borderBottomLeftRadius: v => [
+    {field: 'border_bottom_left_radius', expr: dim(v)},
+  ],
   borderWidth: v => [{field: 'border_width', expr: dim(v)}],
   borderColor: v => [{field: 'border_color', expr: colorLiteral(v)}],
   opacity: v => [
@@ -236,6 +245,12 @@ const KEYS = {
   letterSpacing: v => [{field: 'letter_spacing', expr: dim(v)}],
 };
 
+/** Whether the static lowering knows `key` at all (vs. knowing it but rejecting its value). */
+export const isStyleKey = key => Object.hasOwn(KEYS, key);
+
+/** Every style key the AOT lowers statically — listed in the "unsupported style key" diagnostic. */
+export const STYLE_KEYS = Object.keys(KEYS);
+
 /**
  * Lowers one flattened style object to a list of ERProps field assignments.
  *
@@ -246,7 +261,7 @@ export function lowerStyle(style) {
   const out = [];
   for (const [key, value] of Object.entries(style)) {
     if (value === undefined || value === null) continue;
-    const fn = KEYS[key];
+    const fn = Object.hasOwn(KEYS, key) ? KEYS[key] : undefined;
     if (!fn)
       throw new Error(
         `AOT: unsupported style key "${key}" (not yet lowered to ERProps)`,
@@ -297,6 +312,10 @@ const NUM_FIELDS = {
   flexGrow: 'flex_grow',
   flexShrink: 'flex_shrink',
   borderRadius: 'border_radius',
+  borderTopLeftRadius: 'border_top_left_radius',
+  borderTopRightRadius: 'border_top_right_radius',
+  borderBottomRightRadius: 'border_bottom_right_radius',
+  borderBottomLeftRadius: 'border_bottom_left_radius',
   borderWidth: 'border_width',
   zIndex: 'z_index',
   fontSize: 'font_size',

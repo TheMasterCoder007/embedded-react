@@ -57,6 +57,63 @@ See the README for the release process.
 
 ### Fixed
 
+- String concatenation in AOT text now works: `<Text>{'page ' + n + '/' + PAGES}</Text>` lowers to a
+  printf format built from the parts. It used to be typed as arithmetic and emit invalid C, so the
+  failure surfaced in the host compiler over a generated source the author never wrote. Also supported
+  in a string `useState` setter and a `<TextInput value>`; anywhere else it is a located error.
+
+- The AOT now lowers the four per-corner `border*Radius` styles, closing a gap where Flow A accepted
+  a style Flow B could not express.
+
+- An AOT style key with no lowering is now reported as unsupported instead of as "a state-driven
+  value ... (static only)", advice that could not be followed when the value was already a literal.
+
+- Booleans in the AOT now behave the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, a
+  bare `{flag}` child draws nothing (React's rule), nested spans included, and `flag === 1` is false.
+  Flow B printed `1` and treated `true === 1` as true.
+
+- A string state setter that reads its own slot (`setLabel(label + '!')`) now builds the new value in a
+  temporary first. `snprintf` may not read and write overlapping objects, so an embedded libc was free
+  to truncate or corrupt it.
+
+- A ternary mixing a string branch with a numeric one (`{ok ? 1 : 'none'}`) is now a located AOT error
+  instead of ill-typed C for the host compiler to reject.
+
+- AOT text that mixes a string with anything else (`{'n=' + name}`) now builds under GCC. Every string
+  goes into a fixed-size slot, so an over-long value truncates by design; GCC reports that intent and
+  ESP-IDF compiles with `-Werror`, which failed the build. The generated file now says it is deliberate.
+
+- Names now resolve the way JavaScript scopes them, in styles and props as well as text. A runtime
+  binding — state, a memo, a prop, a `.map` row item, a handler or event parameter — always beats a
+  module constant of the same name, and an inlined child component sees module scope plus its own props
+  and consts, never the caller's locals. Previously the constant fold could quietly substitute the module
+  value.
+
+- Strings in positions C cannot express are handled instead of reaching the host compiler: string
+  equality lowers to `strcmp` (ordering is refused: JS orders by UTF-16 code unit, the device holds
+  UTF-8), a string used as a condition tests for non-empty (a bare `char[]` compared
+  its address, which GCC rejects), a handler `const` copied from a string state gets its own buffer, and
+  arithmetic on a string — `-`, `*`, `/`, `%`, a unary `+`/`-`, or a string driving a numeric style — is
+  a located error.
+
+- `undefined` behaves as it does in Flow A: a prop or style entry that is `undefined` — written out, or a
+  prop a child component was never given — is omitted, and in text `{undefined}` renders nothing while
+  `s + undefined` appends "undefined". Previously an absent prop could hide a node (`visible`) or put
+  the word "undefined" in a `placeholder`. A `const` whose value is `undefined` folds like any other; a
+  binding *named* `undefined` is a located error.
+
+- A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
+  constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the
+  module value instead of the one the code uses.
+
+- AOT text refuses `{cond && 'yes'}` with a located error instead of printing `1`. JS evaluates `&&`
+  and `||` to one of their operands, which the emitted C has no way to reproduce; write the branch out
+  as `{cond ? 'yes' : ''}`. A logical whose sides are both boolean still lowers.
+
+- A board example built against an AOT app generated from a different *demo* is now a compiler error
+  naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
+  generated. The marker encodes the app name one-to-one, so two apps can never share one.
+
 - A dep-driven `useEffect` in the AOT now runs its cleanup before re-running, so a `setInterval` it
   starts is stopped again on the next dep change instead of accumulating for the life of the app.
   Timer ids are generation-tagged so clearing an already-finished one cannot stop an unrelated timer.

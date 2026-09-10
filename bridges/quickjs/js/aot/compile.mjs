@@ -46,6 +46,8 @@ import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   lowerStyle,
+  isStyleKey,
+  STYLE_KEYS,
   NODE_TYPES,
   DYN_FIELDS,
   colorLiteral,
@@ -102,6 +104,15 @@ const [PKG_MAJOR, PKG_MINOR] = PKG_VERSION.split('.');
 // hint when one is attached). emitExpr / emitNode / compileHandlerExpr are wrapped (withLoc) so the
 // DEEPEST node that failed pins the location; compileSource formats it at the top.
 // ---------------------------------------------------------------------------------------------------
+
+/**
+ * The `#ifndef` marker a board example guards on, from a demo name. Every character outside [A-Za-z0-9]
+ * becomes `_<hex code point>_`, so the result is a C identifier AND the mapping is one-to-one: `foo-bar`
+ * is ER_AOT_DEMO_foo_2d_bar and `foo_bar` is ER_AOT_DEMO_foo_5f_bar. Flattening both to `foo_bar` would
+ * let a board guard accept the wrong app, from either entry point that generates one.
+ */
+export const demoMarker = demo =>
+  `ER_AOT_DEMO_${demo.replace(/[^A-Za-z0-9]/gu, ch => `_${ch.codePointAt(0).toString(16)}_`)}`;
 
 /** Throws an AOT error carrying an optional `hint` (a "rewrite it like this" suggestion shown to the user). */
 function aotError(message, hint) {
@@ -290,6 +301,42 @@ function evalStatic(node, scope) {
 const ARITH = new Set(['+', '-', '*', '/', '%']);
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
+/**
+ * `scope` minus every name `env` binds at RUNTIME — locals, state, refs, animated values, and the event /
+ * gesture params of the handler being compiled. emitExpr resolves those before env.consts, so a fold
+ * that consulted the raw scope would silently swap a module const in for the value the code actually
+ * uses. Every env-driven constant fold goes through this; the JSX-side folds keep the same rule by
+ * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap).
+ */
+function foldScope(env, scope) {
+  const bound = new Set([
+    ...(env.locals?.keys() ?? []),
+    ...(env.state?.keys() ?? []),
+    ...(env.refs?.keys() ?? []),
+    ...(env.anims?.keys() ?? []),
+  ]);
+  if (env.event) bound.add(env.event);
+  if (env.gesture) bound.add(env.gesture);
+  let shadows = false;
+  for (const k of bound)
+    if (k in scope) {
+      shadows = true;
+      break;
+    }
+  if (!shadows) return scope;
+  return Object.fromEntries(
+    Object.entries(scope).filter(([k]) => !bound.has(k)),
+  );
+}
+
+const withUndefined = scope => Object.assign(Object.create(scope), {undefined});
+
+/**
+ * `e` used as a C condition. JS treats a string as truthy when it is non-empty; a bare char[] in C tests
+ * its ADDRESS, which is always true — and real GCC refuses that under -Werror=address.
+ */
+const asCond = e => (e.cType === 'string' ? `(${e.code}[0] != '\\0')` : e.code);
+
 function emitExprImpl(node, env) {
   switch (node.type) {
     case 'NumericLiteral':
@@ -299,7 +346,7 @@ function emitExprImpl(node, env) {
     case 'StringLiteral':
       return {code: cstr(node.value), cType: 'string'};
     case 'BooleanLiteral':
-      return {code: node.value ? '1' : '0', cType: 'int'};
+      return {code: node.value ? '1' : '0', cType: 'int', isBool: true};
     case 'Identifier': {
       if (env.locals.has(node.name)) return env.locals.get(node.name);
       if (env.state.has(node.name)) {
@@ -308,7 +355,7 @@ function emitExprImpl(node, env) {
           throw new Error(
             `AOT: a list state ("${node.name}") can only be used via .length or .map`,
           );
-        return {code: s.cMember, cType: s.cType};
+        return {code: s.cMember, cType: s.cType, isBool: s.isBool};
       }
       if (node.name in env.consts) {
         const v = env.consts[node.name];
@@ -317,6 +364,8 @@ function emitExprImpl(node, env) {
             ? {code: String(v), cType: 'int'}
             : {code: `${v}f`, cType: 'float'};
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
+        if (typeof v === 'boolean')
+          return {code: v ? '1' : '0', cType: 'int', isBool: true};
       }
       throw new Error(
         `AOT: cannot resolve identifier "${node.name}" in a dynamic expression`,
@@ -324,15 +373,26 @@ function emitExprImpl(node, env) {
     }
     case 'UnaryExpression': {
       const a = emitExpr(node.argument, env);
+      if (
+        (node.operator === '-' || node.operator === '+') &&
+        a.cType === 'string'
+      )
+        throw aotError(
+          `AOT: unary "${node.operator}" on a string is not supported`,
+          'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
+        );
       // Parenthesize the operand so `-` on a negative literal emits `(-(-135))`, not `(--135)` (a decrement).
       if (
         node.operator === '-' ||
         node.operator === '+' ||
         node.operator === '!'
       )
+        // Only `!` yields a boolean. Unary +/- are numeric coercions — `+flag` is 0 or 1 in JS, so the
+        // operand's boolean-ness must not survive them.
         return {
-          code: `(${node.operator}(${a.code}))`,
+          code: `(${node.operator}(${node.operator === '!' ? asCond(a) : a.code}))`,
           cType: node.operator === '!' ? 'int' : a.cType,
+          isBool: node.operator === '!',
         };
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
@@ -340,6 +400,21 @@ function emitExprImpl(node, env) {
       const l = emitExpr(node.left, env);
       const r = emitExpr(node.right, env);
       if (ARITH.has(node.operator)) {
+        if (l.cType === 'string' || r.cType === 'string') {
+          // `+` over a string builds text, which C cannot express as one value. Where the destination is
+          // a char buffer the caller lowers it with emitFormat(); anywhere else there is nothing to lower
+          // to.
+          if (node.operator === '+')
+            throw aotError(
+              'AOT: string concatenation is not supported in this position',
+              'a `+` chain over strings lowers to a printf format, which only works where the value lands in a text buffer: a <Text> body, a string useState setter, or a <TextInput value>.',
+            );
+          // JS would coerce the string to a number; C would do pointer arithmetic or refuse to compile.
+          throw aotError(
+            `AOT: "${node.operator}" on a string is not supported`,
+            'keep both operands numeric — a string cannot be coerced to a number here.',
+          );
+        }
         if (node.operator === '/')
           return {
             code: `((float)(${l.code}) / (float)(${r.code}))`,
@@ -350,25 +425,67 @@ function emitExprImpl(node, env) {
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
       }
       if (COMPARE.has(node.operator)) {
-        const eqOp =
-          node.operator === '===' || node.operator === '=='
-            ? '=='
-            : node.operator === '!==' || node.operator === '!='
-              ? '!='
-              : null;
-        // String (in)equality → strcmp; the generated C already includes <string.h>.
-        if (eqOp && (l.cType === 'string' || r.cType === 'string'))
-          return {
-            code: `(strcmp(${l.code}, ${r.code}) ${eqOp} 0)`,
-            cType: 'int',
-          };
         const op =
           node.operator === '==='
             ? '=='
             : node.operator === '!=='
               ? '!='
               : node.operator;
-        return {code: `(${l.code} ${op} ${r.code})`, cType: 'int'};
+        if (l.cType === 'string' || r.cType === 'string') {
+          if (l.cType !== r.cType) {
+            // A strict comparison never coerces, so a string against a number is decided statically.
+            if (node.operator === '===' || node.operator === '!==')
+              return {
+                code: node.operator === '===' ? '0' : '1',
+                cType: 'int',
+                isBool: true,
+              };
+            throw aotError(
+              'AOT: a string cannot be compared with a number',
+              `\`${node.operator}\` coerces the string to a number in JS, which C cannot reproduce. Compare like with like, or use === / !== (which never coerce).`,
+            );
+          }
+          // Equality is byte-exact, which for UTF-8 is exactly JS string equality. Ordering is not: JS
+          // orders by UTF-16 code unit and strcmp by UTF-8 byte, and the two disagree once a character
+          // lies outside the Basic Multilingual Plane. Refuse rather than silently pick the other branch.
+          // (A bare `<` on two char* would compare addresses — real GCC rejects that under -Werror=address.)
+          if (op !== '==' && op !== '!=')
+            throw aotError(
+              `AOT: ordering strings with "${node.operator}" is not supported`,
+              'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can differ. Use === / !==, or compare numbers.',
+            );
+          return {
+            code: `(strcmp(${l.code}, ${r.code}) ${op} 0)`,
+            cType: 'int',
+            isBool: true,
+          };
+        }
+        // A boolean and a number share an int slot, so C would hold `true === 1`; a strict comparison never
+        // coerces, so JS never does. Decided only when the other side is surely a number.
+        const surelyNum = (n, x) =>
+          !x.isBool &&
+          (x.cType === 'float' ||
+            n.type === 'NumericLiteral' ||
+            (n.type === 'UnaryExpression' &&
+              n.argument.type === 'NumericLiteral') ||
+            (n.type === 'Identifier' &&
+              !env.locals.has(n.name) &&
+              env.state.get(n.name)?.isBool === false));
+        if (
+          (node.operator === '===' || node.operator === '!==') &&
+          ((l.isBool && surelyNum(node.right, r)) ||
+            (r.isBool && surelyNum(node.left, l)))
+        )
+          return {
+            code: node.operator === '===' ? '0' : '1',
+            cType: 'int',
+            isBool: true,
+          };
+        return {
+          code: `(${l.code} ${op} ${r.code})`,
+          cType: 'int',
+          isBool: true,
+        };
       }
       throw new Error(`AOT: unsupported binary operator "${node.operator}"`);
     }
@@ -379,30 +496,46 @@ function emitExprImpl(node, env) {
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
       const l = emitExpr(node.left, env);
       const r = emitExpr(node.right, env);
-      return {code: `(${l.code} ${op} ${r.code})`, cType: 'int'};
+      return {
+        code: `(${asCond(l)} ${op} ${asCond(r)})`,
+        cType: 'int',
+        isBool: Boolean(l.isBool && r.isBool),
+      };
     }
     case 'ConditionalExpression': {
       const t = emitExpr(node.test, env);
       const c = emitExpr(node.consequent, env);
       const a = emitExpr(node.alternate, env);
+      // `(ok ? 1 : "none")` is ill-typed C (int vs char*) and has no single printf spec either, so it
+      // has to be refused here rather than handed to the host compiler.
+      if ((c.cType === 'string') !== (a.cType === 'string'))
+        throw aotError(
+          'AOT: a ternary cannot mix a string branch with a numeric one',
+          "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
+        );
       const cType =
         c.cType === 'float' || a.cType === 'float'
           ? 'float'
           : c.cType === a.cType
             ? c.cType
             : 'int';
-      return {code: `(${t.code} ? ${c.code} : ${a.code})`, cType};
+      return {
+        code: `(${asCond(t)} ? ${c.code} : ${a.code})`,
+        cType,
+        isBool: Boolean(c.isBool && a.isBool),
+      };
     }
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g. a .map item's `.key`).
       try {
-        const v = evalStatic(node, env.consts ?? {});
+        const v = evalStatic(node, foldScope(env, env.consts ?? {}));
         if (typeof v === 'number')
           return Number.isInteger(v)
             ? {code: String(v), cType: 'int'}
             : {code: `${v}f`, cType: 'float'};
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
-        if (typeof v === 'boolean') return {code: v ? '1' : '0', cType: 'int'};
+        if (typeof v === 'boolean')
+          return {code: v ? '1' : '0', cType: 'int', isBool: true};
       } catch {
         /* not static — fall through to the dynamic member forms below */
       }
@@ -541,6 +674,140 @@ const cTypeOfValue = v =>
       ? 'float'
       : 'int';
 
+/** An aotError pinned to the expression that cannot be lowered to text (concatParts is not withLoc-wrapped). */
+function textShapeError(node, message, hint) {
+  const e = aotError(message, hint);
+  if (node.loc) e.aotLoc = node.loc.start;
+  return e;
+}
+
+/**
+ * Text a constant renders as a standalone JSX child. React draws nothing for null, undefined or a
+ * boolean (see flattenTextChildren in Flow A), which is not how `+` treats the same values — a
+ * concatenation operand goes through String() instead.
+ */
+const jsxChildText = v =>
+  v === undefined || v === null || typeof v === 'boolean' ? '' : String(v);
+
+/**
+ * Splits a string-building `+` chain into printf parts, following JS's own left-to-right typing: a `+`
+ * is a concatenation only once one of its sides is a string, so `n + 1 + ' ms'` still adds before it
+ * appends. Parts are either a `literal` (folded into the format) or a `{spec, code}` pair (a runtime arg).
+ *
+ * @returns {{isString: boolean, parts: Array<{literal?: string, spec?: string, code?: string}>}}
+ */
+function concatParts(node, env, scope, operand = false) {
+  // The global `undefined` (the name is reserved — see normalizeUndefined) renders as nothing for a
+  // standalone child and as "undefined" when concatenated. It is handled here, the one place it has a
+  // text meaning, rather than in the shared constant fold, where every prop reader would inherit it.
+  if (node.type === 'Identifier' && node.name === 'undefined')
+    return {isString: false, parts: [{literal: operand ? 'undefined' : ''}]};
+  try {
+    const v = evalStatic(node, scope);
+    return {
+      isString: typeof v === 'string',
+      parts: [{literal: operand ? String(v) : jsxChildText(v)}],
+    };
+  } catch {
+    /* not a compile-time constant — split it below */
+  }
+  if (node.type === 'BinaryExpression' && node.operator === '+') {
+    const l = concatParts(node.left, env, scope, true);
+    const r = concatParts(node.right, env, scope, true);
+    if (l.isString || r.isString)
+      return {isString: true, parts: [...l.parts, ...r.parts]};
+  }
+  // A branch or operand that itself concatenates (`on ? 'a' + s : 'b'`, `ok && 'n=' + n`) would need a
+  // format of its own, and one snprintf has one format. Say that here, before emitExpr's generic "not
+  // supported in this position" fires — its hint that text buffers are fine is exactly wrong here.
+  const concatenates = n =>
+    n.type === 'BinaryExpression' &&
+    n.operator === '+' &&
+    concatParts(n, env, scope, true).isString;
+  if (
+    node.type === 'ConditionalExpression' &&
+    (concatenates(node.test) ||
+      concatenates(node.consequent) ||
+      concatenates(node.alternate))
+  )
+    throw textShapeError(
+      node,
+      'AOT: a ternary in text cannot concatenate inside its test or a branch',
+      "each branch must be a single value — a literal, a state, or a number. Build the joined string first (a string useState set from a handler), or split it: {on ? 'a' : 'b'}{on ? s : ''}.",
+    );
+  if (
+    node.type === 'LogicalExpression' &&
+    (concatenates(node.left) || concatenates(node.right))
+  )
+    throw textShapeError(
+      node,
+      `AOT: "${node.operator}" in text cannot concatenate inside an operand`,
+      "write it with plain values — {ok ? 'n=' : ''}{ok ? n : ''} — or build the joined string first in a string useState.",
+    );
+  const e = emitExpr(node, env);
+  // JS `&&`/`||` evaluate to one of their OPERANDS, and a ternary to one of its BRANCHES. The generated C
+  // collapses a logical to 0/1 and gives a ternary a single slot, so text can only reproduce JS when the
+  // operands agree in kind. Refuse rather than print a value the app never computed.
+  if (node.type === 'LogicalExpression' && !e.isBool)
+    throw textShapeError(
+      node,
+      `AOT: "${node.operator}" in text evaluates to one of its operands, not to true/false`,
+      `\`a ${node.operator} b\` is a or b unless both sides are already booleans — the generated C only has 0/1. Write the branch out instead: {cond ? 'yes' : ''}.`,
+    );
+  if (
+    node.type === 'ConditionalExpression' &&
+    Boolean(emitExpr(node.consequent, env).isBool) !==
+      Boolean(emitExpr(node.alternate, env).isBool)
+  )
+    throw textShapeError(
+      node,
+      'AOT: a ternary in text mixes a boolean branch with a non-boolean one',
+      'JS renders those differently (`cond ? true : 5` is "true" or "5") but they share one C slot here. Make both branches the same kind.',
+    );
+  // A boolean draws nothing as a child but stringifies as an operand — same split as the constants above.
+  // isString stays FALSE either way: a boolean is not a string in JS, so it must not by itself put an
+  // enclosing `+` into concatenation mode (`on + n` adds, giving 0, and only then does `+ 'x'` append).
+  // The %s form below is picked up only when some other operand of that `+` really is a string.
+  if (e.isBool)
+    return operand
+      ? {
+          isString: false,
+          parts: [{spec: '%s', code: `((${e.code}) ? "true" : "false")`}],
+        }
+      : {isString: false, parts: [{literal: ''}]};
+  return {
+    isString: e.cType === 'string',
+    parts: [{spec: printfSpec(e.cType), code: e.code}],
+  };
+}
+
+/**
+ * Lowers an expression to a printf format + args for a char-buffer destination (a <Text> body, a string
+ * state slot, a <TextInput value>). A string-building `+` chain becomes one spec per dynamic part with
+ * the literals folded into the format; anything else is a single spec over its own value.
+ *
+ * @returns {{format: string, args: string[]}} `format` already has literal `%` escaped as `%%`.
+ */
+function emitFormat(node, env, scope = env.consts ?? {}) {
+  const visible = foldScope(env, scope);
+  let format = '';
+  const args = [];
+  for (const part of concatParts(node, env, visible).parts) {
+    if (part.literal !== undefined) format += part.literal.replace(/%/g, '%%');
+    else {
+      format += part.spec;
+      args.push(part.code);
+    }
+  }
+  return {format, args};
+}
+
+/** Renders an emitFormat() result as snprintf's trailing arguments (a constant string keeps its `%s` form). */
+const formatArgs = ({format, args}) =>
+  args.length
+    ? `${cstr(format)}, ${args.join(', ')}`
+    : `"%s", ${cstr(format.replace(/%%/g, '%'))}`;
+
 // ---------------------------------------------------------------------------------------------------
 // AST helpers + collection passes — small predicates (isFn, fnReturnsJSX, …) and the up-front scans
 // that walk the component body ONCE to gather what later emission needs: the module scope, useState,
@@ -577,6 +844,29 @@ const SCREEN_FROM_ENV =
   Number(process.env.ER_AOT_SCREEN_W) > 0 &&
   Number(process.env.ER_AOT_SCREEN_H) > 0;
 
+/**
+ * Every name a variable declaration directly in `body` binds, destructuring included. In JS each one
+ * shadows a module binding of that name for the whole function body, not only from its declaration on.
+ */
+function declaredNames(body) {
+  const names = [];
+  const walk = p => {
+    if (!p) return;
+    if (p.type === 'Identifier') names.push(p.name);
+    else if (p.type === 'ArrayPattern') p.elements.forEach(walk);
+    else if (p.type === 'ObjectPattern')
+      p.properties.forEach(q =>
+        walk(q.type === 'RestElement' ? q.argument : q.value),
+      );
+    else if (p.type === 'AssignmentPattern') walk(p.left);
+    else if (p.type === 'RestElement') walk(p.argument);
+  };
+  for (const stmt of body)
+    if (stmt.type === 'VariableDeclaration')
+      for (const d of stmt.declarations) walk(d.id);
+  return names;
+}
+
 function moduleScope(program, screen, seed = {}) {
   // `seed` pre-populates the scope (e.g. image imports as their asset-name strings) BEFORE module consts are
   // folded, so a const that references one — `const DAYS = [{ icon: wxSun }]` — folds correctly.
@@ -593,7 +883,7 @@ function moduleScope(program, screen, seed = {}) {
       )
         continue;
       try {
-        scope[decl.id.name] = evalStatic(decl.init, scope);
+        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
       } catch {
         /* not a static const — skip */
       }
@@ -716,7 +1006,24 @@ function collectState(fnBody, scope, prefix = '') {
             `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ${JSON.stringify(initVal)}`,
             'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, strings, and objects are not supported.',
           );
+        // A scalar slot is an int, float, string or boolean. `null` or NaN would otherwise fold into an
+        // initializer like `.value = NaN` — invalid C, with no location.
+        if (
+          initVal === undefined ||
+          initVal === null ||
+          (typeof initVal === 'number' && !Number.isFinite(initVal))
+        ) {
+          const e = aotError(
+            `AOT: the initial value of state "${name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
+            "give it a concrete starting value: useState(0), useState(''), useState(false).",
+          );
+          if (initArg?.loc) e.aotLoc = initArg.loc.start;
+          throw e;
+        }
         let cType = cTypeOfValue(initVal);
+        // JS prints a boolean as "true"/"false" and React renders one as nothing, so text lowering has
+        // to tell useState(false) from useState(0) — cTypeOfValue funnels both to 'int'.
+        const isBool = typeof initVal === 'boolean';
         // A numeric literal written with a decimal point or exponent (e.g. useState(70.0)) forces a FLOAT
         // slot even though the value is integral — lets the state hold sub-integer values (a smooth drag)
         // while the UI shows Math.round(value). (70.0 === 70 in JS, so we read the raw source to tell them apart.)
@@ -741,6 +1048,7 @@ function collectState(fnBody, scope, prefix = '') {
           setter,
           kind: 'scalar',
           cType,
+          isBool,
           cMember: `s_state.${cField}`,
           initCode,
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
@@ -1083,8 +1391,23 @@ function collectAnims(fnBody, scope, prefix = '') {
         decl.id.type === 'Identifier'
       ) {
         const initVal = init.arguments[0]
-          ? evalStatic(init.arguments[0], scope)
+          ? evalStaticOrThrow(
+              init.arguments[0],
+              scope,
+              `AOT: the initial value of useAnimatedValue "${decl.id.name}" must be a compile-time constant`,
+              'give it a finite starting number: useAnimatedValue(0).',
+            )
           : 0;
+        // An animated value is a float slot; null or a non-finite number would reach C as `NaNf`.
+        // Refuse here, at the declaration, with its location.
+        if (typeof initVal !== 'number' || !Number.isFinite(initVal)) {
+          const e = aotError(
+            `AOT: the initial value of useAnimatedValue "${decl.id.name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
+            'give it a finite starting number: useAnimatedValue(0).',
+          );
+          if (init.arguments[0]?.loc) e.aotLoc = init.arguments[0].loc.start;
+          throw e;
+        }
         anims.set(decl.id.name, {
           cVar: `s_av_${prefix}${decl.id.name}`,
           initCode: floatLit(initVal),
@@ -1127,11 +1450,20 @@ function collectRefs(fnBody, scope, prefix = '') {
           });
           continue;
         }
-        const v = evalStatic(arg, scope);
-        if (typeof v !== 'number')
-          throw new Error(
+        const v = evalStaticOrThrow(
+          arg,
+          scope,
+          `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+          'a value ref needs a compile-time number: useRef(0).',
+        );
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+          const e = aotError(
             `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+            `got ${v === undefined ? 'undefined' : String(v)}.`,
           );
+          if (arg.loc) e.aotLoc = arg.loc.start;
+          throw e;
+        }
         const cType = Number.isInteger(v) ? 'int' : 'float';
         refs.set(decl.id.name, {
           cVar,
@@ -1174,6 +1506,13 @@ const ANIM_TRANSFORM_PROPS = {
 /** Formats a number as a valid C float literal (`1` → `1.0f`, not `1f` which doesn't compile). */
 function floatLit(n) {
   const v = Number(n);
+  // `NaNf` / `Infinityf` / `undefinedf` are not C. Every numeric-literal path funnels through here, so a
+  // value that slipped past its own boundary check still fails at generate time, never in the host compiler.
+  if (!Number.isFinite(v))
+    throw aotError(
+      `AOT: a numeric constant folded to ${n === undefined ? 'undefined' : String(n)}, which has no C form`,
+      'the value must be a finite number.',
+    );
   return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
 }
 
@@ -1311,12 +1650,12 @@ function argbLiteral(value) {
 function emitColorExpr(node, env) {
   if (node.type === 'StringLiteral') return colorLiteral(node.value);
   if (node.type === 'ConditionalExpression') {
-    const t = emitExpr(node.test, env).code;
+    const t = asCond(emitExpr(node.test, env));
     return `((${t}) ? ${emitColorExpr(node.consequent, env)} : ${emitColorExpr(node.alternate, env)})`;
   }
   // A statically-resolvable color (a const string, or a theme token like `theme.card`) folds to a literal.
   try {
-    const s = evalStatic(node, env.consts ?? {});
+    const s = evalStatic(node, foldScope(env, env.consts ?? {}));
     if (typeof s === 'string') return colorLiteral(s);
   } catch {
     /* not static — fall through to the error below */
@@ -1339,12 +1678,12 @@ function emitEnumExpr(node, table, env) {
     return c;
   }
   if (node.type === 'ConditionalExpression') {
-    const t = emitExpr(node.test, env).code;
+    const t = asCond(emitExpr(node.test, env));
     return `((${t}) ? ${emitEnumExpr(node.consequent, table, env)} : ${emitEnumExpr(node.alternate, table, env)})`;
   }
   // A statically resolvable enum (a const string) folds to its constant.
   try {
-    const s = evalStatic(node, env.consts ?? {});
+    const s = evalStatic(node, foldScope(env, env.consts ?? {}));
     if (typeof s === 'string' && table[s]) return table[s];
   } catch {
     /* not static — fall through */
@@ -1355,9 +1694,41 @@ function emitEnumExpr(node, table, env) {
   );
 }
 
+/** The diagnostic for a style key the AOT has no lowering for, static or dynamic. */
+const unknownStyleKey = key =>
+  aotError(
+    `AOT: style "${key}" is not supported by the AOT (no ERProps lowering)`,
+    `Flow A may accept it; Flow B lowers these: ${STYLE_KEYS.join(', ')}.`,
+  );
+
+/**
+ * Lowers one STATIC style key/value, telling the two failures apart: a key the AOT has no lowering for
+ * at all, and a known key whose value it rejects. Both used to be indistinguishable from a state-driven
+ * value, because a single `try` covered the constant fold and the lowering together.
+ */
+function lowerStyleChecked(key, value) {
+  // `{transform: undefined}` is a no-op in Flow A and in lowerStyle itself; the key is only judged when
+  // there is a value to lower.
+  if (value === undefined || value === null) return [];
+  if (!isStyleKey(key)) throw unknownStyleKey(key);
+  try {
+    return lowerStyle({[key]: value});
+  } catch (e) {
+    // style-map's own value errors already name the key in some cases — don't say it twice.
+    const msg = String(e.message);
+    const why = msg.startsWith(`${key}: `) ? msg.slice(key.length + 2) : msg;
+    throw aotError(`AOT: unsupported value for style "${key}": ${why}`);
+  }
+}
+
 /** Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions). */
 function lowerDynamicStyleValue(key, valueNode, env) {
-  const meta = DYN_FIELDS[key];
+  // Own-property only: `DYN_FIELDS.toString` would otherwise hand back Object.prototype's method, look
+  // like a known key, and emit `p.undefined = ...`.
+  const meta = Object.hasOwn(DYN_FIELDS, key) ? DYN_FIELDS[key] : undefined;
+  // An unknown key is unsupported outright — telling the author to "make it static" would only move
+  // them on to the unknown-key error.
+  if (!meta && !isStyleKey(key)) throw unknownStyleKey(key);
   if (!meta)
     throw aotError(
       `AOT: a state-driven value for style "${key}" is not supported (static only)`,
@@ -1365,23 +1736,23 @@ function lowerDynamicStyleValue(key, valueNode, env) {
     );
   if (meta.kind === 'color')
     return [{field: meta.field, code: emitColorExpr(valueNode, env)}];
-  if (meta.kind === 'opacity')
-    return [
-      {
-        field: meta.field,
-        code: `(uint8_t)((${emitExpr(valueNode, env).code}) * 255.0f)`,
-      },
-    ];
   if (meta.kind === 'enum')
     return [
       {field: meta.field, code: emitEnumExpr(valueNode, meta.table, env)},
     ];
-  return [
-    {
-      field: meta.field,
-      code: `app_round_dim(${emitExpr(valueNode, env).code})`,
-    },
-  ]; /* num */
+  // Opacity and every size are numbers; C would take a char[] here as its address, or refuse it.
+  const e = emitExpr(valueNode, env);
+  if (e.cType === 'string') {
+    const err = aotError(
+      `AOT: style "${key}" needs a number, but the value is a string`,
+      "JS would coerce the string; C cannot. Keep the state numeric — useState(10), not useState('10').",
+    );
+    if (valueNode.loc) err.aotLoc = valueNode.loc.start;
+    throw err;
+  }
+  if (meta.kind === 'opacity')
+    return [{field: meta.field, code: `(uint8_t)((${e.code}) * 255.0f)`}];
+  return [{field: meta.field, code: `app_round_dim(${e.code})`}]; /* num */
 }
 
 /**
@@ -1431,6 +1802,8 @@ function collectStyleAssigns(openingElement, scope, env) {
     return null;
   };
   const apply = expr => {
+    // RN ignores an undefined style or style-array entry; so does Flow A's flattenStyle.
+    if (expr.type === 'Identifier' && expr.name === 'undefined') return;
     if (expr.type === 'ArrayExpression') {
       for (const e of expr.elements) if (e) apply(e);
       return;
@@ -1444,6 +1817,9 @@ function collectStyleAssigns(openingElement, scope, env) {
         const key = prop.computed
           ? evalStatic(prop.key, scope)
           : (prop.key.name ?? prop.key.value);
+        // `{transform: undefined}` is a no-op in RN and Flow A.
+        if (prop.value.type === 'Identifier' && prop.value.name === 'undefined')
+          continue;
 
         // Animated value bound directly to a prop (opacity / backgroundColor / color), optionally through
         // an .interpolate({ inputRange, outputRange }) mapping.
@@ -1484,19 +1860,35 @@ function collectStyleAssigns(openingElement, scope, env) {
           if (handled) continue;
         }
 
+        // Only the FOLD may fall back to the dynamic path. Letting lowerStyle's own failure fall
+        // through too made an unknown style key surface as "state-driven value ... (static only)",
+        // which sends the author looking for state that isn't there.
+        let staticValue;
         try {
-          for (const a of lowerStyle({[key]: evalStatic(prop.value, scope)}))
-            fields.set(a.field, {dynamic: false, code: a.expr});
+          staticValue = {v: evalStatic(prop.value, withUndefined(scope))};
         } catch {
+          staticValue = null; // references state — lower it as a dynamic value
+        }
+        if (staticValue) {
+          for (const a of lowerStyleChecked(key, staticValue.v))
+            fields.set(a.field, {dynamic: false, code: a.expr});
+        } else {
           for (const a of lowerDynamicStyleValue(key, prop.value, env))
             fields.set(a.field, {dynamic: true, code: a.code});
         }
       }
       return;
     }
-    // A StyleSheet reference / identifier resolving to a static style object.
-    for (const a of lowerStyle(evalStatic(expr, scope)))
-      fields.set(a.field, {dynamic: false, code: a.expr});
+    // A StyleSheet reference / identifier resolving to a static style object. `style={null}` and a false
+    // `cond && s` are valid RN and mean no style — Object.entries would throw on null.
+    const resolved = evalStatic(expr, withUndefined(scope));
+    if (resolved === null || resolved === undefined || resolved === false)
+      return;
+    for (const [k, v] of Object.entries(resolved)) {
+      if (v === undefined || v === null) continue;
+      for (const a of lowerStyleChecked(k, v))
+        fields.set(a.field, {dynamic: false, code: a.expr});
+    }
   };
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute' || attr.name.name !== 'style') continue;
@@ -1542,18 +1934,11 @@ function buildText(children, scope, env) {
       format += t.replace(/%/g, '%%');
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
-      try {
-        const v = evalStatic(child.expression, scope); // constant → fold in
-        format += (v === undefined || v === null ? '' : String(v)).replace(
-          /%/g,
-          '%%',
-        );
-      } catch {
-        const e = emitExpr(child.expression, env); // references state → dynamic
-        format += printfSpec(e.cType);
-        args.push(e.code);
-        dynamic = true;
-      }
+      // Constants fold into the literal; anything referencing state contributes a spec + arg.
+      const f = emitFormat(child.expression, env, scope);
+      format += f.format;
+      args.push(...f.args);
+      if (f.args.length) dynamic = true;
     } else if (child.type === 'JSXElement') {
       throw new Error(
         'AOT: nested <Text> / element children inside <Text> not yet supported (spans)',
@@ -1589,7 +1974,7 @@ function staticTextContent(children, scope) {
       c.expression.type !== 'JSXEmptyExpression'
     ) {
       const v = evalStatic(c.expression, scope); // throws if it references state
-      if (v !== undefined && v !== null) s += String(v);
+      s += jsxChildText(v);
     } else if (c.type === 'JSXElement')
       throw aotError(
         'AOT: a nested <Text> span may not itself contain another <Text> (one level of spans only)',
@@ -1637,7 +2022,8 @@ function collectTextSpans(children, scope, env) {
           'spans must be static; keep dynamic text in its own single <Text> (no nested <Text> siblings).',
         );
       }
-      if (v !== undefined && v !== null)
+      // React draws nothing for null, undefined, or a boolean child.
+      if (v !== undefined && v !== null && typeof v !== 'boolean')
         spans.push(inheritSpan(cstr(String(v))));
     } else if (
       c.type === 'JSXElement' &&
@@ -1705,12 +2091,14 @@ function compileListOp(rec, arg, env) {
       for (const f of struct.fields) {
         const valNode = props.get(f.key);
         if (!valNode) continue;
-        const e = emitExpr(valNode, env);
         if (f.kind === 'string')
           lines.push(
-            `        snprintf(${arr}[${cnt}].${f.key}, sizeof(${arr}[${cnt}].${f.key}), "${printfSpec(e.cType)}", ${e.code});`,
+            `        snprintf(${arr}[${cnt}].${f.key}, sizeof(${arr}[${cnt}].${f.key}), ${formatArgs(emitFormat(valNode, env))});`,
           );
-        else lines.push(`        ${arr}[${cnt}].${f.key} = ${e.code};`);
+        else
+          lines.push(
+            `        ${arr}[${cnt}].${f.key} = ${emitExpr(valNode, env).code};`,
+          );
       }
       lines.push(`        ${cnt}++;`, '    }');
     }
@@ -2028,7 +2416,7 @@ function compileAnimateStart(expr, env, state, ctx) {
 function evalStaticOr(node, env, dflt) {
   if (!node) return dflt;
   try {
-    return evalStatic(node, env.consts ?? {});
+    return evalStatic(node, foldScope(env, env.consts ?? {}));
   } catch {
     return dflt;
   }
@@ -2039,11 +2427,28 @@ function blockList(node) {
   return node.type === 'BlockStatement' ? node.body : [node];
 }
 
-/** Emits C to write a value into a scalar state slot: snprintf for a string buffer, plain assign else. */
-function scalarAssign(rec, e, indent) {
-  if (rec.cType === 'string')
-    return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), "${printfSpec(e.cType)}", ${e.code});`;
-  return `${indent}${rec.cMember} = ${e.code};`;
+/** Matches `<member>` as a whole C lvalue, so `s_state.label` does not also match `s_state.label2`. */
+const readsMember = member =>
+  new RegExp(`(^|[^\\w.])${member.replace(/\./g, '\\.')}(?![\\w])`);
+
+/** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
+ *  becomes a format + args), plain assign otherwise. */
+function scalarAssign(rec, node, env, indent) {
+  if (rec.cType !== 'string')
+    return `${indent}${rec.cMember} = ${emitExpr(node, env).code};`;
+  const f = emitFormat(node, env);
+  // snprintf's source and destination may not overlap (C11 7.21.6.6), and `setLabel(label + '!')` feeds
+  // the slot its own contents. Build the new value in a temporary first — some embedded libcs write the
+  // destination as they go, which would read back what they just overwrote.
+  if (f.args.some(a => readsMember(rec.cMember).test(a)))
+    return [
+      `${indent}{`,
+      `${indent}    char next[sizeof(${rec.cMember})];`,
+      `${indent}    snprintf(next, sizeof(next), ${formatArgs(f)});`,
+      `${indent}    memcpy(${rec.cMember}, next, strlen(next) + 1);`,
+      `${indent}}`,
+    ].join('\n');
+  return `${indent}snprintf(${rec.cMember}, sizeof(${rec.cMember}), ${formatArgs(f)});`;
 }
 
 /** True if `node` is a `<ref>.current` member access on a known value ref. */
@@ -2216,7 +2621,7 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
       );
     if (args[i]) {
       const e = emitExpr(args[i], env);
-      locals.set(p.name, {code: e.code, cType: e.cType});
+      locals.set(p.name, {code: e.code, cType: e.cType, isBool: e.isBool});
     }
   });
   const body = fn.body;
@@ -2335,9 +2740,9 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       throw new Error(
         'AOT: updater function must be a single expression (for now)',
       );
-    return [scalarAssign(rec, emitExpr(arg.body, {...env, locals}), indent)];
+    return [scalarAssign(rec, arg.body, {...env, locals}, indent)];
   }
-  return [scalarAssign(rec, emitExpr(arg, env), indent)];
+  return [scalarAssign(rec, arg, env, indent)];
 }
 const compileHandlerExpr = withLoc(compileHandlerExprImpl);
 
@@ -2389,14 +2794,29 @@ function compileStmts(list, env, state, ctx, indent) {
           continue;
         }
         const e = emitExpr(decl.init, env);
-        const cType = e.cType === 'float' ? 'float' : 'int';
-        if (hoist) ctx.hoist.decls.push(`static ${cType} ${cName};`);
-        lines.push(`${indent}${hoist ? '' : cType + ' '}${cName} = ${e.code};`);
+        if (e.cType === 'string') {
+          // A string local gets a buffer of its own rather than a char* into a state slot: a pointer alias
+          // would let `setLabel(t + '!')` read and write the same bytes behind readsMember's back — and
+          // `int l_t = s_state.label` was never valid C to begin with.
+          if (hoist)
+            ctx.hoist.decls.push(`static char ${cName}[${LIST_STR_CAP}];`);
+          else lines.push(`${indent}char ${cName}[${LIST_STR_CAP}];`);
+          lines.push(
+            `${indent}snprintf(${cName}, sizeof(${cName}), "%s", ${e.code});`,
+          );
+        } else {
+          const cType = e.cType === 'float' ? 'float' : 'int';
+          if (hoist) ctx.hoist.decls.push(`static ${cType} ${cName};`);
+          lines.push(
+            `${indent}${hoist ? '' : cType + ' '}${cName} = ${e.code};`,
+          );
+        }
         env = {
           ...env,
           locals: new Map(env.locals).set(decl.id.name, {
             code: cName,
             cType: e.cType,
+            isBool: e.isBool,
           }),
         };
       }
@@ -2437,7 +2857,10 @@ function compileStmts(list, env, state, ctx, indent) {
       continue;
     }
     if (st.type === 'IfStatement') {
-      lines.push(`${indent}if (${emitExpr(st.test, env).code})`, `${indent}{`);
+      lines.push(
+        `${indent}if (${asCond(emitExpr(st.test, env))})`,
+        `${indent}{`,
+      );
       lines.push(
         ...compileStmts(
           blockList(st.consequent),
@@ -3113,8 +3536,14 @@ function emitComponent(el, scope, out, env, state, opts) {
     childrenRef = {kind: 'props', name: param.name};
   }
 
-  const childScope = {...scope};
-  const childLocals = new Map(env.locals);
+  // A child component is a module-level function: its body resolves names against MODULE scope, not the
+  // caller's locals. Copying the caller's scope here would let an App-local const shadow a module one
+  // inside the child, which JavaScript never does.
+  const childScope = {...(env.moduleConsts ?? scope)};
+  // A child is a module-level function: it closes over module scope and receives everything else
+  // through props. Starting from the caller's locals let App's memos and dynamic consts leak in —
+  // and then masked the child's own `const` of the same name.
+  const childLocals = new Map();
   // Callback props bound here resolve to the CALLER's function (node + caller env/state) so the child can
   // use them as event handlers (onPress={onTap}); inherit any the caller itself received (forwarding).
   const fnProps = new Map(env.fnProps);
@@ -3130,8 +3559,18 @@ function emitComponent(el, scope, out, env, state, opts) {
         state: d.state ?? state,
       });
     else if (d.static) childScope[name] = d.value;
-    else
-      childLocals.set(name, {code: d.code, cType: d.cType, struct: d.struct});
+    else {
+      childLocals.set(name, {
+        code: d.code,
+        cType: d.cType,
+        struct: d.struct,
+        isBool: d.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
+      });
+      // A dynamic prop is a RUNTIME binding. Every constant fold in the child (styles, colors, enums,
+      // svg attrs, text) consults childScope first, so a module const of the same name must not be
+      // left there to win — the fold would silently emit the module value instead of the prop.
+      delete childScope[name];
+    }
   }
   const children = childNodes.length
     ? {nodes: childNodes, scope, env, ref: childrenRef}
@@ -3143,6 +3582,33 @@ function emitComponent(el, scope, out, env, state, opts) {
   // exactly like a React component — it receives everything else through props. All initials/values fold
   // against the child's static-prop scope. prefix is per-instance; the App keeps the bare (unprefixed) names.
   const prefix = `c${out.instN++}_`;
+  // Fold the child's own statically-derived body consts, the way compileSourceImpl does for App. Without
+  // this a `const L = …` in a child body either failed to resolve or, when a module const shared the
+  // name, silently rendered the MODULE value — the child's declaration must shadow it.
+  if (fn.body.type === 'BlockStatement') {
+    // As in App: the body's own names, hook bindings included, shadow module ones before anything folds.
+    for (const name of declaredNames(fn.body.body)) delete childScope[name];
+    for (const stmt of fn.body.body) {
+      if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const')
+        continue;
+      for (const decl of stmt.declarations) {
+        if (decl.id.type !== 'Identifier' || !decl.init) continue;
+        if (childLocals.has(decl.id.name)) continue; // a dynamic prop of that name is already bound
+        try {
+          childScope[decl.id.name] = evalStatic(
+            decl.init,
+            withUndefined(childScope),
+          );
+        } catch {
+          // Dynamic (state-derived, useMemo, …): the child's binding shadows any module const of the
+          // same name, so that const must not stay visible — a hook initializer or text reading it would
+          // silently get the module value. A memo re-binds it below; anything else is an unresolved name.
+          delete childScope[decl.id.name];
+        }
+      }
+    }
+  }
+
   const childAnims = collectAnims(fn.body, childScope, prefix);
   const childRefs = collectRefs(fn.body, childScope, prefix);
   const childPans = collectPanResponders(fn.body, prefix);
@@ -3152,7 +3618,11 @@ function emitComponent(el, scope, out, env, state, opts) {
   if (usesState(fn)) {
     childState = collectState(fn.body, childScope, prefix);
     out.childStateRecords.push(...childState.byName.values());
+    for (const name of childState.byName.keys()) delete childScope[name];
   }
+  // The child's own refs and animated values are runtime bindings too (see compileSourceImpl).
+  for (const name of [...childAnims.keys(), ...childRefs.keys()])
+    delete childScope[name];
   out.childRefs.push(...childRefs.values());
   out.childAnims.push(...childAnims.values());
 
@@ -3178,7 +3648,12 @@ function emitComponent(el, scope, out, env, state, opts) {
       childScope[name] = evalStatic(expr, childScope);
     } catch {
       const e = emitExpr(expr, childEnv);
-      childLocals.set(name, {code: `(${e.code})`, cType: e.cType});
+      childLocals.set(name, {
+        code: `(${e.code})`,
+        cType: e.cType,
+        isBool: e.isBool,
+      });
+      delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
   for (const eff of collectEffects(fn.body)) {
@@ -3230,10 +3705,40 @@ function emitMap(call, parentVar, scope, out, env, state) {
       parentVar,
       iterScope,
       out,
-      {...env, consts: iterScope},
+      rowEnv(env, [itemName, idxName], iterScope),
       state,
     );
   });
+}
+
+/**
+ * The env for one `.map` row. Its callback params (item, index) shadow every outer binding of the same
+ * name — a JS arrow parameter always does — so those names leave every name-keyed map (state, locals,
+ * callbacks, helpers, …) and the row's own binding wins: in `consts`, or in `ownLocals` for a pooled
+ * row's struct item.
+ */
+function rowEnv(env, params, consts, ownLocals = null) {
+  const names = params.filter(Boolean);
+  const drop = m => {
+    if (!m || !names.some(n => m.has(n))) return m;
+    const c = new Map(m);
+    for (const n of names) c.delete(n);
+    return c;
+  };
+  return {
+    ...env,
+    consts,
+    state: drop(env.state),
+    refs: drop(env.refs),
+    anims: drop(env.anims),
+    locals: ownLocals ?? drop(env.locals),
+    callbacks: drop(env.callbacks),
+    fnProps: drop(env.fnProps),
+    pans: drop(env.pans),
+    helpers: drop(env.helpers),
+    svgImports: drop(env.svgImports),
+    children: names.includes(env.children?.ref?.name) ? null : env.children,
+  };
 }
 
 /**
@@ -3250,8 +3755,12 @@ function emitDynamicMap(call, rec, parentVar, scope, out, env, state) {
   const retJSX = componentReturnJSX(cb);
   for (let k = 0; k < rec.cap; k++) {
     const iterScope = {...scope};
+    // The item is a runtime local (a struct slot), so a same-named module const must not shadow it
+    // in any fold inside the row — see the dynamic-prop note in emitComponent.
+    if (itemName) delete iterScope[itemName];
     if (idxName) iterScope[idxName] = k; // the index is a compile-time literal per pooled row
     const locals = new Map(env.locals);
+    if (idxName) locals.delete(idxName); // the index is a per-row literal in iterScope
     if (itemName)
       locals.set(itemName, {
         code: `${rec.arrayName}[${k}]`,
@@ -3262,7 +3771,7 @@ function emitDynamicMap(call, rec, parentVar, scope, out, env, state) {
       parentVar,
       iterScope,
       out,
-      {...env, consts: iterScope, locals},
+      rowEnv(env, [itemName, idxName], iterScope, locals),
       state,
       {
         displayCode: `(${k} < ${rec.countMember})`,
@@ -3300,7 +3809,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
           if (cond)
             emitElementInto(expr.right, parentVar, scope, out, env, state);
         } catch {
-          const code = emitExpr(expr.left, env).code;
+          const code = asCond(emitExpr(expr.left, env));
           emitElementInto(expr.right, parentVar, scope, out, env, state, {
             displayCode: code,
           });
@@ -3323,7 +3832,7 @@ function emitChildren(children, parentVar, scope, out, env, state) {
             state,
           );
         } catch {
-          const code = emitExpr(expr.test, env).code;
+          const code = asCond(emitExpr(expr.test, env));
           if (expr.consequent.type === 'JSXElement')
             emitElementInto(
               expr.consequent,
@@ -3492,8 +4001,15 @@ function svgAttrs(openingElement, scope, env) {
     else if (vn.type === 'StringLiteral') out[name] = vn.value;
     else if (vn.type === 'JSXExpressionContainer') {
       try {
-        out[name] = evalStatic(vn.expression, scope);
+        out[name] = evalStatic(vn.expression, withUndefined(scope));
       } catch {
+        // A state-driven `d` is unsupported whatever it is built from, and pathEntries carries the
+        // diagnostic that names the fix (use Arc/Circle/Rect/Line). Emitting it first would replace that
+        // with whatever generic reason the expression itself fails for.
+        if (name === 'd') {
+          out[name] = {dyn: null, node: vn.expression};
+          continue;
+        }
         // Keep the raw expression node too: color paint attrs (fill/stroke) lower via emitColorExpr (→ ARGB),
         // not the generic numeric `dyn` code, so a dynamic color resolves to a uint, not a char*.
         out[name] = {
@@ -3606,13 +4122,13 @@ function gradAttr(v, scope, env, what) {
       node.consequent.type === 'ObjectExpression' &&
       nullish(node.alternate)
     ) {
-      cond = emitExpr(node.test, env).code;
+      cond = asCond(emitExpr(node.test, env));
       node = node.consequent;
     } else if (
       node.alternate.type === 'ObjectExpression' &&
       nullish(node.consequent)
     ) {
-      cond = `!(${emitExpr(node.test, env).code})`;
+      cond = `!(${asCond(emitExpr(node.test, env))})`;
       node = node.alternate;
     } else
       throw new Error(
@@ -3623,7 +4139,7 @@ function gradAttr(v, scope, env, what) {
     node.operator === '&&' &&
     node.right.type === 'ObjectExpression'
   ) {
-    cond = emitExpr(node.left, env).code;
+    cond = asCond(emitExpr(node.left, env));
     node = node.right;
   }
   const spec = gradSpec(node, scope, env, what);
@@ -4267,11 +4783,13 @@ function compileValueHandler(
   out,
   cType = 'int',
   valueCode2 = null,
+  isBool = false,
 ) {
   const param =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
   const locals = new Map(env.locals);
-  if (param) locals.set(param, {code: valueCode, cType});
+  // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
+  if (param) locals.set(param, {code: valueCode, cType, isBool});
   // A second parameter (a RANGE <Dial>'s low end) binds the same way, so `onChange={(hi, lo) => …}`
   // lowers to data->value / data->value_start with no object allocated on device.
   const param2 =
@@ -4640,7 +5158,7 @@ function emitSwitch(el, scope, out, env, state) {
     } catch {
       dynAssigns.push({
         field: 'switch_value',
-        code: `(uint8_t)((${emitExpr(valueNode, env).code}) ? 1 : 0)`,
+        code: `(uint8_t)((${asCond(emitExpr(valueNode, env))}) ? 1 : 0)`,
       });
     }
   }
@@ -4670,10 +5188,19 @@ function emitSwitch(el, scope, out, env, state) {
         'controlled switch: <Switch value={on} onValueChange={(v) => setOn(v)} />',
       );
     const handlerName = `er_handler_${out.handlers.length}`;
-    const toggled = `(!(${emitExpr(valueNode, env).code}))`; // the engine toggles on press → param is !value
+    const toggled = `(!(${asCond(emitExpr(valueNode, env))}))`; // the engine toggles on press → param is !value
     out.handlers.push({
       name: handlerName,
-      body: compileValueHandler(onChangeFn, toggled, env, state, out),
+      body: compileValueHandler(
+        onChangeFn,
+        toggled,
+        env,
+        state,
+        out,
+        'int',
+        null,
+        true,
+      ),
     });
     out.build.push(
       `    er_event_set(${v}, ER_EVENT_PRESS, ${handlerName}, NULL);`,
@@ -4760,17 +5287,8 @@ function emitTextInput(el, scope, out, env, state) {
   // state-driven value re-synced each app_update.
   let text = null;
   if (valueNode) {
-    try {
-      const cv = evalStatic(valueNode, scope);
-      text = {
-        dynamic: false,
-        format: (cv == null ? '' : String(cv)).replace(/%/g, '%%'),
-        args: [],
-      };
-    } catch {
-      const e = emitExpr(valueNode, env);
-      text = {dynamic: true, format: printfSpec(e.cType), args: [e.code]};
-    }
+    const f = emitFormat(valueNode, env, scope);
+    text = {dynamic: f.args.length > 0, format: f.format, args: f.args};
   }
 
   const isDynamic = dynAssigns.length > 0 || (text && text.dynamic);
@@ -5325,6 +5843,7 @@ function touchablePressFades(
 }
 
 function emitNodeImpl(el, scope, out, env, state, opts = {}) {
+  el = omitUndefinedAttrs(el, scope, env);
   const tag = resolveTag(el.openingElement);
   if (tag === 'Svg') return emitSvg(el, scope, out, env, state, opts);
   if (tag === 'Switch') return emitSwitch(el, scope, out, env, state);
@@ -5617,6 +6136,34 @@ function emitNodeImpl(el, scope, out, env, state, opts = {}) {
   if (tag !== 'Text') emitChildren(el.children, v, scope, out, env, state);
   return v;
 }
+/**
+ * `el` without the attributes whose value folds to `undefined` in this scope — typically a prop a child
+ * component was never given. Flow A omits an undefined prop, so every reader has to see it as absent;
+ * read as a value, `visible` hid the node and `placeholder` printed the word "undefined". This is the one
+ * place that rule lives: every element reaches its reader through here. A copy is returned only when
+ * something is dropped, because the same JSX node is emitted once per scope (each .map row, each
+ * component instance) and one scope's answer must not leak into another's.
+ */
+function omitUndefinedAttrs(el, scope, env) {
+  const attrs = el.openingElement.attributes;
+  // Built on first use: the runtime-aware scope, plus the global `undefined` (a reserved name — see
+  // normalizeUndefined), so `SHOW ? true : undefined` with SHOW false folds too.
+  let fold = null;
+  const kept = attrs.filter(a => {
+    if (a.type !== 'JSXAttribute' || a.value?.type !== 'JSXExpressionContainer')
+      return true;
+    fold ??= Object.assign(Object.create(foldScope(env, scope)), {undefined});
+    try {
+      return evalStatic(a.value.expression, fold) !== undefined;
+    } catch {
+      return true; // not a compile-time value — its reader decides
+    }
+  });
+  return kept.length === attrs.length
+    ? el
+    : {...el, openingElement: {...el.openingElement, attributes: kept}};
+}
+
 const emitNode = withLoc(emitNodeImpl);
 
 // ---------------------------------------------------------------------------------------------------
@@ -5846,6 +6393,93 @@ function stripTypeScript(root) {
   return root;
 }
 
+/**
+ * One pass over the parsed program that fixes what `undefined` means before anything is compiled.
+ *
+ * - A JSX attribute whose value is `{undefined}` is DROPPED. Flow A's buildProps omits an undefined prop
+ *   (`props[k] !== undefined`), so the node keeps its default — `visible={undefined}` stays visible. Doing
+ *   it here gives the twenty-odd prop readers that view at once, instead of each deciding what an
+ *   undefined value means (one hid the node, one crashed on Object.entries(undefined)).
+ *   A value that only becomes undefined in some scope — a prop a child was never given — is dropped per
+ *   emission by omitUndefinedAttrs. This literal pass still matters for <Svg> shapes, which bypass it.
+ * - A BINDING named `undefined` is refused. JS allows shadowing the global, but Flow B gives `undefined`
+ *   a meaning of its own (an omitted prop, empty text), and a shadowing local would silently lose to it.
+ */
+function normalizeUndefined(ast) {
+  const reserved = id => {
+    if (id?.type !== 'Identifier' || id.name !== 'undefined') return;
+    const e = aotError(
+      'AOT: `undefined` cannot be used as a name',
+      'Flow B reads `undefined` as the global everywhere — an omitted prop, or empty text — so a binding with that name would never be read. Rename it.',
+    );
+    if (id.loc) e.aotLoc = id.loc.start;
+    throw e;
+  };
+  const pattern = p => {
+    if (!p) return;
+    if (p.type === 'Identifier') reserved(p);
+    else if (p.type === 'ArrayPattern') p.elements.forEach(pattern);
+    else if (p.type === 'ObjectPattern')
+      p.properties.forEach(q =>
+        pattern(q.type === 'RestElement' ? q.argument : q.value),
+      );
+    else if (p.type === 'AssignmentPattern') pattern(p.left);
+    else if (p.type === 'RestElement') pattern(p.argument);
+  };
+  const isUndefinedAttr = a =>
+    a.type === 'JSXAttribute' &&
+    a.value?.type === 'JSXExpressionContainer' &&
+    a.value.expression.type === 'Identifier' &&
+    a.value.expression.name === 'undefined';
+  const SKIP = new Set([
+    'loc',
+    'start',
+    'end',
+    'extra',
+    'leadingComments',
+    'trailingComments',
+    'innerComments',
+  ]);
+  const visit = node => {
+    if (!node || typeof node.type !== 'string') return;
+    switch (node.type) {
+      case 'VariableDeclarator':
+        pattern(node.id);
+        break;
+      case 'FunctionDeclaration':
+      case 'FunctionExpression':
+      case 'ArrowFunctionExpression':
+      case 'ObjectMethod':
+      case 'ClassMethod':
+        if (node.id) reserved(node.id);
+        node.params.forEach(pattern);
+        break;
+      case 'CatchClause':
+        pattern(node.param);
+        break;
+      case 'ClassDeclaration':
+      case 'ClassExpression':
+        if (node.id) reserved(node.id);
+        break;
+      case 'ImportSpecifier':
+      case 'ImportDefaultSpecifier':
+      case 'ImportNamespaceSpecifier':
+        reserved(node.local);
+        break;
+      case 'JSXOpeningElement':
+        node.attributes = node.attributes.filter(a => !isUndefinedAttr(a));
+        break;
+    }
+    for (const key of Object.keys(node)) {
+      if (SKIP.has(key)) continue;
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v && typeof v.type === 'string') visit(v);
+    }
+  };
+  visit(ast);
+}
+
 /** Parse an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .ts/.tsx. */
 function parseApp(src, opts = {}) {
   const ts = isTsEntry(opts);
@@ -5862,6 +6496,7 @@ function parseApp(src, opts = {}) {
  */
 function compileSourceImpl(src, demo = 'app', opts = {}) {
   const ast = parseApp(src, opts);
+  normalizeUndefined(ast);
 
   const screen = opts.screen ?? {width: SCREEN_W, height: SCREEN_H};
   // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
@@ -5872,27 +6507,37 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     [...imageImports].map(([local, imp]) => [local, imp.name]),
   );
   const scope = moduleScope(ast.program, screen, imageSeed);
+  // Module bindings ALONE, before App's own consts are folded in below. A child component is declared at
+  // module level, so its body closes over these — not over whatever App happens to have shadowed.
+  const moduleConsts = {...scope};
   const component = findComponent(ast.program);
   // Fold statically-derived component-local consts (e.g. `const compact = screen.width < 400`) into the
   // const scope, so responsive `if` branches and styles can switch on them at compile time. Dynamic consts
   // (state-derived, useMemo, etc.) throw here and are skipped — they're handled later by memos/emitExpr.
+  // Every name the body declares — a hook's destructured state included — shadows the module binding
+  // before any local folds, or `const copy = r` would capture a module `r` that state `r` hides.
+  for (const name of declaredNames(component.body.body)) delete scope[name];
   for (const stmt of component.body.body) {
     if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const') continue;
     for (const decl of stmt.declarations) {
-      if (decl.id.type !== 'Identifier' || !decl.init || decl.id.name in scope)
-        continue;
+      if (decl.id.type !== 'Identifier' || !decl.init) continue;
       try {
-        scope[decl.id.name] = evalStatic(decl.init, scope);
+        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
       } catch {
-        /* dynamic const — resolved later */
+        // Dynamic (state-derived, useMemo, …). A memo is re-bound below and a plain derived const is not
+        // supported — either way a same-named module const must not stay visible to the folds, or the
+        // JSX quietly renders the module value. Mirrors the child-component path.
+        delete scope[decl.id.name];
       }
     }
   }
   const state = collectState(component.body, scope);
+  for (const name of state.byName.keys()) delete scope[name];
   const rootJSX = findReturnJSX(component.body, scope);
 
   const anims = collectAnims(component.body, scope);
   const refs = collectRefs(component.body, scope);
+  for (const name of [...anims.keys(), ...refs.keys()]) delete scope[name];
   const pans = collectPanResponders(component.body);
   const callbacks = collectCallbacks(component.body);
   const memos = collectMemos(component.body);
@@ -5904,6 +6549,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     state: state.byName,
     locals: new Map(),
     consts: scope,
+    moduleConsts, // what an inlined child component sees (see emitComponent)
     anims,
     refs,
     pans,
@@ -5921,7 +6567,12 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
       scope[name] = evalStatic(expr, scope);
     } catch {
       const e = emitExpr(expr, env);
-      env.locals.set(name, {code: `(${e.code})`, cType: e.cType});
+      env.locals.set(name, {
+        code: `(${e.code})`,
+        cType: e.cType,
+        isBool: e.isBool,
+      });
+      delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
   const out = {
@@ -6306,6 +6957,16 @@ static int16_t app_round_dim(double v)
 #include <stdio.h>
 #include <string.h>
 
+/* Every string this file writes goes into a FIXED-SIZE slot (a state buffer, ERProps.text), so an
+   over-long value is truncated by design — the app cannot grow the buffer the way JS grows a string.
+   GCC's -Wformat-truncation reports exactly that intent for any format combining %s with anything else,
+   and ESP-IDF compiles with -Werror, so leaving it on would fail the build for ordinary text like
+   {'n=' + name}. Clang does not implement the warning; the guard keeps its "unknown warning group"
+   diagnostic from firing there. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+
 /* Version-pin: this file was generated by embedded-react ${PKG_VERSION}. The engine ships LOCKSTEP, so its
    headers must be the same major.minor — otherwise these generated er_scene.h calls may not match the ABI.
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
@@ -6344,10 +7005,17 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
  * Every board example consumes the same dist/app.gen.c, so generating for one board and then building
  * another produces firmware that compiles, links, boots, and lays out wrong. Boards \`_Static_assert\` these
  * against their own panel size to turn that into a compile error; see each board example's main.c.
+ *
+ * WHICH demo is recorded the same way, as a marker macro named ER_AOT_DEMO_<demo> with every character
+ * outside [A-Za-z0-9] encoded as _<hex>_ (so \`watch-face\` defines ER_AOT_DEMO_watch_2d_face). The encoding
+ * is one-to-one, so no two app names can ever share a marker. A board that
+ * needs a particular demo's useHostValue setters guards on \`#ifndef\` of its own marker, which names the
+ * mismatch instead of leaving a pile of implicit-declaration errors for those setters.
  */
 #define ER_AOT_SCREEN_W ${screen.width}
 #define ER_AOT_SCREEN_H ${screen.height}
-#define ER_AOT_DEMO "${demo}"
+#define ER_AOT_DEMO ${cstr(demo)}
+#define ${demoMarker(demo)} 1
 
 /** @brief Builds the AOT-compiled app's scene graph + state machine (call once after backend init). */
 void er_app_build(int screen_w, int screen_h);
@@ -6399,12 +7067,12 @@ if (
 ) {
   const demo = process.argv[2] || process.env.DEMO || 'thermostat';
   const appPath = resolve(demosDir, demo, 'App.jsx');
+  const avail = existsSync(demosDir)
+    ? readdirSync(demosDir, {withFileTypes: true})
+        .filter(d => d.isDirectory())
+        .map(d => d.name)
+    : [];
   if (!existsSync(appPath)) {
-    const avail = existsSync(demosDir)
-      ? readdirSync(demosDir, {withFileTypes: true})
-          .filter(d => d.isDirectory())
-          .map(d => d.name)
-      : [];
     console.error(
       `AOT: demo "${demo}" not found (expected ${appPath}). Available: ${avail.join(', ') || '(none)'}`,
     );

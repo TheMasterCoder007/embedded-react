@@ -63,6 +63,37 @@ function findCC() {
 }
 const CC = findCC();
 
+/**
+ * Warnings that only real GCC implements, added when the compiler accepts them. `gcc` is clang on macOS,
+ * which silently has no -Wformat-truncation — and ESP-IDF builds with GCC and -Werror, so a format this
+ * suite called clean could still fail on the device. Probing keeps the flag off clang (where an unknown
+ * warning group would itself be an error under -Werror) without hard-coding a toolchain.
+ */
+const GCC_FORMAT_FLAGS = (() => {
+  const probe = join(tmpdir(), `er-flagprobe-${process.pid}.c`);
+  try {
+    writeFileSync(probe, 'int main(void){return 0;}\n');
+    const r = spawnSync(
+      CC ?? 'cc',
+      [
+        '-Wformat-truncation=2',
+        '-Wformat-overflow=2',
+        '-Werror',
+        '-fsyntax-only',
+        probe,
+      ],
+      {encoding: 'utf8'},
+    );
+    return r.status === 0
+      ? ['-Wformat-truncation=2', '-Wformat-overflow=2']
+      : [];
+  } catch {
+    return [];
+  } finally {
+    rmSync(probe, {force: true});
+  }
+})();
+
 describe('AOT generated C compiles', () => {
   it('emits the thermostat solo dial as a native, state-driven arc node', async () => {
     const r = await emitThermostat();
@@ -198,6 +229,7 @@ describe('AOT generated C compiles', () => {
           [
             '-fsyntax-only',
             '-Wall',
+            ...GCC_FORMAT_FLAGS,
             '-I',
             engineInc,
             '-I',
@@ -400,6 +432,65 @@ describe('AOT generated C compiles', () => {
           [
             '-fsyntax-only',
             '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+  (CC ? it : it.skip)(
+    `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
+    () => {
+      // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two
+      // char pointers — invalid C the AOT itself accepted. -Wformat is what proves the format string and
+      // the argument list agree, which no regex over the generated text can.
+      const r = compileSource(
+        `import { useState } from 'react';
+         import { View, Text, TextInput } from 'embedded-react';
+         const PAGES = 4;
+         export function App() {
+           const [page, setPage] = useState(0);
+           const [hit, setHit] = useState('none');
+           const [ratio, setRatio] = useState(0.5);
+           const [label, setLabel] = useState('');
+           const [on, setOn] = useState(false);
+           return (
+             <View style={{ flex: 1 }}>
+               <Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>
+               <Text>{'hit: ' + hit}</Text>
+               <Text onPress={() => setLabel('page ' + page)}>{ratio + '% of ' + PAGES}</Text>
+               {/* A boolean lowers to %s over a ternary of string literals — a pairing only -Wformat checks. */}
+               <Text>{'on: ' + on + ' hot: ' + (page > 2)}</Text>
+               <Text>{'nul: ' + label + null}</Text>
+               {/* Self-referential setter: builds in a temporary, so snprintf never reads its own target. */}
+               <Text onPress={() => setLabel(label + '!')}>{label}</Text>
+               <TextInput value={'#' + page} />
+             </View>
+           );
+         }`,
+        'concat',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-concat-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wformat',
+            ...GCC_FORMAT_FLAGS,
             '-I',
             engineInc,
             '-I',

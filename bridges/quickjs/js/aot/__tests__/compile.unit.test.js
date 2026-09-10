@@ -1016,6 +1016,19 @@ describe('AOT responsive layout', () => {
     expect(res.h).toContain('#define ER_AOT_DEMO "test"');
   });
 
+  // A board that calls a demo's useHostValue setters otherwise fails on implicit declarations of setters
+  // that were never generated. The marker macro lets its main.c #ifndef the mismatch by name.
+  it('stamps a demo marker macro, sanitised into a C identifier', () => {
+    const src = `${PRE}
+      export function App() { return (<View><Text>x</Text></View>); }`;
+    expect(compileSource(src, 'watch-face').h).toContain(
+      '#define ER_AOT_DEMO_watch_2d_face 1',
+    );
+    expect(compileSource(src, 'thermostat').h).toContain(
+      '#define ER_AOT_DEMO_thermostat 1',
+    );
+  });
+
   it('throws on a top-level if whose test is not compile-time constant', () => {
     const src = `${PRE}
       export function App() {
@@ -2986,6 +2999,649 @@ describe('AOT useHostValue (host-fed input)', () => {
   });
 });
 
+// Name resolution has been a recurring source of silently-wrong text: the constant fold reaching past a
+// runtime binding, App's locals leaking into a child, a child's own const not shadowing. These pin the
+// rule rather than one instance of it — a child component is declared at module level, so its body sees
+// MODULE scope plus its own props and consts, never the caller's locals.
+describe('AOT const scoping', () => {
+  const D = `import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+`;
+  const texts = c =>
+    (
+      c.match(/snprintf\(p\.text, sizeof\(p\.text\), "%s", "([^"]*)"\);/g) || []
+    ).map(l => l.match(/"%s", "([^"]*)"/)[1]);
+
+  it("App's local const shadows a module const of the same name", () => {
+    const c = gen(`${D}const L = 'module';
+      export function App() {
+        const L = 'applocal';
+        return (<Text>{'a=' + L}</Text>);
+      }`);
+    expect(texts(c)).toContain('a=applocal');
+  });
+
+  it("App's local does NOT leak into a child component", () => {
+    const c = gen(`${D}const L = 'module';
+      function Child() { return (<Text>{'c=' + L}</Text>); }
+      export function App() {
+        const L = 'applocal';
+        return (<View><Text>{'a=' + L}</Text><Child /></View>);
+      }`);
+    expect(texts(c)).toEqual(
+      expect.arrayContaining(['a=applocal', 'c=module']),
+    );
+  });
+
+  it("a child's own const shadows the module one", () => {
+    const c = gen(`${D}const L = 'module';
+      function Child() { const L = 'childlocal'; return (<Text>{'c=' + L}</Text>); }
+      export function App() { return (<View><Child /></View>); }`);
+    expect(texts(c)).toContain('c=childlocal');
+  });
+
+  it('a prop shadows the module const', () => {
+    const c = gen(`${D}const L = 'module';
+      function Child({L}) { return (<Text>{'c=' + L}</Text>); }
+      export function App() { return (<View><Child L="prop" /></View>); }`);
+    expect(texts(c)).toContain('c=prop');
+  });
+
+  it('a nested child still resolves to module scope', () => {
+    const c = gen(`${D}const L = 'module';
+      function Inner() { return (<Text>{'i=' + L}</Text>); }
+      function Outer() { return (<View><Inner /></View>); }
+      export function App() { const L = 'applocal'; return (<View><Outer /></View>); }`);
+    expect(texts(c)).toContain('i=module');
+  });
+
+  // Styles fold constants through the same scope as text, so a runtime binding has to beat a same-named
+  // module const there too — otherwise the fold silently emits the module value where the prop or row
+  // item was meant. `width` is a supported dynamic style, so a correct lowering is observable.
+  it('a dynamic child prop beats a same-named module const in a style', () => {
+    const c = gen(`${D}const w = 10;
+      function Child({w}) { return (<View style={{width: w}} />); }
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<View><Child w={n * 2} /></View>);
+      }`);
+    expect(c).toContain('p.width = app_round_dim((s_state.n * 2));');
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  it("a .map row's item beats a same-named module const in a style", () => {
+    const c = gen(`${D}const it = {w: 10};
+      export function App() {
+        const [items, setItems] = useState([{w: 4}]);
+        return (<View>{items.map(it => (<View style={{width: it.w}} />))}</View>);
+      }`);
+    expect(c).toMatch(/p\.width = app_round_dim\(s_items\[\d+\]\.w\);/);
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  // A child is a module-level function: App's runtime locals (memos, dynamic consts) are not in its scope.
+  it("App's memo does NOT leak into a child, and a child's const beats it", () => {
+    const c = gen(`${D}import {useMemo} from 'react';
+      const total = 5;
+      function Child() { return (<Text>{'c=' + total}</Text>); }
+      function Own() { const total = 3; return (<Text>{'o=' + total}</Text>); }
+      export function App() {
+        const [n, setN] = useState(1);
+        const total = useMemo(() => n * 2, [n]);
+        return (<View><Text>{'a=' + total}</Text><Child /><Own /></View>);
+      }`);
+    expect(c).toContain('"a=%d", ((s_state.n * 2))');
+    expect(texts(c)).toEqual(expect.arrayContaining(['c=5', 'o=3']));
+  });
+
+  it("App's memo beats a same-named module const in a style and as a prop", () => {
+    const c = gen(`${D}import {useMemo} from 'react';
+      const w = 10;
+      function Child({w}) { return (<Text>{w}</Text>); }
+      export function App() {
+        const [n, setN] = useState(1);
+        const w = useMemo(() => n * 3, [n]);
+        return (<View style={{width: w}}><Child w={w} /></View>);
+      }`);
+    expect(c).toContain('p.width = app_round_dim(((s_state.n * 3)));');
+    expect(c).toContain('"%d", ((s_state.n * 3))');
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  it('an event or gesture param beats a same-named module const', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      const e = 'MOD';
+      export function App() {
+        const [label, setLabel] = useState('');
+        return (<Pressable onTouchMove={e => setLabel('x=' + e.x)}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('"x=%d", data->x');
+    expect(c).not.toContain('"x=undefined"');
+  });
+
+  it('a child const can seed its own useState initial', () => {
+    const c = gen(`${D}
+      function Child() { const START = 5; const [n, setN] = useState(START); return (<Text>{n}</Text>); }
+      export function App() { return (<View><Child /></View>); }`);
+    expect(c).toMatch(/c0_n = 5/);
+  });
+
+  it('a handler param shadows a module const in a string setter', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      const label = 'MODULE';
+      export function App() {
+        const [s, setS] = useState('x');
+        const [n, setN] = useState(0);
+        const pick = (label) => setS(label);
+        return (<Pressable onPress={() => pick(n > 0 ? 'a' : 'b')}><Text>{s}</Text></Pressable>);
+      }`);
+    expect(c).toContain('((s_state.n > 0) ? "a" : "b")');
+    expect(c).not.toContain('"MODULE"');
+  });
+});
+
+// Everything here used to reach the C compiler as something GCC rejects under -Werror (ESP-IDF's
+// default): a string in arithmetic, a `<` on two char* (address compare), a char[] as a condition
+// (-Werror=address), and `int l_t = s_state.label`.
+describe('AOT strings in C-hostile positions', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, Pressable, Switch} from 'embedded-react';
+`;
+  it('rejects arithmetic other than + on a string', () => {
+    for (const op of ['-', '*', '/', '%']) {
+      expect(() =>
+        gen(
+          `${D}export function App() { const [n] = useState(1); return (<Text>{'5' ${op} n}</Text>); }`,
+        ),
+      ).toThrow(new RegExp(`"\\${op}" on a string is not supported`));
+    }
+  });
+
+  // Equality through strcmp is exact for UTF-8. Ordering is not — JS compares UTF-16 code units, the
+  // device holds UTF-8 bytes, and they disagree outside the BMP — so it is refused. A strict compare of a
+  // string with a number never coerces, so it folds to its constant.
+  it('compares strings for equality only, and decides strict mixed compares statically', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('a');
+      const [n] = useState(5);
+      return (<View><Text>{label === 'a' ? 'y' : 'n'}</Text><Text>{'v=' + (label !== n)}</Text></View>);
+    }`);
+    expect(c).toContain('(strcmp(s_state.label, "a") == 0)');
+    expect(c).toContain('((1) ? "true" : "false")');
+    for (const expr of [`label < 'm'`, `label >= 'm'`])
+      expect(() =>
+        gen(
+          `${D}export function App() { const [label] = useState('a'); return (<Text>{${expr} ? 'a' : 'b'}</Text>); }`,
+        ),
+      ).toThrow(/ordering strings with/);
+    expect(() =>
+      gen(
+        `${D}export function App() { const [label] = useState('a'); return (<Text>{label == 5 ? 'a' : 'b'}</Text>); }`,
+      ),
+    ).toThrow(/cannot be compared with a number/);
+  });
+
+  it('tests a string condition for non-empty, never its address', () => {
+    const c = gen(`${D}export function App() {
+      const [label, setLabel] = useState('');
+      const [n, setN] = useState(0);
+      return (
+        <Pressable onPress={() => { if (label) setN(1); }}>
+          <Text>{label ? 'set' : 'empty'}</Text>
+          <Text>{'v=' + !label}</Text>
+        </Pressable>
+      );
+    }`);
+    expect(c).toContain(`(s_state.label[0] != '\\0') ? "set" : "empty"`);
+    expect(c).toContain(`(!((s_state.label[0] != '\\0')))`);
+    expect(c).toContain(`if ((s_state.label[0] != '\\0'))`);
+    expect(c).not.toMatch(/\(s_state\.label \?/);
+  });
+
+  it('gives a string handler local its own buffer, so the setter never aliases', () => {
+    const c = gen(`${D}export function App() {
+      const [label, setLabel] = useState('ab');
+      return (<Pressable onPress={() => { const t = label; setLabel(t + '!'); }}><Text>{label}</Text></Pressable>);
+    }`);
+    expect(c).toContain('char l_t[48];');
+    expect(c).toContain('snprintf(l_t, sizeof(l_t), "%s", s_state.label);');
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "%s!", l_t);',
+    );
+    expect(c).not.toContain('int l_t');
+  });
+
+  it('a <Switch> callback value prints as a boolean', () => {
+    const c = gen(`${D}export function App() {
+      const [on, setOn] = useState(false);
+      const [label, setLabel] = useState('');
+      return (<View><Switch value={on} onValueChange={v => { setOn(v); setLabel('on=' + v); }} /><Text>{label}</Text></View>);
+    }`);
+    expect(c).toMatch(/"on=%s", \(\(.*\) \? "true" : "false"\)/);
+  });
+});
+
+// The global `undefined` folds like any constant — text needs it (`s + undefined` is "…undefined") — so
+// every TYPED slot has to refuse it (and null / NaN) itself, with a location, or it reaches C as `NaN`.
+describe('AOT typed slots refuse nothing-values', () => {
+  const D = `import {useState, useRef} from 'react';
+import {View, Text, useAnimatedValue} from 'embedded-react';
+`;
+  const err = src => {
+    try {
+      gen(src);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+  it.each([
+    [
+      'useState(undefined)',
+      'const [n] = useState(undefined);',
+      /initial value of state "n" must be a compile-time constant/,
+    ],
+    [
+      'useState(null)',
+      'const [n] = useState(null);',
+      /initial value of state "n" is null/,
+    ],
+    [
+      'useState(NaN)',
+      'const [n] = useState(0 / 0);',
+      /initial value of state "n" is NaN/,
+    ],
+    [
+      'useAnimatedValue(undefined)',
+      'const v = useAnimatedValue(undefined);',
+      /initial value of useAnimatedValue "v" must be a compile-time constant/,
+    ],
+    [
+      'useRef(undefined)',
+      'const r = useRef(undefined);',
+      /useRef initial for "r"/,
+    ],
+    ['useRef(NaN)', 'const r = useRef(0 / 0);', /useRef initial for "r"/],
+  ])('%s is a located error, never C', (_n, decl, re) => {
+    const e = err(
+      `${D}export function App() { ${decl} return (<Text>x</Text>); }`,
+    );
+    expect(e.message).toMatch(re);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('a nullish style value is skipped, not judged as a key', () => {
+    const c = gen(`${D}export function App() {
+      return (<View style={{transform: undefined, width: null, height: 5}} />);
+    }`);
+    expect(c).toContain('p.height = 5;');
+    expect(c).not.toMatch(/p\.width = [0-9]/); // the root's screen_w width is expected; a literal is not
+  });
+
+  it('undefined still renders as JS does in text', () => {
+    const c = gen(`${D}export function App() {
+      const [s] = useState('a');
+      return (<View><Text>{undefined}</Text><Text>{s + undefined}</Text></View>);
+    }`);
+    expect(c).toContain('"%s", ""');
+    expect(c).toContain('"%sundefined", s_state.s');
+  });
+});
+
+describe('AOT demo marker encoding', () => {
+  it('is one-to-one: names differing only in punctuation get distinct markers', () => {
+    const h = name =>
+      compileSource(`${PRE}export function App() { return (<View />); }`, name)
+        .h;
+    expect(h('foo-bar')).toContain('#define ER_AOT_DEMO_foo_2d_bar 1');
+    expect(h('foo_bar')).toContain('#define ER_AOT_DEMO_foo_5f_bar 1');
+    expect(h('thermostat')).toContain('#define ER_AOT_DEMO_thermostat 1');
+    expect(h('my app')).toContain('#define ER_AOT_DEMO_my_20_app 1');
+    expect(h('café')).toContain('#define ER_AOT_DEMO_caf_e9_ 1');
+  });
+});
+
+// State, refs and animated values are runtime bindings. They follow the rule every other binding already
+// did — beat a same-named module const in EVERY fold, not only the ones that consult env — which went
+// unenforced for them: a style, prop, conditional or svg attribute silently used the module value.
+describe('AOT hook bindings beat module consts', () => {
+  const D = `import {useState, useRef} from 'react';
+import {View, Text, Svg, Circle} from 'embedded-react';
+`;
+  const withState = jsx =>
+    gen(`${D}const r = 10;
+      export function App() { const [r, setR] = useState(4); return (${jsx}); }`);
+
+  it('in a style', () => {
+    const c = withState(`<View style={{width: r, borderTopLeftRadius: r}} />`);
+    expect(c).toContain('p.width = app_round_dim(s_state.r);');
+    expect(c).toContain('p.border_top_left_radius = app_round_dim(s_state.r);');
+    expect(c).not.toMatch(/p\.(width|border_top_left_radius) = 10;/);
+  });
+
+  it('in a conditional child', () => {
+    expect(withState(`<View>{r > 5 && <Text>big</Text>}</View>`)).toContain(
+      '(s_state.r > 5)',
+    );
+  });
+
+  it('as a prop into a child', () => {
+    const c = gen(`${D}const r = 10;
+      function C({v}) { return (<Text>{v}</Text>); }
+      export function App() { const [r, setR] = useState(4); return (<View><C v={r} /></View>); }`);
+    expect(c).toContain('"%d", s_state.r');
+    expect(c).not.toContain('"%s", "10"');
+  });
+
+  it('in an svg attribute', () => {
+    expect(
+      withState(
+        `<Svg width={40} height={40}><Circle cx={20} cy={20} r={r} fill="#fff" /></Svg>`,
+      ),
+    ).toContain('(float)(s_state.r)');
+  });
+
+  it('for a ref', () => {
+    const c = gen(`${D}const w = 10;
+      export function App() { const w = useRef(4); return (<View style={{width: w.current}} />); }`);
+    expect(c).toContain('p.width = app_round_dim(s_ref_w);');
+  });
+
+  // A dynamic child const is unsupported, as it is in App — so it must fail loudly, never quietly fall
+  // back to the module const it shadows.
+  it("a child's dynamic const is a located error, never the module value", () => {
+    const child = body =>
+      `${D}const k = 99;
+      function C({n}) { const k = n * 2; ${body} }
+      export function App() { const [n] = useState(3); return (<View><C n={n} /></View>); }`;
+    expect(() => gen(child(`return (<Text>{'k=' + k}</Text>);`))).toThrow(
+      /cannot resolve identifier "k"/,
+    );
+    expect(() =>
+      gen(child(`const [v] = useState(k); return (<Text>{v}</Text>);`)),
+    ).toThrow(/initial value of state "v" must be a compile-time constant/);
+  });
+});
+
+describe('AOT a string used as a condition', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, Switch, Svg, Circle} from 'embedded-react';
+`;
+
+  it('a string in {cond && <X/>} is tested for non-empty, not its address', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('');
+      return (<View>{label && <Text>x</Text>}</View>);
+    }`);
+    expect(c).toContain(`(s_state.label[0] != '\\0')`);
+    expect(c).not.toMatch(/\(\(s_state\.label\) \?/);
+  });
+
+  it('a <Switch> driven by a string state tests non-empty, not the address', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('x');
+      const [on, setOn] = useState(false);
+      return (<Switch value={label} onValueChange={v => setOn(v)} />);
+    }`);
+    expect(c).toContain("(!((s_state.label[0] != '\\0')))");
+    expect(c).toContain("(uint8_t)(((s_state.label[0] != '\\0')) ? 1 : 0)");
+  });
+
+  it('a conditional gradient driven by a string state tests non-empty', () => {
+    const grad = `{type: 1, stops: [{color: '#ff0000', offset: 0}, {color: '#0000ff', offset: 1}], bx: 40}`;
+    const svg = attr =>
+      gen(`${D}export function App() {
+        const [label] = useState('x');
+        return (<Svg width={40} height={40}><Circle cx={20} cy={20} r={10} fillGrad={${attr}} /></Svg>);
+      }`);
+    for (const attr of [`label ? null : ${grad}`, `label && ${grad}`])
+      expect(svg(attr)).toContain("s_state.label[0] != '\\0'");
+  });
+});
+
+describe('AOT a string where a style needs a number', () => {
+  it('a string state cannot drive a numeric style', () => {
+    expect(() =>
+      gen(`${PRE}export function App() {
+        const [radius] = useState('10');
+        return (<View style={{borderTopLeftRadius: radius}} />);
+      }`),
+    ).toThrow(/style "borderTopLeftRadius" needs a number/);
+  });
+});
+
+describe('AOT boolean semantics', () => {
+  const D = `import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+`;
+
+  it('a boolean is never strictly equal to a number', () => {
+    const app = cond =>
+      gen(`${D}export function App() {
+        const [flag] = useState(true);
+        return (<View>{${cond} && <Text>a</Text>}</View>);
+      }`);
+    expect(app('flag === 1')).not.toContain('s_state.flag == 1');
+    expect(app('flag !== 1')).not.toContain('s_state.flag != 1');
+    expect(app('flag == 1')).toContain('(s_state.flag == 1)');
+    expect(app('flag === true')).toContain('(s_state.flag == 1)');
+  });
+
+  it('a nested span drops a boolean child', () => {
+    const c = gen(`${D}export function App() {
+      return (<Text>a<Text>{true}</Text>{false}</Text>);
+    }`);
+    expect(c).not.toContain('"true"');
+    expect(c).not.toContain('"false"');
+  });
+});
+
+describe('AOT name shadowing', () => {
+  const D = `import {useState, useCallback} from 'react';
+import {View, Text, Pressable} from 'embedded-react';
+`;
+
+  // A .map callback's params shadow outer bindings of the same name, as a JS arrow param does.
+  it('a static .map item and index shadow a same-named state', () => {
+    const c = gen(`${D}const ITEMS = [{key: 'a'}, {key: 'b'}];
+      export function App() {
+        const [it] = useState(0);
+        const [i] = useState(7);
+        return (<View>{ITEMS.map((it, i) => (<Text>{it.key + i}</Text>))}</View>);
+      }`);
+    expect(c).toContain('"%s", "a0"');
+    expect(c).toContain('"%s", "b1"');
+    expect(c).not.toContain('s_state.i');
+  });
+
+  it('a pooled .map row index shadows a same-named state', () => {
+    const c = gen(`${D}export function App() {
+      const [items] = useState([{k: 'a'}]);
+      const [i] = useState(7);
+      return (<View>{items.map((it, i) => (<Text>{'i=' + i}</Text>))}</View>);
+    }`);
+    expect(c).toContain('"%s", "i=0"');
+    expect(c).not.toContain('s_state.i)');
+  });
+
+  it('a .map parameter shadows a callback of the same name', () => {
+    expect(() =>
+      gen(`${D}export function App() {
+        const [n, setN] = useState(0);
+        const onTap = useCallback(() => setN(n + 1), [n]);
+        return (<View>{['a'].map(onTap => <Pressable key={onTap} onPress={onTap}><Text>x</Text></Pressable>)}</View>);
+      }`),
+    ).toThrow(/onPress must be an inline function/);
+  });
+
+  it('a hook binding shadows a module const before the local consts fold', () => {
+    expect(() =>
+      gen(`${D}const r = 10;
+        export function App() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }`),
+    ).toThrow(/cannot resolve identifier "copy"/);
+    expect(() =>
+      gen(`${D}const r = 10;
+        function C() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }
+        export function App() { return (<View><C /></View>); }`),
+    ).toThrow(/cannot resolve identifier "copy"/);
+  });
+
+  it("App's dynamic const is a located error, never the module value it shadows", () => {
+    const src = use =>
+      `${D}const L = 'module';
+      export function App() { const [n] = useState(3); const L = n; return (${use}); }`;
+    for (const use of [
+      `<Text>{'L=' + L}</Text>`,
+      `<View style={{width: L}} />`,
+    ])
+      expect(() => gen(src(use))).toThrow(/cannot resolve identifier "L"/);
+  });
+});
+
+describe('AOT undefined as a value', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, TextInput} from 'embedded-react';
+`;
+
+  it('a const that is undefined folds like any other', () => {
+    const c = gen(`${D}const EMPTY = undefined;
+      export function App() {
+        const empty = undefined;
+        return (<View><Text>{EMPTY}</Text><Text>{empty}</Text></View>);
+      }`);
+    expect(c).toContain('"%s", ""');
+    expect(() =>
+      gen(`${D}const EMPTY = undefined;
+        export function App() { const [n] = useState(EMPTY); return (<Text>x</Text>); }`),
+    ).toThrow(/initial value of state "n" is undefined/);
+  });
+
+  // Flow A omits an undefined prop; so does Flow B — every reader sees the attribute as absent.
+  it('an attribute set to undefined is omitted, as in Flow A', () => {
+    const c = gen(`${D}export function App() {
+      const [v, setV] = useState('');
+      return (
+        <View>
+          <View visible={undefined} style={{width: 5}} />
+          <TextInput value={v} placeholder={undefined} onChangeText={t => setV(t)} />
+        </View>
+      );
+    }`);
+    expect(c).toContain('p.width = 5;');
+    expect(c).not.toContain('ER_DISPLAY_NONE');
+    expect(c).not.toContain('placeholder');
+  });
+
+  it('an undefined or null style, or style-array entry, means no style', () => {
+    expect(() =>
+      gen(`${D}export function App() { return (<View style={undefined} />); }`),
+    ).not.toThrow();
+    expect(() =>
+      gen(
+        `${D}const s = null;\nexport function App() { return (<View style={s} />); }`,
+      ),
+    ).not.toThrow();
+    expect(
+      gen(
+        `${D}const s = {width: 7};\nexport function App() { return (<View style={[s, undefined]} />); }`,
+      ),
+    ).toContain('p.width = 7;');
+  });
+
+  it('a binding named undefined is a located error', () => {
+    let e;
+    try {
+      gen(`${D}export function App() {
+        const [undefined] = useState('x');
+        return (<Text>{undefined}</Text>);
+      }`);
+    } catch (x) {
+      e = x;
+    }
+    expect(e?.message).toMatch(/`undefined` cannot be used as a name/);
+    expect(e?.aotLoc).toBeTruthy();
+  });
+});
+
+describe('AOT unary arithmetic on a string', () => {
+  it.each(['+', '-'])('rejects unary %s on a string', op => {
+    expect(() =>
+      gen(
+        `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
+      ),
+    ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
+  });
+});
+
+// An attribute that FOLDS to undefined — a prop a child was never given — is omitted like a literal
+// {undefined}, as in Flow A. Read as a value, `visible` hid the node and `placeholder` printed the word
+// "undefined"; both did so on master too.
+describe('AOT props that fold to undefined are omitted', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, Pressable, TextInput} from 'embedded-react';
+`;
+  const withChild = child =>
+    gen(`${D}${child}
+      export function App() { return (<View><C /></View>); }`);
+
+  it('visible from an absent prop leaves the node visible', () => {
+    const c = withChild(
+      `function C({x}) { return (<View visible={x} style={{width: 5}} />); }`,
+    );
+    expect(c).not.toContain('ER_DISPLAY_NONE');
+    expect(c).toContain('p.width = 5;');
+  });
+
+  it('placeholder from an absent prop is not the word "undefined"', () => {
+    const c = withChild(
+      `function C({x}) { const [v, setV] = useState(''); return (<TextInput value={v} placeholder={x} onChangeText={t => setV(t)} />); }`,
+    );
+    expect(c).not.toContain('"undefined"');
+  });
+
+  it('a handler from an absent prop is simply not attached', () => {
+    const c = withChild(
+      `function C({x}) { return (<Pressable onPress={x}><Text>t</Text></Pressable>); }`,
+    );
+    expect(c).not.toContain('ER_EVENT_PRESS,');
+  });
+
+  it('a statically-decided undefined branch is omitted too', () => {
+    const c = gen(`${D}const SHOW = false;
+      export function App() { return (<View><View visible={SHOW ? true : undefined} style={{width: 5}} /></View>); }`);
+    expect(c).not.toContain('p.display');
+  });
+
+  // The rule copies the element rather than editing the shared JSX node, so one instance's answer must
+  // not leak into another's.
+  it('the same JSX in two scopes gets each its own answer', () => {
+    const c =
+      gen(`${D}function C({x}) { return (<View visible={x} style={{width: 5}} />); }
+      export function App() { return (<View><C /><C x={false} /></View>); }`);
+    expect((c.match(/p\.display = ER_DISPLAY_NONE;/g) || []).length).toBe(1);
+  });
+});
+
+describe('AOT fixed-slot truncation', () => {
+  // Every string the generated file writes lands in a fixed-size slot, so an over-long value truncates by
+  // design. GCC reports that intent for any format mixing %s with anything else, and ESP-IDF builds with
+  // -Werror — so without this the ordinary `{'n=' + name}` fails on the device. Clang has no such warning,
+  // which is why a clang-only smoke test called the same code clean.
+  it('tells GCC the truncation is intended, and keeps clang out of it', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [name, setName] = useState('x');
+        return (<Text>{'n=' + name}</Text>);
+      }`);
+    expect(c).toContain('#if defined(__GNUC__) && !defined(__clang__)');
+    expect(c).toContain('#pragma GCC diagnostic ignored "-Wformat-truncation"');
+    // The suppression has to precede the code it covers.
+    expect(c.indexOf('#pragma GCC diagnostic ignored')).toBeLessThan(
+      c.indexOf('snprintf(p.text'),
+    );
+  });
+});
+
 describe('AOT generated-C portability', () => {
   it('emits a guarded M_PI fallback when the app uses math (M_PI is not in ISO C99 <math.h>)', () => {
     const c = compileSource(
@@ -3040,5 +3696,488 @@ describe('AOT delayLongPress', () => {
         return (<Pressable delayLongPress={ms} onLongPress={() => {}}><Text>x</Text></Pressable>);
       }`),
     ).toThrow(/delayLongPress> must fold to a number/);
+  });
+});
+
+describe('AOT string concatenation in text', () => {
+  const D = `import { useState } from 'react';
+import { View, Text, TextInput } from 'embedded-react';
+`;
+
+  it('lowers a `+` chain in a <Text> child to a printf format + args', () => {
+    const c = gen(`${D}
+      const PAGES = 4;
+      export function App() {
+        const [page, setPage] = useState(0);
+        return (<Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>);
+      }`);
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "render-check %d/4", (s_state.page + 1));',
+    );
+  });
+
+  it('picks the specifier from the part, not the chain', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [hit, setHit] = useState('none');
+        const [t, setT] = useState(0.5);
+        return (<View><Text>{'hit: ' + hit}</Text><Text>{'t=' + t}</Text></View>);
+      }`);
+    expect(c).toContain('"hit: %s", s_state.hit');
+    expect(c).toContain('"t=%g", s_state.t');
+  });
+
+  // JS types a `+` left to right, so the string only starts at the first string operand: `n + 1` still
+  // adds. Flattening the chain blindly would emit "%d%d ms" and print "51 ms" where JS prints "6 ms".
+  it('keeps arithmetic that runs before the first string operand', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(5);
+        return (<Text>{n + 1 + ' ms'}</Text>);
+      }`);
+    expect(c).toContain('"%d ms", (s_state.n + 1)');
+  });
+
+  it('appends past the first string operand, as JS does', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(5);
+        return (<Text>{'a' + n + 2}</Text>);
+      }`);
+    expect(c).toContain('"a%d2", s_state.n');
+  });
+
+  // `"a" + null === "anull"` in JS, but a standalone {null} child draws nothing. The two contexts need
+  // different handling of the same value.
+  it('stringifies a nullish concat operand, but not a standalone child', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        return (<View><Text>{label + null}</Text><Text>{null}</Text></View>);
+      }`);
+    expect(c).toContain('"%snull", s_state.label');
+    expect(c).toContain('snprintf(p.text, sizeof(p.text), "%s", "");');
+  });
+
+  // The AOT stores a boolean in an int slot, so the type alone cannot tell useState(false) from
+  // useState(0). JS prints a boolean as "true"/"false"; React draws nothing for one as a child.
+  it('prints a boolean operand the way JS does', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{'enabled: ' + on}</Text>);
+      }`);
+    expect(c).toContain('"enabled: %s", ((s_state.on) ? "true" : "false")');
+  });
+
+  it('draws nothing for a boolean as a standalone child, like React', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<View><Text>{on}</Text><Text>{false}</Text></View>);
+      }`);
+    expect(c).not.toContain('%d');
+    expect(c.match(/snprintf\(p\.text[^\n]*/g)).toEqual([
+      'snprintf(p.text, sizeof(p.text), "%s", "");',
+      'snprintf(p.text, sizeof(p.text), "%s", "");',
+    ]);
+  });
+
+  it.each([
+    ['a comparison', 'n > 5'],
+    ['a negation', '!on'],
+    ['a ternary of booleans', 'n ? on : !on'],
+    ['&& of two booleans', 'on && n > 5'],
+  ])('treats %s as a boolean', (_name, expr) => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [on, setOn] = useState(false);
+        return (<Text>{'v: ' + (${expr})}</Text>);
+      }`);
+    expect(c).toContain('? "true" : "false"');
+  });
+
+  // `on && 'yes'` is 'yes' or false in JS, and C's && only has 0/1 — neither value survives. Printing
+  // "1" (or relabelling it "true") is a wrong answer either way, so text refuses the shape instead.
+  const textErr = body => {
+    try {
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [m, setM] = useState(1);
+        const [on, setOn] = useState(false);
+        return (${body});
+      }`);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+
+  it.each([
+    ['&& yielding a string', `<Text>{'x: ' + (on && 'yes')}</Text>`],
+    ['&& as a bare child', `<Text>{on && 'yes'}</Text>`],
+    ['|| yielding a string', `<Text>{'x: ' + (on || 'no')}</Text>`],
+    ['&& of two numbers', `<Text>{'x: ' + (n && m)}</Text>`],
+  ])('refuses %s in text, with a location', (_name, body) => {
+    const e = textErr(body);
+    expect(e.message).toMatch(/evaluates to one of its operands/);
+    expect(e.aotLoc).toBeTruthy();
+    expect(e.message).toContain('^');
+  });
+
+  // `(ok ? 1 : "none")` is ill-typed C — int against char* — and has no single printf spec either.
+  it.each([
+    ['numeric then string', `on ? 1 : 'none'`],
+    ['string then numeric', `on ? 'none' : 1`],
+  ])('refuses a ternary mixing %s', (_name, expr) => {
+    const e = textErr(`<Text>{'x: ' + (${expr})}</Text>`);
+    expect(e.message).toMatch(/cannot mix a string branch with a numeric one/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('refuses the same mix outside text, e.g. in a setter', () => {
+    let err;
+    try {
+      gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [ok, setOk] = useState(false);
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel(ok ? 1 : 'none')}><Text>{label}</Text></Pressable>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(
+      /cannot mix a string branch with a numeric one/,
+    );
+  });
+
+  it('still allows a ternary whose branches agree', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [ok, setOk] = useState(false);
+        return (<View><Text>{'a: ' + (ok ? 'x' : 'y')}</Text><Text>{'b: ' + (ok ? 1 : 2.5)}</Text></View>);
+      }`);
+    expect(c).toContain('"a: %s", (s_state.ok ? "x" : "y")');
+    expect(c).toContain('"b: %g", (s_state.ok ? 1 : 2.5f)');
+  });
+
+  // A branch that concatenates would need a format of its own; one snprintf has one. The generic
+  // "not supported in this position" used to fire first, with a hint that text buffers are fine — which
+  // is exactly wrong inside a text buffer.
+  it('names a ternary whose branch concatenates, instead of the generic position error', () => {
+    const e = textErr(`<Text>{'x: ' + (on ? 'a' + n : 'b')}</Text>`);
+    expect(e.message).toMatch(
+      /ternary in text cannot concatenate inside its test or a branch/,
+    );
+    expect(e.message).not.toMatch(/not supported in this position/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('names a logical whose operand concatenates, and a ternary whose test does', () => {
+    const e1 = textErr(`<Text>{on && ('n=' + n)}</Text>`);
+    expect(e1.message).toMatch(
+      /"&&" in text cannot concatenate inside an operand/,
+    );
+    const e2 = textErr(`<Text>{('a' + n) ? 'x' : 'y'}</Text>`);
+    expect(e2.message).toMatch(
+      /cannot concatenate inside its test or a branch/,
+    );
+  });
+
+  it('refuses a ternary mixing a boolean branch with a non-boolean one', () => {
+    const e = textErr(`<Text>{'x: ' + (on ? on : 5)}</Text>`);
+    expect(e.message).toMatch(/mixes a boolean branch/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('still lowers a logical whose operands are both boolean', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [on, setOn] = useState(false);
+        return (<Text>{'x: ' + (on && n > 1)}</Text>);
+      }`);
+    expect(c).toContain('? "true" : "false"');
+  });
+
+  // Unary +/- are numeric coercions: `+flag` is 0 or 1 in JS, never true/false.
+  it.each([
+    ['+', `+on`],
+    ['-', `-on`],
+  ])('does not carry boolean-ness through unary %s', (_op, expr) => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{'v=' + (${expr})}</Text>);
+      }`);
+    expect(c).toContain('"v=%d"');
+    expect(c).not.toContain('? "true" : "false"');
+  });
+
+  it('renders a coerced boolean as a number child, not an empty one', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<Text>{+on}</Text>);
+      }`);
+    expect(c).toContain('"%d", (+(s_state.on))');
+  });
+
+  it('keeps a boolean local through a handler const', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('');
+        return (<Pressable onPress={() => { const hot = n > 5; setLabel('hot: ' + hot); }}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('"hot: %s", ((l_hot) ? "true" : "false")');
+  });
+
+  it('still prints numbers, floats and strings by type', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(1.5);
+        const [s, setS] = useState('x');
+        return (<View><Text>{'a' + n}</Text><Text>{'b' + f}</Text><Text>{'c' + s}</Text></View>);
+      }`);
+    expect(c).toContain('"a%d", s_state.n');
+    expect(c).toContain('"b%g", s_state.f');
+    expect(c).toContain('"c%s", s_state.s');
+  });
+
+  // snprintf may not read and write overlapping objects (C11 7.21.6.6), and a self-referential setter
+  // feeds the slot its own contents.
+  it('builds a self-referential string setter in a temporary', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel(label + '!')}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('char next[sizeof(s_state.label)];');
+    expect(c).toContain('snprintf(next, sizeof(next), "%s!", s_state.label);');
+    expect(c).toContain('memcpy(s_state.label, next, strlen(next) + 1);');
+    expect(c).not.toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "%s!"',
+    );
+  });
+
+  it('writes a non-self-referential setter straight to the slot', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('hi');
+        return (<Pressable onPress={() => setLabel('x' + n)}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "x%d", s_state.n);',
+    );
+    expect(c).not.toContain('char next[');
+  });
+
+  // A near-miss name must not be mistaken for the destination.
+  it('does not take a different slot with a shared prefix as self-reference', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      export function App() {
+        const [label, setLabel] = useState('hi');
+        const [label2, setLabel2] = useState('yo');
+        return (<Pressable onPress={() => setLabel(label2 + '!')}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).not.toContain('char next[');
+  });
+
+  it('escapes a literal % so it survives the format string', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [pct, setPct] = useState(0);
+        return (<Text>{pct + '% full'}</Text>);
+      }`);
+    expect(c).toContain('"%d%% full", s_state.pct');
+  });
+
+  it('folds a fully static chain into the literal', () => {
+    const c = gen(`${D}
+      const NAME = 'watch';
+      export function App() {
+        return (<Text>{'demo: ' + NAME}</Text>);
+      }`);
+    expect(c).toContain('"demo: watch"');
+    expect(c).not.toContain('s_state');
+  });
+
+  it('builds a string state slot from a concatenation', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [label, setLabel] = useState('');
+        return (<Text onPress={() => setLabel('hit ' + n)}>x</Text>);
+      }`);
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "hit %d", s_state.n);',
+    );
+  });
+
+  it('builds a <TextInput value> from a concatenation', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<TextInput value={'#' + n} />);
+      }`);
+    expect(c).toContain('"#%d", s_state.n');
+  });
+
+  // Outside a text buffer there is no format string to lower into, so it must be a located error rather
+  // than C that only the host compiler rejects.
+  it('rejects a concatenation where the value is not text', () => {
+    let err;
+    try {
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [s, setS] = useState('x');
+        return (<Text onPress={() => setN('a' + s)}>x</Text>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(/string concatenation is not supported/);
+    expect(err.aotLoc).toBeTruthy();
+    expect(err.message).toContain('^');
+  });
+});
+
+describe('AOT per-corner border radii', () => {
+  const D = `import { useState } from 'react';
+import { View, StyleSheet } from 'embedded-react';
+`;
+
+  it('lowers the four corners to their ERProps fields', () => {
+    const c = gen(`${D}
+      export function App() {
+        return (<View style={{borderTopLeftRadius: 2, borderTopRightRadius: 10,
+                              borderBottomRightRadius: 20, borderBottomLeftRadius: 0}} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = 2;');
+    expect(c).toContain('p.border_top_right_radius = 10;');
+    expect(c).toContain('p.border_bottom_right_radius = 20;');
+    expect(c).toContain('p.border_bottom_left_radius = 0;');
+  });
+
+  it('takes them state-driven too', () => {
+    const c = gen(`${D}
+      export function App() {
+        const [r, setR] = useState(4);
+        return (<View style={{borderTopLeftRadius: r}} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = app_round_dim(s_state.r);');
+  });
+
+  it('takes them from a StyleSheet', () => {
+    const c = gen(`${D}
+      const styles = StyleSheet.create({ card: { borderTopLeftRadius: 6 } });
+      export function App() {
+        return (<View style={styles.card} />);
+      }`);
+    expect(c).toContain('p.border_top_left_radius = 6;');
+  });
+});
+
+describe('AOT style diagnostics', () => {
+  const D = `import { useState } from 'react';
+import { View, StyleSheet } from 'embedded-react';
+`;
+  const err = src => {
+    try {
+      gen(src);
+    } catch (e) {
+      return e;
+    }
+    throw new Error('expected a compile error');
+  };
+
+  // A key the static lowering does not know used to fall through to the dynamic branch and be reported
+  // as state-driven, which sent the author looking for state that isn't there.
+  it('names an unknown style key as unknown, not as state-driven', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{transform: [{scale: 2}]}} />);
+      }`);
+    expect(e.message).toMatch(/style "transform" is not supported/);
+    expect(e.message).not.toMatch(/state-driven/);
+    expect(e.aotHint).toMatch(/Flow B lowers these:/);
+  });
+
+  it('says the same for an unknown key given a state-driven value', () => {
+    const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{shadowRadius: n}} />);
+      }`);
+    expect(e.message).toMatch(/style "shadowRadius" is not supported/);
+    expect(e.message).not.toMatch(/state-driven/);
+  });
+
+  it('still reports a state-driven value on a known key as state-driven', () => {
+    const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{flex: n}} />);
+      }`);
+    expect(e.message).toMatch(/state-driven value for style "flex"/);
+  });
+
+  it('reports a bad value on a known key as a bad value, with a location', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{alignItems: 'baseline'}} />);
+      }`);
+    expect(e.message).toMatch(/unsupported value for style "alignItems"/);
+    expect(e.message).toMatch(/one of auto, flex-start/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  // DYN_FIELDS/KEYS are plain objects, so `style={{toString: n}}` used to find Object.prototype's method,
+  // look like a known key, and emit `p.undefined = …` — invalid C, from the compiler that is supposed to
+  // reject unsupported styles up front.
+  it.each(['toString', 'constructor', 'valueOf', 'hasOwnProperty'])(
+    'rejects the inherited Object.prototype key "%s" as an unknown style',
+    key => {
+      const e = err(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{${key}: n}} />);
+      }`);
+      expect(e.message).toMatch(new RegExp(`style "${key}" is not supported`));
+    },
+  );
+
+  it('does not emit an undefined ERProps field for a prototype key', () => {
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<View style={{toString: n}} />);
+      }`),
+    ).toThrow();
+    // And the static path too, which goes through lowerStyle's own key lookup.
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        return (<View style={{valueOf: 4}} />);
+      }`),
+    ).toThrow(/style "valueOf" is not supported/);
+  });
+
+  it('locates an unknown key that arrived through a StyleSheet', () => {
+    const e = err(`${D}
+      const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });
+      export function App() {
+        return (<View style={styles.card} />);
+      }`);
+    expect(e.message).toMatch(/style "shadowOpacity" is not supported/);
+    expect(e.aotLoc).toBeTruthy();
   });
 });
