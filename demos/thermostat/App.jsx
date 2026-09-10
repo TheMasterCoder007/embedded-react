@@ -19,6 +19,7 @@ import {View, Text, Pressable, Image, Modal, Dial} from 'embedded-react';
 import cogIcon from './assets/cog.png';
 import {ThermoDial} from './components/dial.jsx';
 import {WeatherPanel} from './components/weather.jsx';
+import {HeaderClock, ClockSetter} from './components/clock.jsx';
 
 // Thermostat — one app, three layouts chosen from the panel size:
 //
@@ -419,6 +420,8 @@ const SettingsSheet = memo(function SettingsSheet({
             </Pressable>
           </View>
         </View>
+
+        <ClockSetter theme={th} />
       </View>
     </Modal>
   );
@@ -989,7 +992,10 @@ export function App() {
             {statusLine}
           </Text>
         </View>
-        <CogButton onPress={openSettings} />
+        <View style={{flexDirection: 'row', alignItems: 'center', gap: 16}}>
+          <HeaderClock theme={theme} onPress={openSettings} />
+          <CogButton onPress={openSettings} />
+        </View>
       </View>
 
       <View style={{flex: 1, alignItems: 'center', justifyContent: 'center'}}>

@@ -12,6 +12,9 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- The thermostat demo has a clock: the time and date in its header, set from the settings sheet. It
+  runs on `Date.now()`, so it needs no RTC, but it has to be set again after a power cycle.
+
 - The frame instrumentation now splits the JS phase the way it already split raster: dispatch,
   reconcile, prop/tape marshaling, and the commit the pump drove, with `JSS`/`PKJ` overlay lines.
   Turning "JS is 40 ms" into "React is 30 of it" is what the bridge-performance work needs to be
