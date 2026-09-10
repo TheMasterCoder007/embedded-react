@@ -3363,28 +3363,10 @@ import {View, Text, Svg, Circle} from 'embedded-react';
   });
 });
 
-describe('AOT unary arithmetic on a string', () => {
-  it.each(['+', '-'])('rejects unary %s on a string', op => {
-    expect(() =>
-      gen(
-        `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
-      ),
-    ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
-  });
-});
-
-describe('AOT round-7 review', () => {
+describe('AOT a string used as a condition', () => {
   const D = `import {useState} from 'react';
-import {View, Text, TextInput} from 'embedded-react';
+import {View, Text, Switch, Svg, Circle} from 'embedded-react';
 `;
-  const err = src => {
-    try {
-      gen(src);
-    } catch (e) {
-      return e;
-    }
-    throw new Error('expected a compile error');
-  };
 
   it('a string in {cond && <X/>} is tested for non-empty, not its address', () => {
     const c = gen(`${D}export function App() {
@@ -3395,7 +3377,71 @@ import {View, Text, TextInput} from 'embedded-react';
     expect(c).not.toMatch(/\(\(s_state\.label\) \?/);
   });
 
-  // A .map callback's params shadow outer runtime bindings of the same name, as a JS arrow param does.
+  it('a <Switch> driven by a string state tests non-empty, not the address', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('x');
+      const [on, setOn] = useState(false);
+      return (<Switch value={label} onValueChange={v => setOn(v)} />);
+    }`);
+    expect(c).toContain("(!((s_state.label[0] != '\\0')))");
+    expect(c).toContain("(uint8_t)(((s_state.label[0] != '\\0')) ? 1 : 0)");
+  });
+
+  it('a conditional gradient driven by a string state tests non-empty', () => {
+    const grad = `{type: 1, stops: [{color: '#ff0000', offset: 0}, {color: '#0000ff', offset: 1}], bx: 40}`;
+    const svg = attr =>
+      gen(`${D}export function App() {
+        const [label] = useState('x');
+        return (<Svg width={40} height={40}><Circle cx={20} cy={20} r={10} fillGrad={${attr}} /></Svg>);
+      }`);
+    for (const attr of [`label ? null : ${grad}`, `label && ${grad}`])
+      expect(svg(attr)).toContain("s_state.label[0] != '\\0'");
+  });
+});
+
+describe('AOT a string where a style needs a number', () => {
+  it('a string state cannot drive a numeric style', () => {
+    expect(() =>
+      gen(`${PRE}export function App() {
+        const [radius] = useState('10');
+        return (<View style={{borderTopLeftRadius: radius}} />);
+      }`),
+    ).toThrow(/style "borderTopLeftRadius" needs a number/);
+  });
+});
+
+describe('AOT boolean semantics', () => {
+  const D = `import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+`;
+
+  it('a boolean is never strictly equal to a number', () => {
+    const app = cond =>
+      gen(`${D}export function App() {
+        const [flag] = useState(true);
+        return (<View>{${cond} && <Text>a</Text>}</View>);
+      }`);
+    expect(app('flag === 1')).not.toContain('s_state.flag == 1');
+    expect(app('flag !== 1')).not.toContain('s_state.flag != 1');
+    expect(app('flag == 1')).toContain('(s_state.flag == 1)');
+    expect(app('flag === true')).toContain('(s_state.flag == 1)');
+  });
+
+  it('a nested span drops a boolean child', () => {
+    const c = gen(`${D}export function App() {
+      return (<Text>a<Text>{true}</Text>{false}</Text>);
+    }`);
+    expect(c).not.toContain('"true"');
+    expect(c).not.toContain('"false"');
+  });
+});
+
+describe('AOT name shadowing', () => {
+  const D = `import {useState, useCallback} from 'react';
+import {View, Text, Pressable} from 'embedded-react';
+`;
+
+  // A .map callback's params shadow outer bindings of the same name, as a JS arrow param does.
   it('a static .map item and index shadow a same-named state', () => {
     const c = gen(`${D}const ITEMS = [{key: 'a'}, {key: 'b'}];
       export function App() {
@@ -3418,6 +3464,28 @@ import {View, Text, TextInput} from 'embedded-react';
     expect(c).not.toContain('s_state.i)');
   });
 
+  it('a .map parameter shadows a callback of the same name', () => {
+    expect(() =>
+      gen(`${D}export function App() {
+        const [n, setN] = useState(0);
+        const onTap = useCallback(() => setN(n + 1), [n]);
+        return (<View>{['a'].map(onTap => <Pressable key={onTap} onPress={onTap}><Text>x</Text></Pressable>)}</View>);
+      }`),
+    ).toThrow(/onPress must be an inline function/);
+  });
+
+  it('a hook binding shadows a module const before the local consts fold', () => {
+    expect(() =>
+      gen(`${D}const r = 10;
+        export function App() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }`),
+    ).toThrow(/cannot resolve identifier "copy"/);
+    expect(() =>
+      gen(`${D}const r = 10;
+        function C() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }
+        export function App() { return (<View><C /></View>); }`),
+    ).toThrow(/cannot resolve identifier "copy"/);
+  });
+
   it("App's dynamic const is a located error, never the module value it shadows", () => {
     const src = use =>
       `${D}const L = 'module';
@@ -3425,13 +3493,30 @@ import {View, Text, TextInput} from 'embedded-react';
     for (const use of [
       `<Text>{'L=' + L}</Text>`,
       `<View style={{width: L}} />`,
-    ]) {
-      const e = err(src(use));
-      expect(e.message).toMatch(/cannot resolve identifier "L"/);
-    }
+    ])
+      expect(() => gen(src(use))).toThrow(/cannot resolve identifier "L"/);
+  });
+});
+
+describe('AOT undefined as a value', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, TextInput} from 'embedded-react';
+`;
+
+  it('a const that is undefined folds like any other', () => {
+    const c = gen(`${D}const EMPTY = undefined;
+      export function App() {
+        const empty = undefined;
+        return (<View><Text>{EMPTY}</Text><Text>{empty}</Text></View>);
+      }`);
+    expect(c).toContain('"%s", ""');
+    expect(() =>
+      gen(`${D}const EMPTY = undefined;
+        export function App() { const [n] = useState(EMPTY); return (<Text>x</Text>); }`),
+    ).toThrow(/initial value of state "n" is undefined/);
   });
 
-  // Flow A omits an undefined prop; so does Flow B now — every reader sees the attribute as absent.
+  // Flow A omits an undefined prop; so does Flow B — every reader sees the attribute as absent.
   it('an attribute set to undefined is omitted, as in Flow A', () => {
     const c = gen(`${D}export function App() {
       const [v, setV] = useState('');
@@ -3464,12 +3549,27 @@ import {View, Text, TextInput} from 'embedded-react';
   });
 
   it('a binding named undefined is a located error', () => {
-    const e = err(`${D}export function App() {
-      const [undefined] = useState('x');
-      return (<Text>{undefined}</Text>);
-    }`);
-    expect(e.message).toMatch(/`undefined` cannot be used as a name/);
-    expect(e.aotLoc).toBeTruthy();
+    let e;
+    try {
+      gen(`${D}export function App() {
+        const [undefined] = useState('x');
+        return (<Text>{undefined}</Text>);
+      }`);
+    } catch (x) {
+      e = x;
+    }
+    expect(e?.message).toMatch(/`undefined` cannot be used as a name/);
+    expect(e?.aotLoc).toBeTruthy();
+  });
+});
+
+describe('AOT unary arithmetic on a string', () => {
+  it.each(['+', '-'])('rejects unary %s on a string', op => {
+    expect(() =>
+      gen(
+        `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
+      ),
+    ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
   });
 });
 

@@ -68,8 +68,9 @@ See the README for the release process.
 - An AOT style key with no lowering is now reported as unsupported instead of as "a state-driven
   value ... (static only)", advice that could not be followed when the value was already a literal.
 
-- Booleans in AOT text now read the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, and a
-  bare `{flag}` child draws nothing (React's rule). Flow B printed `1` for both.
+- Booleans in the AOT now behave the way they do in Flow A: `{'on: ' + flag}` prints `on: true`, a
+  bare `{flag}` child draws nothing (React's rule), nested spans included, and `flag === 1` is false.
+  Flow B printed `1` and treated `true === 1` as true.
 
 - A string state setter that reads its own slot (`setLabel(label + '!')`) now builds the new value in a
   temporary first. `snprintf` may not read and write overlapping objects, so an embedded libc was free
@@ -92,12 +93,14 @@ See the README for the release process.
   equality lowers to `strcmp` (ordering is refused: JS orders by UTF-16 code unit, the device holds
   UTF-8), a string used as a condition tests for non-empty (a bare `char[]` compared
   its address, which GCC rejects), a handler `const` copied from a string state gets its own buffer, and
-  arithmetic on a string — `-`, `*`, `/`, `%`, or a unary `+`/`-` — is a located error.
+  arithmetic on a string — `-`, `*`, `/`, `%`, a unary `+`/`-`, or a string driving a numeric style — is
+  a located error.
 
 - `undefined` behaves as it does in Flow A: a prop or style entry that is `undefined` — written out, or a
   prop a child component was never given — is omitted, and in text `{undefined}` renders nothing while
   `s + undefined` appends "undefined". Previously an absent prop could hide a node (`visible`) or put
-  the word "undefined" in a `placeholder`. A binding named `undefined` is a located error.
+  the word "undefined" in a `placeholder`. A `const` whose value is `undefined` folds like any other; a
+  binding *named* `undefined` is a located error.
 
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the

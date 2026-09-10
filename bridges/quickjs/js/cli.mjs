@@ -400,7 +400,7 @@ async function buildAot(cwd, explicit, outDir, screen) {
     // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
     const svgArtifacts = await bakeSvgArtifacts(src, appDir);
     // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
-    // the source project — the same ER_AOT_DEMO_watch_face that `npm run aot -- watch-face` produces.
+    // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
     result = compileSource(src, projectIdentity(appPath), {
       filename: appPath,
       svgArtifacts,

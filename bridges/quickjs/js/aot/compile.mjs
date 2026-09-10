@@ -460,6 +460,27 @@ function emitExprImpl(node, env) {
             isBool: true,
           };
         }
+        // A boolean and a number share an int slot, so C would hold `true === 1`; a strict comparison never
+        // coerces, so JS never does. Decided only when the other side is surely a number.
+        const surelyNum = (n, x) =>
+          !x.isBool &&
+          (x.cType === 'float' ||
+            n.type === 'NumericLiteral' ||
+            (n.type === 'UnaryExpression' &&
+              n.argument.type === 'NumericLiteral') ||
+            (n.type === 'Identifier' &&
+              !env.locals.has(n.name) &&
+              env.state.get(n.name)?.isBool === false));
+        if (
+          (node.operator === '===' || node.operator === '!==') &&
+          ((l.isBool && surelyNum(node.right, r)) ||
+            (r.isBool && surelyNum(node.left, l)))
+        )
+          return {
+            code: node.operator === '===' ? '0' : '1',
+            cType: 'int',
+            isBool: true,
+          };
         return {
           code: `(${l.code} ${op} ${r.code})`,
           cType: 'int',
@@ -823,6 +844,29 @@ const SCREEN_FROM_ENV =
   Number(process.env.ER_AOT_SCREEN_W) > 0 &&
   Number(process.env.ER_AOT_SCREEN_H) > 0;
 
+/**
+ * Every name a variable declaration directly in `body` binds, destructuring included. In JS each one
+ * shadows a module binding of that name for the whole function body, not only from its declaration on.
+ */
+function declaredNames(body) {
+  const names = [];
+  const walk = p => {
+    if (!p) return;
+    if (p.type === 'Identifier') names.push(p.name);
+    else if (p.type === 'ArrayPattern') p.elements.forEach(walk);
+    else if (p.type === 'ObjectPattern')
+      p.properties.forEach(q =>
+        walk(q.type === 'RestElement' ? q.argument : q.value),
+      );
+    else if (p.type === 'AssignmentPattern') walk(p.left);
+    else if (p.type === 'RestElement') walk(p.argument);
+  };
+  for (const stmt of body)
+    if (stmt.type === 'VariableDeclaration')
+      for (const d of stmt.declarations) walk(d.id);
+  return names;
+}
+
 function moduleScope(program, screen, seed = {}) {
   // `seed` pre-populates the scope (e.g. image imports as their asset-name strings) BEFORE module consts are
   // folded, so a const that references one — `const DAYS = [{ icon: wxSun }]` — folds correctly.
@@ -839,7 +883,7 @@ function moduleScope(program, screen, seed = {}) {
       )
         continue;
       try {
-        scope[decl.id.name] = evalStatic(decl.init, scope);
+        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
       } catch {
         /* not a static const — skip */
       }
@@ -1692,23 +1736,23 @@ function lowerDynamicStyleValue(key, valueNode, env) {
     );
   if (meta.kind === 'color')
     return [{field: meta.field, code: emitColorExpr(valueNode, env)}];
-  if (meta.kind === 'opacity')
-    return [
-      {
-        field: meta.field,
-        code: `(uint8_t)((${emitExpr(valueNode, env).code}) * 255.0f)`,
-      },
-    ];
   if (meta.kind === 'enum')
     return [
       {field: meta.field, code: emitEnumExpr(valueNode, meta.table, env)},
     ];
-  return [
-    {
-      field: meta.field,
-      code: `app_round_dim(${emitExpr(valueNode, env).code})`,
-    },
-  ]; /* num */
+  // Opacity and every size are numbers; C would take a char[] here as its address, or refuse it.
+  const e = emitExpr(valueNode, env);
+  if (e.cType === 'string') {
+    const err = aotError(
+      `AOT: style "${key}" needs a number, but the value is a string`,
+      "JS would coerce the string; C cannot. Keep the state numeric — useState(10), not useState('10').",
+    );
+    if (valueNode.loc) err.aotLoc = valueNode.loc.start;
+    throw err;
+  }
+  if (meta.kind === 'opacity')
+    return [{field: meta.field, code: `(uint8_t)((${e.code}) * 255.0f)`}];
+  return [{field: meta.field, code: `app_round_dim(${e.code})`}]; /* num */
 }
 
 /**
@@ -1930,7 +1974,7 @@ function staticTextContent(children, scope) {
       c.expression.type !== 'JSXEmptyExpression'
     ) {
       const v = evalStatic(c.expression, scope); // throws if it references state
-      if (v !== undefined && v !== null) s += String(v);
+      s += jsxChildText(v);
     } else if (c.type === 'JSXElement')
       throw aotError(
         'AOT: a nested <Text> span may not itself contain another <Text> (one level of spans only)',
@@ -1978,7 +2022,8 @@ function collectTextSpans(children, scope, env) {
           'spans must be static; keep dynamic text in its own single <Text> (no nested <Text> siblings).',
         );
       }
-      if (v !== undefined && v !== null)
+      // React draws nothing for null, undefined, or a boolean child.
+      if (v !== undefined && v !== null && typeof v !== 'boolean')
         spans.push(inheritSpan(cstr(String(v))));
     } else if (
       c.type === 'JSXElement' &&
@@ -3541,6 +3586,8 @@ function emitComponent(el, scope, out, env, state, opts) {
   // this a `const L = …` in a child body either failed to resolve or, when a module const shared the
   // name, silently rendered the MODULE value — the child's declaration must shadow it.
   if (fn.body.type === 'BlockStatement') {
+    // As in App: the body's own names, hook bindings included, shadow module ones before anything folds.
+    for (const name of declaredNames(fn.body.body)) delete childScope[name];
     for (const stmt of fn.body.body) {
       if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const')
         continue;
@@ -3665,9 +3712,10 @@ function emitMap(call, parentVar, scope, out, env, state) {
 }
 
 /**
- * The env for one `.map` row. Its callback params (item, index) shadow any outer state, local, ref or
- * animated value of the same name — a JS arrow parameter always does — so those names leave the runtime
- * maps and the row's own binding wins: in `consts`, or in `ownLocals` for a pooled row's struct item.
+ * The env for one `.map` row. Its callback params (item, index) shadow every outer binding of the same
+ * name — a JS arrow parameter always does — so those names leave every name-keyed map (state, locals,
+ * callbacks, helpers, …) and the row's own binding wins: in `consts`, or in `ownLocals` for a pooled
+ * row's struct item.
  */
 function rowEnv(env, params, consts, ownLocals = null) {
   const names = params.filter(Boolean);
@@ -3684,6 +3732,12 @@ function rowEnv(env, params, consts, ownLocals = null) {
     refs: drop(env.refs),
     anims: drop(env.anims),
     locals: ownLocals ?? drop(env.locals),
+    callbacks: drop(env.callbacks),
+    fnProps: drop(env.fnProps),
+    pans: drop(env.pans),
+    helpers: drop(env.helpers),
+    svgImports: drop(env.svgImports),
+    children: names.includes(env.children?.ref?.name) ? null : env.children,
   };
 }
 
@@ -4074,7 +4128,7 @@ function gradAttr(v, scope, env, what) {
       node.alternate.type === 'ObjectExpression' &&
       nullish(node.consequent)
     ) {
-      cond = `!(${emitExpr(node.test, env).code})`;
+      cond = `!(${asCond(emitExpr(node.test, env))})`;
       node = node.alternate;
     } else
       throw new Error(
@@ -4085,7 +4139,7 @@ function gradAttr(v, scope, env, what) {
     node.operator === '&&' &&
     node.right.type === 'ObjectExpression'
   ) {
-    cond = emitExpr(node.left, env).code;
+    cond = asCond(emitExpr(node.left, env));
     node = node.right;
   }
   const spec = gradSpec(node, scope, env, what);
@@ -5104,7 +5158,7 @@ function emitSwitch(el, scope, out, env, state) {
     } catch {
       dynAssigns.push({
         field: 'switch_value',
-        code: `(uint8_t)((${emitExpr(valueNode, env).code}) ? 1 : 0)`,
+        code: `(uint8_t)((${asCond(emitExpr(valueNode, env))}) ? 1 : 0)`,
       });
     }
   }
@@ -5134,7 +5188,7 @@ function emitSwitch(el, scope, out, env, state) {
         'controlled switch: <Switch value={on} onValueChange={(v) => setOn(v)} />',
       );
     const handlerName = `er_handler_${out.handlers.length}`;
-    const toggled = `(!(${emitExpr(valueNode, env).code}))`; // the engine toggles on press → param is !value
+    const toggled = `(!(${asCond(emitExpr(valueNode, env))}))`; // the engine toggles on press → param is !value
     out.handlers.push({
       name: handlerName,
       body: compileValueHandler(
@@ -6460,12 +6514,15 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
   // Fold statically-derived component-local consts (e.g. `const compact = screen.width < 400`) into the
   // const scope, so responsive `if` branches and styles can switch on them at compile time. Dynamic consts
   // (state-derived, useMemo, etc.) throw here and are skipped — they're handled later by memos/emitExpr.
+  // Every name the body declares — a hook's destructured state included — shadows the module binding
+  // before any local folds, or `const copy = r` would capture a module `r` that state `r` hides.
+  for (const name of declaredNames(component.body.body)) delete scope[name];
   for (const stmt of component.body.body) {
     if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const') continue;
     for (const decl of stmt.declarations) {
       if (decl.id.type !== 'Identifier' || !decl.init) continue;
       try {
-        scope[decl.id.name] = evalStatic(decl.init, scope);
+        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
       } catch {
         // Dynamic (state-derived, useMemo, …). A memo is re-bound below and a plain derived const is not
         // supported — either way a same-named module const must not stay visible to the folds, or the
