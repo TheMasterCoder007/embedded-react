@@ -76,6 +76,14 @@ check(
   performance.now() - perfBefore === 1000,
   'setting the wall clock does not move performance.now',
 );
+let rejected = false;
+try {
+  __setWallClock(Symbol('not a time'));
+} catch (e) {
+  rejected = e instanceof TypeError;
+}
+check(rejected, 'a value that cannot become a number throws');
+check(Date.now() === 1700000001000, 'and leaves the wall clock alone');
 
 // --- both keep counting past the engine clock's 32-bit wrap (~49.7 days) -----------------------
 const dw = Date.now();

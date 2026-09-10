@@ -268,9 +268,9 @@ static JSValue rt_set_wall_clock(JSContext* ctx, JSValueConst this_val, int argc
 {
     (void)this_val;
     int64_t ms = 0;
-    if (argc >= 1)
+    if (argc >= 1 && JS_ToInt64(ctx, &ms, argv[0]) < 0)
     {
-        JS_ToInt64(ctx, &ms, argv[0]);
+        return JS_EXCEPTION; /* e.g. a Symbol: let the throw reach the test instead of setting 0 */
     }
     er_runtime_set_wall_clock(ms);
     return JS_UNDEFINED;
