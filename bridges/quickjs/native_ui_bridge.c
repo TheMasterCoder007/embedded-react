@@ -95,10 +95,6 @@ static int s_high_water = 1;
 /** @brief Context the bridge was installed into; used by the event trampoline. */
 static JSContext* s_bridge_ctx = NULL;
 
-/** @brief er_now_ms() at the last er_bridge_now_ms() sample, and the 64-bit total it has been widened to. */
-static uint32_t s_clock_last = 0;
-static uint64_t s_clock_ms = 0;
-
 /**
  * @brief JS object mapping encoded (handle, eventType) keys to JS handler functions.
  *
@@ -4713,17 +4709,13 @@ static JSValue js_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief The engine clock widened past its 32-bit wrap (see header).
+ * @brief The engine clock as 64 bits (see header).
  *
  * @return Milliseconds of engine-clock time since the backend was set.
  */
 uint64_t er_bridge_now_ms(void)
 {
-    /* Unsigned subtraction measures the step across a wrap too, as long as samples are < 2^32 ms apart. */
-    const uint32_t now = er_now_ms();
-    s_clock_ms += (uint32_t)(now - s_clock_last);
-    s_clock_last = now;
-    return s_clock_ms;
+    return er_now_ms64();
 }
 
 /**
@@ -4747,8 +4739,6 @@ uint64_t er_bridge_now_ms(void)
  */
 void er_bridge_pump(JSContext* ctx)
 {
-    /* Sampled every frame, so the widened clock never goes a whole wrap unread. */
-    (void)er_bridge_now_ms();
     if (!ctx)
     {
         return;

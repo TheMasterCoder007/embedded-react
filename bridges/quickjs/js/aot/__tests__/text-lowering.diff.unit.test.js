@@ -331,3 +331,109 @@ describe('AOT text lowering matches JavaScript', () => {
     );
   }
 });
+
+describe('AOT 64-bit time math matches JavaScript', () => {
+  // Negative values too: Date.now() goes back when the host re-sets the wall clock, so `now - start` can be
+  // below zero, and that is where C's `/` and Math.floor part ways.
+  const VALUES = [
+    0, 1, 999, 1000, 1500, -1, -1000, -1500, 1700000123456, -1700000123456,
+  ];
+  const EXPRS64 = [
+    `t`,
+    `t + 1`,
+    `t - 1700000000000`,
+    `t * 2`,
+    `t % 1000`,
+    `t % -7`,
+    `Math.floor(t / 1000)`,
+    `Math.floor(t / -7)`,
+    `Math.floor(t / 60000) % 60`,
+    `Math.floor(t)`,
+    `Math.abs(t)`,
+    `Math.max(0, t)`,
+    `Math.min(t, 5)`,
+    `'t=' + t + ' ms'`,
+    `t > 1000 ? 'late' : 'early'`,
+  ];
+
+  (CC ? it : it.skip)(
+    `every expression renders what JS renders (${CC || 'no cc found'})`,
+    () => {
+      const cases = [];
+      const helpers = new Map();
+      for (const expr of EXPRS64) {
+        // The setter stores Date.now(), which widens `t` to int64_t; the text is what gets checked.
+        const c = compileSource(
+          `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [t, setT] = useState(0);
+  return (<Pressable onPress={() => setT(Date.now())}><Text>{${expr}}</Text></Pressable>);
+}`,
+          'diff64',
+        ).c;
+        expect(c).toContain('    int64_t t;');
+        const m = c.match(MODES.child.re);
+        expect(m, `${expr}: no snprintf emitted`).toBeTruthy();
+        for (const h of c.matchAll(
+          /static int64_t (app_(?:floordiv|abs|min|max)64)\([^)]*\)\n\{[\s\S]*?\n\}\n/g,
+        ))
+          helpers.set(h[1], h[0]);
+        for (const v of VALUES)
+          cases.push({
+            expr,
+            v,
+            call: m[1].replace(/s_state\./g, 'S.'),
+            js: String(Function('t', `return (${expr});`)(v)),
+          });
+      }
+
+      let prog =
+        '#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n' +
+        GENERATED_PRAGMAS;
+      for (const [name, def] of helpers)
+        if (cases.some(c => c.call.includes(`${name}(`))) prog += def;
+      prog += 'struct St { int64_t t; };\n';
+      cases.forEach((c, i) => {
+        prog +=
+          `static void case_${i}(void){ struct St S = {${c.v}LL}; (void)S;\n` +
+          `  char b[256]; snprintf(b, sizeof b, ${c.call}); printf("%d\\t%s\\n", ${i}, b); }\n`;
+      });
+      prog +=
+        'int main(void){\n' +
+        cases.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-diff64-'));
+      try {
+        const src = join(dir, 'time.c');
+        const bin = join(dir, 'time');
+        writeFileSync(src, prog);
+        const build = spawnSync(
+          CC,
+          ['-Wall', '-Wextra', '-Wformat', '-Werror', '-o', bin, src],
+          {encoding: 'utf8'},
+        );
+        expect(build.stderr || '').toBe('');
+        expect(build.status).toBe(0);
+
+        const got = new Map();
+        for (const line of execFileSync(bin, {encoding: 'utf8'}).split('\n')) {
+          if (!line) continue;
+          const t = line.indexOf('\t');
+          got.set(Number(line.slice(0, t)), line.slice(t + 1));
+        }
+        const bad = cases
+          .map((c, i) => ({...c, got: got.get(i)}))
+          .filter(c => c.got !== c.js)
+          .map(
+            c =>
+              `${c.expr} @t=${c.v}: C=${JSON.stringify(c.got)} JS=${JSON.stringify(c.js)}`,
+          );
+        expect(bad).toEqual([]);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+});

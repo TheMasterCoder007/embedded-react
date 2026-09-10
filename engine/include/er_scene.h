@@ -1158,9 +1158,19 @@ extern "C"
     /**
      * @brief Returns the number of milliseconds elapsed since embedded_renderer_set_backend() was called.
      *
+     * Wraps back to zero after ~49.7 days of uptime; er_now_ms64() does not.
+     *
      * @return Monotonic timestamp in milliseconds, accumulated from embedded_renderer_tick() calls.
      */
     uint32_t er_now_ms(void);
+
+    /**
+     * @brief er_now_ms() as 64 bits, so it keeps counting past the 32-bit wrap. `performance.now()` and
+     *        `Date.now()` read it in both flows.
+     *
+     * @return Monotonic timestamp in milliseconds, accumulated from embedded_renderer_tick() calls.
+     */
+    uint64_t er_now_ms64(void);
 
     /**
      * @brief Registers a baked bitmap font blob under a name for use by Text nodes.

@@ -205,6 +205,68 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `64-bit time (Date.now / performance.now) passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every place a timestamp can go, under -Wall: a printf format that does not match int64_t on this
+      // host, or a clock helper emitted but never called, would warn. (The interval is cleared from a
+      // dep-driven cleanup; a mount effect's cleanup is dropped, which would leave er_timer_clear unused.)
+      const r = compileSource(
+        `import { useState, useEffect, useRef } from 'react';
+         import { View, Text, Pressable } from 'embedded-react';
+         export function App() {
+           const [t, setT] = useState(0);
+           const [sec, setSec] = useState(0);
+           const start = useRef(0);
+           useEffect(() => {
+             start.current = performance.now();
+           }, []);
+           useEffect(() => {
+             const id = setInterval(() => setSec(Math.floor((performance.now() - start.current) / 1000) % 60), 1000);
+             return () => clearInterval(id);
+           }, [t]);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { const now = Date.now(); if (now - t > 500) setT(now); }}>
+                 <Text>{t}</Text>
+               </Pressable>
+               <Text>{'up ' + Math.max(0, Math.abs(performance.now() - start.current)) + ' ms'}</Text>
+               <Text>{Math.floor(Date.now() / 60000) % 60}</Text>
+               <View style={{ width: Date.now() % 100, height: 4 }} />
+             </View>
+           );
+         }`,
+        'time',
+      );
+      expect(r.c).toContain(
+        'static int64_t app_floordiv64(int64_t a, int64_t b)',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-time-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `the state-driven dimension rounder passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // app_round_dim is the only helper the codegen writes into the file itself rather than calling from

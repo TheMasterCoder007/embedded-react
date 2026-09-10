@@ -55,9 +55,10 @@
 #define ER_CURSOR_BLINK_MS 1000U
 
 /** @brief Whether the text cursor is in the visible half of its blink cycle at @p now_ms. */
-static inline bool cursor_blink_on(uint32_t now_ms)
+static inline bool cursor_blink_on(uint64_t now_ms)
 {
-    return (now_ms % ER_CURSOR_BLINK_MS) < (ER_CURSOR_BLINK_MS / 2U);
+    /* A 32-bit modulo, which an MCU does in hardware; the phase slips once per 49.7-day wrap. */
+    return ((uint32_t)now_ms % ER_CURSOR_BLINK_MS) < (ER_CURSOR_BLINK_MS / 2U);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -69,7 +70,7 @@ static uint16_t s_next_tag = 0;
 static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node slots available for reuse. */
 static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
-static uint32_t s_now_ms = 0;
+static uint64_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
 static bool s_kbd_dirty =
@@ -5504,6 +5505,11 @@ uint32_t er_layout_pass_count(void)
 }
 
 uint32_t er_now_ms(void)
+{
+    return (uint32_t)s_now_ms;
+}
+
+uint64_t er_now_ms64(void)
 {
     return s_now_ms;
 }

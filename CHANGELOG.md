@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- `Date.now()` and `performance.now()` now compile in Flow B, with the same surface as Flow A's lite
+  profile. The generated C holds them as 64-bit whole milliseconds, so divide with `Math.floor(a / b)`;
+  a host sets the real time with `er_app_set_wall_clock()`. The engine clock is also exposed as
+  `er_now_ms64()`, which does not wrap at 49.7 days.
+
 - The thermostat demo has a clock: the time and date in its header, set from the settings sheet. It
   runs on `Date.now()`, so it needs no RTC, but it has to be set again after a power cycle.
 
