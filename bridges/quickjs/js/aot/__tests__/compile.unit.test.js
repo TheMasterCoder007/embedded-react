@@ -2999,6 +2999,26 @@ describe('AOT useHostValue (host-fed input)', () => {
   });
 });
 
+describe('AOT fixed-slot truncation', () => {
+  // Every string the generated file writes lands in a fixed-size slot, so an over-long value truncates by
+  // design. GCC reports that intent for any format mixing %s with anything else, and ESP-IDF builds with
+  // -Werror — so without this the ordinary `{'n=' + name}` fails on the device. Clang has no such warning,
+  // which is why a clang-only smoke test called the same code clean.
+  it('tells GCC the truncation is intended, and keeps clang out of it', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [name, setName] = useState('x');
+        return (<Text>{'n=' + name}</Text>);
+      }`);
+    expect(c).toContain('#if defined(__GNUC__) && !defined(__clang__)');
+    expect(c).toContain('#pragma GCC diagnostic ignored "-Wformat-truncation"');
+    // The suppression has to precede the code it covers.
+    expect(c.indexOf('#pragma GCC diagnostic ignored')).toBeLessThan(
+      c.indexOf('snprintf(p.text'),
+    );
+  });
+});
+
 describe('AOT generated-C portability', () => {
   it('emits a guarded M_PI fallback when the app uses math (M_PI is not in ISO C99 <math.h>)', () => {
     const c = compileSource(

@@ -63,6 +63,37 @@ function findCC() {
 }
 const CC = findCC();
 
+/**
+ * Warnings that only real GCC implements, added when the compiler accepts them. `gcc` is clang on macOS,
+ * which silently has no -Wformat-truncation — and ESP-IDF builds with GCC and -Werror, so a format this
+ * suite called clean could still fail on the device. Probing keeps the flag off clang (where an unknown
+ * warning group would itself be an error under -Werror) without hard-coding a toolchain.
+ */
+const GCC_FORMAT_FLAGS = (() => {
+  const probe = join(tmpdir(), `er-flagprobe-${process.pid}.c`);
+  try {
+    writeFileSync(probe, 'int main(void){return 0;}\n');
+    const r = spawnSync(
+      CC ?? 'cc',
+      [
+        '-Wformat-truncation=2',
+        '-Wformat-overflow=2',
+        '-Werror',
+        '-fsyntax-only',
+        probe,
+      ],
+      {encoding: 'utf8'},
+    );
+    return r.status === 0
+      ? ['-Wformat-truncation=2', '-Wformat-overflow=2']
+      : [];
+  } catch {
+    return [];
+  } finally {
+    rmSync(probe, {force: true});
+  }
+})();
+
 describe('AOT generated C compiles', () => {
   it('emits the thermostat solo dial as a native, state-driven arc node', async () => {
     const r = await emitThermostat();
@@ -198,6 +229,7 @@ describe('AOT generated C compiles', () => {
           [
             '-fsyntax-only',
             '-Wall',
+            ...GCC_FORMAT_FLAGS,
             '-I',
             engineInc,
             '-I',
@@ -400,6 +432,7 @@ describe('AOT generated C compiles', () => {
           [
             '-fsyntax-only',
             '-Wall',
+            ...GCC_FORMAT_FLAGS,
             '-I',
             engineInc,
             '-I',
@@ -457,6 +490,7 @@ describe('AOT generated C compiles', () => {
             '-fsyntax-only',
             '-Wall',
             '-Wformat',
+            ...GCC_FORMAT_FLAGS,
             '-I',
             engineInc,
             '-I',

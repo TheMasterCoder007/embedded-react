@@ -144,6 +144,14 @@ export function App() {${decls(v)}
   return (<Pressable onPress={() => setOut(${expr})}><Text>{out}</Text></Pressable>);
 }`;
 
+/** The same expression rendered inside a child component, reached through the prop boundary. */
+const childCompApp = (expr, v) => `import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+function Row({n, f, s, on, on2}) { return (<Text>{${expr}}</Text>); }
+export function App() {${decls(v)}
+  return (<View><Row n={n} f={f} s={s} on={on} on2={on2} /></View>);
+}`;
+
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
   val === null || val === undefined || typeof val === 'boolean'
@@ -159,7 +167,63 @@ const MODES = {
     app: setterApp,
     re: /snprintf\(s_state\.out, sizeof\(s_state\.out\), ([\s\S]*?)\);\n/,
   },
+  'child component': {
+    app: childCompApp,
+    re: /snprintf\(p\.text, sizeof\(p\.text\), ([\s\S]*?)\);\n/,
+  },
 };
+
+describe('AOT self-referential string setter', () => {
+  (CC ? it : it.skip)(
+    `appends to its own slot the way JS does (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+         import {Text, Pressable} from 'embedded-react';
+         export function App() {
+           const [out, setOut] = useState('ab');
+           return (<Pressable onPress={() => setOut(out + '!')}><Text>{out}</Text></Pressable>);
+         }`,
+        'selfref',
+      ).c;
+      const block = c.match(/\{\s*\n\s*char next\[[\s\S]*?\n\s*\}/);
+      expect(block, 'no temporary-buffer block emitted').toBeTruthy();
+      const body = block[0].replace(/s_state\./g, 'S.');
+
+      const ITER = 5;
+      let prog = '#include <stdio.h>\n#include <string.h>\n';
+      prog += 'struct St { char out[64]; };\n';
+      prog +=
+        'int main(void){ struct St S; snprintf(S.out, sizeof S.out, "%s", "ab");\n';
+      prog += `  for (int i = 0; i < ${ITER}; i++) {\n${body}\n    printf("%s\\n", S.out); }\n  return 0; }\n`;
+
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-selfref-'));
+      try {
+        const src = join(dir, 'sr.c');
+        const bin = join(dir, 'sr');
+        writeFileSync(src, prog);
+        const build = spawnSync(
+          CC,
+          ['-Wall', '-Wextra', '-Wformat', '-Werror', '-o', bin, src],
+          {encoding: 'utf8'},
+        );
+        expect(build.stderr || '').toBe('');
+        expect(build.status).toBe(0);
+        const got = execFileSync(bin, {encoding: 'utf8'}).trim().split('\n');
+
+        let js = 'ab';
+        const want = [];
+        for (let i = 0; i < ITER; i++) {
+          js = js + '!';
+          want.push(js);
+        }
+        expect(got).toEqual(want);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+});
 
 describe('AOT text lowering matches JavaScript', () => {
   for (const [mode, {app, re}] of Object.entries(MODES)) {

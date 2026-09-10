@@ -78,6 +78,13 @@ See the README for the release process.
 - A ternary mixing a string branch with a numeric one (`{ok ? 1 : 'none'}`) is now a located AOT error
   instead of ill-typed C for the host compiler to reject.
 
+- AOT text that mixes a string with anything else (`{'n=' + name}`) now builds under GCC. Every string
+  goes into a fixed-size slot, so an over-long value truncates by design; GCC reports that intent and
+  ESP-IDF compiles with `-Werror`, which failed the build. The generated file now says it is deliberate.
+
+- A component-local `const` sharing a name with a module one now shadows it, instead of the module value
+  being folded into text that reads the local.
+
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the
   module value instead of the one the code uses.
