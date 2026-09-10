@@ -2999,6 +2999,217 @@ describe('AOT useHostValue (host-fed input)', () => {
   });
 });
 
+// Name resolution has been a recurring source of silently-wrong text: the constant fold reaching past a
+// runtime binding, App's locals leaking into a child, a child's own const not shadowing. These pin the
+// rule rather than one instance of it — a child component is declared at module level, so its body sees
+// MODULE scope plus its own props and consts, never the caller's locals.
+describe('AOT const scoping', () => {
+  const D = `import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+`;
+  const texts = c =>
+    (
+      c.match(/snprintf\(p\.text, sizeof\(p\.text\), "%s", "([^"]*)"\);/g) || []
+    ).map(l => l.match(/"%s", "([^"]*)"/)[1]);
+
+  it("App's local const shadows a module const of the same name", () => {
+    const c = gen(`${D}const L = 'module';
+      export function App() {
+        const L = 'applocal';
+        return (<Text>{'a=' + L}</Text>);
+      }`);
+    expect(texts(c)).toContain('a=applocal');
+  });
+
+  it("App's local does NOT leak into a child component", () => {
+    const c = gen(`${D}const L = 'module';
+      function Child() { return (<Text>{'c=' + L}</Text>); }
+      export function App() {
+        const L = 'applocal';
+        return (<View><Text>{'a=' + L}</Text><Child /></View>);
+      }`);
+    expect(texts(c)).toEqual(
+      expect.arrayContaining(['a=applocal', 'c=module']),
+    );
+  });
+
+  it("a child's own const shadows the module one", () => {
+    const c = gen(`${D}const L = 'module';
+      function Child() { const L = 'childlocal'; return (<Text>{'c=' + L}</Text>); }
+      export function App() { return (<View><Child /></View>); }`);
+    expect(texts(c)).toContain('c=childlocal');
+  });
+
+  it('a prop shadows the module const', () => {
+    const c = gen(`${D}const L = 'module';
+      function Child({L}) { return (<Text>{'c=' + L}</Text>); }
+      export function App() { return (<View><Child L="prop" /></View>); }`);
+    expect(texts(c)).toContain('c=prop');
+  });
+
+  it('a nested child still resolves to module scope', () => {
+    const c = gen(`${D}const L = 'module';
+      function Inner() { return (<Text>{'i=' + L}</Text>); }
+      function Outer() { return (<View><Inner /></View>); }
+      export function App() { const L = 'applocal'; return (<View><Outer /></View>); }`);
+    expect(texts(c)).toContain('i=module');
+  });
+
+  // Styles fold constants through the same scope as text, so a runtime binding has to beat a same-named
+  // module const there too — otherwise the fold silently emits the module value where the prop or row
+  // item was meant. `width` is a supported dynamic style, so a correct lowering is observable.
+  it('a dynamic child prop beats a same-named module const in a style', () => {
+    const c = gen(`${D}const w = 10;
+      function Child({w}) { return (<View style={{width: w}} />); }
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<View><Child w={n * 2} /></View>);
+      }`);
+    expect(c).toContain('p.width = app_round_dim((s_state.n * 2));');
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  it("a .map row's item beats a same-named module const in a style", () => {
+    const c = gen(`${D}const it = {w: 10};
+      export function App() {
+        const [items, setItems] = useState([{w: 4}]);
+        return (<View>{items.map(it => (<View style={{width: it.w}} />))}</View>);
+      }`);
+    expect(c).toMatch(/p\.width = app_round_dim\(s_items\[\d+\]\.w\);/);
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  // A child is a module-level function: App's runtime locals (memos, dynamic consts) are not in its scope.
+  it("App's memo does NOT leak into a child, and a child's const beats it", () => {
+    const c = gen(`${D}import {useMemo} from 'react';
+      const total = 5;
+      function Child() { return (<Text>{'c=' + total}</Text>); }
+      function Own() { const total = 3; return (<Text>{'o=' + total}</Text>); }
+      export function App() {
+        const [n, setN] = useState(1);
+        const total = useMemo(() => n * 2, [n]);
+        return (<View><Text>{'a=' + total}</Text><Child /><Own /></View>);
+      }`);
+    expect(c).toContain('"a=%d", ((s_state.n * 2))');
+    expect(texts(c)).toEqual(expect.arrayContaining(['c=5', 'o=3']));
+  });
+
+  it("App's memo beats a same-named module const in a style and as a prop", () => {
+    const c = gen(`${D}import {useMemo} from 'react';
+      const w = 10;
+      function Child({w}) { return (<Text>{w}</Text>); }
+      export function App() {
+        const [n, setN] = useState(1);
+        const w = useMemo(() => n * 3, [n]);
+        return (<View style={{width: w}}><Child w={w} /></View>);
+      }`);
+    expect(c).toContain('p.width = app_round_dim(((s_state.n * 3)));');
+    expect(c).toContain('"%d", ((s_state.n * 3))');
+    expect(c).not.toContain('p.width = 10;');
+  });
+
+  it('an event or gesture param beats a same-named module const', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      const e = 'MOD';
+      export function App() {
+        const [label, setLabel] = useState('');
+        return (<Pressable onTouchMove={e => setLabel('x=' + e.x)}><Text>{label}</Text></Pressable>);
+      }`);
+    expect(c).toContain('"x=%d", data->x');
+    expect(c).not.toContain('"x=undefined"');
+  });
+
+  it('a child const can seed its own useState initial', () => {
+    const c = gen(`${D}
+      function Child() { const START = 5; const [n, setN] = useState(START); return (<Text>{n}</Text>); }
+      export function App() { return (<View><Child /></View>); }`);
+    expect(c).toMatch(/c0_n = 5/);
+  });
+
+  it('a handler param shadows a module const in a string setter', () => {
+    const c = gen(`${D}import {Pressable} from 'embedded-react';
+      const label = 'MODULE';
+      export function App() {
+        const [s, setS] = useState('x');
+        const [n, setN] = useState(0);
+        const pick = (label) => setS(label);
+        return (<Pressable onPress={() => pick(n > 0 ? 'a' : 'b')}><Text>{s}</Text></Pressable>);
+      }`);
+    expect(c).toContain('((s_state.n > 0) ? "a" : "b")');
+    expect(c).not.toContain('"MODULE"');
+  });
+});
+
+// Everything here used to reach the C compiler as something GCC rejects under -Werror (ESP-IDF's
+// default): a string in arithmetic, a `<` on two char* (address compare), a char[] as a condition
+// (-Werror=address), and `int l_t = s_state.label`.
+describe('AOT strings in C-hostile positions', () => {
+  const D = `import {useState} from 'react';
+import {View, Text, Pressable, Switch} from 'embedded-react';
+`;
+  it('rejects arithmetic other than + on a string', () => {
+    for (const op of ['-', '*', '/', '%']) {
+      expect(() =>
+        gen(
+          `${D}export function App() { const [n] = useState(1); return (<Text>{'5' ${op} n}</Text>); }`,
+        ),
+      ).toThrow(new RegExp(`"\\${op}" on a string is not supported`));
+    }
+  });
+
+  it('orders strings with strcmp, and refuses a string-vs-number compare', () => {
+    const c = gen(`${D}export function App() {
+      const [label] = useState('a');
+      return (<Text>{label < 'm' ? 'lo' : 'hi'}</Text>);
+    }`);
+    expect(c).toContain('(strcmp(s_state.label, "m") < 0)');
+    expect(() =>
+      gen(
+        `${D}export function App() { const [label] = useState('a'); return (<Text>{label < 5 ? 'a' : 'b'}</Text>); }`,
+      ),
+    ).toThrow(/cannot be compared with a number/);
+  });
+
+  it('tests a string condition for non-empty, never its address', () => {
+    const c = gen(`${D}export function App() {
+      const [label, setLabel] = useState('');
+      const [n, setN] = useState(0);
+      return (
+        <Pressable onPress={() => { if (label) setN(1); }}>
+          <Text>{label ? 'set' : 'empty'}</Text>
+          <Text>{'v=' + !label}</Text>
+        </Pressable>
+      );
+    }`);
+    expect(c).toContain(`(s_state.label[0] != '\\0') ? "set" : "empty"`);
+    expect(c).toContain(`(!((s_state.label[0] != '\\0')))`);
+    expect(c).toContain(`if ((s_state.label[0] != '\\0'))`);
+    expect(c).not.toMatch(/\(s_state\.label \?/);
+  });
+
+  it('gives a string handler local its own buffer, so the setter never aliases', () => {
+    const c = gen(`${D}export function App() {
+      const [label, setLabel] = useState('ab');
+      return (<Pressable onPress={() => { const t = label; setLabel(t + '!'); }}><Text>{label}</Text></Pressable>);
+    }`);
+    expect(c).toContain('char l_t[48];');
+    expect(c).toContain('snprintf(l_t, sizeof(l_t), "%s", s_state.label);');
+    expect(c).toContain(
+      'snprintf(s_state.label, sizeof(s_state.label), "%s!", l_t);',
+    );
+    expect(c).not.toContain('int l_t');
+  });
+
+  it('a <Switch> callback value prints as a boolean', () => {
+    const c = gen(`${D}export function App() {
+      const [on, setOn] = useState(false);
+      const [label, setLabel] = useState('');
+      return (<View><Switch value={on} onValueChange={v => { setOn(v); setLabel('on=' + v); }} /><Text>{label}</Text></View>);
+    }`);
+    expect(c).toMatch(/"on=%s", \(\(.*\) \? "true" : "false"\)/);
+  });
+});
+
 describe('AOT fixed-slot truncation', () => {
   // Every string the generated file writes lands in a fixed-size slot, so an over-long value truncates by
   // design. GCC reports that intent for any format mixing %s with anything else, and ESP-IDF builds with
@@ -3239,6 +3450,29 @@ import { View, Text, TextInput } from 'embedded-react';
       }`);
     expect(c).toContain('"a: %s", (s_state.ok ? "x" : "y")');
     expect(c).toContain('"b: %g", (s_state.ok ? 1 : 2.5f)');
+  });
+
+  // A branch that concatenates would need a format of its own; one snprintf has one. The generic
+  // "not supported in this position" used to fire first, with a hint that text buffers are fine — which
+  // is exactly wrong inside a text buffer.
+  it('names a ternary whose branch concatenates, instead of the generic position error', () => {
+    const e = textErr(`<Text>{'x: ' + (on ? 'a' + n : 'b')}</Text>`);
+    expect(e.message).toMatch(
+      /ternary in text cannot concatenate inside its test or a branch/,
+    );
+    expect(e.message).not.toMatch(/not supported in this position/);
+    expect(e.aotLoc).toBeTruthy();
+  });
+
+  it('names a logical whose operand concatenates, and a ternary whose test does', () => {
+    const e1 = textErr(`<Text>{on && ('n=' + n)}</Text>`);
+    expect(e1.message).toMatch(
+      /"&&" in text cannot concatenate inside an operand/,
+    );
+    const e2 = textErr(`<Text>{('a' + n) ? 'x' : 'y'}</Text>`);
+    expect(e2.message).toMatch(
+      /cannot concatenate inside its test or a branch/,
+    );
   });
 
   it('refuses a ternary mixing a boolean branch with a non-boolean one', () => {

@@ -82,8 +82,16 @@ See the README for the release process.
   goes into a fixed-size slot, so an over-long value truncates by design; GCC reports that intent and
   ESP-IDF compiles with `-Werror`, which failed the build. The generated file now says it is deliberate.
 
-- A component-local `const` sharing a name with a module one now shadows it, instead of the module value
-  being folded into text that reads the local.
+- Names now resolve the way JavaScript scopes them, in styles and props as well as text. A runtime
+  binding — state, a memo, a prop, a `.map` row item, a handler or event parameter — always beats a
+  module constant of the same name, and an inlined child component sees module scope plus its own props
+  and consts, never the caller's locals. Previously the constant fold could quietly substitute the module
+  value.
+
+- Strings in positions C cannot express are handled instead of reaching the host compiler: ordering
+  compares lower to `strcmp`, a string used as a condition tests for non-empty (a bare `char[]` compared
+  its address, which GCC rejects), a handler `const` copied from a string state gets its own buffer, and
+  `-`/`*`/`/`/`%` on a string is a located error.
 
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the
