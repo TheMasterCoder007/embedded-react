@@ -152,6 +152,23 @@ export function App() {${decls(v)}
   return (<View><Row n={n} f={f} s={s} on={on} on2={on2} /></View>);
 }`;
 
+/**
+ * The diagnostic suppressions the real app.gen.c carries, lifted out of a generated file rather than
+ * copied. Fixtures below compile EXTRACTED snippets, so without this they face a stricter environment
+ * than the code they came from: GCC's -Wformat-truncation fires on the intended fixed-slot truncation
+ * and -Werror turns it into a failure, while clang has no such warning and stays silent. Deriving it
+ * keeps the two from drifting if compile.mjs ever changes what it suppresses.
+ */
+const GENERATED_PRAGMAS = (() => {
+  const c = compileSource(
+    `import {Text} from 'embedded-react';
+     export function App() { return (<Text>x</Text>); }`,
+    'pragmas',
+  ).c;
+  const m = c.match(/#if defined\(__GNUC__\)[\s\S]*?#endif\n/);
+  return m ? m[0] : '';
+})();
+
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
   val === null || val === undefined || typeof val === 'boolean'
@@ -191,7 +208,8 @@ describe('AOT self-referential string setter', () => {
       const body = block[0].replace(/s_state\./g, 'S.');
 
       const ITER = 5;
-      let prog = '#include <stdio.h>\n#include <string.h>\n';
+      let prog =
+        '#include <stdio.h>\n#include <string.h>\n' + GENERATED_PRAGMAS;
       prog += 'struct St { char out[64]; };\n';
       prog +=
         'int main(void){ struct St S; snprintf(S.out, sizeof S.out, "%s", "ab");\n';
@@ -262,7 +280,8 @@ describe('AOT text lowering matches JavaScript', () => {
 
         // One translation unit for the whole matrix: -Werror turns any format/argument mismatch into a
         // build failure, and running it compares the actual bytes.
-        let prog = '#include <stdio.h>\n#include <string.h>\n';
+        let prog =
+          '#include <stdio.h>\n#include <string.h>\n' + GENERATED_PRAGMAS;
         prog += 'struct St { int n; float f; char s[64]; int on; int on2; };\n';
         cases.forEach((c, i) => {
           const v = c.v;
