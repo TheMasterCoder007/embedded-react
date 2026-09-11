@@ -726,6 +726,59 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `state that nothing on screen reads passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // app_update is emitted only when a node reads state, so every body that would call it has to leave
+      // the call out too: an undeclared function is an error in C99 and later.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text, Pressable, Switch, Animated, useAnimatedValue } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           const [items, setItems] = useState([{w: 1}]);
+           const a = useAnimatedValue(0);
+           useEffect(() => { setN(1); }, []);
+           useEffect(() => { if (n > 5) return; setN(2); }, []);
+           useEffect(() => { setInterval(() => setN((v) => v + 1), 1000); }, []);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { setN(n + 1); setItems([...items, {w: 2}]); Animated.timing(a, {toValue: 1, duration: 300}).start(() => setN(0)); }}>
+                 <Text>x</Text>
+               </Pressable>
+               <Switch value={true} onValueChange={() => setN(n - 1)} />
+             </View>
+           );
+         }`,
+        'unread',
+      );
+      expect(r.c).not.toContain('app_update');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-unread-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
     () => {
       // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two

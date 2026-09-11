@@ -65,6 +65,9 @@ See the README for the release process.
 
 ### Fixed
 
+- A Flow B app that sets state nothing on screen reads now compiles. Its handlers called an
+  `app_update()` that was never generated, which every C compiler rejects.
+
 - A Flow B list setter's `items.slice(0, n)` now keeps what JS keeps, with a negative `n` counting back
   from the end. It used to leave the list's count negative, so the next append wrote outside the array.
   `items.slice(0)` no longer crashes the compiler, and a slice that does not start at 0 is now a compiler

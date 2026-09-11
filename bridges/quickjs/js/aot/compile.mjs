@@ -2732,7 +2732,7 @@ function emitCompletionCb(fnNode, env, state, ctx) {
       : [{type: 'ExpressionStatement', expression: body}];
   const cctx = {stateChanged: false, animIdx: 0, out: ctx.out};
   const lines = compileStmts(list, {...env, locals}, state, cctx, '    ');
-  if (cctx.stateChanged) lines.push('    app_update();');
+  if (cctx.stateChanged) lines.push(APP_UPDATE_CALL);
   ctx.out.animCbs.push({name, body: lines});
   return name;
 }
@@ -2819,6 +2819,12 @@ const asInt = e => (e.cType === 'float' ? `app_f2i(${e.code})` : e.code);
 
 /** `e` as C for a slot of `slotType`: an int slot takes a float the way asInt does. */
 const storeCode = (e, slotType) => (slotType === 'int' ? asInt(e) : e.code);
+
+/**
+ * The call a body that set state ends with, to re-apply what reads it. Whether anything reads state is known
+ * only once the whole app is emitted, so the call is dropped then if nothing does.
+ */
+const APP_UPDATE_CALL = '    app_update();';
 
 /** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
  *  becomes a format + args), plain assign otherwise. */
@@ -3403,7 +3409,7 @@ function compileEffect(eff, env, state, out) {
     };
     const lines = compileStmts(stmts, env, state, ctx, '    ');
     if (!ctx.usedReturn) {
-      if (ctx.stateChanged) lines.push('    app_update();');
+      if (ctx.stateChanged) lines.push(APP_UPDATE_CALL);
       out.mountEffects.push(...lines);
       return;
     }
@@ -3413,7 +3419,7 @@ function compileEffect(eff, env, state, out) {
     const name = `er_effect_${out.effN++}`;
     out.effectFns.push({name, body: lines});
     out.mountEffects.push(`    ${name}();`);
-    if (ctx.stateChanged) out.mountEffects.push('    app_update();');
+    if (ctx.stateChanged) out.mountEffects.push(APP_UPDATE_CALL);
     return;
   }
   if (eff.deps.type !== 'ArrayExpression')
@@ -3532,7 +3538,7 @@ function compileHandler(fnNode, env, state, out, pan = null) {
   if (gestureParam) henv = {...henv, gesture: gestureParam, pan};
   const ctx = {stateChanged: false, animIdx: 0, out};
   const stmts = compileStmts(list, henv, state, ctx, '    ');
-  if (ctx.stateChanged) stmts.push('    app_update();'); // re-apply state-dependent props once
+  if (ctx.stateChanged) stmts.push(APP_UPDATE_CALL); // re-apply state-dependent props once
   return stmts;
 }
 
@@ -5281,7 +5287,7 @@ function compileValueHandler(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
   const stmts = compileStmts(list, {...env, locals}, state, ctx, '    ');
-  if (ctx.stateChanged) stmts.push('    app_update();');
+  if (ctx.stateChanged) stmts.push(APP_UPDATE_CALL);
   return stmts;
 }
 
@@ -7173,6 +7179,18 @@ function compileSourceImpl(src, demo, opts, wide, found) {
     out.updates.length > 0 ||
     out.svgUpdates.length > 0 ||
     out.depEffects.length > 0;
+  // With nothing to re-apply there is no app_update, so the calls queued by setters go too.
+  if (!hasUpdate) {
+    const dropUpdate = lines => lines.filter(l => l !== APP_UPDATE_CALL);
+    for (const f of [
+      ...out.handlers,
+      ...out.timerFns,
+      ...out.animCbs,
+      ...out.effectFns,
+    ])
+      f.body = dropUpdate(f.body);
+    out.mountEffects = dropUpdate(out.mountEffects);
+  }
   const updateBlock = (() => {
     if (!hasUpdate) return '';
     const lines = ['static void app_update(void)', '{'];

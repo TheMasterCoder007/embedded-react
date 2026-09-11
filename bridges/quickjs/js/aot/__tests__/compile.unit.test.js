@@ -164,7 +164,7 @@ describe('AOT baseline (regression)', () => {
       export function App() {
         const [a, setA] = useState(0);
         const [b, setB] = useState(0);
-        return (<Pressable onPress={() => { setA(a + 1); setB(b - 1); }}><Text>x</Text></Pressable>);
+        return (<Pressable onPress={() => { setA(a + 1); setB(b - 1); }}><Text>{a}</Text></Pressable>);
       }`);
     expect(c).toContain('s_state.a = app_add(s_state.a, 1);');
     expect(c).toContain('s_state.b = app_sub(s_state.b, 1);');
@@ -222,6 +222,34 @@ describe('AOT baseline (regression)', () => {
     expect(
       handler.slice(0, handler.indexOf('\n}')).includes('app_update();'),
     ).toBe(false);
+  });
+
+  // A setter queues app_update() before anything knows whether a node reads state; app_update itself is
+  // emitted only when one does. Every kind of body that queues it is here, and nothing on screen reads n.
+  it('calls no app_update when nothing on screen reads state', () => {
+    const c = gen(`${PRE}
+      import { useEffect } from 'react';
+      import { Switch } from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [items, setItems] = useState([{w: 1}]);
+        const a = useAnimatedValue(0);
+        useEffect(() => { setN(1); }, []);
+        useEffect(() => { if (n > 5) return; setN(2); }, []);
+        useEffect(() => { setInterval(() => setN((v) => v + 1), 1000); }, []);
+        return (
+          <View>
+            <Pressable onPress={() => { setN(n + 1); setItems([...items, {w: 2}]); Animated.timing(a, {toValue: 1, duration: 300}).start(() => setN(0)); }}><Text>x</Text></Pressable>
+            <Switch value={true} onValueChange={() => setN(n - 1)} />
+          </View>
+        );
+      }`);
+    expect(c).not.toContain('app_update');
+    // The setters themselves stay.
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
+    expect(c).toContain('s_state.n = app_sub(s_state.n, 1);');
+    expect(c).toContain('s_state.n = 0;');
+    expect(c).toContain('s_items_count++;');
   });
 
   it('lowers a string useState to a char buffer + snprintf setter + %s text', () => {
