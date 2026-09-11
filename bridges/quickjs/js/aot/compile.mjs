@@ -348,6 +348,13 @@ const mix64Error = () =>
     'Date.now() and performance.now() are whole milliseconds in a 64-bit integer, and a float would round them. Keep the arithmetic whole — e.g. Math.floor(ms / 1000), not ms * 0.001.',
   );
 
+/** A 64-bit timestamp met a boolean in `&&` / `||` / `?:`, where JS would hand back the boolean itself. */
+const bool64Error = what =>
+  aotError(
+    `AOT: ${what} cannot mix a boolean with a 64-bit time value`,
+    'JS would give back the boolean itself (and false renders as no text), which a 64-bit integer cannot hold. Use a number on both sides, e.g. `on ? Date.now() : 0`.',
+  );
+
 /** Flow A's lite profile has Date.now() and no Date objects, and so does the AOT. */
 const dateObjectError = () =>
   aotError(
@@ -643,6 +650,9 @@ function emitExprImpl(node, env) {
             `AOT: "${op}" cannot mix a 64-bit time value with a string`,
             'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
           );
+        if (l.isBool || r.isBool) throw bool64Error(`"${op}"`);
+        // `l` is read twice, which is safe: AOT expressions have no side effects, and the engine clock only
+        // moves in er_tick(), so a second Date.now() in the same expression reads the same value.
         return {
           code:
             op === '||'
@@ -670,6 +680,8 @@ function emitExprImpl(node, env) {
         );
       const either = k => c.cType === k || a.cType === k;
       if (either('i64') && either('float')) throw mix64Error();
+      if (either('i64') && (c.isBool || a.isBool))
+        throw bool64Error('a ternary');
       const cType = either('float')
         ? 'float'
         : either('i64')
@@ -891,6 +903,13 @@ const printfSpec = cType =>
         : '%d';
 /** An expression as a printf argument: `%lld` needs a long long, and int64_t is `long` on 64-bit Linux. */
 const printfArg = e => (e.cType === 'i64' ? `(long long)(${e.code})` : e.code);
+
+/** C source with its string and char literals and its comments blanked, so a scan for a call sees only code. */
+const stripCLiterals = c =>
+  c.replace(
+    /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    ' ',
+  );
 const cTypeOfValue = v =>
   typeof v === 'string'
     ? 'string'
@@ -2853,10 +2872,13 @@ function compileTimerAdd(expr, env, state, ctx) {
       'AOT: a setInterval/setTimeout callback must be an inline function',
       'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).',
     );
-  // A delay computed from a timestamp is cast to int like any other; JS timers take 32-bit delays too.
-  const ms = expr.arguments[1]
-    ? emitExprWide(expr.arguments[1], env).code
-    : '0';
+  // A delay computed from a timestamp goes through ToInt32 and a floor at 0, as Flow A's setTimeout does.
+  const delay = expr.arguments[1] ? emitExprWide(expr.arguments[1], env) : null;
+  const ms = !delay
+    ? '0'
+    : delay.cType === 'i64'
+      ? `app_delay_ms64(${delay.code})`
+      : delay.code;
   const repeat = expr.callee.name === 'setInterval';
   const slot = ctx.out.timerFns.length;
   const name = `er_timer_fn_${slot}`;
@@ -7266,22 +7288,31 @@ static int16_t app_round_dim(double v)
       'app_max64',
       'static int64_t app_max64(int64_t a, int64_t b)\n{\n    return a > b ? a : b;\n}',
     ],
+    [
+      'app_delay_ms64',
+      '/* A timer delay computed from a timestamp: ToInt32 (wrap to 32 bits), then a negative delay is 0 — the\n' +
+        "   conversion Flow A's setTimeout applies. */\n" +
+        'static int app_delay_ms64(int64_t v)\n{\n    const uint32_t u = (uint32_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
   ];
-  // The generated code that can call a file-local helper. Each static helper is emitted only when this
-  // calls it, since an unused static function warns under -Wall.
-  const helperCallers = [
-    stateBlock,
-    refDecls,
-    vectorBuilderBlock,
-    updateBlock,
-    handlerDefs,
-    queryDefs,
-    effectFnDefs,
-    animCbDefs,
-    timerFnDefs,
-    out.mountEffects.join('\n'),
-    out.build.join('\n'),
-  ].join('\n');
+  // The generated code that can call a file-local helper, with literals and comments blanked so a
+  // `<Text>app_date_now(</Text>` is not a call. Each static helper is emitted only when this calls it, since
+  // an unused static function warns under -Wall.
+  const helperCallers = stripCLiterals(
+    [
+      stateBlock,
+      refDecls,
+      vectorBuilderBlock,
+      updateBlock,
+      handlerDefs,
+      queryDefs,
+      effectFnDefs,
+      animCbDefs,
+      timerFnDefs,
+      out.mountEffects.join('\n'),
+      out.build.join('\n'),
+    ].join('\n'),
+  );
   const clockBlock = [
     '/* Date.now() is the engine clock plus this offset, so it reads as uptime until the host calls\n' +
       '   er_app_set_wall_clock(). performance.now() is the engine clock alone. */\n' +

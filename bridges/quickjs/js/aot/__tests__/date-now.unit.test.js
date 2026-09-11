@@ -275,14 +275,14 @@ export function App() {
     const c = gen(
       app(
         `const [t, setT] = useState(0);
-  const [on, setOn] = useState(false);`,
-        '<Pressable onPress={() => { setT(Date.now() || 0); setT(on && Date.now()); }}><Text>{t}</Text></Pressable>',
+  const [n, setN] = useState(0);`,
+        '<Pressable onPress={() => { setT(Date.now() || 0); setT(n && Date.now()); }}><Text>{t}</Text></Pressable>',
       ),
     );
     expect(c).toContain('    int64_t t;');
     expect(c).toContain('s_state.t = (app_date_now() ? app_date_now() : 0);');
     expect(c).toContain(
-      's_state.t = (s_state.on ? app_date_now() : s_state.on);',
+      's_state.t = (s_state.n ? app_date_now() : s_state.n);',
     );
   });
 
@@ -316,5 +316,41 @@ export function App() {
     expect(c).toMatch(
       /void er_app_tick\(int dt_ms\)\n\{[\s\S]*?if \(s_wall_clock_changed\)\n {4}\{\n {8}s_wall_clock_changed = 0;\n {8}app_update\(\);/,
     );
+  });
+
+  it('refuses a boolean paired with a timestamp, where JS would keep the boolean', () => {
+    const withOn = jsx =>
+      gen(
+        app(
+          'const [t, setT] = useState(0);\n  const [on, setOn] = useState(false);',
+          `<Pressable onPress={() => setT(${jsx})}><Text>{t}</Text></Pressable>`,
+        ),
+      );
+    expect(() => withOn('on && Date.now()')).toThrow(
+      /"&&" cannot mix a boolean/,
+    );
+    expect(() => withOn('Date.now() || false')).toThrow(
+      /"\|\|" cannot mix a boolean/,
+    );
+    expect(() => withOn('on ? Date.now() : false')).toThrow(
+      /a ternary cannot mix a boolean/,
+    );
+    // A number on both sides is fine.
+    expect(withOn('on ? Date.now() : 0')).toContain(
+      's_state.t = (s_state.on ? app_date_now() : 0);',
+    );
+  });
+
+  it('converts a timer delay computed from a timestamp the way Flow A does', () => {
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setTimeout(() => setT(0), t - Date.now()); }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain(
+      'er_timer_add((int)(app_delay_ms64((s_state.t - app_date_now()))), false, er_timer_fn_0)',
+    );
+    expect(c).toContain('static int app_delay_ms64(int64_t v)');
   });
 });

@@ -205,6 +205,54 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `helper names inside text do not pull in unused helpers (${CC || 'no cc found'})`,
+    () => {
+      // The scan for helper calls must not read string literals: this text names four helpers and the app
+      // calls none of them.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           useEffect(() => { setInterval(() => setN(v => v + 1), 1000); }, []);
+           return (
+             <View style={{ flex: 1 }}>
+               <Text>app_perf_now(</Text>
+               <Text>{'app_date_now( app_floordiv64( er_timer_clear( ' + n}</Text>
+             </View>
+           );
+         }`,
+        'literal-helpers',
+      );
+      expect(r.c).not.toContain('static int64_t app_date_now(void)');
+      expect(r.c).not.toContain('static void er_timer_clear(int id)');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-literal-helpers-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `a timer cleared only from a mount effect's cleanup passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // That cleanup is dropped (the app never unmounts), so nothing calls er_timer_clear — and a static
@@ -273,6 +321,7 @@ describe('AOT generated C compiles', () => {
                  <Text>{t}</Text>
                </Pressable>
                <Pressable onPress={() => setT(Date.now() || 0)}><Text>now</Text></Pressable>
+               <Pressable onPress={() => setTimeout(() => setSec(0), t - Date.now())}><Text>later</Text></Pressable>
                <Text>{'up ' + Math.max(0, Math.abs(performance.now() - start.current)) + ' ms'}</Text>
                <Text>{Math.floor(Date.now() / 60000) % 60}</Text>
                <View style={{ width: Date.now() % 100, height: 4 }} />

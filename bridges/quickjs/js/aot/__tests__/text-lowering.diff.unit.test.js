@@ -437,3 +437,59 @@ export function App() {
     },
   );
 });
+
+describe('AOT timer delay from a timestamp matches Flow A', () => {
+  // Flow A's setTimeout runs its delay through JS_ToInt32 and floors a negative at 0 (timer_register in
+  // native_ui_bridge.c); app_delay_ms64 has to land on the same number.
+  const VALUES = [
+    0, 1, 1000, 2147483647, 2147483648, 4294967295, 4294967301, -1, -1000,
+    1700000123456, -1700000123456,
+  ];
+
+  (CC ? it : it.skip)(
+    `converts every delay the way Flow A does (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [t, setT] = useState(0);
+  return (<Pressable onPress={() => { setT(Date.now()); setTimeout(() => setT(0), t - Date.now()); }}><Text>{t}</Text></Pressable>);
+}`,
+        'delay64',
+      ).c;
+      expect(c).toContain('er_timer_add((int)(app_delay_ms64(');
+      const def = c.match(
+        /static int app_delay_ms64\(int64_t v\)\n\{[\s\S]*?\n\}\n/,
+      );
+      expect(def, 'no app_delay_ms64 emitted').toBeTruthy();
+
+      const prog =
+        '#include <stdint.h>\n#include <stdio.h>\n' +
+        def[0] +
+        'int main(void){\n' +
+        VALUES.map(v => `  printf("%d\\n", app_delay_ms64(${v}LL));`).join(
+          '\n',
+        ) +
+        '\n  return 0; }\n';
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-delay64-'));
+      try {
+        const src = join(dir, 'delay.c');
+        const bin = join(dir, 'delay');
+        writeFileSync(src, prog);
+        const build = spawnSync(
+          CC,
+          ['-Wall', '-Wextra', '-Werror', '-o', bin, src],
+          {encoding: 'utf8'},
+        );
+        expect(build.stderr || '').toBe('');
+        expect(build.status).toBe(0);
+        const got = execFileSync(bin, {encoding: 'utf8'}).trim().split('\n');
+        const want = VALUES.map(v => String(Math.max(0, v | 0)));
+        expect(got).toEqual(want);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+});
