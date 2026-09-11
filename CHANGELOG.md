@@ -65,6 +65,11 @@ See the README for the release process.
 
 ### Fixed
 
+- A Flow B list setter's `items.slice(0, n)` now keeps what JS keeps, with a negative `n` counting back
+  from the end. It used to leave the list's count negative, so the next append wrote outside the array.
+  `items.slice(0)` no longer crashes the compiler, and a slice that does not start at 0 is now a compiler
+  error instead of being treated as one that does.
+
 - Integer division and float-to-int conversion in Flow B no longer hit undefined behavior in the generated
   C. A zero divisor gives JS's answer kept whole (`x % 0` is 0, `x / 0` saturates), and a float that is NaN
   or out of range becomes 0 or the nearest int. `Math.round` now rounds halves up as JS does, and a

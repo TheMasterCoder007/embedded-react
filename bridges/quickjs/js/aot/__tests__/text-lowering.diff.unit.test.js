@@ -245,6 +245,20 @@ function buildAndRun(prog, tag) {
   }
 }
 
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+/** An int as a C literal: `-2147483648` is `-` applied to a number too big for an int. */
+const cInt = v => (v === INT_MIN ? '(-2147483647 - 1)' : String(v));
+/** A float as a C literal, the value rounded to float first as the C state holds it. */
+const cFloat = v =>
+  Number.isNaN(v)
+    ? 'NAN'
+    : v === Infinity
+      ? 'INFINITY'
+      : v === -Infinity
+        ? '-INFINITY'
+        : `${Math.fround(v).toExponential()}f`;
+
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
   val === null || val === undefined || typeof val === 'boolean'
@@ -747,8 +761,6 @@ export function App() {
 });
 
 describe('AOT integer division and float conversion give JS’s answer, kept whole', () => {
-  const INT_MIN = -(2 ** 31);
-  const INT_MAX = 2 ** 31 - 1;
   /** A JS number as an int slot keeps it: truncated toward zero, saturated at the int range, NaN as 0. */
   const toInt = x =>
     Number.isNaN(x)
@@ -758,15 +770,6 @@ describe('AOT integer division and float conversion give JS’s answer, kept who
         : x <= INT_MIN
           ? INT_MIN
           : Math.trunc(x);
-  const cInt = v => (v === INT_MIN ? '(-2147483647 - 1)' : String(v));
-  const cFloat = v =>
-    Number.isNaN(v)
-      ? 'NAN'
-      : v === Infinity
-        ? 'INFINITY'
-        : v === -Infinity
-          ? '-INFINITY'
-          : `${Math.fround(v).toExponential()}f`;
 
   /** `expr` as a <Text> child of an app declaring `decls`: its snprintf args, and the helpers it defines. */
   const textCall = (decls, expr) => {
@@ -1040,6 +1043,127 @@ export function App() {
       expect(VALUES.map((_, i) => got.get(i))).toEqual(
         VALUES.map(v => String(byte(v))),
       );
+    },
+  );
+});
+
+describe('AOT list slice keeps what JS keeps', () => {
+  (CC ? it : it.skip)(
+    `app_slice_len gives the length Array.prototype.slice(0, end) leaves (${CC || 'no cc found'})`,
+    () => {
+      // A float end reaches the helper through app_f2i, so both come from an app with one.
+      const c = compileSource(
+        `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [f, setF] = useState(0.5);
+  const [items, setItems] = useState([{w: 1}]);
+  return (<Pressable onPress={() => setItems(items.slice(0, f))}><Text>x</Text></Pressable>);
+}`,
+        'slice-len',
+      ).c;
+      const defs = helperDefs(c);
+      expect(defs.has('app_slice_len'), 'no app_slice_len emitted').toBe(true);
+      const ENDS = [
+        INT_MIN,
+        -17,
+        -16,
+        -4,
+        -3,
+        -2,
+        -1,
+        0,
+        1,
+        2,
+        3,
+        4,
+        16,
+        17,
+        INT_MAX,
+      ];
+      const FLOATS = [NaN, Infinity, -Infinity, -1.5, -0.5, 1.5, 2.99];
+      const cases = [];
+      for (const len of [0, 1, 3, 16]) {
+        for (const end of ENDS) cases.push({len, end, arg: cInt(end)});
+        for (const end of FLOATS)
+          cases.push({len, end, arg: `app_f2i(${cFloat(end)})`});
+      }
+      const calls = cases.map(k => `app_slice_len(${k.len}, ${k.arg})`);
+      const prog =
+        HELPER_INCLUDES +
+        usedHelpers(defs, calls) +
+        'int main(void){\n' +
+        calls
+          .map((call, i) => `  printf("%d\\t%d\\n", ${i}, ${call});`)
+          .join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'slice-len');
+      const bad = cases
+        .map((k, i) => {
+          const want = String(new Array(k.len).fill(0).slice(0, k.end).length);
+          return got.get(i) === want
+            ? null
+            : `slice(0, ${k.end}) of ${k.len}: C=${got.get(i)} want=${want}`;
+        })
+        .filter(Boolean);
+      expect(bad).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a negative runtime slice end leaves a count the next append stays inside (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+import {View, Text, Pressable} from 'embedded-react';
+export function App() {
+  const [k, setK] = useState(-2);
+  const [items, setItems] = useState([{w: 1}, {w: 2}, {w: 3}]);
+  return (<View>
+    <Pressable onPress={() => setItems(items.slice(0, k))}><Text>trim</Text></Pressable>
+    <Pressable onPress={() => setItems([...items, {w: 4}])}><Text>add</Text></Pressable>
+  </View>);
+}`,
+        'slice-append',
+      ).c;
+      const trim = c.match(
+        / {4}s_items_count = app_slice_len\(s_items_count, s_state\.k\);\n/,
+      );
+      const add = c.match(
+        / {4}if \(s_items_count < 16\)\n {4}\{\n[\s\S]*?\n {4}\}\n/,
+      );
+      expect(trim, 'no slice emitted').toBeTruthy();
+      expect(add, 'no append emitted').toBeTruthy();
+      // UBSan's bounds check is what catches an append through a negative count.
+      const KS = [-2, -1, -3, -5, 0, 2, 5, INT_MIN, INT_MAX];
+      let prog =
+        HELPER_INCLUDES +
+        usedHelpers(helperDefs(c), [trim[0]]) +
+        'typedef struct { int w; } Item;\nstatic Item s_items[16];\nstatic int s_items_count;\n' +
+        'struct St { int k; };\n';
+      KS.forEach((k, i) => {
+        prog +=
+          `static void case_${i}(void){ struct St S = {${cInt(k)}};\n` +
+          '    s_items[0].w = 1; s_items[1].w = 2; s_items[2].w = 3; s_items_count = 3;\n' +
+          trim[0].replace(/s_state\./g, 'S.') +
+          add[0] +
+          `    printf("%d\\t%d", ${i}, s_items_count);\n` +
+          '    for (int j = 0; j < s_items_count; j++) printf(" %d", s_items[j].w);\n' +
+          '    printf("\\n"); }\n';
+      });
+      prog +=
+        'int main(void){\n' +
+        KS.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'slice-append');
+      const bad = KS.map((k, i) => {
+        const items = [1, 2, 3].slice(0, k).concat([4]);
+        const want = [items.length, ...items].join(' ');
+        return got.get(i) === want
+          ? null
+          : `k=${k}: C=${got.get(i)} want=${want}`;
+      }).filter(Boolean);
+      expect(bad).toEqual([]);
     },
   );
 });

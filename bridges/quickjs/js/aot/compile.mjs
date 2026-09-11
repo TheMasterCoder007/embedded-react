@@ -2452,25 +2452,36 @@ function compileListOp(rec, arg, env) {
     }
     return lines;
   }
-  // setItems(items.slice(0, X)) — slice(0,-1) pops the last; slice(0,n) truncates to n.
+  // setItems(items.slice(0, end)) keeps the first items, counted as JS counts them: a negative end counts back
+  // from the length and stops at 0, and an end past the length (or none) keeps every item.
   if (
     arg.type === 'CallExpression' &&
     arg.callee.type === 'MemberExpression' &&
     arg.callee.object.name === rec.name &&
     arg.callee.property.name === 'slice'
   ) {
-    const end = arg.arguments[1];
-    if (
-      end?.type === 'UnaryExpression' &&
-      end.operator === '-' &&
-      end.argument.value === 1
-    )
-      return [`    if (${cnt} > 0) ${cnt}--;`];
-    const e = asInt(emitExpr(end, env));
-    return [`    ${cnt} = (${cnt} < (${e})) ? ${cnt} : (${e});`];
+    const [start, end] = arg.arguments;
+    if (start && staticInt(start, env) !== 0)
+      throw aotError(
+        `AOT: only ${rec.name}.slice(0, end) is supported on a list`,
+        `a list is a fixed C array and a count, so a slice can only drop items from the end — e.g. ${rec.name}.slice(0, -1) drops the last one.`,
+      );
+    if (!end) return [];
+    // A constant end is settled here. Past the capacity it keeps every item either way, so it is clamped
+    // there and never needs 64-bit math.
+    const k = staticInt(end, env);
+    if (k !== null) {
+      const kk = Math.max(-cap, Math.min(cap, k));
+      if (kk === -1) return [`    if (${cnt} > 0) ${cnt}--;`];
+      if (kk >= 0) return [`    ${cnt} = (${cnt} < ${kk}) ? ${cnt} : ${kk};`];
+      return [`    ${cnt} = app_slice_len(${cnt}, ${kk});`];
+    }
+    return [
+      `    ${cnt} = app_slice_len(${cnt}, ${asInt(emitExpr(end, env))});`,
+    ];
   }
   throw new Error(
-    `AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`,
+    `AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, n), or [])`,
   );
 }
 
@@ -7552,6 +7563,14 @@ static int16_t app_round_dim(double v)
         'static int app_delay_msf(float v)\n{\n' +
         '    if (!(v > -9223372036854775808.0f && v < 9223372036854775808.0f))\n    {\n        return 0;\n    }\n' +
         '    const uint32_t u = (uint32_t)(int64_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
+    [
+      'app_slice_len',
+      '/* The length items.slice(0, end) leaves, as JS counts it: a negative end counts back from the length and\n' +
+        '   stops at 0, and an end past the length keeps every item. */\n' +
+        'static int app_slice_len(int len, int end)\n{\n' +
+        '    if (end < 0)\n    {\n        return end <= -len ? 0 : len + end;\n    }\n' +
+        '    return end < len ? end : len;\n}',
     ],
   ];
   // The generated code that can call a file-local helper, with literals and comments blanked so a

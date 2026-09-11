@@ -1388,7 +1388,9 @@ describe('AOT arithmetic semantics', () => {
       's_ref_r = app_f2i(((float)(s_ref_r) / (float)(s_state.f)));',
     );
     expect(c).toMatch(/s_items\[[^\]]+\]\.w = app_f2i\(s_state\.f\);/);
-    expect(c).toMatch(/ = \(\S+ < \(app_f2i\(s_state\.f\)\)\) \?/);
+    expect(c).toContain(
+      's_items_count = app_slice_len(s_items_count, app_f2i(s_state.f));',
+    );
     expect(c).toContain('if (v >= 2147483648.0f)');
     expect(c).toContain('if (v != v)');
   });
@@ -4384,5 +4386,62 @@ import { View, StyleSheet } from 'embedded-react';
       }`);
     expect(e.message).toMatch(/style "shadowOpacity" is not supported/);
     expect(e.aotLoc).toBeTruthy();
+  });
+});
+
+describe('AOT list setters', () => {
+  const app = body =>
+    gen(`${PRE}
+      export function App() {
+        const [k, setK] = useState(-2);
+        const [f, setF] = useState(0.5);
+        const [items, setItems] = useState([{w: 1}, {w: 2}, {w: 3}]);
+        return (<Pressable onPress={() => { ${body} }}><Text>x</Text></Pressable>);
+      }`);
+
+  // A negative count would send the next append to s_items[-n], outside the array.
+  it('keeps the count in range for a runtime slice end, counting a negative one back from the length', () => {
+    const c = app('setItems(items.slice(0, k));');
+    expect(c).toContain(
+      's_items_count = app_slice_len(s_items_count, s_state.k);',
+    );
+    expect(c).toContain('static int app_slice_len(int len, int end)');
+    expect(c).toContain('return end <= -len ? 0 : len + end;');
+  });
+
+  it('settles a constant slice end at compile time', () => {
+    const c = app(
+      'setItems(items.slice(0, 2)); setItems(items.slice(0, -1)); setItems(items.slice(0, -2)); setItems(items.slice(0, 1e12));',
+    );
+    expect(c).toContain(
+      's_items_count = (s_items_count < 2) ? s_items_count : 2;',
+    );
+    expect(c).toContain('if (s_items_count > 0) s_items_count--;');
+    expect(c).toContain('s_items_count = app_slice_len(s_items_count, -2);');
+    // Past the capacity an end keeps every item, so a huge one clamps there and needs no 64-bit math.
+    expect(c).toContain(
+      's_items_count = (s_items_count < 16) ? s_items_count : 16;',
+    );
+  });
+
+  it('truncates a float slice end the way JS does', () => {
+    expect(app('setItems(items.slice(0, f));')).toContain(
+      's_items_count = app_slice_len(s_items_count, app_f2i(s_state.f));',
+    );
+  });
+
+  it('keeps every item for slice(0) and slice()', () => {
+    const c = app('setItems(items.slice(0)); setItems(items.slice());');
+    expect(c).not.toMatch(/^\s+s_items_count\b/m);
+    expect(c).not.toContain('app_slice_len');
+  });
+
+  it('refuses a slice that drops items from the front', () => {
+    expect(() => app('setItems(items.slice(1, 3));')).toThrow(
+      /only items\.slice\(0, end\) is supported/,
+    );
+    expect(() => app('setItems(items.slice(k));')).toThrow(
+      /only items\.slice\(0, end\) is supported/,
+    );
   });
 });
