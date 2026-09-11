@@ -185,7 +185,7 @@ const usedHelpers = (defs, calls) =>
     .join('');
 
 const HELPER_INCLUDES =
-  '#include <limits.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n';
+  '#include <limits.h>\n#include <math.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n';
 
 /**
  * UBSan flags that build here, or none. With them a signed overflow that gets through aborts the run
@@ -208,6 +208,42 @@ const UBSAN = (() => {
     rmSync(dir, {recursive: true, force: true});
   }
 })();
+
+/** Builds `prog` under -Werror, with UBSan where it builds, and runs it: `index\ttext` lines → Map. */
+function buildAndRun(prog, tag) {
+  const dir = mkdtempSync(join(tmpdir(), `er-aot-${tag}-`));
+  try {
+    const src = join(dir, `${tag}.c`);
+    const bin = join(dir, tag);
+    writeFileSync(src, prog);
+    const build = spawnSync(
+      CC,
+      [
+        '-Wall',
+        '-Wextra',
+        '-Wformat',
+        '-Werror',
+        ...UBSAN,
+        '-o',
+        bin,
+        src,
+        '-lm',
+      ],
+      {encoding: 'utf8'},
+    );
+    expect(build.stderr || '').toBe('');
+    expect(build.status).toBe(0);
+    const got = new Map();
+    for (const line of execFileSync(bin, {encoding: 'utf8'}).split('\n')) {
+      if (!line) continue;
+      const t = line.indexOf('\t');
+      got.set(Number(line.slice(0, t)), line.slice(t + 1));
+    }
+    return got;
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+}
 
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
@@ -550,32 +586,6 @@ export function App() {
 });
 
 describe('AOT whole-number overflow saturates', () => {
-  /** Builds `prog` under -Werror, with UBSan where it builds, and runs it: `index\ttext` lines → Map. */
-  function buildAndRun(prog, tag) {
-    const dir = mkdtempSync(join(tmpdir(), `er-aot-${tag}-`));
-    try {
-      const src = join(dir, `${tag}.c`);
-      const bin = join(dir, tag);
-      writeFileSync(src, prog);
-      const build = spawnSync(
-        CC,
-        ['-Wall', '-Wextra', '-Wformat', '-Werror', ...UBSAN, '-o', bin, src],
-        {encoding: 'utf8'},
-      );
-      expect(build.stderr || '').toBe('');
-      expect(build.status).toBe(0);
-      const got = new Map();
-      for (const line of execFileSync(bin, {encoding: 'utf8'}).split('\n')) {
-        if (!line) continue;
-        const t = line.indexOf('\t');
-        got.set(Number(line.slice(0, t)), line.slice(t + 1));
-      }
-      return got;
-    } finally {
-      rmSync(dir, {recursive: true, force: true});
-    }
-  }
-
   // One operator each, so the model is the exact result clamped to the type's range. JS would keep the
   // bigger number; what is pinned here is that C gives a defined one.
   const EXPRS = [
@@ -587,6 +597,8 @@ describe('AOT whole-number overflow saturates', () => {
     ['n * n', n => n * n],
     ['n * -1', n => -n],
     ['-n', n => -n],
+    // The minimum % -1 overflows in C; the answer is 0 for every n.
+    ['n % -1', () => 0n],
   ];
   // Each minimum is spelled the way C needs it: `-2147483648` is `-` applied to a number too big for an int.
   const WIDTHS = {
@@ -623,7 +635,11 @@ describe('AOT whole-number overflow saturates', () => {
         2n ** 63n - 1n,
         -(2n ** 63n),
       ],
-      exprs: [...EXPRS, ['Math.abs(n)', n => (n < 0n ? -n : n)]],
+      exprs: [
+        ...EXPRS,
+        ['Math.abs(n)', n => (n < 0n ? -n : n)],
+        ['Math.floor(n / -1)', n => -n],
+      ],
       // Storing Date.now() widens `n` to int64_t.
       body: expr =>
         `<Pressable onPress={() => setN(Date.now())}><Text>{${expr}}</Text></Pressable>`,
@@ -725,6 +741,304 @@ export function App() {
         '    printf("0\\tt=%lld n=%d\\n", (long long)S.t, S.n);\n    return 0; }\n';
       expect(buildAndRun(prog, 'handler-overflow').get(0)).toBe(
         't=9223372036854775807 n=2147483647',
+      );
+    },
+  );
+});
+
+describe('AOT integer division and float conversion give JS’s answer, kept whole', () => {
+  const INT_MIN = -(2 ** 31);
+  const INT_MAX = 2 ** 31 - 1;
+  /** A JS number as an int slot keeps it: truncated toward zero, saturated at the int range, NaN as 0. */
+  const toInt = x =>
+    Number.isNaN(x)
+      ? 0
+      : x >= 2 ** 31
+        ? INT_MAX
+        : x <= INT_MIN
+          ? INT_MIN
+          : Math.trunc(x);
+  const cInt = v => (v === INT_MIN ? '(-2147483647 - 1)' : String(v));
+  const cFloat = v =>
+    Number.isNaN(v)
+      ? 'NAN'
+      : v === Infinity
+        ? 'INFINITY'
+        : v === -Infinity
+          ? '-INFINITY'
+          : `${Math.fround(v).toExponential()}f`;
+
+  /** `expr` as a <Text> child of an app declaring `decls`: its snprintf args, and the helpers it defines. */
+  const textCall = (decls, expr) => {
+    const c = compileSource(
+      `import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  ${decls}
+  return (<Text>{${expr}}</Text>);
+}`,
+      'divconv',
+    ).c;
+    const m = c.match(MODES.child.re);
+    expect(m, `${expr}: no snprintf emitted`).toBeTruthy();
+    return {call: m[1].replace(/s_state\./g, 'S.'), defs: helperDefs(c)};
+  };
+
+  /** Runs each case's snprintf over its own `struct St` initializer; returns the ones that differ. */
+  const runText = (tag, fields, cases, defs) => {
+    let prog =
+      HELPER_INCLUDES +
+      GENERATED_PRAGMAS +
+      usedHelpers(
+        defs,
+        cases.map(c => c.call),
+      );
+    prog += `struct St { ${fields} };\n`;
+    cases.forEach((c, i) => {
+      prog +=
+        `static void case_${i}(void){ struct St S = {${c.init}}; (void)S;\n` +
+        `  char b[64]; snprintf(b, sizeof b, ${c.call}); printf("%d\\t%s\\n", ${i}, b); }\n`;
+    });
+    prog +=
+      'int main(void){\n' +
+      cases.map((_, i) => `  case_${i}();`).join('\n') +
+      '\n  return 0; }\n';
+    const got = buildAndRun(prog, tag);
+    return cases
+      .map((c, i) => ({...c, got: got.get(i)}))
+      .filter(c => c.got !== c.want)
+      .map(c => `${c.label}: C=${c.got} want=${c.want}`);
+  };
+
+  (CC ? it : it.skip)(
+    `% by a runtime divisor, zero and -1 included (${CC || 'no cc found'})`,
+    () => {
+      const {call, defs} = textCall(
+        'const [n, setN] = useState(7);\n  const [d, setD] = useState(3);',
+        'n % d',
+      );
+      const PAIRS = [
+        [7, 3],
+        [-7, 3],
+        [7, -3],
+        [-7, -3],
+        [5, 1],
+        [7, 0],
+        [0, 0],
+        [-7, 0],
+        [INT_MIN, -1],
+        [INT_MAX, -1],
+        [INT_MIN, 0],
+        [INT_MIN, 3],
+      ];
+      const cases = PAIRS.map(([n, d]) => ({
+        label: `${n} % ${d}`,
+        init: `${cInt(n)}, ${cInt(d)}`,
+        call,
+        want: String(toInt(n % d)),
+      }));
+      expect(runText('mod', 'int n; int d;', cases, defs)).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `Math.floor / ceil / round of a float, NaN and infinities included (${CC || 'no cc found'})`,
+    () => {
+      // Floats the C state holds exactly, and the halves where roundf and JS disagree.
+      const VALUES = [
+        0,
+        0.5,
+        -0.5,
+        1.5,
+        -1.5,
+        2.5,
+        -2.5,
+        0.49999997,
+        -0.49999997,
+        1e10,
+        -1e10,
+        2147483520,
+        2147483648,
+        -2147483648,
+        -2147483904,
+        NaN,
+        Infinity,
+        -Infinity,
+      ];
+      const defs = new Map();
+      const cases = [];
+      for (const fn of ['floor', 'ceil', 'round']) {
+        const t = textCall('const [f, setF] = useState(0.5);', `Math.${fn}(f)`);
+        for (const [k, def] of t.defs) defs.set(k, def);
+        for (const v of VALUES)
+          cases.push({
+            label: `Math.${fn}(${v})`,
+            init: cFloat(v),
+            call: t.call,
+            want: String(toInt(Math[fn](Math.fround(v)))),
+          });
+      }
+      expect(runText('rounding', 'float f;', cases, defs)).toEqual([]);
+      // An int is already whole, and stays exact past 2^24, where a float round trip would not.
+      const r = textCall('const [n, setN] = useState(0);', 'Math.round(n)');
+      const ints = [16777217, INT_MAX, INT_MIN].map(n => ({
+        label: `Math.round(${n})`,
+        init: cInt(n),
+        call: r.call,
+        want: String(n),
+      }));
+      expect(runText('rounding-int', 'int n;', ints, r.defs)).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a handler storing a float, and dividing an int ref, keeps JS's answer whole (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState, useRef} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const [f, setF] = useState(0.5);
+  const [d, setD] = useState(0);
+  const q = useRef(0);
+  const m = useRef(0);
+  const g = useRef(0);
+  return (<Pressable onPress={() => { setN(f); q.current /= d; m.current %= d; g.current = f * 1000; }}><Text>{n}</Text></Pressable>);
+}`,
+        'handler-divconv',
+      ).c;
+      const body = c.match(
+        / {4}s_state\.n = [^\n]+\n {4}s_ref_q = [^\n]+\n {4}s_ref_m = [^\n]+\n {4}s_ref_g = [^\n]+\n/,
+      );
+      expect(body, 'no handler statements emitted').toBeTruthy();
+      // [f, d, q and m's starting value]
+      const CASES = [
+        [NaN, 0, 7],
+        [3e9, 0, -7],
+        [-3e9, -1, INT_MIN],
+        [2.75, 2, 7],
+        [-2.75, -2, -7],
+        [Infinity, 0, 0],
+      ];
+      let prog =
+        HELPER_INCLUDES +
+        usedHelpers(helperDefs(c), [body[0]]) +
+        'struct St { int n; float f; int d; };\n';
+      CASES.forEach(([f, d, q], i) => {
+        prog +=
+          `static void case_${i}(void){ struct St S = {0, ${cFloat(f)}, ${cInt(d)}};\n` +
+          `    int s_ref_q = ${cInt(q)}, s_ref_m = ${cInt(q)}, s_ref_g = 0;\n` +
+          body[0].replace(/s_state\./g, 'S.') +
+          `    printf("%d\\t%d %d %d %d\\n", ${i}, S.n, s_ref_q, s_ref_m, s_ref_g); }\n`;
+      });
+      prog +=
+        'int main(void){\n' +
+        CASES.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'handler-divconv');
+      const bad = CASES.map(([f, d, q], i) => {
+        const x = Math.fround(f);
+        const want = [x, q / d, q % d, Math.fround(x * 1000)]
+          .map(v => String(toInt(v)))
+          .join(' ');
+        return got.get(i) === want
+          ? null
+          : `f=${f} d=${d} q=${q}: C=${got.get(i)} want=${want}`;
+      }).filter(Boolean);
+      expect(bad).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a float timer delay converts the way Flow A's setTimeout does (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [f, setF] = useState(0.5);
+  return (<Pressable onPress={() => setTimeout(() => setF(0), f * 1000)}><Text>{f}</Text></Pressable>);
+}`,
+        'delayf',
+      ).c;
+      const def = helperDefs(c).get('app_delay_msf');
+      expect(def, 'no app_delay_msf emitted').toBeTruthy();
+      // Flow A runs the delay through JS_ToInt32 and floors a negative at 0 (timer_register in
+      // native_ui_bridge.c); `| 0` is ToInt32.
+      const VALUES = [
+        0,
+        0.5,
+        1000.9,
+        -1,
+        2147483647,
+        4294968320,
+        1e20,
+        -1e10,
+        NaN,
+        Infinity,
+        -Infinity,
+      ];
+      const prog =
+        HELPER_INCLUDES +
+        def +
+        'int main(void){\n' +
+        VALUES.map(
+          (v, i) =>
+            `  printf("%d\\t%d\\n", ${i}, app_delay_msf(${cFloat(v)}));`,
+        ).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'delayf');
+      expect(VALUES.map((_, i) => got.get(i))).toEqual(
+        VALUES.map(v => String(Math.max(0, Math.fround(v) | 0))),
+      );
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a state-driven opacity clamps and rounds the way Flow A does (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const [f, setF] = useState(0.5);
+  return (<View style={{opacity: f}} />);
+}`,
+        'opacity',
+      ).c;
+      const def = helperDefs(c).get('app_opacity');
+      expect(def, 'no app_opacity emitted').toBeTruthy();
+      // Flow A's apply_opacity clamps to 0..1 and rounds to the byte; NaN, which it leaves to the cast, is 0.
+      const VALUES = [
+        -1,
+        0,
+        0.001,
+        0.25,
+        0.5,
+        0.999,
+        1,
+        2,
+        NaN,
+        Infinity,
+        -Infinity,
+      ];
+      const prog =
+        HELPER_INCLUDES +
+        def +
+        'int main(void){\n' +
+        VALUES.map(
+          (v, i) => `  printf("%d\\t%d\\n", ${i}, app_opacity(${cFloat(v)}));`,
+        ).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'opacity');
+      const clamp01 = v => Math.min(1, Math.max(0, Math.fround(v)));
+      const byte = v =>
+        Number.isNaN(v)
+          ? 0
+          : Math.floor(Math.fround(Math.fround(clamp01(v) * 255) + 0.5));
+      expect(VALUES.map((_, i) => got.get(i))).toEqual(
+        VALUES.map(v => String(byte(v))),
       );
     },
   );

@@ -667,6 +667,65 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `integer division and float conversion pass the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every division and conversion helper under -Wall -Wextra. app_roundf needs <math.h> though the app
+      // itself calls no libm function, so a missing include only shows up here.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Text, Pressable } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(7);
+           const [f, setF] = useState(0.5);
+           const q = useRef(9);
+           return (
+             <View style={{ flex: 1, opacity: f }}>
+               <Pressable onPress={() => { setN(n % q.current); q.current /= n; setN(f * 3); setTimeout(() => setF(0.25), f * 1000); }}>
+                 <Text>{Math.round(f)}</Text>
+               </Pressable>
+             </View>
+           );
+         }`,
+        'divconv',
+      );
+      for (const h of [
+        'static int app_mod(',
+        'static int app_div(',
+        'static int app_f2i(',
+        'static float app_roundf(',
+        'static uint8_t app_opacity(',
+        'static int app_delay_msf(',
+      ])
+        expect(r.c).toContain(h);
+      expect(r.c).toContain('#include <math.h>');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-divconv-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wextra',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
     () => {
       // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two

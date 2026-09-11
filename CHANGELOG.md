@@ -65,6 +65,11 @@ See the README for the release process.
 
 ### Fixed
 
+- Integer division and float-to-int conversion in Flow B no longer hit undefined behavior in the generated
+  C. A zero divisor gives JS's answer kept whole (`x % 0` is 0, `x / 0` saturates), and a float that is NaN
+  or out of range becomes 0 or the nearest int. `Math.round` now rounds halves up as JS does, and a
+  state-driven opacity clamps and rounds as Flow A does.
+
 - Whole-number `+`, `-` and `*` in Flow B no longer overflow into undefined behavior in the generated C.
   A result too big for its C type now saturates at the type's limit, and constant math is worked out at
   compile time, so `30 * DAY_MS` stays exact.

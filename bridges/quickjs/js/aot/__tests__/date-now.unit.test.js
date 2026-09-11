@@ -395,6 +395,20 @@ export function App() {
     expect(c).toContain('s_state.days = app_add(s_state.days, 1);');
   });
 
+  it('lowers a 64-bit `% -1` to 0 and Math.floor(t / -1) to a saturating negation', () => {
+    // INT64_MIN / -1 and INT64_MIN % -1 overflow in C; the divisor is a constant, so it is settled here.
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const r = useRef(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setT(Math.floor(t / -1)); setT(t % -1); r.current = Date.now(); r.current %= -1; }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_neg64(s_state.t);');
+    expect(c).toContain('s_state.t = 0;');
+    expect(c).toContain('s_ref_r = 0;');
+    expect(c).not.toContain('app_floordiv64');
+  });
+
   it('works int math stored into a 64-bit slot out in 64 bits', () => {
     const c = gen(
       app(

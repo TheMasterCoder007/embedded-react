@@ -438,7 +438,7 @@ function nonzeroDivisor(node, env) {
   const m = staticInt(node, env);
   if (m !== null && m !== 0) return m;
   const e = aotError(
-    'AOT: a 64-bit time value can only be divided by a nonzero constant',
+    'AOT: a 64-bit value can only be divided by a nonzero constant',
     'JS gives NaN or Infinity for a zero divisor, which an integer cannot hold, so the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
   );
   if (node.loc) e.aotLoc = node.loc.start;
@@ -447,9 +447,9 @@ function nonzeroDivisor(node, env) {
 
 /**
  * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. `%` takes a
- * nonzero constant, and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary
- * number again. `/` is refused: JS would give a fraction, and the whole-number division is written
- * Math.floor(a / b).
+ * nonzero constant, and the result narrows back to int when the divisor or the dividend fits one, so
+ * `ms % 1000` is an ordinary number again. `/` is refused: JS would give a fraction, and the whole-number
+ * division is written Math.floor(a / b).
  */
 function emitArith64(node, l, r, env) {
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
@@ -460,7 +460,9 @@ function emitArith64(node, l, r, env) {
     );
   if (node.operator === '%') {
     const m = nonzeroDivisor(node.right, env);
-    if (Math.abs(m) <= 0x7fffffff)
+    // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
+    if (m === 1 || m === -1) return {code: '0', cType: 'int'};
+    if (Math.abs(m) <= 0x7fffffff || l.cType === 'int')
       return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
     return {code: `(${l.code} % ${r.code})`, cType: 'i64'};
   }
@@ -494,7 +496,9 @@ function emitFloorDiv64(fn, args, env) {
       `AOT: Math.${fn}(a / b) on a 64-bit time value is not supported`,
       'use Math.floor(a / b), which stays exact in whole milliseconds.',
     );
-  nonzeroDivisor(arg.right, env);
+  // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
+  if (nonzeroDivisor(arg.right, env) === -1)
+    return {code: `app_neg64(${l.code})`, cType: 'i64'};
   return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
 }
 
@@ -622,13 +626,12 @@ function emitExprImpl(node, env) {
             'keep both operands numeric — a string cannot be coerced to a number here.',
           );
         }
-        // `/` and `%` take a 64-bit constant as an ordinary C number; only a runtime 64-bit value is held to
-        // the whole-millisecond rules.
+        // `/` takes a 64-bit constant as an ordinary C number; only a runtime 64-bit value is refused it.
         if (
           isTime64(l) ||
           isTime64(r) ||
           ((l.cType === 'i64' || r.cType === 'i64') &&
-            CHECKED_OP[node.operator])
+            (CHECKED_OP[node.operator] || node.operator === '%'))
         )
           return emitArith64(node, l, r, env);
         if (node.operator === '/')
@@ -643,6 +646,14 @@ function emitExprImpl(node, env) {
           return env.math64
             ? {code: `${fn}64(${l.code}, ${r.code})`, cType: 'i64'}
             : {code: `${fn}(${l.code}, ${r.code})`, cType: 'int'};
+        // JS gives NaN for `x % 0` (0 here, as a float would convert), and C overflows on INT_MIN % -1, whose
+        // answer is 0. A constant divisor other than those two needs no check.
+        if (cType === 'int' && node.operator === '%') {
+          const k = staticInt(node.right, env);
+          if (k === 0 || k === -1) return {code: '0', cType: 'int'};
+          if (k === null)
+            return {code: `app_mod(${l.code}, ${r.code})`, cType: 'int'};
+        }
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
       }
       if (COMPARE.has(node.operator)) {
@@ -908,15 +919,19 @@ function emitExprImpl(node, env) {
           tan: 'tanf',
           sqrt: 'sqrtf',
           abs: 'fabsf',
-          round: 'roundf',
+          round: 'app_roundf',
           floor: 'floorf',
           ceil: 'ceilf',
         };
         if (UNARY[fn] && a.length === 1) {
+          const whole = fn === 'round' || fn === 'floor' || fn === 'ceil';
+          // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
+          if (whole && a[0].cType === 'int')
+            return {code: a[0].code, cType: 'int'};
           const inner = `${UNARY[fn]}((float)(${a[0].code}))`;
-          // round/floor/ceil yield a whole number — cast to int so %d / int assignments are correct.
-          return fn === 'round' || fn === 'floor' || fn === 'ceil'
-            ? {code: `((int)${inner})`, cType: 'int'}
+          // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
+          return whole
+            ? {code: `app_f2i(${inner})`, cType: 'int'}
             : {code: inner, cType: 'float'};
         }
         const BINARY = {
@@ -2084,7 +2099,7 @@ function lowerDynamicStyleValue(key, valueNode, env) {
     throw err;
   }
   if (meta.kind === 'opacity')
-    return [{field: meta.field, code: `(uint8_t)((${e.code}) * 255.0f)`}];
+    return [{field: meta.field, code: `app_opacity(${e.code})`}];
   return [{field: meta.field, code: `app_round_dim(${e.code})`}]; /* num */
 }
 
@@ -2430,7 +2445,7 @@ function compileListOp(rec, arg, env) {
           );
         else
           lines.push(
-            `        ${arr}[${cnt}].${f.key} = ${emitExpr(valNode, env).code};`,
+            `        ${arr}[${cnt}].${f.key} = ${storeCode(emitExpr(valNode, env), f.kind)};`,
           );
       }
       lines.push(`        ${cnt}++;`, '    }');
@@ -2451,8 +2466,8 @@ function compileListOp(rec, arg, env) {
       end.argument.value === 1
     )
       return [`    if (${cnt} > 0) ${cnt}--;`];
-    const e = emitExpr(end, env);
-    return [`    ${cnt} = (${cnt} < (${e.code})) ? ${cnt} : (${e.code});`];
+    const e = asInt(emitExpr(end, env));
+    return [`    ${cnt} = (${cnt} < (${e})) ? ${cnt} : (${e});`];
   }
   throw new Error(
     `AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`,
@@ -2785,6 +2800,15 @@ function storeCheck(e, slotType, isBool, key, what, env) {
   if (slotType === 'i64' && e.cType === 'float') throw mix64Error();
 }
 
+/**
+ * `e` as C for an int destination. A float goes through app_f2i: C's own conversion is undefined behavior
+ * for NaN or a value past the int range.
+ */
+const asInt = e => (e.cType === 'float' ? `app_f2i(${e.code})` : e.code);
+
+/** `e` as C for a slot of `slotType`: an int slot takes a float the way asInt does. */
+const storeCode = (e, slotType) => (slotType === 'int' ? asInt(e) : e.code);
+
 /** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
  *  becomes a format + args), plain assign otherwise. */
 function scalarAssign(rec, node, env, indent) {
@@ -2802,7 +2826,7 @@ function scalarAssign(rec, node, env, indent) {
       `state "${rec.name}"`,
       env,
     );
-    return `${indent}${rec.cMember} = ${e.code};`;
+    return `${indent}${rec.cMember} = ${storeCode(e, rec.cType)};`;
   }
   const f = emitFormat(node, env);
   // snprintf's source and destination may not overlap (C11 7.21.6.6), and `setLabel(label + '!')` feeds
@@ -2944,7 +2968,7 @@ function compileUpdateVector(expr, env, ctx, indent) {
       throw new Error(
         'AOT: updateVector dirtyRect must be a [x, y, w, h] array literal',
       );
-    const [x, y, w, h] = dirtyArg.elements.map(el => emitExpr(el, env).code);
+    const [x, y, w, h] = dirtyArg.elements.map(el => asInt(emitExpr(el, env)));
     lines.push(
       `${indent}er_node_set_vector_dirty_rect(${ref.cVar}, ${x}, ${y}, ${w}, ${h});`,
     );
@@ -2961,13 +2985,16 @@ function compileTimerAdd(expr, env, state, ctx) {
       'AOT: a setInterval/setTimeout callback must be an inline function',
       'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).',
     );
-  // A delay computed from a timestamp goes through ToInt32 and a floor at 0, as Flow A's setTimeout does.
+  // A delay computed from a timestamp or a float goes through ToInt32 and a floor at 0, as Flow A's setTimeout
+  // does.
   const delay = expr.arguments[1] ? emitExprWide(expr.arguments[1], env) : null;
   const ms = !delay
     ? '0'
     : delay.cType === 'i64'
       ? `app_delay_ms64(${delay.code})`
-      : delay.code;
+      : delay.cType === 'float'
+        ? `app_delay_msf(${delay.code})`
+        : delay.code;
   const repeat = expr.callee.name === 'setInterval';
   const slot = ctx.out.timerFns.length;
   const name = `er_timer_fn_${slot}`;
@@ -3047,7 +3074,7 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       expr.callee.name === 'clearTimeout')
   ) {
     return [
-      `${indent}er_timer_clear(${emitExpr(expr.arguments[0], env).code});`,
+      `${indent}er_timer_clear(${asInt(emitExpr(expr.arguments[0], env))});`,
     ];
   }
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
@@ -3064,8 +3091,10 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
       );
-    if (expr.operator === '%=' && (r.cType === 'i64' || isTime64(e)))
-      nonzeroDivisor(expr.right, env);
+    const m =
+      expr.operator === '%=' && (r.cType === 'i64' || isTime64(e))
+        ? nonzeroDivisor(expr.right, env)
+        : null;
     storeCheck(
       e,
       r.cType,
@@ -3074,22 +3103,43 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       `ref "${expr.left.object.name}"`,
       env,
     );
-    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`.
+    const whole = r.cType === 'int' || r.cType === 'i64';
+    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`, and `/=` by a float
+    // divides as floats; a float result is stored the way any int slot stores one.
     const step = {'+=': '+', '-=': '-', '*=': '*'}[expr.operator];
-    if (step && (r.cType === 'int' || r.cType === 'i64')) {
+    if (whole && (step || (expr.operator === '/=' && e.cType === 'float'))) {
       const v = emitExprWide(
         {
           type: 'BinaryExpression',
-          operator: step,
+          operator: step ?? '/',
           left: expr.left,
           right: expr.right,
           loc: expr.loc,
         },
         refEnv,
       );
-      return [`${indent}${r.cVar} = ${v.code};`];
+      return [`${indent}${r.cVar} = ${storeCode(v, r.cType)};`];
     }
-    return [`${indent}${r.cVar} ${expr.operator} ${e.code};`];
+    // `/=` and `%=` on an int ref by an int give JS's answer, kept whole (app_div / app_mod). A constant
+    // divisor other than 0 and -1 needs no check.
+    if (
+      r.cType === 'int' &&
+      e.cType === 'int' &&
+      (expr.operator === '/=' || expr.operator === '%=')
+    ) {
+      const k = staticInt(expr.right, env);
+      if (expr.operator === '/=' && (k === null || k === 0 || k === -1))
+        return [`${indent}${r.cVar} = app_div(${r.cVar}, ${e.code});`];
+      if (expr.operator === '%=' && (k === 0 || k === -1))
+        return [`${indent}${r.cVar} = 0;`];
+      if (expr.operator === '%=' && k === null)
+        return [`${indent}${r.cVar} = app_mod(${r.cVar}, ${e.code});`];
+    }
+    // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
+    if (m === 1 || m === -1) return [`${indent}${r.cVar} = 0;`];
+    return [
+      `${indent}${r.cVar} ${expr.operator} ${expr.operator === '=' ? storeCode(e, r.cType) : e.code};`,
+    ];
   }
   // `ref.current++` / `ref.current--`; a whole-number ref steps through the checked `+ 1` / `- 1`.
   if (expr.type === 'UpdateExpression') {
@@ -7335,7 +7385,7 @@ static int16_t app_round_dim(double v)
   // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
   const usesMath =
     out.needsMath ||
-    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test(
+    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|app_roundf|M_PI)\b/.test(
       [
         stateBlock,
         refDecls,
@@ -7395,6 +7445,47 @@ static int16_t app_round_dim(double v)
         'static int app_neg(int a)\n{\n    return a == INT_MIN ? INT_MAX : -a;\n}',
     ],
     [
+      'app_mod',
+      "/* a % b as JS computes it, kept whole: the remainder has the dividend's sign, as in C. JS gives NaN\n" +
+        '   for b == 0, which is 0 here, and INT_MIN % -1 is 0, where C would overflow. */\n' +
+        'static int app_mod(int a, int b)\n{\n    return (b == 0 || b == -1) ? 0 : a % b;\n}',
+    ],
+    [
+      'app_div',
+      '/* a / b as JS computes it, kept whole: truncated toward zero, and saturated where JS gives +-Infinity\n' +
+        '   (b == 0) or a result past the int range (INT_MIN / -1). 0 / 0 is NaN, which is 0. */\n' +
+        'static int app_div(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT_MIN ? INT_MAX : -a;\n    }\n' +
+        '    return a / b;\n}',
+    ],
+    [
+      'app_f2i',
+      '/* A float kept as an int: truncated toward zero like a C cast, but saturated at the int range and NaN as\n' +
+        '   0, where the cast would be undefined behavior. */\n' +
+        'static int app_f2i(float v)\n{\n' +
+        '    if (v != v)\n    {\n        return 0;\n    }\n' +
+        '    if (v >= 2147483648.0f)\n    {\n        return INT_MAX;\n    }\n' +
+        '    if (v <= -2147483648.0f)\n    {\n        return INT_MIN;\n    }\n' +
+        '    return (int)v;\n}',
+    ],
+    [
+      'app_roundf',
+      "/* Math.round as JS rounds: to the nearest whole number, halves up (toward +Infinity). C's roundf takes\n" +
+        '   halves away from zero, which gives -3 for -2.5 where JS gives -2. */\n' +
+        'static float app_roundf(float v)\n{\n' +
+        '    const float f = floorf(v);\n    return v - f >= 0.5f ? f + 1.0f : f;\n}',
+    ],
+    [
+      'app_opacity',
+      "/* A state-driven opacity as the engine's 0-255 byte: clamped to 0..1 and rounded, as Flow A's bridge and\n" +
+        '   the compile-time fold do, with NaN as 0. */\n' +
+        'static uint8_t app_opacity(float v)\n{\n' +
+        '    if (!(v > 0.0f))\n    {\n        return 0;\n    }\n' +
+        '    if (v >= 1.0f)\n    {\n        return 255;\n    }\n' +
+        '    return (uint8_t)(v * 255.0f + 0.5f);\n}',
+    ],
+    [
       'app_add64',
       '/* a + b, saturated to the int64 range: C leaves a signed overflow undefined. */\n' +
         'static int64_t app_add64(int64_t a, int64_t b)\n{\n' +
@@ -7431,7 +7522,7 @@ static int16_t app_round_dim(double v)
     [
       'app_floordiv64',
       "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. b is a\n" +
-        '   nonzero constant; the compiler refuses any other divisor. */\n' +
+        '   nonzero constant other than -1, which the compiler lowers to a negation; it refuses any other divisor. */\n' +
         'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n' +
         '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n}',
     ],
@@ -7453,6 +7544,14 @@ static int16_t app_round_dim(double v)
       '/* A timer delay computed from a timestamp: ToInt32 (wrap to 32 bits), then a negative delay is 0 — the\n' +
         "   conversion Flow A's setTimeout applies. */\n" +
         'static int app_delay_ms64(int64_t v)\n{\n    const uint32_t u = (uint32_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
+    [
+      'app_delay_msf',
+      '/* A timer delay computed as a float, converted as app_delay_ms64 converts one: ToInt32 (NaN and +-Infinity\n' +
+        '   are 0), then a negative delay is 0. Past +-2^63 a float is a multiple of 2^32, which ToInt32 takes to 0. */\n' +
+        'static int app_delay_msf(float v)\n{\n' +
+        '    if (!(v > -9223372036854775808.0f && v < 9223372036854775808.0f))\n    {\n        return 0;\n    }\n' +
+        '    const uint32_t u = (uint32_t)(int64_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
     ],
   ];
   // The generated code that can call a file-local helper, with literals and comments blanked so a

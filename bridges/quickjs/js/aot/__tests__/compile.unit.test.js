@@ -745,7 +745,7 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect(c).toContain('#include <math.h>');
-    expect(c).toContain('(int)roundf('); // Math.round → int cast
+    expect(c).toContain('app_f2i(app_roundf('); // Math.round → a whole int
     expect(c).toContain('strcmp(s_state.sel, "a")'); // string equality + it.key folded to "a"
     expect(c).toContain('strcmp(s_state.sel, "b")'); // second unrolled .map iteration
   });
@@ -1307,7 +1307,7 @@ describe('AOT arithmetic semantics', () => {
         return (<Pressable onPress={() => { acc.current += 2; acc.current -= f; acc.current *= 3; acc.current--; pos.current += 1; pos.current++; setF(f * 2 - 1); }}><Text>{f}</Text></Pressable>);
       }`);
     expect(c).toContain('s_ref_acc = app_add(s_ref_acc, 2);');
-    expect(c).toContain('s_ref_acc = (s_ref_acc - s_state.f);');
+    expect(c).toContain('s_ref_acc = app_f2i((s_ref_acc - s_state.f));');
     expect(c).toContain('s_ref_acc = app_mul(s_ref_acc, 3);');
     expect(c).toContain('s_ref_acc = app_sub(s_ref_acc, 1);');
     expect(c).toContain('s_ref_pos += 1;');
@@ -1343,6 +1343,96 @@ describe('AOT arithmetic semantics', () => {
     expect(c).toContain('    int64_t n;');
     expect(c).toContain('s_state.n = app_mul64(s_state.n, 2999999000);');
     expect(c).toContain('s_state.f = (s_state.f * ((float)3000000000));');
+  });
+
+  // JS gives NaN or ±Infinity for a zero divisor, which an int cannot hold, and C traps or overflows. The
+  // answer is JS's, kept whole the way a float is: NaN → 0, ±Infinity → the int limit.
+  it('keeps integer % and /= by a runtime divisor defined', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [n, setN] = useState(7);
+        const [d, setD] = useState(0);
+        const q = useRef(9);
+        return (<Pressable onPress={() => { setN(n % d); q.current /= d; q.current %= d; setD(n % 24); setN(n % -1); q.current /= 4; q.current %= 5; q.current /= -1; q.current %= 0; }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.n = app_mod(s_state.n, s_state.d);');
+    expect(c).toContain('s_ref_q = app_div(s_ref_q, s_state.d);');
+    expect(c).toContain('s_ref_q = app_mod(s_ref_q, s_state.d);');
+    // A constant divisor other than 0 and -1 needs no check...
+    expect(c).toContain('s_state.d = (s_state.n % 24);');
+    expect(c).toContain('s_ref_q /= 4;');
+    expect(c).toContain('s_ref_q %= 5;');
+    // ...and those two leave no remainder, or only a quotient that saturates.
+    expect(c).toContain('s_state.n = 0;');
+    expect(c).toContain('s_ref_q = 0;');
+    expect(c).toContain('s_ref_q = app_div(s_ref_q, -1);');
+    expect(c).toContain('return (b == 0 || b == -1) ? 0 : a % b;');
+    expect(c).toContain('return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;');
+  });
+
+  it('stores a float in an int slot through a saturating conversion', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(0.5);
+        const [items, setItems] = useState([{w: 1}]);
+        const r = useRef(0);
+        return (<Pressable onPress={() => { setN(f * 2); r.current = f; r.current += f; r.current /= f; setItems([...items, {w: f}]); setItems(items.slice(0, f)); }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.n = app_f2i((s_state.f * 2));');
+    expect(c).toContain('s_ref_r = app_f2i(s_state.f);');
+    expect(c).toContain('s_ref_r = app_f2i((s_ref_r + s_state.f));');
+    expect(c).toContain(
+      's_ref_r = app_f2i(((float)(s_ref_r) / (float)(s_state.f)));',
+    );
+    expect(c).toMatch(/s_items\[[^\]]+\]\.w = app_f2i\(s_state\.f\);/);
+    expect(c).toMatch(/ = \(\S+ < \(app_f2i\(s_state\.f\)\)\) \?/);
+    expect(c).toContain('if (v >= 2147483648.0f)');
+    expect(c).toContain('if (v != v)');
+  });
+
+  it('rounds a float to an int like JS, and leaves an int as it is', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        const [f, setF] = useState(0.5);
+        return (<View><Text>{Math.round(f)}</Text><Text>{Math.floor(f)}</Text><Text>{Math.ceil(f)}</Text><Text>{Math.round(n) + Math.floor(n)}</Text></View>);
+      }`);
+    expect(c).toContain('"%d", app_f2i(app_roundf((float)(s_state.f)))');
+    expect(c).toContain('"%d", app_f2i(floorf((float)(s_state.f)))');
+    expect(c).toContain('"%d", app_f2i(ceilf((float)(s_state.f)))');
+    // No float round trip for an int, which would lose digits past 2^24.
+    expect(c).toContain('"%d", app_add(s_state.n, s_state.n)');
+    // Halves go up, as JS's Math.round does: floor, then one more at a remainder of 0.5.
+    expect(c).toContain('return v - f >= 0.5f ? f + 1.0f : f;');
+    expect(c).toContain('#include <math.h>');
+  });
+
+  it('converts a float opacity, timer delay and dirty rect the way Flow A does', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      import { Svg } from 'embedded-react';
+      export function App() {
+        const [f, setF] = useState(0.5);
+        const bar = useRef(null);
+        return (
+          <View style={{ opacity: f }}>
+            <Pressable onPress={() => { setTimeout(() => setF(0), f * 1000); updateVector(bar, [{ rect: [0, 0, f * 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}>
+              <Svg ref={bar} width={100} height={10} />
+            </Pressable>
+          </View>
+        );
+      }`);
+    expect(c).toContain('p.opacity = app_opacity(s_state.f);');
+    expect(c).toContain('return (uint8_t)(v * 255.0f + 0.5f);');
+    expect(c).toContain(
+      'er_timer_add((int)(app_delay_msf((s_state.f * 1000))), false, er_timer_fn_0)',
+    );
+    expect(c).toMatch(
+      /er_node_set_vector_dirty_rect\(\w+, 0, 0, app_f2i\(\(s_state\.f \* 100\)\), 10\);/,
+    );
   });
 
   // A dimension folded at compile time goes through Math.round; one driven by state used to be handed to
@@ -1396,7 +1486,7 @@ describe('AOT touch drag', () => {
     expect(c).toContain('ER_EVENT_TOUCH_MOVE');
     // onLayout rect: x/y stay, width/height map to ERRect w/h
     expect(c).toContain(
-      's_ref_cx = (data->layout_rect.x + ((float)(data->layout_rect.w) / (float)(2)));',
+      's_ref_cx = app_f2i((data->layout_rect.x + ((float)(data->layout_rect.w) / (float)(2))));',
     );
     // touch coord + ref read in the shared drag handler
     expect(c).toContain('static void er_cb_onDrag(');
@@ -1418,7 +1508,7 @@ describe('AOT touch drag', () => {
     expect(c).toContain('float v;'); // float struct field, not int
     expect(c).toContain('.v = 70.0f'); // valid C float literal (not 70f)
     expect(c).toContain('s_state.v = (s_state.v + 0.5f);');
-    expect(c).toContain('(int)roundf((float)(s_state.v))'); // displayed rounded
+    expect(c).toContain('app_f2i(app_roundf((float)(s_state.v)))'); // displayed rounded
   });
 
   it('keeps useState(70) an int slot (no decimal → no float widening)', () => {
@@ -2157,7 +2247,7 @@ describe('AOT Dial', () => {
     expect(c).toContain('p.arc_track_color = 0xFF30343Au;');
     expect(c).toContain('p.arc_indicator_color = 0xFFFF8800u;');
     expect(c).toMatch(/er_event_set\(n\d+, ER_EVENT_VALUE_CHANGE,/);
-    expect(c).toContain('s_state.temp = data->value;'); // onChange's v param = the engine's new value
+    expect(c).toContain('s_state.temp = app_f2i(data->value);'); // onChange's v param = the engine's new value
     expect(c).toContain('p.width = 200;');
   });
 
@@ -2216,8 +2306,8 @@ describe('AOT Dial', () => {
       /p\.gradient_stop_count = \(uint8_t\)\(\(.*\) \? 2 : 0\);/,
     );
     // Both handler params bind to the event payload — no object allocated on device.
-    expect(c).toContain('s_state.hi = data->value;');
-    expect(c).toContain('s_state.lo = data->value_start;');
+    expect(c).toContain('s_state.hi = app_f2i(data->value);');
+    expect(c).toContain('s_state.lo = app_f2i(data->value_start);');
   });
 
   it('accepts a useCallback onChange and binds an animated valueStart', () => {
@@ -2234,7 +2324,7 @@ describe('AOT Dial', () => {
     expect(c).toMatch(
       /er_anim_value_bind\(\w+, n\d+, ER_PROP_ARC_VALUE_START\);/,
     );
-    expect(c).toContain('s_state.v = data->value;');
+    expect(c).toContain('s_state.v = app_f2i(data->value);');
   });
 
   it('rejects an unsupported prop and a bad enum token', () => {
