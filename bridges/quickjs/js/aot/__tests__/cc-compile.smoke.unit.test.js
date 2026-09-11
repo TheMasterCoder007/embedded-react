@@ -229,6 +229,7 @@ describe('AOT generated C compiles', () => {
                <Pressable onPress={() => { const now = Date.now(); if (now - t > 500) setT(now); }}>
                  <Text>{t}</Text>
                </Pressable>
+               <Pressable onPress={() => setT(Date.now() || 0)}><Text>now</Text></Pressable>
                <Text>{'up ' + Math.max(0, Math.abs(performance.now() - start.current)) + ' ms'}</Text>
                <Text>{Math.floor(Date.now() / 60000) % 60}</Text>
                <View style={{ width: Date.now() % 100, height: 4 }} />

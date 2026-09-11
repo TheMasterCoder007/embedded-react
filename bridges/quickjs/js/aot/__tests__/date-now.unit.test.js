@@ -176,6 +176,7 @@ export function App() {
       's_wall_offset_ms = epoch_ms - (int64_t)er_now_ms64();',
     );
     expect(r.c).not.toContain('app_date_now');
+    expect(r.c).not.toContain('s_wall_clock_changed'); // nothing reads the clock, so nothing to refresh
     expect(r.h).toContain('#include <stdint.h>');
     expect(r.h).toContain('void er_app_set_wall_clock(int64_t epoch_ms);');
   });
@@ -205,7 +206,7 @@ export function App() {
       '<Text>{Math.sqrt(Date.now())}</Text>',
       /Math\.sqrt\(\.\.\.\) on a 64-bit/,
     ],
-    ['`% 0`', '<Text>{Date.now() % 0}</Text>', /`% 0`/],
+    ['`% 0`', '<Text>{Date.now() % 0}</Text>', /nonzero constant/],
     ['new Date()', '<Text>{new Date()}</Text>', /Date objects/],
     ['Date()', '<Text>{Date()}</Text>', /Date objects/],
     ['Date.parse', "<Text>{Date.parse('2026')}</Text>", /Date objects/],
@@ -246,5 +247,74 @@ export function App() {
         ),
       ),
     ).toThrow(/`\/=` on a 64-bit/);
+  });
+
+  it('refuses a 64-bit division whose divisor is not a nonzero constant', () => {
+    const withN = jsx =>
+      gen(app('const [n, setN] = useState(3);', `<View>${jsx}</View>`));
+    expect(() => withN('<Text>{Date.now() % n}</Text>')).toThrow(
+      /nonzero constant/,
+    );
+    expect(() => withN('<Text>{Math.floor(Date.now() / n)}</Text>')).toThrow(
+      /nonzero constant/,
+    );
+    expect(() => withN('<Text>{Math.floor(Date.now() / 0)}</Text>')).toThrow(
+      /nonzero constant/,
+    );
+    expect(() =>
+      gen(
+        app(
+          'const [n, setN] = useState(3);\n  const r = useRef(0);',
+          '<Pressable onPress={() => { r.current = Date.now(); r.current %= n; }}><Text>x</Text></Pressable>',
+        ),
+      ),
+    ).toThrow(/nonzero constant/);
+  });
+
+  it('keeps the value of `||` / `&&` over a timestamp, not just its truth', () => {
+    const c = gen(
+      app(
+        `const [t, setT] = useState(0);
+  const [on, setOn] = useState(false);`,
+        '<Pressable onPress={() => { setT(Date.now() || 0); setT(on && Date.now()); }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('    int64_t t;');
+    expect(c).toContain('s_state.t = (app_date_now() ? app_date_now() : 0);');
+    expect(c).toContain(
+      's_state.t = (s_state.on ? app_date_now() : s_state.on);',
+    );
+  });
+
+  it('leaves a `Date` / `performance` that the app binds itself alone', () => {
+    // A handler param and a module const shadow the globals, so neither call is the engine clock.
+    expect(() =>
+      gen(
+        app(
+          'const [t, setT] = useState(0);',
+          '<Pressable onPress={(performance) => setT(performance.now())}><Text>{t}</Text></Pressable>',
+        ),
+      ),
+    ).toThrow(/unsupported call expression/);
+    expect(() =>
+      gen(`${PRE}
+const performance = {now: 5};
+export function App() {
+  return (<Text>{performance.now()}</Text>);
+}`),
+    ).toThrow(/unsupported call expression/);
+  });
+
+  it('re-applies what reads the clock on the tick after the wall clock is set', () => {
+    const c = gen(
+      app('', '<View><Text>{Math.floor(Date.now() / 1000) % 60}</Text></View>'),
+    );
+    expect(c).toContain('static int s_wall_clock_changed;');
+    expect(c).toMatch(
+      /s_wall_offset_ms = epoch_ms - \(int64_t\)er_now_ms64\(\);\n {4}s_wall_clock_changed = 1;/,
+    );
+    expect(c).toMatch(
+      /void er_app_tick\(int dt_ms\)\n\{[\s\S]*?if \(s_wall_clock_changed\)\n {4}\{\n {8}s_wall_clock_changed = 0;\n {8}app_update\(\);/,
+    );
   });
 });

@@ -34,6 +34,7 @@
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
 //   npm run aot -- watch-face        # a specific demo by folder name
 import {parse} from '@babel/parser';
+import {traverse} from '@babel/core';
 import {codeFrameColumns} from '@babel/code-frame';
 import {
   readFileSync,
@@ -354,6 +355,27 @@ const dateObjectError = () =>
     'keep time as milliseconds from Date.now() and do the calendar math on the number.',
   );
 
+/**
+ * The `Date` / `performance` calls whose name is the app's own binding — a const, a param, an import —
+ * rather than the global, so they are not the engine clock. Babel's scopes decide, as JS would.
+ */
+function findShadowedClockCalls(ast) {
+  const calls = new WeakSet();
+  traverse(ast, {
+    'CallExpression|NewExpression'(path) {
+      const c = path.node.callee;
+      const id = c.type === 'MemberExpression' ? c.object : c;
+      if (
+        id.type === 'Identifier' &&
+        (id.name === 'Date' || id.name === 'performance') &&
+        path.scope.getBinding(id.name)
+      )
+        calls.add(path.node);
+    },
+  });
+  return calls;
+}
+
 /** `node` as an integer compile-time constant, or null. */
 function staticInt(node, env) {
   try {
@@ -365,9 +387,24 @@ function staticInt(node, env) {
 }
 
 /**
- * `+ - * %` with a 64-bit timestamp on either side, kept in whole milliseconds. `%` by a constant that fits
- * an int narrows back to int, so `ms % 1000` is an ordinary number again. `/` is refused: JS would give a
- * fraction, and the whole-number division is written Math.floor(a / b).
+ * The divisor of a 64-bit `%` or Math.floor(a / b), which has to be a nonzero constant: JS gives NaN or
+ * Infinity for a zero divisor, which an integer cannot hold, and C would trap on it.
+ */
+function nonzeroDivisor(node, env) {
+  const m = staticInt(node, env);
+  if (m !== null && m !== 0) return m;
+  const e = aotError(
+    'AOT: a 64-bit time value can only be divided by a nonzero constant',
+    'JS gives NaN or Infinity for a zero divisor, which an integer cannot hold, so the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
+  );
+  if (node.loc) e.aotLoc = node.loc.start;
+  throw e;
+}
+
+/**
+ * `+ - * %` with a 64-bit timestamp on either side, kept in whole milliseconds. `%` takes a nonzero constant,
+ * and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary number again. `/` is
+ * refused: JS would give a fraction, and the whole-number division is written Math.floor(a / b).
  */
 function emitArith64(node, l, r, env) {
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
@@ -377,13 +414,8 @@ function emitArith64(node, l, r, env) {
       'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / b) for whole units — e.g. Math.floor(ms / 1000) for seconds.',
     );
   if (node.operator === '%') {
-    const m = staticInt(node.right, env);
-    if (m === 0)
-      throw aotError(
-        'AOT: `% 0` on a 64-bit time value is not supported',
-        'JS gives NaN there, which an integer cannot hold, and C would trap.',
-      );
-    if (m !== null && Math.abs(m) <= 0x7fffffff)
+    const m = nonzeroDivisor(node.right, env);
+    if (Math.abs(m) <= 0x7fffffff)
       return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
   }
   return {code: `(${l.code} ${node.operator} ${r.code})`, cType: 'i64'};
@@ -391,8 +423,8 @@ function emitArith64(node, l, r, env) {
 
 /**
  * Math.floor / round / ceil over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
- * integer floor division (C's `/` rounds toward zero, floor rounds down); round and ceil are refused. Null
- * when neither side is 64-bit, which leaves it to the float path.
+ * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round and
+ * ceil are refused. Null when neither side is 64-bit, which leaves it to the float path.
  */
 function emitFloorDiv64(fn, args, env) {
   const arg = args[0];
@@ -413,6 +445,7 @@ function emitFloorDiv64(fn, args, env) {
       `AOT: Math.${fn}(a / b) on a 64-bit time value is not supported`,
       'use Math.floor(a / b), which stays exact in whole milliseconds.',
     );
+  nonzeroDivisor(arg.right, env);
   return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
 }
 
@@ -601,6 +634,23 @@ function emitExprImpl(node, env) {
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
       const l = emitExprWide(node.left, env);
       const r = emitExprWide(node.right, env);
+      // JS gives back one of the operands, not true/false. The 0/1 below is only its truth, which would
+      // store `1` in place of a timestamp — so with a 64-bit side, keep the operand's value.
+      if (l.cType === 'i64' || r.cType === 'i64') {
+        if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
+        if (l.cType === 'string' || r.cType === 'string')
+          throw aotError(
+            `AOT: "${op}" cannot mix a 64-bit time value with a string`,
+            'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
+          );
+        return {
+          code:
+            op === '||'
+              ? `(${l.code} ? ${l.code} : ${r.code})`
+              : `(${l.code} ? ${r.code} : ${l.code})`,
+          cType: 'i64',
+        };
+      }
       return {
         code: `(${asCond(l)} ${op} ${asCond(r)})`,
         cType: 'int',
@@ -734,8 +784,7 @@ function emitExprImpl(node, env) {
         !c.computed &&
         c.object.type === 'Identifier' &&
         (c.object.name === 'Date' || c.object.name === 'performance') &&
-        !env.locals.has(c.object.name) &&
-        !env.state.has(c.object.name)
+        !env.shadowedClock?.has(node)
       ) {
         if (c.property.name === 'now')
           return {
@@ -745,7 +794,12 @@ function emitExprImpl(node, env) {
           };
         if (c.object.name === 'Date') throw dateObjectError();
       }
-      if (c.type === 'Identifier' && c.name === 'Date') throw dateObjectError();
+      if (
+        c.type === 'Identifier' &&
+        c.name === 'Date' &&
+        !env.shadowedClock?.has(node)
+      )
+        throw dateObjectError();
       // Math.* helpers → libm (the generated C includes <math.h> when these appear).
       if (c.type === 'MemberExpression' && c.object.name === 'Math') {
         const fn = c.property.name;
@@ -788,7 +842,11 @@ function emitExprImpl(node, env) {
       );
     }
     case 'NewExpression':
-      if (node.callee.type === 'Identifier' && node.callee.name === 'Date')
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'Date' &&
+        !env.shadowedClock?.has(node)
+      )
         throw dateObjectError();
       break;
   }
@@ -2889,6 +2947,8 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
       );
+    if (expr.operator === '%=' && (r.cType === 'i64' || e.cType === 'i64'))
+      nonzeroDivisor(expr.right, env);
     storeCheck(
       e,
       r.cType,
@@ -6722,6 +6782,7 @@ function parseApp(src, opts = {}) {
 function compileSourceImpl(src, demo, opts, wide, found) {
   const ast = parseApp(src, opts);
   normalizeUndefined(ast);
+  const shadowedClock = findShadowedClockCalls(ast);
 
   const screen = opts.screen ?? {width: SCREEN_W, height: SCREEN_H};
   // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
@@ -6785,6 +6846,7 @@ function compileSourceImpl(src, demo, opts, wide, found) {
     svgArtifacts: opts.svgArtifacts || {},
     wide,
     found,
+    shadowedClock,
   };
   // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
   // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
@@ -7060,10 +7122,15 @@ static void er_timer_clear(int id)
     )
     .join('\n\n');
 
+  // A wall-clock change is applied here, on the app loop, rather than in the setter: the host may set the
+  // time before er_app_build(), when there is nothing to update yet.
+  const wallClockRefresh = hasUpdate
+    ? '    if (s_wall_clock_changed)\n    {\n        s_wall_clock_changed = 0;\n        app_update();\n    }\n'
+    : '';
   const appTickFn = out.usesTimers
     ? `void er_app_tick(int dt_ms)
 {
-    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
+${wallClockRefresh}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
     {
         if (!s_timers[i].active)
         {
@@ -7092,7 +7159,7 @@ static void er_timer_clear(int id)
         }
     }
 }`
-    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n}`;
+    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n${wallClockRefresh}}`;
 
   const mountEffectsBlock = out.mountEffects.length
     ? '\n    /* useEffect(fn, []) — run once on mount. */\n' +
@@ -7194,9 +7261,9 @@ static int16_t app_round_dim(double v)
     ],
     [
       'app_floordiv64',
-      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. A zero divisor\n" +
-        '   gives 0 — JS would give Infinity, and C would trap. */\n' +
-        'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n    if (b == 0)\n    {\n        return 0;\n    }\n' +
+      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. b is a\n" +
+        '   nonzero constant; the compiler refuses any other divisor. */\n' +
+        'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n' +
         '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n}',
     ],
     [
@@ -7228,7 +7295,11 @@ static int16_t app_round_dim(double v)
   const clockBlock = [
     '/* Date.now() is the engine clock plus this offset, so it reads as uptime until the host calls\n' +
       '   er_app_set_wall_clock(). performance.now() is the engine clock alone. */\n' +
-      'static int64_t s_wall_offset_ms;',
+      'static int64_t s_wall_offset_ms;' +
+      (hasUpdate
+        ? '\n/* Set by er_app_set_wall_clock(); the next er_app_tick() re-applies what reads the clock. */\n' +
+          'static int s_wall_clock_changed;'
+        : ''),
     ...CLOCK_HELPERS.filter(([name]) => clockUsers.includes(`${name}(`)).map(
       ([, def]) => def,
     ),
@@ -7266,7 +7337,7 @@ ${appTickFn}
 
 void er_app_set_wall_clock(int64_t epoch_ms)
 {
-    s_wall_offset_ms = epoch_ms - (int64_t)er_now_ms64();
+    s_wall_offset_ms = epoch_ms - (int64_t)er_now_ms64();${hasUpdate ? '\n    s_wall_clock_changed = 1;' : ''}
 }
 ${hostSettersBlock ? '\n' + hostSettersBlock + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
@@ -7321,8 +7392,9 @@ void er_app_build(int screen_w, int screen_h);
 void er_app_tick(int dt_ms);
 
 /** @brief Tells the app the current time, which Date.now() counts on from. Until it is called Date.now()
- *         reads as uptime; a later call re-anchors it, and performance.now() never moves with it. Safe to
- *         call whether or not the app reads the clock.
+ *         reads as uptime; a later call re-anchors it, the next er_app_tick() re-applies what reads the
+ *         clock, and performance.now() never moves with it. Call it from the loop that calls
+ *         er_app_tick(), before or after er_app_build(); safe whether or not the app reads the clock.
  *  @param[in] epoch_ms  Current time, in milliseconds since the Unix epoch. */
 void er_app_set_wall_clock(int64_t epoch_ms);
 ${hostSetterProtos ? '\n' + hostSetterProtos + '\n' : ''}
