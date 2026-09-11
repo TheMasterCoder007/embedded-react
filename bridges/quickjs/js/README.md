@@ -439,6 +439,14 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   `clearInterval` and the Promise job queue are serviced each frame by the host pump
   (`er_bridge_pump`, off the engine clock). React passive effects (`useEffect`) flush on the pump.
   Covered by `timers.runtime.test.js` and `effects.runtime.test.jsx`.
+- ✅ **`Date.now()` / `performance.now()` in both flows.** Both run on the engine clock, with the same
+  surface as the lite JS profile (no `Date` objects). Until the host sets the real time —
+  `er_runtime_set_wall_clock()` in Flow A, `er_app_set_wall_clock()` in Flow B — `Date.now()` reads as
+  uptime. Flow B holds a timestamp as 64-bit whole milliseconds: keep it in state, a ref, or a local,
+  compare it, show it in text, and divide it by a constant with `%` or `Math.floor(a / b)`; a plain
+  `/`, a divisor from state, or mixing it with a float or a boolean is a compiler error. Covered by
+  `date-now.runtime.test.js`, the AOT's `date-now`, `cc-compile` and `text-lowering` cases, and the
+  engine's `test_node_pool`.
 - ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
   `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with
   completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.

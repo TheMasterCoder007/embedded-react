@@ -205,6 +205,161 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `helper names inside text do not pull in unused helpers (${CC || 'no cc found'})`,
+    () => {
+      // The scan for helper calls must not read string literals: this text names four helpers and the app
+      // calls none of them.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           useEffect(() => { setInterval(() => setN(v => v + 1), 1000); }, []);
+           return (
+             <View style={{ flex: 1 }}>
+               <Text>app_perf_now(</Text>
+               <Text>{'app_date_now( app_floordiv64( er_timer_clear( ' + n}</Text>
+             </View>
+           );
+         }`,
+        'literal-helpers',
+      );
+      expect(r.c).not.toContain('static int64_t app_date_now(void)');
+      expect(r.c).not.toContain('static void er_timer_clear(int id)');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-literal-helpers-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a timer cleared only from a mount effect's cleanup passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // That cleanup is dropped (the app never unmounts), so nothing calls er_timer_clear — and a static
+      // function nothing calls is a -Wall warning.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           useEffect(() => {
+             const id = setInterval(() => setN(v => v + 1), 1000);
+             return () => clearInterval(id);
+           }, []);
+           return (<View style={{ flex: 1 }}><Text>{n}</Text></View>);
+         }`,
+        'mount-timer',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-mount-timer-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `64-bit time (Date.now / performance.now) passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every place a timestamp can go, under -Wall: a printf format that does not match int64_t on this
+      // host, or a clock helper emitted but never called, would warn.
+      const r = compileSource(
+        `import { useState, useEffect, useRef } from 'react';
+         import { View, Text, Pressable } from 'embedded-react';
+         export function App() {
+           const [t, setT] = useState(0);
+           const [sec, setSec] = useState(0);
+           const start = useRef(0);
+           useEffect(() => {
+             start.current = performance.now();
+           }, []);
+           useEffect(() => {
+             const id = setInterval(() => setSec(Math.floor((performance.now() - start.current) / 1000) % 60), 1000);
+             return () => clearInterval(id);
+           }, [t]);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { const now = Date.now(); if (now - t > 500) setT(now); }}>
+                 <Text>{t}</Text>
+               </Pressable>
+               <Pressable onPress={() => setT(Date.now() || 0)}><Text>now</Text></Pressable>
+               <Pressable onPress={() => setTimeout(() => setSec(0), t - Date.now())}><Text>later</Text></Pressable>
+               <Text>{'up ' + Math.max(0, Math.abs(performance.now() - start.current)) + ' ms'}</Text>
+               <Text>{Math.floor(Date.now() / 60000) % 60}</Text>
+               <View style={{ width: Date.now() % 100, height: 4 }} />
+             </View>
+           );
+         }`,
+        'time',
+      );
+      expect(r.c).toContain(
+        'static int64_t app_floordiv64(int64_t a, int64_t b)',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-time-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `the state-driven dimension rounder passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // app_round_dim is the only helper the codegen writes into the file itself rather than calling from
@@ -271,13 +426,11 @@ describe('AOT generated C compiles', () => {
       try {
         writeFileSync(join(dir, 'app.gen.c'), r.c);
         writeFileSync(join(dir, 'app.gen.h'), r.h);
-        // The timer table always defines er_timer_clear, and this app never clears a timer.
         const res = spawnSync(
           CC,
           [
             '-fsyntax-only',
             '-Wall',
-            '-Wno-unused-function',
             '-I',
             engineInc,
             '-I',

@@ -456,6 +456,25 @@ static void test_reset(void)
     printf("test_reset PASSED\n");
 }
 
+/**
+ * @brief er_now_ms64() keeps counting where er_now_ms() wraps, and er_reset() leaves the clock alone.
+ */
+static void test_clock_64bit(void)
+{
+    const uint64_t t0 = er_now_ms64();
+
+    /* 5e9 ms is past 2^32 (~49.7 days); a tick is a 32-bit step, so it takes several. */
+    for (int i = 0; i < 5; i++)
+        embedded_renderer_tick(1000000000U);
+    assert(er_now_ms64() - t0 == 5000000000ULL && "er_now_ms64 must not wrap");
+    assert(er_now_ms() == (uint32_t)(t0 + 5000000000ULL) && "er_now_ms wraps as it always has");
+
+    const uint64_t before = er_now_ms64();
+    er_reset();
+    assert(er_now_ms64() == before && "er_reset must not move the clock");
+    printf("test_clock_64bit PASSED\n");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -475,6 +494,7 @@ int main(void)
     embedded_renderer_set_backend(&be);
 
     test_reset();
+    test_clock_64bit();
     test_freelist_lifo_reuse();
     test_freelist_multi_reuse();
     test_double_free_is_noop();

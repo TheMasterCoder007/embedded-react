@@ -34,6 +34,7 @@
 //   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
 //   npm run aot -- watch-face        # a specific demo by folder name
 import {parse} from '@babel/parser';
+import {traverse} from '@babel/core';
 import {codeFrameColumns} from '@babel/code-frame';
 import {
   readFileSync,
@@ -337,6 +338,142 @@ const withUndefined = scope => Object.assign(Object.create(scope), {undefined});
  */
 const asCond = e => (e.cType === 'string' ? `(${e.code}[0] != '\\0')` : e.code);
 
+/** No state or ref slot widened to 64 bits — the collectors' default. */
+const NO_WIDE = new Set();
+
+/** A 64-bit timestamp met a float, which would round it. */
+const mix64Error = () =>
+  aotError(
+    'AOT: a 64-bit time value cannot be mixed with a float',
+    'Date.now() and performance.now() are whole milliseconds in a 64-bit integer, and a float would round them. Keep the arithmetic whole — e.g. Math.floor(ms / 1000), not ms * 0.001.',
+  );
+
+/** A 64-bit timestamp met a boolean in `&&` / `||` / `?:`, where JS would hand back the boolean itself. */
+const bool64Error = what =>
+  aotError(
+    `AOT: ${what} cannot mix a boolean with a 64-bit time value`,
+    'JS would give back the boolean itself (and false renders as no text), which a 64-bit integer cannot hold. Use a number on both sides, e.g. `on ? Date.now() : 0`.',
+  );
+
+/** Flow A's lite profile has Date.now() and no Date objects, and so does the AOT. */
+const dateObjectError = () =>
+  aotError(
+    'AOT: Date objects are not supported — only Date.now()',
+    'keep time as milliseconds from Date.now() and do the calendar math on the number.',
+  );
+
+/**
+ * The `Date` / `performance` calls whose name is the app's own binding — a const, a param, an import —
+ * rather than the global, so they are not the engine clock. Babel's scopes decide, as JS would.
+ */
+function findShadowedClockCalls(ast) {
+  const calls = new WeakSet();
+  traverse(ast, {
+    'CallExpression|NewExpression'(path) {
+      const c = path.node.callee;
+      const id = c.type === 'MemberExpression' ? c.object : c;
+      if (
+        id.type === 'Identifier' &&
+        (id.name === 'Date' || id.name === 'performance') &&
+        path.scope.getBinding(id.name)
+      )
+        calls.add(path.node);
+    },
+  });
+  return calls;
+}
+
+/** `node` as an integer compile-time constant, or null. */
+function staticInt(node, env) {
+  try {
+    const v = evalStatic(node, foldScope(env, env.consts ?? {}));
+    return Number.isInteger(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The divisor of a 64-bit `%` or Math.floor(a / b), which has to be a nonzero constant: JS gives NaN or
+ * Infinity for a zero divisor, which an integer cannot hold, and C would trap on it.
+ */
+function nonzeroDivisor(node, env) {
+  const m = staticInt(node, env);
+  if (m !== null && m !== 0) return m;
+  const e = aotError(
+    'AOT: a 64-bit time value can only be divided by a nonzero constant',
+    'JS gives NaN or Infinity for a zero divisor, which an integer cannot hold, so the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
+  );
+  if (node.loc) e.aotLoc = node.loc.start;
+  throw e;
+}
+
+/**
+ * `+ - * %` with a 64-bit timestamp on either side, kept in whole milliseconds. `%` takes a nonzero constant,
+ * and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary number again. `/` is
+ * refused: JS would give a fraction, and the whole-number division is written Math.floor(a / b).
+ */
+function emitArith64(node, l, r, env) {
+  if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
+  if (node.operator === '/')
+    throw aotError(
+      'AOT: `/` on a 64-bit time value is not supported',
+      'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / b) for whole units — e.g. Math.floor(ms / 1000) for seconds.',
+    );
+  if (node.operator === '%') {
+    const m = nonzeroDivisor(node.right, env);
+    if (Math.abs(m) <= 0x7fffffff)
+      return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
+  }
+  return {code: `(${l.code} ${node.operator} ${r.code})`, cType: 'i64'};
+}
+
+/**
+ * Math.floor / round / ceil over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
+ * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round and
+ * ceil are refused. Null when neither side is 64-bit, which leaves it to the float path.
+ */
+function emitFloorDiv64(fn, args, env) {
+  const arg = args[0];
+  if (
+    (fn !== 'floor' && fn !== 'round' && fn !== 'ceil') ||
+    args.length !== 1 ||
+    arg.type !== 'BinaryExpression' ||
+    arg.operator !== '/'
+  )
+    return null;
+  const l = emitExprWide(arg.left, env);
+  const r = emitExprWide(arg.right, env);
+  if (l.cType !== 'i64' && r.cType !== 'i64') return null;
+  if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
+  if (l.cType === 'string' || r.cType === 'string') return null;
+  if (fn !== 'floor')
+    throw aotError(
+      `AOT: Math.${fn}(a / b) on a 64-bit time value is not supported`,
+      'use Math.floor(a / b), which stays exact in whole milliseconds.',
+    );
+  nonzeroDivisor(arg.right, env);
+  return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
+}
+
+/** Math.* over a 64-bit timestamp: only what stays exact in whole numbers. */
+function emitMath64(fn, a) {
+  if (a.some(x => x.cType === 'float')) throw mix64Error();
+  if (a.every(x => x.cType === 'int' || x.cType === 'i64')) {
+    // A timestamp is already whole, so rounding leaves it as it is.
+    if ((fn === 'floor' || fn === 'round' || fn === 'ceil') && a.length === 1)
+      return {code: a[0].code, cType: 'i64'};
+    if (fn === 'abs' && a.length === 1)
+      return {code: `app_abs64(${a[0].code})`, cType: 'i64'};
+    if ((fn === 'min' || fn === 'max') && a.length === 2)
+      return {code: `app_${fn}64(${a[0].code}, ${a[1].code})`, cType: 'i64'};
+  }
+  throw aotError(
+    `AOT: Math.${fn}(...) on a 64-bit time value is not supported`,
+    'Math.floor / round / ceil / abs / min / max keep a timestamp exact; for anything else, reduce it to a small number first, e.g. `ms % 1000`.',
+  );
+}
+
 function emitExprImpl(node, env) {
   switch (node.type) {
     case 'NumericLiteral':
@@ -372,7 +509,7 @@ function emitExprImpl(node, env) {
       );
     }
     case 'UnaryExpression': {
-      const a = emitExpr(node.argument, env);
+      const a = emitExprWide(node.argument, env);
       if (
         (node.operator === '-' || node.operator === '+') &&
         a.cType === 'string'
@@ -397,8 +534,8 @@ function emitExprImpl(node, env) {
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
-      const l = emitExpr(node.left, env);
-      const r = emitExpr(node.right, env);
+      const l = emitExprWide(node.left, env);
+      const r = emitExprWide(node.right, env);
       if (ARITH.has(node.operator)) {
         if (l.cType === 'string' || r.cType === 'string') {
           // `+` over a string builds text, which C cannot express as one value. Where the destination is
@@ -415,6 +552,8 @@ function emitExprImpl(node, env) {
             'keep both operands numeric — a string cannot be coerced to a number here.',
           );
         }
+        if (l.cType === 'i64' || r.cType === 'i64')
+          return emitArith64(node, l, r, env);
         if (node.operator === '/')
           return {
             code: `((float)(${l.code}) / (float)(${r.code}))`,
@@ -462,9 +601,15 @@ function emitExprImpl(node, env) {
         }
         // A boolean and a number share an int slot, so C would hold `true === 1`; a strict comparison never
         // coerces, so JS never does. Decided only when the other side is surely a number.
+        if (
+          (l.cType === 'i64' || r.cType === 'i64') &&
+          (l.cType === 'float' || r.cType === 'float')
+        )
+          throw mix64Error();
         const surelyNum = (n, x) =>
           !x.isBool &&
           (x.cType === 'float' ||
+            x.cType === 'i64' ||
             n.type === 'NumericLiteral' ||
             (n.type === 'UnaryExpression' &&
               n.argument.type === 'NumericLiteral') ||
@@ -494,8 +639,28 @@ function emitExprImpl(node, env) {
         node.operator === '&&' || node.operator === '||' ? node.operator : null;
       if (!op)
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
-      const l = emitExpr(node.left, env);
-      const r = emitExpr(node.right, env);
+      const l = emitExprWide(node.left, env);
+      const r = emitExprWide(node.right, env);
+      // JS gives back one of the operands, not true/false. The 0/1 below is only its truth, which would
+      // store `1` in place of a timestamp — so with a 64-bit side, keep the operand's value.
+      if (l.cType === 'i64' || r.cType === 'i64') {
+        if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
+        if (l.cType === 'string' || r.cType === 'string')
+          throw aotError(
+            `AOT: "${op}" cannot mix a 64-bit time value with a string`,
+            'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
+          );
+        if (l.isBool || r.isBool) throw bool64Error(`"${op}"`);
+        // `l` is read twice, which is safe: AOT expressions have no side effects, and the engine clock only
+        // moves in er_tick(), so a second Date.now() in the same expression reads the same value.
+        return {
+          code:
+            op === '||'
+              ? `(${l.code} ? ${l.code} : ${r.code})`
+              : `(${l.code} ? ${r.code} : ${l.code})`,
+          cType: 'i64',
+        };
+      }
       return {
         code: `(${asCond(l)} ${op} ${asCond(r)})`,
         cType: 'int',
@@ -503,9 +668,9 @@ function emitExprImpl(node, env) {
       };
     }
     case 'ConditionalExpression': {
-      const t = emitExpr(node.test, env);
-      const c = emitExpr(node.consequent, env);
-      const a = emitExpr(node.alternate, env);
+      const t = emitExprWide(node.test, env);
+      const c = emitExprWide(node.consequent, env);
+      const a = emitExprWide(node.alternate, env);
       // `(ok ? 1 : "none")` is ill-typed C (int vs char*) and has no single printf spec either, so it
       // has to be refused here rather than handed to the host compiler.
       if ((c.cType === 'string') !== (a.cType === 'string'))
@@ -513,9 +678,14 @@ function emitExprImpl(node, env) {
           'AOT: a ternary cannot mix a string branch with a numeric one',
           "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
         );
-      const cType =
-        c.cType === 'float' || a.cType === 'float'
-          ? 'float'
+      const either = k => c.cType === k || a.cType === k;
+      if (either('i64') && either('float')) throw mix64Error();
+      if (either('i64') && (c.isBool || a.isBool))
+        throw bool64Error('a ternary');
+      const cType = either('float')
+        ? 'float'
+        : either('i64')
+          ? 'i64'
           : c.cType === a.cType
             ? c.cType
             : 'int';
@@ -619,11 +789,36 @@ function emitExprImpl(node, env) {
       );
     }
     case 'CallExpression': {
-      // Math.* helpers → libm (the generated C includes <math.h> when these appear).
       const c = node.callee;
+      // Date.now() / performance.now() → the engine clock, as 64-bit whole milliseconds.
+      if (
+        c.type === 'MemberExpression' &&
+        !c.computed &&
+        c.object.type === 'Identifier' &&
+        (c.object.name === 'Date' || c.object.name === 'performance') &&
+        !env.shadowedClock?.has(node)
+      ) {
+        if (c.property.name === 'now')
+          return {
+            code:
+              c.object.name === 'Date' ? 'app_date_now()' : 'app_perf_now()',
+            cType: 'i64',
+          };
+        if (c.object.name === 'Date') throw dateObjectError();
+      }
+      if (
+        c.type === 'Identifier' &&
+        c.name === 'Date' &&
+        !env.shadowedClock?.has(node)
+      )
+        throw dateObjectError();
+      // Math.* helpers → libm (the generated C includes <math.h> when these appear).
       if (c.type === 'MemberExpression' && c.object.name === 'Math') {
         const fn = c.property.name;
-        const a = node.arguments.map(x => emitExpr(x, env));
+        const floorDiv = emitFloorDiv64(fn, node.arguments, env);
+        if (floorDiv) return floorDiv;
+        const a = node.arguments.map(x => emitExprWide(x, env));
+        if (a.some(x => x.cType === 'i64')) return emitMath64(fn, a);
         const UNARY = {
           sin: 'sinf',
           cos: 'cosf',
@@ -658,15 +853,63 @@ function emitExprImpl(node, env) {
         'AOT: unsupported call expression in a dynamic expression',
       );
     }
+    case 'NewExpression':
+      if (
+        node.callee.type === 'Identifier' &&
+        node.callee.name === 'Date' &&
+        !env.shadowedClock?.has(node)
+      )
+        throw dateObjectError();
+      break;
   }
   throw new Error(
     `AOT: unsupported expression "${node.type}" in a dynamic context`,
   );
 }
-const emitExpr = withLoc(emitExprImpl);
+/** emitExpr for the destinations that can hold a 64-bit timestamp: state, refs, locals, text, conditions. */
+const emitExprWide = withLoc(emitExprImpl);
+
+/**
+ * Lowers an expression for a destination that holds an int, a float or a string. C would narrow a 64-bit
+ * timestamp (Date.now() / performance.now()) into one of those without a warning, so it is refused here;
+ * the destinations that hold 64 bits call emitExprWide.
+ */
+function emitExpr(node, env) {
+  const e = emitExprWide(node, env);
+  if (e.cType !== 'i64') return e;
+  const err = aotError(
+    'AOT: a 64-bit time value (Date.now() / performance.now()) cannot be used here',
+    'keep it in state, a ref or a local, compare it, or show it in text. Anywhere else, reduce it to a small number first — e.g. `ms % 1000`, or `Math.floor(ms / 1000) % 60`.',
+  );
+  if (node.loc) err.aotLoc = node.loc.start;
+  throw err;
+}
+
+/** The C type a numeric state, ref or local slot of `cType` is declared with. */
+function cScalarType(cType) {
+  if (cType === 'int') return 'int';
+  if (cType === 'float') return 'float';
+  if (cType === 'i64') return 'int64_t';
+  throw new Error(`AOT internal: no C scalar type for "${cType}"`);
+}
 
 const printfSpec = cType =>
-  cType === 'string' ? '%s' : cType === 'float' ? '%g' : '%d';
+  cType === 'string'
+    ? '%s'
+    : cType === 'float'
+      ? '%g'
+      : cType === 'i64'
+        ? '%lld'
+        : '%d';
+/** An expression as a printf argument: `%lld` needs a long long, and int64_t is `long` on 64-bit Linux. */
+const printfArg = e => (e.cType === 'i64' ? `(long long)(${e.code})` : e.code);
+
+/** C source with its string and char literals and its comments blanked, so a scan for a call sees only code. */
+const stripCLiterals = c =>
+  c.replace(
+    /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    ' ',
+  );
 const cTypeOfValue = v =>
   typeof v === 'string'
     ? 'string'
@@ -744,7 +987,7 @@ function concatParts(node, env, scope, operand = false) {
       `AOT: "${node.operator}" in text cannot concatenate inside an operand`,
       "write it with plain values — {ok ? 'n=' : ''}{ok ? n : ''} — or build the joined string first in a string useState.",
     );
-  const e = emitExpr(node, env);
+  const e = emitExprWide(node, env);
   // JS `&&`/`||` evaluate to one of their OPERANDS, and a ternary to one of its BRANCHES. The generated C
   // collapses a logical to 0/1 and gives a ternary a single slot, so text can only reproduce JS when the
   // operands agree in kind. Refuse rather than print a value the app never computed.
@@ -756,8 +999,8 @@ function concatParts(node, env, scope, operand = false) {
     );
   if (
     node.type === 'ConditionalExpression' &&
-    Boolean(emitExpr(node.consequent, env).isBool) !==
-      Boolean(emitExpr(node.alternate, env).isBool)
+    Boolean(emitExprWide(node.consequent, env).isBool) !==
+      Boolean(emitExprWide(node.alternate, env).isBool)
   )
     throw textShapeError(
       node,
@@ -777,7 +1020,7 @@ function concatParts(node, env, scope, operand = false) {
       : {isString: false, parts: [{literal: ''}]};
   return {
     isString: e.cType === 'string',
-    parts: [{spec: printfSpec(e.cType), code: e.code}],
+    parts: [{spec: printfSpec(e.cType), code: printfArg(e)}],
   };
 }
 
@@ -937,7 +1180,7 @@ function inferItemStruct(items, name) {
  * lookup keys stay the bare JS names (`count`), but the C field / array / count derive from `cField`
  * (`<prefix>count`). prefix='' (the App) leaves storage names exactly as the JS names — backward compatible.
  */
-function collectState(fnBody, scope, prefix = '') {
+function collectState(fnBody, scope, prefix = '', wide = NO_WIDE) {
   const byName = new Map();
   const bySetter = new Map();
   for (const stmt of fnBody.body) {
@@ -1035,6 +1278,8 @@ function collectState(fnBody, scope, prefix = '') {
         ) {
           cType = 'float';
         }
+        // A setter stores a timestamp in it, so it holds 64 bits (see compileWidened).
+        if (cType === 'int' && !isBool && wide.has(cField)) cType = 'i64';
         // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
         const initCode =
           cType === 'string'
@@ -1425,7 +1670,7 @@ function collectAnims(fnBody, scope, prefix = '') {
  *  - NODE ref (`useRef()` / `useRef(null)`): holds an `ERNode*`, captured by `ref={r}` on an element and
  *    used as the target of imperative calls like updateVector(r, …). kind === 'node'.
  */
-function collectRefs(fnBody, scope, prefix = '') {
+function collectRefs(fnBody, scope, prefix = '', wide = NO_WIDE) {
   const refs = new Map();
   if (fnBody.type !== 'BlockStatement') return refs;
   for (const stmt of fnBody.body) {
@@ -1464,7 +1709,12 @@ function collectRefs(fnBody, scope, prefix = '') {
           if (arg.loc) e.aotLoc = arg.loc.start;
           throw e;
         }
-        const cType = Number.isInteger(v) ? 'int' : 'float';
+        // A ref a timestamp is written to holds 64 bits (see compileWidened).
+        const cType = !Number.isInteger(v)
+          ? 'float'
+          : wide.has(cVar)
+            ? 'i64'
+            : 'int';
         refs.set(decl.id.name, {
           cVar,
           cType,
@@ -2431,11 +2681,40 @@ function blockList(node) {
 const readsMember = member =>
   new RegExp(`(^|[^\\w.])${member.replace(/\./g, '\\.')}(?![\\w])`);
 
+/**
+ * Checks a value written to a numeric state or ref slot, whose C type came from its initial value. A 64-bit
+ * timestamp written to an int slot is recorded in env.found, and compileWidened compiles again with that
+ * slot widened to int64_t. It cannot go into a float or boolean slot, and a widened slot takes no floats.
+ */
+function storeCheck(e, slotType, isBool, key, what, env) {
+  if (e.cType === 'i64' && slotType !== 'i64') {
+    if (slotType === 'int' && !isBool) {
+      env.found.add(key);
+      return;
+    }
+    throw aotError(
+      `AOT: a 64-bit time value cannot be stored in ${what}`,
+      'give it a whole-number initial value — useState(0) or useRef(0) — and it widens to hold the timestamp.',
+    );
+  }
+  if (slotType === 'i64' && e.cType === 'float') throw mix64Error();
+}
+
 /** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
  *  becomes a format + args), plain assign otherwise. */
 function scalarAssign(rec, node, env, indent) {
-  if (rec.cType !== 'string')
-    return `${indent}${rec.cMember} = ${emitExpr(node, env).code};`;
+  if (rec.cType !== 'string') {
+    const e = emitExprWide(node, env);
+    storeCheck(
+      e,
+      rec.cType,
+      rec.isBool,
+      rec.cField,
+      `state "${rec.name}"`,
+      env,
+    );
+    return `${indent}${rec.cMember} = ${e.code};`;
+  }
   const f = emitFormat(node, env);
   // snprintf's source and destination may not overlap (C11 7.21.6.6), and `setLabel(label + '!')` feeds
   // the slot its own contents. Build the new value in a temporary first — some embedded libcs write the
@@ -2593,7 +2872,13 @@ function compileTimerAdd(expr, env, state, ctx) {
       'AOT: a setInterval/setTimeout callback must be an inline function',
       'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).',
     );
-  const ms = expr.arguments[1] ? emitExpr(expr.arguments[1], env).code : '0';
+  // A delay computed from a timestamp goes through ToInt32 and a floor at 0, as Flow A's setTimeout does.
+  const delay = expr.arguments[1] ? emitExprWide(expr.arguments[1], env) : null;
+  const ms = !delay
+    ? '0'
+    : delay.cType === 'i64'
+      ? `app_delay_ms64(${delay.code})`
+      : delay.code;
   const repeat = expr.callee.name === 'setInterval';
   const slot = ctx.out.timerFns.length;
   const name = `er_timer_fn_${slot}`;
@@ -2620,7 +2905,7 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
         'a helper called from a handler must use plain positional params (e.g. `(a, b) => …`) — destructuring or default params in the signature are not supported.',
       );
     if (args[i]) {
-      const e = emitExpr(args[i], env);
+      const e = emitExprWide(args[i], env);
       locals.set(p.name, {code: e.code, cType: e.cType, isBool: e.isBool});
     }
   });
@@ -2678,9 +2963,23 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       throw new Error(
         'AOT: the only assignment allowed in a handler is `ref.current = ...`',
       );
-    return [
-      `${indent}${r.cVar} ${expr.operator} ${emitExpr(expr.right, env).code};`,
-    ];
+    const e = emitExprWide(expr.right, env);
+    if (expr.operator === '/=' && (r.cType === 'i64' || e.cType === 'i64'))
+      throw aotError(
+        'AOT: `/=` on a 64-bit time value is not supported',
+        'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
+      );
+    if (expr.operator === '%=' && (r.cType === 'i64' || e.cType === 'i64'))
+      nonzeroDivisor(expr.right, env);
+    storeCheck(
+      e,
+      r.cType,
+      false,
+      r.cVar,
+      `ref "${expr.left.object.name}"`,
+      env,
+    );
+    return [`${indent}${r.cVar} ${expr.operator} ${e.code};`];
   }
   // `ref.current++` / `ref.current--`.
   if (expr.type === 'UpdateExpression') {
@@ -2793,7 +3092,7 @@ function compileStmts(list, env, state, ctx, indent) {
           };
           continue;
         }
-        const e = emitExpr(decl.init, env);
+        const e = emitExprWide(decl.init, env);
         if (e.cType === 'string') {
           // A string local gets a buffer of its own rather than a char* into a state slot: a pointer alias
           // would let `setLabel(t + '!')` read and write the same bytes behind readsMember's back — and
@@ -2805,7 +3104,12 @@ function compileStmts(list, env, state, ctx, indent) {
             `${indent}snprintf(${cName}, sizeof(${cName}), "%s", ${e.code});`,
           );
         } else {
-          const cType = e.cType === 'float' ? 'float' : 'int';
+          if (e.cType !== 'int' && e.cType !== 'float' && e.cType !== 'i64')
+            throw aotError(
+              'AOT: a handler local must hold a number, a boolean or a string',
+              'bind the value itself — e.g. `const id = item.id` — rather than a list item or a node ref.',
+            );
+          const cType = cScalarType(e.cType);
           if (hoist) ctx.hoist.decls.push(`static ${cType} ${cName};`);
           lines.push(
             `${indent}${hoist ? '' : cType + ' '}${cName} = ${e.code};`,
@@ -2858,7 +3162,7 @@ function compileStmts(list, env, state, ctx, indent) {
     }
     if (st.type === 'IfStatement') {
       lines.push(
-        `${indent}if (${asCond(emitExpr(st.test, env))})`,
+        `${indent}if (${asCond(emitExprWide(st.test, env))})`,
         `${indent}{`,
       );
       lines.push(
@@ -2946,8 +3250,8 @@ function compileEffect(eff, env, state, out) {
   const name = `er_effect_${id}`;
   const deps = eff.deps.elements.map(d => {
     if (!d) throw aotError('AOT: a useEffect dependency must be an expression');
-    const e = emitExpr(d, env);
-    if (e.cType !== 'int' && e.cType !== 'float' && e.cType !== 'string')
+    const e = emitExprWide(d, env);
+    if (!['int', 'float', 'i64', 'string'].includes(e.cType))
       throw aotError(
         'AOT: useEffect dependencies must be scalar (number / bool / string)',
         'depend on scalar state values; object/array dependencies are not yet supported.',
@@ -3006,7 +3310,7 @@ function compileEffect(eff, env, state, out) {
     out.effectDecls.push(
       d.cType === 'string'
         ? `static char s_eff${id}_d${j}[${LIST_STR_CAP}];`
-        : `static ${d.cType === 'float' ? 'float' : 'int'} s_eff${id}_d${j};`,
+        : `static ${cScalarType(d.cType)} s_eff${id}_d${j};`,
     ),
   );
   const snap = (j, d) =>
@@ -3024,7 +3328,7 @@ function compileEffect(eff, env, state, out) {
         `        if (strcmp(s_eff${id}_d${j}, ${d.code}) != 0) { ${snap(j, d)}; er_changed = 1; }`,
       );
     else {
-      const t = d.cType === 'float' ? 'float' : 'int';
+      const t = cScalarType(d.cType);
       check.push(
         `        ${t} er_d${j} = ${d.code}; if (er_d${j} != s_eff${id}_d${j}) { s_eff${id}_d${j} = er_d${j}; er_changed = 1; }`,
       );
@@ -3453,7 +3757,7 @@ function extractProps(openingElement, scope, env) {
     try {
       props[attr.name.name] = {static: true, value: evalStatic(node, scope)};
     } catch {
-      props[attr.name.name] = {static: false, ...emitExpr(node, env)};
+      props[attr.name.name] = {static: false, ...emitExprWide(node, env)};
     }
   }
   return props;
@@ -3610,13 +3914,13 @@ function emitComponent(el, scope, out, env, state, opts) {
   }
 
   const childAnims = collectAnims(fn.body, childScope, prefix);
-  const childRefs = collectRefs(fn.body, childScope, prefix);
+  const childRefs = collectRefs(fn.body, childScope, prefix, env.wide);
   const childPans = collectPanResponders(fn.body, prefix);
   const childCallbacks = collectCallbacks(fn.body);
   const childMemos = collectMemos(fn.body);
   let childState = state;
   if (usesState(fn)) {
-    childState = collectState(fn.body, childScope, prefix);
+    childState = collectState(fn.body, childScope, prefix, env.wide);
     out.childStateRecords.push(...childState.byName.values());
     for (const name of childState.byName.keys()) delete childScope[name];
   }
@@ -3647,7 +3951,7 @@ function emitComponent(el, scope, out, env, state, opts) {
     try {
       childScope[name] = evalStatic(expr, childScope);
     } catch {
-      const e = emitExpr(expr, childEnv);
+      const e = emitExprWide(expr, childEnv);
       childLocals.set(name, {
         code: `(${e.code})`,
         cType: e.cType,
@@ -6492,11 +6796,15 @@ function parseApp(src, opts = {}) {
  * Compiles a Flow B app's JSX (or TSX) source to C.
  * @param {string} src   The App.jsx/App.tsx source text.
  * @param {string} demo  Demo name (only used in the generated-by header comment).
+ * @param {object} opts  compileSource's options.
+ * @param {Set<string>} wide   State/ref slots to declare 64-bit (see compileWidened).
+ * @param {Set<string>} found  Collects the int slots a 64-bit timestamp was stored in.
  * @returns {{c: string, h: string, nodes: number, state: number, handlers: number, updates: number}}
  */
-function compileSourceImpl(src, demo = 'app', opts = {}) {
+function compileSourceImpl(src, demo, opts, wide, found) {
   const ast = parseApp(src, opts);
   normalizeUndefined(ast);
+  const shadowedClock = findShadowedClockCalls(ast);
 
   const screen = opts.screen ?? {width: SCREEN_W, height: SCREEN_H};
   // Image imports first, so their asset-name strings seed the module scope BEFORE its consts fold (a const
@@ -6531,12 +6839,12 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
       }
     }
   }
-  const state = collectState(component.body, scope);
+  const state = collectState(component.body, scope, '', wide);
   for (const name of state.byName.keys()) delete scope[name];
   const rootJSX = findReturnJSX(component.body, scope);
 
   const anims = collectAnims(component.body, scope);
-  const refs = collectRefs(component.body, scope);
+  const refs = collectRefs(component.body, scope, '', wide);
   for (const name of [...anims.keys(), ...refs.keys()]) delete scope[name];
   const pans = collectPanResponders(component.body);
   const callbacks = collectCallbacks(component.body);
@@ -6558,6 +6866,9 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     imageNames,
     svgImports,
     svgArtifacts: opts.svgArtifacts || {},
+    wide,
+    found,
+    shadowedClock,
   };
   // Resolve memos in declaration order: constant-fold into the const scope when possible, else register a
   // derived C expression in locals so each reference inlines it (the AOT has no per-render cache — the dep
@@ -6566,7 +6877,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     try {
       scope[name] = evalStatic(expr, scope);
     } catch {
-      const e = emitExpr(expr, env);
+      const e = emitExprWide(expr, env);
       env.locals.set(name, {
         code: `(${e.code})`,
         cType: e.cType,
@@ -6650,7 +6961,7 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
   const scalarFieldDecl = s =>
     s.cType === 'string'
       ? `    char ${s.cField}[${LIST_STR_CAP}];`
-      : `    ${s.cType === 'float' ? 'float' : 'int'} ${s.cField};`;
+      : `    ${cScalarType(s.cType)} ${s.cField};`;
   const scalarBlock = scalarRecords.length
     ? `typedef struct\n{\n${scalarRecords.map(scalarFieldDecl).join('\n')}\n} ErAppState;\n\nstatic ErAppState s_state = {${scalarRecords.map(s => ` .${s.cField} = ${s.initCode}`).join(',')} };\n`
     : '';
@@ -6663,7 +6974,10 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
   // so consumer builds don't warn about an unused static.
   const refDecls = [...refs.values(), ...out.childRefs]
     .filter(r => r.used)
-    .map(r => `static ${r.cType} ${r.cVar} = ${r.initCode};`)
+    .map(
+      r =>
+        `static ${r.kind === 'value' ? cScalarType(r.cType) : r.cType} ${r.cVar} = ${r.initCode};`,
+    )
     .join('\n');
 
   // Baked vector op-tapes + paint tables (static <Svg> geometry), emitted at file scope.
@@ -6754,8 +7068,9 @@ function compileSourceImpl(src, demo = 'app', opts = {}) {
     .join('\n\n');
 
   // setInterval/setTimeout → a small fixed timer table advanced by er_app_tick(dt) (the host calls it each
-  // frame). The table + helpers are emitted only when timers are used; er_app_tick is always defined (a no-op
-  // otherwise) so a host can call it unconditionally. Timer callbacks become parameterless C functions.
+  // frame). The table + er_timer_add are emitted only when timers are used (er_timer_clear only when
+  // something calls it — see timerClearBlock); er_app_tick is always defined (a no-op otherwise) so a host
+  // can call it unconditionally. Timer callbacks become parameterless C functions.
   const timerTableBlock = out.usesTimers
     ? `#include <stdbool.h>
 
@@ -6792,19 +7107,6 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
         }
     }
     return -1; /* table full (raise ER_AOT_MAX_TIMERS) */
-}
-
-static void er_timer_clear(int id)
-{
-    if (id < 0)
-    {
-        return;
-    }
-    int i = id % ER_AOT_MAX_TIMERS;
-    if (s_timers[i].active && s_timers[i].gen == id / ER_AOT_MAX_TIMERS)
-    {
-        s_timers[i].active = false;
-    }
 }`
     : '';
 
@@ -6830,10 +7132,15 @@ static void er_timer_clear(int id)
     )
     .join('\n\n');
 
+  // A wall-clock change is applied here, on the app loop, rather than in the setter: the host may set the
+  // time before er_app_build(), when there is nothing to update yet.
+  const wallClockRefresh = hasUpdate
+    ? '    if (s_wall_clock_changed)\n    {\n        s_wall_clock_changed = 0;\n        app_update();\n    }\n'
+    : '';
   const appTickFn = out.usesTimers
     ? `void er_app_tick(int dt_ms)
 {
-    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
+${wallClockRefresh}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
     {
         if (!s_timers[i].active)
         {
@@ -6862,7 +7169,7 @@ static void er_timer_clear(int id)
         }
     }
 }`
-    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n}`;
+    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n${wallClockRefresh}}`;
 
   const mountEffectsBlock = out.mountEffects.length
     ? '\n    /* useEffect(fn, []) — run once on mount. */\n' +
@@ -6932,18 +7239,109 @@ static int16_t app_round_dim(double v)
   // dependent nodes via app_update() (which the host also gets for free — it is the same refresh a JS
   // setter would trigger). The host calls e.g. er_app_set_steps(count) once per frame.
   const hostRecords = scalarRecords.filter(s => s.host);
+  if (hostRecords.some(s => s.name === 'wall_clock'))
+    throw aotError(
+      'AOT: useHostValue("wall_clock") would collide with er_app_set_wall_clock()',
+      'rename the host value — every app exports er_app_set_wall_clock() for Date.now().',
+    );
   const hostSettersBlock = hostRecords
     .map(
       s =>
-        `void er_app_set_${s.name}(${s.cType === 'float' ? 'float' : 'int'} v)\n{\n    ${s.cMember} = v;\n${hasUpdate ? '    app_update();\n' : ''}}`,
+        `void er_app_set_${s.name}(${cScalarType(s.cType)} v)\n{\n    ${s.cMember} = v;\n${hasUpdate ? '    app_update();\n' : ''}}`,
     )
     .join('\n\n');
   const hostSetterProtos = hostRecords
     .map(
       s =>
-        `/** @brief Host-fed input '${s.name}' (useHostValue): set its value and refresh the display. */\nvoid er_app_set_${s.name}(${s.cType === 'float' ? 'float' : 'int'} v);`,
+        `/** @brief Host-fed input '${s.name}' (useHostValue): set its value and refresh the display. */\nvoid er_app_set_${s.name}(${cScalarType(s.cType)} v);`,
     )
     .join('\n\n');
+
+  // Date.now() / performance.now() read the engine clock as 64-bit whole milliseconds. The offset and its
+  // setter are always emitted, so a host can set the time whether or not the app reads it; the readers and
+  // the 64-bit Math helpers only when something calls them.
+  const CLOCK_HELPERS = [
+    [
+      'app_perf_now',
+      'static int64_t app_perf_now(void)\n{\n    return (int64_t)er_now_ms64();\n}',
+    ],
+    [
+      'app_date_now',
+      'static int64_t app_date_now(void)\n{\n    return s_wall_offset_ms + (int64_t)er_now_ms64();\n}',
+    ],
+    [
+      'app_floordiv64',
+      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. b is a\n" +
+        '   nonzero constant; the compiler refuses any other divisor. */\n' +
+        'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n' +
+        '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n}',
+    ],
+    [
+      'app_abs64',
+      'static int64_t app_abs64(int64_t v)\n{\n    return v < 0 ? -v : v;\n}',
+    ],
+    [
+      'app_min64',
+      'static int64_t app_min64(int64_t a, int64_t b)\n{\n    return a < b ? a : b;\n}',
+    ],
+    [
+      'app_max64',
+      'static int64_t app_max64(int64_t a, int64_t b)\n{\n    return a > b ? a : b;\n}',
+    ],
+    [
+      'app_delay_ms64',
+      '/* A timer delay computed from a timestamp: ToInt32 (wrap to 32 bits), then a negative delay is 0 — the\n' +
+        "   conversion Flow A's setTimeout applies. */\n" +
+        'static int app_delay_ms64(int64_t v)\n{\n    const uint32_t u = (uint32_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
+  ];
+  // The generated code that can call a file-local helper, with literals and comments blanked so a
+  // `<Text>app_date_now(</Text>` is not a call. Each static helper is emitted only when this calls it, since
+  // an unused static function warns under -Wall.
+  const helperCallers = stripCLiterals(
+    [
+      stateBlock,
+      refDecls,
+      vectorBuilderBlock,
+      updateBlock,
+      handlerDefs,
+      queryDefs,
+      effectFnDefs,
+      animCbDefs,
+      timerFnDefs,
+      out.mountEffects.join('\n'),
+      out.build.join('\n'),
+    ].join('\n'),
+  );
+  const clockBlock = [
+    '/* Date.now() is the engine clock plus this offset, so it reads as uptime until the host calls\n' +
+      '   er_app_set_wall_clock(). performance.now() is the engine clock alone. */\n' +
+      'static int64_t s_wall_offset_ms;' +
+      (hasUpdate
+        ? '\n/* Set by er_app_set_wall_clock(); the next er_app_tick() re-applies what reads the clock. */\n' +
+          'static int s_wall_clock_changed;'
+        : ''),
+    ...CLOCK_HELPERS.filter(([name]) => helperCallers.includes(`${name}(`)).map(
+      ([, def]) => def,
+    ),
+  ].join('\n\n');
+  // A mount effect's cleanup is dropped (the app never unmounts), so an app whose only clearInterval lives
+  // there calls er_timer_clear from nowhere.
+  const timerClearBlock =
+    out.usesTimers && helperCallers.includes('er_timer_clear(')
+      ? `static void er_timer_clear(int id)
+{
+    if (id < 0)
+    {
+        return;
+    }
+    int i = id % ER_AOT_MAX_TIMERS;
+    if (s_timers[i].active && s_timers[i].gen == id / ER_AOT_MAX_TIMERS)
+    {
+        s_timers[i].active = false;
+    }
+}`
+      : '';
 
   const body = `/*
  * Generated by the embedded-react Flow B AOT compiler (npm run aot -- ${demo}). DO NOT EDIT.
@@ -6972,8 +7370,13 @@ static int16_t app_round_dim(double v)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "embedded-react version mismatch: app.gen.c was generated by ${PKG_VERSION} but the engine header (er_version.h) is a different major.minor. Regenerate the app with 'npm run aot', or align the engine and npm versions.");
-${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${dimRoundBlock}${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${timerClearBlock ? '\n' + timerClearBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
+
+void er_app_set_wall_clock(int64_t epoch_ms)
+{
+    s_wall_offset_ms = epoch_ms - (int64_t)er_now_ms64();${hasUpdate ? '\n    s_wall_clock_changed = 1;' : ''}
+}
 ${hostSettersBlock ? '\n' + hostSettersBlock + '\n' : ''}
 void er_app_build(int screen_w, int screen_h)
 {
@@ -6996,6 +7399,8 @@ ${out.kbdSetup ? out.kbdSetup + ' /* app-supplied on-screen keyboard layout/appe
   const header = `/* Generated by the embedded-react Flow B AOT compiler. DO NOT EDIT. */
 #ifndef ER_APP_GEN_H
 #define ER_APP_GEN_H
+
+#include <stdint.h>
 
 /*
  * What this file was generated FOR. er_app_build() takes the screen size at runtime, but a responsive app
@@ -7023,6 +7428,13 @@ void er_app_build(int screen_w, int screen_h);
 /** @brief Advances app timers (setInterval/setTimeout). Call once per frame with the elapsed ms; a no-op
  *         for apps that use no timers, so it is always safe to call. */
 void er_app_tick(int dt_ms);
+
+/** @brief Tells the app the current time, which Date.now() counts on from. Until it is called Date.now()
+ *         reads as uptime; a later call re-anchors it, the next er_app_tick() re-applies what reads the
+ *         clock, and performance.now() never moves with it. Call it from the loop that calls
+ *         er_app_tick(), before or after er_app_build(); safe whether or not the app reads the clock.
+ *  @param[in] epoch_ms  Current time, in milliseconds since the Unix epoch. */
+void er_app_set_wall_clock(int64_t epoch_ms);
 ${hostSetterProtos ? '\n' + hostSetterProtos + '\n' : ''}
 #endif
 `;
@@ -7044,11 +7456,37 @@ ${hostSetterProtos ? '\n' + hostSetterProtos + '\n' : ''}
   };
 }
 
+/**
+ * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
+ * Date.now() in it. A compile reports such slots (env.found); this compiles again with them widened to
+ * int64_t until none are new, so every read of a slot sees its final type.
+ */
+function compileWidened(src, demo, opts) {
+  const wide = new Set();
+  for (;;) {
+    const found = new Set();
+    let result;
+    let error;
+    try {
+      result = compileSourceImpl(src, demo, opts, wide, found);
+    } catch (e) {
+      error = e;
+    }
+    const fresh = [...found].filter(key => !wide.has(key));
+    // A failed pass that still had slots to widen may have failed on the narrow type, so retry it first.
+    if (!fresh.length) {
+      if (error) throw error;
+      return result;
+    }
+    for (const key of fresh) wide.add(key);
+  }
+}
+
 /** Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
  *  source code-frame (+ hint) so the failure points at the exact unsupported construct. */
 export function compileSource(src, demo = 'app', opts = {}) {
   try {
-    return compileSourceImpl(src, demo, opts);
+    return compileWidened(src, demo, opts);
   } catch (e) {
     if (e && typeof e.message === 'string' && e.message.startsWith('AOT:')) {
       throw formatAotError(e, src, opts.filename || `demos/${demo}/App.jsx`);

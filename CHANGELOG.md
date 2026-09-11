@@ -12,6 +12,11 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- `Date.now()` and `performance.now()` now compile in Flow B, with the same surface as Flow A's lite
+  profile. The generated C holds them as 64-bit whole milliseconds, so divide them by a constant with
+  `%` or `Math.floor(a / b)`; a host sets the real time with `er_app_set_wall_clock()`. The engine
+  clock is also exposed as `er_now_ms64()`, which does not wrap at 49.7 days.
+
 - The thermostat demo has a clock: the time and date in its header, set from the settings sheet. It
   runs on `Date.now()`, so it needs no RTC, but it has to be set again after a power cycle.
 
@@ -59,6 +64,9 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- An AOT app whose timers are only cleared from a mount effect's cleanup no longer carries an unused
+  `er_timer_clear()`, which warned under `-Wall`. That cleanup never runs on an MCU, so nothing called it.
 
 - `Date.now()` no longer throws in Flow A. The default JS profile leaves `Date` out, so any handler
   that called it died on the spot; it now runs on the engine clock, and a host that knows the real

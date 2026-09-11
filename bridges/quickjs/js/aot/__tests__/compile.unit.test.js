@@ -1817,6 +1817,38 @@ describe('AOT effects & timers', () => {
     expect(c).not.toContain('er_timer_add');
   });
 
+  it('emits er_timer_clear only when something calls it', () => {
+    // A mount effect's cleanup is dropped (the app never unmounts), so nothing calls the clear here.
+    const mountOnly = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        useEffect(() => { const id = setInterval(() => setN((v) => v + 1), 1000); return () => clearInterval(id); }, []);
+        return (<Text>{n}</Text>);
+      }`);
+    expect(mountOnly).toContain(
+      'er_timer_add((int)(1000), true, er_timer_fn_0)',
+    );
+    expect(mountOnly).not.toContain('er_timer_clear');
+
+    const fromHandler = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<Pressable onPress={() => { const id = setInterval(() => setN((v) => v + 1), 1000); clearInterval(id); }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(fromHandler).toContain('static void er_timer_clear(int id)');
+    expect(fromHandler).toContain('er_timer_clear(l_id);');
+
+    const fromDepCleanup = gen(`${PRE}
+      export function App() {
+        const [page, setPage] = useState(0);
+        const [n, setN] = useState(0);
+        useEffect(() => { const id = setInterval(() => setN((v) => v + 1), 1000); return () => clearInterval(id); }, [page]);
+        return (<Pressable onPress={() => setPage(page + 1)}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(fromDepCleanup).toContain('static void er_timer_clear(int id)');
+    expect(fromDepCleanup).toContain('er_timer_clear(s_eff0_l_id);');
+  });
+
   it('lowers an early return in a dependency-driven useEffect to a real `return`', () => {
     const c = gen(`${PRE}
       export function App() {
@@ -1900,8 +1932,7 @@ describe('AOT effects & timers', () => {
     const c = gen(`${PRE}
       export function App() {
         const [n, setN] = useState(0);
-        useEffect(() => { const id = setTimeout(() => setN(1), 50); return () => clearTimeout(id); }, []);
-        return (<Text>{n}</Text>);
+        return (<Pressable onPress={() => { const id = setTimeout(() => setN(1), 50); clearTimeout(id); }}><Text>{n}</Text></Pressable>);
       }`);
     expect(c).toContain('return (s_timers[i].gen * ER_AOT_MAX_TIMERS) + i;');
     expect(c).toContain(
