@@ -78,6 +78,36 @@ typedef struct
 } ERPadding;
 
 /**
+ * @brief A pixel offset from the app (a translate, a shadow offset) that the compositor can cast to int.
+ *
+ * NaN (a 0/0 in app math) fails every comparison, and a C cast of it, or of a value past the int range, is
+ * undefined. NaN is 0 and the rest is clamped to ±32767, which is off every screen.
+ *
+ * @param[in] v  Offset in pixels.
+ *
+ * @return v, clamped; 0 for NaN.
+ */
+static inline float er_px_offset(float v)
+{
+    if (v != v)
+        return 0.0f;
+    return v < -32767.0f ? -32767.0f : (v > 32767.0f ? 32767.0f : v);
+}
+
+/**
+ * @brief A float prop from the app with NaN replaced, so it cannot reach a cast derived from it.
+ *
+ * @param[in] v     Incoming value.
+ * @param[in] dflt  Value to use for NaN (for a transform component, the one that means unset).
+ *
+ * @return v, or dflt when v is NaN.
+ */
+static inline float er_nan_or(float v, float dflt)
+{
+    return v != v ? dflt : v;
+}
+
+/**
  * @brief Resolves ONE padding edge: the per-edge value, else the shorthand, else the caller's default.
  *
  * Split out so a node with a built-in inset of its own can reuse the exact same cascade instead of

@@ -3120,8 +3120,8 @@ void er_props_default(ERProps* props)
 static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
 {
     node->props.view.shadow_color = props->shadow_color;
-    node->props.view.shadow_offset_x = props->shadow_offset_x;
-    node->props.view.shadow_offset_y = props->shadow_offset_y;
+    node->props.view.shadow_offset_x = er_px_offset(props->shadow_offset_x);
+    node->props.view.shadow_offset_y = er_px_offset(props->shadow_offset_y);
 #if ERUI_SHADOWS
     {
         const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
@@ -3241,21 +3241,21 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->hit_slop_bottom = props->hit_slop_bottom;
     node->long_press_ms = props->long_press_ms;
 
-    /* Copy transform props. */
-    node->tp_translate_x = props->transform_translate_x;
-    node->tp_translate_y = props->transform_translate_y;
-    node->tp_scale_x = props->transform_scale_x;
-    node->tp_scale_y = props->transform_scale_y;
-    node->tp_rotate_z = props->transform_rotate_z;
-    node->tp_origin_x = props->transform_origin_x;
-    node->tp_origin_y = props->transform_origin_y;
-    node->tp_rotate_x = props->transform_rotate_x;
-    node->tp_rotate_y = props->transform_rotate_y;
-    node->tp_perspective = props->transform_perspective;
-    node->has_transform = (props->transform_translate_x != 0.0f || props->transform_translate_y != 0.0f
-                           || props->transform_scale_x != 0.0f || props->transform_scale_y != 0.0f
-                           || props->transform_rotate_z != 0.0f || props->transform_rotate_x != 0.0f
-                           || props->transform_rotate_y != 0.0f || props->transform_perspective != 0.0f);
+    /* Copy transform props. A NaN component is unset (a NaN origin is the centre), where it would reach the
+     * integer casts that place and bound the node. */
+    node->tp_translate_x = er_px_offset(props->transform_translate_x);
+    node->tp_translate_y = er_px_offset(props->transform_translate_y);
+    node->tp_scale_x = er_nan_or(props->transform_scale_x, 0.0f);
+    node->tp_scale_y = er_nan_or(props->transform_scale_y, 0.0f);
+    node->tp_rotate_z = er_nan_or(props->transform_rotate_z, 0.0f);
+    node->tp_origin_x = er_nan_or(props->transform_origin_x, 0.5f);
+    node->tp_origin_y = er_nan_or(props->transform_origin_y, 0.5f);
+    node->tp_rotate_x = er_nan_or(props->transform_rotate_x, 0.0f);
+    node->tp_rotate_y = er_nan_or(props->transform_rotate_y, 0.0f);
+    node->tp_perspective = er_nan_or(props->transform_perspective, 0.0f);
+    node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
+                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
+                           || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
 
     /* Copy type-specific visual props. */
     switch (node->type)

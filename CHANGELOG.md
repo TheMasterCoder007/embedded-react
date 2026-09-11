@@ -65,6 +65,10 @@ See the README for the release process.
 
 ### Fixed
 
+- A NaN opacity, transform or shadow offset (a 0/0 in app math, say) now has a defined result instead of
+  undefined behavior in C: the view is fully transparent, the transform component is ignored, and the
+  shadow is not shifted. Flow B already made a NaN opacity transparent; Flow A and Animated now agree.
+
 - A Flow B app that sets state nothing on screen reads now compiles. Its handlers called an
   `app_update()` that was never generated, which every C compiler rejects.
 

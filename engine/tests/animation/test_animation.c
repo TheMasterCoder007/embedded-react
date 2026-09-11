@@ -805,6 +805,50 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * NAN AND OUT-OF-RANGE VALUES: NaN fails every comparison, so a clamp alone would pass it on to the
+     * opacity byte's cast, or to the compositor's (int)tp_translate_x, both undefined in C. A NaN value is
+     * 0 (for a transform component, unset), and a translate is clamped to what an int holds.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* na = er_node_create(ER_NODE_VIEW);
+        ERProps np = props_default();
+        np.width = 10;
+        np.height = 10;
+        er_node_set_props(na, &np);
+
+        ERAnimValueHandle th = er_anim_value_create(5.0f);
+        ERAnimValueHandle sh = er_anim_value_create(2.0f);
+        ERAnimValueHandle oh = er_anim_value_create(1.0f);
+        if (th == ER_ANIM_VALUE_INVALID || sh == ER_ANIM_VALUE_INVALID || oh == ER_ANIM_VALUE_INVALID)
+            return fail("nan values: er_anim_value_create returned INVALID");
+        er_anim_value_bind(th, na, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(sh, na, ER_PROP_SCALE_X);
+        er_anim_value_bind(oh, na, ER_PROP_OPACITY);
+
+        er_anim_value_set(th, NAN);
+        er_anim_value_set(sh, NAN);
+        er_anim_value_set(oh, NAN);
+        if (na->tp_translate_x != 0.0f)
+            return fail("nan values: a NaN translate should be 0");
+        if (na->tp_scale_x != 0.0f)
+            return fail("nan values: a NaN scale should be 0 (unset)");
+        if (na->props.view.opacity != 0U)
+            return fail("nan values: a NaN opacity should be fully transparent");
+
+        er_anim_value_set(th, 1e10f);
+        if (na->tp_translate_x != 32767.0f)
+            return fail("nan values: a translate past the int range should clamp to 32767");
+        er_anim_value_set(th, -1e10f);
+        if (na->tp_translate_x != -32767.0f)
+            return fail("nan values: a translate below the int range should clamp to -32767");
+
+        er_anim_value_destroy(th);
+        er_anim_value_destroy(sh);
+        er_anim_value_destroy(oh);
+        er_node_destroy(na);
+    }
+
+    /* -----------------------------------------------------------------------
      * STALE BINDING ON DESTROY: a binding to a destroyed node must not survive
      * to drive a DIFFERENT node that later reuses the freed tag. The node pool
      * recycles tags via a free list, so without clearing bindings in

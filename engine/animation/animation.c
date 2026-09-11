@@ -381,6 +381,11 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
 {
     if (!node)
         return false;
+    /* NaN fails every comparison, so a clamp below would pass it on to an integer cast (the opacity byte,
+     * or the compositor placing a node by (int)tp_translate_x), where it is undefined. A NaN value is 0,
+     * which for a transform component means unset. */
+    if (value != value)
+        value = 0.0f;
 
     switch (prop)
     {
@@ -399,12 +404,14 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
             return true;
         }
         case ER_PROP_TRANSLATE_X:
+            value = er_px_offset(value);
             if (node->tp_translate_x == value)
                 return false;
             node->tp_translate_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_TRANSLATE_Y:
+            value = er_px_offset(value);
             if (node->tp_translate_y == value)
                 return false;
             node->tp_translate_y = value;

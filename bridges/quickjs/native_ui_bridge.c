@@ -1713,7 +1713,9 @@ static void apply_opacity(JSContext* ctx, JSValueConst v, ERProps* p)
     double d = 1.0;
     if (JS_ToFloat64(ctx, &d, v) == 0)
     {
-        if (d < 0.0)
+        /* NaN fails every comparison, so `d < 0.0` would pass it on to the cast, where it is undefined. A NaN
+           opacity (a 0/0 in app math) is fully transparent, as Flow B's app_opacity makes it. */
+        if (!(d > 0.0))
         {
             d = 0.0;
         }

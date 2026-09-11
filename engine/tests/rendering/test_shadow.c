@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -515,6 +516,52 @@ int main(void)
         er_tree_remove_child(root, child);
         er_node_destroy(child);
         er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * A NaN shadow offset (a 0/0 in app math) is 0, where a C cast of it would be undefined: the hard
+     * shadow lands under the node, as an offset of (0,0) puts it. One past the int range is clamped,
+     * which puts it off screen.
+     * ---------------------------------------------------------------------- */
+    {
+        const float offsets[2] = {NAN, 1e10f};
+        const uint32_t under_node[2] = {0xFF000000U, 0xFFFFFFFFU}; /* the shadow, then the white root */
+        for (int i = 0; i < 2; i++)
+        {
+            reset(&tc);
+            er_reset();
+
+            ERNode* root = er_node_create(ER_NODE_VIEW);
+            ERProps rp = props_default();
+            rp.width = FB_W;
+            rp.height = FB_H;
+            rp.background_color = 0xFFFFFFFFU; /* white */
+            er_node_set_props(root, &rp);
+
+            ERNode* child = er_node_create(ER_NODE_VIEW);
+            ERProps cp = props_default();
+            cp.width = 4;
+            cp.height = 4;
+            cp.background_color = 0x00000000U; /* transparent — only the shadow visible */
+            cp.shadow_color = 0xFF000000U;
+            cp.shadow_offset_x = offsets[i];
+            cp.shadow_offset_y = offsets[i];
+            cp.shadow_opacity = 1.0f;
+            cp.shadow_radius = 0;
+            er_node_set_props(child, &cp);
+
+            er_tree_append_child(root, child);
+            er_tree_set_root(root);
+            er_commit();
+
+            if (px(&tc, 1, 1) != under_node[i])
+                return fail(i == 0 ? "nan offset: the shadow should sit under the node, unshifted"
+                                   : "huge offset: the shadow should be clamped off screen");
+
+            er_tree_remove_child(root, child);
+            er_node_destroy(child);
+            er_node_destroy(root);
+        }
     }
 
 #endif /* ERUI_SHADOWS */
