@@ -169,6 +169,46 @@ const GENERATED_PRAGMAS = (() => {
   return m ? m[0] : '';
 })();
 
+/** The file-local `app_*` helpers a generated file defines, by name. */
+const helperDefs = c =>
+  new Map(
+    [...c.matchAll(/static [\w ]+? (app_\w+)\([^)]*\)\n\{[\s\S]*?\n\}\n/g)].map(
+      m => [m[1], m[0]],
+    ),
+  );
+
+/** The helpers any of `calls` uses, as C source: an unused static function would fail -Werror. */
+const usedHelpers = (defs, calls) =>
+  [...defs]
+    .filter(([name]) => calls.some(c => c.includes(`${name}(`)))
+    .map(([, def]) => def)
+    .join('');
+
+const HELPER_INCLUDES =
+  '#include <limits.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n';
+
+/**
+ * UBSan flags that build here, or none. With them a signed overflow that gets through aborts the run
+ * instead of printing a plausible number. MinGW has no UBSan runtime, so the trap-only form is tried too.
+ */
+const UBSAN = (() => {
+  if (!CC) return [];
+  const dir = mkdtempSync(join(tmpdir(), 'er-aot-ubsan-probe-'));
+  try {
+    const src = join(dir, 'p.c');
+    writeFileSync(src, 'int main(void){return 0;}\n');
+    for (const flags of [
+      ['-fsanitize=undefined', '-fno-sanitize-recover=all'],
+      ['-fsanitize=undefined', '-fsanitize-undefined-trap-on-error'],
+    ])
+      if (spawnSync(CC, [...flags, '-o', join(dir, 'p'), src]).status === 0)
+        return flags;
+    return [];
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+})();
+
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
   val === null || val === undefined || typeof val === 'boolean'
@@ -249,10 +289,12 @@ describe('AOT text lowering matches JavaScript', () => {
       `${mode}: every expression renders what JS renders (${CC || 'no cc found'})`,
       () => {
         const cases = [];
+        const defs = new Map();
         for (let si = 0; si < SETS.length; si++) {
           const v = SETS[si];
           for (const expr of EXPRS) {
             const c = compileSource(app(expr, v), 'diff').c;
+            for (const [name, def] of helperDefs(c)) defs.set(name, def);
             const m = c.match(re);
             expect(
               m,
@@ -281,7 +323,12 @@ describe('AOT text lowering matches JavaScript', () => {
         // One translation unit for the whole matrix: -Werror turns any format/argument mismatch into a
         // build failure, and running it compares the actual bytes.
         let prog =
-          '#include <stdio.h>\n#include <string.h>\n' + GENERATED_PRAGMAS;
+          HELPER_INCLUDES +
+          GENERATED_PRAGMAS +
+          usedHelpers(
+            defs,
+            cases.map(c => c.call),
+          );
         prog += 'struct St { int n; float f; char s[64]; int on; int on2; };\n';
         cases.forEach((c, i) => {
           const v = c.v;
@@ -302,7 +349,16 @@ describe('AOT text lowering matches JavaScript', () => {
           writeFileSync(src, prog);
           const build = spawnSync(
             CC,
-            ['-Wall', '-Wextra', '-Wformat', '-Werror', '-o', bin, src],
+            [
+              '-Wall',
+              '-Wextra',
+              '-Wformat',
+              '-Werror',
+              ...UBSAN,
+              '-o',
+              bin,
+              src,
+            ],
             {encoding: 'utf8'},
           );
           expect(build.stderr || '').toBe('');
@@ -375,10 +431,7 @@ export function App() {
         expect(c).toContain('    int64_t t;');
         const m = c.match(MODES.child.re);
         expect(m, `${expr}: no snprintf emitted`).toBeTruthy();
-        for (const h of c.matchAll(
-          /static int64_t (app_(?:floordiv|abs|min|max)64)\([^)]*\)\n\{[\s\S]*?\n\}\n/g,
-        ))
-          helpers.set(h[1], h[0]);
+        for (const [name, def] of helperDefs(c)) helpers.set(name, def);
         for (const v of VALUES)
           cases.push({
             expr,
@@ -389,10 +442,12 @@ export function App() {
       }
 
       let prog =
-        '#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n' +
-        GENERATED_PRAGMAS;
-      for (const [name, def] of helpers)
-        if (cases.some(c => c.call.includes(`${name}(`))) prog += def;
+        HELPER_INCLUDES +
+        GENERATED_PRAGMAS +
+        usedHelpers(
+          helpers,
+          cases.map(c => c.call),
+        );
       prog += 'struct St { int64_t t; };\n';
       cases.forEach((c, i) => {
         prog +=
@@ -411,7 +466,7 @@ export function App() {
         writeFileSync(src, prog);
         const build = spawnSync(
           CC,
-          ['-Wall', '-Wextra', '-Wformat', '-Werror', '-o', bin, src],
+          ['-Wall', '-Wextra', '-Wformat', '-Werror', ...UBSAN, '-o', bin, src],
           {encoding: 'utf8'},
         );
         expect(build.stderr || '').toBe('');
@@ -490,6 +545,187 @@ export function App() {
       } finally {
         rmSync(dir, {recursive: true, force: true});
       }
+    },
+  );
+});
+
+describe('AOT whole-number overflow saturates', () => {
+  /** Builds `prog` under -Werror, with UBSan where it builds, and runs it: `index\ttext` lines → Map. */
+  function buildAndRun(prog, tag) {
+    const dir = mkdtempSync(join(tmpdir(), `er-aot-${tag}-`));
+    try {
+      const src = join(dir, `${tag}.c`);
+      const bin = join(dir, tag);
+      writeFileSync(src, prog);
+      const build = spawnSync(
+        CC,
+        ['-Wall', '-Wextra', '-Wformat', '-Werror', ...UBSAN, '-o', bin, src],
+        {encoding: 'utf8'},
+      );
+      expect(build.stderr || '').toBe('');
+      expect(build.status).toBe(0);
+      const got = new Map();
+      for (const line of execFileSync(bin, {encoding: 'utf8'}).split('\n')) {
+        if (!line) continue;
+        const t = line.indexOf('\t');
+        got.set(Number(line.slice(0, t)), line.slice(t + 1));
+      }
+      return got;
+    } finally {
+      rmSync(dir, {recursive: true, force: true});
+    }
+  }
+
+  // One operator each, so the model is the exact result clamped to the type's range. JS would keep the
+  // bigger number; what is pinned here is that C gives a defined one.
+  const EXPRS = [
+    ['n + 1', n => n + 1n],
+    ['n - 1', n => n - 1n],
+    ['1 - n', n => 1n - n],
+    ['n + n', n => n + n],
+    ['n * 100000', n => n * 100000n],
+    ['n * n', n => n * n],
+    ['n * -1', n => -n],
+    ['-n', n => -n],
+  ];
+  // Each minimum is spelled the way C needs it: `-2147483648` is `-` applied to a number too big for an int.
+  const WIDTHS = {
+    int: {
+      bits: 32n,
+      field: 'int n;',
+      values: [
+        0n,
+        7n,
+        -7n,
+        21474n,
+        21475n,
+        -21475n,
+        46341n,
+        2n ** 31n - 1n,
+        -(2n ** 31n),
+      ],
+      exprs: EXPRS,
+      // Nothing stores a timestamp in `n`, so it stays an int.
+      body: expr => `<Text>{${expr}}</Text>`,
+      lit: v => (v === -(2n ** 31n) ? '(-2147483647 - 1)' : String(v)),
+    },
+    int64: {
+      bits: 64n,
+      field: 'int64_t n;',
+      values: [
+        0n,
+        7n,
+        -7n,
+        1789075980000n,
+        3037000500n,
+        -3037000500n,
+        2n ** 62n,
+        2n ** 63n - 1n,
+        -(2n ** 63n),
+      ],
+      exprs: [...EXPRS, ['Math.abs(n)', n => (n < 0n ? -n : n)]],
+      // Storing Date.now() widens `n` to int64_t.
+      body: expr =>
+        `<Pressable onPress={() => setN(Date.now())}><Text>{${expr}}</Text></Pressable>`,
+      lit: v =>
+        v === -(2n ** 63n) ? '(-9223372036854775807LL - 1)' : `${v}LL`,
+    },
+  };
+
+  for (const [name, w] of Object.entries(WIDTHS))
+    (CC ? it : it.skip)(
+      `${name}: + - * and negation clamp to the range (${CC || 'no cc found'})`,
+      () => {
+        const lo = -(2n ** (w.bits - 1n));
+        const hi = 2n ** (w.bits - 1n) - 1n;
+        const defs = new Map();
+        const cases = [];
+        for (const [expr, model] of w.exprs) {
+          const c = compileSource(
+            `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  return (${w.body(expr)});
+}`,
+            'overflow',
+          ).c;
+          expect(c).toContain(`    ${w.field}`);
+          const m = c.match(MODES.child.re);
+          expect(m, `${expr}: no snprintf emitted`).toBeTruthy();
+          for (const [k, def] of helperDefs(c)) defs.set(k, def);
+          for (const v of w.values) {
+            const x = model(v);
+            cases.push({
+              expr,
+              v,
+              call: m[1].replace(/s_state\./g, 'S.'),
+              want: String(x < lo ? lo : x > hi ? hi : x),
+            });
+          }
+        }
+        const helpers = usedHelpers(
+          defs,
+          cases.map(c => c.call),
+        );
+        // GCC and Clang take the overflow builtin; the division fallback other compilers get must agree.
+        const variants = [helpers];
+        if (helpers.includes('__builtin_mul_overflow'))
+          variants.push(
+            helpers.replace(/^#if defined\(__clang__\).*$/m, '#if 0'),
+          );
+        for (const h of variants) {
+          let prog = HELPER_INCLUDES + GENERATED_PRAGMAS + h;
+          prog += `struct St { ${w.field} };\n`;
+          cases.forEach((c, i) => {
+            prog +=
+              `static void case_${i}(void){ struct St S = {${w.lit(c.v)}}; (void)S;\n` +
+              `  char b[64]; snprintf(b, sizeof b, ${c.call}); printf("%d\\t%s\\n", ${i}, b); }\n`;
+          });
+          prog +=
+            'int main(void){\n' +
+            cases.map((_, i) => `  case_${i}();`).join('\n') +
+            '\n  return 0; }\n';
+          const got = buildAndRun(prog, `overflow-${name}`);
+          const bad = cases
+            .map((c, i) => ({...c, got: got.get(i)}))
+            .filter(c => c.got !== c.want)
+            .map(c => `${c.expr} @n=${c.v}: C=${c.got} want=${c.want}`);
+          expect(bad).toEqual([]);
+        }
+      },
+    );
+
+  (CC ? it : it.skip)(
+    `a handler storing an overflowing product keeps a clamped value (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [t, setT] = useState(0);
+  const [n, setN] = useState(0);
+  return (<Pressable onPress={() => { setT(Date.now() * 10000000); setN(n * 100000); }}><Text>{n}</Text></Pressable>);
+}`,
+        'handler-overflow',
+      ).c;
+      const body = c.match(
+        / {4}s_state\.t = [^\n]+\n {4}s_state\.n = [^\n]+\n/,
+      );
+      expect(body, 'no setter statements emitted').toBeTruthy();
+      const defs = helperDefs(c);
+      defs.delete('app_date_now'); // pinned below instead of reading the engine clock
+      const prog =
+        HELPER_INCLUDES +
+        usedHelpers(defs, [body[0]]) +
+        'static int64_t app_date_now(void) { return 1789075980000LL; }\n' +
+        'struct St { int64_t t; int n; };\n' +
+        'int main(void){ struct St S = {0, 30000};\n' +
+        body[0].replace(/s_state\./g, 'S.') +
+        '    printf("0\\tt=%lld n=%d\\n", (long long)S.t, S.n);\n    return 0; }\n';
+      expect(buildAndRun(prog, 'handler-overflow').get(0)).toBe(
+        't=9223372036854775807 n=2147483647',
+      );
     },
   );
 });

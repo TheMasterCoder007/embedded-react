@@ -303,6 +303,12 @@ const ARITH = new Set(['+', '-', '*', '/', '%']);
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
 /**
+ * The C helper each whole-number operator lowers to. It saturates at the limit of its type, where C's own
+ * signed overflow is undefined behavior; the 64-bit variant appends `64`.
+ */
+const CHECKED_OP = {'+': 'app_add', '-': 'app_sub', '*': 'app_mul'};
+
+/**
  * `scope` minus every name `env` binds at RUNTIME — locals, state, refs, animated values, and the event /
  * gesture params of the handler being compiled. emitExpr resolves those before env.consts, so a fold
  * that consulted the raw scope would silently swap a module const in for the value the code actually
@@ -393,6 +399,37 @@ function staticInt(node, env) {
   }
 }
 
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+
+/**
+ * A compile-time number as C. A whole number too big for an int is a 64-bit constant (`lit`), so whole-number
+ * math keeps it exact; past 64 bits it is a float.
+ */
+function numConst(v) {
+  if (!Number.isInteger(v)) return {code: `${v}f`, cType: 'float'};
+  if (Math.abs(v) >= 2 ** 63)
+    return {code: `${v.toExponential()}f`, cType: 'float'};
+  if (v < INT_MIN || v > INT_MAX)
+    return {code: String(v), cType: 'i64', lit: true};
+  // `-2147483648` is `-` applied to 2147483648, which does not fit an int.
+  return {code: v === INT_MIN ? '(-2147483647 - 1)' : String(v), cType: 'int'};
+}
+
+/** `+ - *` or a unary `-`: the operators that can overflow a whole number. */
+const isIntArith = n =>
+  (n.type === 'BinaryExpression' && Boolean(CHECKED_OP[n.operator])) ||
+  (n.type === 'UnaryExpression' && n.operator === '-');
+
+/** A 64-bit value computed at runtime (a timestamp, or math on one), as opposed to a 64-bit constant. */
+const isTime64 = e => e.cType === 'i64' && !e.lit;
+
+/** Beside a float, a 64-bit constant is an ordinary number that converts, as in JS; only a timestamp refuses. */
+const litPeers = (...es) =>
+  es.some(e => e.cType === 'float')
+    ? es.map(e => (e.lit ? {code: `((float)${e.code})`, cType: 'float'} : e))
+    : es;
+
 /**
  * The divisor of a 64-bit `%` or Math.floor(a / b), which has to be a nonzero constant: JS gives NaN or
  * Infinity for a zero divisor, which an integer cannot hold, and C would trap on it.
@@ -409,9 +446,10 @@ function nonzeroDivisor(node, env) {
 }
 
 /**
- * `+ - * %` with a 64-bit timestamp on either side, kept in whole milliseconds. `%` takes a nonzero constant,
- * and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary number again. `/` is
- * refused: JS would give a fraction, and the whole-number division is written Math.floor(a / b).
+ * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. `%` takes a
+ * nonzero constant, and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary
+ * number again. `/` is refused: JS would give a fraction, and the whole-number division is written
+ * Math.floor(a / b).
  */
 function emitArith64(node, l, r, env) {
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
@@ -424,8 +462,12 @@ function emitArith64(node, l, r, env) {
     const m = nonzeroDivisor(node.right, env);
     if (Math.abs(m) <= 0x7fffffff)
       return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
+    return {code: `(${l.code} % ${r.code})`, cType: 'i64'};
   }
-  return {code: `(${l.code} ${node.operator} ${r.code})`, cType: 'i64'};
+  return {
+    code: `${CHECKED_OP[node.operator]}64(${l.code}, ${r.code})`,
+    cType: 'i64',
+  };
 }
 
 /**
@@ -444,7 +486,7 @@ function emitFloorDiv64(fn, args, env) {
     return null;
   const l = emitExprWide(arg.left, env);
   const r = emitExprWide(arg.right, env);
-  if (l.cType !== 'i64' && r.cType !== 'i64') return null;
+  if (!isTime64(l) && !isTime64(r)) return null;
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
   if (l.cType === 'string' || r.cType === 'string') return null;
   if (fn !== 'floor')
@@ -475,11 +517,11 @@ function emitMath64(fn, a) {
 }
 
 function emitExprImpl(node, env) {
+  // 64-bit int math reaches only through `+ - *` and `-`; any other node under them is typed as usual.
+  if (env.math64 && !isIntArith(node)) env = {...env, math64: false};
   switch (node.type) {
     case 'NumericLiteral':
-      return Number.isInteger(node.value)
-        ? {code: String(node.value), cType: 'int'}
-        : {code: `${node.value}f`, cType: 'float'};
+      return numConst(node.value);
     case 'StringLiteral':
       return {code: cstr(node.value), cType: 'string'};
     case 'BooleanLiteral':
@@ -496,10 +538,7 @@ function emitExprImpl(node, env) {
       }
       if (node.name in env.consts) {
         const v = env.consts[node.name];
-        if (typeof v === 'number')
-          return Number.isInteger(v)
-            ? {code: String(v), cType: 'int'}
-            : {code: `${v}f`, cType: 'float'};
+        if (typeof v === 'number') return numConst(v);
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
         if (typeof v === 'boolean')
           return {code: v ? '1' : '0', cType: 'int', isBool: true};
@@ -509,6 +548,9 @@ function emitExprImpl(node, env) {
       );
     }
     case 'UnaryExpression': {
+      // A constant is negated here, so `-A` is its value and -2147483648 is not an int overflow.
+      const neg = node.operator === '-' ? staticInt(node.argument, env) : null;
+      if (neg !== null) return numConst(-neg);
       const a = emitExprWide(node.argument, env);
       if (
         (node.operator === '-' || node.operator === '+') &&
@@ -518,7 +560,15 @@ function emitExprImpl(node, env) {
           `AOT: unary "${node.operator}" on a string is not supported`,
           'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
         );
-      // Parenthesize the operand so `-` on a negative literal emits `(-(-135))`, not `(--135)` (a decrement).
+      // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
+      if (node.operator === '-' && (a.cType === 'int' || a.cType === 'i64')) {
+        const w = a.cType === 'i64' || env.math64;
+        return {
+          code: `app_neg${w ? '64' : ''}(${a.code})`,
+          cType: w ? 'i64' : 'int',
+        };
+      }
+      // Parenthesize the operand so `-` on a negative operand emits `(-(-x))`, not `(--x)` (a decrement).
       if (
         node.operator === '-' ||
         node.operator === '+' ||
@@ -534,8 +584,28 @@ function emitExprImpl(node, env) {
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
-      const l = emitExprWide(node.left, env);
-      const r = emitExprWide(node.right, env);
+      // `+ - *` over two whole-number constants is worked out here, as JS would, so a product too big for an
+      // int (30 * DAY_MS) is an exact 64-bit constant rather than an overflow.
+      const lk = CHECKED_OP[node.operator] ? staticInt(node.left, env) : null;
+      const rk = lk === null ? null : staticInt(node.right, env);
+      if (rk !== null)
+        return numConst(
+          node.operator === '+'
+            ? lk + rk
+            : node.operator === '-'
+              ? lk - rk
+              : lk * rk,
+        );
+      let l = emitExprWide(node.left, env);
+      let r = emitExprWide(node.right, env);
+      // Beside a 64-bit value, int `+ - *` is worked out in 64 bits too: JS would not have cut it to 32.
+      if (l.cType === 'i64' || r.cType === 'i64') {
+        if (l.cType === 'int' && isIntArith(node.left))
+          l = emitExprWide(node.left, {...env, math64: true});
+        if (r.cType === 'int' && isIntArith(node.right))
+          r = emitExprWide(node.right, {...env, math64: true});
+      }
+      [l, r] = litPeers(l, r);
       if (ARITH.has(node.operator)) {
         if (l.cType === 'string' || r.cType === 'string') {
           // `+` over a string builds text, which C cannot express as one value. Where the destination is
@@ -552,7 +622,14 @@ function emitExprImpl(node, env) {
             'keep both operands numeric — a string cannot be coerced to a number here.',
           );
         }
-        if (l.cType === 'i64' || r.cType === 'i64')
+        // `/` and `%` take a 64-bit constant as an ordinary C number; only a runtime 64-bit value is held to
+        // the whole-millisecond rules.
+        if (
+          isTime64(l) ||
+          isTime64(r) ||
+          ((l.cType === 'i64' || r.cType === 'i64') &&
+            CHECKED_OP[node.operator])
+        )
           return emitArith64(node, l, r, env);
         if (node.operator === '/')
           return {
@@ -561,6 +638,11 @@ function emitExprImpl(node, env) {
           };
         const cType =
           l.cType === 'float' || r.cType === 'float' ? 'float' : 'int';
+        const fn = cType === 'int' && CHECKED_OP[node.operator];
+        if (fn)
+          return env.math64
+            ? {code: `${fn}64(${l.code}, ${r.code})`, cType: 'i64'}
+            : {code: `${fn}(${l.code}, ${r.code})`, cType: 'int'};
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
       }
       if (COMPARE.has(node.operator)) {
@@ -639,8 +721,10 @@ function emitExprImpl(node, env) {
         node.operator === '&&' || node.operator === '||' ? node.operator : null;
       if (!op)
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
-      const l = emitExprWide(node.left, env);
-      const r = emitExprWide(node.right, env);
+      const [l, r] = litPeers(
+        emitExprWide(node.left, env),
+        emitExprWide(node.right, env),
+      );
       // JS gives back one of the operands, not true/false. The 0/1 below is only its truth, which would
       // store `1` in place of a timestamp — so with a 64-bit side, keep the operand's value.
       if (l.cType === 'i64' || r.cType === 'i64') {
@@ -669,8 +753,10 @@ function emitExprImpl(node, env) {
     }
     case 'ConditionalExpression': {
       const t = emitExprWide(node.test, env);
-      const c = emitExprWide(node.consequent, env);
-      const a = emitExprWide(node.alternate, env);
+      const [c, a] = litPeers(
+        emitExprWide(node.consequent, env),
+        emitExprWide(node.alternate, env),
+      );
       // `(ok ? 1 : "none")` is ill-typed C (int vs char*) and has no single printf spec either, so it
       // has to be refused here rather than handed to the host compiler.
       if ((c.cType === 'string') !== (a.cType === 'string'))
@@ -699,10 +785,7 @@ function emitExprImpl(node, env) {
       // Static fold: member access that resolves to a compile-time constant (e.g. a .map item's `.key`).
       try {
         const v = evalStatic(node, foldScope(env, env.consts ?? {}));
-        if (typeof v === 'number')
-          return Number.isInteger(v)
-            ? {code: String(v), cType: 'int'}
-            : {code: `${v}f`, cType: 'float'};
+        if (typeof v === 'number') return numConst(v);
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
         if (typeof v === 'boolean')
           return {code: v ? '1' : '0', cType: 'int', isBool: true};
@@ -817,7 +900,7 @@ function emitExprImpl(node, env) {
         const fn = c.property.name;
         const floorDiv = emitFloorDiv64(fn, node.arguments, env);
         if (floorDiv) return floorDiv;
-        const a = node.arguments.map(x => emitExprWide(x, env));
+        const a = litPeers(...node.arguments.map(x => emitExprWide(x, env)));
         if (a.some(x => x.cType === 'i64')) return emitMath64(fn, a);
         const UNARY = {
           sin: 'sinf',
@@ -871,14 +954,14 @@ const emitExprWide = withLoc(emitExprImpl);
 
 /**
  * Lowers an expression for a destination that holds an int, a float or a string. C would narrow a 64-bit
- * timestamp (Date.now() / performance.now()) into one of those without a warning, so it is refused here;
- * the destinations that hold 64 bits call emitExprWide.
+ * value (a Date.now() / performance.now() timestamp, or a whole number past the int range) into one of those
+ * without a warning, so it is refused here; the destinations that hold 64 bits call emitExprWide.
  */
 function emitExpr(node, env) {
   const e = emitExprWide(node, env);
   if (e.cType !== 'i64') return e;
   const err = aotError(
-    'AOT: a 64-bit time value (Date.now() / performance.now()) cannot be used here',
+    'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
     'keep it in state, a ref or a local, compare it, or show it in text. Anywhere else, reduce it to a small number first — e.g. `ms % 1000`, or `Math.floor(ms / 1000) % 60`.',
   );
   if (node.loc) err.aotLoc = node.loc.start;
@@ -2684,7 +2767,8 @@ const readsMember = member =>
 /**
  * Checks a value written to a numeric state or ref slot, whose C type came from its initial value. A 64-bit
  * timestamp written to an int slot is recorded in env.found, and compileWidened compiles again with that
- * slot widened to int64_t. It cannot go into a float or boolean slot, and a widened slot takes no floats.
+ * slot widened to int64_t. It cannot go into a float or boolean slot (a 64-bit constant can go into a float
+ * one), and a widened slot takes no floats.
  */
 function storeCheck(e, slotType, isBool, key, what, env) {
   if (e.cType === 'i64' && slotType !== 'i64') {
@@ -2692,6 +2776,7 @@ function storeCheck(e, slotType, isBool, key, what, env) {
       env.found.add(key);
       return;
     }
+    if (e.lit && slotType === 'float') return;
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${what}`,
       'give it a whole-number initial value — useState(0) or useRef(0) — and it widens to hold the timestamp.',
@@ -2704,7 +2789,11 @@ function storeCheck(e, slotType, isBool, key, what, env) {
  *  becomes a format + args), plain assign otherwise. */
 function scalarAssign(rec, node, env, indent) {
   if (rec.cType !== 'string') {
-    const e = emitExprWide(node, env);
+    // A 64-bit slot takes int `+ - *` worked out in 64 bits.
+    const e = emitExprWide(
+      node,
+      rec.cType === 'i64' ? {...env, math64: true} : env,
+    );
     storeCheck(
       e,
       rec.cType,
@@ -2906,7 +2995,12 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
       );
     if (args[i]) {
       const e = emitExprWide(args[i], env);
-      locals.set(p.name, {code: e.code, cType: e.cType, isBool: e.isBool});
+      locals.set(p.name, {
+        code: e.code,
+        cType: e.cType,
+        isBool: e.isBool,
+        lit: e.lit,
+      });
     }
   });
   const body = fn.body;
@@ -2963,13 +3057,14 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       throw new Error(
         'AOT: the only assignment allowed in a handler is `ref.current = ...`',
       );
-    const e = emitExprWide(expr.right, env);
-    if (expr.operator === '/=' && (r.cType === 'i64' || e.cType === 'i64'))
+    const refEnv = r.cType === 'i64' ? {...env, math64: true} : env;
+    const e = emitExprWide(expr.right, refEnv);
+    if (expr.operator === '/=' && (r.cType === 'i64' || isTime64(e)))
       throw aotError(
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
       );
-    if (expr.operator === '%=' && (r.cType === 'i64' || e.cType === 'i64'))
+    if (expr.operator === '%=' && (r.cType === 'i64' || isTime64(e)))
       nonzeroDivisor(expr.right, env);
     storeCheck(
       e,
@@ -2979,15 +3074,34 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       `ref "${expr.left.object.name}"`,
       env,
     );
+    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`.
+    const step = {'+=': '+', '-=': '-', '*=': '*'}[expr.operator];
+    if (step && (r.cType === 'int' || r.cType === 'i64')) {
+      const v = emitExprWide(
+        {
+          type: 'BinaryExpression',
+          operator: step,
+          left: expr.left,
+          right: expr.right,
+          loc: expr.loc,
+        },
+        refEnv,
+      );
+      return [`${indent}${r.cVar} = ${v.code};`];
+    }
     return [`${indent}${r.cVar} ${expr.operator} ${e.code};`];
   }
-  // `ref.current++` / `ref.current--`.
+  // `ref.current++` / `ref.current--`; a whole-number ref steps through the checked `+ 1` / `- 1`.
   if (expr.type === 'UpdateExpression') {
     const r = refTarget(expr.argument, env);
     if (!r)
       throw new Error(
         'AOT: the only ++/-- allowed in a handler is on `ref.current`',
       );
+    if (r.cType === 'int' || r.cType === 'i64')
+      return [
+        `${indent}${r.cVar} = ${CHECKED_OP[expr.operator[0]]}${r.cType === 'i64' ? '64' : ''}(${r.cVar}, 1);`,
+      ];
     return [`${indent}${r.cVar}${expr.operator};`];
   }
   // Animated.*(…).start() — single timing/spring/decay OR a sequence/parallel/stagger/delay/loop
@@ -7258,9 +7372,9 @@ static int16_t app_round_dim(double v)
     .join('\n\n');
 
   // Date.now() / performance.now() read the engine clock as 64-bit whole milliseconds. The offset and its
-  // setter are always emitted, so a host can set the time whether or not the app reads it; the readers and
-  // the 64-bit Math helpers only when something calls them.
-  const CLOCK_HELPERS = [
+  // setter are always emitted, so a host can set the time whether or not the app reads it; the readers, the
+  // checked whole-number math and the 64-bit Math helpers only when something calls them.
+  const APP_HELPERS = [
     [
       'app_perf_now',
       'static int64_t app_perf_now(void)\n{\n    return (int64_t)er_now_ms64();\n}',
@@ -7268,6 +7382,51 @@ static int16_t app_round_dim(double v)
     [
       'app_date_now',
       'static int64_t app_date_now(void)\n{\n    return s_wall_offset_ms + (int64_t)er_now_ms64();\n}',
+    ],
+    ...Object.entries(CHECKED_OP).map(([op, name]) => [
+      name,
+      `/* a ${op} b, saturated to the int range: C leaves a signed overflow undefined. */\n` +
+        `static int ${name}(int a, int b)\n{\n    const int64_t v = (int64_t)a ${op} b;\n` +
+        '    return v > INT_MAX ? INT_MAX : v < INT_MIN ? INT_MIN : (int)v;\n}',
+    ]),
+    [
+      'app_neg',
+      '/* -a, saturated: -INT_MIN does not fit an int. */\n' +
+        'static int app_neg(int a)\n{\n    return a == INT_MIN ? INT_MAX : -a;\n}',
+    ],
+    [
+      'app_add64',
+      '/* a + b, saturated to the int64 range: C leaves a signed overflow undefined. */\n' +
+        'static int64_t app_add64(int64_t a, int64_t b)\n{\n' +
+        '    if (b > 0 ? a > INT64_MAX - b : a < INT64_MIN - b)\n    {\n' +
+        '        return b > 0 ? INT64_MAX : INT64_MIN;\n    }\n    return a + b;\n}',
+    ],
+    [
+      'app_sub64',
+      '/* a - b, saturated to the int64 range: C leaves a signed overflow undefined. */\n' +
+        'static int64_t app_sub64(int64_t a, int64_t b)\n{\n' +
+        '    if (b < 0 ? a > INT64_MAX + b : a < INT64_MIN + b)\n    {\n' +
+        '        return b < 0 ? INT64_MAX : INT64_MIN;\n    }\n    return a - b;\n}',
+    ],
+    [
+      'app_mul64',
+      '/* a * b, saturated to the int64 range: C leaves a signed overflow undefined. GCC and Clang test for\n' +
+        '   the overflow with a builtin; anywhere else (MSVC) the limits are checked by division first. */\n' +
+        'static int64_t app_mul64(int64_t a, int64_t b)\n{\n' +
+        '#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5)\n' +
+        '    int64_t v;\n    if (!__builtin_mul_overflow(a, b, &v))\n    {\n        return v;\n    }\n' +
+        '#else\n' +
+        '    if (a == 0 || b == 0 ||\n' +
+        '        (a > 0 ? (b > 0 ? a <= INT64_MAX / b : b >= INT64_MIN / a)\n' +
+        '               : (b > 0 ? a >= INT64_MIN / b : a >= INT64_MAX / b)))\n    {\n' +
+        '        return a * b;\n    }\n' +
+        '#endif\n' +
+        '    return (a < 0) == (b < 0) ? INT64_MAX : INT64_MIN;\n}',
+    ],
+    [
+      'app_neg64',
+      '/* -a, saturated: -INT64_MIN does not fit an int64_t. */\n' +
+        'static int64_t app_neg64(int64_t a)\n{\n    return a == INT64_MIN ? INT64_MAX : -a;\n}',
     ],
     [
       'app_floordiv64',
@@ -7278,7 +7437,8 @@ static int16_t app_round_dim(double v)
     ],
     [
       'app_abs64',
-      'static int64_t app_abs64(int64_t v)\n{\n    return v < 0 ? -v : v;\n}',
+      '/* |v|, saturated: -INT64_MIN does not fit an int64_t. */\n' +
+        'static int64_t app_abs64(int64_t v)\n{\n    return v >= 0 ? v : v == INT64_MIN ? INT64_MAX : -v;\n}',
     ],
     [
       'app_min64',
@@ -7321,10 +7481,11 @@ static int16_t app_round_dim(double v)
         ? '\n/* Set by er_app_set_wall_clock(); the next er_app_tick() re-applies what reads the clock. */\n' +
           'static int s_wall_clock_changed;'
         : ''),
-    ...CLOCK_HELPERS.filter(([name]) => helperCallers.includes(`${name}(`)).map(
+    ...APP_HELPERS.filter(([name]) => helperCallers.includes(`${name}(`)).map(
       ([, def]) => def,
     ),
   ].join('\n\n');
+  const usesLimits = /\bINT_M(?:AX|IN)\b/.test(clockBlock);
   // A mount effect's cleanup is dropped (the app never unmounts), so an app whose only clearInterval lives
   // there calls er_timer_clear from nowhere.
   const timerClearBlock =
@@ -7370,7 +7531,7 @@ static int16_t app_round_dim(double v)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "embedded-react version mismatch: app.gen.c was generated by ${PKG_VERSION} but the engine header (er_version.h) is a different major.minor. Regenerate the app with 'npm run aot', or align the engine and npm versions.");
-${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${timerClearBlock ? '\n' + timerClearBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${usesLimits ? '#include <limits.h>\n' : ''}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${timerClearBlock ? '\n' + timerClearBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 
 void er_app_set_wall_clock(int64_t epoch_ms)

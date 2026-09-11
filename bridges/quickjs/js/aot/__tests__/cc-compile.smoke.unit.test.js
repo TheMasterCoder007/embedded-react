@@ -602,6 +602,71 @@ describe('AOT generated C compiles', () => {
     },
   );
   (CC ? it : it.skip)(
+    `saturating whole-number math passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every checked-math helper, int and 64-bit, under -Wall: one emitted but never called would warn,
+      // and so would a printf format that no longer matches a widened value.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Text, Pressable } from 'embedded-react';
+         const DAY_MS = 86400000;
+         export function App() {
+           const [n, setN] = useState(0);
+           const [t, setT] = useState(0);
+           const acc = useRef(0);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { setN(-(n * 3 - 1) + 2); acc.current += n; acc.current++; }}>
+                 <Text>{n}</Text>
+               </Pressable>
+               <Pressable onPress={() => setT(-(Date.now() * 2 - 30 * DAY_MS) + n * DAY_MS)}><Text>{t}</Text></Pressable>
+               <Text>{Math.abs(Date.now() - t)}</Text>
+             </View>
+           );
+         }`,
+        'checked',
+      );
+      for (const h of [
+        'app_add',
+        'app_sub',
+        'app_mul',
+        'app_neg',
+        'app_add64',
+        'app_sub64',
+        'app_mul64',
+        'app_neg64',
+        'app_abs64',
+      ])
+        expect(r.c).toMatch(new RegExp(`static int(64_t)? ${h}\\(`));
+      expect(r.c).toContain('#include <limits.h>');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-checked-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wextra',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
     () => {
       // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two

@@ -65,6 +65,10 @@ See the README for the release process.
 
 ### Fixed
 
+- Whole-number `+`, `-` and `*` in Flow B no longer overflow into undefined behavior in the generated C.
+  A result too big for its C type now saturates at the type's limit, and constant math is worked out at
+  compile time, so `30 * DAY_MS` stays exact.
+
 - An AOT app whose timers are only cleared from a mount effect's cleanup no longer carries an unused
   `er_timer_clear()`, which warned under `-Wall`. That cleanup never runs on an MCU, so nothing called it.
 

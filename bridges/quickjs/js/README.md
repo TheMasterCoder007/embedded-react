@@ -447,6 +447,12 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   `/`, a divisor from state, or mixing it with a float or a boolean is a compiler error. Covered by
   `date-now.runtime.test.js`, the AOT's `date-now`, `cc-compile` and `text-lowering` cases, and the
   engine's `test_node_pool`.
+- ✅ **Whole-number overflow in Flow B is defined.** C leaves a signed overflow undefined, so `+`, `-`,
+  `*` and negation on an int or a 64-bit value saturate at the limit of their C type: JS would keep a
+  bigger number, and the nearest one the type holds keeps its sign and order. Constant math is worked
+  out at compile time, as JS would, so `30 * DAY_MS` is an exact 64-bit value, and int math beside a
+  timestamp is done in 64 bits. Covered by the AOT's `compile`, `date-now`, `cc-compile` and
+  `text-lowering` cases, the last run under UBSan.
 - ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
   `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with
   completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.
