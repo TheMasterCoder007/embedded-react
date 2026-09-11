@@ -319,13 +319,8 @@ static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* ou
                     node, node->computed.x, node->computed.y, node->computed.w, node->computed.h, H);
                 if (!er_transform_homography_invert(H, inv_H))
                     return false;
-                /* Back-project screen point through the inverse homography. */
-                const float sx_f = (float)x, sy_f = (float)y;
-                const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
-                if (Wp <= 0.0f)
+                if (!er_transform_map_point_3d(inv_H, x, y, &qx, &qy))
                     return false;
-                qx = (int)((inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp);
-                qy = (int)((inv_H[3] * sx_f + inv_H[4] * sy_f + inv_H[5]) / Wp);
             }
             else
 #endif
@@ -345,7 +340,8 @@ static bool node_map_point(const ERNode* node, int x, int y, int* out_x, int* ou
                 float ia, ib, ic, id, itx, ity;
                 if (!er_transform_invert(a, b, c, d, ftx, fty, &ia, &ib, &ic, &id, &itx, &ity))
                     return false;
-                er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy);
+                if (!er_transform_map_point(ia, ib, ic, id, itx, ity, x, y, &qx, &qy))
+                    return false;
             }
         }
         else

@@ -205,6 +205,14 @@ static void xform_emit_2d(int src_x,
             for (int ox = 0; ox < seg_w; ox++)
             {
                 const float flx = ia * (float)(seg + ox) + itx - (float)src_x;
+                /* Off the source there is no neighbour to read, and a column that far out (or NaN, which
+                 * fails every comparison) would make the cast undefined. -2 reads as out, like x0 + 1. */
+                if (!(flx >= -1.0f && flx < (float)src_w))
+                {
+                    cx0[ox] = -2;
+                    cwx[ox] = 0;
+                    continue;
+                }
                 const int x0 = (int)floorf(flx);
                 cx0[ox] = x0;
                 cwx[ox] = (uint16_t)((flx - (float)x0) * 256.0f);
@@ -212,6 +220,8 @@ static void xform_emit_2d(int src_x,
             for (int oy = ey0; oy < ey1; oy++)
             {
                 const float fly = id * (float)oy + ity - (float)src_y;
+                if (!(fly >= -1.0f && fly < (float)src_h))
+                    continue; /* the row reads nothing, as for the columns above */
                 const int y0 = (int)floorf(fly);
                 const int y1 = y0 + 1;
                 const uint32_t wy = (uint32_t)((fly - (float)y0) * 256.0f);
@@ -258,8 +268,9 @@ static void xform_emit_2d(int src_x,
                 const float flx = (ia * sx + ic * sy + itx) - (float)src_x;
                 const float fly = (ib * sx + id * sy + ity) - (float)src_y;
 
-                /* Coarse bounds reject: skip if all four bilinear neighbours are outside. */
-                if (flx < -1.0f || flx >= (float)src_w || fly < -1.0f || fly >= (float)src_h)
+                /* Coarse bounds reject: skip if all four bilinear neighbours are outside. Written to pass
+                 * only an in-range point: NaN fails every comparison and would reach er_bilerp's cast. */
+                if (!(flx >= -1.0f && flx < (float)src_w && fly >= -1.0f && fly < (float)src_h))
                 {
                     xrowbuf()[ox] = 0u;
                     continue;
@@ -275,6 +286,23 @@ static void xform_emit_2d(int src_x,
     }
 }
 #endif
+
+/* Every screen coordinate a transform produces is clamped to this before an int cast. A huge or lopsided
+ * scale, or a 3D corner near the camera plane, projects past the int range, where the cast is undefined;
+ * ±32767 is off every screen and keeps a box's width (max - min) inside an int too. */
+#define ER_XFORM_COORD_MAX 32767.0f
+
+/**
+ * @brief Clamps a projected coordinate to ±ER_XFORM_COORD_MAX, so the int cast after it is defined.
+ *
+ * @param[in] v  Coordinate; the caller rejects NaN first, which no clamp can place.
+ *
+ * @return v clamped.
+ */
+static inline float xform_clamp(float v)
+{
+    return v < -ER_XFORM_COORD_MAX ? -ER_XFORM_COORD_MAX : (v > ER_XFORM_COORD_MAX ? ER_XFORM_COORD_MAX : v);
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -376,7 +404,9 @@ bool er_transform_homography_invert(const float H[9], float inv[9])
     const float c22 = H[0] * H[4] - H[1] * H[3];
 
     const float det = H[0] * c00 + H[1] * c01 + H[2] * c02;
-    if (det > -ER_XFORM_DET_EPS_3D && det < ER_XFORM_DET_EPS_3D)
+    /* Written to pass only a usable determinant: NaN fails every comparison, and one that overflowed to
+     * infinity has no usable inverse either. */
+    if (!(fabsf(det) >= ER_XFORM_DET_EPS_3D && fabsf(det) < INFINITY))
         return false;
 
     const float inv_det = 1.0f / det;
@@ -404,10 +434,12 @@ void er_transform_aabb_3d(
     for (int i = 0; i < 4; i++)
     {
         const float Wp = H[6] * cu[i] + H[7] * cv[i] + H[8];
-        if (Wp <= 0.0f)
+        if (!(Wp > 0.0f)) /* behind the viewer, or NaN */
             continue;
         const float sx = (H[0] * cu[i] + H[1] * cv[i] + H[2]) / Wp;
         const float sy = (H[3] * cu[i] + H[4] * cv[i] + H[5]) / Wp;
+        if (sx != sx || sy != sy)
+            continue;
         if (!any || sx < min_x)
             min_x = sx;
         if (!any || sx > max_x)
@@ -432,14 +464,30 @@ void er_transform_aabb_3d(
      * transparent gap.  The 1-pixel border always has valid source pixels behind it
      * (the back-projected coordinate is still inside the source), stabilising the
      * apparent size across frames and eliminating the edge-jagging artefact. */
-    *out_x = (int)floorf(min_x) - 1;
-    *out_y = (int)floorf(min_y) - 1;
-    *out_w = (int)ceilf(max_x) - *out_x + 1;
-    *out_h = (int)ceilf(max_y) - *out_y + 1;
+    *out_x = (int)floorf(xform_clamp(min_x)) - 1;
+    *out_y = (int)floorf(xform_clamp(min_y)) - 1;
+    *out_w = (int)ceilf(xform_clamp(max_x)) - *out_x + 1;
+    *out_h = (int)ceilf(xform_clamp(max_y)) - *out_y + 1;
     if (*out_w < 0)
         *out_w = 0;
     if (*out_h < 0)
         *out_h = 0;
+}
+
+bool er_transform_map_point_3d(const float inv_H[9], int screen_x, int screen_y, int* layout_x, int* layout_y)
+{
+    const float sx = (float)screen_x;
+    const float sy = (float)screen_y;
+    const float Wp = inv_H[6] * sx + inv_H[7] * sy + inv_H[8];
+    if (!(Wp > 0.0f)) /* behind the viewer, or NaN */
+        return false;
+    const float lx = (inv_H[0] * sx + inv_H[1] * sy + inv_H[2]) / Wp;
+    const float ly = (inv_H[3] * sx + inv_H[4] * sy + inv_H[5]) / Wp;
+    if (lx != lx || ly != ly)
+        return false;
+    *layout_x = (int)xform_clamp(lx);
+    *layout_y = (int)xform_clamp(ly);
+    return true;
 }
 
 #if ERUI_TRANSFORMS_FULL
@@ -470,7 +518,7 @@ static void xform_emit_3d(
 
                 /* Back-project screen point through the inverse homography. */
                 const float Wp = inv_H[6] * sx_f + inv_H[7] * sy_f + inv_H[8];
-                if (Wp <= 0.0f)
+                if (!(Wp > 0.0f)) /* behind the viewer, or NaN */
                 {
                     xrowbuf()[ox] = 0u;
                     continue;
@@ -478,7 +526,7 @@ static void xform_emit_3d(
                 const float flx = (inv_H[0] * sx_f + inv_H[1] * sy_f + inv_H[2]) / Wp - (float)src_x;
                 const float fly = (inv_H[3] * sx_f + inv_H[4] * sy_f + inv_H[5]) / Wp - (float)src_y;
 
-                if (flx < -1.0f || flx >= (float)src_w || fly < -1.0f || fly >= (float)src_h)
+                if (!(flx >= -1.0f && flx < (float)src_w && fly >= -1.0f && fly < (float)src_h))
                 {
                     xrowbuf()[ox] = 0u;
                     continue;
@@ -588,7 +636,8 @@ bool er_transform_invert(float a,
                          float* ity)
 {
     const float det = a * d - b * c;
-    if (det > -ER_XFORM_DET_EPS_2D && det < ER_XFORM_DET_EPS_2D)
+    /* As in er_transform_homography_invert: a NaN or overflowed determinant is singular too. */
+    if (!(fabsf(det) >= ER_XFORM_DET_EPS_2D && fabsf(det) < INFINITY))
         return false;
 
     const float inv = 1.0f / det;
@@ -621,35 +670,43 @@ void er_transform_aabb(int ref_x,
     const float cx[4] = {(float)ref_x, (float)(ref_x + w), (float)(ref_x + w), (float)ref_x};
     const float cy[4] = {(float)ref_y, (float)ref_y, (float)(ref_y + h), (float)(ref_y + h)};
 
-    float min_x, max_x, min_y, max_y;
-    min_x = max_x = a * cx[0] + c * cy[0] + tx;
-    min_y = max_y = b * cx[0] + d * cy[0] + ty;
+    float min_x = 0.0f, max_x = 0.0f, min_y = 0.0f, max_y = 0.0f;
+    bool any = false;
 
-    for (int i = 1; i < 4; i++)
+    for (int i = 0; i < 4; i++)
     {
         const float sx = a * cx[i] + c * cy[i] + tx;
         const float sy = b * cx[i] + d * cy[i] + ty;
-        if (sx < min_x)
+        if (sx != sx || sy != sy) /* an infinite component times zero: no position to bound */
+            continue;
+        if (!any || sx < min_x)
             min_x = sx;
-        if (sx > max_x)
+        if (!any || sx > max_x)
             max_x = sx;
-        if (sy < min_y)
+        if (!any || sy < min_y)
             min_y = sy;
-        if (sy > max_y)
+        if (!any || sy > max_y)
             max_y = sy;
+        any = true;
     }
 
-    *out_x = (int)floorf(min_x);
-    *out_y = (int)floorf(min_y);
-    *out_w = (int)ceilf(max_x) - *out_x;
-    *out_h = (int)ceilf(max_y) - *out_y;
+    if (!any)
+    {
+        *out_x = *out_y = *out_w = *out_h = 0;
+        return;
+    }
+
+    *out_x = (int)floorf(xform_clamp(min_x));
+    *out_y = (int)floorf(xform_clamp(min_y));
+    *out_w = (int)ceilf(xform_clamp(max_x)) - *out_x;
+    *out_h = (int)ceilf(xform_clamp(max_y)) - *out_y;
     if (*out_w < 0)
         *out_w = 0;
     if (*out_h < 0)
         *out_h = 0;
 }
 
-void er_transform_map_point(float ia,
+bool er_transform_map_point(float ia,
                             float ib,
                             float ic,
                             float id,
@@ -660,8 +717,13 @@ void er_transform_map_point(float ia,
                             int* layout_x,
                             int* layout_y)
 {
-    *layout_x = (int)(ia * (float)screen_x + ic * (float)screen_y + itx);
-    *layout_y = (int)(ib * (float)screen_x + id * (float)screen_y + ity);
+    const float lx = ia * (float)screen_x + ic * (float)screen_y + itx;
+    const float ly = ib * (float)screen_x + id * (float)screen_y + ity;
+    if (lx != lx || ly != ly)
+        return false;
+    *layout_x = (int)xform_clamp(lx);
+    *layout_y = (int)xform_clamp(ly);
+    return true;
 }
 
 /**

@@ -65,6 +65,11 @@ See the README for the release process.
 
 ### Fixed
 
+- A transform with a huge, lopsided or infinite scale or rotation, or a 3D corner near the camera plane,
+  no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp to ±32767, and a
+  matrix that overflows or goes NaN counts as singular, so the view paints untransformed, as it already
+  did for a scale of 0.
+
 - A NaN opacity, transform or shadow offset (a 0/0 in app math, say) now has a defined result instead of
   undefined behavior in C: the view is fully transparent, the transform component is ignored, and the
   shadow is not shifted. Flow B already made a NaN opacity transparent; Flow A and Animated now agree.
