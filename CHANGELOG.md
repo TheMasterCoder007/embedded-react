@@ -65,6 +65,9 @@ See the README for the release process.
 
 ### Fixed
 
+- An AOT app whose timers are only cleared from a mount effect's cleanup no longer carries an unused
+  `er_timer_clear()`, which warned under `-Wall`. That cleanup never runs on an MCU, so nothing called it.
+
 - `Date.now()` no longer throws in Flow A. The default JS profile leaves `Date` out, so any handler
   that called it died on the spot; it now runs on the engine clock, and a host that knows the real
   time can hand it over with `er_runtime_set_wall_clock()`. `new Date()` still needs the Date

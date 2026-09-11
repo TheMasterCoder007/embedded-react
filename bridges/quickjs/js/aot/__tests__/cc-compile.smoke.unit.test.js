@@ -205,11 +205,54 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `a timer cleared only from a mount effect's cleanup passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // That cleanup is dropped (the app never unmounts), so nothing calls er_timer_clear — and a static
+      // function nothing calls is a -Wall warning.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           useEffect(() => {
+             const id = setInterval(() => setN(v => v + 1), 1000);
+             return () => clearInterval(id);
+           }, []);
+           return (<View style={{ flex: 1 }}><Text>{n}</Text></View>);
+         }`,
+        'mount-timer',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-mount-timer-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `64-bit time (Date.now / performance.now) passes the C syntax check (${CC || 'no cc found'})`,
     () => {
       // Every place a timestamp can go, under -Wall: a printf format that does not match int64_t on this
-      // host, or a clock helper emitted but never called, would warn. (The interval is cleared from a
-      // dep-driven cleanup; a mount effect's cleanup is dropped, which would leave er_timer_clear unused.)
+      // host, or a clock helper emitted but never called, would warn.
       const r = compileSource(
         `import { useState, useEffect, useRef } from 'react';
          import { View, Text, Pressable } from 'embedded-react';
@@ -334,13 +377,11 @@ describe('AOT generated C compiles', () => {
       try {
         writeFileSync(join(dir, 'app.gen.c'), r.c);
         writeFileSync(join(dir, 'app.gen.h'), r.h);
-        // The timer table always defines er_timer_clear, and this app never clears a timer.
         const res = spawnSync(
           CC,
           [
             '-fsyntax-only',
             '-Wall',
-            '-Wno-unused-function',
             '-I',
             engineInc,
             '-I',
