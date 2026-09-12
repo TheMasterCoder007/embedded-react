@@ -277,7 +277,9 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
 
     const uint32_t base_color = n->props.act.color ? n->props.act.color : 0xFFFFFFFFU;
     const float base_a = (float)((base_color >> 24) & 0xFFU);
-    const float angle_offset_deg = n->tp_rotate_z;
+    /* The spin angle is the node's rotation, which app math can make infinite (a NaN one is already 0): every
+     * dot's position would then be NaN before its int cast. It is drawn as at 0 instead. */
+    const float angle_offset_deg = fabsf(n->tp_rotate_z) < INFINITY ? n->tp_rotate_z : 0.0f;
 
     for (int i = 0; i < ACTIND_DOT_COUNT; i++)
     {
@@ -4025,14 +4027,39 @@ void er_node_set_vector_ops(ERNode* node,
     er_mark_dirty_upward(node);
 }
 
+/* A vector dirty rect is clipped to this, which holds any node box, so its width and height fit the int16 it is
+ * kept in. A cast alone would wrap a big edge into a rect off to the side, which damages none of the node. */
+#define ER_VEC_DIRTY_MAX 16383
+
+/**
+ * @brief Clips one axis of a dirty rect, [lo, lo + len), to ±ER_VEC_DIRTY_MAX, keeping what it covers.
+ *
+ * @param[in]  lo       Start, in node-local pixels.
+ * @param[in]  len      Length; a negative one covers nothing.
+ * @param[out] out_lo   Clipped start.
+ * @param[out] out_len  Clipped length, never negative.
+ */
+static void vec_dirty_axis(int lo, int len, int16_t* out_lo, int16_t* out_len)
+{
+    int64_t a = lo;
+    int64_t b = (int64_t)lo + len; /* in 64 bits: the far edge can pass the int range */
+    a = a < -ER_VEC_DIRTY_MAX ? -ER_VEC_DIRTY_MAX : (a > ER_VEC_DIRTY_MAX ? ER_VEC_DIRTY_MAX : a);
+    b = b < -ER_VEC_DIRTY_MAX ? -ER_VEC_DIRTY_MAX : (b > ER_VEC_DIRTY_MAX ? ER_VEC_DIRTY_MAX : b);
+    *out_lo = (int16_t)a;
+    *out_len = (int16_t)(b > a ? b - a : 0);
+}
+
 void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h)
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
-    node->vec_dirty_x = (int16_t)x;
-    node->vec_dirty_y = (int16_t)y;
-    node->vec_dirty_w = (int16_t)w;
-    node->vec_dirty_h = (int16_t)h;
+    int16_t x16, y16, w16, h16;
+    vec_dirty_axis(x, w, &x16, &w16);
+    vec_dirty_axis(y, h, &y16, &h16);
+    node->vec_dirty_x = x16;
+    node->vec_dirty_y = y16;
+    node->vec_dirty_w = w16;
+    node->vec_dirty_h = h16;
     node->vec_has_dirty = true;
     er_mark_dirty_upward(node);
 }

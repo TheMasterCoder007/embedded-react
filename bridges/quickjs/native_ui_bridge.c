@@ -3826,13 +3826,13 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
         }
         /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
            non-finite edge gives no hint, and the whole node repaints as it would without one; the rest is
-           clamped to the int16 range the engine keeps it in. */
+           bounded well inside the int range, and the engine clips the rect's corners from there. */
         if (finite)
         {
             int r[4];
             for (int k = 0; k < 4; k++)
             {
-                r[k] = (int)(d[k] < -32767.0 ? -32767.0 : (d[k] > 32767.0 ? 32767.0 : d[k]));
+                r[k] = (int)(d[k] < -1e9 ? -1e9 : (d[k] > 1e9 ? 1e9 : d[k]));
             }
             er_node_set_vector_dirty_rect(node, r[0], r[1], r[2], r[3]);
         }

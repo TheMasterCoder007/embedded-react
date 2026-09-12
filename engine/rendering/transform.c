@@ -304,6 +304,30 @@ static inline float xform_clamp(float v)
     return v < -ER_XFORM_COORD_MAX ? -ER_XFORM_COORD_MAX : (v > ER_XFORM_COORD_MAX ? ER_XFORM_COORD_MAX : v);
 }
 
+/* A transformed node's box is clipped to this, which holds every screen, so its width and height fit the int16
+ * the compositor records a node's last paint in. Clamped to ±ER_XFORM_COORD_MAX alone, a box could be 65534
+ * wide, which wraps there, and the next commit would erase none of it. */
+#define ER_XFORM_BOX_MAX 16383
+
+/**
+ * @brief Turns one axis of a box's float bounds into an int start and length, clipped to ±ER_XFORM_BOX_MAX.
+ *
+ * @param[in]  lo   Least coordinate (not NaN).
+ * @param[in]  hi   Greatest coordinate (not NaN).
+ * @param[in]  pad  Pixels added on each side.
+ * @param[out] pos  Clipped start.
+ * @param[out] len  Clipped length, never negative.
+ */
+static inline void xform_box_axis(float lo, float hi, int pad, int* pos, int* len)
+{
+    int a = (int)floorf(xform_clamp(lo)) - pad;
+    int b = (int)ceilf(xform_clamp(hi)) + pad;
+    a = a < -ER_XFORM_BOX_MAX ? -ER_XFORM_BOX_MAX : (a > ER_XFORM_BOX_MAX ? ER_XFORM_BOX_MAX : a);
+    b = b < -ER_XFORM_BOX_MAX ? -ER_XFORM_BOX_MAX : (b > ER_XFORM_BOX_MAX ? ER_XFORM_BOX_MAX : b);
+    *pos = a;
+    *len = b > a ? b - a : 0;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -410,15 +434,22 @@ bool er_transform_homography_invert(const float H[9], float inv[9])
         return false;
 
     const float inv_det = 1.0f / det;
-    inv[0] = c00 * inv_det;
-    inv[1] = c10 * inv_det;
-    inv[2] = c20 * inv_det;
-    inv[3] = c01 * inv_det;
-    inv[4] = c11 * inv_det;
-    inv[5] = c21 * inv_det;
-    inv[6] = c02 * inv_det;
-    inv[7] = c12 * inv_det;
-    inv[8] = c22 * inv_det;
+    const float r[9] = {c00 * inv_det,
+                        c10 * inv_det,
+                        c20 * inv_det,
+                        c01 * inv_det,
+                        c11 * inv_det,
+                        c21 * inv_det,
+                        c02 * inv_det,
+                        c12 * inv_det,
+                        c22 * inv_det};
+    /* A usable determinant does not make every cofactor usable: one huge entry times another overflows. An
+     * inverse with a NaN or infinite coefficient has no usable map either. */
+    for (int k = 0; k < 9; k++)
+        if (!(fabsf(r[k]) < INFINITY))
+            return false;
+    for (int k = 0; k < 9; k++)
+        inv[k] = r[k];
     return true;
 }
 
@@ -464,14 +495,8 @@ void er_transform_aabb_3d(
      * transparent gap.  The 1-pixel border always has valid source pixels behind it
      * (the back-projected coordinate is still inside the source), stabilising the
      * apparent size across frames and eliminating the edge-jagging artefact. */
-    *out_x = (int)floorf(xform_clamp(min_x)) - 1;
-    *out_y = (int)floorf(xform_clamp(min_y)) - 1;
-    *out_w = (int)ceilf(xform_clamp(max_x)) - *out_x + 1;
-    *out_h = (int)ceilf(xform_clamp(max_y)) - *out_y + 1;
-    if (*out_w < 0)
-        *out_w = 0;
-    if (*out_h < 0)
-        *out_h = 0;
+    xform_box_axis(min_x, max_x, 1, out_x, out_w);
+    xform_box_axis(min_y, max_y, 1, out_y, out_h);
 }
 
 bool er_transform_map_point_3d(const float inv_H[9], int screen_x, int screen_y, int* layout_x, int* layout_y)
@@ -641,13 +666,19 @@ bool er_transform_invert(float a,
         return false;
 
     const float inv = 1.0f / det;
-    *ia = d * inv;
-    *ib = -b * inv;
-    *ic = -c * inv;
-    *id = a * inv;
     /* Inverse translation: itx = (c*ty − d*tx) / det, ity = (b*tx − a*ty) / det */
-    *itx = (c * ty - d * tx) * inv;
-    *ity = (b * tx - a * ty) * inv;
+    const float r[6] = {d * inv, -b * inv, -c * inv, a * inv, (c * ty - d * tx) * inv, (b * tx - a * ty) * inv};
+    /* A usable determinant says nothing of the translation, which a huge scale about the pivot overflows while
+     * a lopsided one keeps a*d finite. An inverse with a NaN or infinite coefficient has no usable map either. */
+    for (int k = 0; k < 6; k++)
+        if (!(fabsf(r[k]) < INFINITY))
+            return false;
+    *ia = r[0];
+    *ib = r[1];
+    *ic = r[2];
+    *id = r[3];
+    *itx = r[4];
+    *ity = r[5];
     return true;
 }
 
@@ -696,14 +727,8 @@ void er_transform_aabb(int ref_x,
         return;
     }
 
-    *out_x = (int)floorf(xform_clamp(min_x));
-    *out_y = (int)floorf(xform_clamp(min_y));
-    *out_w = (int)ceilf(xform_clamp(max_x)) - *out_x;
-    *out_h = (int)ceilf(xform_clamp(max_y)) - *out_y;
-    if (*out_w < 0)
-        *out_w = 0;
-    if (*out_h < 0)
-        *out_h = 0;
+    xform_box_axis(min_x, max_x, 0, out_x, out_w);
+    xform_box_axis(min_y, max_y, 0, out_y, out_h);
 }
 
 bool er_transform_map_point(float ia,

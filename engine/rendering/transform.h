@@ -79,8 +79,9 @@ void er_transform_compute_matrix(
  * @param[out] itx  Inverse translation X.
  * @param[out] ity  Inverse translation Y.
  *
- * @return true on success; false when the matrix is singular (e.g. scale = 0), or its determinant is NaN or
- *         overflows (an infinite or huge scale), which leaves no usable inverse.
+ * @return true on success; false when the matrix is singular (e.g. scale = 0), or its determinant or any
+ *         inverse coefficient is NaN or overflows (an infinite, huge or lopsided scale), which leaves no usable
+ *         inverse.
  */
 bool er_transform_invert(float a,
                          float b,
@@ -98,8 +99,8 @@ bool er_transform_invert(float a,
 /**
  * @brief Computes the screen-space axis-aligned bounding box of a transformed rectangle.
  *
- * A corner that comes out NaN is skipped (the box is (0,0,0,0) when none is left), and the box is clamped
- * to ±32767, so its int fields are defined for any matrix.
+ * A corner that comes out NaN is skipped (the box is (0,0,0,0) when none is left), and the box is clipped
+ * to ±16383, so its int fields are defined for any matrix and its width and height fit an int16.
  *
  * @param[in]  ref_x   Layout-space X origin.
  * @param[in]  ref_y   Layout-space Y origin.
@@ -199,7 +200,8 @@ void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, i
  * @param[in]  H    Input 9-element row-major homography.
  * @param[out] inv  Inverted 9-element row-major homography.
  *
- * @return true on success; false when H is singular (determinant near zero, NaN, or overflowed).
+ * @return true on success; false when H is singular (determinant near zero, NaN, or overflowed), or when a
+ *         coefficient of its inverse is NaN or overflowed.
  */
 bool er_transform_homography_invert(const float H[9], float inv[9]);
 
@@ -209,7 +211,8 @@ bool er_transform_homography_invert(const float H[9], float inv[9]);
  * Projects the four corners (ref_x,ref_y), (ref_x+w,ref_y), (ref_x+w,ref_y+h),
  * (ref_x,ref_y+h) and returns their bounding box.  Corners that project behind the
  * viewer (W ≤ 0), or to NaN, are skipped; the AABB is (0,0,0,0) when none is left. A corner near the
- * camera plane projects arbitrarily far out, so the box is clamped to ±32767 before its int fields.
+ * camera plane projects arbitrarily far out, so the box is clipped to ±16383, which holds every screen and
+ * keeps its width and height inside an int16.
  *
  * @param[in]  ref_x   Source rectangle left edge.
  * @param[in]  ref_y   Source rectangle top edge.

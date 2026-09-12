@@ -2994,7 +2994,8 @@ function compileUpdateVector(expr, env, ctx, indent) {
       );
     const rect = dirtyArg.elements.slice(0, 4).map(el => emitExpr(el, env));
     // A float edge can be NaN (a 0/0), which app_vector_dirty turns into no hint at all, so the whole node
-    // repaints: the engine damages exactly the hinted rect, and a zero-width one paints nothing.
+    // repaints: the engine damages exactly the hinted rect, and a zero-width one paints nothing. An int edge
+    // goes straight to the engine, which clips the rect's corners to the int16 range it keeps them in.
     const fn = rect.some(e => e.cType === 'float')
       ? 'app_vector_dirty'
       : 'er_node_set_vector_dirty_rect';
@@ -7612,12 +7613,12 @@ static int16_t app_round_dim(double v)
       'app_vector_dirty',
       "/* updateVector's damage hint from float math. A NaN or infinite edge (a 0/0 in app math) gives no hint,\n" +
         '   so the whole node repaints, where a zero-width one would leave the new drawing unpainted; the rest is\n' +
-        '   clamped to the int16 range the engine keeps it in. */\n' +
+        "   bounded well inside the int range, and the engine clips the rect's corners from there. */\n" +
         'static void app_vector_dirty(ERNode* node, float x, float y, float w, float h)\n{\n' +
         '    if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))\n    {\n        return;\n    }\n' +
         '    const float r[4] = {x, y, w, h};\n    int c[4];\n' +
         '    for (int k = 0; k < 4; k++)\n    {\n' +
-        '        c[k] = (int)(r[k] < -32767.0f ? -32767.0f : (r[k] > 32767.0f ? 32767.0f : r[k]));\n    }\n' +
+        '        c[k] = (int)(r[k] < -1e9f ? -1e9f : (r[k] > 1e9f ? 1e9f : r[k]));\n    }\n' +
         '    er_node_set_vector_dirty_rect(node, c[0], c[1], c[2], c[3]);\n}',
     ],
   ];

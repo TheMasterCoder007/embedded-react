@@ -1109,7 +1109,8 @@ export function App() {
       const def = helperDefs(c).get('app_vector_dirty');
       expect(def, 'no app_vector_dirty emitted').toBeTruthy();
       // [x, y, w, h]. The stub records the hint the engine gets, if any: none repaints the whole node, as
-      // Flow A's setVectorOps does for a non-finite edge.
+      // Flow A's setVectorOps does for a non-finite edge. The rest is bounded to ±1e9 before its int cast, and
+      // the engine clamps the rect's corners from there.
       const RECTS = [
         [0, 0, 50.9, 10],
         [-0.5, 2.5, 10, 10],
@@ -1134,7 +1135,7 @@ export function App() {
         '\n  return 0; }\n';
       const got = buildAndRun(prog, 'vecdirty');
       const edge = v =>
-        String(Math.trunc(Math.min(32767, Math.max(-32767, Math.fround(v)))));
+        String(Math.trunc(Math.min(1e9, Math.max(-1e9, Math.fround(v)))));
       expect(RECTS.map((_, i) => got.get(i))).toEqual(
         RECTS.map(r =>
           r.every(Number.isFinite) ? r.map(edge).join(' ') : 'none',

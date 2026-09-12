@@ -357,6 +357,36 @@ static int check_sweep(const char* label, TapeFn fn)
     return rc;
 }
 
+/**
+ * @brief A dirty rect hinted far past the node on both sides still damages all of it.
+ *
+ * The engine keeps the rect in int16 fields, where a cast alone wraps -40000 and 80000 into a rect off to the
+ * side that damages none of the node, so the needle's new pose would never reach the screen.
+ */
+static int check_huge_dirty_rect(void)
+{
+    ERNode *root, *svg;
+    build_scene(&root, &svg);
+    float ops[24];
+    int n = 0;
+
+    tape_needle_open(0, ops, &n);
+    er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+    frame();
+    frame();
+
+    tape_needle_open(3, ops, &n);
+    er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+    er_node_set_vector_dirty_rect(svg, -40000, -40000, 80000, 80000);
+    frame();
+
+    const int rc = check_matches_full_repaint("a dirty rect past the int16 range should still damage the node");
+    er_node_destroy(root);
+    if (rc == EXIT_SUCCESS)
+        printf("PASS: a dirty rect past the int16 range still damages the node\n");
+    return rc;
+}
+
 int main(void)
 {
     static const EmbeddedRenderBackend k_backend = {
@@ -389,6 +419,9 @@ int main(void)
             failures++;
         er_reset();
     }
+    if (check_huge_dirty_rect() != EXIT_SUCCESS)
+        failures++;
+    er_reset();
     if (failures > 0)
     {
         fprintf(stderr, "%d vector damage case(s) failed\n", failures);
