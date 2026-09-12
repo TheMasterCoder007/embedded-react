@@ -654,6 +654,13 @@ function emitExprImpl(node, env) {
           if (k === null)
             return {code: `app_mod(${l.code}, ${r.code})`, cType: 'int'};
         }
+        // C has no `%` on floats. fmodf is JS's `%` exactly: the dividend's sign, NaN for a zero divisor, and
+        // the dividend itself for an infinite one.
+        if (cType === 'float' && node.operator === '%')
+          return {
+            code: `fmodf((float)(${l.code}), (float)(${r.code}))`,
+            cType: 'float',
+          };
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
       }
       if (COMPARE.has(node.operator)) {
@@ -2985,9 +2992,14 @@ function compileUpdateVector(expr, env, ctx, indent) {
       throw new Error(
         'AOT: updateVector dirtyRect must be a [x, y, w, h] array literal',
       );
-    const [x, y, w, h] = dirtyArg.elements.map(el => asInt(emitExpr(el, env)));
+    const rect = dirtyArg.elements.slice(0, 4).map(el => emitExpr(el, env));
+    // A float edge can be NaN (a 0/0), which app_vector_dirty turns into no hint at all, so the whole node
+    // repaints: the engine damages exactly the hinted rect, and a zero-width one paints nothing.
+    const fn = rect.some(e => e.cType === 'float')
+      ? 'app_vector_dirty'
+      : 'er_node_set_vector_dirty_rect';
     lines.push(
-      `${indent}er_node_set_vector_dirty_rect(${ref.cVar}, ${x}, ${y}, ${w}, ${h});`,
+      `${indent}${fn}(${ref.cVar}, ${rect.map(e => e.code).join(', ')});`,
     );
   }
   return lines;
@@ -3121,14 +3133,20 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       env,
     );
     const whole = r.cType === 'int' || r.cType === 'i64';
-    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`, and `/=` by a float
-    // divides as floats; a float result is stored the way any int slot stores one.
+    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`, `/=` by a float divides
+    // as floats, and `%=` over a float goes through fmodf as `%` does; a float result is stored the way any
+    // int slot stores one.
     const step = {'+=': '+', '-=': '-', '*=': '*'}[expr.operator];
-    if (whole && (step || (expr.operator === '/=' && e.cType === 'float'))) {
+    const floatMod =
+      expr.operator === '%=' && (r.cType === 'float' || e.cType === 'float');
+    if (
+      (whole && (step || (expr.operator === '/=' && e.cType === 'float'))) ||
+      floatMod
+    ) {
       const v = emitExprWide(
         {
           type: 'BinaryExpression',
-          operator: step ?? '/',
+          operator: step ?? expr.operator.slice(0, -1),
           left: expr.left,
           right: expr.right,
           loc: expr.loc,
@@ -7414,7 +7432,7 @@ static int16_t app_round_dim(double v)
   // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
   const usesMath =
     out.needsMath ||
-    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|app_roundf|M_PI)\b/.test(
+    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|app_roundf|M_PI)\b/.test(
       [
         stateBlock,
         refDecls,
@@ -7589,6 +7607,18 @@ static int16_t app_round_dim(double v)
         'static int app_slice_len(int len, int end)\n{\n' +
         '    if (end < 0)\n    {\n        return end <= -len ? 0 : len + end;\n    }\n' +
         '    return end < len ? end : len;\n}',
+    ],
+    [
+      'app_vector_dirty',
+      "/* updateVector's damage hint from float math. A NaN or infinite edge (a 0/0 in app math) gives no hint,\n" +
+        '   so the whole node repaints, where a zero-width one would leave the new drawing unpainted; the rest is\n' +
+        '   clamped to the int16 range the engine keeps it in. */\n' +
+        'static void app_vector_dirty(ERNode* node, float x, float y, float w, float h)\n{\n' +
+        '    if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))\n    {\n        return;\n    }\n' +
+        '    const float r[4] = {x, y, w, h};\n    int c[4];\n' +
+        '    for (int k = 0; k < 4; k++)\n    {\n' +
+        '        c[k] = (int)(r[k] < -32767.0f ? -32767.0f : (r[k] > 32767.0f ? 32767.0f : r[k]));\n    }\n' +
+        '    er_node_set_vector_dirty_rect(node, c[0], c[1], c[2], c[3]);\n}',
     ],
   ];
   // The generated code that can call a file-local helper, with literals and comments blanked so a

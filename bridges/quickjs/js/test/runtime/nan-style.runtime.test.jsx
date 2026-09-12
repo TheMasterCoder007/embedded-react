@@ -18,12 +18,20 @@
 // cast, which C leaves undefined. A NaN opacity is fully transparent (as Flow B makes it) and a NaN
 // transform component is ignored. Built with -fsanitize=float-cast-overflow, the runner also catches a cast
 // that still sees one.
+import {useRef} from 'react';
 import {createRoot} from '../../src/renderer.js';
-import {Animated, useAnimatedValue, View} from 'embedded-react';
+import {
+  Animated,
+  Svg,
+  updateVector,
+  useAnimatedValue,
+  View,
+} from 'embedded-react';
 import {check, report} from './harness.js';
 
 const root = createRoot({width: screen.width, height: screen.height});
 const RED = 0xffff0000;
+const GREEN = 0xff00ff00;
 // An opaque backdrop, so a box that stops painting shows it instead of the last frame's pixels.
 const BLUE = 0xff0000ff;
 const BACKDROP = {width: 200, height: 200, backgroundColor: '#0000ff'};
@@ -72,6 +80,37 @@ NativeUI.commit(); // tick() only advances the engine; a frame is painted on com
 check(
   __pixel(50, 50) === BLUE,
   'an animated opacity set to NaN is fully transparent',
+);
+
+// updateVector's damage hint is app math too. The engine repaints exactly the hinted rect, so a NaN edge has
+// to drop the hint (the whole node repaints) rather than become 0 (nothing does).
+let canvas = null;
+function Canvas() {
+  canvas = useRef(null);
+  return (
+    <View style={BACKDROP}>
+      <Svg
+        ref={canvas}
+        style={{position: 'absolute', left: 0, top: 0, width: 100, height: 100}}
+      />
+    </View>
+  );
+}
+root.render(<Canvas />);
+/** Fills the whole Svg with `fill`, hinting `rect` as the damage, and returns the pixel at its centre. */
+function fillWith(fill, rect) {
+  updateVector(canvas.current, [{rect: [0, 0, 100, 100], fill}], rect);
+  NativeUI.commit();
+  return __pixel(50, 50);
+}
+check(fillWith('#ff0000') === RED, 'updateVector paints the node');
+check(
+  fillWith('#00ff00', [0, 0, NaN, 100]) === GREEN,
+  'a NaN dirty rect repaints the whole node',
+);
+check(
+  fillWith('#ff0000', [0, 0, 1e10, 100]) === RED,
+  'a dirty rect past the int range still covers the node',
 );
 
 report('nan-style');

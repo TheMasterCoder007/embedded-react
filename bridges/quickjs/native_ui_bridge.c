@@ -3818,11 +3818,24 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
     if (argc >= 5 && JS_IsArray(argv[4]) && vec_array_len(ctx, argv[4]) >= 4)
     {
         double d[4];
+        bool finite = true;
         for (int k = 0; k < 4; k++)
         {
             d[k] = vec_num_at(ctx, argv[4], (uint32_t)k);
+            finite = finite && isfinite(d[k]);
         }
-        er_node_set_vector_dirty_rect(node, (int)d[0], (int)d[1], (int)d[2], (int)d[3]);
+        /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
+           non-finite edge gives no hint, and the whole node repaints as it would without one; the rest is
+           clamped to the int16 range the engine keeps it in. */
+        if (finite)
+        {
+            int r[4];
+            for (int k = 0; k < 4; k++)
+            {
+                r[k] = (int)(d[k] < -32767.0 ? -32767.0 : (d[k] > 32767.0 ? 32767.0 : d[k]));
+            }
+            er_node_set_vector_dirty_rect(node, r[0], r[1], r[2], r[3]);
+        }
     }
     return JS_UNDEFINED;
 }

@@ -1045,6 +1045,103 @@ export function App() {
       );
     },
   );
+
+  (CC ? it : it.skip)(
+    `% on a float is JS's remainder, a zero or infinite divisor included (${CC || 'no cc found'})`,
+    () => {
+      // Remainders the C state holds exactly, printed as they are and floored to a whole number, where the
+      // NaN of a zero divisor or an infinite dividend is 0.
+      const PAIRS = [
+        [5.5, 2],
+        [-5.5, 2],
+        [5.5, -2],
+        [-5.5, -2],
+        [7.25, 1.5],
+        [-7.25, 1.5],
+        [0.75, 0.5],
+        [1e10, 3],
+        [5.5, Infinity],
+        [-5.5, -Infinity],
+      ];
+      const NANS = [
+        [5.5, 0],
+        [0, 0],
+        [Infinity, 2],
+        [NaN, 2],
+      ];
+      const decls =
+        'const [f, setF] = useState(5.5);\n  const [d, setD] = useState(2.5);';
+      const text = textCall(decls, 'f % d');
+      const floor = textCall(decls, 'Math.floor(f % d)');
+      const rem = (f, d) => Math.fround(f) % Math.fround(d);
+      const cases = [
+        ...PAIRS.map(([f, d]) => ({
+          label: `${f} % ${d}`,
+          init: `${cFloat(f)}, ${cFloat(d)}`,
+          call: text.call,
+          want: String(rem(f, d)),
+        })),
+        ...[...PAIRS, ...NANS].map(([f, d]) => ({
+          label: `Math.floor(${f} % ${d})`,
+          init: `${cFloat(f)}, ${cFloat(d)}`,
+          call: floor.call,
+          want: String(toInt(Math.floor(rem(f, d)))),
+        })),
+      ];
+      const defs = new Map([...text.defs, ...floor.defs]);
+      expect(runText('fmod', 'float f; float d;', cases, defs)).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a float updateVector dirty rect drops a non-finite edge and clamps the rest (${CC || 'no cc found'})`,
+    () => {
+      const c = compileSource(
+        `import {useState, useRef} from 'react';
+import {Pressable, Svg, updateVector} from 'embedded-react';
+export function App() {
+  const [f, setF] = useState(0.5);
+  const bar = useRef(null);
+  return (<Pressable onPress={() => { updateVector(bar, [{ rect: [0, 0, 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}><Svg ref={bar} width={100} height={10} /></Pressable>);
+}`,
+        'vecdirty',
+      ).c;
+      const def = helperDefs(c).get('app_vector_dirty');
+      expect(def, 'no app_vector_dirty emitted').toBeTruthy();
+      // [x, y, w, h]. The stub records the hint the engine gets, if any: none repaints the whole node, as
+      // Flow A's setVectorOps does for a non-finite edge.
+      const RECTS = [
+        [0, 0, 50.9, 10],
+        [-0.5, 2.5, 10, 10],
+        [0, 0, 1e10, 10],
+        [-1e10, 0, 10, -1e10],
+        [0, 0, NaN, 10],
+        [Infinity, 0, 10, 10],
+        [0, -Infinity, 10, 10],
+      ];
+      const prog =
+        HELPER_INCLUDES +
+        'typedef struct ERNode ERNode;\nstatic char hint[64];\n' +
+        'static void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h)\n' +
+        '{ (void)node; snprintf(hint, sizeof hint, "%d %d %d %d", x, y, w, h); }\n' +
+        def +
+        'int main(void){\n' +
+        RECTS.map(
+          (r, i) =>
+            `  hint[0] = 0; app_vector_dirty(NULL, ${r.map(v => cFloat(v)).join(', ')});\n` +
+            `  printf("%d\\t%s\\n", ${i}, hint[0] ? hint : "none");`,
+        ).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'vecdirty');
+      const edge = v =>
+        String(Math.trunc(Math.min(32767, Math.max(-32767, Math.fround(v)))));
+      expect(RECTS.map((_, i) => got.get(i))).toEqual(
+        RECTS.map(r =>
+          r.every(Number.isFinite) ? r.map(edge).join(' ') : 'none',
+        ),
+      );
+    },
+  );
 });
 
 describe('AOT list slice keeps what JS keeps', () => {

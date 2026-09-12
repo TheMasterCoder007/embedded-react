@@ -673,16 +673,19 @@ describe('AOT generated C compiles', () => {
       // itself calls no libm function, so a missing include only shows up here.
       const r = compileSource(
         `import { useState, useRef } from 'react';
-         import { View, Text, Pressable } from 'embedded-react';
+         import { View, Text, Pressable, Svg, updateVector } from 'embedded-react';
          export function App() {
            const [n, setN] = useState(7);
            const [f, setF] = useState(0.5);
            const q = useRef(9);
+           const bar = useRef(null);
            return (
              <View style={{ flex: 1, opacity: f }}>
-               <Pressable onPress={() => { setN(n % q.current); q.current /= n; setN(f * 3); setTimeout(() => setF(0.25), f * 1000); }}>
+               <Pressable onPress={() => { setN(n % q.current); q.current /= n; q.current %= f; setN(f * 3); setTimeout(() => setF(0.25), f * 1000); updateVector(bar, [{ rect: [0, 0, f * 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}>
                  <Text>{Math.round(f)}</Text>
+                 <Text>{f % 2}</Text>
                </Pressable>
+               <Svg ref={bar} width={100} height={10} />
              </View>
            );
          }`,
@@ -695,6 +698,8 @@ describe('AOT generated C compiles', () => {
         'static float app_roundf(',
         'static uint8_t app_opacity(',
         'static int app_delay_msf(',
+        'static void app_vector_dirty(',
+        'fmodf(',
       ])
         expect(r.c).toContain(h);
       expect(r.c).toContain('#include <math.h>');

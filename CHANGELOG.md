@@ -65,6 +65,13 @@ See the README for the release process.
 
 ### Fixed
 
+- `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
+  C compiler accepts. `%=` on a float ref works the same way.
+
+- An `updateVector` dirty rect with a NaN edge now repaints the whole node in both flows, and a huge edge
+  is clamped instead of wrapping. Flow A cast the rect to int unguarded, and Flow B turned a NaN edge
+  into a zero-size hint that repainted nothing.
+
 - A transform with a huge, lopsided or infinite scale or rotation, or a 3D corner near the camera plane,
   no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp to ±32767, and a
   matrix that overflows or goes NaN counts as singular, so the view paints untransformed, as it already

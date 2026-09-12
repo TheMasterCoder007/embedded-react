@@ -1460,9 +1460,37 @@ describe('AOT arithmetic semantics', () => {
     expect(c).toContain(
       'er_timer_add((int)(app_delay_msf((s_state.f * 1000))), false, er_timer_fn_0)',
     );
+    // The engine damages exactly the hinted rect, so a NaN edge must drop the hint rather than become 0.
     expect(c).toMatch(
-      /er_node_set_vector_dirty_rect\(\w+, 0, 0, app_f2i\(\(s_state\.f \* 100\)\), 10\);/,
+      /app_vector_dirty\(\w+, 0, 0, \(s_state\.f \* 100\), 10\);/,
     );
+    expect(c).toContain(
+      'if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))',
+    );
+  });
+
+  it('lowers % on a float to fmodf, which C has instead of %', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [f, setF] = useState(5.5);
+        const [n, setN] = useState(7);
+        const r = useRef(0.5);
+        const k = useRef(9);
+        return (<Pressable onPress={() => { setF(f % 2); r.current %= f; k.current %= f; setN(n % 2); }}><Text>{f % 1.5}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.f = fmodf((float)(s_state.f), (float)(2));');
+    expect(c).toContain(
+      's_ref_r = fmodf((float)(s_ref_r), (float)(s_state.f));',
+    );
+    // An int ref keeps the remainder the way an int slot keeps any float.
+    expect(c).toContain(
+      's_ref_k = app_f2i(fmodf((float)(s_ref_k), (float)(s_state.f)));',
+    );
+    // Whole numbers keep C's own %.
+    expect(c).toContain('s_state.n = (s_state.n % 2);');
+    expect(c).toContain('"%g", fmodf((float)(s_state.f), (float)(1.5f))');
+    expect(c).toContain('#include <math.h>');
   });
 
   // A dimension folded at compile time goes through Math.round; one driven by state used to be handed to
