@@ -602,6 +602,188 @@ describe('AOT generated C compiles', () => {
     },
   );
   (CC ? it : it.skip)(
+    `saturating whole-number math passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every checked-math helper, int and 64-bit, under -Wall: one emitted but never called would warn,
+      // and so would a printf format that no longer matches a widened value.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Text, Pressable } from 'embedded-react';
+         const DAY_MS = 86400000;
+         export function App() {
+           const [n, setN] = useState(0);
+           const [t, setT] = useState(0);
+           const acc = useRef(0);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { setN(-(n * 3 - 1) + 2); acc.current += n; acc.current++; }}>
+                 <Text>{n}</Text>
+               </Pressable>
+               <Pressable onPress={() => setT(-(Date.now() * 2 - 30 * DAY_MS) + n * DAY_MS)}><Text>{t}</Text></Pressable>
+               <Text>{Math.abs(Date.now() - t)}</Text>
+             </View>
+           );
+         }`,
+        'checked',
+      );
+      for (const h of [
+        'app_add',
+        'app_sub',
+        'app_mul',
+        'app_neg',
+        'app_add64',
+        'app_sub64',
+        'app_mul64',
+        'app_neg64',
+        'app_abs64',
+      ])
+        expect(r.c).toMatch(new RegExp(`static int(64_t)? ${h}\\(`));
+      expect(r.c).toContain('#include <limits.h>');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-checked-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wextra',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `integer division and float conversion pass the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // Every division and conversion helper under -Wall -Wextra. app_roundf needs <math.h> though the app
+      // itself calls no libm function, so a missing include only shows up here.
+      const r = compileSource(
+        `import { useState, useRef } from 'react';
+         import { View, Text, Pressable, Svg, updateVector } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(7);
+           const [f, setF] = useState(0.5);
+           const q = useRef(9);
+           const bar = useRef(null);
+           return (
+             <View style={{ flex: 1, opacity: f }}>
+               <Pressable onPress={() => { setN(n % q.current); q.current /= n; q.current %= f; setN(f * 3); setTimeout(() => setF(0.25), f * 1000); updateVector(bar, [{ rect: [0, 0, f * 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}>
+                 <Text>{Math.round(f)}</Text>
+                 <Text>{f % 2}</Text>
+               </Pressable>
+               <Svg ref={bar} width={100} height={10} />
+             </View>
+           );
+         }`,
+        'divconv',
+      );
+      for (const h of [
+        'static int app_mod(',
+        'static int app_div(',
+        'static int app_f2i(',
+        'static float app_roundf(',
+        'static uint8_t app_opacity(',
+        'static int app_delay_msf(',
+        'static void app_vector_dirty(',
+        'fmodf(',
+      ])
+        expect(r.c).toContain(h);
+      expect(r.c).toContain('#include <math.h>');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-divconv-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-Wextra',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `state that nothing on screen reads passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // app_update is emitted only when a node reads state, so every body that would call it has to leave
+      // the call out too: an undeclared function is an error in C99 and later.
+      const r = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Text, Pressable, Switch, Animated, useAnimatedValue } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           const [items, setItems] = useState([{w: 1}]);
+           const a = useAnimatedValue(0);
+           useEffect(() => { setN(1); }, []);
+           useEffect(() => { if (n > 5) return; setN(2); }, []);
+           useEffect(() => { setInterval(() => setN((v) => v + 1), 1000); }, []);
+           return (
+             <View style={{ flex: 1 }}>
+               <Pressable onPress={() => { setN(n + 1); setItems([...items, {w: 2}]); Animated.timing(a, {toValue: 1, duration: 300}).start(() => setN(0)); }}>
+                 <Text>x</Text>
+               </Pressable>
+               <Switch value={true} onValueChange={() => setN(n - 1)} />
+             </View>
+           );
+         }`,
+        'unread',
+      );
+      expect(r.c).not.toContain('app_update');
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-unread-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            ...GCC_FORMAT_FLAGS,
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `concatenated text passes the C syntax check with -Wformat (${CC || 'no cc found'})`,
     () => {
       // A `+` chain over strings used to be typed as arithmetic, so it emitted "%d" over C's `+` on two

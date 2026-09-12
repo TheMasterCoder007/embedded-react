@@ -65,6 +65,41 @@ See the README for the release process.
 
 ### Fixed
 
+- `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
+  C compiler accepts. `%=` on a float ref works the same way.
+
+- An `updateVector` dirty rect with a NaN edge now repaints the whole node in both flows, and a huge one
+  is clipped at its corners, so it still covers what it says instead of wrapping; the engine's
+  `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
+  and Flow B turned a NaN edge into a zero-size hint that repainted nothing.
+
+- A transform with a huge, lopsided or infinite scale or rotation, or a 3D corner near the camera plane,
+  no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix
+  whose determinant or inverse overflows or goes NaN counts as singular, so the view paints untransformed,
+  as it already did for a scale of 0. A view scaled far past the screen no longer leaves a trail when it
+  shrinks back.
+
+- A NaN opacity, transform or shadow offset (a 0/0 in app math, say) now has a defined result instead of
+  undefined behavior in C: the view is fully transparent, the transform component is ignored, and the
+  shadow is not shifted. Flow B already made a NaN opacity transparent; Flow A and Animated now agree.
+
+- A Flow B app that sets state nothing on screen reads now compiles. Its handlers called an
+  `app_update()` that was never generated, which every C compiler rejects.
+
+- A Flow B list setter's `items.slice(0, n)` now keeps what JS keeps, with a negative `n` counting back
+  from the end. It used to leave the list's count negative, so the next append wrote outside the array.
+  `items.slice(0)` no longer crashes the compiler, and a slice that does not start at 0 is now a compiler
+  error instead of being treated as one that does.
+
+- Integer division and float-to-int conversion in Flow B no longer hit undefined behavior in the generated
+  C. A zero divisor gives JS's answer kept whole (`x % 0` is 0, `x / 0` saturates), and a float that is NaN
+  or out of range becomes 0 or the nearest int. `Math.round` now rounds halves up as JS does, and a
+  state-driven opacity clamps and rounds as Flow A does.
+
+- Whole-number `+`, `-` and `*` in Flow B no longer overflow into undefined behavior in the generated C.
+  A result too big for its C type now saturates at the type's limit, and constant math is worked out at
+  compile time, so `30 * DAY_MS` stays exact.
+
 - An AOT app whose timers are only cleared from a mount effect's cleanup no longer carries an unused
   `er_timer_clear()`, which warned under `-Wall`. That cleanup never runs on an MCU, so nothing called it.
 

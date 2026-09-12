@@ -46,7 +46,7 @@ describe('AOT baseline (regression)', () => {
         return (<Pressable onPress={() => setN(n + 1)}><Text>{n}</Text></Pressable>);
       }`);
     expect(c).toContain('ErAppState');
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
     expect(c).toContain('er_event_set(');
     expect(c).toContain('app_update();');
   });
@@ -164,10 +164,10 @@ describe('AOT baseline (regression)', () => {
       export function App() {
         const [a, setA] = useState(0);
         const [b, setB] = useState(0);
-        return (<Pressable onPress={() => { setA(a + 1); setB(b - 1); }}><Text>x</Text></Pressable>);
+        return (<Pressable onPress={() => { setA(a + 1); setB(b - 1); }}><Text>{a}</Text></Pressable>);
       }`);
-    expect(c).toContain('s_state.a = (s_state.a + 1);');
-    expect(c).toContain('s_state.b = (s_state.b - 1);');
+    expect(c).toContain('s_state.a = app_add(s_state.a, 1);');
+    expect(c).toContain('s_state.b = app_sub(s_state.b, 1);');
     // exactly one app_update per handler body
     const handler = c.slice(c.indexOf('er_handler_0'));
     expect(
@@ -182,7 +182,7 @@ describe('AOT baseline (regression)', () => {
         return (<Pressable onPress={() => { const step = 5; setN(n + step); }}><Text>x</Text></Pressable>);
       }`);
     expect(c).toContain('int l_step = 5;');
-    expect(c).toContain('s_state.n = (s_state.n + l_step);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, l_step);');
   });
 
   it('compiles a branching (if/else) handler', () => {
@@ -193,7 +193,7 @@ describe('AOT baseline (regression)', () => {
       }`);
     expect(c).toContain('if ((s_state.n > 10))');
     expect(c).toContain('s_state.n = 0;');
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
     expect(c).toContain('else');
   });
 
@@ -206,7 +206,7 @@ describe('AOT baseline (regression)', () => {
         return (<Pressable onPress={() => { taps.current = taps.current + 1; setN(taps.current); }}><Text>x</Text></Pressable>);
       }`);
     expect(c).toContain('static int s_ref_taps = 0;');
-    expect(c).toContain('s_ref_taps = (s_ref_taps + 1);');
+    expect(c).toContain('s_ref_taps = app_add(s_ref_taps, 1);');
     expect(c).toContain('s_state.n = s_ref_taps;');
   });
 
@@ -217,11 +217,39 @@ describe('AOT baseline (regression)', () => {
         const acc = useRef(0);
         return (<Pressable onPress={() => { acc.current++; }}><Text>x</Text></Pressable>);
       }`);
-    expect(c).toContain('s_ref_acc++;');
+    expect(c).toContain('s_ref_acc = app_add(s_ref_acc, 1);');
     const handler = c.slice(c.indexOf('er_handler_0('));
     expect(
       handler.slice(0, handler.indexOf('\n}')).includes('app_update();'),
     ).toBe(false);
+  });
+
+  // A setter queues app_update() before anything knows whether a node reads state; app_update itself is
+  // emitted only when one does. Every kind of body that queues it is here, and nothing on screen reads n.
+  it('calls no app_update when nothing on screen reads state', () => {
+    const c = gen(`${PRE}
+      import { useEffect } from 'react';
+      import { Switch } from 'embedded-react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [items, setItems] = useState([{w: 1}]);
+        const a = useAnimatedValue(0);
+        useEffect(() => { setN(1); }, []);
+        useEffect(() => { if (n > 5) return; setN(2); }, []);
+        useEffect(() => { setInterval(() => setN((v) => v + 1), 1000); }, []);
+        return (
+          <View>
+            <Pressable onPress={() => { setN(n + 1); setItems([...items, {w: 2}]); Animated.timing(a, {toValue: 1, duration: 300}).start(() => setN(0)); }}><Text>x</Text></Pressable>
+            <Switch value={true} onValueChange={() => setN(n - 1)} />
+          </View>
+        );
+      }`);
+    expect(c).not.toContain('app_update');
+    // The setters themselves stay.
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
+    expect(c).toContain('s_state.n = app_sub(s_state.n, 1);');
+    expect(c).toContain('s_state.n = 0;');
+    expect(c).toContain('s_items_count++;');
   });
 
   it('lowers a string useState to a char buffer + snprintf setter + %s text', () => {
@@ -265,7 +293,7 @@ describe('AOT baseline (regression)', () => {
         const doubled = useMemo(() => n * 2, [n]);
         return (<Text>Value {doubled}</Text>);
       }`);
-    expect(c).toContain('(s_state.n * 2)');
+    expect(c).toContain('app_mul(s_state.n, 2)');
   });
 
   it('constant-folds a useMemo with no dynamic deps', () => {
@@ -498,7 +526,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('ER_VOP_ARC');
     expect((c.match(/ER_VOP_MOVE/g) || []).length).toBe(1);
     expect(c).toContain('(float)M_PI / 180.0f'); // degrees → radians for the arc angles
-    expect(c).toContain('(s_state.temp * 2)'); // dynamic endAngle expression
+    expect(c).toContain('app_mul(s_state.temp, 2)'); // dynamic endAngle expression
     expect(c).toContain('build_svg0();');
     expect(c).toMatch(
       /er_node_set_vector_ops\(s_n\d+, s_svg0_ops, \d+, s_svg0_paints, 2, NULL, 0\);/,
@@ -745,7 +773,7 @@ describe('AOT baseline (regression)', () => {
         );
       }`);
     expect(c).toContain('#include <math.h>');
-    expect(c).toContain('(int)roundf('); // Math.round → int cast
+    expect(c).toContain('app_f2i(app_roundf('); // Math.round → a whole int
     expect(c).toContain('strcmp(s_state.sel, "a")'); // string equality + it.key folded to "a"
     expect(c).toContain('strcmp(s_state.sel, "b")'); // second unrolled .map iteration
   });
@@ -1190,7 +1218,7 @@ describe('AOT <Svg> child unwrapping', () => {
     );
     expect(c).toContain('static void build_svg0(void)');
     expect(c).toMatch(/static float s_svg0_ops\[\d+\];/); // mutable tape → the dynamic path ran
-    expect(c).toContain('(s_state.t * 2)');
+    expect(c).toContain('app_mul(s_state.t, 2)');
   });
 
   it('inlines a fragment in a state-driven <Svg>', () => {
@@ -1247,18 +1275,222 @@ describe('AOT arithmetic semantics', () => {
         const [sp, setSp] = useState(72);
         return (<View style={{ width: ((sp - 50) / (90 - 50)) * 240 }}><Text>x</Text></View>);
       }`);
-    expect(c).toContain('(float)((s_state.sp - 50)) / (float)((90 - 50))');
+    expect(c).toContain('(float)(app_sub(s_state.sp, 50)) / (float)(40)');
     // The bare int division that produced the bug must not survive.
-    expect(c).not.toContain('(s_state.sp - 50) / (90 - 50)');
+    expect(c).not.toContain('app_sub(s_state.sp, 50) / 40');
   });
 
-  it('leaves + - * on integers as integer arithmetic', () => {
+  it('keeps + - * on integers whole, through the saturating helpers', () => {
     const c = gen(`${PRE}
       export function App() {
         const [n, setN] = useState(3);
         return (<View style={{ width: (n + 2) * 4 }}><Text>x</Text></View>);
       }`);
-    expect(c).toMatch(/\(s_state\.n \+ 2\) \* 4/);
+    expect(c).toContain('app_mul(app_add(s_state.n, 2), 4)');
+  });
+
+  // C leaves a signed overflow undefined, and JS would give a number an int cannot hold. The helpers
+  // saturate instead: the nearest value the type has, with the sign and order JS would have.
+  it('lowers + - * and negation on whole numbers to saturating helpers', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<Pressable onPress={() => setN(-(n * 3 - 1) + 2)}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain(
+      's_state.n = app_add(app_neg(app_sub(app_mul(s_state.n, 3), 1)), 2);',
+    );
+    expect(c).toContain('static int app_add(int a, int b)');
+    expect(c).toContain(
+      'return v > INT_MAX ? INT_MAX : v < INT_MIN ? INT_MIN : (int)v;',
+    );
+    expect(c).toContain('return a == INT_MIN ? INT_MAX : -a;');
+    expect(c).toContain('#include <limits.h>');
+  });
+
+  it('emits only the helpers the app calls, and no <limits.h> without them', () => {
+    const one = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<Pressable onPress={() => setN(n + 1)}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(one).toContain('static int app_add(int a, int b)');
+    expect(one).not.toMatch(/static int(64_t)? app_(sub|mul|neg|add64)/);
+    const none = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        return (<Pressable onPress={() => setN(0)}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(none).not.toMatch(/app_(add|sub|mul|neg)/);
+    expect(none).not.toContain('#include <limits.h>');
+  });
+
+  it('steps a whole-number ref through the helpers, and leaves float math alone', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [f, setF] = useState(0.5);
+        const acc = useRef(0);
+        const pos = useRef(0.5);
+        return (<Pressable onPress={() => { acc.current += 2; acc.current -= f; acc.current *= 3; acc.current--; pos.current += 1; pos.current++; setF(f * 2 - 1); }}><Text>{f}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_ref_acc = app_add(s_ref_acc, 2);');
+    expect(c).toContain('s_ref_acc = app_f2i((s_ref_acc - s_state.f));');
+    expect(c).toContain('s_ref_acc = app_mul(s_ref_acc, 3);');
+    expect(c).toContain('s_ref_acc = app_sub(s_ref_acc, 1);');
+    expect(c).toContain('s_ref_pos += 1;');
+    expect(c).toContain('s_ref_pos++;');
+    expect(c).toContain('s_state.f = ((s_state.f * 2) - 1);');
+  });
+
+  it('works out constant math at compile time, exactly as JS does', () => {
+    const c = gen(`${PRE}
+      const LOW = -2147483647 - 1;
+      const STEP = 2;
+      export function App() {
+        const [n, setN] = useState(0);
+        return (<Pressable onPress={() => { setN(n + STEP * 3); setN(LOW); setN(-LOW - 1); }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.n = app_add(s_state.n, 6);');
+    // `-2147483648` would be `-` applied to 2147483648, which does not fit an int.
+    expect(c).toContain('s_state.n = (-2147483647 - 1);');
+    // -LOW is 2^31, past an int, but only on the way to a result that fits.
+    expect(c).toContain('s_state.n = 2147483647;');
+    expect(c).toContain('    int n;');
+  });
+
+  it('types a constant past the int range as 64-bit, and as a plain number beside a float', () => {
+    const c = gen(`${PRE}
+      const BIG = 3000000000;
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(0.5);
+        return (<Pressable onPress={() => { setN(n * (BIG - 1000)); setF(f * BIG); }}><Text>{n}</Text></Pressable>);
+      }`);
+    // Widened to hold the product, as a slot is for a timestamp.
+    expect(c).toContain('    int64_t n;');
+    expect(c).toContain('s_state.n = app_mul64(s_state.n, 2999999000);');
+    expect(c).toContain('s_state.f = (s_state.f * ((float)3000000000));');
+  });
+
+  // JS gives NaN or ±Infinity for a zero divisor, which an int cannot hold, and C traps or overflows. The
+  // answer is JS's, kept whole the way a float is: NaN → 0, ±Infinity → the int limit.
+  it('keeps integer % and /= by a runtime divisor defined', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [n, setN] = useState(7);
+        const [d, setD] = useState(0);
+        const q = useRef(9);
+        return (<Pressable onPress={() => { setN(n % d); q.current /= d; q.current %= d; setD(n % 24); setN(n % -1); q.current /= 4; q.current %= 5; q.current /= -1; q.current %= 0; }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.n = app_mod(s_state.n, s_state.d);');
+    expect(c).toContain('s_ref_q = app_div(s_ref_q, s_state.d);');
+    expect(c).toContain('s_ref_q = app_mod(s_ref_q, s_state.d);');
+    // A constant divisor other than 0 and -1 needs no check...
+    expect(c).toContain('s_state.d = (s_state.n % 24);');
+    expect(c).toContain('s_ref_q /= 4;');
+    expect(c).toContain('s_ref_q %= 5;');
+    // ...and those two leave no remainder, or only a quotient that saturates.
+    expect(c).toContain('s_state.n = 0;');
+    expect(c).toContain('s_ref_q = 0;');
+    expect(c).toContain('s_ref_q = app_div(s_ref_q, -1);');
+    expect(c).toContain('return (b == 0 || b == -1) ? 0 : a % b;');
+    expect(c).toContain('return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;');
+  });
+
+  it('stores a float in an int slot through a saturating conversion', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(0.5);
+        const [items, setItems] = useState([{w: 1}]);
+        const r = useRef(0);
+        return (<Pressable onPress={() => { setN(f * 2); r.current = f; r.current += f; r.current /= f; setItems([...items, {w: f}]); setItems(items.slice(0, f)); }}><Text>{n}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.n = app_f2i((s_state.f * 2));');
+    expect(c).toContain('s_ref_r = app_f2i(s_state.f);');
+    expect(c).toContain('s_ref_r = app_f2i((s_ref_r + s_state.f));');
+    expect(c).toContain(
+      's_ref_r = app_f2i(((float)(s_ref_r) / (float)(s_state.f)));',
+    );
+    expect(c).toMatch(/s_items\[[^\]]+\]\.w = app_f2i\(s_state\.f\);/);
+    expect(c).toContain(
+      's_items_count = app_slice_len(s_items_count, app_f2i(s_state.f));',
+    );
+    expect(c).toContain('if (v >= 2147483648.0f)');
+    expect(c).toContain('if (v != v)');
+  });
+
+  it('rounds a float to an int like JS, and leaves an int as it is', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(3);
+        const [f, setF] = useState(0.5);
+        return (<View><Text>{Math.round(f)}</Text><Text>{Math.floor(f)}</Text><Text>{Math.ceil(f)}</Text><Text>{Math.round(n) + Math.floor(n)}</Text></View>);
+      }`);
+    expect(c).toContain('"%d", app_f2i(app_roundf((float)(s_state.f)))');
+    expect(c).toContain('"%d", app_f2i(floorf((float)(s_state.f)))');
+    expect(c).toContain('"%d", app_f2i(ceilf((float)(s_state.f)))');
+    // No float round trip for an int, which would lose digits past 2^24.
+    expect(c).toContain('"%d", app_add(s_state.n, s_state.n)');
+    // Halves go up, as JS's Math.round does: floor, then one more at a remainder of 0.5.
+    expect(c).toContain('return v - f >= 0.5f ? f + 1.0f : f;');
+    expect(c).toContain('#include <math.h>');
+  });
+
+  it('converts a float opacity, timer delay and dirty rect the way Flow A does', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      import { Svg } from 'embedded-react';
+      export function App() {
+        const [f, setF] = useState(0.5);
+        const bar = useRef(null);
+        return (
+          <View style={{ opacity: f }}>
+            <Pressable onPress={() => { setTimeout(() => setF(0), f * 1000); updateVector(bar, [{ rect: [0, 0, f * 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}>
+              <Svg ref={bar} width={100} height={10} />
+            </Pressable>
+          </View>
+        );
+      }`);
+    expect(c).toContain('p.opacity = app_opacity(s_state.f);');
+    expect(c).toContain('return (uint8_t)(v * 255.0f + 0.5f);');
+    expect(c).toContain(
+      'er_timer_add((int)(app_delay_msf((s_state.f * 1000))), false, er_timer_fn_0)',
+    );
+    // The engine damages exactly the hinted rect, so a NaN edge must drop the hint rather than become 0.
+    expect(c).toMatch(
+      /app_vector_dirty\(\w+, 0, 0, \(s_state\.f \* 100\), 10\);/,
+    );
+    expect(c).toContain(
+      'if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))',
+    );
+  });
+
+  it('lowers % on a float to fmodf, which C has instead of %', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const [f, setF] = useState(5.5);
+        const [n, setN] = useState(7);
+        const r = useRef(0.5);
+        const k = useRef(9);
+        return (<Pressable onPress={() => { setF(f % 2); r.current %= f; k.current %= f; setN(n % 2); }}><Text>{f % 1.5}</Text></Pressable>);
+      }`);
+    expect(c).toContain('s_state.f = fmodf((float)(s_state.f), (float)(2));');
+    expect(c).toContain(
+      's_ref_r = fmodf((float)(s_ref_r), (float)(s_state.f));',
+    );
+    // An int ref keeps the remainder the way an int slot keeps any float.
+    expect(c).toContain(
+      's_ref_k = app_f2i(fmodf((float)(s_ref_k), (float)(s_state.f)));',
+    );
+    // Whole numbers keep C's own %.
+    expect(c).toContain('s_state.n = (s_state.n % 2);');
+    expect(c).toContain('"%g", fmodf((float)(s_state.f), (float)(1.5f))');
+    expect(c).toContain('#include <math.h>');
   });
 
   // A dimension folded at compile time goes through Math.round; one driven by state used to be handed to
@@ -1312,11 +1544,11 @@ describe('AOT touch drag', () => {
     expect(c).toContain('ER_EVENT_TOUCH_MOVE');
     // onLayout rect: x/y stay, width/height map to ERRect w/h
     expect(c).toContain(
-      's_ref_cx = (data->layout_rect.x + ((float)(data->layout_rect.w) / (float)(2)));',
+      's_ref_cx = app_f2i((data->layout_rect.x + ((float)(data->layout_rect.w) / (float)(2))));',
     );
     // touch coord + ref read in the shared drag handler
     expect(c).toContain('static void er_cb_onDrag(');
-    expect(c).toContain('s_state.v = (data->x - s_ref_cx);');
+    expect(c).toContain('s_state.v = app_sub(data->x, s_ref_cx);');
     // onTouchStart + onTouchMove reuse the one useCallback handler
     expect(
       c.match(
@@ -1334,7 +1566,7 @@ describe('AOT touch drag', () => {
     expect(c).toContain('float v;'); // float struct field, not int
     expect(c).toContain('.v = 70.0f'); // valid C float literal (not 70f)
     expect(c).toContain('s_state.v = (s_state.v + 0.5f);');
-    expect(c).toContain('(int)roundf((float)(s_state.v))'); // displayed rounded
+    expect(c).toContain('app_f2i(app_roundf((float)(s_state.v)))'); // displayed rounded
   });
 
   it('keeps useState(70) an int slot (no decimal → no float widening)', () => {
@@ -1348,14 +1580,14 @@ describe('AOT touch drag', () => {
     expect(c).not.toContain('float v;');
   });
 
-  it('negates a negative constant as (-(-135)), never the decrement token --135', () => {
+  it('folds the negation of a negative constant, never the decrement token --135', () => {
     const c = gen(`${PRE}
       const A = -135;
       export function App() {
         const [v, setV] = useState(0);
         return (<Pressable onPress={(e) => setV(e.x > -A ? -A : e.x)}><Text>{v}</Text></Pressable>);
       }`);
-    expect(c).toContain('(-(-135))');
+    expect(c).toContain('s_state.v = ((data->x > 135) ? 135 : data->x);');
     expect(c).not.toContain('--135');
   });
 });
@@ -1429,8 +1661,8 @@ import { View, Pressable, ScrollView, Text, PanResponder } from 'embedded-react'
         })).current;
         return (<View {...pan.panHandlers}><Text>{x}</Text></View>);
       }`);
-    expect(c).toContain('(data->x + data->y)'); // moveX, moveY
-    expect(c).toContain('s_pan_pan_x0) + s_pan_pan_y0'); // x0, y0 — the grant point
+    expect(c).toContain('app_add(data->x, data->y)'); // moveX, moveY
+    expect(c).toContain('s_pan_pan_x0), s_pan_pan_y0)'); // x0, y0 — the grant point
     expect(c).toContain('er_touch_active_count()'); // numberActiveTouches
     expect(c).toContain('(data->dy - s_pan_pan_base_dy)'); // dy, grant-relative
     expect(c).toContain('(data->vx > 0.4f)'); // vx straight off the payload
@@ -1793,7 +2025,7 @@ describe('AOT effects & timers', () => {
     expect(c).toContain('void er_app_tick(int dt_ms)'); // host-tick timer driver
     expect(c).toContain('er_timer_add((int)(250), true, er_timer_fn_0)'); // repeating timer
     expect(c).toContain('static void er_timer_fn_0(void)'); // callback → parameterless C fn
-    expect(c).toContain('s_state.t = (s_state.t + 1);'); // setT(p => p+1) in the callback
+    expect(c).toContain('s_state.t = app_add(s_state.t, 1);'); // setT(p => p+1) in the callback
     expect(c).toContain('/* useEffect(fn, []) — run once on mount. */'); // body runs in er_app_build
     expect(c).not.toContain('clearInterval'); // the cleanup return is dropped (never unmounts)
   });
@@ -2073,7 +2305,7 @@ describe('AOT Dial', () => {
     expect(c).toContain('p.arc_track_color = 0xFF30343Au;');
     expect(c).toContain('p.arc_indicator_color = 0xFFFF8800u;');
     expect(c).toMatch(/er_event_set\(n\d+, ER_EVENT_VALUE_CHANGE,/);
-    expect(c).toContain('s_state.temp = data->value;'); // onChange's v param = the engine's new value
+    expect(c).toContain('s_state.temp = app_f2i(data->value);'); // onChange's v param = the engine's new value
     expect(c).toContain('p.width = 200;');
   });
 
@@ -2132,8 +2364,8 @@ describe('AOT Dial', () => {
       /p\.gradient_stop_count = \(uint8_t\)\(\(.*\) \? 2 : 0\);/,
     );
     // Both handler params bind to the event payload — no object allocated on device.
-    expect(c).toContain('s_state.hi = data->value;');
-    expect(c).toContain('s_state.lo = data->value_start;');
+    expect(c).toContain('s_state.hi = app_f2i(data->value);');
+    expect(c).toContain('s_state.lo = app_f2i(data->value_start);');
   });
 
   it('accepts a useCallback onChange and binds an animated valueStart', () => {
@@ -2150,7 +2382,7 @@ describe('AOT Dial', () => {
     expect(c).toMatch(
       /er_anim_value_bind\(\w+, n\d+, ER_PROP_ARC_VALUE_START\);/,
     );
-    expect(c).toContain('s_state.v = data->value;');
+    expect(c).toContain('s_state.v = app_f2i(data->value);');
   });
 
   it('rejects an unsupported prop and a bad enum token', () => {
@@ -2432,7 +2664,7 @@ import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embed
     const down = handlerFor(c, 'ER_EVENT_PRESS_IN');
     expect(down).toContain('er_anim_value_animate');
     expect(down).toMatch(/er_handler_\d+\(node, data, user_data\);/);
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
   });
 
   it('shares one useCallback handler between the two ends rather than duplicating it', () => {
@@ -2593,8 +2825,8 @@ import { View, Text, Pressable } from 'embedded-react';
           <StepButton label="+" onTap={() => setN(n + 1)} />
         </View>);
       }`);
-    expect(c).toContain('s_state.n = (s_state.n - 1);');
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_sub(s_state.n, 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
     // two distinct handlers, one per instance, each wired via er_event_set
     expect((c.match(/static void er_handler_\d+\(/g) || []).length).toBe(2);
     expect((c.match(/er_event_set\(\w+, ER_EVENT_PRESS,/g) || []).length).toBe(
@@ -2611,7 +2843,7 @@ import { View, Text, Pressable } from 'embedded-react';
         const inc = useCallback(() => setN(n + 1), [n]);
         return (<Btn onTap={inc} />);
       }`);
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
     expect(c).toContain('er_event_set(');
   });
 
@@ -2623,7 +2855,7 @@ import { View, Text, Pressable } from 'embedded-react';
         const [n, setN] = useState(0);
         return (<Outer onTap={() => setN(n + 1)} />);
       }`);
-    expect(c).toContain('s_state.n = (s_state.n + 1);');
+    expect(c).toContain('s_state.n = app_add(s_state.n, 1);');
     expect(c).toContain('er_event_set(');
   });
 });
@@ -2792,7 +3024,7 @@ function Counter({ label }) {
       'demo',
     ).c;
     expect(c).toContain('int c0_n;');
-    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // the child's setter mutates its own field
+    expect(c).toContain('s_state.c0_n = app_add(s_state.c0_n, 1);'); // the child's setter mutates its own field
   });
 
   it('keeps two instances of the same component independent', () => {
@@ -2802,8 +3034,8 @@ function Counter({ label }) {
     ).c;
     expect(c).toContain('int c0_n;');
     expect(c).toContain('int c1_n;'); // distinct storage per instance
-    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);');
-    expect(c).toContain('s_state.c1_n = (s_state.c1_n + 1);');
+    expect(c).toContain('s_state.c0_n = app_add(s_state.c0_n, 1);');
+    expect(c).toContain('s_state.c1_n = app_add(s_state.c1_n, 1);');
     // each instance's text reads its OWN field
     expect(c).toMatch(/"A: %d",\s*s_state\.c0_n/);
     expect(c).toMatch(/"B: %d",\s*s_state\.c1_n/);
@@ -2842,8 +3074,8 @@ export function App() { return (<View><Tally /><Tally /></View>); }`;
     const c = compileSource(src, 'demo').c;
     expect(c).toContain('static int s_ref_c0_t = 0;');
     expect(c).toContain('static int s_ref_c1_t = 0;');
-    expect(c).toContain('s_ref_c0_t = (s_ref_c0_t + 1);');
-    expect(c).toContain('s_ref_c1_t = (s_ref_c1_t + 1);');
+    expect(c).toContain('s_ref_c0_t = app_add(s_ref_c0_t, 1);');
+    expect(c).toContain('s_ref_c1_t = app_add(s_ref_c1_t, 1);');
   });
 
   it('compiles each instance useCallback into its own distinct handler', () => {
@@ -2854,8 +3086,8 @@ export function App() { return (<View><Btn /><Btn /></View>); }`;
     const c = compileSource(src, 'demo').c;
     expect(c).toContain('static void er_cb_c0_tap(');
     expect(c).toContain('static void er_cb_c1_tap(');
-    expect(c).toContain('s_state.c0_n = (s_state.c0_n + 1);'); // c0's handler mutates c0's state
-    expect(c).toContain('s_state.c1_n = (s_state.c1_n + 1);');
+    expect(c).toContain('s_state.c0_n = app_add(s_state.c0_n, 1);'); // c0's handler mutates c0's state
+    expect(c).toContain('s_state.c1_n = app_add(s_state.c1_n, 1);');
   });
 });
 
@@ -2876,7 +3108,7 @@ export { App };`,
     ).c;
     expect(c).toContain('s_state.a = 0;');
     expect(c).toContain('s_state.b = 0;');
-    expect(c).toContain('s_state.a = (s_state.a + 5);'); // bump(5): arg bound
+    expect(c).toContain('s_state.a = app_add(s_state.a, 5);'); // bump(5): arg bound
   });
 
   it('detects a recursive helper and errors instead of looping forever', () => {
@@ -3096,7 +3328,7 @@ import {View, Text} from 'embedded-react';
         const [n, setN] = useState(3);
         return (<View><Child w={n * 2} /></View>);
       }`);
-    expect(c).toContain('p.width = app_round_dim((s_state.n * 2));');
+    expect(c).toContain('p.width = app_round_dim(app_mul(s_state.n, 2));');
     expect(c).not.toContain('p.width = 10;');
   });
 
@@ -3121,7 +3353,7 @@ import {View, Text} from 'embedded-react';
         const total = useMemo(() => n * 2, [n]);
         return (<View><Text>{'a=' + total}</Text><Child /><Own /></View>);
       }`);
-    expect(c).toContain('"a=%d", ((s_state.n * 2))');
+    expect(c).toContain('"a=%d", (app_mul(s_state.n, 2))');
     expect(texts(c)).toEqual(expect.arrayContaining(['c=5', 'o=3']));
   });
 
@@ -3134,8 +3366,8 @@ import {View, Text} from 'embedded-react';
         const w = useMemo(() => n * 3, [n]);
         return (<View style={{width: w}}><Child w={w} /></View>);
       }`);
-    expect(c).toContain('p.width = app_round_dim(((s_state.n * 3)));');
-    expect(c).toContain('"%d", ((s_state.n * 3))');
+    expect(c).toContain('p.width = app_round_dim((app_mul(s_state.n, 3)));');
+    expect(c).toContain('"%d", (app_mul(s_state.n, 3))');
     expect(c).not.toContain('p.width = 10;');
   });
 
@@ -3743,7 +3975,7 @@ import { View, Text, TextInput } from 'embedded-react';
         return (<Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>);
       }`);
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "render-check %d/4", (s_state.page + 1));',
+      'snprintf(p.text, sizeof(p.text), "render-check %d/4", app_add(s_state.page, 1));',
     );
   });
 
@@ -3766,7 +3998,7 @@ import { View, Text, TextInput } from 'embedded-react';
         const [n, setN] = useState(5);
         return (<Text>{n + 1 + ' ms'}</Text>);
       }`);
-    expect(c).toContain('"%d ms", (s_state.n + 1)');
+    expect(c).toContain('"%d ms", app_add(s_state.n, 1)');
   });
 
   it('appends past the first string operand, as JS does', () => {
@@ -4210,5 +4442,62 @@ import { View, StyleSheet } from 'embedded-react';
       }`);
     expect(e.message).toMatch(/style "shadowOpacity" is not supported/);
     expect(e.aotLoc).toBeTruthy();
+  });
+});
+
+describe('AOT list setters', () => {
+  const app = body =>
+    gen(`${PRE}
+      export function App() {
+        const [k, setK] = useState(-2);
+        const [f, setF] = useState(0.5);
+        const [items, setItems] = useState([{w: 1}, {w: 2}, {w: 3}]);
+        return (<Pressable onPress={() => { ${body} }}><Text>x</Text></Pressable>);
+      }`);
+
+  // A negative count would send the next append to s_items[-n], outside the array.
+  it('keeps the count in range for a runtime slice end, counting a negative one back from the length', () => {
+    const c = app('setItems(items.slice(0, k));');
+    expect(c).toContain(
+      's_items_count = app_slice_len(s_items_count, s_state.k);',
+    );
+    expect(c).toContain('static int app_slice_len(int len, int end)');
+    expect(c).toContain('return end <= -len ? 0 : len + end;');
+  });
+
+  it('settles a constant slice end at compile time', () => {
+    const c = app(
+      'setItems(items.slice(0, 2)); setItems(items.slice(0, -1)); setItems(items.slice(0, -2)); setItems(items.slice(0, 1e12));',
+    );
+    expect(c).toContain(
+      's_items_count = (s_items_count < 2) ? s_items_count : 2;',
+    );
+    expect(c).toContain('if (s_items_count > 0) s_items_count--;');
+    expect(c).toContain('s_items_count = app_slice_len(s_items_count, -2);');
+    // Past the capacity an end keeps every item, so a huge one clamps there and needs no 64-bit math.
+    expect(c).toContain(
+      's_items_count = (s_items_count < 16) ? s_items_count : 16;',
+    );
+  });
+
+  it('truncates a float slice end the way JS does', () => {
+    expect(app('setItems(items.slice(0, f));')).toContain(
+      's_items_count = app_slice_len(s_items_count, app_f2i(s_state.f));',
+    );
+  });
+
+  it('keeps every item for slice(0) and slice()', () => {
+    const c = app('setItems(items.slice(0)); setItems(items.slice());');
+    expect(c).not.toMatch(/^\s+s_items_count\b/m);
+    expect(c).not.toContain('app_slice_len');
+  });
+
+  it('refuses a slice that drops items from the front', () => {
+    expect(() => app('setItems(items.slice(1, 3));')).toThrow(
+      /only items\.slice\(0, end\) is supported/,
+    );
+    expect(() => app('setItems(items.slice(k));')).toThrow(
+      /only items\.slice\(0, end\) is supported/,
+    );
   });
 });

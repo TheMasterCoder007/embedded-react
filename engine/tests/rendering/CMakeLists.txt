@@ -61,6 +61,13 @@ target_link_libraries(test_transform_damage PRIVATE embedded-react)
 target_include_directories(test_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_transform_damage COMMAND test_transform_damage)
 
+add_executable(test_transform_extremes test_transform_extremes.c)
+target_link_libraries(test_transform_extremes PRIVATE embedded-react)
+# test_transform_extremes needs engine/rendering (transform.h — it calls the matrix helpers directly) and
+# engine/scene (er_node_internal.h, pulled in by transform.h).
+target_include_directories(test_transform_extremes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
+add_test(NAME rendering_transform_extremes COMMAND test_transform_extremes)
+
 add_executable(test_transform_inner_damage test_transform_inner_damage.c)
 target_link_libraries(test_transform_inner_damage PRIVATE embedded-react)
 # test_transform_inner_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the
