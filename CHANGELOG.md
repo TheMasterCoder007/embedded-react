@@ -65,6 +65,9 @@ See the README for the release process.
 
 ### Fixed
 
+- A Flow B list whose float field holds a whole number (`0`, `2`) now compiles. The generated C wrote it
+  as `0f`, which no C compiler accepts.
+
 - `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
   C compiler accepts. `%=` on a float ref works the same way.
 

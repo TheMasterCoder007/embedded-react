@@ -407,7 +407,8 @@ const INT_MAX = 2 ** 31 - 1;
  * math keeps it exact; past 64 bits it is a float.
  */
 function numConst(v) {
-  if (!Number.isInteger(v)) return {code: `${v}f`, cType: 'float'};
+  // floatLit refuses NaN and Infinity (a folded `0 / 0`, say), which have no C literal.
+  if (!Number.isInteger(v)) return {code: floatLit(v), cType: 'float'};
   if (Math.abs(v) >= 2 ** 63)
     return {code: `${v.toExponential()}f`, cType: 'float'};
   if (v < INT_MIN || v > INT_MAX)
@@ -7149,7 +7150,7 @@ function compileSourceImpl(src, demo, opts, wide, found) {
       ? `    char ${f.key}[${LIST_STR_CAP}];`
       : `    ${f.kind} ${f.key};`;
   const itemInit = (item, struct) =>
-    `{ ${struct.fields.map(f => (f.kind === 'string' ? cstr(String(item[f.key] ?? '')) : f.kind === 'float' ? `${Number(item[f.key]) || 0}f` : String(Math.round(Number(item[f.key]) || 0)))).join(', ')} }`;
+    `{ ${struct.fields.map(f => (f.kind === 'string' ? cstr(String(item[f.key] ?? '')) : f.kind === 'float' ? floatLit(Number(item[f.key]) || 0) : String(Math.round(Number(item[f.key]) || 0)))).join(', ')} }`;
   const listBlocks = listRecords
     .map(
       s =>
@@ -7430,10 +7431,11 @@ static int16_t app_round_dim(double v)
 `
     : '';
 
-  // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
+  // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks), or
+  // a call to a helper whose body uses one.
   const usesMath =
     out.needsMath ||
-    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|app_roundf|M_PI)\b/.test(
+    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|isfinite|app_roundf|app_vector_dirty|M_PI)\b/.test(
       [
         stateBlock,
         refDecls,

@@ -1493,6 +1493,37 @@ describe('AOT arithmetic semantics', () => {
     expect(c).toContain('#include <math.h>');
   });
 
+  it('refuses a constant that folds to NaN or Infinity, which has no C literal', () => {
+    const app = (decl, handler) => `${PRE}
+      ${decl}
+      export function App() {
+        const [n, setN] = useState(0);
+        const [f, setF] = useState(0.5);
+        return (<Pressable onPress={() => ${handler}}><Text>{n}</Text><Text>{f}</Text></Pressable>);
+      }`;
+    expect(() => gen(app('const X = -1 / 0;', 'setF(f + X)'))).toThrow(
+      /folded to -?Infinity/,
+    );
+    expect(() =>
+      gen(app('const X = 0 / 0;', 'setF(f > X ? 1.5 : 2.5)')),
+    ).toThrow(/folded to NaN/);
+    expect(() => gen(app('const X = 1 / 0;', 'setN(Math.floor(X))'))).toThrow(
+      /folded to -?Infinity/,
+    );
+  });
+
+  it('writes a whole number in a list float field as a C float literal', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [items, setItems] = useState([{ id: 1, x: 1.5 }, { id: 2, x: 0 }, { id: 3, x: 2 }]);
+        return (<View>{items.map(it => <Text key={it.id}>{it.x}</Text>)}</View>);
+      }`);
+    // `0f` is not C: it reads as an octal constant with a bad digit.
+    expect(c).toContain('{ 1, 1.5f }');
+    expect(c).toContain('{ 2, 0.0f }');
+    expect(c).toContain('{ 3, 2.0f }');
+  });
+
   // A dimension folded at compile time goes through Math.round; one driven by state used to be handed to
   // int16 with a plain C cast, which truncates toward zero. That made the AOT disagree with ITSELF (and
   // with Flow A's bridge, which rounds) for any state-driven fractional size — the same half-pixel split

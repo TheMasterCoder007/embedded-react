@@ -304,13 +304,11 @@ static inline float xform_clamp(float v)
     return v < -ER_XFORM_COORD_MAX ? -ER_XFORM_COORD_MAX : (v > ER_XFORM_COORD_MAX ? ER_XFORM_COORD_MAX : v);
 }
 
-/* A transformed node's box is clipped to this, which holds every screen, so its width and height fit the int16
- * the compositor records a node's last paint in. Clamped to ±ER_XFORM_COORD_MAX alone, a box could be 65534
- * wide, which wraps there, and the next commit would erase none of it. */
-#define ER_XFORM_BOX_MAX 16383
-
 /**
- * @brief Turns one axis of a box's float bounds into an int start and length, clipped to ±ER_XFORM_BOX_MAX.
+ * @brief Turns one axis of a box's float bounds into an int start and length, clipped to ±ER_PAINT_RECT_MAX.
+ *
+ * Clamped to ±ER_XFORM_COORD_MAX alone, a box could be 65534 wide, which wraps in the int16 the compositor
+ * records a node's last paint in, and the next commit would erase none of it.
  *
  * @param[in]  lo   Least coordinate (not NaN).
  * @param[in]  hi   Greatest coordinate (not NaN).
@@ -322,8 +320,8 @@ static inline void xform_box_axis(float lo, float hi, int pad, int* pos, int* le
 {
     int a = (int)floorf(xform_clamp(lo)) - pad;
     int b = (int)ceilf(xform_clamp(hi)) + pad;
-    a = a < -ER_XFORM_BOX_MAX ? -ER_XFORM_BOX_MAX : (a > ER_XFORM_BOX_MAX ? ER_XFORM_BOX_MAX : a);
-    b = b < -ER_XFORM_BOX_MAX ? -ER_XFORM_BOX_MAX : (b > ER_XFORM_BOX_MAX ? ER_XFORM_BOX_MAX : b);
+    a = a < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (a > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : a);
+    b = b < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (b > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : b);
     *pos = a;
     *len = b > a ? b - a : 0;
 }

@@ -4027,12 +4027,11 @@ void er_node_set_vector_ops(ERNode* node,
     er_mark_dirty_upward(node);
 }
 
-/* A vector dirty rect is clipped to this, which holds any node box, so its width and height fit the int16 it is
- * kept in. A cast alone would wrap a big edge into a rect off to the side, which damages none of the node. */
-#define ER_VEC_DIRTY_MAX 16383
-
 /**
- * @brief Clips one axis of a dirty rect, [lo, lo + len), to ±ER_VEC_DIRTY_MAX, keeping what it covers.
+ * @brief Clips one axis of a dirty rect, [lo, lo + len), to ±ER_PAINT_RECT_MAX, keeping what it covers.
+ *
+ * The rect is kept in int16 fields, where a cast alone would wrap a big edge into a rect off to the side that
+ * damages none of the node.
  *
  * @param[in]  lo       Start, in node-local pixels.
  * @param[in]  len      Length; a negative one covers nothing.
@@ -4043,8 +4042,8 @@ static void vec_dirty_axis(int lo, int len, int16_t* out_lo, int16_t* out_len)
 {
     int64_t a = lo;
     int64_t b = (int64_t)lo + len; /* in 64 bits: the far edge can pass the int range */
-    a = a < -ER_VEC_DIRTY_MAX ? -ER_VEC_DIRTY_MAX : (a > ER_VEC_DIRTY_MAX ? ER_VEC_DIRTY_MAX : a);
-    b = b < -ER_VEC_DIRTY_MAX ? -ER_VEC_DIRTY_MAX : (b > ER_VEC_DIRTY_MAX ? ER_VEC_DIRTY_MAX : b);
+    a = a < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (a > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : a);
+    b = b < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (b > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : b);
     *out_lo = (int16_t)a;
     *out_len = (int16_t)(b > a ? b - a : 0);
 }

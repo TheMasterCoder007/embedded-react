@@ -84,4 +84,14 @@
 #define ERUI_MAX_IMG_ROW_PIXELS 800
 #endif
 
+/**
+ * @brief How far from the origin a recorded paint or damage rect reaches, in pixels.
+ *
+ * A node's last paint rect and a vector node's dirty rect are kept in int16 fields. Clipped to this, a rect
+ * still holds every screen and its width and height still fit one, where ±32767 would allow 65534. Shared by
+ * the transformed-box clip (rendering/transform.c) and the vector dirty rect (scene/compositor.c); fixed by
+ * that storage, so not a build knob.
+ */
+#define ER_PAINT_RECT_MAX 16383
+
 #endif
