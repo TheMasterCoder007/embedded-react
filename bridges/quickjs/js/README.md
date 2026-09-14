@@ -427,7 +427,7 @@ cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest er-bridge
 ```
 
 To use a bridge build in another directory, point `ER_BRIDGE_BUILD_DIR` at it. CI runs both runtime tiers
-this way, against the bridge job's Release build on Linux.
+this way, against the bridge job's two Release builds on Linux (the native and the bare-metal allocator).
 
 Pick the tier by what the code touches: pure marshaling/logic → a co-located `*.unit.test.js`;
 anything that exercises the reconciler → engine pipeline → a `test/runtime/*.runtime.test.jsx`.
