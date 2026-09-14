@@ -426,6 +426,92 @@ static int check_huge_dirty_rect(void)
     return rc;
 }
 
+#if ERUI_GRADIENT
+/**
+ * @brief A tape of two shapes: a rect filled with grads[0] that never moves, and a stroked line at @p line_y.
+ *
+ * The rect sits left of the line, so the line's own damage never reaches it.
+ */
+static int tape_grad_rect_and_line(float line_y, float* ops)
+{
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 10.0f;
+    ops[i++] = 10.0f;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 60.0f;
+    ops[i++] = 10.0f;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 60.0f;
+    ops[i++] = 150.0f;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 10.0f;
+    ops[i++] = 150.0f;
+    ops[i++] = (float)ER_VOP_CLOSE;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 1.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 110.0f;
+    ops[i++] = line_y;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 140.0f;
+    ops[i++] = line_y;
+    return i;
+}
+
+/**
+ * @brief A gradient changed in the same upload that moves another shape repaints the whole node.
+ *
+ * The tape diff sees only ops and paints, so the moving line alone would narrow the damage to its own bounds
+ * and leave the gradient-filled rect, whose geometry never changes, in its old colours.
+ */
+static int check_gradient_change(void)
+{
+    ERNode *root, *svg;
+    build_scene(&root, &svg);
+
+    ERVectorPaint paints[2];
+    memset(paints, 0, sizeof(paints));
+    paints[0].fill_rule = ER_VFILL_NONZERO;
+    paints[0].fill_grad = 1; /* grads[0] */
+    paints[1] = g_paint;
+
+    ERVectorGradient grad;
+    memset(&grad, 0, sizeof(grad));
+    grad.type = ER_GRADIENT_LINEAR;
+    grad.stop_count = 2;
+    grad.stops[0].color = 0xFFE63946U;
+    grad.stops[0].position = 0.0f;
+    grad.stops[1].color = 0xFF457B9DU;
+    grad.stops[1].position = 1.0f;
+    grad.ax = 10.0f;
+    grad.ay = 10.0f;
+    grad.bx = 10.0f;
+    grad.by = 150.0f; /* down the rect */
+
+    float ops[32];
+    int n = tape_grad_rect_and_line(20.0f, ops);
+    er_node_set_vector_ops(svg, ops, n, paints, 2, &grad, 1);
+    frame();
+    frame();
+
+    /* One upload moves the line and recolours the rect's gradient. */
+    n = tape_grad_rect_and_line(60.0f, ops);
+    grad.stops[0].color = 0xFF2A9D8FU;
+    grad.stops[1].color = 0xFFE9C46AU;
+    er_node_set_vector_ops(svg, ops, n, paints, 2, &grad, 1);
+    frame();
+
+    const int rc = check_matches_full_repaint("a gradient changed beside a moving shape should repaint the node");
+    er_node_destroy(root);
+    if (rc == EXIT_SUCCESS)
+        printf("PASS: a gradient changed beside a moving shape repaints the node\n");
+    return rc;
+}
+#endif
+
 int main(void)
 {
     static const EmbeddedRenderBackend k_backend = {
@@ -463,6 +549,11 @@ int main(void)
     if (check_huge_dirty_rect() != EXIT_SUCCESS)
         failures++;
     er_reset();
+#if ERUI_GRADIENT
+    if (check_gradient_change() != EXIT_SUCCESS)
+        failures++;
+    er_reset();
+#endif
     if (failures > 0)
     {
         fprintf(stderr, "%d vector damage case(s) failed\n", failures);

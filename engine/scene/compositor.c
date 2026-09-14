@@ -3732,9 +3732,10 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
  * vector rasterizer's cost is CLIP-AREA bound, so damaging just the changed sub-region instead of the
  * whole node box is the difference between a cheap and an expensive redraw. We diff the new tape against
  * the stored one and emit a tight node-local damage rect. CONSERVATIVE: any structural change (first
- * upload, different length/opcodes/paint-index, or a paint-table change) falls back to a full-box repaint,
- * so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change (same geometry, e.g.
- * a mode recolor) also falls back to full, which is correct (every pixel of the shape changes colour).
+ * upload, different length/opcodes/paint-index, or a paint- or gradient-table change) falls back to a
+ * full-box repaint, so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change
+ * (same geometry, e.g. a mode recolor) also falls back to full, which is correct (every pixel of the shape
+ * changes colour).
  *
  * A segment is bounded by its ANCHOR (the pen position it starts from) as well as by its own points: a
  * rotating needle `M cx cy L tip` moves only `tip` in the tape, but the whole line sweeps, so damaging
@@ -4090,19 +4091,24 @@ void er_node_set_vector_ops(ERNode* node,
         const float* old_ops = er_vector_slot_ops(node->vector_slot, &old_n);
         const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
         const ERVectorGradient* old_grads = er_vector_slot_grads(node->vector_slot, &old_ng);
+        const bool same_grads =
+            old_ng == n_grads
+            && (n_grads <= 0
+                || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0));
         /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
          * state) → nothing changed, so skip the repaint entirely. */
         if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
             && (n_paints <= 0
                 || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0))
-            && old_ng == n_grads
-            && (n_grads <= 0
-                || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0)))
+            && same_grads)
         {
             return;
         }
-        tight =
-            vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
+        /* The diff sees only ops and paints. A changed gradient recolours every shape that uses it, wherever the
+         * geometry changed, so it repaints the whole node. */
+        tight = same_grads
+                && vec_diff_dirty_rect(
+                    old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
     }
 
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints, grads, n_grads);

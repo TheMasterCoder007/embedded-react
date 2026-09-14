@@ -98,6 +98,9 @@ See the README for the release process.
   the whole circle, as a canvas arc does, and an infinite sweep draws nothing. A huge stroke width, or a
   path point past the int range, no longer hits an undefined cast in the rasterizer either.
 
+- An `<Svg>` update that changes a gradient and moves a shape at once now repaints the whole node. Only
+  the moved shape was repainted, so a shape filled with the changed gradient kept its old colors.
+
 - A transform with a huge, lopsided, or infinite scale or rotation, or a 3D corner near the camera plane,
   no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix
   whose determinant or inverse overflows or goes NaN counts as singular, so the view paints untransformed,
