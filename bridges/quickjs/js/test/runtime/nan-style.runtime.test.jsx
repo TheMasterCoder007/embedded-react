@@ -83,8 +83,8 @@ check(
 );
 
 // updateVector's damage hint is app math too. The engine repaints exactly the hinted rect, so a NaN edge has
-// to drop the hint (the whole node repaints) rather than become 0 (nothing does), and a huge rect has to be
-// clamped at its corners, so it still covers what it did.
+// to drop the hint (the engine's own damage applies, here the whole node, since the fill changed) rather than
+// become 0 (nothing repaints), and a huge rect has to be clamped at its corners, so it still covers what it did.
 let canvas = null;
 function Canvas() {
   canvas = useRef(null);

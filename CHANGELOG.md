@@ -14,7 +14,8 @@ See the README for the release process.
 
 - `Date.now()` and `performance.now()` now compile in Flow B, with the same surface as Flow A's lite
   profile. The generated C holds them as 64-bit whole milliseconds, so divide them by a constant with
-  `%` or `Math.floor(a / b)`; a host sets the real time with `er_app_set_wall_clock()`. The engine
+  `%` or `Math.floor`/`ceil`/`round`/`trunc(a / b)`; a host sets the real time with
+  `er_app_set_wall_clock()`. The engine
   clock is also exposed as `er_now_ms64()`, which does not wrap at 49.7 days.
 
 - The thermostat demo has a clock: the time and date in its header, set from the settings sheet. It
@@ -86,12 +87,16 @@ See the README for the release process.
 - `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
   C compiler accepts. `%=` on a float ref works the same way.
 
-- An `updateVector` dirty rect with a NaN edge now repaints the whole node in both flows, and a huge one
-  is clipped at its corners, so it still covers what it says instead of wrapping; the engine's
+- An `updateVector` dirty rect with a NaN edge is now dropped in both flows, leaving the engine's own
+  damage (what changed in the tape, or the whole node), and a huge one is clipped at its corners, so it still covers what it says instead of wrapping; the engine's
   `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
   and Flow B turned a NaN edge into a zero-size hint that repainted nothing. An `<Svg>` whose changed
   geometry runs that far out repaints the whole node, where the damage rect the engine works out itself
   wrapped, or past the int range hit an undefined cast.
+
+- An `<Svg>` arc swept through a huge or infinite angle no longer hangs the engine. A turn or more draws
+  the whole circle, as a canvas arc does, and an infinite sweep draws nothing. A huge stroke width, or a
+  path point past the int range, no longer hits an undefined cast in the rasterizer either.
 
 - A transform with a huge, lopsided, or infinite scale or rotation, or a 3D corner near the camera plane,
   no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix

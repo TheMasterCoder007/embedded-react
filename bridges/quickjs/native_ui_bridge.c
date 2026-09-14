@@ -3825,8 +3825,9 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
             finite = finite && isfinite(d[k]);
         }
         /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
-           non-finite edge gives no hint, and the whole node repaints as it would without one; the rest is
-           bounded well inside the int range, and the engine clips the rect's corners from there. */
+           non-finite edge gives no hint, so the engine's own damage applies, as it would without one: what
+           changed in the tape, or the whole node. The rest is bounded well inside the int range, and the
+           engine clips the rect's corners from there. */
         if (finite)
         {
             int r[4];

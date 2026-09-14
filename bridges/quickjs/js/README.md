@@ -443,8 +443,9 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   surface as the lite JS profile (no `Date` objects). Until the host sets the real time —
   `er_runtime_set_wall_clock()` in Flow A, `er_app_set_wall_clock()` in Flow B — `Date.now()` reads as
   uptime. Flow B holds a timestamp as 64-bit whole milliseconds: keep it in state, a ref, or a local,
-  compare it, show it in text, and divide it by a constant with `%` or `Math.floor(a / b)`; a plain
-  `/`, a divisor from state, or mixing it with a float or a boolean is a compiler error. Covered by
+  compare it, show it in text, and divide it by a constant with `%` or `Math.floor`/`ceil`/`round`/
+  `trunc(a / b)`; a plain `/`, a divisor from state, or mixing it with a float or a boolean is a
+  compiler error. Covered by
   `date-now.runtime.test.js`, the AOT's `date-now`, `cc-compile` and `text-lowering` cases, and the
   engine's `test_node_pool`.
 - ✅ **Whole-number math in Flow B is defined.** C leaves a signed overflow, a zero divisor and an

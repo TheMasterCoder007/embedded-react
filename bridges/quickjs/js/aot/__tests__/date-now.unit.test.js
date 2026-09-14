@@ -197,16 +197,10 @@ export function App() {
       /mixed with a float/,
     ],
     [
-      'Math.round of a division',
-      '<Text>{Math.round(Date.now() / 1000)}</Text>',
-      /Math\.round\(a \/ b\)/,
-    ],
-    [
       'Math.sqrt',
       '<Text>{Math.sqrt(Date.now())}</Text>',
       /Math\.sqrt\(\.\.\.\) on a 64-bit/,
     ],
-    ['`% 0`', '<Text>{Date.now() % 0}</Text>', /nonzero constant/],
     ['new Date()', '<Text>{new Date()}</Text>', /Date objects/],
     ['Date()', '<Text>{Date()}</Text>', /Date objects/],
     ['Date.parse', "<Text>{Date.parse('2026')}</Text>", /Date objects/],
@@ -249,17 +243,17 @@ export function App() {
     ).toThrow(/`\/=` on a 64-bit/);
   });
 
-  it('refuses a 64-bit division whose divisor is not a nonzero constant', () => {
+  it('refuses a timestamp divided by anything but a constant', () => {
     const withN = jsx =>
       gen(app('const [n, setN] = useState(3);', `<View>${jsx}</View>`));
     expect(() => withN('<Text>{Date.now() % n}</Text>')).toThrow(
-      /nonzero constant/,
+      /divided by a constant/,
     );
     expect(() => withN('<Text>{Math.floor(Date.now() / n)}</Text>')).toThrow(
-      /nonzero constant/,
+      /divided by a constant/,
     );
-    expect(() => withN('<Text>{Math.floor(Date.now() / 0)}</Text>')).toThrow(
-      /nonzero constant/,
+    expect(() => withN('<Text>{Math.ceil(Date.now() / n)}</Text>')).toThrow(
+      /divided by a constant/,
     );
     expect(() =>
       gen(
@@ -268,7 +262,7 @@ export function App() {
           '<Pressable onPress={() => { r.current = Date.now(); r.current %= n; }}><Text>x</Text></Pressable>',
         ),
       ),
-    ).toThrow(/nonzero constant/);
+    ).toThrow(/divided by a constant/);
   });
 
   it('keeps the value of `||` / `&&` over a timestamp, not just its truth', () => {
@@ -464,7 +458,21 @@ export function App() {
     );
   });
 
-  it('still divides a timestamp itself only by a nonzero constant, with Math.floor', () => {
+  it('divides a timestamp itself by a constant with any rounding function, zero included', () => {
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const r = useRef(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setT(Math.ceil(t / 1000)); setT(Math.round(t / 7)); setT(Math.trunc(t / -1)); setT(Math.floor(t / 0)); setT(t % 0); r.current = Date.now(); r.current %= 0; }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_ceildiv64(s_state.t, 1000);');
+    expect(c).toContain('s_state.t = app_rounddiv64(s_state.t, 7);');
+    expect(c).toContain('s_state.t = app_neg64(s_state.t);');
+    // JS's ±Infinity saturates by the timestamp's sign, and a remainder of NaN is 0.
+    expect(c).toContain('s_state.t = app_floordiv64(s_state.t, 0);');
+    expect(c).toContain('s_state.t = 0;');
+    expect(c).toContain('s_ref_r = 0;');
+    // A divisor from state still has to be reduced first.
     expect(() =>
       gen(
         app(
@@ -472,14 +480,6 @@ export function App() {
           '<Pressable onPress={() => { setT(Date.now()); setT(Math.floor(t / d)); }}><Text>{t}</Text></Pressable>',
         ),
       ),
-    ).toThrow(/nonzero constant/);
-    expect(() =>
-      gen(
-        app(
-          'const [t, setT] = useState(0);',
-          '<Pressable onPress={() => { setT(Date.now()); setT(Math.round(t / 1000)); }}><Text>{t}</Text></Pressable>',
-        ),
-      ),
-    ).toThrow(/Math\.round\(a \/ b\) on a 64-bit time value/);
+    ).toThrow(/divided by a constant/);
   });
 });

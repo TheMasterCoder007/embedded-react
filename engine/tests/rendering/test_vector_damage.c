@@ -263,6 +263,29 @@ static void tape_far_line(int step, float* ops, int* n_ops)
     *n_ops = i;
 }
 
+/**
+ * @brief An arc's end swept through huge and infinite angles and back. A turn or more draws the whole circle and
+ *        an infinite sweep nothing; every change between them has to be damaged in full.
+ */
+static void tape_arc_blowup(int step, float* ops, int* n_ops)
+{
+    static const float k_end[7] = {1.2f, 1e10f, -1e10f, INFINITY, 1.2f, -INFINITY, 2.0f};
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = HUB_X + 40.0f;
+    ops[i++] = HUB_Y;
+    ops[i++] = (float)ER_VOP_ARC;
+    ops[i++] = HUB_X;
+    ops[i++] = HUB_Y;
+    ops[i++] = 40.0f;
+    ops[i++] = 0.0f;
+    ops[i++] = k_end[step];
+    ops[i++] = 0.0f;
+    *n_ops = i;
+}
+
 /** @brief The anchor slides down the left edge; the far endpoint never moves, so the line pivots. */
 static void tape_pivot_line(int step, float* ops, int* n_ops)
 {
@@ -426,6 +449,7 @@ int main(void)
         {"pivoting cubic (anchor moves)", tape_pivot_cubic},
         {"pivoting arc (anchor moves)", tape_pivot_arc},
         {"line running far past the node", tape_far_line},
+        {"arc swept through huge and infinite angles", tape_arc_blowup},
     };
 
     /* Every case runs even after one fails: the set of failures says which shape kinds lost damage. */

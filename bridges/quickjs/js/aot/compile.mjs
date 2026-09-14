@@ -469,15 +469,16 @@ const litPeers = (...es) =>
     : es;
 
 /**
- * The divisor of a 64-bit `%` or Math.floor(a / b), which has to be a nonzero constant: JS gives NaN or
- * Infinity for a zero divisor, which an integer cannot hold, and C would trap on it.
+ * The divisor of a timestamp's `%` or Math.floor / ceil / round / trunc(a / b), which has to be a constant; for
+ * one from state, an app reduces the timestamp first. A constant 0 gives JS's answer as the int math converts it:
+ * a remainder of 0, or a quotient saturated by the dividend's sign.
  */
-function nonzeroDivisor(node, env) {
+function constDivisor(node, env) {
   const m = staticInt(node, env);
-  if (m !== null && m !== 0) return m;
+  if (m !== null) return m;
   const e = aotError(
-    'AOT: a 64-bit value can only be divided by a nonzero constant',
-    'JS gives NaN or Infinity for a zero divisor, which an integer cannot hold, so the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
+    'AOT: a 64-bit time value can only be divided by a constant',
+    'the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
   );
   if (node.loc) e.aotLoc = node.loc.start;
   throw e;
@@ -485,7 +486,7 @@ function nonzeroDivisor(node, env) {
 
 /**
  * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. With a
- * timestamp in it, `%` takes a nonzero constant; whole-number math widened beside one takes any divisor, as the
+ * timestamp in it, `%` takes a constant; whole-number math widened beside one takes any divisor, as the
  * int `%` does. The result narrows back to int when the divisor or the dividend fits one, so `ms % 1000` is an
  * ordinary number again. `/` is refused: JS would give a fraction, and the whole-number division is written
  * Math.floor(a / b).
@@ -501,14 +502,14 @@ function emitArith64(node, l, r, env) {
   if (node.operator === '%') {
     const k = staticInt(node.right, env);
     // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
-    if (wide && k === 0) return {code: '0', cType: 'int'};
+    if (k === 0) return {code: '0', cType: 'int'};
     if (wide && k === null)
       return {
         code: `app_mod64(${l.code}, ${r.code})`,
         cType: 'i64',
         wide: true,
       };
-    const m = nonzeroDivisor(node.right, env);
+    const m = constDivisor(node.right, env);
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
     if (m === 1 || m === -1) return {code: '0', cType: 'int'};
     if (Math.abs(m) <= 0x7fffffff || l.cType === 'int')
@@ -523,14 +524,14 @@ function emitArith64(node, l, r, env) {
 }
 
 /**
- * Math.floor / round / ceil / trunc over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
- * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round, ceil and
- * trunc are refused. Null when neither side is 64-bit, which leaves it to the int or float path.
+ * Math.floor / ceil / round / trunc over `a / b` with a 64-bit timestamp on either side, as exact integer division
+ * by a constant (see constDivisor); a zero one saturates by the dividend's sign, as JS's ±Infinity converts. Null
+ * when neither side is a timestamp, which leaves it to the whole-number or float path.
  */
-function emitFloorDiv64(fn, args, env) {
+function emitTimeRoundDiv(fn, args, env) {
   const arg = args[0];
   if (
-    (fn !== 'floor' && fn !== 'round' && fn !== 'ceil' && fn !== 'trunc') ||
+    !INT_ROUND_DIV.has(fn) ||
     args.length !== 1 ||
     arg.type !== 'BinaryExpression' ||
     arg.operator !== '/'
@@ -541,15 +542,13 @@ function emitFloorDiv64(fn, args, env) {
   if (!isTime64(l) && !isTime64(r)) return null;
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
   if (l.cType === 'string' || r.cType === 'string') return null;
-  if (fn !== 'floor')
-    throw aotError(
-      `AOT: Math.${fn}(a / b) on a 64-bit time value is not supported`,
-      'use Math.floor(a / b), which stays exact in whole milliseconds.',
-    );
   // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
-  if (nonzeroDivisor(arg.right, env) === -1)
+  if (constDivisor(arg.right, env) === -1)
     return {code: `app_neg64(${l.code})`, cType: 'i64'};
-  return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
+  return {
+    code: `${INT_ROUND_DIV.get(fn)}64(${l.code}, ${r.code})`,
+    cType: 'i64',
+  };
 }
 
 /** The helper that rounds `a / b` for two ints the way each Math function does. */
@@ -564,8 +563,9 @@ const INT_ROUND_DIV = new Map([
  * Math.floor / ceil / round / trunc over `a / b` with two whole numbers, as exact integer division: the float
  * path rounds an operand past 2^24, so Math.floor(16777217 / 1) came out 16777216. A zero divisor keeps JS's
  * answer as app_f2i converts it (±Infinity saturates by the dividend's sign, 0 / 0 is 0), and INT_MIN / -1
- * saturates too. Beside a 64-bit value, or over whole-number math already widened to 64 bits, it divides in 64
- * bits, since JS would not cut the operands to 32. Null for anything else, which leaves it to the float path.
+ * saturates too. Beside a 64-bit value, or with a 64-bit operand that is not a timestamp (a constant past the int
+ * range, or math already widened), it divides in 64 bits, since JS would not cut the operands to 32. Null for
+ * anything else, which leaves it to the float path.
  */
 function emitIntRoundDiv(fn, args, env) {
   const arg = args[0];
@@ -578,7 +578,7 @@ function emitIntRoundDiv(fn, args, env) {
     return null;
   const l = emitExprWide(arg.left, env);
   const r = emitExprWide(arg.right, env);
-  if (env.math64 || l.wide || r.wide) {
+  if (env.math64 || l.cType === 'i64' || r.cType === 'i64') {
     const whole = e => e.cType === 'int' || (e.cType === 'i64' && !isTime64(e));
     if (!whole(l) || !whole(r)) return null;
     return {
@@ -1017,8 +1017,8 @@ function emitExprImpl(node, env) {
       // Math.* helpers → libm (the generated C includes <math.h> when these appear).
       if (c.type === 'MemberExpression' && c.object.name === 'Math') {
         const fn = c.property.name;
-        const floorDiv = emitFloorDiv64(fn, node.arguments, env);
-        if (floorDiv) return floorDiv;
+        const timeDiv = emitTimeRoundDiv(fn, node.arguments, env);
+        if (timeDiv) return timeDiv;
         const intDiv = emitIntRoundDiv(fn, node.arguments, env);
         if (intDiv) return intDiv;
         const a = litPeers(...node.arguments.map(x => emitExprWide(x, env)));
@@ -3126,9 +3126,10 @@ function compileUpdateVector(expr, env, ctx, indent) {
         'AOT: updateVector dirtyRect must be a [x, y, w, h] array literal',
       );
     const rect = dirtyArg.elements.slice(0, 4).map(el => emitExpr(el, env));
-    // A float edge can be NaN (a 0/0), which app_vector_dirty turns into no hint at all, so the whole node
-    // repaints: the engine damages exactly the hinted rect, and a zero-width one paints nothing. An int edge
-    // goes straight to the engine, which clips the rect's corners to the int16 range it keeps them in.
+    // A float edge can be NaN (a 0/0), which app_vector_dirty turns into no hint at all, so the engine's own
+    // damage applies (what changed in the tape, or the whole node), where a zero-width hint would paint nothing:
+    // the engine damages exactly the hinted rect. An int edge goes straight to the engine, which clips the
+    // rect's corners to the int16 range it keeps them in.
     const fn = rect.some(e => e.cType === 'float')
       ? 'app_vector_dirty'
       : 'er_node_set_vector_dirty_rect';
@@ -3256,7 +3257,7 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       );
     const m =
       expr.operator === '%=' && (r.cType === 'i64' || isTime64(e))
-        ? nonzeroDivisor(expr.right, env)
+        ? constDivisor(expr.right, env)
         : null;
     storeCheck(
       e,
@@ -3304,8 +3305,8 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       if (expr.operator === '%=' && k === null)
         return [`${indent}${r.cVar} = app_mod(${r.cVar}, ${e.code});`];
     }
-    // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
-    if (m === 1 || m === -1) return [`${indent}${r.cVar} = 0;`];
+    // ±1 leaves no remainder, 0 is JS's NaN, which is 0 here, and INT64_MIN % -1 overflows in C.
+    if (m === 0 || m === 1 || m === -1) return [`${indent}${r.cVar} = 0;`];
     return [
       `${indent}${r.cVar} ${expr.operator} ${expr.operator === '=' ? storeCode(e, r.cType) : e.code};`,
     ];
@@ -7840,8 +7841,9 @@ static int16_t app_round_dim(double v)
     [
       'app_vector_dirty',
       "/* updateVector's damage hint from float math. A NaN or infinite edge (a 0/0 in app math) gives no hint,\n" +
-        '   so the whole node repaints, where a zero-width one would leave the new drawing unpainted; the rest is\n' +
-        "   bounded well inside the int range, and the engine clips the rect's corners from there. */\n" +
+        "   so the engine's own damage applies (what changed in the tape, or the whole node), where a zero-width\n" +
+        '   one would leave the new drawing unpainted; the rest is bounded well inside the int range, and the\n' +
+        "   engine clips the rect's corners from there. */\n" +
         'static void app_vector_dirty(ERNode* node, float x, float y, float w, float h)\n{\n' +
         '    if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))\n    {\n        return;\n    }\n' +
         '    const float r[4] = {x, y, w, h};\n    int c[4];\n' +

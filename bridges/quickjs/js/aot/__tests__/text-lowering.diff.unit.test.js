@@ -1331,6 +1331,25 @@ export function App() {
       expect(runText('wholemath', 'int n; int d;', cases, defs)).toEqual([]);
     },
   );
+
+  (CC ? it : it.skip)(
+    `a 64-bit constant divided by an int stays a 64-bit whole number (${CC || 'no cc found'})`,
+    () => {
+      // 2^53 / d through a float would round, and through app_f2i saturate at the int range.
+      const t = textCall(
+        'const [d, setD] = useState(3);',
+        'Math.trunc(9007199254740992 / d)',
+      );
+      expect(t.call).toContain('app_div64(9007199254740992, S.d)');
+      const cases = [3, 7, -7, 1, -1, 0].map(d => ({
+        label: `Math.trunc(2^53 / ${d})`,
+        init: cInt(d),
+        call: t.call,
+        want: d === 0 ? String(2n ** 63n - 1n) : String(2n ** 53n / BigInt(d)),
+      }));
+      expect(runText('litdiv', 'int d;', cases, t.defs)).toEqual([]);
+    },
+  );
 });
 
 describe('AOT whole-number math beside a timestamp is worked out in 64 bits', () => {
@@ -1434,6 +1453,67 @@ export function App() {
         .map((c, i) => ({...c, got: got.get(i)}))
         .filter(c => c.got !== c.want)
         .map(c => `${c.expr} @ n=${c.n}, d=${c.d}: C=${c.got} JS=${c.want}`);
+      expect(bad).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a timestamp divided by a constant rounds as JS does, zero included (${CC || 'no cc found'})`,
+    () => {
+      const EXPRS = [];
+      for (const fn of ['floor', 'ceil', 'round', 'trunc'])
+        for (const k of [1000, 7, -7, 2, -1, 0])
+          EXPRS.push(`Math.${fn}(t / ${k})`);
+      for (const k of [1000, 7, -7, -1, 0]) EXPRS.push(`t % ${k}`);
+      const VALUES = [
+        1789075980123, -1789075980123, 1500, -1500, 2500, -2500, 7, 0,
+      ];
+      const defs = new Map();
+      const cases = [];
+      for (const expr of EXPRS) {
+        const c = compileSource(
+          `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [t, setT] = useState(0);
+  return (<Pressable onPress={() => { setT(Date.now()); setT(${expr}); }}><Text>{t}</Text></Pressable>);
+}`,
+          'tdiv',
+        ).c;
+        const code = [...c.matchAll(/ {4}s_state\.t = (.+);\n/g)]
+          .map(m => m[1])
+          .find(s => s !== 'app_date_now()');
+        expect(code, `${expr}: no store emitted`).toBeTruthy();
+        for (const [k, def] of helperDefs(c)) defs.set(k, def);
+        for (const t of VALUES)
+          cases.push({
+            expr,
+            t,
+            code: code.replace(/s_state\./g, 'S.'),
+            want: String(toI64(Function('t', `return (${expr});`)(t))),
+          });
+      }
+      let prog =
+        HELPER_INCLUDES +
+        usedHelpers(
+          defs,
+          cases.map(c => c.code),
+        ) +
+        'struct St { int64_t t; };\n';
+      cases.forEach((c, i) => {
+        prog +=
+          `static void case_${i}(void){ struct St S = {${c.t}LL};\n` +
+          `  S.t = ${c.code}; printf("%d\\t%lld\\n", ${i}, (long long)S.t); }\n`;
+      });
+      prog +=
+        'int main(void){\n' +
+        cases.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'tdiv');
+      const bad = cases
+        .map((c, i) => ({...c, got: got.get(i)}))
+        .filter(c => c.got !== c.want)
+        .map(c => `${c.expr} @ t=${c.t}: C=${c.got} JS=${c.want}`);
       expect(bad).toEqual([]);
     },
   );

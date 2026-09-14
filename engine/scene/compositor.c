@@ -3756,19 +3756,35 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
 #define VEC_BBOX_ARC_STEPS 32
 #define VEC_BBOX_ARC_STEP (2.0f * ER_PI / (float)VEC_BBOX_ARC_STEPS)
 
-/** @brief Hard cap on samples for one arc, so a many-turn sweep cannot walk the bbox forever. */
-#define VEC_BBOX_ARC_MAX_SAMPLES 64
-
-/** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
-static void
+/**
+ * @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep.
+ *
+ * @return false for an arc no sample can bound (a NaN or infinite input); the caller repaints the whole node.
+ */
+static bool
 vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
 {
     float span = a1 - a0;
     if (span < 0.0f)
         span = -span;
-    int n = (int)(span / VEC_BBOX_ARC_STEP) + 1;
-    if (n > VEC_BBOX_ARC_MAX_SAMPLES)
-        n = VEC_BBOX_ARC_MAX_SAMPLES;
+    if (!(fabsf(cx) < INFINITY && fabsf(cy) < INFINITY && fabsf(r) < INFINITY && span < INFINITY))
+        return false;
+    if (span >= 2.0f * ER_PI)
+    {
+        /* A turn or more sweeps the whole circle, however many turns it is (and past the int range, the sample
+         * count's cast would be undefined): bound the circle rather than sample it. */
+        const float ar = fabsf(r);
+        if (cx - ar < *minx)
+            *minx = cx - ar;
+        if (cy - ar < *miny)
+            *miny = cy - ar;
+        if (cx + ar > *maxx)
+            *maxx = cx + ar;
+        if (cy + ar > *maxy)
+            *maxy = cy + ar;
+        return true;
+    }
+    const int n = (int)(span / VEC_BBOX_ARC_STEP) + 1; /* under a turn, so at most VEC_BBOX_ARC_STEPS + 1 */
     for (int k = 0; k <= n; k++)
     {
         const float a = a0 + (a1 - a0) * (float)k / (float)n;
@@ -3783,6 +3799,7 @@ vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float
         if (y > *maxy)
             *maxy = y;
     }
+    return true;
 }
 
 /**
@@ -3809,10 +3826,13 @@ static bool vec_diff_dirty_rect(const float* o,
 
     float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
     bool any = false;
+    bool finite = true; /* false once a changed point is NaN or infinite, which no rect can bound */
 #define VADD(X, Y)                                                                                                     \
     do                                                                                                                 \
     {                                                                                                                  \
         const float _x = (X), _y = (Y);                                                                                \
+        if (!(fabsf(_x) < INFINITY && fabsf(_y) < INFINITY))                                                           \
+            finite = false;                                                                                            \
         if (_x < minx)                                                                                                 \
             minx = _x;                                                                                                 \
         if (_y < miny)                                                                                                 \
@@ -3955,10 +3975,10 @@ static bool vec_diff_dirty_rect(const float* o,
                         VADD(ocx + orr * cosf(oa0), ocy + orr * sinf(oa0));
                         VADD(ncx + nrr * cosf(na0), ncy + nrr * sinf(na0));
                     }
-                    if (oa0 != na0)
-                        vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
-                    if (oa1 != na1)
-                        vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy);
+                    if (oa0 != na0 && !vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy))
+                        return false;
+                    if (oa1 != na1 && !vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy))
+                        return false;
                     any = true;
                 }
                 else
@@ -4002,6 +4022,8 @@ static bool vec_diff_dirty_rect(const float* o,
 #undef VANCHOR
 #undef VADD
 
+    if (!finite)
+        return false; /* a NaN or infinite point is bounded by nothing: repaint the whole node */
     if (!any)
         return false; /* geometry identical (paint-only or no-op change) → full box is simplest & correct */
 
