@@ -41,6 +41,8 @@
 #define WHITE 0xFFFFFFFFU
 
 static uint32_t s_fb[FB_W * FB_H];
+/* Backend draws since it was last zeroed: whether a commit repainted anything at all. */
+static int s_draws;
 
 /**
  * @brief Backend fill_rect: premultiplies the color and writes it, clipped to the framebuffer.
@@ -48,6 +50,7 @@ static uint32_t s_fb[FB_W * FB_H];
 static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    s_draws++;
     const uint32_t a = (argb >> 24) & 0xFFU;
     if (a == 0U)
         return;
@@ -64,6 +67,7 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
 static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    s_draws++;
     for (int row = 0; row < h; row++)
     {
         const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + row * stride);
@@ -82,6 +86,7 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
 static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
     (void)ctx;
+    s_draws++;
     for (int row = 0; row < h; row++)
     {
         const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + row * stride);
@@ -257,6 +262,40 @@ static uint32_t shrink_back(uint32_t* big)
     er_node_destroy(root);
     return p;
 }
+
+/**
+ * @brief Paints the node scaled past every edge of the framebuffer, then moves it and commits again.
+ *
+ * Its box clips to the whole ±ER_PAINT_RECT_MAX window before and after, so the recorded paint alone cannot
+ * show the move.
+ *
+ * @return How many backend draws the second commit made.
+ */
+static int move_zoomed(void)
+{
+    ERProps xf;
+    er_props_default(&xf);
+    xf.transform_scale_x = xf.transform_scale_y = 1e4f;
+    ERNode* root = white_root();
+    ERNode* node = er_node_create(ER_NODE_VIEW);
+    ERProps np = node_props(&xf);
+    er_node_set_props(node, &np);
+
+    er_tree_append_child(root, node);
+    er_tree_set_root(root);
+    er_commit();
+
+    np.left = 10;
+    er_node_set_props(node, &np);
+    s_draws = 0;
+    er_commit();
+    const int draws = s_draws;
+
+    er_tree_remove_child(root, node);
+    er_node_destroy(node);
+    er_node_destroy(root);
+    return draws;
+}
 #endif /* ERUI_TRANSFORMS_FULL */
 
 int main(void)
@@ -381,6 +420,11 @@ int main(void)
         return fail("a node scaled past every edge should cover the framebuffer");
     if (after != WHITE)
         return fail("a node shrinking back from past every edge should erase its whole trail");
+
+    /* Scaled past every edge before and after a move, its box clips to the same record either way, so the
+     * move counts regardless: the second commit repaints. */
+    if (move_zoomed() == 0)
+        return fail("a node scaled past every edge should repaint when it moves");
 
 #if ERUI_3D_TRANSFORMS
     /* 3D with an overflowing scale, and with an infinite tilt: both singular, both untransformed. */

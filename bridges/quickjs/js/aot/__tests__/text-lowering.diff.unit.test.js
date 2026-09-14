@@ -1143,6 +1143,50 @@ export function App() {
       );
     },
   );
+
+  (CC ? it : it.skip)(
+    `/ by a runtime zero gives JS's Infinity or NaN, converted like any float (${CC || 'no cc found'})`,
+    () => {
+      // A float divided by zero follows IEEE 754 (C's Annex F), which GCC and Clang implement; neither counts
+      // it as undefined under -fsanitize=undefined. IEEE's answer is JS's: ±Infinity, or NaN for 0 / 0.
+      const decls =
+        'const [n, setN] = useState(7);\n  const [f, setF] = useState(1.5);\n  const [d, setD] = useState(0);';
+      const ints = textCall(decls, 'Math.floor(n / d)');
+      const floats = textCall(decls, 'Math.floor(f / d)');
+      const INT_PAIRS = [
+        [7, 0],
+        [-7, 0],
+        [0, 0],
+        [7, 2],
+        [-7, 2],
+      ];
+      const FLOAT_PAIRS = [
+        [1.5, 0],
+        [-1.5, 0],
+        [0, 0],
+        [NaN, 0],
+        [1.5, -2],
+      ];
+      const cases = [
+        ...INT_PAIRS.map(([n, d]) => ({
+          label: `Math.floor(${n} / ${d})`,
+          init: `${cInt(n)}, 0.0f, ${cInt(d)}`,
+          call: ints.call,
+          want: String(toInt(Math.floor(n / d))),
+        })),
+        ...FLOAT_PAIRS.map(([f, d]) => ({
+          label: `Math.floor(${f} / ${d})`,
+          init: `0, ${cFloat(f)}, ${cInt(d)}`,
+          call: floats.call,
+          want: String(toInt(Math.floor(Math.fround(f) / d))),
+        })),
+      ];
+      const defs = new Map([...ints.defs, ...floats.defs]);
+      expect(runText('divzero', 'int n; float f; int d;', cases, defs)).toEqual(
+        [],
+      );
+    },
+  );
 });
 
 describe('AOT list slice keeps what JS keeps', () => {

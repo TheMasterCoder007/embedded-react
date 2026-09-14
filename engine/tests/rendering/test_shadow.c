@@ -564,6 +564,70 @@ int main(void)
         }
     }
 
+    /* -----------------------------------------------------------------------
+     * An offset near 32767 widens the node's recorded paint by twice that, past the int16 it is kept in.
+     * Clipped rather than wrapped, the record still covers the node, so what erases the node by it (dropping
+     * the shadow as the node moves away, or removing the node) still clears where it was. Moving it with the
+     * shadow kept leaves a footprint that clips to the same record, so that is counted as a move regardless.
+     * ---------------------------------------------------------------------- */
+    for (int mode = 0; mode < 3; mode++)
+    {
+        reset(&tc);
+        er_reset();
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &rp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.position = ER_POS_ABSOLUTE;
+        cp.left = 2;
+        cp.top = 2;
+        cp.width = 4;
+        cp.height = 4;
+        cp.background_color = 0xFF0000FFU; /* blue */
+        cp.shadow_color = 0xFF000000U;
+        cp.shadow_offset_x = 32767.0f;
+        cp.shadow_opacity = 1.0f;
+        cp.shadow_radius = 0;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(root, child);
+        er_tree_set_root(root);
+        er_commit();
+        if (px(&tc, 3, 3) != 0xFF0000FFU)
+            return fail("huge offset: the node itself should paint");
+
+        static const char* const k_what[3] = {
+            "huge offset: moving the node with its shadow should erase where it was",
+            "huge offset: dropping the shadow as the node moves should erase where it was",
+            "huge offset: removing the node should erase where it was",
+        };
+        if (mode < 2)
+        {
+            cp.left = 20; /* away from (3,3) */
+            if (mode == 1)
+                cp.shadow_opacity = 0.0f; /* and a footprint that no longer covers it */
+            er_node_set_props(child, &cp);
+        }
+        else
+            er_tree_remove_child(root, child);
+        er_commit();
+        if (px(&tc, 3, 3) != 0xFFFFFFFFU)
+            return fail(k_what[mode]);
+        if (mode < 2 && px(&tc, 21, 3) != 0xFF0000FFU)
+            return fail("huge offset: the moved node should paint where it went");
+
+        if (mode < 2)
+            er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_node_destroy(root);
+    }
+
 #endif /* ERUI_SHADOWS */
 
     return EXIT_SUCCESS;

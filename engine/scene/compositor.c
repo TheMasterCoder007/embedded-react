@@ -1018,6 +1018,43 @@ static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
 #endif
 
 /**
+ * @brief Clips one axis of a rect, [*lo, *lo + *len), to ±ER_PAINT_RECT_MAX, keeping what it covers.
+ *
+ * Every rect the engine keeps in int16 fields goes through this first: a node's last paint and a vector node's
+ * dirty rect. A cast alone would wrap a far edge (a shadow offset near 32767 widens a small node that far) into
+ * a rect off to the side, which then erases or damages none of what it should.
+ *
+ * @param[in,out] lo   Start; clipped.
+ * @param[in,out] len  Length, where a negative one covers nothing; clipped, never negative.
+ */
+static void clip_rect_axis(int* lo, int* len)
+{
+    int64_t a = *lo;
+    int64_t b = (int64_t)*lo + *len; /* in 64 bits: the far edge can pass the int range */
+    a = a < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (a > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : a);
+    b = b < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (b > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : b);
+    *lo = (int)a;
+    *len = (int)(b > a ? b - a : 0);
+}
+
+/**
+ * @brief Whether a clipped footprint spans the whole ±ER_PAINT_RECT_MAX window along either axis.
+ *
+ * Two such footprints clip to the same rect wherever the node sits, so comparing one with the record cannot tell
+ * that the node moved. The pre-pass counts it as moved every commit instead: it covers the whole screen, so that
+ * repaints what a move would.
+ *
+ * @param[in] x,y,w,h  Clipped footprint.
+ *
+ * @return true when the footprint reaches both ends of the window on some axis.
+ */
+static bool spans_paint_window(int x, int y, int w, int h)
+{
+    return (x <= -ER_PAINT_RECT_MAX && x + w >= ER_PAINT_RECT_MAX)
+           || (y <= -ER_PAINT_RECT_MAX && y + h >= ER_PAINT_RECT_MAX);
+}
+
+/**
  * @brief Computes a node's current screen rect for damage tracking.
  *
  * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
@@ -2248,6 +2285,8 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             expand_for_shadow(n, &lp_x, &lp_y, &lp_w, &lp_h);
 #endif
         }
+        clip_rect_axis(&lp_x, &lp_w);
+        clip_rect_axis(&lp_y, &lp_h);
         n->last_paint_rect.x = (int16_t)lp_x;
         n->last_paint_rect.y = (int16_t)lp_y;
         n->last_paint_rect.w = (int16_t)lp_w;
@@ -4027,38 +4066,16 @@ void er_node_set_vector_ops(ERNode* node,
     er_mark_dirty_upward(node);
 }
 
-/**
- * @brief Clips one axis of a dirty rect, [lo, lo + len), to ±ER_PAINT_RECT_MAX, keeping what it covers.
- *
- * The rect is kept in int16 fields, where a cast alone would wrap a big edge into a rect off to the side that
- * damages none of the node.
- *
- * @param[in]  lo       Start, in node-local pixels.
- * @param[in]  len      Length; a negative one covers nothing.
- * @param[out] out_lo   Clipped start.
- * @param[out] out_len  Clipped length, never negative.
- */
-static void vec_dirty_axis(int lo, int len, int16_t* out_lo, int16_t* out_len)
-{
-    int64_t a = lo;
-    int64_t b = (int64_t)lo + len; /* in 64 bits: the far edge can pass the int range */
-    a = a < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (a > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : a);
-    b = b < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (b > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : b);
-    *out_lo = (int16_t)a;
-    *out_len = (int16_t)(b > a ? b - a : 0);
-}
-
 void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h)
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
-    int16_t x16, y16, w16, h16;
-    vec_dirty_axis(x, w, &x16, &w16);
-    vec_dirty_axis(y, h, &y16, &h16);
-    node->vec_dirty_x = x16;
-    node->vec_dirty_y = y16;
-    node->vec_dirty_w = w16;
-    node->vec_dirty_h = h16;
+    clip_rect_axis(&x, &w);
+    clip_rect_axis(&y, &h);
+    node->vec_dirty_x = (int16_t)x;
+    node->vec_dirty_y = (int16_t)y;
+    node->vec_dirty_w = (int16_t)w;
+    node->vec_dirty_h = (int16_t)h;
     node->vec_has_dirty = true;
     er_mark_dirty_upward(node);
 }
@@ -4918,7 +4935,8 @@ void er_commit(void)
                 {
                     const bool moved = n->has_last_paint
                                        && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
-                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
+                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h
+                                           || spans_paint_window(td.fx, td.fy, td.fw, td.fh));
                     /* The third way this node's pixels can move: an ANCESTOR gained or lost a transform,
                      * which hands the capture to a different node and flips this one between its AABB and
                      * its raw box (issue #139). It leaves the node clean and its layout box where it was,
@@ -5010,9 +5028,13 @@ void er_commit(void)
 #if ERUI_SHADOWS
             expand_for_shadow(n, &rx, &ry, &rw, &rh);
 #endif
+            /* Clipped as the record is, or a footprint past the clip would never match it. */
+            clip_rect_axis(&rx, &rw);
+            clip_rect_axis(&ry, &rh);
             const bool moved = n->has_last_paint
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
-                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
+                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h
+                                   || spans_paint_window(rx, ry, rw, rh));
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
             if (scrim_modal)

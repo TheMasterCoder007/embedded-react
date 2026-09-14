@@ -409,12 +409,21 @@ const INT_MAX = 2 ** 31 - 1;
 function numConst(v) {
   // floatLit refuses NaN and Infinity (a folded `0 / 0`, say), which have no C literal.
   if (!Number.isInteger(v)) return {code: floatLit(v), cType: 'float'};
-  if (Math.abs(v) >= 2 ** 63)
+  if (v < -(2 ** 63) || v >= 2 ** 63)
     return {code: `${v.toExponential()}f`, cType: 'float'};
   if (v < INT_MIN || v > INT_MAX)
-    return {code: String(v), cType: 'i64', lit: true};
+    return {code: i64Lit(v), cType: 'i64', lit: true};
   // `-2147483648` is `-` applied to 2147483648, which does not fit an int.
   return {code: v === INT_MIN ? '(-2147483647 - 1)' : String(v), cType: 'int'};
+}
+
+/**
+ * A whole number in the int64 range as a C literal. `String(v)` is JS's shortest spelling that reads back as the
+ * same double, which past 2^53 is not the number itself: 4611686018427387904 prints as 4611686018427388000.
+ */
+function i64Lit(v) {
+  // `-9223372036854775808` is `-` applied to 9223372036854775808, which fits no signed type.
+  return v === -(2 ** 63) ? '(-9223372036854775807 - 1)' : BigInt(v).toString();
 }
 
 /** `+ - *` or a unary `-`: the operators that can overflow a whole number. */
@@ -1392,7 +1401,9 @@ function collectState(fnBody, scope, prefix = '', wide = NO_WIDE) {
             ? cstr(String(initVal))
             : cType === 'float'
               ? floatLit(initVal)
-              : String(Number(initVal));
+              : cType === 'i64'
+                ? i64Lit(Number(initVal))
+                : String(Number(initVal));
         rec = {
           name,
           cField,
@@ -1824,7 +1835,12 @@ function collectRefs(fnBody, scope, prefix = '', wide = NO_WIDE) {
         refs.set(decl.id.name, {
           cVar,
           cType,
-          initCode: cType === 'float' ? `${v}f` : String(v),
+          initCode:
+            cType === 'float'
+              ? floatLit(v)
+              : cType === 'i64'
+                ? i64Lit(v)
+                : String(v),
           kind: 'value',
           used: false,
         });

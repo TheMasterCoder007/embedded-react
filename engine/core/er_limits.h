@@ -89,8 +89,8 @@
  *
  * A node's last paint rect and a vector node's dirty rect are kept in int16 fields. Clipped to this, a rect
  * still holds every screen and its width and height still fit one, where ±32767 would allow 65534. Shared by
- * the transformed-box clip (rendering/transform.c) and the vector dirty rect (scene/compositor.c); fixed by
- * that storage, so not a build knob.
+ * the transformed-box clip (rendering/transform.c) and every rect scene/compositor.c records: a node's last
+ * paint, with its shadow bleed, and a vector dirty rect. Fixed by that storage, so not a build knob.
  */
 #define ER_PAINT_RECT_MAX 16383
 

@@ -379,6 +379,23 @@ export function App() {
     expect(c).toContain('s_state.t = app_sub64(app_date_now(), 2592000000);');
   });
 
+  it('spells a 64-bit constant exactly, the int64 minimum included', () => {
+    // JS prints 2^62 as 4611686018427388000, which is a different whole number in C.
+    const c = gen(`${PRE}
+export function App() {
+  const [t, setT] = useState(4611686018427387904);
+  const r = useRef(4611686018427387904);
+  return (<Pressable onPress={() => { r.current = Date.now(); setT(Date.now() - 4611686018427387904); setT(Date.now() > -9223372036854775808 ? 1 : 0); }}><Text>{t}</Text></Pressable>);
+}`);
+    expect(c).not.toContain('4611686018427388000');
+    expect(c).toContain(
+      's_state.t = app_sub64(app_date_now(), 4611686018427387904);',
+    );
+    expect(c).toMatch(/\.t = 4611686018427387904\b/);
+    expect(c).toContain('s_ref_r = 4611686018427387904;');
+    expect(c).toContain('(-9223372036854775807 - 1)');
+  });
+
   it('works int math beside a timestamp out in 64 bits, as JS would', () => {
     const c = gen(`${PRE}
 const DAY_MS = 86400000;

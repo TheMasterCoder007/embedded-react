@@ -68,6 +68,9 @@ See the README for the release process.
 - A Flow B list whose float field holds a whole number (`0`, `2`) now compiles. The generated C wrote it
   as `0f`, which no C compiler accepts.
 
+- A Flow B whole-number constant past 2^53 now reaches the generated C exactly. It was written the way JS
+  prints it, which past 2^53 is a different number.
+
 - `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
   C compiler accepts. `%=` on a float ref works the same way.
 
@@ -76,11 +79,11 @@ See the README for the release process.
   `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
   and Flow B turned a NaN edge into a zero-size hint that repainted nothing.
 
-- A transform with a huge, lopsided or infinite scale or rotation, or a 3D corner near the camera plane,
+- A transform with a huge, lopsided, or infinite scale or rotation, or a 3D corner near the camera plane,
   no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix
   whose determinant or inverse overflows or goes NaN counts as singular, so the view paints untransformed,
-  as it already did for a scale of 0. A view scaled far past the screen no longer leaves a trail when it
-  shrinks back.
+  as it already did for a scale of 0. A view whose transform or shadow reaches far past the screen no
+  longer leaves a trail when it moves or shrinks back.
 
 - A NaN opacity, transform or shadow offset (a 0/0 in app math, say) now has a defined result instead of
   undefined behavior in C: the view is fully transparent, the transform component is ignored, and the
