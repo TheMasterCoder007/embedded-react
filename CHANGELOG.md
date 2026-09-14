@@ -65,6 +65,10 @@ See the README for the release process.
 
 ### Fixed
 
+- `Math.floor`, `Math.ceil` and `Math.round` of an int divided by an int are now exact in Flow B. They went
+  through a float, which rounds a number past 2^24, so `Math.floor(16777217 / 1)` gave 16777216.
+  `Math.trunc`, which Flow B did not support, now compiles too.
+
 - A Flow B list whose float field holds a whole number (`0`, `2`) now compiles. The generated C wrote it
   as `0f`, which no C compiler accepts.
 

@@ -845,7 +845,7 @@ export function App() {
   );
 
   (CC ? it : it.skip)(
-    `Math.floor / ceil / round of a float, NaN and infinities included (${CC || 'no cc found'})`,
+    `Math.floor / ceil / round / trunc of a float, NaN and infinities included (${CC || 'no cc found'})`,
     () => {
       // Floats the C state holds exactly, and the halves where roundf and JS disagree.
       const VALUES = [
@@ -870,7 +870,7 @@ export function App() {
       ];
       const defs = new Map();
       const cases = [];
-      for (const fn of ['floor', 'ceil', 'round']) {
+      for (const fn of ['floor', 'ceil', 'round', 'trunc']) {
         const t = textCall('const [f, setF] = useState(0.5);', `Math.${fn}(f)`);
         for (const [k, def] of t.defs) defs.set(k, def);
         for (const v of VALUES)
@@ -1148,43 +1148,82 @@ export function App() {
     `/ by a runtime zero gives JS's Infinity or NaN, converted like any float (${CC || 'no cc found'})`,
     () => {
       // A float divided by zero follows IEEE 754 (C's Annex F), which GCC and Clang implement; neither counts
-      // it as undefined under -fsanitize=undefined. IEEE's answer is JS's: ±Infinity, or NaN for 0 / 0.
-      const decls =
-        'const [n, setN] = useState(7);\n  const [f, setF] = useState(1.5);\n  const [d, setD] = useState(0);';
-      const ints = textCall(decls, 'Math.floor(n / d)');
-      const floats = textCall(decls, 'Math.floor(f / d)');
-      const INT_PAIRS = [
-        [7, 0],
-        [-7, 0],
-        [0, 0],
-        [7, 2],
-        [-7, 2],
-      ];
-      const FLOAT_PAIRS = [
+      // it as undefined under -fsanitize=undefined. IEEE's answer is JS's: ±Infinity, or NaN for 0 / 0. (Two
+      // ints divide exactly, in the test below.)
+      const {call, defs} = textCall(
+        'const [f, setF] = useState(1.5);\n  const [d, setD] = useState(0);',
+        'Math.floor(f / d)',
+      );
+      const PAIRS = [
         [1.5, 0],
         [-1.5, 0],
         [0, 0],
         [NaN, 0],
         [1.5, -2],
       ];
-      const cases = [
-        ...INT_PAIRS.map(([n, d]) => ({
-          label: `Math.floor(${n} / ${d})`,
-          init: `${cInt(n)}, 0.0f, ${cInt(d)}`,
-          call: ints.call,
-          want: String(toInt(Math.floor(n / d))),
-        })),
-        ...FLOAT_PAIRS.map(([f, d]) => ({
-          label: `Math.floor(${f} / ${d})`,
-          init: `0, ${cFloat(f)}, ${cInt(d)}`,
-          call: floats.call,
-          want: String(toInt(Math.floor(Math.fround(f) / d))),
-        })),
+      const cases = PAIRS.map(([f, d]) => ({
+        label: `Math.floor(${f} / ${d})`,
+        init: `${cFloat(f)}, ${cInt(d)}`,
+        call,
+        want: String(toInt(Math.floor(Math.fround(f) / d))),
+      }));
+      expect(runText('divzero', 'float f; int d;', cases, defs)).toEqual([]);
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `Math.floor / ceil / round / trunc of an int divided by an int are exact, past 2^24 too (${CC || 'no cc found'})`,
+    () => {
+      // A float quotient rounds an operand past 2^24: Math.floor(16777217 / 1) used to give 16777216.
+      const PAIRS = [
+        [16777217, 1],
+        [16777217, 2],
+        [-16777217, 2],
+        [INT_MAX, 3],
+        [INT_MAX, 1],
+        [INT_MAX, -1],
+        [INT_MIN, 1],
+        [INT_MIN, 2],
+        [INT_MIN, -1],
+        [INT_MIN, -2],
+        [7, 2],
+        [-7, 2],
+        [7, -2],
+        [-7, -2],
+        [5, 2],
+        [-5, 2],
+        [5, -2],
+        [1, 3],
+        [-1, 3],
+        [2, 3],
+        [-2, 3],
+        [0, 5],
+        [0, -5],
+        [7, 0],
+        [-7, 0],
+        [0, 0],
+        [INT_MIN, 0],
       ];
-      const defs = new Map([...ints.defs, ...floats.defs]);
-      expect(runText('divzero', 'int n; float f; int d;', cases, defs)).toEqual(
-        [],
-      );
+      const defs = new Map();
+      const cases = [];
+      for (const fn of ['floor', 'ceil', 'round', 'trunc']) {
+        const t = textCall(
+          'const [n, setN] = useState(7);\n  const [d, setD] = useState(2);',
+          `Math.${fn}(n / d)`,
+        );
+        expect(t.call, `Math.${fn}(n / d) went through a float`).not.toMatch(
+          /float/,
+        );
+        for (const [k, def] of t.defs) defs.set(k, def);
+        for (const [n, d] of PAIRS)
+          cases.push({
+            label: `Math.${fn}(${n} / ${d})`,
+            init: `${cInt(n)}, ${cInt(d)}`,
+            call: t.call,
+            want: String(toInt(Math[fn](n / d))),
+          });
+      }
+      expect(runText('intdiv', 'int n; int d;', cases, defs)).toEqual([]);
     },
   );
 });

@@ -483,14 +483,14 @@ function emitArith64(node, l, r, env) {
 }
 
 /**
- * Math.floor / round / ceil over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
- * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round and
- * ceil are refused. Null when neither side is 64-bit, which leaves it to the float path.
+ * Math.floor / round / ceil / trunc over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
+ * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round, ceil and
+ * trunc are refused. Null when neither side is 64-bit, which leaves it to the int or float path.
  */
 function emitFloorDiv64(fn, args, env) {
   const arg = args[0];
   if (
-    (fn !== 'floor' && fn !== 'round' && fn !== 'ceil') ||
+    (fn !== 'floor' && fn !== 'round' && fn !== 'ceil' && fn !== 'trunc') ||
     args.length !== 1 ||
     arg.type !== 'BinaryExpression' ||
     arg.operator !== '/'
@@ -512,12 +512,47 @@ function emitFloorDiv64(fn, args, env) {
   return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
 }
 
+/** The helper that rounds `a / b` for two ints the way each Math function does. */
+const INT_ROUND_DIV = new Map([
+  ['floor', 'app_floordiv'],
+  ['ceil', 'app_ceildiv'],
+  ['round', 'app_rounddiv'],
+  ['trunc', 'app_div'],
+]);
+
+/**
+ * Math.floor / ceil / round / trunc over `a / b` with two ints, as exact integer division: the float path
+ * rounds an operand past 2^24, so Math.floor(16777217 / 1) came out 16777216. A zero divisor keeps JS's answer
+ * as app_f2i converts it (±Infinity saturates by the dividend's sign, 0 / 0 is 0), and INT_MIN / -1 saturates
+ * too. Null for anything else, which leaves it to the float path.
+ */
+function emitIntRoundDiv(fn, args, env) {
+  const arg = args[0];
+  if (
+    !INT_ROUND_DIV.has(fn) ||
+    args.length !== 1 ||
+    arg.type !== 'BinaryExpression' ||
+    arg.operator !== '/'
+  )
+    return null;
+  const l = emitExprWide(arg.left, env);
+  const r = emitExprWide(arg.right, env);
+  if (l.cType !== 'int' || r.cType !== 'int') return null;
+  return {
+    code: `${INT_ROUND_DIV.get(fn)}(${l.code}, ${r.code})`,
+    cType: 'int',
+  };
+}
+
 /** Math.* over a 64-bit timestamp: only what stays exact in whole numbers. */
 function emitMath64(fn, a) {
   if (a.some(x => x.cType === 'float')) throw mix64Error();
   if (a.every(x => x.cType === 'int' || x.cType === 'i64')) {
     // A timestamp is already whole, so rounding leaves it as it is.
-    if ((fn === 'floor' || fn === 'round' || fn === 'ceil') && a.length === 1)
+    if (
+      (fn === 'floor' || fn === 'round' || fn === 'ceil' || fn === 'trunc') &&
+      a.length === 1
+    )
       return {code: a[0].code, cType: 'i64'};
     if (fn === 'abs' && a.length === 1)
       return {code: `app_abs64(${a[0].code})`, cType: 'i64'};
@@ -526,7 +561,7 @@ function emitMath64(fn, a) {
   }
   throw aotError(
     `AOT: Math.${fn}(...) on a 64-bit time value is not supported`,
-    'Math.floor / round / ceil / abs / min / max keep a timestamp exact; for anything else, reduce it to a small number first, e.g. `ms % 1000`.',
+    'Math.floor / round / ceil / trunc / abs / min / max keep a timestamp exact; for anything else, reduce it to a small number first, e.g. `ms % 1000`.',
   );
 }
 
@@ -928,8 +963,16 @@ function emitExprImpl(node, env) {
         const fn = c.property.name;
         const floorDiv = emitFloorDiv64(fn, node.arguments, env);
         if (floorDiv) return floorDiv;
+        const intDiv = emitIntRoundDiv(fn, node.arguments, env);
+        if (intDiv) return intDiv;
         const a = litPeers(...node.arguments.map(x => emitExprWide(x, env)));
         if (a.some(x => x.cType === 'i64')) return emitMath64(fn, a);
+        // An int is already whole; app_f2i truncates a float toward zero, with NaN as 0 and the int range
+        // saturated, which is Math.trunc kept as an int.
+        if (fn === 'trunc' && a.length === 1)
+          return a[0].cType === 'int'
+            ? {code: a[0].code, cType: 'int'}
+            : {code: `app_f2i((float)(${a[0].code}))`, cType: 'int'};
         const UNARY = {
           sin: 'sinf',
           cos: 'cosf',
@@ -7524,6 +7567,39 @@ static int16_t app_round_dim(double v)
         '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
         '    if (b == -1)\n    {\n        return a == INT_MIN ? INT_MAX : -a;\n    }\n' +
         '    return a / b;\n}',
+    ],
+    [
+      'app_floordiv',
+      "/* Math.floor(a / b) for two ints, exactly: C's `/` rounds toward zero where floor rounds down, and a float\n" +
+        '   quotient would round an operand past 2^24. JS gives +-Infinity for b == 0, which saturates by the sign\n' +
+        '   of a (0 / 0 is NaN, which is 0); INT_MIN / -1 saturates too, so the quotient is taken in 64 bits. */\n' +
+        'static int app_floordiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t q = (int64_t)a / b;\n' +
+        '    const int64_t f = ((int64_t)a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n' +
+        '    return f > INT_MAX ? INT_MAX : (int)f;\n}',
+    ],
+    [
+      'app_ceildiv',
+      '/* Math.ceil(a / b) for two ints, exactly, with the zero divisor and INT_MIN / -1 as app_floordiv has them. */\n' +
+        'static int app_ceildiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t q = (int64_t)a / b;\n' +
+        '    const int64_t c = ((int64_t)a % b != 0 && (a < 0) == (b < 0)) ? q + 1 : q;\n' +
+        '    return c > INT_MAX ? INT_MAX : (int)c;\n}',
+    ],
+    [
+      'app_rounddiv',
+      '/* Math.round(a / b) for two ints, exactly: floor(a / b + 1/2), halves up as JS rounds, which is\n' +
+        '   floor((2a + b) / 2b) once b is made positive. The zero divisor and the range go as in app_floordiv. */\n' +
+        'static int app_rounddiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t n = b < 0 ? -(int64_t)a : a;\n' +
+        '    const int64_t d = b < 0 ? -(int64_t)b : b;\n' +
+        '    const int64_t num = 2 * n + d, den = 2 * d;\n' +
+        '    const int64_t q = num / den;\n' +
+        '    const int64_t r = (num % den != 0 && num < 0) ? q - 1 : q;\n' +
+        '    return r > INT_MAX ? INT_MAX : r < INT_MIN ? INT_MIN : (int)r;\n}',
     ],
     [
       'app_f2i',

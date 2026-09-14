@@ -684,6 +684,10 @@ describe('AOT generated C compiles', () => {
                <Pressable onPress={() => { setN(n % q.current); q.current /= n; q.current %= f; setN(f * 3); setTimeout(() => setF(0.25), f * 1000); updateVector(bar, [{ rect: [0, 0, f * 100, 10], fill: '#ffffff' }], [0, 0, f * 100, 10]); }}>
                  <Text>{Math.round(f)}</Text>
                  <Text>{f % 2}</Text>
+                 <Text>{Math.floor(n / q.current)}</Text>
+                 <Text>{Math.ceil(n / q.current)}</Text>
+                 <Text>{Math.round(n / q.current)}</Text>
+                 <Text>{Math.trunc(n / q.current)}</Text>
                </Pressable>
                <Svg ref={bar} width={100} height={10} />
              </View>
@@ -694,6 +698,9 @@ describe('AOT generated C compiles', () => {
       for (const h of [
         'static int app_mod(',
         'static int app_div(',
+        'static int app_floordiv(',
+        'static int app_ceildiv(',
+        'static int app_rounddiv(',
         'static int app_f2i(',
         'static float app_roundf(',
         'static uint8_t app_opacity(',

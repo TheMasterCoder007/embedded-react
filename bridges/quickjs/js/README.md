@@ -450,8 +450,9 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
 - ✅ **Whole-number math in Flow B is defined.** C leaves a signed overflow, a zero divisor and an
   out-of-range float-to-int conversion undefined, so the generated C gives each an answer: `+`, `-`,
   `*` and negation saturate at the limit of their C type (JS would keep a bigger number; the nearest
-  one the type holds keeps its sign and order); `%` and an int ref's `/=` give JS's result kept whole,
-  so `x % 0` is 0 and `x / 0` saturates; and a float that is NaN or past the int range becomes 0 or
+  one the type holds keeps its sign and order); `%`, an int ref's `/=`, and `Math.floor`/`ceil`/`round`/
+  `trunc` of an int divided by an int give JS's result kept whole and exact, so `x % 0` is 0 and `x / 0`
+  saturates; and a float that is NaN or past the int range becomes 0 or
   the nearest int. Constant math is worked out at compile time, as JS would, so `30 * DAY_MS` is an
   exact 64-bit value, and int math beside a timestamp is done in 64 bits. `Math.round` rounds halves
   up, as JS does. Covered by the AOT's `compile`, `date-now`, `cc-compile` and `text-lowering` cases,
