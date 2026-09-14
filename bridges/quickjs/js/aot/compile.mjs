@@ -410,7 +410,7 @@ function numConst(v) {
   // floatLit refuses NaN and Infinity (a folded `0 / 0`, say), which have no C literal.
   if (!Number.isInteger(v)) return {code: floatLit(v), cType: 'float'};
   if (v < -(2 ** 63) || v >= 2 ** 63)
-    return {code: `${v.toExponential()}f`, cType: 'float'};
+    return {code: floatLit(v), cType: 'float'};
   if (v < INT_MIN || v > INT_MAX)
     return {code: i64Lit(v), cType: 'i64', lit: true};
   // `-2147483648` is `-` applied to 2147483648, which does not fit an int.
@@ -2001,7 +2001,18 @@ function floatLit(n) {
       `AOT: a numeric constant folded to ${n === undefined ? 'undefined' : String(n)}, which has no C form`,
       'the value must be a finite number.',
     );
-  return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
+  // Past about 3.4e38 a float literal overflows to Infinity, which C compilers warn about, so it is refused
+  // as Infinity is. One too small for a float, which they also warn about, is written as the 0 it rounds to.
+  const f = Math.fround(v);
+  if (!Number.isFinite(f))
+    throw aotError(
+      `AOT: the numeric constant ${v} is past the float range`,
+      'a float holds up to about 3.4e38.',
+    );
+  if (f === 0 && v !== 0) return v < 0 ? '-0.0f' : '0.0f';
+  // An exponent (`1e+21`) already makes a float literal; `.0` after one would not be C.
+  const s = String(v);
+  return /[.e]/.test(s) ? `${s}f` : `${s}.0f`;
 }
 
 /** The polynomial family of an `Easing.quad` / `Easing.cubic` node, for in/out/inOut composition. */
@@ -7842,14 +7853,15 @@ static int16_t app_round_dim(double v)
       'app_vector_dirty',
       "/* updateVector's damage hint from float math. A NaN or infinite edge (a 0/0 in app math) gives no hint,\n" +
         "   so the engine's own damage applies (what changed in the tape, or the whole node), where a zero-width\n" +
-        '   one would leave the new drawing unpainted; the rest is bounded well inside the int range, and the\n' +
-        "   engine clips the rect's corners from there. */\n" +
+        '   one would leave the new drawing unpainted. The rest is rounded out to whole pixels and its edges, not\n' +
+        '   its lengths, are bounded well inside the int range, so a rect reaching past the bound is not cut\n' +
+        "   short; the engine clips the rect's corners from there. */\n" +
         'static void app_vector_dirty(ERNode* node, float x, float y, float w, float h)\n{\n' +
         '    if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))\n    {\n        return;\n    }\n' +
-        '    const float r[4] = {x, y, w, h};\n    int c[4];\n' +
+        '    const float e[4] = {floorf(x), floorf(y), ceilf(x + w), ceilf(y + h)};\n    int c[4];\n' +
         '    for (int k = 0; k < 4; k++)\n    {\n' +
-        '        c[k] = (int)(r[k] < -1e9f ? -1e9f : (r[k] > 1e9f ? 1e9f : r[k]));\n    }\n' +
-        '    er_node_set_vector_dirty_rect(node, c[0], c[1], c[2], c[3]);\n}',
+        '        c[k] = (int)(e[k] < -1e9f ? -1e9f : (e[k] > 1e9f ? 1e9f : e[k]));\n    }\n' +
+        '    er_node_set_vector_dirty_rect(node, c[0], c[1], c[2] - c[0], c[3] - c[1]);\n}',
     ],
   ];
   // The generated code that can call a file-local helper, with literals and comments blanked so a

@@ -84,19 +84,25 @@ See the README for the release process.
 - A Flow B whole-number constant past 2^53 now reaches the generated C exactly. It was written the way JS
   prints it, which past 2^53 is a different number.
 
+- A Flow B float constant past about 3.4e38 is now a compile error naming it, as NaN and Infinity already
+  were, and one too small for a float is written as 0. Both reached the C as literals the compiler warns
+  about. A whole number from 1e21 up in a float field is no longer written as invalid C.
+
 - `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
   C compiler accepts. `%=` on a float ref works the same way.
 
 - An `updateVector` dirty rect with a NaN edge is now dropped in both flows, leaving the engine's own
-  damage (what changed in the tape, or the whole node), and a huge one is clipped at its corners, so it still covers what it says instead of wrapping; the engine's
+  damage (what changed in the tape, or the whole node), and a huge one is bounded at its edges and clipped at its corners, so it still covers what it says instead of wrapping or stopping short; the engine's
   `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
   and Flow B turned a NaN edge into a zero-size hint that repainted nothing. An `<Svg>` whose changed
   geometry runs that far out repaints the whole node, where the damage rect the engine works out itself
   wrapped, or past the int range hit an undefined cast.
 
-- An `<Svg>` arc swept through a huge or infinite angle no longer hangs the engine. A turn or more draws
-  the whole circle, as a canvas arc does, and an infinite sweep draws nothing. A huge stroke width, or a
-  path point past the int range, no longer hits an undefined cast in the rasterizer either.
+- An `<Svg>` arc swept through a huge or infinite angle no longer hangs the engine, and neither does a
+  `<Dial>` with a huge start angle. A turn or more draws the whole circle, as a canvas arc does, even from
+  a huge start angle or between ends too far apart to subtract, and a NaN or infinite angle draws
+  nothing. A huge stroke width or radius, or a path point past the int range, no longer hits an undefined
+  cast in the rasterizer.
 
 - An `<Svg>` update that changes a gradient and moves a shape at once now repaints the whole node. Only
   the moved shape was repainted, so a shape filled with the changed gradient kept its old colors.

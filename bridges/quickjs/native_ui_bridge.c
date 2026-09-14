@@ -3826,16 +3826,18 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
         }
         /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
            non-finite edge gives no hint, so the engine's own damage applies, as it would without one: what
-           changed in the tape, or the whole node. The rest is bounded well inside the int range, and the
-           engine clips the rect's corners from there. */
+           changed in the tape, or the whole node. The rest is rounded out to whole pixels and its edges are
+           bounded well inside the int range (bounding its lengths would cut short a rect that reaches past
+           the bound), and the engine clips the rect's corners from there. */
         if (finite)
         {
+            const double e[4] = {floor(d[0]), floor(d[1]), ceil(d[0] + d[2]), ceil(d[1] + d[3])};
             int r[4];
             for (int k = 0; k < 4; k++)
             {
-                r[k] = (int)(d[k] < -1e9 ? -1e9 : (d[k] > 1e9 ? 1e9 : d[k]));
+                r[k] = (int)(e[k] < -1e9 ? -1e9 : (e[k] > 1e9 ? 1e9 : e[k]));
             }
-            er_node_set_vector_dirty_rect(node, r[0], r[1], r[2], r[3]);
+            er_node_set_vector_dirty_rect(node, r[0], r[1], r[2] - r[0], r[3] - r[1]);
         }
     }
     return JS_UNDEFINED;

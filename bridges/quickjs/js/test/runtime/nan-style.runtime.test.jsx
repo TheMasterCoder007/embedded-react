@@ -117,5 +117,9 @@ check(
   fillWith('#00ff00', [-40000, 0, 80000, 100]) === GREEN,
   'a dirty rect far past both sides still covers the node',
 );
+check(
+  fillWith('#ff0000', [-1e9, 0, 2e9, 100]) === RED,
+  'a dirty rect from a billion left, reaching as far right, still covers the node',
+);
 
 report('nan-style');

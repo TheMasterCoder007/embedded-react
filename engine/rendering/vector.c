@@ -249,34 +249,30 @@ static void flatten_cubic(float x0, float y0, float x1, float y1, float x2, floa
  * @brief An arc's sweep a1 - a0 as it is drawn: forward for clockwise, back for counter-clockwise, and an
  *        opposite sweep wrapped by a turn.
  *
- * A turn or more in the drawing direction is a full turn, as a canvas arc is. The sweep is app geometry, and past
- * a certain size adding 2π no longer changes it, so the wrap is a fmodf rather than a loop that would never end.
+ * A turn or more in the drawing direction is a full turn, as a canvas arc is, and so are two finite ends too far
+ * apart to subtract. The sweep is app geometry, and past a certain size adding 2π no longer changes it, so the
+ * wrap is a fmodf rather than a loop that would never end.
  *
- * @return The sweep, at most a turn either way; NaN for a NaN or infinite one, which draws nothing.
+ * @return The sweep, at most a turn either way; NaN for a NaN or infinite end, which draws nothing.
  */
 static float arc_sweep(float a0, float a1, bool ccw)
 {
     const float turn = 2.0f * ER_PI;
-    float da = a1 - a0;
-    if (!(fabsf(da) < INFINITY))
+    if (!(fabsf(a0) < INFINITY && fabsf(a1) < INFINITY))
         return NAN;
-    if (ccw)
-    {
-        if (da > 0.0f)
-        {
-            da = fmodf(da, turn);
-            if (da > 0.0f)
-                da -= turn;
-        }
-        return da < -turn ? -turn : da;
-    }
-    if (da < 0.0f)
+    float da = a1 - a0;
+    if (ccw ? da <= -turn : da >= turn)
+        return ccw ? -turn : turn;
+    /* The opposite way round, ends too far apart to subtract are each brought within a turn first. */
+    if (!(fabsf(da) < INFINITY))
+        da = fmodf(fmodf(a1, turn) - fmodf(a0, turn), turn);
+    if (ccw ? da > 0.0f : da < 0.0f)
     {
         da = fmodf(da, turn);
-        if (da < 0.0f)
-            da += turn;
+        if (ccw ? da > 0.0f : da < 0.0f)
+            da += ccw ? -turn : turn;
     }
-    return da > turn ? turn : da;
+    return da;
 }
 
 /** @brief Appends a circular arc, sampled so the chord error stays sub-pixel. */
@@ -1508,7 +1504,12 @@ static bool arc_run_match(const float* ops, int i, int n_ops, int px, int py, Ve
             out->cx = acx;
             out->cy = acy;
             out->r = ar;
-            out->a0_deg = ((da < 0.0f) ? (a0 + da) : a0) * ER_RAD2DEG;
+            /* The sector core works in degrees from this start: one a turn or more out is brought within a turn,
+             * or a huge one would swallow the sweep added to it. */
+            float start = (da < 0.0f) ? (a0 + da) : a0;
+            if (!(fabsf(start) < 2.0f * ER_PI))
+                start = fmodf(start, 2.0f * ER_PI);
+            out->a0_deg = start * ER_RAD2DEG;
             out->sweep_deg = sweep * ER_RAD2DEG;
             out->full = (sweep >= 2.0f * ER_PI - 1e-4f);
             sx = acx + ar * cosf(a0);

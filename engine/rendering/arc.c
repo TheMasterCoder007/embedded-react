@@ -218,12 +218,24 @@ void er_arc_sector_bbox(float cx,
     ADD(cx + r_out * c0, cy + r_out * s0);
     ADD(cx + r_in * c1, cy + r_in * s1);
     ADD(cx + r_out * c1, cy + r_out * s1);
-    /* Axis extremes inside the sweep: the outer circle reaches its bbox edge there. */
-    const float k0 = ceilf(a0 / 90.0f);
-    for (float k = k0; k * 90.0f <= a1; k += 1.0f)
+    /* Axis extremes inside the sweep: the outer circle reaches its bbox edge there. The quadrants are counted in
+     * a float, which stops changing past 2^24, so an angle that far out (a <Dial> prop is app math), a NaN or
+     * infinite one, or a sweep past a turn takes all four. */
+    if (a1 - a0 <= 360.0f && fabsf(a0) < 1e6f)
     {
-        const float a = k * 90.0f * ER_DEG2RAD;
-        ADD(cx + r_out * cosf(a), cy + r_out * sinf(a));
+        const float k0 = ceilf(a0 / 90.0f);
+        for (float k = k0; k * 90.0f <= a1; k += 1.0f)
+        {
+            const float a = k * 90.0f * ER_DEG2RAD;
+            ADD(cx + r_out * cosf(a), cy + r_out * sinf(a));
+        }
+    }
+    else
+    {
+        ADD(cx + r_out, cy);
+        ADD(cx - r_out, cy);
+        ADD(cx, cy + r_out);
+        ADD(cx, cy - r_out);
     }
 #undef ADD
     *x0 -= pad;
@@ -240,6 +252,11 @@ void er_arc_fill_sector(const ERArcSector* s)
     float ri = s->r_inner;
     if (ri < 0.0f)
         ri = 0.0f;
+    /* NaN or infinite geometry (app math behind an <Svg> arc or a <Dial> prop) has nothing to draw, and would
+     * reach the int casts below as NaN. */
+    if (!(fabsf(s->cx) < INFINITY && fabsf(s->cy) < INFINITY && ro < INFINITY && ri == ri && fabsf(s->a0) < INFINITY
+          && fabsf(s->a1) < INFINITY))
+        return;
     if (ro <= 0.0f || ri >= ro)
         return;
     float sweep = s->a1 - s->a0;
@@ -305,13 +322,12 @@ void er_arc_fill_sector(const ERArcSector* s)
         }
     }
 
-    /* Row range. */
-    int y_start = (int)floorf(s->cy - ro - 1.0f);
-    int y_end = (int)ceilf(s->cy + ro + 1.0f); /* exclusive */
-    if (y_start < s->clip_y0)
-        y_start = s->clip_y0;
-    if (y_end > s->clip_y1)
-        y_end = s->clip_y1;
+    /* Row range, clamped to the clip in float first: a huge radius or centre would run past the int range. */
+    const float fy0 = s->cy - ro - 1.0f, fy1 = s->cy + ro + 1.0f;
+    const int y_start =
+        fy0 > (float)s->clip_y0 ? (fy0 < (float)s->clip_y1 ? (int)floorf(fy0) : s->clip_y1) : s->clip_y0;
+    const int y_end = /* exclusive */
+        fy1 < (float)s->clip_y1 ? (fy1 > (float)s->clip_y0 ? (int)ceilf(fy1) : s->clip_y0) : s->clip_y1;
     if (y_start >= y_end)
         return;
 
@@ -367,12 +383,13 @@ void er_arc_fill_sector(const ERArcSector* s)
         {
             const float xa = (it == 0) ? ia0 : ia1;
             const float xb = (it == 0) ? ib0 : ib1;
-            int xs = (int)floorf(xa - 0.5f);
-            int xe = (int)ceilf(xb - 0.5f) + 1; /* exclusive */
-            if (xs < s->clip_x0)
-                xs = s->clip_x0;
-            if (xe > s->clip_x1)
-                xe = s->clip_x1;
+            /* Clamped to the clip in float first, as the rows are. */
+            const float fxs = xa - 0.5f, fxe = xb - 0.5f;
+            const int xs =
+                fxs > (float)s->clip_x0 ? (fxs < (float)s->clip_x1 ? (int)floorf(fxs) : s->clip_x1) : s->clip_x0;
+            const int xe = /* exclusive */
+                fxe < (float)(s->clip_x1 - 1) ? (fxe > (float)(s->clip_x0 - 1) ? (int)ceilf(fxe) + 1 : s->clip_x0)
+                                              : s->clip_x1;
             for (int cx0 = xs; cx0 < xe; cx0 += ARC_ROW_CHUNK)
             {
                 int cx1 = cx0 + ARC_ROW_CHUNK;

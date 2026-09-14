@@ -1174,14 +1174,16 @@ export function App() {
       ).c;
       const def = helperDefs(c).get('app_vector_dirty');
       expect(def, 'no app_vector_dirty emitted').toBeTruthy();
-      // [x, y, w, h]. The stub records the hint the engine gets, if any: none repaints the whole node, as
-      // Flow A's setVectorOps does for a non-finite edge. The rest is bounded to ±1e9 before its int cast, and
-      // the engine clamps the rect's corners from there.
+      // [x, y, w, h]. The stub records the hint the engine gets, if any: none leaves the engine's own damage, as
+      // Flow A's setVectorOps does for a non-finite edge. The rest is rounded out to whole pixels and bounded to
+      // ±1e9 at its edges, not its lengths, before the int cast, so [-1e9, 2e9] still reaches +1e9; the engine
+      // clips the rect's corners from there.
       const RECTS = [
         [0, 0, 50.9, 10],
         [-0.5, 2.5, 10, 10],
         [0, 0, 1e10, 10],
         [-1e10, 0, 10, -1e10],
+        [-1e9, 0, 2e9, 10],
         [0, 0, NaN, 10],
         [Infinity, 0, 10, 10],
         [0, -Infinity, 10, 10],
@@ -1200,12 +1202,18 @@ export function App() {
         ).join('\n') +
         '\n  return 0; }\n';
       const got = buildAndRun(prog, 'vecdirty');
-      const edge = v =>
-        String(Math.trunc(Math.min(1e9, Math.max(-1e9, Math.fround(v)))));
+      // The C works in floats: each edge, x + w included, is a float before it is rounded.
+      const f = Math.fround;
+      const bound = v => Math.min(1e9, Math.max(-1e9, v));
+      const hint = ([x, y, w, h]) => {
+        const x0 = bound(Math.floor(f(x)));
+        const y0 = bound(Math.floor(f(y)));
+        const x1 = bound(Math.ceil(f(f(x) + f(w))));
+        const y1 = bound(Math.ceil(f(f(y) + f(h))));
+        return `${x0} ${y0} ${x1 - x0} ${y1 - y0}`;
+      };
       expect(RECTS.map((_, i) => got.get(i))).toEqual(
-        RECTS.map(r =>
-          r.every(Number.isFinite) ? r.map(edge).join(' ') : 'none',
-        ),
+        RECTS.map(r => (r.every(Number.isFinite) ? hint(r) : 'none')),
       );
     },
   );
@@ -1515,6 +1523,66 @@ export function App() {
         .filter(c => c.got !== c.want)
         .map(c => `${c.expr} @ t=${c.t}: C=${c.got} JS=${c.want}`);
       expect(bad).toEqual([]);
+    },
+  );
+});
+
+describe('AOT float constants reach the C as the float they round to', () => {
+  const app = v => `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [f, setF] = useState(0.5);
+  return (<Pressable onPress={() => { setF(${v}); }}><Text>{f}</Text></Pressable>);
+}`;
+
+  (CC ? it : it.skip)(
+    `each literal builds under -Werror and holds the float JS's value rounds to (${CC || 'no cc found'})`,
+    () => {
+      // Too small for a float, a literal warns and is 0; from 1e21 up JS spells a whole number with an
+      // exponent, after which `.0` is not C; past 2^63 a whole number is a float, not a 64-bit constant.
+      const VALUES = [
+        1e-50,
+        -1e-50,
+        1e-40,
+        1.5e-7,
+        0.1,
+        1e21,
+        2 ** 63,
+        -(2 ** 64),
+        3.4e38,
+        -3.4e38,
+      ];
+      const bits = v => new Uint32Array(new Float32Array([v]).buffer)[0];
+      const cases = VALUES.map(v => {
+        const m = compileSource(app(v), 'fconst').c.match(
+          / {4}s_state\.f = (.+);\n/,
+        );
+        expect(m, `${v}: no store emitted`).toBeTruthy();
+        return {v, code: m[1], want: String(bits(v))};
+      });
+      let prog = HELPER_INCLUDES;
+      cases.forEach((c, i) => {
+        prog +=
+          `static void case_${i}(void){ float v = ${c.code}; uint32_t b; memcpy(&b, &v, sizeof b);\n` +
+          `  printf("%d\\t%u\\n", ${i}, (unsigned)b); }\n`;
+      });
+      prog +=
+        'int main(void){\n' +
+        cases.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'fconst');
+      expect(cases.map((c, i) => `${c.v}: ${got.get(i)}`)).toEqual(
+        cases.map(c => `${c.v}: ${c.want}`),
+      );
+    },
+  );
+
+  it.each([1e39, -1e39, 3.5e38, 1.7976931348623157e308])(
+    'refuses %s, past the float range',
+    v => {
+      expect(() => compileSource(app(v), 'fconst')).toThrow(
+        /past the float range/,
+      );
     },
   );
 });
