@@ -71,7 +71,7 @@ describe('AOT Date.now() / performance.now()', () => {
     );
     expect(c).toContain('static int64_t s_ref_start = 0;');
     expect(c).toContain('s_ref_start = app_perf_now();');
-    expect(c).toContain('s_state.ms = (app_perf_now() - s_ref_start);');
+    expect(c).toContain('s_state.ms = app_sub64(app_perf_now(), s_ref_start);');
     expect(c).toContain('    int64_t ms;');
   });
 
@@ -126,7 +126,7 @@ describe('AOT Date.now() / performance.now()', () => {
       ),
     );
     expect(c).toContain(
-      's_state.left = app_max64(0, app_abs64((s_ref_deadline - app_date_now())));',
+      's_state.left = app_max64(0, app_abs64(app_sub64(s_ref_deadline, app_date_now())));',
     );
   });
 
@@ -138,7 +138,7 @@ describe('AOT Date.now() / performance.now()', () => {
         '<Pressable onPress={() => { if (Date.now() - last.current < 300) setN(n + 1); last.current = Date.now(); }}><Text>{n}</Text></Pressable>',
       ),
     );
-    expect(c).toContain('if (((app_date_now() - s_ref_last) < 300))');
+    expect(c).toContain('if ((app_sub64(app_date_now(), s_ref_last) < 300))');
     expect(c).toContain('static int64_t s_ref_last = 0;');
   });
 
@@ -197,16 +197,10 @@ export function App() {
       /mixed with a float/,
     ],
     [
-      'Math.round of a division',
-      '<Text>{Math.round(Date.now() / 1000)}</Text>',
-      /Math\.round\(a \/ b\)/,
-    ],
-    [
       'Math.sqrt',
       '<Text>{Math.sqrt(Date.now())}</Text>',
       /Math\.sqrt\(\.\.\.\) on a 64-bit/,
     ],
-    ['`% 0`', '<Text>{Date.now() % 0}</Text>', /nonzero constant/],
     ['new Date()', '<Text>{new Date()}</Text>', /Date objects/],
     ['Date()', '<Text>{Date()}</Text>', /Date objects/],
     ['Date.parse', "<Text>{Date.parse('2026')}</Text>", /Date objects/],
@@ -249,17 +243,17 @@ export function App() {
     ).toThrow(/`\/=` on a 64-bit/);
   });
 
-  it('refuses a 64-bit division whose divisor is not a nonzero constant', () => {
+  it('refuses a timestamp divided by anything but a constant', () => {
     const withN = jsx =>
       gen(app('const [n, setN] = useState(3);', `<View>${jsx}</View>`));
     expect(() => withN('<Text>{Date.now() % n}</Text>')).toThrow(
-      /nonzero constant/,
+      /divided by a constant/,
     );
     expect(() => withN('<Text>{Math.floor(Date.now() / n)}</Text>')).toThrow(
-      /nonzero constant/,
+      /divided by a constant/,
     );
-    expect(() => withN('<Text>{Math.floor(Date.now() / 0)}</Text>')).toThrow(
-      /nonzero constant/,
+    expect(() => withN('<Text>{Math.ceil(Date.now() / n)}</Text>')).toThrow(
+      /divided by a constant/,
     );
     expect(() =>
       gen(
@@ -268,7 +262,7 @@ export function App() {
           '<Pressable onPress={() => { r.current = Date.now(); r.current %= n; }}><Text>x</Text></Pressable>',
         ),
       ),
-    ).toThrow(/nonzero constant/);
+    ).toThrow(/divided by a constant/);
   });
 
   it('keeps the value of `||` / `&&` over a timestamp, not just its truth', () => {
@@ -349,8 +343,143 @@ export function App() {
       ),
     );
     expect(c).toContain(
-      'er_timer_add((int)(app_delay_ms64((s_state.t - app_date_now()))), false, er_timer_fn_0)',
+      'er_timer_add((int)(app_delay_ms64(app_sub64(s_state.t, app_date_now()))), false, er_timer_fn_0)',
     );
     expect(c).toContain('static int app_delay_ms64(int64_t v)');
+  });
+
+  it('saturates a product past the int and int64 limits instead of overflowing', () => {
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const [n, setN] = useState(0);',
+        '<Pressable onPress={() => { setT(Date.now() * 10000000); setN(n * 100000); }}><Text>{n}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_mul64(app_date_now(), 10000000);');
+    expect(c).toContain('s_state.n = app_mul(s_state.n, 100000);');
+    expect(c).toContain('    int n;');
+    expect(c).toContain('static int64_t app_mul64(int64_t a, int64_t b)');
+    expect(c).toContain('static int app_mul(int a, int b)');
+    expect(c).toContain('#include <limits.h>');
+  });
+
+  it('folds a constant too big for an int into an exact 64-bit one', () => {
+    const c = gen(`${PRE}
+const DAY_MS = 24 * 60 * 60 * 1000;
+export function App() {
+  const [t, setT] = useState(0);
+  return (<Pressable onPress={() => setT(Date.now() - 30 * DAY_MS)}><Text>{t}</Text></Pressable>);
+}`);
+    expect(c).toContain('s_state.t = app_sub64(app_date_now(), 2592000000);');
+  });
+
+  it('spells a 64-bit constant exactly, the int64 minimum included', () => {
+    // JS prints 2^62 as 4611686018427388000, which is a different whole number in C.
+    const c = gen(`${PRE}
+export function App() {
+  const [t, setT] = useState(4611686018427387904);
+  const r = useRef(4611686018427387904);
+  return (<Pressable onPress={() => { r.current = Date.now(); setT(Date.now() - 4611686018427387904); setT(Date.now() > -9223372036854775808 ? 1 : 0); }}><Text>{t}</Text></Pressable>);
+}`);
+    expect(c).not.toContain('4611686018427388000');
+    expect(c).toContain(
+      's_state.t = app_sub64(app_date_now(), 4611686018427387904);',
+    );
+    expect(c).toMatch(/\.t = 4611686018427387904\b/);
+    expect(c).toContain('s_ref_r = 4611686018427387904;');
+    expect(c).toContain('(-9223372036854775807 - 1)');
+  });
+
+  it('works int math beside a timestamp out in 64 bits, as JS would', () => {
+    const c = gen(`${PRE}
+const DAY_MS = 86400000;
+export function App() {
+  const [t, setT] = useState(0);
+  const [days, setDays] = useState(30);
+  return (<Pressable onPress={() => { setT(Date.now() + days * DAY_MS); setDays(days + 1); }}><Text>{t}</Text></Pressable>);
+}`);
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_mul64(s_state.days, 86400000));',
+    );
+    // Only the math is 64-bit; the operand's own slot stays an int.
+    expect(c).toContain('    int days;');
+    expect(c).toContain('s_state.days = app_add(s_state.days, 1);');
+  });
+
+  it('lowers a 64-bit `% -1` to 0 and Math.floor(t / -1) to a saturating negation', () => {
+    // INT64_MIN / -1 and INT64_MIN % -1 overflow in C; the divisor is a constant, so it is settled here.
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const r = useRef(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setT(Math.floor(t / -1)); setT(t % -1); r.current = Date.now(); r.current %= -1; }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_neg64(s_state.t);');
+    expect(c).toContain('s_state.t = 0;');
+    expect(c).toContain('s_ref_r = 0;');
+    expect(c).not.toContain('app_floordiv64');
+  });
+
+  it('works int math stored into a 64-bit slot out in 64 bits', () => {
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const [n, setN] = useState(0);\n  const last = useRef(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setT(n * 86400000); last.current = Date.now(); last.current += n * 1000; }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_mul64(s_state.n, 86400000);');
+    expect(c).toContain(
+      's_ref_last = app_add64(s_ref_last, app_mul64(s_state.n, 1000));',
+    );
+  });
+
+  it('works whole-number math inside Math.* and % beside a timestamp out in 64 bits', () => {
+    // Behind a wrapper the int math used to be cut to 32 bits first, so n * 100000 saturated.
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const [n, setN] = useState(0);\n  const [d, setD] = useState(1);',
+        '<Pressable onPress={() => { setT(Date.now() + Math.trunc(n * 100000 / 2)); setT(Date.now() - Math.round(n * 100000 / d)); setT(Date.now() + Math.abs(n)); setT(Date.now() + (n * 100000) % d); setT(Date.now() + Math.max(n * 100000, d)); }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_div64(app_mul64(s_state.n, 100000), 2));',
+    );
+    expect(c).toContain(
+      's_state.t = app_sub64(app_date_now(), app_rounddiv64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_abs64(s_state.n));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_mod64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_max64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+  });
+
+  it('divides a timestamp itself by a constant with any rounding function, zero included', () => {
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const r = useRef(0);',
+        '<Pressable onPress={() => { setT(Date.now()); setT(Math.ceil(t / 1000)); setT(Math.round(t / 7)); setT(Math.trunc(t / -1)); setT(Math.floor(t / 0)); setT(t % 0); r.current = Date.now(); r.current %= 0; }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain('s_state.t = app_ceildiv64(s_state.t, 1000);');
+    expect(c).toContain('s_state.t = app_rounddiv64(s_state.t, 7);');
+    expect(c).toContain('s_state.t = app_neg64(s_state.t);');
+    // JS's ±Infinity saturates by the timestamp's sign, and a remainder of NaN is 0.
+    expect(c).toContain('s_state.t = app_floordiv64(s_state.t, 0);');
+    expect(c).toContain('s_state.t = 0;');
+    expect(c).toContain('s_ref_r = 0;');
+    // A divisor from state still has to be reduced first.
+    expect(() =>
+      gen(
+        app(
+          'const [t, setT] = useState(0);\n  const [d, setD] = useState(1);',
+          '<Pressable onPress={() => { setT(Date.now()); setT(Math.floor(t / d)); }}><Text>{t}</Text></Pressable>',
+        ),
+      ),
+    ).toThrow(/divided by a constant/);
   });
 });

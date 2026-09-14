@@ -14,7 +14,8 @@ See the README for the release process.
 
 - `Date.now()` and `performance.now()` now compile in Flow B, with the same surface as Flow A's lite
   profile. The generated C holds them as 64-bit whole milliseconds, so divide them by a constant with
-  `%` or `Math.floor(a / b)`; a host sets the real time with `er_app_set_wall_clock()`. The engine
+  `%` or `Math.floor`/`ceil`/`round`/`trunc(a / b)`; a host sets the real time with
+  `er_app_set_wall_clock()`. The engine
   clock is also exposed as `er_now_ms64()`, which does not wrap at 49.7 days.
 
 - The thermostat demo has a clock: the time and date in its header, set from the settings sheet. It
@@ -26,6 +27,10 @@ See the README for the release process.
   ranked by measurement instead of by reading the code.
 
 ### Changed
+
+- CI now runs the QuickJS runtime tests, from source and as bytecode, against both of the bridge job's
+  Linux builds (the native and the bare-metal allocator); they had only ever run locally. `ER_BRIDGE_BUILD_DIR` 
+  points the test runners at a bridge build other than `bridges/quickjs/build`.
 
 - Building a board example against an AOT app generated for a *different* board is now a compiler
   error instead of firmware that boots and lays out wrong. All three examples consume the same
@@ -64,6 +69,74 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
+  `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
+  `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
+  numbers now: they went through a float, so `Math.max(n, 0)` printed 1000000 as "1e+06".
+
+- Flow B text now prints a float that is Infinity, -Infinity, NaN, or -0 the way JS does: "Infinity",
+  "-Infinity", "NaN" and "0". It printed C's "inf", "-inf", "nan" and "-0", as after a division by zero.
+
+- `Math.floor`, `Math.ceil` and `Math.round` of an int divided by an int are now exact in Flow B. They went
+  through a float, which rounds a number past 2^24, so `Math.floor(16777217 / 1)` gave 16777216.
+  `Math.trunc`, which Flow B did not support, now compiles too.
+
+- A Flow B list whose float field holds a whole number (`0`, `2`) now compiles. The generated C wrote it
+  as `0f`, which no C compiler accepts.
+
+- A Flow B whole-number constant past 2^53 now reaches the generated C exactly. It was written the way JS
+  prints it, which past 2^53 is a different number.
+
+- A Flow B float constant past about 3.4e38 is now a compile error naming it, as NaN and Infinity already
+  were, and one too small for a float is written as 0. Both reached the C as literals the compiler warns
+  about. A whole number from 1e21 up in a float field is no longer written as invalid C.
+
+- `%` on a float now compiles in Flow B, as JS's remainder; it used to emit a C `%` on a float, which no
+  C compiler accepts. `%=` on a float ref works the same way.
+
+- An `updateVector` dirty rect with a NaN edge is now dropped in both flows, leaving the engine's own
+  damage (what changed in the tape, or the whole node), and a huge one is bounded at its edges and clipped at its corners, so it still covers what it says instead of wrapping or stopping short; the engine's
+  `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
+  and Flow B turned a NaN edge into a zero-size hint that repainted nothing. An `<Svg>` whose changed
+  geometry runs that far out repaints the whole node, where the damage rect the engine works out itself
+  wrapped, or past the int range hit an undefined cast.
+
+- An `<Svg>` arc swept through a huge or infinite angle no longer hangs the engine, and neither does a
+  `<Dial>` with a huge start angle. A turn or more draws the whole circle, as a canvas arc does, even from
+  a huge start angle or between ends too far apart to subtract, and a NaN or infinite angle draws
+  nothing. A huge stroke width or radius, or a path point past the int range, no longer hits an undefined
+  cast in the rasterizer.
+
+- An `<Svg>` update that changes a gradient and moves a shape at once now repaints the whole node. Only
+  the moved shape was repainted, so a shape filled with the changed gradient kept its old colors.
+
+- A transform with a huge, lopsided, or infinite scale or rotation, or a 3D corner near the camera plane,
+  no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix
+  whose determinant or inverse overflows or goes NaN counts as singular, so the view paints untransformed,
+  as it already did for a scale of 0. A view whose transform or shadow reaches far past the screen no
+  longer leaves a trail when it moves or shrinks back.
+
+- A NaN opacity, transform or shadow offset (a 0/0 in app math, say) now has a defined result instead of
+  undefined behavior in C: the view is fully transparent, the transform component is ignored, and the
+  shadow is not shifted. Flow B already made a NaN opacity transparent; Flow A and Animated now agree.
+
+- A Flow B app that sets state nothing on screen reads now compiles. Its handlers called an
+  `app_update()` that was never generated, which every C compiler rejects.
+
+- A Flow B list setter's `items.slice(0, n)` now keeps what JS keeps, with a negative `n` counting back
+  from the end. It used to leave the list's count negative, so the next append wrote outside the array.
+  `items.slice(0)` no longer crashes the compiler, and a slice that does not start at 0 is now a compiler
+  error instead of being treated as one that does.
+
+- Integer division and float-to-int conversion in Flow B no longer hit undefined behavior in the generated
+  C. A zero divisor gives JS's answer kept whole (`x % 0` is 0, `x / 0` saturates), and a float that is NaN
+  or out of range becomes 0 or the nearest int. `Math.round` now rounds halves up as JS does, and a
+  state-driven opacity clamps and rounds as Flow A does.
+
+- Whole-number `+`, `-` and `*` in Flow B no longer overflow into undefined behavior in the generated C.
+  A result too big for its C type now saturates at the type's limit, and constant math is worked out at
+  compile time, so `30 * DAY_MS` stays exact.
 
 - An AOT app whose timers are only cleared from a mount effect's cleanup no longer carries an unused
   `er_timer_clear()`, which warned under `-Wall`. That cleanup never runs on an MCU, so nothing called it.

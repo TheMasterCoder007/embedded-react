@@ -33,7 +33,11 @@ const outDir = path.join(jsRoot, 'dist', 'runtime');
 // JS_ReadObject). The QuickJS VM still runs it; this is Flow A, not the Flow B AOT compiler.
 const bytecodeMode = process.argv.includes('--bytecode');
 
-const bridgeBuild = path.resolve(jsRoot, '..', 'build');
+// The bridge build holding the harness (and the precompiler, for --bytecode): bridges/quickjs/build, or the
+// directory ER_BRIDGE_BUILD_DIR names (CI builds into its own), resolved from the current directory.
+const bridgeBuild = process.env.ER_BRIDGE_BUILD_DIR
+  ? path.resolve(process.env.ER_BRIDGE_BUILD_DIR)
+  : path.resolve(jsRoot, '..', 'build');
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 const exe = path.join(bridgeBuild, `er-bridge-quickjs-runtest${exeSuffix}`);
 const compileExe = path.join(
@@ -41,18 +45,22 @@ const compileExe = path.join(
   `er-bridge-quickjs-compile${exeSuffix}`,
 );
 
+// The build directory as the hint's cmake command should name it: from the repo root when it is inside it.
+const repoRoot = path.resolve(jsRoot, '..', '..', '..');
+const fromRoot = path.relative(repoRoot, bridgeBuild);
+const buildArg = fromRoot.startsWith('..') ? bridgeBuild : fromRoot;
+const buildHint = target =>
+  `Build it first (from the repo root):\n  cmake --build ${buildArg} --target ${target}\n` +
+  'or set ER_BRIDGE_BUILD_DIR to a bridge build that has it.';
+
 if (!existsSync(exe)) {
   console.error(`Runtime test harness not found at:\n  ${exe}\n`);
-  console.error(
-    'Build it first:\n  cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest',
-  );
+  console.error(buildHint('er-bridge-quickjs-runtest'));
   process.exit(2);
 }
 if (bytecodeMode && !existsSync(compileExe)) {
   console.error(`Bytecode compiler not found at:\n  ${compileExe}\n`);
-  console.error(
-    'Build it first:\n  cmake --build bridges/quickjs/build --target er-bridge-quickjs-compile',
-  );
+  console.error(buildHint('er-bridge-quickjs-compile'));
   process.exit(2);
 }
 

@@ -3,7 +3,8 @@
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
 #   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
-#             in both the native and the bare-metal allocator configurations.
+#             in both the native and the bare-metal allocator configurations, each followed by the runtime
+#             tests (test/runtime/*.runtime.test.jsx) in the headless harness, from source and as bytecode.
 #   aot     — compile a demo to C with the Flow B AOT, then gcc the generated C against the engine headers
 #             (verifies the output compiles + the embedded-react version-pin _Static_assert holds).
 name: CI
@@ -133,6 +134,27 @@ jobs:
         run: ctest --test-dir bridges/quickjs/build-ci --output-on-failure
       - name: Smoke
         run: ./bridges/quickjs/build-ci/er-bridge-quickjs-smoke
+      # The runtime tests: each test/runtime/*.runtime.test.jsx is bundled with esbuild and run by the headless
+      # harness this build made (er-bridge-quickjs-runtest), so the reconciler drives the real engine. The
+      # bytecode pass runs the same bundles precompiled, through the load path MCU hosts use.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bridges/quickjs/js/package-lock.json
+      - name: Install JS dependencies
+        working-directory: bridges/quickjs/js
+        run: npm ci
+      - name: Runtime tests
+        working-directory: bridges/quickjs/js
+        env:
+          ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci
+        run: npm run test:runtime
+      - name: Runtime tests (bytecode)
+        working-directory: bridges/quickjs/js
+        env:
+          ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci
+        run: npm run test:bytecode
       # Second pass forcing the bare-metal allocator. It is selected by platform, so on a Linux runner
       # the shim path would otherwise never be compiled or run — exactly the kind of off-by-default code
       # that rots unbuilt (and it is the path that ships to MCUs).
@@ -144,6 +166,17 @@ jobs:
         run: cmake --build bridges/quickjs/build-ci-shim -j
       - name: Test (bare-metal size-prefix allocator)
         run: ctest --test-dir bridges/quickjs/build-ci-shim --output-on-failure
+      # The runtime tests again on this allocator; bytecode on it is the combination an MCU runs.
+      - name: Runtime tests (bare-metal size-prefix allocator)
+        working-directory: bridges/quickjs/js
+        env:
+          ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci-shim
+        run: npm run test:runtime
+      - name: Runtime tests (bytecode, bare-metal size-prefix allocator)
+        working-directory: bridges/quickjs/js
+        env:
+          ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci-shim
+        run: npm run test:bytecode
 
   aot:
     name: AOT compile smoke

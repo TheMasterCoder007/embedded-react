@@ -277,7 +277,9 @@ static void render_activity_indicator(const ERNode* n, int px, int py, int w, in
 
     const uint32_t base_color = n->props.act.color ? n->props.act.color : 0xFFFFFFFFU;
     const float base_a = (float)((base_color >> 24) & 0xFFU);
-    const float angle_offset_deg = n->tp_rotate_z;
+    /* The spin angle is the node's rotation, which app math can make infinite (a NaN one is already 0): every
+     * dot's position would then be NaN before its int cast. It is drawn as at 0 instead. */
+    const float angle_offset_deg = fabsf(n->tp_rotate_z) < INFINITY ? n->tp_rotate_z : 0.0f;
 
     for (int i = 0; i < ACTIND_DOT_COUNT; i++)
     {
@@ -1016,6 +1018,43 @@ static void expand_for_shadow(const ERNode* n, int* x, int* y, int* w, int* h)
 #endif
 
 /**
+ * @brief Clips one axis of a rect, [*lo, *lo + *len), to ±ER_PAINT_RECT_MAX, keeping what it covers.
+ *
+ * Every rect the engine keeps in int16 fields goes through this first: a node's last paint and a vector node's
+ * dirty rect. A cast alone would wrap a far edge (a shadow offset near 32767 widens a small node that far) into
+ * a rect off to the side, which then erases or damages none of what it should.
+ *
+ * @param[in,out] lo   Start; clipped.
+ * @param[in,out] len  Length, where a negative one covers nothing; clipped, never negative.
+ */
+static void clip_rect_axis(int* lo, int* len)
+{
+    int64_t a = *lo;
+    int64_t b = (int64_t)*lo + *len; /* in 64 bits: the far edge can pass the int range */
+    a = a < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (a > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : a);
+    b = b < -ER_PAINT_RECT_MAX ? -ER_PAINT_RECT_MAX : (b > ER_PAINT_RECT_MAX ? ER_PAINT_RECT_MAX : b);
+    *lo = (int)a;
+    *len = (int)(b > a ? b - a : 0);
+}
+
+/**
+ * @brief Whether a clipped footprint spans the whole ±ER_PAINT_RECT_MAX window along either axis.
+ *
+ * Two such footprints clip to the same rect wherever the node sits, so comparing one with the record cannot tell
+ * that the node moved. The pre-pass counts it as moved every commit instead: it covers the whole screen, so that
+ * repaints what a move would.
+ *
+ * @param[in] x,y,w,h  Clipped footprint.
+ *
+ * @return true when the footprint reaches both ends of the window on some axis.
+ */
+static bool spans_paint_window(int x, int y, int w, int h)
+{
+    return (x <= -ER_PAINT_RECT_MAX && x + w >= ER_PAINT_RECT_MAX)
+           || (y <= -ER_PAINT_RECT_MAX && y + h >= ER_PAINT_RECT_MAX);
+}
+
+/**
  * @brief Computes a node's current screen rect for damage tracking.
  *
  * Mirrors render_tree's position math: absolute layout position minus accumulated ancestor scroll,
@@ -1155,6 +1194,27 @@ typedef struct
     bool hedge;         /**< Damage both candidates: which one the paint uses is not decided here. */
 } NodeTransformDamage;
 
+#if ERUI_TRANSFORMS_FULL
+/**
+ * @brief Clips a NodeTransformDamage's footprints as render_tree clips the paint it records.
+ *
+ * The AABB is clipped already, but a raw-box fallback is not: one past ±ER_PAINT_RECT_MAX would differ from its
+ * clipped record on every commit, so an idle node would read as moved and repaint itself forever.
+ *
+ * @param[in,out] d  Footprints to clip; the other candidate only when `hedge`.
+ */
+static void clip_transform_damage(NodeTransformDamage* d)
+{
+    clip_rect_axis(&d->fx, &d->fw);
+    clip_rect_axis(&d->fy, &d->fh);
+    if (d->hedge)
+    {
+        clip_rect_axis(&d->hx, &d->hw);
+        clip_rect_axis(&d->hy, &d->hh);
+    }
+}
+#endif /* ERUI_TRANSFORMS_FULL */
+
 /**
  * @brief Bounds the next paint of a node carrying a transform the fast path cannot express.
  *
@@ -1221,6 +1281,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
          * No matrix, no AABB — and no full-repaint fallback either, even for a degenerate transform,
          * because bounded damage matching the actual paint beats a conservative whole-screen repaint. */
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        clip_transform_damage(d);
         return true;
     }
 
@@ -1240,6 +1301,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
          * paint recorded the raw box, and from the next commit the (stale) prediction agreed with it —
          * `moved` stayed false and the torn node was never source-dirty again (issue #138). */
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        clip_transform_damage(d);
         return true;
     }
     if (!bounded)
@@ -1270,6 +1332,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
         if (d->hedge)
             node_untransformed_screen_rect(n, sx, sy, &d->hx, &d->hy, &d->hw, &d->hh);
     }
+    clip_transform_damage(d);
     return true;
 #else
     (void)n;
@@ -2246,6 +2309,8 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             expand_for_shadow(n, &lp_x, &lp_y, &lp_w, &lp_h);
 #endif
         }
+        clip_rect_axis(&lp_x, &lp_w);
+        clip_rect_axis(&lp_y, &lp_h);
         n->last_paint_rect.x = (int16_t)lp_x;
         n->last_paint_rect.y = (int16_t)lp_y;
         n->last_paint_rect.w = (int16_t)lp_w;
@@ -3120,8 +3185,8 @@ void er_props_default(ERProps* props)
 static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
 {
     node->props.view.shadow_color = props->shadow_color;
-    node->props.view.shadow_offset_x = props->shadow_offset_x;
-    node->props.view.shadow_offset_y = props->shadow_offset_y;
+    node->props.view.shadow_offset_x = er_px_offset(props->shadow_offset_x);
+    node->props.view.shadow_offset_y = er_px_offset(props->shadow_offset_y);
 #if ERUI_SHADOWS
     {
         const bool casts = (props->shadow_opacity > 0.0f || props->elevation > 0);
@@ -3241,21 +3306,21 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->hit_slop_bottom = props->hit_slop_bottom;
     node->long_press_ms = props->long_press_ms;
 
-    /* Copy transform props. */
-    node->tp_translate_x = props->transform_translate_x;
-    node->tp_translate_y = props->transform_translate_y;
-    node->tp_scale_x = props->transform_scale_x;
-    node->tp_scale_y = props->transform_scale_y;
-    node->tp_rotate_z = props->transform_rotate_z;
-    node->tp_origin_x = props->transform_origin_x;
-    node->tp_origin_y = props->transform_origin_y;
-    node->tp_rotate_x = props->transform_rotate_x;
-    node->tp_rotate_y = props->transform_rotate_y;
-    node->tp_perspective = props->transform_perspective;
-    node->has_transform = (props->transform_translate_x != 0.0f || props->transform_translate_y != 0.0f
-                           || props->transform_scale_x != 0.0f || props->transform_scale_y != 0.0f
-                           || props->transform_rotate_z != 0.0f || props->transform_rotate_x != 0.0f
-                           || props->transform_rotate_y != 0.0f || props->transform_perspective != 0.0f);
+    /* Copy transform props. A NaN component is unset (a NaN origin is the centre), where it would reach the
+     * integer casts that place and bound the node. */
+    node->tp_translate_x = er_px_offset(props->transform_translate_x);
+    node->tp_translate_y = er_px_offset(props->transform_translate_y);
+    node->tp_scale_x = er_nan_or(props->transform_scale_x, 0.0f);
+    node->tp_scale_y = er_nan_or(props->transform_scale_y, 0.0f);
+    node->tp_rotate_z = er_nan_or(props->transform_rotate_z, 0.0f);
+    node->tp_origin_x = er_nan_or(props->transform_origin_x, 0.5f);
+    node->tp_origin_y = er_nan_or(props->transform_origin_y, 0.5f);
+    node->tp_rotate_x = er_nan_or(props->transform_rotate_x, 0.0f);
+    node->tp_rotate_y = er_nan_or(props->transform_rotate_y, 0.0f);
+    node->tp_perspective = er_nan_or(props->transform_perspective, 0.0f);
+    node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
+                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
+                           || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
 
     /* Copy type-specific visual props. */
     switch (node->type)
@@ -3667,9 +3732,10 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
  * vector rasterizer's cost is CLIP-AREA bound, so damaging just the changed sub-region instead of the
  * whole node box is the difference between a cheap and an expensive redraw. We diff the new tape against
  * the stored one and emit a tight node-local damage rect. CONSERVATIVE: any structural change (first
- * upload, different length/opcodes/paint-index, or a paint-table change) falls back to a full-box repaint,
- * so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change (same geometry, e.g.
- * a mode recolor) also falls back to full, which is correct (every pixel of the shape changes colour).
+ * upload, different length/opcodes/paint-index, or a paint- or gradient-table change) falls back to a
+ * full-box repaint, so the rect can never be too SMALL — no stale-pixel artifacts. A paint-only change
+ * (same geometry, e.g. a mode recolor) also falls back to full, which is correct (every pixel of the shape
+ * changes colour).
  *
  * A segment is bounded by its ANCHOR (the pen position it starts from) as well as by its own points: a
  * rotating needle `M cx cy L tip` moves only `tip` in the tape, but the whole line sweeps, so damaging
@@ -3691,19 +3757,35 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
 #define VEC_BBOX_ARC_STEPS 32
 #define VEC_BBOX_ARC_STEP (2.0f * ER_PI / (float)VEC_BBOX_ARC_STEPS)
 
-/** @brief Hard cap on samples for one arc, so a many-turn sweep cannot walk the bbox forever. */
-#define VEC_BBOX_ARC_MAX_SAMPLES 64
-
-/** @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep. */
-static void
+/**
+ * @brief Grows a bbox with points sampled along a circle arc [a0,a1] (radians) — the changed sub-sweep.
+ *
+ * @return false for an arc no sample can bound (a NaN or infinite input); the caller repaints the whole node.
+ */
+static bool
 vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float* miny, float* maxx, float* maxy)
 {
     float span = a1 - a0;
     if (span < 0.0f)
         span = -span;
-    int n = (int)(span / VEC_BBOX_ARC_STEP) + 1;
-    if (n > VEC_BBOX_ARC_MAX_SAMPLES)
-        n = VEC_BBOX_ARC_MAX_SAMPLES;
+    if (!(fabsf(cx) < INFINITY && fabsf(cy) < INFINITY && fabsf(r) < INFINITY && span < INFINITY))
+        return false;
+    if (span >= 2.0f * ER_PI)
+    {
+        /* A turn or more sweeps the whole circle, however many turns it is (and past the int range, the sample
+         * count's cast would be undefined): bound the circle rather than sample it. */
+        const float ar = fabsf(r);
+        if (cx - ar < *minx)
+            *minx = cx - ar;
+        if (cy - ar < *miny)
+            *miny = cy - ar;
+        if (cx + ar > *maxx)
+            *maxx = cx + ar;
+        if (cy + ar > *maxy)
+            *maxy = cy + ar;
+        return true;
+    }
+    const int n = (int)(span / VEC_BBOX_ARC_STEP) + 1; /* under a turn, so at most VEC_BBOX_ARC_STEPS + 1 */
     for (int k = 0; k <= n; k++)
     {
         const float a = a0 + (a1 - a0) * (float)k / (float)n;
@@ -3718,6 +3800,7 @@ vec_bbox_arc(float cx, float cy, float r, float a0, float a1, float* minx, float
         if (y > *maxy)
             *maxy = y;
     }
+    return true;
 }
 
 /**
@@ -3744,10 +3827,13 @@ static bool vec_diff_dirty_rect(const float* o,
 
     float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
     bool any = false;
+    bool finite = true; /* false once a changed point is NaN or infinite, which no rect can bound */
 #define VADD(X, Y)                                                                                                     \
     do                                                                                                                 \
     {                                                                                                                  \
         const float _x = (X), _y = (Y);                                                                                \
+        if (!(fabsf(_x) < INFINITY && fabsf(_y) < INFINITY))                                                           \
+            finite = false;                                                                                            \
         if (_x < minx)                                                                                                 \
             minx = _x;                                                                                                 \
         if (_y < miny)                                                                                                 \
@@ -3890,10 +3976,10 @@ static bool vec_diff_dirty_rect(const float* o,
                         VADD(ocx + orr * cosf(oa0), ocy + orr * sinf(oa0));
                         VADD(ncx + nrr * cosf(na0), ncy + nrr * sinf(na0));
                     }
-                    if (oa0 != na0)
-                        vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy);
-                    if (oa1 != na1)
-                        vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy);
+                    if (oa0 != na0 && !vec_bbox_arc(ocx, ocy, orr, oa0, na0, &minx, &miny, &maxx, &maxy))
+                        return false;
+                    if (oa1 != na1 && !vec_bbox_arc(ocx, ocy, orr, oa1, na1, &minx, &miny, &maxx, &maxy))
+                        return false;
                     any = true;
                 }
                 else
@@ -3937,6 +4023,8 @@ static bool vec_diff_dirty_rect(const float* o,
 #undef VANCHOR
 #undef VADD
 
+    if (!finite)
+        return false; /* a NaN or infinite point is bounded by nothing: repaint the whole node */
     if (!any)
         return false; /* geometry identical (paint-only or no-op change) → full box is simplest & correct */
 
@@ -3956,6 +4044,12 @@ static bool vec_diff_dirty_rect(const float* o,
     miny -= pad;
     maxx += pad;
     maxy += pad;
+    /* The tape is app geometry: a rect past ±ER_PAINT_RECT_MAX cannot be kept in the node's int16 fields, and
+     * one past the int range (or NaN) cannot even be converted. Repaint the whole node instead, which is always
+     * right. */
+    const float lim = (float)ER_PAINT_RECT_MAX;
+    if (!(minx >= -lim && maxx <= lim && miny >= -lim && maxy <= lim && minx <= maxx && miny <= maxy))
+        return false;
     *rx = (int)floorf(minx);
     *ry = (int)floorf(miny);
     *rw = (int)ceilf(maxx) - *rx;
@@ -3997,24 +4091,31 @@ void er_node_set_vector_ops(ERNode* node,
         const float* old_ops = er_vector_slot_ops(node->vector_slot, &old_n);
         const ERVectorPaint* old_paints = er_vector_slot_paints(node->vector_slot, &old_np);
         const ERVectorGradient* old_grads = er_vector_slot_grads(node->vector_slot, &old_ng);
+        const bool same_grads =
+            old_ng == n_grads
+            && (n_grads <= 0
+                || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0));
         /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
          * state) → nothing changed, so skip the repaint entirely. */
         if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
             && (n_paints <= 0
                 || (old_paints && paints && memcmp(old_paints, paints, (size_t)n_paints * sizeof(ERVectorPaint)) == 0))
-            && old_ng == n_grads
-            && (n_grads <= 0
-                || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0)))
+            && same_grads)
         {
             return;
         }
-        tight =
-            vec_diff_dirty_rect(old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
+        /* The diff sees only ops and paints. A changed gradient recolours every shape that uses it, wherever the
+         * geometry changed, so it repaints the whole node. */
+        tight = same_grads
+                && vec_diff_dirty_rect(
+                    old_ops, old_n, old_paints, old_np, ops, n_ops, paints, n_paints, &dx, &dy, &dw, &dh);
     }
 
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints, grads, n_grads);
     if (tight)
     {
+        clip_rect_axis(&dx, &dw);
+        clip_rect_axis(&dy, &dh);
         node->vec_dirty_x = (int16_t)dx;
         node->vec_dirty_y = (int16_t)dy;
         node->vec_dirty_w = (int16_t)dw;
@@ -4029,6 +4130,8 @@ void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h)
 {
     if (!node || node->type != ER_NODE_VECTOR)
         return;
+    clip_rect_axis(&x, &w);
+    clip_rect_axis(&y, &h);
     node->vec_dirty_x = (int16_t)x;
     node->vec_dirty_y = (int16_t)y;
     node->vec_dirty_w = (int16_t)w;
@@ -4892,7 +4995,8 @@ void er_commit(void)
                 {
                     const bool moved = n->has_last_paint
                                        && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
-                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h);
+                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h
+                                           || spans_paint_window(td.fx, td.fy, td.fw, td.fh));
                     /* The third way this node's pixels can move: an ANCESTOR gained or lost a transform,
                      * which hands the capture to a different node and flips this one between its AABB and
                      * its raw box (issue #139). It leaves the node clean and its layout box where it was,
@@ -4984,9 +5088,13 @@ void er_commit(void)
 #if ERUI_SHADOWS
             expand_for_shadow(n, &rx, &ry, &rw, &rh);
 #endif
+            /* Clipped as the record is, or a footprint past the clip would never match it. */
+            clip_rect_axis(&rx, &rw);
+            clip_rect_axis(&ry, &rh);
             const bool moved = n->has_last_paint
                                && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
-                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h);
+                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h
+                                   || spans_paint_window(rx, ry, rw, rh));
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
             if (scrim_modal)

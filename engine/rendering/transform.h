@@ -79,7 +79,9 @@ void er_transform_compute_matrix(
  * @param[out] itx  Inverse translation X.
  * @param[out] ity  Inverse translation Y.
  *
- * @return true on success; false when the matrix is singular (e.g. scale = 0).
+ * @return true on success; false when the matrix is singular (e.g. scale = 0), or its determinant or any
+ *         inverse coefficient is NaN or overflows (an infinite, huge or lopsided scale), which leaves no usable
+ *         inverse.
  */
 bool er_transform_invert(float a,
                          float b,
@@ -96,6 +98,9 @@ bool er_transform_invert(float a,
 
 /**
  * @brief Computes the screen-space axis-aligned bounding box of a transformed rectangle.
+ *
+ * A corner that comes out NaN is skipped (the box is (0,0,0,0) when none is left), and the box is clipped
+ * to ±16383, so its int fields are defined for any matrix and its width and height fit an int16.
  *
  * @param[in]  ref_x   Layout-space X origin.
  * @param[in]  ref_y   Layout-space Y origin.
@@ -138,10 +143,12 @@ void er_transform_aabb(int ref_x,
  * @param[in]  ity      Inverse translation Y.
  * @param[in]  screen_x Screen-space X.
  * @param[in]  screen_y Screen-space Y.
- * @param[out] layout_x Resulting layout-space X.
- * @param[out] layout_y Resulting layout-space Y.
+ * @param[out] layout_x Resulting layout-space X, clamped to ±32767.
+ * @param[out] layout_y Resulting layout-space Y, clamped to ±32767.
+ *
+ * @return false when the point maps to NaN, which has no layout position (outputs untouched).
  */
-void er_transform_map_point(float ia,
+bool er_transform_map_point(float ia,
                             float ib,
                             float ic,
                             float id,
@@ -193,7 +200,8 @@ void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, i
  * @param[in]  H    Input 9-element row-major homography.
  * @param[out] inv  Inverted 9-element row-major homography.
  *
- * @return true on success; false when H is singular (determinant near zero).
+ * @return true on success; false when H is singular (determinant near zero, NaN, or overflowed), or when a
+ *         coefficient of its inverse is NaN or overflowed.
  */
 bool er_transform_homography_invert(const float H[9], float inv[9]);
 
@@ -202,7 +210,9 @@ bool er_transform_homography_invert(const float H[9], float inv[9]);
  *
  * Projects the four corners (ref_x,ref_y), (ref_x+w,ref_y), (ref_x+w,ref_y+h),
  * (ref_x,ref_y+h) and returns their bounding box.  Corners that project behind the
- * viewer (W ≤ 0) are skipped; the AABB is (0,0,0,0) when all corners are behind.
+ * viewer (W ≤ 0), or to NaN, are skipped; the AABB is (0,0,0,0) when none is left. A corner near the
+ * camera plane projects arbitrarily far out, so the box is clipped to ±16383, which holds every screen and
+ * keeps its width and height inside an int16.
  *
  * @param[in]  ref_x   Source rectangle left edge.
  * @param[in]  ref_y   Source rectangle top edge.
@@ -216,6 +226,19 @@ bool er_transform_homography_invert(const float H[9], float inv[9]);
  */
 void er_transform_aabb_3d(
     int ref_x, int ref_y, int w, int h, const float H[9], int* out_x, int* out_y, int* out_w, int* out_h);
+
+/**
+ * @brief Back-projects a single screen-space point to layout space through an inverse homography.
+ *
+ * @param[in]  inv_H     9-element row-major inverse homography (from er_transform_homography_invert).
+ * @param[in]  screen_x  Screen-space X.
+ * @param[in]  screen_y  Screen-space Y.
+ * @param[out] layout_x  Resulting layout-space X, clamped to ±32767.
+ * @param[out] layout_y  Resulting layout-space Y, clamped to ±32767.
+ *
+ * @return false when the point lies behind the viewer or maps to NaN (outputs untouched).
+ */
+bool er_transform_map_point_3d(const float inv_H[9], int screen_x, int screen_y, int* layout_x, int* layout_y);
 
 /**
  * @brief Ends the 3D transform source capture and blits the result through the homography.

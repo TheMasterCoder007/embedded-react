@@ -303,6 +303,12 @@ const ARITH = new Set(['+', '-', '*', '/', '%']);
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
 /**
+ * The C helper each whole-number operator lowers to. It saturates at the limit of its type, where C's own
+ * signed overflow is undefined behavior; the 64-bit variant appends `64`.
+ */
+const CHECKED_OP = {'+': 'app_add', '-': 'app_sub', '*': 'app_mul'};
+
+/**
  * `scope` minus every name `env` binds at RUNTIME — locals, state, refs, animated values, and the event /
  * gesture params of the handler being compiled. emitExpr resolves those before env.consts, so a fold
  * that consulted the raw scope would silently swap a module const in for the value the code actually
@@ -393,25 +399,97 @@ function staticInt(node, env) {
   }
 }
 
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+
 /**
- * The divisor of a 64-bit `%` or Math.floor(a / b), which has to be a nonzero constant: JS gives NaN or
- * Infinity for a zero divisor, which an integer cannot hold, and C would trap on it.
+ * A compile-time number as C. A whole number too big for an int is a 64-bit constant (`lit`), so whole-number
+ * math keeps it exact; past 64 bits it is a float.
  */
-function nonzeroDivisor(node, env) {
+function numConst(v) {
+  // floatLit refuses NaN and Infinity (a folded `0 / 0`, say), which have no C literal.
+  if (!Number.isInteger(v)) return {code: floatLit(v), cType: 'float'};
+  if (v < -(2 ** 63) || v >= 2 ** 63)
+    return {code: floatLit(v), cType: 'float'};
+  if (v < INT_MIN || v > INT_MAX)
+    return {code: i64Lit(v), cType: 'i64', lit: true};
+  // `-2147483648` is `-` applied to 2147483648, which does not fit an int.
+  return {code: v === INT_MIN ? '(-2147483647 - 1)' : String(v), cType: 'int'};
+}
+
+/**
+ * A whole number in the int64 range as a C literal. `String(v)` is JS's shortest spelling that reads back as the
+ * same double, which past 2^53 is not the number itself: 4611686018427387904 prints as 4611686018427388000.
+ */
+function i64Lit(v) {
+  // `-9223372036854775808` is `-` applied to 9223372036854775808, which fits no signed type.
+  return v === -(2 ** 63) ? '(-9223372036854775807 - 1)' : BigInt(v).toString();
+}
+
+/** `+ - *` or a unary `-`: the operators that can overflow a whole number. */
+const isIntArith = n =>
+  (n.type === 'BinaryExpression' && Boolean(CHECKED_OP[n.operator])) ||
+  (n.type === 'UnaryExpression' && n.operator === '-');
+
+/** The Math functions that keep a whole number whole. */
+const WHOLE_MATH = new Set([
+  'floor',
+  'ceil',
+  'round',
+  'trunc',
+  'abs',
+  'min',
+  'max',
+]);
+
+/**
+ * Whole-number math JS would not cut to 32 bits: `+ - *`, negation, `%`, and the Math functions that keep a
+ * whole number whole. Beside a 64-bit value all of it is worked out in 64 bits, however deep it sits.
+ */
+const keepsMath64 = n =>
+  isIntArith(n) ||
+  (n.type === 'BinaryExpression' && n.operator === '%') ||
+  (n.type === 'CallExpression' &&
+    n.callee.type === 'MemberExpression' &&
+    !n.callee.computed &&
+    n.callee.object.type === 'Identifier' &&
+    n.callee.object.name === 'Math' &&
+    WHOLE_MATH.has(n.callee.property.name));
+
+/**
+ * A 64-bit value computed at runtime from a timestamp, as opposed to a 64-bit constant (`lit`) or whole-number
+ * math widened to 64 bits beside one (`wide`).
+ */
+const isTime64 = e => e.cType === 'i64' && !e.lit && !e.wide;
+
+/** Beside a float, a 64-bit constant is an ordinary number that converts, as in JS; only a timestamp refuses. */
+const litPeers = (...es) =>
+  es.some(e => e.cType === 'float')
+    ? es.map(e => (e.lit ? {code: `((float)${e.code})`, cType: 'float'} : e))
+    : es;
+
+/**
+ * The divisor of a timestamp's `%` or Math.floor / ceil / round / trunc(a / b), which has to be a constant; for
+ * one from state, an app reduces the timestamp first. A constant 0 gives JS's answer as the int math converts it:
+ * a remainder of 0, or a quotient saturated by the dividend's sign.
+ */
+function constDivisor(node, env) {
   const m = staticInt(node, env);
-  if (m !== null && m !== 0) return m;
+  if (m !== null) return m;
   const e = aotError(
-    'AOT: a 64-bit time value can only be divided by a nonzero constant',
-    'JS gives NaN or Infinity for a zero divisor, which an integer cannot hold, so the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
+    'AOT: a 64-bit time value can only be divided by a constant',
+    'the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / 60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / period`.',
   );
   if (node.loc) e.aotLoc = node.loc.start;
   throw e;
 }
 
 /**
- * `+ - * %` with a 64-bit timestamp on either side, kept in whole milliseconds. `%` takes a nonzero constant,
- * and one that fits an int narrows the result back to int, so `ms % 1000` is an ordinary number again. `/` is
- * refused: JS would give a fraction, and the whole-number division is written Math.floor(a / b).
+ * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. With a
+ * timestamp in it, `%` takes a constant; whole-number math widened beside one takes any divisor, as the
+ * int `%` does. The result narrows back to int when the divisor or the dividend fits one, so `ms % 1000` is an
+ * ordinary number again. `/` is refused: JS would give a fraction, and the whole-number division is written
+ * Math.floor(a / b).
  */
 function emitArith64(node, l, r, env) {
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
@@ -420,23 +498,40 @@ function emitArith64(node, l, r, env) {
       'AOT: `/` on a 64-bit time value is not supported',
       'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / b) for whole units — e.g. Math.floor(ms / 1000) for seconds.',
     );
+  const wide = !isTime64(l) && !isTime64(r);
   if (node.operator === '%') {
-    const m = nonzeroDivisor(node.right, env);
-    if (Math.abs(m) <= 0x7fffffff)
+    const k = staticInt(node.right, env);
+    // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
+    if (k === 0) return {code: '0', cType: 'int'};
+    if (wide && k === null)
+      return {
+        code: `app_mod64(${l.code}, ${r.code})`,
+        cType: 'i64',
+        wide: true,
+      };
+    const m = constDivisor(node.right, env);
+    // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
+    if (m === 1 || m === -1) return {code: '0', cType: 'int'};
+    if (Math.abs(m) <= 0x7fffffff || l.cType === 'int')
       return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
+    return {code: `(${l.code} % ${r.code})`, cType: 'i64', wide};
   }
-  return {code: `(${l.code} ${node.operator} ${r.code})`, cType: 'i64'};
+  return {
+    code: `${CHECKED_OP[node.operator]}64(${l.code}, ${r.code})`,
+    cType: 'i64',
+    wide,
+  };
 }
 
 /**
- * Math.floor / round / ceil over `a / b` with a 64-bit timestamp on either side. floor becomes an exact
- * integer floor division by a nonzero constant (C's `/` rounds toward zero, floor rounds down); round and
- * ceil are refused. Null when neither side is 64-bit, which leaves it to the float path.
+ * Math.floor / ceil / round / trunc over `a / b` with a 64-bit timestamp on either side, as exact integer division
+ * by a constant (see constDivisor); a zero one saturates by the dividend's sign, as JS's ±Infinity converts. Null
+ * when neither side is a timestamp, which leaves it to the whole-number or float path.
  */
-function emitFloorDiv64(fn, args, env) {
+function emitTimeRoundDiv(fn, args, env) {
   const arg = args[0];
   if (
-    (fn !== 'floor' && fn !== 'round' && fn !== 'ceil') ||
+    !INT_ROUND_DIV.has(fn) ||
     args.length !== 1 ||
     arg.type !== 'BinaryExpression' ||
     arg.operator !== '/'
@@ -444,42 +539,95 @@ function emitFloorDiv64(fn, args, env) {
     return null;
   const l = emitExprWide(arg.left, env);
   const r = emitExprWide(arg.right, env);
-  if (l.cType !== 'i64' && r.cType !== 'i64') return null;
+  if (!isTime64(l) && !isTime64(r)) return null;
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
   if (l.cType === 'string' || r.cType === 'string') return null;
-  if (fn !== 'floor')
-    throw aotError(
-      `AOT: Math.${fn}(a / b) on a 64-bit time value is not supported`,
-      'use Math.floor(a / b), which stays exact in whole milliseconds.',
-    );
-  nonzeroDivisor(arg.right, env);
-  return {code: `app_floordiv64(${l.code}, ${r.code})`, cType: 'i64'};
+  // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
+  if (constDivisor(arg.right, env) === -1)
+    return {code: `app_neg64(${l.code})`, cType: 'i64'};
+  return {
+    code: `${INT_ROUND_DIV.get(fn)}64(${l.code}, ${r.code})`,
+    cType: 'i64',
+  };
+}
+
+/** The helper that rounds `a / b` for two ints the way each Math function does. */
+const INT_ROUND_DIV = new Map([
+  ['floor', 'app_floordiv'],
+  ['ceil', 'app_ceildiv'],
+  ['round', 'app_rounddiv'],
+  ['trunc', 'app_div'],
+]);
+
+/**
+ * Math.floor / ceil / round / trunc over `a / b` with two whole numbers, as exact integer division: the float
+ * path rounds an operand past 2^24, so Math.floor(16777217 / 1) came out 16777216. A zero divisor keeps JS's
+ * answer as app_f2i converts it (±Infinity saturates by the dividend's sign, 0 / 0 is 0), and INT_MIN / -1
+ * saturates too. Beside a 64-bit value, or with a 64-bit operand that is not a timestamp (a constant past the int
+ * range, or math already widened), it divides in 64 bits, since JS would not cut the operands to 32. Null for
+ * anything else, which leaves it to the float path.
+ */
+function emitIntRoundDiv(fn, args, env) {
+  const arg = args[0];
+  if (
+    !INT_ROUND_DIV.has(fn) ||
+    args.length !== 1 ||
+    arg.type !== 'BinaryExpression' ||
+    arg.operator !== '/'
+  )
+    return null;
+  const l = emitExprWide(arg.left, env);
+  const r = emitExprWide(arg.right, env);
+  if (env.math64 || l.cType === 'i64' || r.cType === 'i64') {
+    const whole = e => e.cType === 'int' || (e.cType === 'i64' && !isTime64(e));
+    if (!whole(l) || !whole(r)) return null;
+    return {
+      code: `${INT_ROUND_DIV.get(fn)}64(${l.code}, ${r.code})`,
+      cType: 'i64',
+      wide: true,
+    };
+  }
+  if (l.cType !== 'int' || r.cType !== 'int') return null;
+  return {
+    code: `${INT_ROUND_DIV.get(fn)}(${l.code}, ${r.code})`,
+    cType: 'int',
+  };
 }
 
 /** Math.* over a 64-bit timestamp: only what stays exact in whole numbers. */
 function emitMath64(fn, a) {
   if (a.some(x => x.cType === 'float')) throw mix64Error();
   if (a.every(x => x.cType === 'int' || x.cType === 'i64')) {
+    // Whole-number math with no timestamp in it stays whole-number math.
+    const wide = !a.some(isTime64);
     // A timestamp is already whole, so rounding leaves it as it is.
-    if ((fn === 'floor' || fn === 'round' || fn === 'ceil') && a.length === 1)
-      return {code: a[0].code, cType: 'i64'};
+    if (
+      (fn === 'floor' || fn === 'round' || fn === 'ceil' || fn === 'trunc') &&
+      a.length === 1
+    )
+      return {code: a[0].code, cType: 'i64', wide};
     if (fn === 'abs' && a.length === 1)
-      return {code: `app_abs64(${a[0].code})`, cType: 'i64'};
+      return {code: `app_abs64(${a[0].code})`, cType: 'i64', wide};
     if ((fn === 'min' || fn === 'max') && a.length === 2)
-      return {code: `app_${fn}64(${a[0].code}, ${a[1].code})`, cType: 'i64'};
+      return {
+        code: `app_${fn}64(${a[0].code}, ${a[1].code})`,
+        cType: 'i64',
+        wide,
+      };
   }
   throw aotError(
     `AOT: Math.${fn}(...) on a 64-bit time value is not supported`,
-    'Math.floor / round / ceil / abs / min / max keep a timestamp exact; for anything else, reduce it to a small number first, e.g. `ms % 1000`.',
+    'Math.floor / round / ceil / trunc / abs / min / max keep a timestamp exact; for anything else, reduce it to a small number first, e.g. `ms % 1000`.',
   );
 }
 
 function emitExprImpl(node, env) {
+  // 64-bit int math reaches only through whole-number math (keepsMath64); any other node under it is typed as
+  // usual.
+  if (env.math64 && !keepsMath64(node)) env = {...env, math64: false};
   switch (node.type) {
     case 'NumericLiteral':
-      return Number.isInteger(node.value)
-        ? {code: String(node.value), cType: 'int'}
-        : {code: `${node.value}f`, cType: 'float'};
+      return numConst(node.value);
     case 'StringLiteral':
       return {code: cstr(node.value), cType: 'string'};
     case 'BooleanLiteral':
@@ -496,10 +644,7 @@ function emitExprImpl(node, env) {
       }
       if (node.name in env.consts) {
         const v = env.consts[node.name];
-        if (typeof v === 'number')
-          return Number.isInteger(v)
-            ? {code: String(v), cType: 'int'}
-            : {code: `${v}f`, cType: 'float'};
+        if (typeof v === 'number') return numConst(v);
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
         if (typeof v === 'boolean')
           return {code: v ? '1' : '0', cType: 'int', isBool: true};
@@ -509,6 +654,9 @@ function emitExprImpl(node, env) {
       );
     }
     case 'UnaryExpression': {
+      // A constant is negated here, so `-A` is its value and -2147483648 is not an int overflow.
+      const neg = node.operator === '-' ? staticInt(node.argument, env) : null;
+      if (neg !== null) return numConst(-neg);
       const a = emitExprWide(node.argument, env);
       if (
         (node.operator === '-' || node.operator === '+') &&
@@ -518,7 +666,14 @@ function emitExprImpl(node, env) {
           `AOT: unary "${node.operator}" on a string is not supported`,
           'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
         );
-      // Parenthesize the operand so `-` on a negative literal emits `(-(-135))`, not `(--135)` (a decrement).
+      // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
+      if (node.operator === '-' && (a.cType === 'int' || a.cType === 'i64')) {
+        const w = a.cType === 'i64' || env.math64;
+        return w
+          ? {code: `app_neg64(${a.code})`, cType: 'i64', wide: !isTime64(a)}
+          : {code: `app_neg(${a.code})`, cType: 'int'};
+      }
+      // Parenthesize the operand so `-` on a negative operand emits `(-(-x))`, not `(--x)` (a decrement).
       if (
         node.operator === '-' ||
         node.operator === '+' ||
@@ -534,8 +689,28 @@ function emitExprImpl(node, env) {
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
-      const l = emitExprWide(node.left, env);
-      const r = emitExprWide(node.right, env);
+      // `+ - *` over two whole-number constants is worked out here, as JS would, so a product too big for an
+      // int (30 * DAY_MS) is an exact 64-bit constant rather than an overflow.
+      const lk = CHECKED_OP[node.operator] ? staticInt(node.left, env) : null;
+      const rk = lk === null ? null : staticInt(node.right, env);
+      if (rk !== null)
+        return numConst(
+          node.operator === '+'
+            ? lk + rk
+            : node.operator === '-'
+              ? lk - rk
+              : lk * rk,
+        );
+      let l = emitExprWide(node.left, env);
+      let r = emitExprWide(node.right, env);
+      // Beside a 64-bit value, whole-number int math is worked out in 64 bits too: JS would not have cut it to 32.
+      if (l.cType === 'i64' || r.cType === 'i64') {
+        if (l.cType === 'int' && keepsMath64(node.left))
+          l = emitExprWide(node.left, {...env, math64: true});
+        if (r.cType === 'int' && keepsMath64(node.right))
+          r = emitExprWide(node.right, {...env, math64: true});
+      }
+      [l, r] = litPeers(l, r);
       if (ARITH.has(node.operator)) {
         if (l.cType === 'string' || r.cType === 'string') {
           // `+` over a string builds text, which C cannot express as one value. Where the destination is
@@ -552,7 +727,13 @@ function emitExprImpl(node, env) {
             'keep both operands numeric — a string cannot be coerced to a number here.',
           );
         }
-        if (l.cType === 'i64' || r.cType === 'i64')
+        // `/` takes a 64-bit constant as an ordinary C number; only a runtime 64-bit value is refused it.
+        if (
+          isTime64(l) ||
+          isTime64(r) ||
+          ((l.cType === 'i64' || r.cType === 'i64') &&
+            (CHECKED_OP[node.operator] || node.operator === '%'))
+        )
           return emitArith64(node, l, r, env);
         if (node.operator === '/')
           return {
@@ -561,6 +742,26 @@ function emitExprImpl(node, env) {
           };
         const cType =
           l.cType === 'float' || r.cType === 'float' ? 'float' : 'int';
+        const fn = cType === 'int' && CHECKED_OP[node.operator];
+        if (fn)
+          return env.math64
+            ? {code: `${fn}64(${l.code}, ${r.code})`, cType: 'i64', wide: true}
+            : {code: `${fn}(${l.code}, ${r.code})`, cType: 'int'};
+        // JS gives NaN for `x % 0` (0 here, as a float would convert), and C overflows on INT_MIN % -1, whose
+        // answer is 0. A constant divisor other than those two needs no check.
+        if (cType === 'int' && node.operator === '%') {
+          const k = staticInt(node.right, env);
+          if (k === 0 || k === -1) return {code: '0', cType: 'int'};
+          if (k === null)
+            return {code: `app_mod(${l.code}, ${r.code})`, cType: 'int'};
+        }
+        // C has no `%` on floats. fmodf is JS's `%` exactly: the dividend's sign, NaN for a zero divisor, and
+        // the dividend itself for an infinite one.
+        if (cType === 'float' && node.operator === '%')
+          return {
+            code: `fmodf((float)(${l.code}), (float)(${r.code}))`,
+            cType: 'float',
+          };
         return {code: `(${l.code} ${node.operator} ${r.code})`, cType};
       }
       if (COMPARE.has(node.operator)) {
@@ -639,8 +840,10 @@ function emitExprImpl(node, env) {
         node.operator === '&&' || node.operator === '||' ? node.operator : null;
       if (!op)
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
-      const l = emitExprWide(node.left, env);
-      const r = emitExprWide(node.right, env);
+      const [l, r] = litPeers(
+        emitExprWide(node.left, env),
+        emitExprWide(node.right, env),
+      );
       // JS gives back one of the operands, not true/false. The 0/1 below is only its truth, which would
       // store `1` in place of a timestamp — so with a 64-bit side, keep the operand's value.
       if (l.cType === 'i64' || r.cType === 'i64') {
@@ -669,8 +872,10 @@ function emitExprImpl(node, env) {
     }
     case 'ConditionalExpression': {
       const t = emitExprWide(node.test, env);
-      const c = emitExprWide(node.consequent, env);
-      const a = emitExprWide(node.alternate, env);
+      const [c, a] = litPeers(
+        emitExprWide(node.consequent, env),
+        emitExprWide(node.alternate, env),
+      );
       // `(ok ? 1 : "none")` is ill-typed C (int vs char*) and has no single printf spec either, so it
       // has to be refused here rather than handed to the host compiler.
       if ((c.cType === 'string') !== (a.cType === 'string'))
@@ -699,10 +904,7 @@ function emitExprImpl(node, env) {
       // Static fold: member access that resolves to a compile-time constant (e.g. a .map item's `.key`).
       try {
         const v = evalStatic(node, foldScope(env, env.consts ?? {}));
-        if (typeof v === 'number')
-          return Number.isInteger(v)
-            ? {code: String(v), cType: 'int'}
-            : {code: `${v}f`, cType: 'float'};
+        if (typeof v === 'number') return numConst(v);
         if (typeof v === 'string') return {code: cstr(v), cType: 'string'};
         if (typeof v === 'boolean')
           return {code: v ? '1' : '0', cType: 'int', isBool: true};
@@ -815,25 +1017,50 @@ function emitExprImpl(node, env) {
       // Math.* helpers → libm (the generated C includes <math.h> when these appear).
       if (c.type === 'MemberExpression' && c.object.name === 'Math') {
         const fn = c.property.name;
-        const floorDiv = emitFloorDiv64(fn, node.arguments, env);
-        if (floorDiv) return floorDiv;
-        const a = node.arguments.map(x => emitExprWide(x, env));
+        const timeDiv = emitTimeRoundDiv(fn, node.arguments, env);
+        if (timeDiv) return timeDiv;
+        const intDiv = emitIntRoundDiv(fn, node.arguments, env);
+        if (intDiv) return intDiv;
+        const a = litPeers(...node.arguments.map(x => emitExprWide(x, env)));
         if (a.some(x => x.cType === 'i64')) return emitMath64(fn, a);
+        // Math.abs / min / max of ints stay whole, as rounding one does: through a float they rounded past 2^24
+        // and printed as %g. Beside a 64-bit value |INT_MIN| is kept, as JS keeps it.
+        if (a.length && a.every(x => x.cType === 'int')) {
+          if (fn === 'abs' && a.length === 1)
+            return env.math64
+              ? {code: `app_abs64(${a[0].code})`, cType: 'i64', wide: true}
+              : {code: `app_abs(${a[0].code})`, cType: 'int'};
+          if ((fn === 'min' || fn === 'max') && a.length === 2)
+            return {
+              code: `app_${fn}(${a[0].code}, ${a[1].code})`,
+              cType: 'int',
+            };
+        }
+        // An int is already whole; app_f2i truncates a float toward zero, with NaN as 0 and the int range
+        // saturated, which is Math.trunc kept as an int.
+        if (fn === 'trunc' && a.length === 1)
+          return a[0].cType === 'int'
+            ? {code: a[0].code, cType: 'int'}
+            : {code: `app_f2i((float)(${a[0].code}))`, cType: 'int'};
         const UNARY = {
           sin: 'sinf',
           cos: 'cosf',
           tan: 'tanf',
           sqrt: 'sqrtf',
           abs: 'fabsf',
-          round: 'roundf',
+          round: 'app_roundf',
           floor: 'floorf',
           ceil: 'ceilf',
         };
         if (UNARY[fn] && a.length === 1) {
+          const whole = fn === 'round' || fn === 'floor' || fn === 'ceil';
+          // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
+          if (whole && a[0].cType === 'int')
+            return {code: a[0].code, cType: 'int'};
           const inner = `${UNARY[fn]}((float)(${a[0].code}))`;
-          // round/floor/ceil yield a whole number — cast to int so %d / int assignments are correct.
-          return fn === 'round' || fn === 'floor' || fn === 'ceil'
-            ? {code: `((int)${inner})`, cType: 'int'}
+          // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
+          return whole
+            ? {code: `app_f2i(${inner})`, cType: 'int'}
             : {code: inner, cType: 'float'};
         }
         const BINARY = {
@@ -871,14 +1098,14 @@ const emitExprWide = withLoc(emitExprImpl);
 
 /**
  * Lowers an expression for a destination that holds an int, a float or a string. C would narrow a 64-bit
- * timestamp (Date.now() / performance.now()) into one of those without a warning, so it is refused here;
- * the destinations that hold 64 bits call emitExprWide.
+ * value (a Date.now() / performance.now() timestamp, or a whole number past the int range) into one of those
+ * without a warning, so it is refused here; the destinations that hold 64 bits call emitExprWide.
  */
 function emitExpr(node, env) {
   const e = emitExprWide(node, env);
   if (e.cType !== 'i64') return e;
   const err = aotError(
-    'AOT: a 64-bit time value (Date.now() / performance.now()) cannot be used here',
+    'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
     'keep it in state, a ref or a local, compare it, or show it in text. Anywhere else, reduce it to a small number first — e.g. `ms % 1000`, or `Math.floor(ms / 1000) % 60`.',
   );
   if (node.loc) err.aotLoc = node.loc.start;
@@ -893,16 +1120,20 @@ function cScalarType(cType) {
   throw new Error(`AOT internal: no C scalar type for "${cType}"`);
 }
 
-const printfSpec = cType =>
-  cType === 'string'
-    ? '%s'
-    : cType === 'float'
-      ? '%g'
-      : cType === 'i64'
-        ? '%lld'
-        : '%d';
-/** An expression as a printf argument: `%lld` needs a long long, and int64_t is `long` on 64-bit Linux. */
-const printfArg = e => (e.cType === 'i64' ? `(long long)(${e.code})` : e.code);
+/**
+ * An expression as one printf spec and its argument. `%lld` needs a long long, and int64_t is `long` on 64-bit
+ * Linux. A float goes through app_ftoa, which prints Infinity, -Infinity, NaN and 0 where %g prints inf, -inf,
+ * nan and -0, and anything else as %g, into a buffer the call site lends it: one per float, so two floats in
+ * one snprintf keep their own.
+ */
+const printfPart = e =>
+  e.cType === 'string'
+    ? {spec: '%s', code: e.code}
+    : e.cType === 'float'
+      ? {spec: '%s', code: `app_ftoa((char[16]){0}, ${e.code})`}
+      : e.cType === 'i64'
+        ? {spec: '%lld', code: `(long long)(${e.code})`}
+        : {spec: '%d', code: e.code};
 
 /** C source with its string and char literals and its comments blanked, so a scan for a call sees only code. */
 const stripCLiterals = c =>
@@ -1020,7 +1251,7 @@ function concatParts(node, env, scope, operand = false) {
       : {isString: false, parts: [{literal: ''}]};
   return {
     isString: e.cType === 'string',
-    parts: [{spec: printfSpec(e.cType), code: printfArg(e)}],
+    parts: [printfPart(e)],
   };
 }
 
@@ -1286,7 +1517,9 @@ function collectState(fnBody, scope, prefix = '', wide = NO_WIDE) {
             ? cstr(String(initVal))
             : cType === 'float'
               ? floatLit(initVal)
-              : String(Number(initVal));
+              : cType === 'i64'
+                ? i64Lit(Number(initVal))
+                : String(Number(initVal));
         rec = {
           name,
           cField,
@@ -1718,7 +1951,12 @@ function collectRefs(fnBody, scope, prefix = '', wide = NO_WIDE) {
         refs.set(decl.id.name, {
           cVar,
           cType,
-          initCode: cType === 'float' ? `${v}f` : String(v),
+          initCode:
+            cType === 'float'
+              ? floatLit(v)
+              : cType === 'i64'
+                ? i64Lit(v)
+                : String(v),
           kind: 'value',
           used: false,
         });
@@ -1763,7 +2001,18 @@ function floatLit(n) {
       `AOT: a numeric constant folded to ${n === undefined ? 'undefined' : String(n)}, which has no C form`,
       'the value must be a finite number.',
     );
-  return Number.isInteger(v) ? `${v}.0f` : `${v}f`;
+  // Past about 3.4e38 a float literal overflows to Infinity, which C compilers warn about, so it is refused
+  // as Infinity is. One too small for a float, which they also warn about, is written as the 0 it rounds to.
+  const f = Math.fround(v);
+  if (!Number.isFinite(f))
+    throw aotError(
+      `AOT: the numeric constant ${v} is past the float range`,
+      'a float holds up to about 3.4e38.',
+    );
+  if (f === 0 && v !== 0) return v < 0 ? '-0.0f' : '0.0f';
+  // An exponent (`1e+21`) already makes a float literal; `.0` after one would not be C.
+  const s = String(v);
+  return /[.e]/.test(s) ? `${s}f` : `${s}.0f`;
 }
 
 /** The polynomial family of an `Easing.quad` / `Easing.cubic` node, for in/out/inOut composition. */
@@ -2001,7 +2250,7 @@ function lowerDynamicStyleValue(key, valueNode, env) {
     throw err;
   }
   if (meta.kind === 'opacity')
-    return [{field: meta.field, code: `(uint8_t)((${e.code}) * 255.0f)`}];
+    return [{field: meta.field, code: `app_opacity(${e.code})`}];
   return [{field: meta.field, code: `app_round_dim(${e.code})`}]; /* num */
 }
 
@@ -2347,32 +2596,43 @@ function compileListOp(rec, arg, env) {
           );
         else
           lines.push(
-            `        ${arr}[${cnt}].${f.key} = ${emitExpr(valNode, env).code};`,
+            `        ${arr}[${cnt}].${f.key} = ${storeCode(emitExpr(valNode, env), f.kind)};`,
           );
       }
       lines.push(`        ${cnt}++;`, '    }');
     }
     return lines;
   }
-  // setItems(items.slice(0, X)) — slice(0,-1) pops the last; slice(0,n) truncates to n.
+  // setItems(items.slice(0, end)) keeps the first items, counted as JS counts them: a negative end counts back
+  // from the length and stops at 0, and an end past the length (or none) keeps every item.
   if (
     arg.type === 'CallExpression' &&
     arg.callee.type === 'MemberExpression' &&
     arg.callee.object.name === rec.name &&
     arg.callee.property.name === 'slice'
   ) {
-    const end = arg.arguments[1];
-    if (
-      end?.type === 'UnaryExpression' &&
-      end.operator === '-' &&
-      end.argument.value === 1
-    )
-      return [`    if (${cnt} > 0) ${cnt}--;`];
-    const e = emitExpr(end, env);
-    return [`    ${cnt} = (${cnt} < (${e.code})) ? ${cnt} : (${e.code});`];
+    const [start, end] = arg.arguments;
+    if (start && staticInt(start, env) !== 0)
+      throw aotError(
+        `AOT: only ${rec.name}.slice(0, end) is supported on a list`,
+        `a list is a fixed C array and a count, so a slice can only drop items from the end — e.g. ${rec.name}.slice(0, -1) drops the last one.`,
+      );
+    if (!end) return [];
+    // A constant end is settled here. Past the capacity it keeps every item either way, so it is clamped
+    // there and never needs 64-bit math.
+    const k = staticInt(end, env);
+    if (k !== null) {
+      const kk = Math.max(-cap, Math.min(cap, k));
+      if (kk === -1) return [`    if (${cnt} > 0) ${cnt}--;`];
+      if (kk >= 0) return [`    ${cnt} = (${cnt} < ${kk}) ? ${cnt} : ${kk};`];
+      return [`    ${cnt} = app_slice_len(${cnt}, ${kk});`];
+    }
+    return [
+      `    ${cnt} = app_slice_len(${cnt}, ${asInt(emitExpr(end, env))});`,
+    ];
   }
   throw new Error(
-    `AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, -1), or [])`,
+    `AOT: unsupported list operation on "${rec.name}" (use [...${rec.name}, item], ${rec.name}.slice(0, n), or [])`,
   );
 }
 
@@ -2623,7 +2883,7 @@ function emitCompletionCb(fnNode, env, state, ctx) {
       : [{type: 'ExpressionStatement', expression: body}];
   const cctx = {stateChanged: false, animIdx: 0, out: ctx.out};
   const lines = compileStmts(list, {...env, locals}, state, cctx, '    ');
-  if (cctx.stateChanged) lines.push('    app_update();');
+  if (cctx.stateChanged) lines.push(APP_UPDATE_CALL);
   ctx.out.animCbs.push({name, body: lines});
   return name;
 }
@@ -2684,7 +2944,8 @@ const readsMember = member =>
 /**
  * Checks a value written to a numeric state or ref slot, whose C type came from its initial value. A 64-bit
  * timestamp written to an int slot is recorded in env.found, and compileWidened compiles again with that
- * slot widened to int64_t. It cannot go into a float or boolean slot, and a widened slot takes no floats.
+ * slot widened to int64_t. It cannot go into a float or boolean slot (a 64-bit constant can go into a float
+ * one), and a widened slot takes no floats.
  */
 function storeCheck(e, slotType, isBool, key, what, env) {
   if (e.cType === 'i64' && slotType !== 'i64') {
@@ -2692,6 +2953,7 @@ function storeCheck(e, slotType, isBool, key, what, env) {
       env.found.add(key);
       return;
     }
+    if (e.lit && slotType === 'float') return;
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${what}`,
       'give it a whole-number initial value — useState(0) or useRef(0) — and it widens to hold the timestamp.',
@@ -2700,11 +2962,30 @@ function storeCheck(e, slotType, isBool, key, what, env) {
   if (slotType === 'i64' && e.cType === 'float') throw mix64Error();
 }
 
+/**
+ * `e` as C for an int destination. A float goes through app_f2i: C's own conversion is undefined behavior
+ * for NaN or a value past the int range.
+ */
+const asInt = e => (e.cType === 'float' ? `app_f2i(${e.code})` : e.code);
+
+/** `e` as C for a slot of `slotType`: an int slot takes a float the way asInt does. */
+const storeCode = (e, slotType) => (slotType === 'int' ? asInt(e) : e.code);
+
+/**
+ * The call a body that set state ends with, to re-apply what reads it. Whether anything reads state is known
+ * only once the whole app is emitted, so the call is dropped then if nothing does.
+ */
+const APP_UPDATE_CALL = '    app_update();';
+
 /** Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
  *  becomes a format + args), plain assign otherwise. */
 function scalarAssign(rec, node, env, indent) {
   if (rec.cType !== 'string') {
-    const e = emitExprWide(node, env);
+    // A 64-bit slot takes int `+ - *` worked out in 64 bits.
+    const e = emitExprWide(
+      node,
+      rec.cType === 'i64' ? {...env, math64: true} : env,
+    );
     storeCheck(
       e,
       rec.cType,
@@ -2713,7 +2994,7 @@ function scalarAssign(rec, node, env, indent) {
       `state "${rec.name}"`,
       env,
     );
-    return `${indent}${rec.cMember} = ${e.code};`;
+    return `${indent}${rec.cMember} = ${storeCode(e, rec.cType)};`;
   }
   const f = emitFormat(node, env);
   // snprintf's source and destination may not overlap (C11 7.21.6.6), and `setLabel(label + '!')` feeds
@@ -2855,9 +3136,16 @@ function compileUpdateVector(expr, env, ctx, indent) {
       throw new Error(
         'AOT: updateVector dirtyRect must be a [x, y, w, h] array literal',
       );
-    const [x, y, w, h] = dirtyArg.elements.map(el => emitExpr(el, env).code);
+    const rect = dirtyArg.elements.slice(0, 4).map(el => emitExpr(el, env));
+    // A float edge can be NaN (a 0/0), which app_vector_dirty turns into no hint at all, so the engine's own
+    // damage applies (what changed in the tape, or the whole node), where a zero-width hint would paint nothing:
+    // the engine damages exactly the hinted rect. An int edge goes straight to the engine, which clips the
+    // rect's corners to the int16 range it keeps them in.
+    const fn = rect.some(e => e.cType === 'float')
+      ? 'app_vector_dirty'
+      : 'er_node_set_vector_dirty_rect';
     lines.push(
-      `${indent}er_node_set_vector_dirty_rect(${ref.cVar}, ${x}, ${y}, ${w}, ${h});`,
+      `${indent}${fn}(${ref.cVar}, ${rect.map(e => e.code).join(', ')});`,
     );
   }
   return lines;
@@ -2872,13 +3160,16 @@ function compileTimerAdd(expr, env, state, ctx) {
       'AOT: a setInterval/setTimeout callback must be an inline function',
       'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).',
     );
-  // A delay computed from a timestamp goes through ToInt32 and a floor at 0, as Flow A's setTimeout does.
+  // A delay computed from a timestamp or a float goes through ToInt32 and a floor at 0, as Flow A's setTimeout
+  // does.
   const delay = expr.arguments[1] ? emitExprWide(expr.arguments[1], env) : null;
   const ms = !delay
     ? '0'
     : delay.cType === 'i64'
       ? `app_delay_ms64(${delay.code})`
-      : delay.code;
+      : delay.cType === 'float'
+        ? `app_delay_msf(${delay.code})`
+        : delay.code;
   const repeat = expr.callee.name === 'setInterval';
   const slot = ctx.out.timerFns.length;
   const name = `er_timer_fn_${slot}`;
@@ -2906,7 +3197,12 @@ function inlineHelperCall(name, fn, args, env, state, ctx, indent) {
       );
     if (args[i]) {
       const e = emitExprWide(args[i], env);
-      locals.set(p.name, {code: e.code, cType: e.cType, isBool: e.isBool});
+      locals.set(p.name, {
+        code: e.code,
+        cType: e.cType,
+        isBool: e.isBool,
+        lit: e.lit,
+      });
     }
   });
   const body = fn.body;
@@ -2953,7 +3249,7 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       expr.callee.name === 'clearTimeout')
   ) {
     return [
-      `${indent}er_timer_clear(${emitExpr(expr.arguments[0], env).code});`,
+      `${indent}er_timer_clear(${asInt(emitExpr(expr.arguments[0], env))});`,
     ];
   }
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
@@ -2963,14 +3259,17 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       throw new Error(
         'AOT: the only assignment allowed in a handler is `ref.current = ...`',
       );
-    const e = emitExprWide(expr.right, env);
-    if (expr.operator === '/=' && (r.cType === 'i64' || e.cType === 'i64'))
+    const refEnv = r.cType === 'i64' ? {...env, math64: true} : env;
+    const e = emitExprWide(expr.right, refEnv);
+    if (expr.operator === '/=' && (r.cType === 'i64' || isTime64(e)))
       throw aotError(
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
       );
-    if (expr.operator === '%=' && (r.cType === 'i64' || e.cType === 'i64'))
-      nonzeroDivisor(expr.right, env);
+    const m =
+      expr.operator === '%=' && (r.cType === 'i64' || isTime64(e))
+        ? constDivisor(expr.right, env)
+        : null;
     storeCheck(
       e,
       r.cType,
@@ -2979,15 +3278,61 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       `ref "${expr.left.object.name}"`,
       env,
     );
-    return [`${indent}${r.cVar} ${expr.operator} ${e.code};`];
+    const whole = r.cType === 'int' || r.cType === 'i64';
+    // `+= -= *=` on a whole-number ref go through the same checked math as `+ - *`, `/=` by a float divides
+    // as floats, and `%=` over a float goes through fmodf as `%` does; a float result is stored the way any
+    // int slot stores one.
+    const step = {'+=': '+', '-=': '-', '*=': '*'}[expr.operator];
+    const floatMod =
+      expr.operator === '%=' && (r.cType === 'float' || e.cType === 'float');
+    if (
+      (whole && (step || (expr.operator === '/=' && e.cType === 'float'))) ||
+      floatMod
+    ) {
+      const v = emitExprWide(
+        {
+          type: 'BinaryExpression',
+          operator: step ?? expr.operator.slice(0, -1),
+          left: expr.left,
+          right: expr.right,
+          loc: expr.loc,
+        },
+        refEnv,
+      );
+      return [`${indent}${r.cVar} = ${storeCode(v, r.cType)};`];
+    }
+    // `/=` and `%=` on an int ref by an int give JS's answer, kept whole (app_div / app_mod). A constant
+    // divisor other than 0 and -1 needs no check.
+    if (
+      r.cType === 'int' &&
+      e.cType === 'int' &&
+      (expr.operator === '/=' || expr.operator === '%=')
+    ) {
+      const k = staticInt(expr.right, env);
+      if (expr.operator === '/=' && (k === null || k === 0 || k === -1))
+        return [`${indent}${r.cVar} = app_div(${r.cVar}, ${e.code});`];
+      if (expr.operator === '%=' && (k === 0 || k === -1))
+        return [`${indent}${r.cVar} = 0;`];
+      if (expr.operator === '%=' && k === null)
+        return [`${indent}${r.cVar} = app_mod(${r.cVar}, ${e.code});`];
+    }
+    // ±1 leaves no remainder, 0 is JS's NaN, which is 0 here, and INT64_MIN % -1 overflows in C.
+    if (m === 0 || m === 1 || m === -1) return [`${indent}${r.cVar} = 0;`];
+    return [
+      `${indent}${r.cVar} ${expr.operator} ${expr.operator === '=' ? storeCode(e, r.cType) : e.code};`,
+    ];
   }
-  // `ref.current++` / `ref.current--`.
+  // `ref.current++` / `ref.current--`; a whole-number ref steps through the checked `+ 1` / `- 1`.
   if (expr.type === 'UpdateExpression') {
     const r = refTarget(expr.argument, env);
     if (!r)
       throw new Error(
         'AOT: the only ++/-- allowed in a handler is on `ref.current`',
       );
+    if (r.cType === 'int' || r.cType === 'i64')
+      return [
+        `${indent}${r.cVar} = ${CHECKED_OP[expr.operator[0]]}${r.cType === 'i64' ? '64' : ''}(${r.cVar}, 1);`,
+      ];
     return [`${indent}${r.cVar}${expr.operator};`];
   }
   // Animated.*(…).start() — single timing/spring/decay OR a sequence/parallel/stagger/delay/loop
@@ -3228,7 +3573,7 @@ function compileEffect(eff, env, state, out) {
     };
     const lines = compileStmts(stmts, env, state, ctx, '    ');
     if (!ctx.usedReturn) {
-      if (ctx.stateChanged) lines.push('    app_update();');
+      if (ctx.stateChanged) lines.push(APP_UPDATE_CALL);
       out.mountEffects.push(...lines);
       return;
     }
@@ -3238,7 +3583,7 @@ function compileEffect(eff, env, state, out) {
     const name = `er_effect_${out.effN++}`;
     out.effectFns.push({name, body: lines});
     out.mountEffects.push(`    ${name}();`);
-    if (ctx.stateChanged) out.mountEffects.push('    app_update();');
+    if (ctx.stateChanged) out.mountEffects.push(APP_UPDATE_CALL);
     return;
   }
   if (eff.deps.type !== 'ArrayExpression')
@@ -3357,7 +3702,7 @@ function compileHandler(fnNode, env, state, out, pan = null) {
   if (gestureParam) henv = {...henv, gesture: gestureParam, pan};
   const ctx = {stateChanged: false, animIdx: 0, out};
   const stmts = compileStmts(list, henv, state, ctx, '    ');
-  if (ctx.stateChanged) stmts.push('    app_update();'); // re-apply state-dependent props once
+  if (ctx.stateChanged) stmts.push(APP_UPDATE_CALL); // re-apply state-dependent props once
   return stmts;
 }
 
@@ -5106,7 +5451,7 @@ function compileValueHandler(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
   const stmts = compileStmts(list, {...env, locals}, state, ctx, '    ');
-  if (ctx.stateChanged) stmts.push('    app_update();');
+  if (ctx.stateChanged) stmts.push(APP_UPDATE_CALL);
   return stmts;
 }
 
@@ -6949,7 +7294,7 @@ function compileSourceImpl(src, demo, opts, wide, found) {
       ? `    char ${f.key}[${LIST_STR_CAP}];`
       : `    ${f.kind} ${f.key};`;
   const itemInit = (item, struct) =>
-    `{ ${struct.fields.map(f => (f.kind === 'string' ? cstr(String(item[f.key] ?? '')) : f.kind === 'float' ? `${Number(item[f.key]) || 0}f` : String(Math.round(Number(item[f.key]) || 0)))).join(', ')} }`;
+    `{ ${struct.fields.map(f => (f.kind === 'string' ? cstr(String(item[f.key] ?? '')) : f.kind === 'float' ? floatLit(Number(item[f.key]) || 0) : String(Math.round(Number(item[f.key]) || 0)))).join(', ')} }`;
   const listBlocks = listRecords
     .map(
       s =>
@@ -6998,6 +7343,18 @@ function compileSourceImpl(src, demo, opts, wide, found) {
     out.updates.length > 0 ||
     out.svgUpdates.length > 0 ||
     out.depEffects.length > 0;
+  // With nothing to re-apply there is no app_update, so the calls queued by setters go too.
+  if (!hasUpdate) {
+    const dropUpdate = lines => lines.filter(l => l !== APP_UPDATE_CALL);
+    for (const f of [
+      ...out.handlers,
+      ...out.timerFns,
+      ...out.animCbs,
+      ...out.effectFns,
+    ])
+      f.body = dropUpdate(f.body);
+    out.mountEffects = dropUpdate(out.mountEffects);
+  }
   const updateBlock = (() => {
     if (!hasUpdate) return '';
     const lines = ['static void app_update(void)', '{'];
@@ -7218,10 +7575,11 @@ static int16_t app_round_dim(double v)
 `
     : '';
 
-  // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks).
+  // <math.h> when any libm symbol appears (Svg arc trig, or Math.* in expressions/handlers/timer callbacks), or
+  // a call to a helper whose body uses one.
   const usesMath =
     out.needsMath ||
-    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|M_PI)\b/.test(
+    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|isfinite|app_roundf|app_ftoa|app_vector_dirty|M_PI)\b/.test(
       [
         stateBlock,
         refDecls,
@@ -7258,9 +7616,9 @@ static int16_t app_round_dim(double v)
     .join('\n\n');
 
   // Date.now() / performance.now() read the engine clock as 64-bit whole milliseconds. The offset and its
-  // setter are always emitted, so a host can set the time whether or not the app reads it; the readers and
-  // the 64-bit Math helpers only when something calls them.
-  const CLOCK_HELPERS = [
+  // setter are always emitted, so a host can set the time whether or not the app reads it; the readers, the
+  // checked whole-number math and the 64-bit Math helpers only when something calls them.
+  const APP_HELPERS = [
     [
       'app_perf_now',
       'static int64_t app_perf_now(void)\n{\n    return (int64_t)er_now_ms64();\n}',
@@ -7269,16 +7627,197 @@ static int16_t app_round_dim(double v)
       'app_date_now',
       'static int64_t app_date_now(void)\n{\n    return s_wall_offset_ms + (int64_t)er_now_ms64();\n}',
     ],
+    ...Object.entries(CHECKED_OP).map(([op, name]) => [
+      name,
+      `/* a ${op} b, saturated to the int range: C leaves a signed overflow undefined. */\n` +
+        `static int ${name}(int a, int b)\n{\n    const int64_t v = (int64_t)a ${op} b;\n` +
+        '    return v > INT_MAX ? INT_MAX : v < INT_MIN ? INT_MIN : (int)v;\n}',
+    ]),
+    [
+      'app_neg',
+      '/* -a, saturated: -INT_MIN does not fit an int. */\n' +
+        'static int app_neg(int a)\n{\n    return a == INT_MIN ? INT_MAX : -a;\n}',
+    ],
+    [
+      'app_mod',
+      "/* a % b as JS computes it, kept whole: the remainder has the dividend's sign, as in C. JS gives NaN\n" +
+        '   for b == 0, which is 0 here, and INT_MIN % -1 is 0, where C would overflow. */\n' +
+        'static int app_mod(int a, int b)\n{\n    return (b == 0 || b == -1) ? 0 : a % b;\n}',
+    ],
+    [
+      'app_abs',
+      '/* Math.abs of an int, saturated: -INT_MIN does not fit an int. */\n' +
+        'static int app_abs(int v)\n{\n    return v >= 0 ? v : v == INT_MIN ? INT_MAX : -v;\n}',
+    ],
+    [
+      'app_min',
+      'static int app_min(int a, int b)\n{\n    return a < b ? a : b;\n}',
+    ],
+    [
+      'app_max',
+      'static int app_max(int a, int b)\n{\n    return a > b ? a : b;\n}',
+    ],
+    [
+      'app_div',
+      '/* a / b as JS computes it, kept whole: truncated toward zero, and saturated where JS gives +-Infinity\n' +
+        '   (b == 0) or a result past the int range (INT_MIN / -1). 0 / 0 is NaN, which is 0. */\n' +
+        'static int app_div(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT_MIN ? INT_MAX : -a;\n    }\n' +
+        '    return a / b;\n}',
+    ],
+    [
+      'app_floordiv',
+      "/* Math.floor(a / b) for two ints, exactly: C's `/` rounds toward zero where floor rounds down, and a float\n" +
+        '   quotient would round an operand past 2^24. JS gives +-Infinity for b == 0, which saturates by the sign\n' +
+        '   of a (0 / 0 is NaN, which is 0); INT_MIN / -1 saturates too, so the quotient is taken in 64 bits. */\n' +
+        'static int app_floordiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t q = (int64_t)a / b;\n' +
+        '    const int64_t f = ((int64_t)a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n' +
+        '    return f > INT_MAX ? INT_MAX : (int)f;\n}',
+    ],
+    [
+      'app_ceildiv',
+      '/* Math.ceil(a / b) for two ints, exactly, with the zero divisor and INT_MIN / -1 as app_floordiv has them. */\n' +
+        'static int app_ceildiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t q = (int64_t)a / b;\n' +
+        '    const int64_t c = ((int64_t)a % b != 0 && (a < 0) == (b < 0)) ? q + 1 : q;\n' +
+        '    return c > INT_MAX ? INT_MAX : (int)c;\n}',
+    ],
+    [
+      'app_rounddiv',
+      '/* Math.round(a / b) for two ints, exactly: floor(a / b + 1/2), halves up as JS rounds, which is\n' +
+        '   floor((2a + b) / 2b) once b is made positive. The zero divisor and the range go as in app_floordiv. */\n' +
+        'static int app_rounddiv(int a, int b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT_MAX : a < 0 ? INT_MIN : 0;\n    }\n' +
+        '    const int64_t n = b < 0 ? -(int64_t)a : a;\n' +
+        '    const int64_t d = b < 0 ? -(int64_t)b : b;\n' +
+        '    const int64_t num = 2 * n + d, den = 2 * d;\n' +
+        '    const int64_t q = num / den;\n' +
+        '    const int64_t r = (num % den != 0 && num < 0) ? q - 1 : q;\n' +
+        '    return r > INT_MAX ? INT_MAX : r < INT_MIN ? INT_MIN : (int)r;\n}',
+    ],
+    [
+      'app_f2i',
+      '/* A float kept as an int: truncated toward zero like a C cast, but saturated at the int range and NaN as\n' +
+        '   0, where the cast would be undefined behavior. */\n' +
+        'static int app_f2i(float v)\n{\n' +
+        '    if (v != v)\n    {\n        return 0;\n    }\n' +
+        '    if (v >= 2147483648.0f)\n    {\n        return INT_MAX;\n    }\n' +
+        '    if (v <= -2147483648.0f)\n    {\n        return INT_MIN;\n    }\n' +
+        '    return (int)v;\n}',
+    ],
+    [
+      'app_roundf',
+      "/* Math.round as JS rounds: to the nearest whole number, halves up (toward +Infinity). C's roundf takes\n" +
+        '   halves away from zero, which gives -3 for -2.5 where JS gives -2. */\n' +
+        'static float app_roundf(float v)\n{\n' +
+        '    const float f = floorf(v);\n    return v - f >= 0.5f ? f + 1.0f : f;\n}',
+    ],
+    [
+      'app_ftoa',
+      "/* A float as JS's String() spells it where %g does not: Infinity, -Infinity and NaN for what %g prints as\n" +
+        '   inf, -inf and nan, and 0 for negative zero, which %g prints as -0. Anything else is %g, into `buf`,\n' +
+        '   which the caller lends (16 chars, room for any float). All ASCII, which every font bakes. */\n' +
+        'static const char* app_ftoa(char* buf, float v)\n{\n' +
+        '    if (v != v)\n    {\n        return "NaN";\n    }\n' +
+        '    if (isinf(v))\n    {\n        return v > 0.0f ? "Infinity" : "-Infinity";\n    }\n' +
+        '    if (v == 0.0f)\n    {\n        return "0";\n    }\n' +
+        '    snprintf(buf, 16, "%g", (double)v);\n    return buf;\n}',
+    ],
+    [
+      'app_opacity',
+      "/* A state-driven opacity as the engine's 0-255 byte: clamped to 0..1 and rounded, as Flow A's bridge and\n" +
+        '   the compile-time fold do, with NaN as 0. */\n' +
+        'static uint8_t app_opacity(float v)\n{\n' +
+        '    if (!(v > 0.0f))\n    {\n        return 0;\n    }\n' +
+        '    if (v >= 1.0f)\n    {\n        return 255;\n    }\n' +
+        '    return (uint8_t)(v * 255.0f + 0.5f);\n}',
+    ],
+    [
+      'app_add64',
+      '/* a + b, saturated to the int64 range: C leaves a signed overflow undefined. */\n' +
+        'static int64_t app_add64(int64_t a, int64_t b)\n{\n' +
+        '    if (b > 0 ? a > INT64_MAX - b : a < INT64_MIN - b)\n    {\n' +
+        '        return b > 0 ? INT64_MAX : INT64_MIN;\n    }\n    return a + b;\n}',
+    ],
+    [
+      'app_sub64',
+      '/* a - b, saturated to the int64 range: C leaves a signed overflow undefined. */\n' +
+        'static int64_t app_sub64(int64_t a, int64_t b)\n{\n' +
+        '    if (b < 0 ? a > INT64_MAX + b : a < INT64_MIN + b)\n    {\n' +
+        '        return b < 0 ? INT64_MAX : INT64_MIN;\n    }\n    return a - b;\n}',
+    ],
+    [
+      'app_mul64',
+      '/* a * b, saturated to the int64 range: C leaves a signed overflow undefined. GCC and Clang test for\n' +
+        '   the overflow with a builtin; anywhere else (MSVC) the limits are checked by division first. */\n' +
+        'static int64_t app_mul64(int64_t a, int64_t b)\n{\n' +
+        '#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5)\n' +
+        '    int64_t v;\n    if (!__builtin_mul_overflow(a, b, &v))\n    {\n        return v;\n    }\n' +
+        '#else\n' +
+        '    if (a == 0 || b == 0 ||\n' +
+        '        (a > 0 ? (b > 0 ? a <= INT64_MAX / b : b >= INT64_MIN / a)\n' +
+        '               : (b > 0 ? a >= INT64_MIN / b : a >= INT64_MAX / b)))\n    {\n' +
+        '        return a * b;\n    }\n' +
+        '#endif\n' +
+        '    return (a < 0) == (b < 0) ? INT64_MAX : INT64_MIN;\n}',
+    ],
+    [
+      'app_neg64',
+      '/* -a, saturated: -INT64_MIN does not fit an int64_t. */\n' +
+        'static int64_t app_neg64(int64_t a)\n{\n    return a == INT64_MIN ? INT64_MAX : -a;\n}',
+    ],
     [
       'app_floordiv64',
-      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. b is a\n" +
-        '   nonzero constant; the compiler refuses any other divisor. */\n' +
+      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. JS gives\n" +
+        '   +-Infinity for b == 0, which saturates by the sign of a (0 / 0 is NaN, which is 0), and INT64_MIN / -1\n' +
+        '   is past the range, so it saturates too. */\n' +
         'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
         '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n}',
     ],
     [
+      'app_ceildiv64',
+      '/* Math.ceil(a / b) in whole numbers, with the zero divisor and INT64_MIN / -1 as app_floordiv64 has them. */\n' +
+        'static int64_t app_ceildiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) == (b < 0)) ? q + 1 : q;\n}',
+    ],
+    [
+      'app_rounddiv64',
+      '/* Math.round(a / b) in whole numbers, halves up as JS rounds: floor(a / b), plus one when what is left is at\n' +
+        '   least half of b. Nothing is doubled, which could overflow; the zero divisor and INT64_MIN / -1 go as in\n' +
+        '   app_floordiv64. */\n' +
+        'static int64_t app_rounddiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    int64_t q = a / b;\n    int64_t r = a % b;\n' +
+        '    if (r != 0 && (r < 0) != (b < 0))\n    {\n        q -= 1;\n        r += b;\n    }\n' +
+        '    return (b > 0 ? r >= b - r : r <= b - r) ? q + 1 : q;\n}',
+    ],
+    [
+      'app_div64',
+      '/* Math.trunc(a / b) in whole numbers, with the zero divisor and INT64_MIN / -1 as app_floordiv64 has them. */\n' +
+        'static int64_t app_div64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    return a / b;\n}',
+    ],
+    [
+      'app_mod64',
+      "/* a % b in whole numbers, as JS computes it: the remainder has the dividend's sign, as in C. JS gives NaN\n" +
+        '   for b == 0, which is 0 here, and INT64_MIN % -1 is 0, where C would overflow. */\n' +
+        'static int64_t app_mod64(int64_t a, int64_t b)\n{\n    return (b == 0 || b == -1) ? 0 : a % b;\n}',
+    ],
+    [
       'app_abs64',
-      'static int64_t app_abs64(int64_t v)\n{\n    return v < 0 ? -v : v;\n}',
+      '/* |v|, saturated: -INT64_MIN does not fit an int64_t. */\n' +
+        'static int64_t app_abs64(int64_t v)\n{\n    return v >= 0 ? v : v == INT64_MIN ? INT64_MAX : -v;\n}',
     ],
     [
       'app_min64',
@@ -7293,6 +7832,36 @@ static int16_t app_round_dim(double v)
       '/* A timer delay computed from a timestamp: ToInt32 (wrap to 32 bits), then a negative delay is 0 — the\n' +
         "   conversion Flow A's setTimeout applies. */\n" +
         'static int app_delay_ms64(int64_t v)\n{\n    const uint32_t u = (uint32_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
+    [
+      'app_delay_msf',
+      '/* A timer delay computed as a float, converted as app_delay_ms64 converts one: ToInt32 (NaN and +-Infinity\n' +
+        '   are 0), then a negative delay is 0. Past +-2^63 a float is a multiple of 2^32, which ToInt32 takes to 0. */\n' +
+        'static int app_delay_msf(float v)\n{\n' +
+        '    if (!(v > -9223372036854775808.0f && v < 9223372036854775808.0f))\n    {\n        return 0;\n    }\n' +
+        '    const uint32_t u = (uint32_t)(int64_t)v;\n    return u > 0x7FFFFFFFu ? 0 : (int)u;\n}',
+    ],
+    [
+      'app_slice_len',
+      '/* The length items.slice(0, end) leaves, as JS counts it: a negative end counts back from the length and\n' +
+        '   stops at 0, and an end past the length keeps every item. */\n' +
+        'static int app_slice_len(int len, int end)\n{\n' +
+        '    if (end < 0)\n    {\n        return end <= -len ? 0 : len + end;\n    }\n' +
+        '    return end < len ? end : len;\n}',
+    ],
+    [
+      'app_vector_dirty',
+      "/* updateVector's damage hint from float math. A NaN or infinite edge (a 0/0 in app math) gives no hint,\n" +
+        "   so the engine's own damage applies (what changed in the tape, or the whole node), where a zero-width\n" +
+        '   one would leave the new drawing unpainted. The rest is rounded out to whole pixels and its edges, not\n' +
+        '   its lengths, are bounded well inside the int range, so a rect reaching past the bound is not cut\n' +
+        "   short; the engine clips the rect's corners from there. */\n" +
+        'static void app_vector_dirty(ERNode* node, float x, float y, float w, float h)\n{\n' +
+        '    if (!(isfinite(x) && isfinite(y) && isfinite(w) && isfinite(h)))\n    {\n        return;\n    }\n' +
+        '    const float e[4] = {floorf(x), floorf(y), ceilf(x + w), ceilf(y + h)};\n    int c[4];\n' +
+        '    for (int k = 0; k < 4; k++)\n    {\n' +
+        '        c[k] = (int)(e[k] < -1e9f ? -1e9f : (e[k] > 1e9f ? 1e9f : e[k]));\n    }\n' +
+        '    er_node_set_vector_dirty_rect(node, c[0], c[1], c[2] - c[0], c[3] - c[1]);\n}',
     ],
   ];
   // The generated code that can call a file-local helper, with literals and comments blanked so a
@@ -7321,10 +7890,11 @@ static int16_t app_round_dim(double v)
         ? '\n/* Set by er_app_set_wall_clock(); the next er_app_tick() re-applies what reads the clock. */\n' +
           'static int s_wall_clock_changed;'
         : ''),
-    ...CLOCK_HELPERS.filter(([name]) => helperCallers.includes(`${name}(`)).map(
+    ...APP_HELPERS.filter(([name]) => helperCallers.includes(`${name}(`)).map(
       ([, def]) => def,
     ),
   ].join('\n\n');
+  const usesLimits = /\bINT_M(?:AX|IN)\b/.test(clockBlock);
   // A mount effect's cleanup is dropped (the app never unmounts), so an app whose only clearInterval lives
   // there calls er_timer_clear from nowhere.
   const timerClearBlock =
@@ -7370,7 +7940,7 @@ static int16_t app_round_dim(double v)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "embedded-react version mismatch: app.gen.c was generated by ${PKG_VERSION} but the engine header (er_version.h) is a different major.minor. Regenerate the app with 'npm run aot', or align the engine and npm versions.");
-${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${timerClearBlock ? '\n' + timerClearBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
+${usesMath ? '#include <math.h>\n/* M_PI is not in ISO C99 <math.h> (only POSIX/GNU); define a fallback so the generated app compiles under -std=c99 / MSVC. */\n#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n' : ''}${usesLimits ? '#include <limits.h>\n' : ''}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${refDecls ? '\n' + refDecls + '\n' : ''}${panDeclBlock ? '\n' + panDeclBlock + '\n' : ''}${effectDeclsBlock ? '\n' + effectDeclsBlock + '\n' : ''}${vectorBlock ? '\n' + vectorBlock + '\n' : ''}${vectorBuilderBlock ? '\n' + vectorBuilderBlock + '\n' : ''}${animDecls ? '\n' + animDecls + '\n' : ''}${handleDecls ? '\n' + handleDecls + '\n' : ''}${timerTableBlock ? '\n' + timerTableBlock + '\n' : ''}${timerClearBlock ? '\n' + timerClearBlock + '\n' : ''}${effectFwdDecls ? '\n' + effectFwdDecls + '\n' : ''}${updateBlock ? '\n' + updateBlock + '\n' : ''}${timerFnFwdDecls ? '\n' + timerFnFwdDecls + '\n' : ''}${animCbDecls ? '\n' + animCbDecls + '\n' : ''}${handlerDefs ? '\n' + handlerDefs + '\n' : ''}${queryDefs ? '\n' + queryDefs + '\n' : ''}${effectFnDefs ? '\n' + effectFnDefs + '\n' : ''}${animCbDefs ? '\n' + animCbDefs + '\n' : ''}${timerFnDefs ? '\n' + timerFnDefs + '\n' : ''}${out.kbdData ? '\n' + out.kbdData + '\n' : ''}
 ${appTickFn}
 
 void er_app_set_wall_clock(int64_t epoch_ms)

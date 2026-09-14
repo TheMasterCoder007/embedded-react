@@ -1749,7 +1749,8 @@ extern "C"
      * interactive update that only touches a small area (e.g. a dial handle moving), call this with the
      * node-local bounding rect of the change; the engine then damages only that rect, so the repaint and
      * panel flush stay tight. The hint applies to ONE commit and is cleared after; er_node_set_vector_ops
-     * resets it to a full-box repaint. The rect is intersected with the node box.
+     * resets it to a full-box repaint. The rect is intersected with the node box; its corners are clipped to
+     * ±16383 first, which holds any box, so a huge rect still covers what it says.
      *
      * @param[in] node  Vector node (no-op for other types).
      * @param[in] x     Sub-rect left, in node-local pixels.

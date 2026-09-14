@@ -245,22 +245,44 @@ static void flatten_cubic(float x0, float y0, float x1, float y1, float x2, floa
     flatten_cubic(xm, ym, xb, yb, x23, y23, x3, y3, depth + 1);
 }
 
+/**
+ * @brief An arc's sweep a1 - a0 as it is drawn: forward for clockwise, back for counter-clockwise, and an
+ *        opposite sweep wrapped by a turn.
+ *
+ * A turn or more in the drawing direction is a full turn, as a canvas arc is, and so are two finite ends too far
+ * apart to subtract. The sweep is app geometry, and past a certain size adding 2π no longer changes it, so the
+ * wrap is a fmodf rather than a loop that would never end.
+ *
+ * @return The sweep, at most a turn either way; NaN for a NaN or infinite end, which draws nothing.
+ */
+static float arc_sweep(float a0, float a1, bool ccw)
+{
+    const float turn = 2.0f * ER_PI;
+    if (!(fabsf(a0) < INFINITY && fabsf(a1) < INFINITY))
+        return NAN;
+    float da = a1 - a0;
+    if (ccw ? da <= -turn : da >= turn)
+        return ccw ? -turn : turn;
+    /* The opposite way round, ends too far apart to subtract are each brought within a turn first. */
+    if (!(fabsf(da) < INFINITY))
+        da = fmodf(fmodf(a1, turn) - fmodf(a0, turn), turn);
+    if (ccw ? da > 0.0f : da < 0.0f)
+    {
+        da = fmodf(da, turn);
+        if (ccw ? da > 0.0f : da < 0.0f)
+            da += ccw ? -turn : turn;
+    }
+    return da;
+}
+
 /** @brief Appends a circular arc, sampled so the chord error stays sub-pixel. */
 static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
 {
     if (r < 0.0f)
         r = -r;
-    float da = a1 - a0;
-    if (ccw)
-    {
-        while (da > 0.0f)
-            da -= 2.0f * ER_PI;
-    }
-    else
-    {
-        while (da < 0.0f)
-            da += 2.0f * ER_PI;
-    }
+    const float da = arc_sweep(a0, a1, ccw != 0);
+    if (da != da)
+        return; /* nothing to draw */
     /* Step angle so the chord deviation r*(1-cos(step/2)) stays under VEC_ARC_TOL px. */
     float step = (r > 0.5f) ? 2.0f * acosf(1.0f - VEC_ARC_TOL / r) : ER_PI;
     if (step <= 0.0f || step != step) /* NaN/0 guard */
@@ -278,6 +300,19 @@ static void append_arc(float cx, float cy, float r, float a0, float a1, int ccw)
 /*----------------------------------------------------------------------------------------------------------------------
  - Edge list + rasterization
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief The scanline row, counted from @p ymin, that an edge starting at @p y0 is activated on: 0 for one starting
+ *        above the rows, -1 for one starting at or below @p ymax (or at NaN), which never crosses a row.
+ *
+ * Compared in float before the int cast: an edge from app geometry can start past the int range.
+ */
+static inline int edge_start_row(float y0, int ymin, int ymax)
+{
+    if (!(y0 < (float)ymax))
+        return -1;
+    return y0 > (float)ymin ? (int)floorf(y0) - ymin : 0;
+}
 
 /** @brief Adds a non-horizontal edge to the rasterizer edge list (normalized so y0 <= y1). */
 static void edge_add(float x0, float y0, float x1, float y1)
@@ -671,12 +706,10 @@ static void rasterize(const ERVecEdge* edges,
         if (edges[i].y1 > fy1)
             fy1 = edges[i].y1;
     }
-    int ymin = (int)floorf(fy0);
-    int ymax = (int)ceilf(fy1);
-    if (ymin < clipy0)
-        ymin = clipy0;
-    if (ymax > clipy1)
-        ymax = clipy1;
+    /* Clamped to the clip in float first: an edge from app geometry can run past the int range, where the cast is
+     * undefined. */
+    int ymin = fy0 > (float)clipy0 ? (fy0 < (float)clipy1 ? (int)floorf(fy0) : clipy1) : clipy0;
+    int ymax = fy1 < (float)clipy1 ? (fy1 > (float)clipy0 ? (int)ceilf(fy1) : clipy0) : clipy1;
     if (ymax <= ymin)
         return;
 
@@ -699,10 +732,8 @@ static void rasterize(const ERVecEdge* edges,
     memset(s_bkt, 0, sizeof(VecIdx) * (size_t)nb);
     for (int i = 0; i < n_edges; i++)
     {
-        int row = (int)floorf(edges[i].y0) - ymin;
+        const int row = edge_start_row(edges[i].y0, ymin, ymax);
         if (row < 0)
-            row = 0; /* starts above the clip: activate it on the first row */
-        else if (row >= nrows)
             continue; /* starts below the last row scanned: it can never cross one */
         s_bkt[row >> shift]++;
     }
@@ -717,10 +748,8 @@ static void rasterize(const ERVecEdge* edges,
         return;
     for (int i = 0; i < n_edges; i++)
     {
-        int row = (int)floorf(edges[i].y0) - ymin;
+        const int row = edge_start_row(edges[i].y0, ymin, ymax);
         if (row < 0)
-            row = 0;
-        else if (row >= nrows)
             continue;
         s_order[s_bkt[row >> shift]++] = (VecIdx)i;
     }
@@ -920,9 +949,10 @@ static void add_quad(float ax, float ay, float bx, float by, float cx, float cy,
  */
 static void add_disc(float cx, float cy, float r)
 {
-    if (r <= 0.0f)
+    if (!(r > 0.0f))
         return;
-    int n = (int)(r * VEC_DISC_SEGS_PER_PX);
+    /* Capped before the cast: a stroke width from app geometry can run past the int range. */
+    int n = r < (float)VEC_DISC_SEGS_MAX / VEC_DISC_SEGS_PER_PX ? (int)(r * VEC_DISC_SEGS_PER_PX) : VEC_DISC_SEGS_MAX;
     if (n < VEC_DISC_SEGS_MIN)
         n = VEC_DISC_SEGS_MIN;
     if (n > VEC_DISC_SEGS_MAX)
@@ -1038,7 +1068,8 @@ static void add_join(float vx, float vy, float u0x, float u0y, float u1x, float 
             da -= 2.0f * ER_PI;
         while (da < -ER_PI)
             da += 2.0f * ER_PI;
-        int steps = (int)ceilf(fabsf(da) / VEC_JOIN_ARC_STEP);
+        /* A NaN corner (app geometry) gives a NaN turn, which the int cast would leave undefined. */
+        int steps = fabsf(da) < INFINITY ? (int)ceilf(fabsf(da) / VEC_JOIN_ARC_STEP) : 1;
         if (steps < 1)
             steps = 1;
         float pax = p0x, pay = p0y;
@@ -1466,24 +1497,19 @@ static bool arc_run_match(const float* ops, int i, int n_ops, int px, int py, Ve
                 ar = -ar;
 
             /* Normalise to a forward (clockwise, increasing-angle) sweep, matching append_arc's wrap. */
-            float da = a1 - a0;
-            if (ccw)
-            {
-                while (da > 0.0f)
-                    da -= 2.0f * ER_PI;
-            }
-            else
-            {
-                while (da < 0.0f)
-                    da += 2.0f * ER_PI;
-            }
+            const float da = arc_sweep(a0, a1, ccw);
             const float sweep = (da < 0.0f) ? -da : da;
             if (!(sweep > 0.0f))
-                return false; /* degenerate: nothing to draw analytically */
+                return false; /* degenerate or NaN: nothing to draw analytically */
             out->cx = acx;
             out->cy = acy;
             out->r = ar;
-            out->a0_deg = ((da < 0.0f) ? (a0 + da) : a0) * ER_RAD2DEG;
+            /* The sector core works in degrees from this start: one a turn or more out is brought within a turn,
+             * or a huge one would swallow the sweep added to it. */
+            float start = (da < 0.0f) ? (a0 + da) : a0;
+            if (!(fabsf(start) < 2.0f * ER_PI))
+                start = fmodf(start, 2.0f * ER_PI);
+            out->a0_deg = start * ER_RAD2DEG;
             out->sweep_deg = sweep * ER_RAD2DEG;
             out->full = (sweep >= 2.0f * ER_PI - 1e-4f);
             sx = acx + ar * cosf(a0);

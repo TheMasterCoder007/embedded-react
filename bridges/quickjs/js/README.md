@@ -426,7 +426,10 @@ The runtime tiers need the harness exe built once (no SDL); `test:bytecode` also
 cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest er-bridge-quickjs-compile
 ```
 
-Pick the tier by what the code touches: pure marshalling/logic → a co-located `*.unit.test.js`;
+To use a bridge build in another directory, point `ER_BRIDGE_BUILD_DIR` at it. CI runs both runtime tiers
+this way, against the bridge job's two Release builds on Linux (the native and the bare-metal allocator).
+
+Pick the tier by what the code touches: pure marshaling/logic → a co-located `*.unit.test.js`;
 anything that exercises the reconciler → engine pipeline → a `test/runtime/*.runtime.test.jsx`.
 
 ## Status & known gaps
@@ -443,10 +446,24 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   surface as the lite JS profile (no `Date` objects). Until the host sets the real time —
   `er_runtime_set_wall_clock()` in Flow A, `er_app_set_wall_clock()` in Flow B — `Date.now()` reads as
   uptime. Flow B holds a timestamp as 64-bit whole milliseconds: keep it in state, a ref, or a local,
-  compare it, show it in text, and divide it by a constant with `%` or `Math.floor(a / b)`; a plain
-  `/`, a divisor from state, or mixing it with a float or a boolean is a compiler error. Covered by
+  compare it, show it in text, and divide it by a constant with `%` or `Math.floor`/`ceil`/`round`/
+  `trunc(a / b)`; a plain `/`, a divisor from state, or mixing it with a float or a boolean is a
+  compiler error. Covered by
   `date-now.runtime.test.js`, the AOT's `date-now`, `cc-compile` and `text-lowering` cases, and the
   engine's `test_node_pool`.
+- ✅ **Whole-number math in Flow B is defined.** C leaves a signed overflow, a zero divisor and an
+  out-of-range float-to-int conversion undefined, so the generated C gives each an answer: `+`, `-`,
+  `*` and negation saturate at the limit of their C type (JS would keep a bigger number; the nearest
+  one the type holds keeps its sign and order); `%`, an int ref's `/=`, and `Math.floor`/`ceil`/`round`/
+  `trunc` of an int divided by an int give JS's result kept whole and exact, so `x % 0` is 0 and `x / 0`
+  saturates; and a float that is NaN or past the int range becomes 0 or
+  the nearest int. Constant math is worked out at compile time, as JS would, so `30 * DAY_MS` is an
+  exact 64-bit value. Beside a timestamp, or stored into a 64-bit slot, whole-number math is done in
+  64 bits all the way through: `+`, `-`, `*`, negation, `%`, and `Math.floor`/`ceil`/`round`/`trunc`/
+  `abs`/`min`/`max`, so `Date.now() + Math.trunc(n * 100000 / 2)` is exact. A handler local or a ternary
+  branch is still worked out on its own terms. `Math.abs`, `min` and `max` of ints stay whole numbers,
+  and `Math.round` rounds halves up, as JS does. Covered by the AOT's `compile`, `date-now`, `cc-compile` and `text-lowering` cases,
+  the last run under UBSan.
 - ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
   `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with
   completion wired through the engine's `on_complete`. Covered by `anim-compose.runtime.test.js`.

@@ -1713,7 +1713,9 @@ static void apply_opacity(JSContext* ctx, JSValueConst v, ERProps* p)
     double d = 1.0;
     if (JS_ToFloat64(ctx, &d, v) == 0)
     {
-        if (d < 0.0)
+        /* NaN fails every comparison, so `d < 0.0` would pass it on to the cast, where it is undefined. A NaN
+           opacity (a 0/0 in app math) is fully transparent, as Flow B's app_opacity makes it. */
+        if (!(d > 0.0))
         {
             d = 0.0;
         }
@@ -3816,11 +3818,27 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
     if (argc >= 5 && JS_IsArray(argv[4]) && vec_array_len(ctx, argv[4]) >= 4)
     {
         double d[4];
+        bool finite = true;
         for (int k = 0; k < 4; k++)
         {
             d[k] = vec_num_at(ctx, argv[4], (uint32_t)k);
+            finite = finite && isfinite(d[k]);
         }
-        er_node_set_vector_dirty_rect(node, (int)d[0], (int)d[1], (int)d[2], (int)d[3]);
+        /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
+           non-finite edge gives no hint, so the engine's own damage applies, as it would without one: what
+           changed in the tape, or the whole node. The rest is rounded out to whole pixels and its edges are
+           bounded well inside the int range (bounding its lengths would cut short a rect that reaches past
+           the bound), and the engine clips the rect's corners from there. */
+        if (finite)
+        {
+            const double e[4] = {floor(d[0]), floor(d[1]), ceil(d[0] + d[2]), ceil(d[1] + d[3])};
+            int r[4];
+            for (int k = 0; k < 4; k++)
+            {
+                r[k] = (int)(e[k] < -1e9 ? -1e9 : (e[k] > 1e9 ? 1e9 : e[k]));
+            }
+            er_node_set_vector_dirty_rect(node, r[0], r[1], r[2] - r[0], r[3] - r[1]);
+        }
     }
     return JS_UNDEFINED;
 }

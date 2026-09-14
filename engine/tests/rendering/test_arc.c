@@ -998,6 +998,58 @@ static void test_svg_fallbacks(void)
     CHECK(er_vector_analytic_arc_count() == 2U, "two arc shapes route as two sectors");
 }
 
+/**
+ * @brief App geometry far out of range: nothing hangs or reaches an undefined cast, and what can still be drawn
+ *        is drawn.
+ */
+static void test_extreme_geometry(void)
+{
+    /* A <Dial>'s value damage counts the sweep's quadrants in a float, which from 90 * 2^25 degrees no longer
+     * steps on; an infinite sweep never ends. Both now bound the whole circle. */
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    er_arc_sector_bbox(100.0f, 100.0f, 20.0f, 40.0f, 3019898880.0f, 3019899136.0f, 0.0f, &x0, &y0, &x1, &y1);
+    CHECK(x0 <= 60.0f && y0 <= 60.0f && x1 >= 140.0f && y1 >= 140.0f, "a huge start angle bounds the whole circle");
+    x0 = y0 = 1e9f;
+    x1 = y1 = -1e9f;
+    er_arc_sector_bbox(100.0f, 100.0f, 20.0f, 40.0f, 0.0f, INFINITY, 0.0f, &x0, &y0, &x1, &y1);
+    CHECK(x0 <= 60.0f && y0 <= 60.0f && x1 >= 140.0f && y1 >= 140.0f, "an infinite sweep bounds the whole circle");
+
+    /* <Svg> arcs through the analytic route. Box (20,20) 200x200 → centre (120,120). */
+    ERVectorPaint ring;
+    memset(&ring, 0, sizeof(ring));
+    ring.stroke = 0xFF00A0FFU;
+    ring.stroke_w = 16.0f;
+
+    /* A full turn from a huge start: in degrees, the start swallowed the 360 added to it, so nothing drew. */
+    const float huge_start[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, 1e10f, 2e10f, 0.0f};
+    render_svg_arc(huge_start, (int)(sizeof(huge_start) / sizeof(huge_start[0])), &ring);
+    CHECK(er_vector_analytic_arc_count() == 1U, "a full turn from a huge start takes the analytic route");
+    CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 20.0f), 0x00A0FFU, 2), "a full turn from a huge start draws");
+
+    /* Ends too far apart to subtract are more than a turn apart: the whole ring, not nothing. */
+    const float far_ends[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, -3e38f, 3e38f, 0.0f};
+    render_svg_arc(far_ends, (int)(sizeof(far_ends) / sizeof(far_ends[0])), &ring);
+    CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 200.0f), 0x00A0FFU, 2), "ends too far apart draw the ring");
+
+    /* A NaN end draws nothing. */
+    const float nan_end[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, 0.0f, NAN, 0.0f};
+    render_svg_arc(nan_end, (int)(sizeof(nan_end) / sizeof(nan_end[0])), &ring);
+    CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 20.0f), 0x000000U, 0), "a NaN end draws nothing");
+
+    /* A disc whose radius runs past the int range fills the whole node; a NaN one draws nothing. */
+    ERVectorPaint disc;
+    memset(&disc, 0, sizeof(disc));
+    disc.fill = 0xFF44FF44U;
+    const float big[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 1e10f, 0.0f, 6.283185307179586f, 0.0f};
+    render_svg_arc(big, (int)(sizeof(big) / sizeof(big[0])), &disc);
+    CHECK(er_vector_analytic_arc_count() == 1U, "a huge disc takes the analytic route");
+    CHECK(near_color(px(25, 25), 0x44FF44U, 0) && near_color(px(214, 214), 0x44FF44U, 0),
+          "a disc past the int range fills the node");
+    const float nan_r[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, NAN, 0.0f, 6.283185307179586f, 0.0f};
+    render_svg_arc(nan_r, (int)(sizeof(nan_r) / sizeof(nan_r[0])), &disc);
+    CHECK(near_color(px(120, 120), 0x000000U, 0), "a NaN radius draws nothing");
+}
+
 /** @brief RANGE mode: the band spans [valueStart, value], each end has a knob, and each drags on its own. */
 static void test_range(void)
 {
@@ -1402,6 +1454,7 @@ int main(void)
     test_svg_native_parity();
     test_svg_circle_route();
     test_svg_fallbacks();
+    test_extreme_geometry();
     test_range();
     test_range_conic_damage();
     test_range_min_span();

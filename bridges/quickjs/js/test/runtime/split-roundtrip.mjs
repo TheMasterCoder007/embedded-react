@@ -39,10 +39,9 @@ const fixtures = resolve(here, 'split-fixtures');
 const outDir = resolve(jsRoot, 'dist', 'runtime');
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+// bridges/quickjs/build, or the bridge build ER_BRIDGE_BUILD_DIR names, as for run.mjs.
 const exe = resolve(
-  jsRoot,
-  '..',
-  'build',
+  process.env.ER_BRIDGE_BUILD_DIR || resolve(jsRoot, '..', 'build'),
   `er-bridge-quickjs-splittest${exeSuffix}`,
 );
 
@@ -54,7 +53,8 @@ if (!existsSync(resolve(simDir, 'embedded-react.cjs'))) {
 }
 if (!existsSync(exe)) {
   console.error(
-    `Harness not built at:\n  ${exe}\n  Build it: cmake --build bridges/quickjs/build --target er-bridge-quickjs-splittest`,
+    `Harness not built at:\n  ${exe}\n  Build it: cmake --build bridges/quickjs/build --target er-bridge-quickjs-splittest\n` +
+      '  or set ER_BRIDGE_BUILD_DIR to a bridge build that has it.',
   );
   process.exit(2);
 }
