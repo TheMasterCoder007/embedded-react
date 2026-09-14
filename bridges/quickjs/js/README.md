@@ -426,7 +426,10 @@ The runtime tiers need the harness exe built once (no SDL); `test:bytecode` also
 cmake --build bridges/quickjs/build --target er-bridge-quickjs-runtest er-bridge-quickjs-compile
 ```
 
-Pick the tier by what the code touches: pure marshalling/logic → a co-located `*.unit.test.js`;
+To use a bridge build in another directory, point `ER_BRIDGE_BUILD_DIR` at it. CI runs both runtime tiers
+this way, against the bridge job's Release build on Linux.
+
+Pick the tier by what the code touches: pure marshaling/logic → a co-located `*.unit.test.js`;
 anything that exercises the reconciler → engine pipeline → a `test/runtime/*.runtime.test.jsx`.
 
 ## Status & known gaps

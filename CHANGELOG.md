@@ -28,6 +28,10 @@ See the README for the release process.
 
 ### Changed
 
+- CI now runs the QuickJS runtime tests, from source and as bytecode, against the bridge job's Linux
+  build; they had only ever run locally. `ER_BRIDGE_BUILD_DIR` points the test runners at a bridge build
+  other than `bridges/quickjs/build`.
+
 - Building a board example against an AOT app generated for a *different* board is now a compiler
   error instead of firmware that boots and lays out wrong. All three examples consume the same
   `dist/app.gen.c`, and a responsive demo folds its layout to the screen size at generate time, so
