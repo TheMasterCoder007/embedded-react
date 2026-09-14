@@ -87,10 +87,12 @@
 /**
  * @brief How far from the origin a recorded paint or damage rect reaches, in pixels.
  *
- * A node's last paint rect and a vector node's dirty rect are kept in int16 fields. Clipped to this, a rect
- * still holds every screen and its width and height still fit one, where ±32767 would allow 65534. Shared by
- * the transformed-box clip (rendering/transform.c) and every rect scene/compositor.c records: a node's last
- * paint, with its shadow bleed, and a vector dirty rect. Fixed by that storage, so not a build knob.
+ * A node's last paint rect and a vector node's dirty rect are kept in int16 fields. A rect is half-open,
+ * [x, x + w), and each of its edges is clipped to ±ER_PAINT_RECT_MAX (clip_rect_axis() in scene/compositor.c), so
+ * the widest is 32766 wide, from -16383 to 16383: it still holds every screen, and its width still fits an int16,
+ * where edges clipped to ±32767 would allow 65534. Shared by the transformed-box clip (rendering/transform.c)
+ * and every rect scene/compositor.c records: a node's last paint, with its shadow bleed, and a vector dirty
+ * rect. Fixed by that storage, so not a build knob.
  */
 #define ER_PAINT_RECT_MAX 16383
 
