@@ -84,7 +84,9 @@ See the README for the release process.
 - An `updateVector` dirty rect with a NaN edge now repaints the whole node in both flows, and a huge one
   is clipped at its corners, so it still covers what it says instead of wrapping; the engine's
   `er_node_set_vector_dirty_rect()` does this for every caller. Flow A cast the rect to int unguarded,
-  and Flow B turned a NaN edge into a zero-size hint that repainted nothing.
+  and Flow B turned a NaN edge into a zero-size hint that repainted nothing. An `<Svg>` whose changed
+  geometry runs that far out repaints the whole node, where the damage rect the engine works out itself
+  wrapped, or past the int range hit an undefined cast.
 
 - A transform with a huge, lopsided, or infinite scale or rotation, or a 3D corner near the camera plane,
   no longer reaches an undefined float-to-int cast in the engine. Its coordinates clamp, and a matrix

@@ -247,6 +247,22 @@ static void tape_curve(int step, float* ops, int* n_ops)
     *n_ops = i;
 }
 
+/** @brief A line from inside the node to far past it, moved down: its changed bounds run past the int16 rect. */
+static void tape_far_line(int step, float* ops, int* n_ops)
+{
+    const float y = 20.0f + 20.0f * (float)step;
+    int i = 0;
+    ops[i++] = (float)ER_VOP_SHAPE;
+    ops[i++] = 0.0f;
+    ops[i++] = (float)ER_VOP_MOVE;
+    ops[i++] = 20.0f;
+    ops[i++] = y;
+    ops[i++] = (float)ER_VOP_LINE;
+    ops[i++] = 40000.0f;
+    ops[i++] = y;
+    *n_ops = i;
+}
+
 /** @brief The anchor slides down the left edge; the far endpoint never moves, so the line pivots. */
 static void tape_pivot_line(int step, float* ops, int* n_ops)
 {
@@ -409,6 +425,7 @@ int main(void)
         {"pivoting line (anchor moves)", tape_pivot_line},
         {"pivoting cubic (anchor moves)", tape_pivot_cubic},
         {"pivoting arc (anchor moves)", tape_pivot_arc},
+        {"line running far past the node", tape_far_line},
     };
 
     /* Every case runs even after one fails: the set of failures says which shape kinds lost damage. */

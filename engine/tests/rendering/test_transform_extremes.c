@@ -296,6 +296,57 @@ static int move_zoomed(void)
     er_node_destroy(root);
     return draws;
 }
+
+/**
+ * @brief Paints a rotated node too wide for the transform source beside a small one, then recolors the small
+ *        one and reads back what that commit repainted.
+ *
+ * The wide node falls back to its raw box, which runs past ±ER_PAINT_RECT_MAX. Unless the pre-pass clips that
+ * box as the recorded paint is clipped, the two never agree, so every commit that runs the pre-pass damages the
+ * wide node again, whatever changed.
+ *
+ * @return The top edge of the second commit's dirty rect; the wide node spans rows 20 to 40.
+ */
+static int oversized_dirty_top(void)
+{
+    ERProps xf;
+    er_props_default(&xf);
+    xf.transform_rotate_z = 10.0f;
+    ERNode* root = white_root();
+    ERNode* wide = er_node_create(ER_NODE_VIEW);
+    ERProps wp = node_props(&xf);
+    wp.width = 20000;
+    er_node_set_props(wide, &wp);
+
+    ERNode* dot = er_node_create(ER_NODE_VIEW);
+    ERProps dp;
+    er_props_default(&dp);
+    dp.position = ER_POS_ABSOLUTE;
+    dp.left = 2;
+    dp.top = 52;
+    dp.width = 4;
+    dp.height = 4;
+    dp.background_color = RED;
+    er_node_set_props(dot, &dp);
+
+    er_tree_append_child(root, wide);
+    er_tree_append_child(root, dot);
+    er_tree_set_root(root);
+    er_commit();
+
+    dp.background_color = 0xFF0000FFU; /* blue */
+    er_node_set_props(dot, &dp);
+    er_commit();
+    ERRect r = {0, 0, 0, 0};
+    er_get_dirty_rect(&r);
+
+    er_tree_remove_child(root, dot);
+    er_tree_remove_child(root, wide);
+    er_node_destroy(dot);
+    er_node_destroy(wide);
+    er_node_destroy(root);
+    return r.y;
+}
 #endif /* ERUI_TRANSFORMS_FULL */
 
 int main(void)
@@ -425,6 +476,11 @@ int main(void)
      * move counts regardless: the second commit repaints. */
     if (move_zoomed() == 0)
         return fail("a node scaled past every edge should repaint when it moves");
+
+    /* Too wide for the transform source, a rotated node paints its raw box, which runs past the clip. A commit
+     * that changes only another node leaves it alone. */
+    if (oversized_dirty_top() <= 40)
+        return fail("recoloring another node should not repaint a node whose raw box runs past the clip");
 
 #if ERUI_3D_TRANSFORMS
     /* 3D with an overflowing scale, and with an infinite tilt: both singular, both untransformed. */

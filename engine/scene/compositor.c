@@ -1194,6 +1194,27 @@ typedef struct
     bool hedge;         /**< Damage both candidates: which one the paint uses is not decided here. */
 } NodeTransformDamage;
 
+#if ERUI_TRANSFORMS_FULL
+/**
+ * @brief Clips a NodeTransformDamage's footprints as render_tree clips the paint it records.
+ *
+ * The AABB is clipped already, but a raw-box fallback is not: one past ±ER_PAINT_RECT_MAX would differ from its
+ * clipped record on every commit, so an idle node would read as moved and repaint itself forever.
+ *
+ * @param[in,out] d  Footprints to clip; the other candidate only when `hedge`.
+ */
+static void clip_transform_damage(NodeTransformDamage* d)
+{
+    clip_rect_axis(&d->fx, &d->fw);
+    clip_rect_axis(&d->fy, &d->fh);
+    if (d->hedge)
+    {
+        clip_rect_axis(&d->hx, &d->hw);
+        clip_rect_axis(&d->hy, &d->hh);
+    }
+}
+#endif /* ERUI_TRANSFORMS_FULL */
+
 /**
  * @brief Bounds the next paint of a node carrying a transform the fast path cannot express.
  *
@@ -1260,6 +1281,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
          * No matrix, no AABB — and no full-repaint fallback either, even for a degenerate transform,
          * because bounded damage matching the actual paint beats a conservative whole-screen repaint. */
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        clip_transform_damage(d);
         return true;
     }
 
@@ -1279,6 +1301,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
          * paint recorded the raw box, and from the next commit the (stale) prediction agreed with it —
          * `moved` stayed false and the torn node was never source-dirty again (issue #138). */
         node_untransformed_screen_rect(n, sx, sy, &d->fx, &d->fy, &d->fw, &d->fh);
+        clip_transform_damage(d);
         return true;
     }
     if (!bounded)
@@ -1309,6 +1332,7 @@ static bool node_transform_damage(ERNode* n, NodeTransformDamage* d)
         if (d->hedge)
             node_untransformed_screen_rect(n, sx, sy, &d->hx, &d->hy, &d->hw, &d->hh);
     }
+    clip_transform_damage(d);
     return true;
 #else
     (void)n;
@@ -3997,6 +4021,12 @@ static bool vec_diff_dirty_rect(const float* o,
     miny -= pad;
     maxx += pad;
     maxy += pad;
+    /* The tape is app geometry: a rect past ±ER_PAINT_RECT_MAX cannot be kept in the node's int16 fields, and
+     * one past the int range (or NaN) cannot even be converted. Repaint the whole node instead, which is always
+     * right. */
+    const float lim = (float)ER_PAINT_RECT_MAX;
+    if (!(minx >= -lim && maxx <= lim && miny >= -lim && maxy <= lim && minx <= maxx && miny <= maxy))
+        return false;
     *rx = (int)floorf(minx);
     *ry = (int)floorf(miny);
     *rw = (int)ceilf(maxx) - *rx;
@@ -4056,6 +4086,8 @@ void er_node_set_vector_ops(ERNode* node,
     node->vector_slot = er_vector_store(node->vector_slot, ops, n_ops, paints, n_paints, grads, n_grads);
     if (tight)
     {
+        clip_rect_axis(&dx, &dw);
+        clip_rect_axis(&dy, &dh);
         node->vec_dirty_x = (int16_t)dx;
         node->vec_dirty_y = (int16_t)dy;
         node->vec_dirty_w = (int16_t)dw;
