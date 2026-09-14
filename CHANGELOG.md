@@ -65,6 +65,9 @@ See the README for the release process.
 
 ### Fixed
 
+- Flow B text now prints a float that is Infinity, -Infinity, NaN, or -0 the way JS does: "Infinity",
+  "-Infinity", "NaN" and "0". It printed C's "inf", "-inf", "nan" and "-0", as after a division by zero.
+
 - `Math.floor`, `Math.ceil` and `Math.round` of an int divided by an int are now exact in Flow B. They went
   through a float, which rounds a number past 2^24, so `Math.floor(16777217 / 1)` gave 16777216.
   `Math.trunc`, which Flow B did not support, now compiles too.

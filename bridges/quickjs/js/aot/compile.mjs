@@ -1051,16 +1051,20 @@ function cScalarType(cType) {
   throw new Error(`AOT internal: no C scalar type for "${cType}"`);
 }
 
-const printfSpec = cType =>
-  cType === 'string'
-    ? '%s'
-    : cType === 'float'
-      ? '%g'
-      : cType === 'i64'
-        ? '%lld'
-        : '%d';
-/** An expression as a printf argument: `%lld` needs a long long, and int64_t is `long` on 64-bit Linux. */
-const printfArg = e => (e.cType === 'i64' ? `(long long)(${e.code})` : e.code);
+/**
+ * An expression as one printf spec and its argument. `%lld` needs a long long, and int64_t is `long` on 64-bit
+ * Linux. A float goes through app_ftoa, which prints Infinity, -Infinity, NaN and 0 where %g prints inf, -inf,
+ * nan and -0, and anything else as %g, into a buffer the call site lends it: one per float, so two floats in
+ * one snprintf keep their own.
+ */
+const printfPart = e =>
+  e.cType === 'string'
+    ? {spec: '%s', code: e.code}
+    : e.cType === 'float'
+      ? {spec: '%s', code: `app_ftoa((char[16]){0}, ${e.code})`}
+      : e.cType === 'i64'
+        ? {spec: '%lld', code: `(long long)(${e.code})`}
+        : {spec: '%d', code: e.code};
 
 /** C source with its string and char literals and its comments blanked, so a scan for a call sees only code. */
 const stripCLiterals = c =>
@@ -1178,7 +1182,7 @@ function concatParts(node, env, scope, operand = false) {
       : {isString: false, parts: [{literal: ''}]};
   return {
     isString: e.cType === 'string',
-    parts: [{spec: printfSpec(e.cType), code: printfArg(e)}],
+    parts: [printfPart(e)],
   };
 }
 
@@ -7494,7 +7498,7 @@ static int16_t app_round_dim(double v)
   // a call to a helper whose body uses one.
   const usesMath =
     out.needsMath ||
-    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|isfinite|app_roundf|app_vector_dirty|M_PI)\b/.test(
+    /\b(sinf|cosf|tanf|sqrtf|fabsf|roundf|floorf|ceilf|fminf|fmaxf|atan2f|powf|fmodf|isfinite|app_roundf|app_ftoa|app_vector_dirty|M_PI)\b/.test(
       [
         stateBlock,
         refDecls,
@@ -7617,6 +7621,17 @@ static int16_t app_round_dim(double v)
         '   halves away from zero, which gives -3 for -2.5 where JS gives -2. */\n' +
         'static float app_roundf(float v)\n{\n' +
         '    const float f = floorf(v);\n    return v - f >= 0.5f ? f + 1.0f : f;\n}',
+    ],
+    [
+      'app_ftoa',
+      "/* A float as JS's String() spells it where %g does not: Infinity, -Infinity and NaN for what %g prints as\n" +
+        '   inf, -inf and nan, and 0 for negative zero, which %g prints as -0. Anything else is %g, into `buf`,\n' +
+        '   which the caller lends (16 chars, room for any float). All ASCII, which every font bakes. */\n' +
+        'static const char* app_ftoa(char* buf, float v)\n{\n' +
+        '    if (v != v)\n    {\n        return "NaN";\n    }\n' +
+        '    if (isinf(v))\n    {\n        return v > 0.0f ? "Infinity" : "-Infinity";\n    }\n' +
+        '    if (v == 0.0f)\n    {\n        return "0";\n    }\n' +
+        '    snprintf(buf, 16, "%g", (double)v);\n    return buf;\n}',
     ],
     [
       'app_opacity',

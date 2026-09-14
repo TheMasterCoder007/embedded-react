@@ -172,9 +172,9 @@ const GENERATED_PRAGMAS = (() => {
 /** The file-local `app_*` helpers a generated file defines, by name. */
 const helperDefs = c =>
   new Map(
-    [...c.matchAll(/static [\w ]+? (app_\w+)\([^)]*\)\n\{[\s\S]*?\n\}\n/g)].map(
-      m => [m[1], m[0]],
-    ),
+    [
+      ...c.matchAll(/static [\w ]+?\*? (app_\w+)\([^)]*\)\n\{[\s\S]*?\n\}\n/g),
+    ].map(m => [m[1], m[0]]),
   );
 
 /** The helpers any of `calls` uses, as C source: an unused static function would fail -Werror. */
@@ -257,7 +257,9 @@ const cFloat = v =>
       ? 'INFINITY'
       : v === -Infinity
         ? '-INFINITY'
-        : `${Math.fround(v).toExponential()}f`;
+        : Object.is(v, -0)
+          ? '-0.0f'
+          : `${Math.fround(v).toExponential()}f`;
 
 /** React's rule for a standalone child: null, undefined and booleans render as nothing. */
 const jsChild = val =>
@@ -279,6 +281,70 @@ const MODES = {
     re: /snprintf\(p\.text, sizeof\(p\.text\), ([\s\S]*?)\);\n/,
   },
 };
+
+describe('AOT text prints a float the way JS does where %g would not', () => {
+  // %g prints inf, -inf, nan and -0 where JS prints Infinity, -Infinity, NaN and 0. The app starts from an
+  // ordinary value (a non-finite initial state does not compile); each case swaps its value into the state.
+  // The last expression puts two floats in one string, which must not share app_ftoa's buffer.
+  const BASE = {n: 3, f: 1.5, s: 'hi', on: false, on2: true};
+  const VALUES = [Infinity, -Infinity, NaN, -0, 1.5, -2.25];
+  const FLOAT_EXPRS = [
+    `f`,
+    `'v' + f`,
+    `f + ' u'`,
+    `n + f`,
+    `f * 2`,
+    `f + '|' + f * 2`,
+  ];
+  for (const [mode, {app, re}] of Object.entries(MODES)) {
+    (CC ? it : it.skip)(
+      `${mode}: Infinity, -Infinity, NaN and -0 (${CC || 'no cc found'})`,
+      () => {
+        const cases = [];
+        const defs = new Map();
+        for (const expr of FLOAT_EXPRS) {
+          const c = compileSource(app(expr, BASE), 'special').c;
+          for (const [name, def] of helperDefs(c)) defs.set(name, def);
+          const m = c.match(re);
+          expect(m, `${mode} ${expr}: no snprintf emitted`).toBeTruthy();
+          for (const f of VALUES)
+            cases.push({
+              expr,
+              f,
+              call: m[1].replace(/s_state\./g, 'S.'),
+              js: jsChild(Function('n', 'f', `return (${expr});`)(BASE.n, f)),
+            });
+        }
+        let prog =
+          HELPER_INCLUDES +
+          GENERATED_PRAGMAS +
+          usedHelpers(
+            defs,
+            cases.map(c => c.call),
+          );
+        prog += 'struct St { int n; float f; char s[64]; int on; int on2; };\n';
+        cases.forEach((c, i) => {
+          prog +=
+            `static void case_${i}(void){ struct St S = {${BASE.n}, ${cFloat(c.f)}, "hi", 0, 1}; (void)S;\n` +
+            `  char b[256]; snprintf(b, sizeof b, ${c.call}); printf("%d\\t%s\\n", ${i}, b); }\n`;
+        });
+        prog +=
+          'int main(void){\n' +
+          cases.map((_, i) => `  case_${i}();`).join('\n') +
+          '\n  return 0; }\n';
+        const got = buildAndRun(prog, 'special');
+        const bad = cases
+          .map((c, i) => ({...c, got: got.get(i)}))
+          .filter(c => c.got !== c.js)
+          .map(
+            c =>
+              `${c.expr} @${Object.is(c.f, -0) ? '-0' : c.f}: C=${JSON.stringify(c.got)} JS=${JSON.stringify(c.js)}`,
+          );
+        expect(bad).toEqual([]);
+      },
+    );
+  }
+});
 
 describe('AOT self-referential string setter', () => {
   (CC ? it : it.skip)(

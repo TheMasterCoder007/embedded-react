@@ -703,6 +703,7 @@ describe('AOT generated C compiles', () => {
         'static int app_rounddiv(',
         'static int app_f2i(',
         'static float app_roundf(',
+        'static const char* app_ftoa(',
         'static uint8_t app_opacity(',
         'static int app_delay_msf(',
         'static void app_vector_dirty(',

@@ -1489,7 +1489,9 @@ describe('AOT arithmetic semantics', () => {
     );
     // Whole numbers keep C's own %.
     expect(c).toContain('s_state.n = (s_state.n % 2);');
-    expect(c).toContain('"%g", fmodf((float)(s_state.f), (float)(1.5f))');
+    expect(c).toContain(
+      '"%s", app_ftoa((char[16]){0}, fmodf((float)(s_state.f), (float)(1.5f)))',
+    );
     expect(c).toContain('#include <math.h>');
   });
 
@@ -4018,7 +4020,7 @@ import { View, Text, TextInput } from 'embedded-react';
         return (<View><Text>{'hit: ' + hit}</Text><Text>{'t=' + t}</Text></View>);
       }`);
     expect(c).toContain('"hit: %s", s_state.hit');
-    expect(c).toContain('"t=%g", s_state.t');
+    expect(c).toContain('"t=%s", app_ftoa((char[16]){0}, s_state.t)');
   });
 
   // JS types a `+` left to right, so the string only starts at the first string operand: `n + 1` still
@@ -4155,7 +4157,9 @@ import { View, Text, TextInput } from 'embedded-react';
         return (<View><Text>{'a: ' + (ok ? 'x' : 'y')}</Text><Text>{'b: ' + (ok ? 1 : 2.5)}</Text></View>);
       }`);
     expect(c).toContain('"a: %s", (s_state.ok ? "x" : "y")');
-    expect(c).toContain('"b: %g", (s_state.ok ? 1 : 2.5f)');
+    expect(c).toContain(
+      '"b: %s", app_ftoa((char[16]){0}, (s_state.ok ? 1 : 2.5f))',
+    );
   });
 
   // A branch that concatenates would need a format of its own; one snprintf has one. The generic
@@ -4239,7 +4243,7 @@ import { View, Text, TextInput } from 'embedded-react';
         return (<View><Text>{'a' + n}</Text><Text>{'b' + f}</Text><Text>{'c' + s}</Text></View>);
       }`);
     expect(c).toContain('"a%d", s_state.n');
-    expect(c).toContain('"b%g", s_state.f');
+    expect(c).toContain('"b%s", app_ftoa((char[16]){0}, s_state.f)');
     expect(c).toContain('"c%s", s_state.s');
   });
 
