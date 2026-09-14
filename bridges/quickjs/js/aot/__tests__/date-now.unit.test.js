@@ -438,4 +438,48 @@ export function App() {
       's_ref_last = app_add64(s_ref_last, app_mul64(s_state.n, 1000));',
     );
   });
+
+  it('works whole-number math inside Math.* and % beside a timestamp out in 64 bits', () => {
+    // Behind a wrapper the int math used to be cut to 32 bits first, so n * 100000 saturated.
+    const c = gen(
+      app(
+        'const [t, setT] = useState(0);\n  const [n, setN] = useState(0);\n  const [d, setD] = useState(1);',
+        '<Pressable onPress={() => { setT(Date.now() + Math.trunc(n * 100000 / 2)); setT(Date.now() - Math.round(n * 100000 / d)); setT(Date.now() + Math.abs(n)); setT(Date.now() + (n * 100000) % d); setT(Date.now() + Math.max(n * 100000, d)); }}><Text>{t}</Text></Pressable>',
+      ),
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_div64(app_mul64(s_state.n, 100000), 2));',
+    );
+    expect(c).toContain(
+      's_state.t = app_sub64(app_date_now(), app_rounddiv64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_abs64(s_state.n));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_mod64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+    expect(c).toContain(
+      's_state.t = app_add64(app_date_now(), app_max64(app_mul64(s_state.n, 100000), s_state.d));',
+    );
+  });
+
+  it('still divides a timestamp itself only by a nonzero constant, with Math.floor', () => {
+    expect(() =>
+      gen(
+        app(
+          'const [t, setT] = useState(0);\n  const [d, setD] = useState(1);',
+          '<Pressable onPress={() => { setT(Date.now()); setT(Math.floor(t / d)); }}><Text>{t}</Text></Pressable>',
+        ),
+      ),
+    ).toThrow(/nonzero constant/);
+    expect(() =>
+      gen(
+        app(
+          'const [t, setT] = useState(0);',
+          '<Pressable onPress={() => { setT(Date.now()); setT(Math.round(t / 1000)); }}><Text>{t}</Text></Pressable>',
+        ),
+      ),
+    ).toThrow(/Math\.round\(a \/ b\) on a 64-bit time value/);
+  });
 });

@@ -1292,6 +1292,151 @@ export function App() {
       expect(runText('intdiv', 'int n; int d;', cases, defs)).toEqual([]);
     },
   );
+
+  (CC ? it : it.skip)(
+    `Math.abs / min / max of ints stay whole numbers (${CC || 'no cc found'})`,
+    () => {
+      // Through a float they rounded past 2^24 and printed through %g, so 1000000 read "1e+06".
+      const EXPRS = [
+        'Math.abs(n)',
+        'Math.max(n, 0)',
+        'Math.min(n, d)',
+        'Math.max(n, d)',
+      ];
+      const PAIRS = [
+        [1000000, 5],
+        [16777217, -3],
+        [-16777217, 0],
+        [-5, 7],
+        [INT_MAX, INT_MIN],
+        [INT_MIN, INT_MAX],
+      ];
+      const defs = new Map();
+      const cases = [];
+      for (const expr of EXPRS) {
+        const t = textCall(
+          'const [n, setN] = useState(7);\n  const [d, setD] = useState(2);',
+          expr,
+        );
+        expect(t.call, `${expr} went through a float`).not.toMatch(/float/);
+        for (const [k, def] of t.defs) defs.set(k, def);
+        for (const [n, d] of PAIRS)
+          cases.push({
+            label: `${expr} @ n=${n}, d=${d}`,
+            init: `${cInt(n)}, ${cInt(d)}`,
+            call: t.call,
+            want: String(toInt(Function('n', 'd', `return (${expr});`)(n, d))),
+          });
+      }
+      expect(runText('wholemath', 'int n; int d;', cases, defs)).toEqual([]);
+    },
+  );
+});
+
+describe('AOT whole-number math beside a timestamp is worked out in 64 bits', () => {
+  // `t` holds a timestamp (a setter stores Date.now() in it), so whatever else is stored in it is worked out in
+  // 64 bits, through the Math functions and `%` too. JS is exact for every value here (all under 2^53); a zero
+  // divisor gives its Infinity or NaN, which the int64 slot saturates or makes 0.
+  const toI64 = v =>
+    Number.isNaN(v)
+      ? 0n
+      : v === Infinity
+        ? 2n ** 63n - 1n
+        : v === -Infinity
+          ? -(2n ** 63n)
+          : BigInt(v);
+  const EXPRS = [
+    'Math.trunc(n * 100000 / 2)',
+    'Math.floor(n * 100000 / d)',
+    'Math.ceil(n * 100000 / d)',
+    'Math.round(n * 100000 / d)',
+    'Math.trunc(n * 100000 / d)',
+    'Math.floor(n / d)',
+    'Math.ceil(n / d)',
+    'Math.round(n / d)',
+    'Math.trunc(n / d)',
+    'Math.floor(n * 100000)',
+    'Math.abs(n * 100000)',
+    'Math.abs(n)',
+    'Math.max(n * 100000, d)',
+    'Math.min(n * -100000, d)',
+    '(n * 100000) % d',
+    'n * 100000 % 7',
+  ];
+  const PAIRS = [
+    [30000, 2],
+    [30000, 7],
+    [-30000, 7],
+    [30000, -7],
+    [-30000, -7],
+    [21475, 3],
+    [5, 2],
+    [-5, 2],
+    [5, -2],
+    [-5, -2],
+    [INT_MAX, 3],
+    [INT_MIN, -1],
+    [INT_MIN, 2],
+    [7, 0],
+    [-7, 0],
+    [0, 0],
+  ];
+  (CC ? it : it.skip)(
+    `every expression gives JS's whole answer (${CC || 'no cc found'})`,
+    () => {
+      const defs = new Map();
+      const cases = [];
+      for (const expr of EXPRS) {
+        const c = compileSource(
+          `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [t, setT] = useState(0);
+  const [n, setN] = useState(0);
+  const [d, setD] = useState(1);
+  return (<Pressable onPress={() => { setT(Date.now()); setT(${expr}); }}><Text>{t}</Text></Pressable>);
+}`,
+          'wide',
+        ).c;
+        expect(c).toContain('    int64_t t;');
+        const code = [...c.matchAll(/ {4}s_state\.t = (.+);\n/g)]
+          .map(m => m[1])
+          .find(s => s !== 'app_date_now()');
+        expect(code, `${expr}: no store emitted`).toBeTruthy();
+        for (const [k, def] of helperDefs(c)) defs.set(k, def);
+        for (const [n, d] of PAIRS)
+          cases.push({
+            expr,
+            n,
+            d,
+            code: code.replace(/s_state\./g, 'S.'),
+            want: String(toI64(Function('n', 'd', `return (${expr});`)(n, d))),
+          });
+      }
+      let prog =
+        HELPER_INCLUDES +
+        usedHelpers(
+          defs,
+          cases.map(c => c.code),
+        ) +
+        'struct St { int64_t t; int n; int d; };\n';
+      cases.forEach((c, i) => {
+        prog +=
+          `static void case_${i}(void){ struct St S = {0, ${cInt(c.n)}, ${cInt(c.d)}};\n` +
+          `  S.t = ${c.code}; printf("%d\\t%lld\\n", ${i}, (long long)S.t); }\n`;
+      });
+      prog +=
+        'int main(void){\n' +
+        cases.map((_, i) => `  case_${i}();`).join('\n') +
+        '\n  return 0; }\n';
+      const got = buildAndRun(prog, 'wide');
+      const bad = cases
+        .map((c, i) => ({...c, got: got.get(i)}))
+        .filter(c => c.got !== c.want)
+        .map(c => `${c.expr} @ n=${c.n}, d=${c.d}: C=${c.got} JS=${c.want}`);
+      expect(bad).toEqual([]);
+    },
+  );
 });
 
 describe('AOT list slice keeps what JS keeps', () => {

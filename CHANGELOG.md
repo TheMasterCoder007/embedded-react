@@ -65,6 +65,11 @@ See the README for the release process.
 
 ### Fixed
 
+- Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
+  `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
+  `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
+  numbers now: they went through a float, so `Math.max(n, 0)` printed 1000000 as "1e+06".
+
 - Flow B text now prints a float that is Infinity, -Infinity, NaN, or -0 the way JS does: "Infinity",
   "-Infinity", "NaN" and "0". It printed C's "inf", "-inf", "nan" and "-0", as after a division by zero.
 

@@ -454,8 +454,11 @@ anything that exercises the reconciler → engine pipeline → a `test/runtime/*
   `trunc` of an int divided by an int give JS's result kept whole and exact, so `x % 0` is 0 and `x / 0`
   saturates; and a float that is NaN or past the int range becomes 0 or
   the nearest int. Constant math is worked out at compile time, as JS would, so `30 * DAY_MS` is an
-  exact 64-bit value, and int math beside a timestamp is done in 64 bits. `Math.round` rounds halves
-  up, as JS does. Covered by the AOT's `compile`, `date-now`, `cc-compile` and `text-lowering` cases,
+  exact 64-bit value. Beside a timestamp, or stored into a 64-bit slot, whole-number math is done in
+  64 bits all the way through: `+`, `-`, `*`, negation, `%`, and `Math.floor`/`ceil`/`round`/`trunc`/
+  `abs`/`min`/`max`, so `Date.now() + Math.trunc(n * 100000 / 2)` is exact. A handler local or a ternary
+  branch is still worked out on its own terms. `Math.abs`, `min` and `max` of ints stay whole numbers,
+  and `Math.round` rounds halves up, as JS does. Covered by the AOT's `compile`, `date-now`, `cc-compile` and `text-lowering` cases,
   the last run under UBSan.
 - ✅ **Animated composition + completion.** `sequence`/`parallel`/`stagger`/`delay`/`loop` and
   `.start(({ finished }) => …)` all work — composition is pure JS over each child's start/stop, with

@@ -431,8 +431,36 @@ const isIntArith = n =>
   (n.type === 'BinaryExpression' && Boolean(CHECKED_OP[n.operator])) ||
   (n.type === 'UnaryExpression' && n.operator === '-');
 
-/** A 64-bit value computed at runtime (a timestamp, or math on one), as opposed to a 64-bit constant. */
-const isTime64 = e => e.cType === 'i64' && !e.lit;
+/** The Math functions that keep a whole number whole. */
+const WHOLE_MATH = new Set([
+  'floor',
+  'ceil',
+  'round',
+  'trunc',
+  'abs',
+  'min',
+  'max',
+]);
+
+/**
+ * Whole-number math JS would not cut to 32 bits: `+ - *`, negation, `%`, and the Math functions that keep a
+ * whole number whole. Beside a 64-bit value all of it is worked out in 64 bits, however deep it sits.
+ */
+const keepsMath64 = n =>
+  isIntArith(n) ||
+  (n.type === 'BinaryExpression' && n.operator === '%') ||
+  (n.type === 'CallExpression' &&
+    n.callee.type === 'MemberExpression' &&
+    !n.callee.computed &&
+    n.callee.object.type === 'Identifier' &&
+    n.callee.object.name === 'Math' &&
+    WHOLE_MATH.has(n.callee.property.name));
+
+/**
+ * A 64-bit value computed at runtime from a timestamp, as opposed to a 64-bit constant (`lit`) or whole-number
+ * math widened to 64 bits beside one (`wide`).
+ */
+const isTime64 = e => e.cType === 'i64' && !e.lit && !e.wide;
 
 /** Beside a float, a 64-bit constant is an ordinary number that converts, as in JS; only a timestamp refuses. */
 const litPeers = (...es) =>
@@ -456,10 +484,11 @@ function nonzeroDivisor(node, env) {
 }
 
 /**
- * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. `%` takes a
- * nonzero constant, and the result narrows back to int when the divisor or the dividend fits one, so
- * `ms % 1000` is an ordinary number again. `/` is refused: JS would give a fraction, and the whole-number
- * division is written Math.floor(a / b).
+ * `+ - * %` with a 64-bit value on either side, kept whole. `+ - *` saturate at the int64 limits. With a
+ * timestamp in it, `%` takes a nonzero constant; whole-number math widened beside one takes any divisor, as the
+ * int `%` does. The result narrows back to int when the divisor or the dividend fits one, so `ms % 1000` is an
+ * ordinary number again. `/` is refused: JS would give a fraction, and the whole-number division is written
+ * Math.floor(a / b).
  */
 function emitArith64(node, l, r, env) {
   if (l.cType === 'float' || r.cType === 'float') throw mix64Error();
@@ -468,17 +497,28 @@ function emitArith64(node, l, r, env) {
       'AOT: `/` on a 64-bit time value is not supported',
       'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / b) for whole units — e.g. Math.floor(ms / 1000) for seconds.',
     );
+  const wide = !isTime64(l) && !isTime64(r);
   if (node.operator === '%') {
+    const k = staticInt(node.right, env);
+    // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
+    if (wide && k === 0) return {code: '0', cType: 'int'};
+    if (wide && k === null)
+      return {
+        code: `app_mod64(${l.code}, ${r.code})`,
+        cType: 'i64',
+        wide: true,
+      };
     const m = nonzeroDivisor(node.right, env);
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
     if (m === 1 || m === -1) return {code: '0', cType: 'int'};
     if (Math.abs(m) <= 0x7fffffff || l.cType === 'int')
       return {code: `((int)(${l.code} % ${r.code}))`, cType: 'int'};
-    return {code: `(${l.code} % ${r.code})`, cType: 'i64'};
+    return {code: `(${l.code} % ${r.code})`, cType: 'i64', wide};
   }
   return {
     code: `${CHECKED_OP[node.operator]}64(${l.code}, ${r.code})`,
     cType: 'i64',
+    wide,
   };
 }
 
@@ -521,10 +561,11 @@ const INT_ROUND_DIV = new Map([
 ]);
 
 /**
- * Math.floor / ceil / round / trunc over `a / b` with two ints, as exact integer division: the float path
- * rounds an operand past 2^24, so Math.floor(16777217 / 1) came out 16777216. A zero divisor keeps JS's answer
- * as app_f2i converts it (±Infinity saturates by the dividend's sign, 0 / 0 is 0), and INT_MIN / -1 saturates
- * too. Null for anything else, which leaves it to the float path.
+ * Math.floor / ceil / round / trunc over `a / b` with two whole numbers, as exact integer division: the float
+ * path rounds an operand past 2^24, so Math.floor(16777217 / 1) came out 16777216. A zero divisor keeps JS's
+ * answer as app_f2i converts it (±Infinity saturates by the dividend's sign, 0 / 0 is 0), and INT_MIN / -1
+ * saturates too. Beside a 64-bit value, or over whole-number math already widened to 64 bits, it divides in 64
+ * bits, since JS would not cut the operands to 32. Null for anything else, which leaves it to the float path.
  */
 function emitIntRoundDiv(fn, args, env) {
   const arg = args[0];
@@ -537,6 +578,15 @@ function emitIntRoundDiv(fn, args, env) {
     return null;
   const l = emitExprWide(arg.left, env);
   const r = emitExprWide(arg.right, env);
+  if (env.math64 || l.wide || r.wide) {
+    const whole = e => e.cType === 'int' || (e.cType === 'i64' && !isTime64(e));
+    if (!whole(l) || !whole(r)) return null;
+    return {
+      code: `${INT_ROUND_DIV.get(fn)}64(${l.code}, ${r.code})`,
+      cType: 'i64',
+      wide: true,
+    };
+  }
   if (l.cType !== 'int' || r.cType !== 'int') return null;
   return {
     code: `${INT_ROUND_DIV.get(fn)}(${l.code}, ${r.code})`,
@@ -548,16 +598,22 @@ function emitIntRoundDiv(fn, args, env) {
 function emitMath64(fn, a) {
   if (a.some(x => x.cType === 'float')) throw mix64Error();
   if (a.every(x => x.cType === 'int' || x.cType === 'i64')) {
+    // Whole-number math with no timestamp in it stays whole-number math.
+    const wide = !a.some(isTime64);
     // A timestamp is already whole, so rounding leaves it as it is.
     if (
       (fn === 'floor' || fn === 'round' || fn === 'ceil' || fn === 'trunc') &&
       a.length === 1
     )
-      return {code: a[0].code, cType: 'i64'};
+      return {code: a[0].code, cType: 'i64', wide};
     if (fn === 'abs' && a.length === 1)
-      return {code: `app_abs64(${a[0].code})`, cType: 'i64'};
+      return {code: `app_abs64(${a[0].code})`, cType: 'i64', wide};
     if ((fn === 'min' || fn === 'max') && a.length === 2)
-      return {code: `app_${fn}64(${a[0].code}, ${a[1].code})`, cType: 'i64'};
+      return {
+        code: `app_${fn}64(${a[0].code}, ${a[1].code})`,
+        cType: 'i64',
+        wide,
+      };
   }
   throw aotError(
     `AOT: Math.${fn}(...) on a 64-bit time value is not supported`,
@@ -566,8 +622,9 @@ function emitMath64(fn, a) {
 }
 
 function emitExprImpl(node, env) {
-  // 64-bit int math reaches only through `+ - *` and `-`; any other node under them is typed as usual.
-  if (env.math64 && !isIntArith(node)) env = {...env, math64: false};
+  // 64-bit int math reaches only through whole-number math (keepsMath64); any other node under it is typed as
+  // usual.
+  if (env.math64 && !keepsMath64(node)) env = {...env, math64: false};
   switch (node.type) {
     case 'NumericLiteral':
       return numConst(node.value);
@@ -612,10 +669,9 @@ function emitExprImpl(node, env) {
       // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
       if (node.operator === '-' && (a.cType === 'int' || a.cType === 'i64')) {
         const w = a.cType === 'i64' || env.math64;
-        return {
-          code: `app_neg${w ? '64' : ''}(${a.code})`,
-          cType: w ? 'i64' : 'int',
-        };
+        return w
+          ? {code: `app_neg64(${a.code})`, cType: 'i64', wide: !isTime64(a)}
+          : {code: `app_neg(${a.code})`, cType: 'int'};
       }
       // Parenthesize the operand so `-` on a negative operand emits `(-(-x))`, not `(--x)` (a decrement).
       if (
@@ -647,11 +703,11 @@ function emitExprImpl(node, env) {
         );
       let l = emitExprWide(node.left, env);
       let r = emitExprWide(node.right, env);
-      // Beside a 64-bit value, int `+ - *` is worked out in 64 bits too: JS would not have cut it to 32.
+      // Beside a 64-bit value, whole-number int math is worked out in 64 bits too: JS would not have cut it to 32.
       if (l.cType === 'i64' || r.cType === 'i64') {
-        if (l.cType === 'int' && isIntArith(node.left))
+        if (l.cType === 'int' && keepsMath64(node.left))
           l = emitExprWide(node.left, {...env, math64: true});
-        if (r.cType === 'int' && isIntArith(node.right))
+        if (r.cType === 'int' && keepsMath64(node.right))
           r = emitExprWide(node.right, {...env, math64: true});
       }
       [l, r] = litPeers(l, r);
@@ -689,7 +745,7 @@ function emitExprImpl(node, env) {
         const fn = cType === 'int' && CHECKED_OP[node.operator];
         if (fn)
           return env.math64
-            ? {code: `${fn}64(${l.code}, ${r.code})`, cType: 'i64'}
+            ? {code: `${fn}64(${l.code}, ${r.code})`, cType: 'i64', wide: true}
             : {code: `${fn}(${l.code}, ${r.code})`, cType: 'int'};
         // JS gives NaN for `x % 0` (0 here, as a float would convert), and C overflows on INT_MIN % -1, whose
         // answer is 0. A constant divisor other than those two needs no check.
@@ -967,6 +1023,19 @@ function emitExprImpl(node, env) {
         if (intDiv) return intDiv;
         const a = litPeers(...node.arguments.map(x => emitExprWide(x, env)));
         if (a.some(x => x.cType === 'i64')) return emitMath64(fn, a);
+        // Math.abs / min / max of ints stay whole, as rounding one does: through a float they rounded past 2^24
+        // and printed as %g. Beside a 64-bit value |INT_MIN| is kept, as JS keeps it.
+        if (a.length && a.every(x => x.cType === 'int')) {
+          if (fn === 'abs' && a.length === 1)
+            return env.math64
+              ? {code: `app_abs64(${a[0].code})`, cType: 'i64', wide: true}
+              : {code: `app_abs(${a[0].code})`, cType: 'int'};
+          if ((fn === 'min' || fn === 'max') && a.length === 2)
+            return {
+              code: `app_${fn}(${a[0].code}, ${a[1].code})`,
+              cType: 'int',
+            };
+        }
         // An int is already whole; app_f2i truncates a float toward zero, with NaN as 0 and the int range
         // saturated, which is Math.trunc kept as an int.
         if (fn === 'trunc' && a.length === 1)
@@ -7564,6 +7633,19 @@ static int16_t app_round_dim(double v)
         'static int app_mod(int a, int b)\n{\n    return (b == 0 || b == -1) ? 0 : a % b;\n}',
     ],
     [
+      'app_abs',
+      '/* Math.abs of an int, saturated: -INT_MIN does not fit an int. */\n' +
+        'static int app_abs(int v)\n{\n    return v >= 0 ? v : v == INT_MIN ? INT_MAX : -v;\n}',
+    ],
+    [
+      'app_min',
+      'static int app_min(int a, int b)\n{\n    return a < b ? a : b;\n}',
+    ],
+    [
+      'app_max',
+      'static int app_max(int a, int b)\n{\n    return a > b ? a : b;\n}',
+    ],
+    [
       'app_div',
       '/* a / b as JS computes it, kept whole: truncated toward zero, and saturated where JS gives +-Infinity\n' +
         '   (b == 0) or a result past the int range (INT_MIN / -1). 0 / 0 is NaN, which is 0. */\n' +
@@ -7678,10 +7760,47 @@ static int16_t app_round_dim(double v)
     ],
     [
       'app_floordiv64',
-      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. b is a\n" +
-        '   nonzero constant other than -1, which the compiler lowers to a negation; it refuses any other divisor. */\n' +
+      "/* Math.floor(a / b) in whole numbers: C's `/` rounds toward zero where floor rounds down. JS gives\n" +
+        '   +-Infinity for b == 0, which saturates by the sign of a (0 / 0 is NaN, which is 0), and INT64_MIN / -1\n' +
+        '   is past the range, so it saturates too. */\n' +
         'static int64_t app_floordiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
         '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;\n}',
+    ],
+    [
+      'app_ceildiv64',
+      '/* Math.ceil(a / b) in whole numbers, with the zero divisor and INT64_MIN / -1 as app_floordiv64 has them. */\n' +
+        'static int64_t app_ceildiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    const int64_t q = a / b;\n    return (a % b != 0 && (a < 0) == (b < 0)) ? q + 1 : q;\n}',
+    ],
+    [
+      'app_rounddiv64',
+      '/* Math.round(a / b) in whole numbers, halves up as JS rounds: floor(a / b), plus one when what is left is at\n' +
+        '   least half of b. Nothing is doubled, which could overflow; the zero divisor and INT64_MIN / -1 go as in\n' +
+        '   app_floordiv64. */\n' +
+        'static int64_t app_rounddiv64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    int64_t q = a / b;\n    int64_t r = a % b;\n' +
+        '    if (r != 0 && (r < 0) != (b < 0))\n    {\n        q -= 1;\n        r += b;\n    }\n' +
+        '    return (b > 0 ? r >= b - r : r <= b - r) ? q + 1 : q;\n}',
+    ],
+    [
+      'app_div64',
+      '/* Math.trunc(a / b) in whole numbers, with the zero divisor and INT64_MIN / -1 as app_floordiv64 has them. */\n' +
+        'static int64_t app_div64(int64_t a, int64_t b)\n{\n' +
+        '    if (b == 0)\n    {\n        return a > 0 ? INT64_MAX : a < 0 ? INT64_MIN : 0;\n    }\n' +
+        '    if (b == -1)\n    {\n        return a == INT64_MIN ? INT64_MAX : -a;\n    }\n' +
+        '    return a / b;\n}',
+    ],
+    [
+      'app_mod64',
+      "/* a % b in whole numbers, as JS computes it: the remainder has the dividend's sign, as in C. JS gives NaN\n" +
+        '   for b == 0, which is 0 here, and INT64_MIN % -1 is 0, where C would overflow. */\n' +
+        'static int64_t app_mod64(int64_t a, int64_t b)\n{\n    return (b == 0 || b == -1) ? 0 : a % b;\n}',
     ],
     [
       'app_abs64',
