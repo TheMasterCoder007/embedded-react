@@ -12,6 +12,14 @@ See the README for the release process.
 ## [Unreleased]
 ### Added
 
+- The ESP32-S3 example has a Wi-Fi build (`sdkconfig.defaults.wifi`). The thermostat's settings get a Wi-Fi
+  page (scan, pick a network, type its password on the on-screen keyboard) and a time-zone picker, both
+  saved on the board, and its clock sets itself over NTP. Wi-Fi is a build of its own because it needs
+  internal RAM the board is short of, which it takes from the main task's stack headroom.
+
+- `ErRuntimeConfig.install_host_globals` gives a host's own JS globals to every context the app runs in,
+  including the fresh one after `er_runtime_reset`, before any app code runs.
+
 - `Date.now()` and `performance.now()` now compile in Flow B, with the same surface as Flow A's lite
   profile. The generated C holds them as 64-bit whole milliseconds, so divide them by a constant with
   `%` or `Math.floor`/`ceil`/`round`/`trunc(a / b)`; a host sets the real time with
@@ -27,6 +35,14 @@ See the README for the release process.
   ranked by measurement instead of by reading the code.
 
 ### Changed
+
+- A Modal with an opaque `backdropColor` no longer redraws the screen it hides each time something in it
+  changes, such as a list scrolling inside a settings sheet.
+
+- The ESP32-S3 example keeps the QuickJS bridge's tables in PSRAM, which frees 22 KB of internal RAM at
+  no measurable cost per frame, and compiles in the on-screen keyboard, so a `TextInput` works on its
+  touch panel. Its JS stack guard is now three quarters of the main task stack, so changing the stack size
+  no longer means changing the guard either.
 
 - CI now runs the QuickJS runtime tests, from source and as bytecode, against both of the bridge job's
   Linux builds (the native and the bare-metal allocator); they had only ever run locally. `ER_BRIDGE_BUILD_DIR` 
@@ -69,6 +85,13 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- In Flow A, `<Modal backdropColor>` now works as a prop, as it already did in Flow B. Flow A read it only
+  from the style and silently dropped the prop, so the thermostat's settings sheet had the default
+  see-through dim instead of its solid backdrop.
+
+- Dragging a scrollable list no longer presses the row the drag started on when you let go. Once the
+  ScrollView (or a pan) takes the gesture, the row gets its press-out and no press, as in React Native.
 
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so

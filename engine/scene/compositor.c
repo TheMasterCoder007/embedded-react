@@ -1993,6 +1993,34 @@ static int edge_opaque_inset(int border_w, uint32_t border_c, int radius)
     return band > radius ? band : radius;
 }
 
+/* A Modal's backdrop when it sets none (backdrop_color 0, er_scene.h): a translucent dim. */
+#define ER_MODAL_DEFAULT_BACKDROP 0x99000000U
+
+/**
+ * @brief Whether a shown Modal's backdrop paints every pixel of a screen rect at full alpha.
+ *
+ * The backdrop fills the whole root before anything of the Modal's own, so when it is opaque everything
+ * painted before the Modal is overwritten: a settings sheet over a busy screen then repaints only itself,
+ * not the screen it hides. A translucent backdrop hides nothing.
+ *
+ * @param[in] m            Modal node.
+ * @param[in] rx,ry,rw,rh  Screen rect to test coverage of.
+ *
+ * @return true when the rect lies inside the root and the backdrop is opaque.
+ */
+static bool modal_backdrop_covers(const ERNode* m, int rx, int ry, int rw, int rh)
+{
+    const uint32_t bd = m->modal_backdrop_color ? m->modal_backdrop_color : ER_MODAL_DEFAULT_BACKDROP;
+    if (!m->modal_visible || m->props.view.opacity != 255U || (bd >> 24) != 0xFFU)
+        return false;
+    const ERNode* root = er_get_root_node();
+    if (!root)
+        return false;
+    const int x0 = (int)root->computed.x;
+    const int y0 = (int)root->computed.y;
+    return rx >= x0 && ry >= y0 && rx + rw <= x0 + (int)root->computed.w && ry + rh <= y0 + (int)root->computed.h;
+}
+
 /**
  * @brief Whether a node's own background paints every pixel of a screen rect at full alpha.
  *
@@ -2037,8 +2065,10 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
         case ER_NODE_PRESSABLE:
         case ER_NODE_FLAT_LIST:
             break;
+        case ER_NODE_MODAL:
+            return modal_backdrop_covers(c, rx, ry, rw, rh); /* its backdrop, not its box */
         default:
-            return false; /* Text/Image/Vector/Arc/Switch leave gaps; Modal paints past its own box. */
+            return false; /* Text/Image/Vector/Arc/Switch leave gaps. */
     }
 
     const ERViewProps* vp = &c->props.view;
@@ -2559,7 +2589,7 @@ static void render_node_content(
                 ERNode* root = er_get_root_node();
                 if (root)
                 {
-                    const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
+                    const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : ER_MODAL_DEFAULT_BACKDROP;
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
                     n->modal_scrim_shown = 1U;
                 }

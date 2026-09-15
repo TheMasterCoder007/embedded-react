@@ -29,8 +29,8 @@
  * This is what lets embedded-react drop into any firmware with a few lines of glue:
  *
  *     ErRuntimeConfig cfg = { .screen_width = W, .screen_height = H, .log = my_log };
+ *     // (optional) cfg.install_host_globals = my_bindings;   // custom device-API globals
  *     er_runtime_init(&cfg);
- *     // (optional) install custom device-API globals on er_runtime_context()
  *     er_register_assets();                 // baked images/fonts (or load a pack)
  *     er_runtime_load_bytecode(qbc, len);   // your app — a pointer into flash/RAM
  *     for (;;) { er_runtime_pump(); er_commit(); my_present(); embedded_renderer_tick(dt); }
@@ -143,6 +143,10 @@ typedef struct
                                                 it yourself. */
     uint32_t extra_intrinsics;                 /**< ER_JS_INTRINSIC_* flags for features beyond the lite profile;
                                                 0 = the lite set only (what the React runtime needs). */
+    /** Installs the host's own globals (device-API bindings) into every context the app runs in: the one
+        er_runtime_init creates and each one er_runtime_reset replaces it with. Runs after the runtime's
+        globals and before any app code. NULL = none. */
+    void (*install_host_globals)(JSContext* ctx);
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -176,10 +180,10 @@ bool er_runtime_init(const ErRuntimeConfig* cfg);
 JSContext* er_js_new_context(JSRuntime* rt, uint32_t extra_intrinsics);
 
 /**
- * @brief Returns the live QuickJS context, for installing custom globals (e.g. device-API bindings).
+ * @brief Returns the live QuickJS context.
  *
- * Valid after er_runtime_init; the pointer changes across er_runtime_reset, so re-install any custom
- * globals after a reset.
+ * Valid after er_runtime_init; the pointer changes across er_runtime_reset. Install custom globals
+ * (device-API bindings) through ErRuntimeConfig.install_host_globals, which runs on every new context.
  *
  * @return The current JSContext, or NULL before init / after shutdown.
  */

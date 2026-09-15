@@ -78,6 +78,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_FADE_CACHE_H=480
     ERUI_FONT_POOL_BYTES=0
     ERUI_MAX_IMG_ROW_PIXELS=800
+    ERUI_ONSCREEN_KEYBOARD=1
 )
 
 # Vector (SVG) pools — PRIVATE (internal to vector.c / vector_store.c; no public struct impact). NOTE: the

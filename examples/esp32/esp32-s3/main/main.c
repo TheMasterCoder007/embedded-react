@@ -24,7 +24,8 @@
  * carries its own assets (images + fonts), so they are NOT compiled in. No config / a corrupt or
  * version-incompatible one paints an on-screen "Couldn't load config" panel and the loop keeps running
  * (so it stays visible), exactly like the desktop. If the panel fails to init, a no-op backend keeps
- * the JS stack running and logging over UART.
+ * the JS stack running and logging over UART. Built with CONFIG_ER_WIFI, it also runs a WiFi station the
+ * app can point at a network, and sets the app's Date.now() over SNTP (network.c).
  *
  * Flash a config to the 'config' partition separately from the firmware (see ../README.md):
  *   parttool.py write_partition --partition-name=config \
@@ -54,6 +55,12 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#if CONFIG_ER_WIFI
+#include "network.h"    /* WiFi station + SNTP: the real time for Date.now() */
+#include "network_js.h" /* the app's __erWifi / __erClock */
+#endif
+#include "freertos/idf_additions.h" /* xTaskCreatePinnedToCoreWithCaps */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -104,10 +111,12 @@ static void remap_touch(int* x, int* y)
     }
 }
 
-/* QuickJS stack-overflow guard. Kept below the main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE,
-   set large in sdkconfig.defaults) so deep React/QuickJS recursion is caught before it corrupts the
-   FreeRTOS task stack. Tune together with the task stack size if you hit "stack overflow" from JS. */
-#define ER_JS_MAX_STACK (48 * 1024)
+/* QuickJS stack-overflow guard: three quarters of the main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE),
+   so deep React/QuickJS recursion is caught before it corrupts the FreeRTOS task stack. The last quarter
+   holds what run_app has already used and the C frames under the deepest JS call. The default build's
+   64 KB stack gives 48 KB; the WiFi build's smaller one scales it down. Raise the task stack if you hit
+   "stack overflow" from JS. */
+#define ER_JS_MAX_STACK (CONFIG_ESP_MAIN_TASK_STACK_SIZE / 4 * 3)
 
 /* Hard cap on the JS heap (all of it lives in PSRAM via er_js_mf). A runaway app fails with a JS
    out-of-memory error — caught and shown by the error overlay — instead of exhausting the PSRAM the
@@ -395,6 +404,14 @@ static bool load_config_partition(ErContainerStatus* out_status)
 static TaskHandle_t s_render_worker;
 static SemaphoreHandle_t s_render_worker_done;
 
+/* Where the worker's stack lives. A WiFi build puts it in PSRAM, which frees the 24 KB of internal RAM WiFi
+   is otherwise short of; the worker never touches flash, so a PSRAM stack is safe for it. */
+#if CONFIG_ER_WIFI
+#define ER_WORKER_STACK_CAPS MALLOC_CAP_SPIRAM
+#else
+#define ER_WORKER_STACK_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#endif
+
 static void render_worker_main(void* arg)
 {
     (void)arg;
@@ -439,7 +456,9 @@ static void install_render_workers(void)
      * 12 KB measurably overflowed on the banded-fade pages. */
     s_render_worker_done = xSemaphoreCreateBinary();
     if (!s_render_worker_done
-        || xTaskCreatePinnedToCore(render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1) != pdPASS)
+        || xTaskCreatePinnedToCoreWithCaps(
+               render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1, ER_WORKER_STACK_CAPS)
+               != pdPASS)
     {
         if (s_render_worker_done)
         {
@@ -546,6 +565,9 @@ static void run_app(void)
         .max_stack_size = ER_JS_MAX_STACK,
         .memory_limit = ER_JS_MEMORY_LIMIT,
         .gc_threshold = ER_JS_GC_THRESHOLD,
+#if CONFIG_ER_WIFI
+        .install_host_globals = network_js_install, /* __erWifi / __erClock, on every context */
+#endif
     };
     if (!er_runtime_init(&rt_cfg))
     {
@@ -599,6 +621,19 @@ static void run_app(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
+#if CONFIG_ER_WIFI
+    /* Last, so the panel and the app have had their internal RAM: Wi-Fi runs on what is left. */
+    const size_t int_before_wifi = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (network_start())
+    {
+        ESP_LOGI(TAG,
+                 "wifi up: free internal %u -> %u, free PSRAM %u",
+                 (unsigned)int_before_wifi,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    }
+#endif
+
     /* Frame loop: poll touch, pump JS (promises + timers), commit, present, advance animations. */
     uint32_t prev = now_ms();
     uint32_t frame = 0;
@@ -636,6 +671,16 @@ static void run_app(void)
            reset/load never races the RX task. The old app keeps running until this swaps it in — no
            teardown beforehand. No-op on frames with nothing pending. */
         er_hotreload_usb_pump();
+#endif
+
+#if CONFIG_ER_WIFI
+        /* Saves a network that just connected; on an NTP sync, anchors Date.now() to it, here on the task
+           that owns the runtime. */
+        int64_t epoch_ms = 0;
+        if (network_poll(&epoch_ms))
+        {
+            er_runtime_set_wall_clock(epoch_ms);
+        }
 #endif
 
         const int64_t frame_start_us = esp_timer_get_time();

@@ -1,0 +1,17 @@
+menu "embedded-react: WiFi"
+
+    config ER_WIFI
+        bool "WiFi: a network menu for the app, and the clock over SNTP"
+        default n
+        help
+            Runs a WiFi station the app can scan with and point at a network (the thermostat's settings
+            sheet does), saves the network and the time zone in NVS, and keeps the app's Date.now() on an
+            NTP server (main/network.c). Off by default: WiFi takes internal RAM this board has little of
+            (see the README's "WiFi" section).
+
+    config ER_SNTP_SERVER
+        string "NTP server"
+        depends on ER_WIFI
+        default "pool.ntp.org"
+
+endmenu

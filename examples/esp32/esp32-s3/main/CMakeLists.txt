@@ -25,12 +25,20 @@ if(ER_HOTRELOAD)
     list(APPEND host_srcs "hotreload_usb.c")
 endif()
 
+# WiFi: a station the app points at a network, plus SNTP for its clock (menuconfig → "embedded-react:
+# WiFi"; off by default). The WiFi stack links in only with these sources, so a build without them pays
+# none of its RAM.
+if(CONFIG_ER_WIFI)
+    list(APPEND host_srcs "network.c" "network_js.c")
+endif()
+
 idf_component_register(
     SRCS ${host_srcs}
     INCLUDE_DIRS "."
     REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
              esp_partition spi_flash esp_driver_usb_serial_jtag
+             esp_wifi esp_netif esp_event nvs_flash
 )
 
 # Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side

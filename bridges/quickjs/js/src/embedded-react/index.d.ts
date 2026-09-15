@@ -539,8 +539,8 @@ export interface ActivityIndicatorProps extends TouchEventProps {
 export interface ModalProps extends TouchEventProps {
   style?: StyleProp<ModalStyle>;
   children?: ReactNode;
-  /** Shows or hides the modal. Unlike other components this does not mean style `display`. */
   visible?: boolean;
+  backdropColor?: string;
   ref?: Ref<NodeHandle>;
 }
 

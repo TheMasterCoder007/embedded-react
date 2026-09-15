@@ -1,8 +1,11 @@
-# ESP-IDF build output + generated config
+# ESP-IDF build output + generated config (the WiFi build has its own, see README "WiFi")
 /build/
+/build-wifi/
 sdkconfig
 sdkconfig.old
 sdkconfig.ci
+sdkconfig.wifi
+sdkconfig.wifi.old
 
 # Build/flash logs (from idf.py wrapper runs)
 *.log

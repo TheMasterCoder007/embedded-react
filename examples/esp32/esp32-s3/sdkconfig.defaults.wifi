@@ -1,0 +1,30 @@
+# The WiFi build (CONFIG_ER_WIFI, see README "WiFi"), layered over sdkconfig.defaults in a build of its own
+# so the default build keeps its stack headroom:
+#   idf.py -B build-wifi -D SDKCONFIG=sdkconfig.wifi \
+#       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi" build flash
+CONFIG_ER_WIFI=y
+
+# WiFi takes about 36 KB of internal RAM, and this board has none to spare (the panel's DMA buffers, the
+# engine's hot pools and the JS stack hold it). The main task stack gives it back: it peaked at 28 KB of
+# 64 KB with the thermostat, the WiFi pages and the keyboard in use, and the JS stack guard in main.c
+# scales down with it (27 KB here).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=36864
+
+# WiFi and lwIP allocate from PSRAM first, and the driver's speed-ups stay out of IRAM, which shares the
+# internal SRAM with DRAM. A scan and an NTP sync need no throughput.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+
+# The driver's static buffers are internal DMA RAM whatever PSRAM-first says, about 1.6 KB each, so keep
+# them few (PSRAM-first makes the TX ones static too). Aggregation would want more of them.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+
+# WiFi keeps nothing of its own in NVS and the PHY calibrates at every boot, so the only flash writes are
+# the app saving a network or a time zone: a flash write suspends the cache the panel reads its PSRAM
+# framebuffer through.
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE=n

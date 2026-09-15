@@ -206,6 +206,57 @@ Notes / limits:
 - **Dev loop only.** Hot reload is for development; ship a release by packing once and flashing the
   `config` partition (above).
 
+## WiFi
+
+> **A build of its own.** WiFi needs internal RAM this board is short of, and making room takes most of
+> the main task's stack headroom (see *What it costs*), so the default build leaves it out.
+
+The WiFi build runs a station the app can scan with and point at a network, saves the network and the
+time zone in NVS, and keeps the app's `Date.now()` on an NTP server. In the thermostat, the settings sheet
+gets a **WI-FI** page (scan, pick a network, type its password on the on-screen keyboard; it is saved once
+it connects) and a **TIME ZONE** page, and the header clock sets itself. Build and flash it in its own
+build directory and config, with `sdkconfig.defaults.wifi` layered over the defaults (plain `idf.py` keeps
+building the default firmware):
+
+```bash
+idf.py -B build-wifi -D SDKCONFIG=sdkconfig.wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi" build flash
+```
+
+Pass the same arguments to every `idf.py` command for this build (`… -p <PORT> monitor`, `… menuconfig`).
+
+The NTP server is `CONFIG_ER_SNTP_SERVER` (menuconfig → **embedded-react: WiFi**, default `pool.ntp.org`).
+SNTP resyncs hourly and after every reconnection.
+
+**How it reaches the app.** `main/network.c` runs the station and SNTP on their own tasks. The frame loop
+saves a network once it connects and, on each sync, calls `er_runtime_set_wall_clock()`, so `Date.now()`
+is UTC. `main/network_js.c` gives every JS context two objects through
+`ErRuntimeConfig.install_host_globals`: `__erWifi` (`scan`, `networks`, `connect`, `forget`, `status`)
+and `__erClock` (`utcOffsetMs`, `timeZone`, `setTimeZone`). The lite JS profile has no `Date` objects, so
+the thermostat takes `__erClock.utcOffsetMs()` as its clock's offset; a time zone is a POSIX TZ string,
+daylight-saving rule included, picked from the list in the demo's `components/network.jsx`. Where the
+objects are absent (the simulator, other boards), the sheet leaves the pages out and the clock is set by
+hand.
+
+**What it costs**, measured on the board with the thermostat idle:
+- Internal RAM: WiFi takes 36 KB once it is up, leaving 16 KB once it has joined a network; a scan and a
+  join never took it below 5.8 KB. Linking it in accounts for 18.7 KB of that, nearly all PHY and driver
+  code and data that have to sit in internal RAM. To make room, the WiFi build shrinks the main task stack
+  from 64 to 36 KB, moves the core-1 render worker's 24 KB stack to PSRAM, and keeps WiFi's static buffers
+  to four each way. Every build keeps the QuickJS bridge's tables (22 KB) in PSRAM, which costs nothing
+  measurable.
+- Stack headroom: the main task stack peaked at 27.8 KB with the thermostat, the WiFi pages and the
+  keyboard in use, leaving 9 KB, and the JS stack guard is 27 KB instead of 48. An app that recurses
+  deeper gets a JS "stack overflow" error; raising `CONFIG_ESP_MAIN_TASK_STACK_SIZE` fixes that at the
+  cost of WiFi's margin. Halving the CPU data cache also makes room, but made every idle frame about a
+  fifth slower.
+- Frame time: against the default build, an idle frame's commit goes from 2.34 to 2.38 ms and its present
+  from 0.87 to 1.03 ms.
+- Flash: the app image grows by about 610 KB (the factory partition is 3 MB). WiFi itself writes nothing
+  to flash: the PHY calibrates at every boot, and the only writes are the app saving a network or a time
+  zone.
+- The saved password is stored unencrypted in NVS, and the password field shows what you type
+  (`TextInput` has no masking yet).
+
 ## Known tuning points / gotchas
 
 - **Host must be present.** The engine never auto-presents — `er_commit()` only paints into the backend
@@ -224,8 +275,9 @@ Notes / limits:
   (`0x814F`), so reading from `0x8150` gives x/y directly (an off-by-one here yields wild coords). If
   taps land in the wrong place, dump the raw point bytes and check for an axis swap/mirror.
 - **Task stack.** QuickJS + the React reconciler recurse deeply. The main task stack is bumped to
-  64 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) and `JS_SetMaxStackSize` to 48 KB. If you see a JS
-  "stack overflow" or a FreeRTOS stack-overflow panic, raise both together.
+  64 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`; 36 KB in the WiFi build), and `JS_SetMaxStackSize` gets three
+  quarters of it. If you see a JS "stack overflow" or a FreeRTOS stack-overflow panic, raise the task
+  stack.
 - **PSRAM mode.** Defaults assume **octal** PSRAM at 80 MHz (this board). A quad-PSRAM board needs
   `CONFIG_SPIRAM_MODE_QUAD`.
 - **Boot bytecode parse.** `JS_ReadObject` of ~940 KB takes a moment on first boot; that's the

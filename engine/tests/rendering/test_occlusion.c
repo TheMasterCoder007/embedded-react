@@ -184,9 +184,9 @@ static int fail(const char* msg)
  * @brief Builds root → [deep → inner, cover, top].
  *
  * `deep` and `inner` sit under `cover`; `top` is painted after it. The caller supplies cover's
- * props so each test can vary exactly one thing about the would-be occluder.
+ * type and props so each test can vary exactly one thing about the would-be occluder.
  */
-static void build(const ERProps* cover_props, ERNode** out_inner, ERNode** out_cover)
+static void build_as(ERNodeType cover_type, const ERProps* cover_props, ERNode** out_inner, ERNode** out_cover)
 {
     er_reset();
 
@@ -204,7 +204,7 @@ static void build(const ERProps* cover_props, ERNode** out_inner, ERNode** out_c
     er_node_set_props(inner, &ip);
     er_tree_append_child(deep, inner);
 
-    ERNode* cover = er_node_create(ER_NODE_VIEW);
+    ERNode* cover = er_node_create(cover_type);
     er_node_set_props(cover, cover_props);
 
     ERNode* top = er_node_create(ER_NODE_VIEW);
@@ -220,6 +220,12 @@ static void build(const ERProps* cover_props, ERNode** out_inner, ERNode** out_c
         *out_inner = inner;
     if (out_cover)
         *out_cover = cover;
+}
+
+/** @brief build_as() with a View as the would-be occluder. */
+static void build(const ERProps* cover_props, ERNode** out_inner, ERNode** out_cover)
+{
+    build_as(ER_NODE_VIEW, cover_props, out_inner, out_cover);
 }
 
 /** @brief Renders one full frame with a clean fill log. */
@@ -270,6 +276,41 @@ static int check_translucent_cover_does_not_cull(void)
 
     if (!drew(C_DEEP) || !drew(C_INNER))
         return fail("buried subtree skipped under a TRANSLUCENT cover");
+    return EXIT_SUCCESS;
+}
+
+/* A shown Modal's backdrop fills the whole root, whatever the Modal's own box. When it is opaque it hides
+ * everything painted before the Modal, so a sheet over a busy screen repaints only itself; the default
+ * translucent dim hides nothing. */
+static int check_modal_backdrop(void)
+{
+    for (int opaque = 1; opaque >= 0; opaque--)
+    {
+        ERProps mp = box(60, 60, 80, 80, C_COVER); /* the sheet: far from full-screen */
+        mp.modal_visible = 1;
+        mp.backdrop_color = opaque ? 0xFF000000U : 0U; /* 0 is the default translucent dim */
+        build_as(ER_NODE_MODAL, &mp, NULL, NULL);
+        full_frame();
+
+        if (!drew(C_COVER) || !drew(C_TOP))
+            return fail("the modal's own box or the sibling above it did not draw");
+        if (!opaque)
+        {
+            if (!drew(C_DEEP) || !drew(C_INNER))
+                return fail("the screen under a TRANSLUCENT modal backdrop was skipped");
+            continue;
+        }
+        if (!drew(0xFF000000U))
+            return fail("the opaque modal backdrop did not draw");
+#if ERUI_OCCLUSION_CULLING
+        if (drew(C_ROOT) || drew(C_DEEP) || drew(C_INNER))
+            return fail("the screen under an opaque modal backdrop was drawn");
+#endif
+        if ((s_fb[10 * SCREEN + 10] & 0x00FFFFFFU) != 0U)
+            return fail("the backdrop does not cover the screen outside the modal's box");
+        if ((s_fb[100 * SCREEN + 100] & 0x00FFFFFFU) != (C_COVER & 0x00FFFFFFU))
+            return fail("the modal's own box did not land on screen");
+    }
     return EXIT_SUCCESS;
 }
 
@@ -446,6 +487,7 @@ int main(void)
     int (*const cases[])(void) = {
         check_opaque_cover_culls,
         check_translucent_cover_does_not_cull,
+        check_modal_backdrop,
         check_rounded_cover_does_not_cull,
         check_partial_cover_does_not_cull,
         check_buried_change_retires,

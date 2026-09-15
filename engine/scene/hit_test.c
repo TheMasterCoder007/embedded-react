@@ -828,6 +828,29 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
 }
 
 /**
+ * @brief Ends the press a gesture began as, once a move hands the gesture to a responder: its press-in gets
+ *        a press-out now, and releasing presses nothing, so scrolling a list never taps the row it started on.
+ *
+ * @param[in] touch  The finger's state.
+ * @param[in] x,y    Where the finger is.
+ */
+static void cancel_press(ERTouchState* touch, int x, int y)
+{
+    ERNode* press_target = er_get_node(touch->press_target_tag);
+    if (press_target && touch->inside)
+        dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
+    touch->press_target_tag = ER_INVALID_TAG;
+    touch->inside = false;
+    touch->long_press_cancelled = true;
+}
+
+/** @brief Whether a ScrollView's content is larger than its viewport, so a drag can move it. */
+static bool scroll_view_can_scroll(const ERNode* sv)
+{
+    return sv->scroll_content_h > sv->computed.h || sv->scroll_content_w > sv->computed.w;
+}
+
+/**
  * @brief Maps a screen point into an Arc's own coordinate space (ancestor scroll, then its transform).
  *
  * Every native-drag geometry query goes through this, so the ring hit test, the end latch and the value
@@ -1288,6 +1311,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                         }
                         terminate_responder_if_active(touch, &rdata);
                         grant_responder(touch, claimant, &rdata);
+                        /* The gesture is the claimant's now, not a tap on what the finger started on. */
+                        if (claimant != press_target)
+                            cancel_press(touch, x, y);
                     }
                     else
                     {
@@ -1306,7 +1332,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 {
                     ERNode* sv = find_scroll_view_ancestor(touch_target);
                     if (sv)
+                    {
                         grant_responder(touch, sv, &rdata);
+                        /* A scroller that can move takes the drag as a scroll, so releasing must not press
+                           the row it started on. One whose content fits leaves a jittery tap a tap. */
+                        if (scroll_view_can_scroll(sv))
+                            cancel_press(touch, x, y);
+                    }
                 }
             }
 

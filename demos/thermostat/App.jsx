@@ -20,6 +20,12 @@ import cogIcon from './assets/cog.png';
 import {ThermoDial} from './components/dial.jsx';
 import {WeatherPanel} from './components/weather.jsx';
 import {HeaderClock, ClockSetter} from './components/clock.jsx';
+import {
+  HAS_NETWORK,
+  NetworkRows,
+  WifiPage,
+  ZonePage,
+} from './components/network.jsx';
 
 // Thermostat — one app, three layouts chosen from the panel size:
 //
@@ -257,6 +263,7 @@ const STEP_RIGHT = {};
 const SEG = {};
 const SEG_TEXT = {};
 const SHEET_STYLE = {};
+const SHEET_WIDE_STYLE = {}; // with the network column beside the rest
 for (const t of ['dark', 'light']) {
   const th = THEMES[t];
   STEP_LEFT[t] = {
@@ -295,6 +302,7 @@ for (const t of ['dark', 'light']) {
     padding: 22,
     gap: 20,
   };
+  SHEET_WIDE_STYLE[t] = {...SHEET_STYLE[t], width: 664};
 }
 
 const CogButton = memo(function CogButton({onPress}) {
@@ -349,6 +357,18 @@ const ModeButton = memo(function ModeButton({item, on, themeName, onSelect}) {
   );
 });
 
+// The sheet's body: one column, or with network settings a second one beside it, since the sheet is too
+// short for both stacked on an 800x480 panel.
+function Columns({wide, side, children}) {
+  if (!wide) return children;
+  return (
+    <View style={{flexDirection: 'row', gap: 28}}>
+      <View style={{width: 296, gap: 20}}>{children}</View>
+      <View style={{width: 296}}>{side}</View>
+    </View>
+  );
+}
+
 // The sheet stays mounted (Modal only toggles its display), so without memo its ~20 nodes reconciled on
 // every mode switch even while hidden.
 const SettingsSheet = memo(function SettingsSheet({
@@ -362,9 +382,26 @@ const SettingsSheet = memo(function SettingsSheet({
   const th = THEMES[themeName];
   const sg = SEG[themeName];
   const st = SEG_TEXT[themeName];
+  // The Wi-Fi and time-zone pages take the sheet's place while one is open.
+  const [page, setPage] = useState(null);
+  const back = useCallback(() => setPage(null), []);
+  if (page) {
+    return (
+      <Modal visible={visible} backdropColor={th.scrim} style={OVERLAY}>
+        {page === 'wifi' ? (
+          <WifiPage theme={th} onDone={back} />
+        ) : (
+          <ZonePage theme={th} onDone={back} />
+        )}
+      </Modal>
+    );
+  }
   return (
     <Modal visible={visible} backdropColor={th.scrim} style={OVERLAY}>
-      <View style={SHEET_STYLE[themeName]}>
+      <View
+        style={
+          HAS_NETWORK ? SHEET_WIDE_STYLE[themeName] : SHEET_STYLE[themeName]
+        }>
         <View
           style={{
             flexDirection: 'row',
@@ -385,43 +422,49 @@ const SettingsSheet = memo(function SettingsSheet({
           </Pressable>
         </View>
 
-        <View style={{gap: 9}}>
-          <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
-            THEME
-          </Text>
-          <View style={{flexDirection: 'row', gap: 4}}>
-            <Pressable
-              onPress={() => onTheme('dark')}
-              style={themeName === 'dark' ? sg.on : sg.off}>
-              <Text style={themeName === 'dark' ? st.on : st.off}>DARK</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => onTheme('light')}
-              style={themeName === 'light' ? sg.on : sg.off}>
-              <Text style={themeName === 'light' ? st.on : st.off}>LIGHT</Text>
-            </Pressable>
+        <Columns
+          wide={HAS_NETWORK}
+          side={<NetworkRows theme={th} onOpen={setPage} />}>
+          <View style={{gap: 9}}>
+            <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
+              THEME
+            </Text>
+            <View style={{flexDirection: 'row', gap: 4}}>
+              <Pressable
+                onPress={() => onTheme('dark')}
+                style={themeName === 'dark' ? sg.on : sg.off}>
+                <Text style={themeName === 'dark' ? st.on : st.off}>DARK</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => onTheme('light')}
+                style={themeName === 'light' ? sg.on : sg.off}>
+                <Text style={themeName === 'light' ? st.on : st.off}>
+                  LIGHT
+                </Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
 
-        <View style={{gap: 9}}>
-          <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
-            UNITS
-          </Text>
-          <View style={{flexDirection: 'row', gap: 4}}>
-            <Pressable
-              onPress={() => onUnit('F')}
-              style={unit === 'F' ? sg.on : sg.off}>
-              <Text style={unit === 'F' ? st.on : st.off}>°F</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => onUnit('C')}
-              style={unit === 'C' ? sg.on : sg.off}>
-              <Text style={unit === 'C' ? st.on : st.off}>°C</Text>
-            </Pressable>
+          <View style={{gap: 9}}>
+            <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
+              UNITS
+            </Text>
+            <View style={{flexDirection: 'row', gap: 4}}>
+              <Pressable
+                onPress={() => onUnit('F')}
+                style={unit === 'F' ? sg.on : sg.off}>
+                <Text style={unit === 'F' ? st.on : st.off}>°F</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => onUnit('C')}
+                style={unit === 'C' ? sg.on : sg.off}>
+                <Text style={unit === 'C' ? st.on : st.off}>°C</Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
 
-        <ClockSetter theme={th} />
+          <ClockSetter theme={th} />
+        </Columns>
       </View>
     </Modal>
   );

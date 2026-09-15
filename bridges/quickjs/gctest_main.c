@@ -203,6 +203,26 @@ static void counting_log(const char* line)
     }
 }
 
+static int s_host_installs = 0;
+
+/** @brief `__hostProbe()` → 42: the device-API global the host-globals scenario installs. */
+static JSValue host_probe(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, 42);
+}
+
+/** @brief ErRuntimeConfig.install_host_globals for that scenario: counts its calls, installs __hostProbe. */
+static void install_host_probe(JSContext* ctx)
+{
+    s_host_installs++;
+    JSValue g = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, g, "__hostProbe", JS_NewCFunction(ctx, host_probe, "__hostProbe", 0));
+    JS_FreeValue(ctx, g);
+}
+
 /** @brief Records one assertion. @param ok Result. @param what Description printed either way. */
 static void check(bool ok, const char* what)
 {
@@ -523,6 +543,28 @@ int main(void)
         check(s_gc_warns == 1, "gc warn: the setter warns when the floor is not below memory_limit");
         er_runtime_set_gc_threshold(256 * 1024);
         check(s_gc_warns == 1, "gc warn: a floor back under the limit is quiet");
+        er_runtime_shutdown();
+    }
+
+    /* --- 7. Host globals reach every context: the first, and each one a reset replaces it with ------- */
+    {
+        ErRuntimeConfig cfg;
+        memset(&cfg, 0, sizeof cfg);
+        cfg.screen_width = GC_SCREEN_W;
+        cfg.screen_height = GC_SCREEN_H;
+        cfg.install_host_globals = install_host_probe;
+        static const char k_read[] = "globalThis.__seen = typeof __hostProbe === 'function' ? __hostProbe() : -1;";
+
+        s_host_installs = 0;
+        check(er_runtime_init(&cfg), "host globals: init");
+        check(s_host_installs == 1, "host globals: installed into the first context");
+        check(er_runtime_load_source(k_read, strlen(k_read), "<host1>"), "host globals: app ran");
+        check(read_int_global(er_runtime_context(), "__seen") == 42, "host globals: the app can call it");
+
+        check(er_runtime_reset(), "host globals: reset");
+        check(s_host_installs == 2, "host globals: installed again into the context the reset made");
+        check(er_runtime_load_source(k_read, strlen(k_read), "<host2>"), "host globals: app ran after the reset");
+        check(read_int_global(er_runtime_context(), "__seen") == 42, "host globals: and still finds it");
         er_runtime_shutdown();
     }
 
