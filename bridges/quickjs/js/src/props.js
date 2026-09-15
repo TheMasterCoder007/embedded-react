@@ -30,7 +30,7 @@ export const PASSTHROUGH = [
   'secureTextEntry',
   'animating',
   'visible',
-  'backdropColor', // <Modal>'s scrim, as React Native take it (the style key works too)
+  'backdropColor', // <Modal>'s scrim, as React Native takes it (the style key works too)
   'resizeMode',
   'tintColor',
   'imageName',

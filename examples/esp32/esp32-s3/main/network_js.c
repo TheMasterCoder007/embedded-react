@@ -73,7 +73,13 @@ static JSValue js_connect(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     {
         return JS_EXCEPTION;
     }
-    const char* password = (argc > 1 && !JS_IsUndefined(argv[1])) ? JS_ToCString(ctx, argv[1]) : NULL;
+    const bool has_password = argc > 1 && !JS_IsUndefined(argv[1]);
+    const char* password = has_password ? JS_ToCString(ctx, argv[1]) : NULL;
+    if (has_password && !password)
+    {
+        JS_FreeCString(ctx, ssid);
+        return JS_EXCEPTION;
+    }
     const bool ok = network_connect(ssid, password ? password : "");
     JS_FreeCString(ctx, ssid);
     if (password)

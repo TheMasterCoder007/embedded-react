@@ -378,6 +378,17 @@ export function WifiPage({theme, onDone}) {
   );
 }
 
+/** Whether every character is a hex digit: a 64-character password is the raw WPA2 key, in hex. */
+function isHex(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const hex =
+      (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
+    if (!hex) return false;
+  }
+  return true;
+}
+
 /**
  * The password for one network. It sits at the top of the screen so its buttons stay clear of the
  * on-screen keyboard. `onJoin(password)` returns false when the host would not start connecting.
@@ -387,8 +398,10 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
   const [show, setShow] = useState(false);
   const [err, setErr] = useState('');
   const join = () => {
-    if (pw.length < 8 || pw.length > 64) {
-      setErr('A WI-FI PASSWORD IS 8 TO 63 CHARACTERS');
+    const ok =
+      (pw.length >= 8 && pw.length <= 63) || (pw.length === 64 && isHex(pw));
+    if (!ok) {
+      setErr('USE 8-63 CHARACTERS OR 64 HEX DIGITS');
       return;
     }
     if (!onJoin(pw)) setErr("COULDN'T START CONNECTING");

@@ -462,6 +462,14 @@ static void test_text_input_secure(void)
     er_commit();
     assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) != 6 && "No dots once secureTextEntry is cleared");
 
+    /* A font size past the text renderer's range is clamped for the dots too: 2 dots at 96 px advance 60 each. */
+    p.secure_text_entry = 1;
+    p.font_size = 200;
+    er_node_set_props(ti, &p);
+    er_text_input_set_text(ti, "ab");
+    er_commit();
+    assert(first_col_in_box(0xFFFF0000U, cx, cy, cw, ch) == cx + 2 * 60 && "Dots past 96 px must size as at 96 px");
+
     er_text_input_blur();
     printf("PASS: test_text_input_secure\n");
 }

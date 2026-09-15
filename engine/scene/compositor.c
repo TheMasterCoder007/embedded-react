@@ -2131,10 +2131,11 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
  */
 static int paint_masked_text(const char* text, const ERTextRenderParams* par)
 {
+    const uint8_t size = er_text_clamp_font_size(par->font_size);
     int line_h = 0;
-    er_text_measure("", par->font_size, par->font_family, 0, 0, NULL, &line_h);
-    const int d = (par->font_size * 3 + 4) / 8; /* 6 px at 16 px */
-    const int gap = (par->font_size / 4 > 2) ? par->font_size / 4 : 2;
+    er_text_measure("", size, par->font_family, 0, 0, NULL, &line_h);
+    const int d = (size * 3 + 4) / 8; /* 6 px at 16 px */
+    const int gap = (size / 4 > 2) ? size / 4 : 2;
     const int y = par->clip.y + (line_h - d) / 2;
     const bool fits = y >= par->clip.y && y + d <= par->clip.y + par->clip.h;
     const int right = par->clip.x + par->clip.w;

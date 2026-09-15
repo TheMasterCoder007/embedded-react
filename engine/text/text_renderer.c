@@ -36,28 +36,9 @@
 /** @brief UTF-8 encoding of U+2026 HORIZONTAL ELLIPSIS '…'. */
 #define ELLIPSIS_UTF8 "\xE2\x80\xA6"
 
-/**
- * @brief Requested font size is clamped to this range before the registry is asked.
- *
- * The floor is where a bitmap glyph stops being legible; the ceiling sits well above the largest
- * baked face (48), so it only catches a nonsense request — the registry picks the nearest size it
- * actually has either way. Drawing and BOTH measure paths clamp through clamp_font_size(), because
- * measuring at one size and drawing at another lays the text out wrong.
- */
-#define TEXT_FONT_SIZE_MIN 8U
-#define TEXT_FONT_SIZE_MAX 96U
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/** @brief Clamps a requested font size to [TEXT_FONT_SIZE_MIN, TEXT_FONT_SIZE_MAX]. */
-static inline uint8_t clamp_font_size(uint8_t sz)
-{
-    if (sz < TEXT_FONT_SIZE_MIN)
-        return TEXT_FONT_SIZE_MIN;
-    return (sz > TEXT_FONT_SIZE_MAX) ? TEXT_FONT_SIZE_MAX : sz;
-}
 
 /**
  * @brief A single rendered line produced by break_lines().
@@ -555,7 +536,7 @@ void er_text_render(const ERTextRenderParams* params)
     if (!span_mode && !params->text)
         return;
 
-    const uint8_t sz = clamp_font_size(params->font_size);
+    const uint8_t sz = er_text_clamp_font_size(params->font_size);
 
     const BitmapFont* font = font_registry_get(params->font_family, sz);
     if (!font)
@@ -788,7 +769,7 @@ void er_text_measure(const char* text,
 {
     s_text_measure_count++;
 
-    font_size = clamp_font_size(font_size);
+    font_size = er_text_clamp_font_size(font_size);
 
     const BitmapFont* font = font_registry_get(font_family, font_size);
     if (!font)
@@ -835,7 +816,7 @@ void er_text_measure_spans(const ERTextSpan* spans,
 {
     s_text_measure_count++;
 
-    font_size = clamp_font_size(font_size);
+    font_size = er_text_clamp_font_size(font_size);
 
     const BitmapFont* font = font_registry_get(font_family, font_size);
     if (!font || !spans || span_count == 0U)

@@ -86,7 +86,8 @@ bool network_start(void);
 bool network_scan_start(void);
 
 /**
- * @brief The last scan's networks, strongest first, one entry per name, hidden networks left out.
+ * @brief The last scan's networks, strongest first, one entry per name. Hidden networks are left out, and so
+ *        are ones this station cannot join: WEP, WPA1-only and enterprise.
  *
  * @param[out] out  Receives up to @p max entries.
  * @param[in]  max  Capacity of @p out.
@@ -142,7 +143,8 @@ void network_time_zone(char* out, size_t cap);
 /**
  * @brief Applies a POSIX TZ string (e.g. "PST8PDT,M3.2.0,M11.1.0") and saves it.
  *
- * @return false if it is empty or too long.
+ * @return false if it is empty or too long (nothing changes), or if saving it failed (it still applies
+ *         until the next boot).
  */
 bool network_set_time_zone(const char* tz);
 

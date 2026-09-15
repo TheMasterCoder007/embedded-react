@@ -31,6 +31,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include <ctype.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,7 +78,9 @@ static atomic_bool s_synced;            /* SNTP → network_poll() */
 static atomic_bool s_got_ip;            /* IP_EVENT_STA_GOT_IP → network_poll() */
 
 static esp_timer_handle_t s_retry_timer;
-static uint32_t s_retry_ms = RETRY_MIN_MS; /* event and timer tasks */
+static uint32_t s_retry_ms = RETRY_MIN_MS; /* under s_lock */
+static esp_event_handler_instance_t s_wifi_handler;
+static esp_event_handler_instance_t s_ip_handler;
 static bool s_started;
 
 /* Frame-loop task only. The pending network is saved once it connects. */
@@ -102,6 +105,24 @@ static bool has_network(void)
     const bool yes = s_status.ssid[0] != '\0';
     portEXIT_CRITICAL(&s_lock);
     return yes;
+}
+
+/** @brief Returns the delay before the next retry and doubles it for the one after, up to RETRY_MAX_MS. */
+static uint32_t next_retry_ms(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    const uint32_t ms = s_retry_ms;
+    s_retry_ms = (ms * 2U > RETRY_MAX_MS) ? RETRY_MAX_MS : ms * 2U;
+    portEXIT_CRITICAL(&s_lock);
+    return ms;
+}
+
+/** @brief Sets the retry delay back to RETRY_MIN_MS. */
+static void reset_retry(void)
+{
+    portENTER_CRITICAL(&s_lock);
+    s_retry_ms = RETRY_MIN_MS;
+    portEXIT_CRITICAL(&s_lock);
 }
 
 /** @brief Maps a disconnect reason to what the app can tell the user. */
@@ -145,7 +166,24 @@ static void retry_join(void* arg)
     }
 }
 
-/** @brief Copies the driver's scan records into s_aps: named networks only, one per name, strongest first. */
+/** @brief Whether this station can join a network secured this way: open, or a password on WPA2 or WPA3. */
+static bool joinable(wifi_auth_mode_t mode)
+{
+    switch (mode)
+    {
+        case WIFI_AUTH_OPEN:
+        case WIFI_AUTH_OWE:
+        case WIFI_AUTH_WPA2_PSK:
+        case WIFI_AUTH_WPA_WPA2_PSK:
+        case WIFI_AUTH_WPA3_PSK:
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            return true;
+        default:
+            return false; /* WEP and WPA1 are below make_config's WPA2 floor, and there is no EAP */
+    }
+}
+
+/** @brief Copies the driver's scan records into s_aps: joinable named networks, one per name, strongest first. */
 static void take_scan_results(void)
 {
     uint16_t n = SCAN_RECORDS;
@@ -157,7 +195,7 @@ static void take_scan_results(void)
     for (int i = 0; i < (int)n; i++)
     {
         const wifi_ap_record_t* r = &s_records[i];
-        if (r->ssid[0] == '\0')
+        if (r->ssid[0] == '\0' || !joinable(r->authmode))
         {
             continue;
         }
@@ -222,11 +260,11 @@ static void on_net_event(void* arg, esp_event_base_t base, int32_t id, void* dat
         {
             return; /* we left on purpose: for another network, a scan, or forget */
         }
-        ESP_LOGW(TAG, "not connected (reason %d), retrying in %u s", (int)ev->reason, (unsigned)(s_retry_ms / 1000U));
+        const uint32_t retry_ms = next_retry_ms();
+        ESP_LOGW(TAG, "not connected (reason %d), retrying in %u s", (int)ev->reason, (unsigned)(retry_ms / 1000U));
         set_state(NETWORK_FAILED, classify(ev->reason));
         esp_timer_stop(s_retry_timer);
-        esp_timer_start_once(s_retry_timer, (uint64_t)s_retry_ms * 1000U);
-        s_retry_ms = (s_retry_ms * 2U > RETRY_MAX_MS) ? RETRY_MAX_MS : s_retry_ms * 2U;
+        esp_timer_start_once(s_retry_timer, (uint64_t)retry_ms * 1000U);
     }
     else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE)
     {
@@ -242,7 +280,7 @@ static void on_net_event(void* arg, esp_event_base_t base, int32_t id, void* dat
         const ip_event_got_ip_t* ev = (const ip_event_got_ip_t*)data;
         ESP_LOGI(TAG, "connected, ip " IPSTR, IP2STR(&ev->ip_info.ip));
         set_state(NETWORK_CONNECTED, NETWORK_FAIL_NONE);
-        s_retry_ms = RETRY_MIN_MS;
+        reset_retry();
         atomic_store(&s_got_ip, true);
         esp_netif_sntp_start(); /* (re)starts SNTP, so a reconnect also resyncs */
     }
@@ -266,11 +304,12 @@ static void read_key(nvs_handle_t h, const char* key, char* out, size_t cap)
     }
 }
 
-/** @brief Writes string keys and commits; @p value NULL erases @p key. */
-static void write_keys(const char* const* keys, const char* const* values, int n)
+/** @brief Writes string keys and commits, returning whether they were saved; @p value NULL erases @p key. */
+static bool write_keys(const char* const* keys, const char* const* values, int n)
 {
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    const bool opened = (err == ESP_OK);
     for (int i = 0; err == ESP_OK && i < n; i++)
     {
         err = values[i] ? nvs_set_str(h, keys[i], values[i]) : nvs_erase_key(h, keys[i]);
@@ -283,14 +322,16 @@ static void write_keys(const char* const* keys, const char* const* values, int n
     {
         err = nvs_commit(h);
     }
-    if (err != ESP_ERR_NVS_NOT_FOUND || n > 0)
+    if (opened)
     {
         nvs_close(h);
     }
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "saving settings failed: %s", esp_err_to_name(err));
+        return false;
     }
+    return true;
 }
 
 /** @brief Applies s_tz. */
@@ -298,6 +339,19 @@ static void apply_time_zone(void)
 {
     setenv("TZ", s_tz, 1);
     tzset();
+}
+
+/** @brief Whether @p s is all hex digits: a 64-character password is the raw key, in hex. */
+static bool is_hex(const char* s)
+{
+    for (; *s; s++)
+    {
+        if (!isxdigit((unsigned char)*s))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 /** @brief Builds a station config; a full-length SSID or PSK has no terminator. */
@@ -392,8 +446,8 @@ bool network_start(void)
 
     const esp_timer_create_args_t retry_args = {.callback = retry_join, .name = "wifi_retry"};
     CHECK(esp_timer_create(&retry_args, &s_retry_timer));
-    CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_net_event, NULL, NULL));
-    CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net_event, NULL, NULL));
+    CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_net_event, NULL, &s_wifi_handler));
+    CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_net_event, NULL, &s_ip_handler));
     CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (s_status.ssid[0] != '\0')
     {
@@ -476,14 +530,14 @@ bool network_connect(const char* ssid, const char* password)
 {
     const size_t sl = strlen(ssid);
     const size_t pl = strlen(password);
-    if (!s_started || sl == 0 || sl > 32 || pl > 64 || (pl > 0 && pl < 8))
+    if (!s_started || sl == 0 || sl > 32 || pl > 64 || (pl > 0 && pl < 8) || (pl == 64 && !is_hex(password)))
     {
         return false;
     }
     wifi_config_t cfg;
     make_config(&cfg, ssid, password);
     esp_timer_stop(s_retry_timer);
-    s_retry_ms = RETRY_MIN_MS;
+    reset_retry();
     esp_wifi_disconnect(); /* leave the current network; reported as ASSOC_LEAVE, which is ignored */
     const esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
     memset(&cfg, 0, sizeof(cfg));
@@ -543,10 +597,13 @@ bool network_poll(int64_t* epoch_ms)
     {
         static const char* const keys[] = {"ssid", "pass"};
         const char* const values[] = {s_pending_ssid, s_pending_pass};
-        write_keys(keys, values, 2);
-        ESP_LOGI(TAG, "saved \"%s\"", s_pending_ssid);
-        memset(s_pending_ssid, 0, sizeof(s_pending_ssid));
-        memset(s_pending_pass, 0, sizeof(s_pending_pass));
+        /* A failed save stays pending and is tried again at the next connection. */
+        if (write_keys(keys, values, 2))
+        {
+            ESP_LOGI(TAG, "saved \"%s\"", s_pending_ssid);
+            memset(s_pending_ssid, 0, sizeof(s_pending_ssid));
+            memset(s_pending_pass, 0, sizeof(s_pending_pass));
+        }
     }
     if (!atomic_exchange(&s_synced, false))
     {
@@ -603,7 +660,6 @@ bool network_set_time_zone(const char* tz)
     apply_time_zone();
     static const char* const keys[] = {"tz"};
     const char* const values[] = {s_tz};
-    write_keys(keys, values, 1);
     ESP_LOGI(TAG, "time zone %s", s_tz);
-    return true;
+    return write_keys(keys, values, 1);
 }
