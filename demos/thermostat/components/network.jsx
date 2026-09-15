@@ -278,6 +278,7 @@ export function WifiPage({theme, onDone}) {
   const [nets, setNets] = useState(null); // null while scanning
   const [scanId, setScanId] = useState(0);
   const [pick, setPick] = useState(null); // a secured network waiting for its password
+  const [err, setErr] = useState('');
 
   // The radio can be busy for a moment (a connect attempt), so keep asking until the scan starts.
   useEffect(() => {
@@ -342,7 +343,7 @@ export function WifiPage({theme, onDone}) {
             theme={theme}
             label="FORGET"
             onPress={() => {
-              wifi.forget();
+              setErr(wifi.forget() ? '' : "COULDN'T FORGET THE NETWORK");
               refresh();
             }}
           />
@@ -351,6 +352,16 @@ export function WifiPage({theme, onDone}) {
       </Header>
       <ScrollView style={{height: LIST_H}}>
         <View style={{gap: 6}}>
+          {err ? (
+            <Text
+              style={{
+                fontSize: 10,
+                letterSpacing: 1,
+                color: theme.accents.heat,
+              }}>
+              {err}
+            </Text>
+          ) : null}
           {nets === null ? (
             <Label theme={theme}>SCANNING...</Label>
           ) : nets.length === 0 ? (
@@ -455,6 +466,7 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
 /** Picks the time zone the clock shows. The host saves it, and the clock follows within a second. */
 export function ZonePage({theme, onDone}) {
   const cur = clock.timeZone();
+  const [err, setErr] = useState('');
   return (
     <View style={pageStyle(theme, PAGE_H)}>
       <Header theme={theme} title="TIME ZONE">
@@ -462,14 +474,24 @@ export function ZonePage({theme, onDone}) {
       </Header>
       <ScrollView style={{height: LIST_H}}>
         <View style={{gap: 6}}>
+          {err ? (
+            <Text
+              style={{
+                fontSize: 10,
+                letterSpacing: 1,
+                color: theme.accents.heat,
+              }}>
+              {err}
+            </Text>
+          ) : null}
           {ZONES.map(z => {
             const on = z.tz === cur;
             return (
               <Pressable
                 key={z.tz}
                 onPress={() => {
-                  clock.setTimeZone(z.tz);
-                  onDone();
+                  if (clock.setTimeZone(z.tz)) onDone();
+                  else setErr('TIME ZONE SET, BUT NOT SAVED');
                 }}
                 style={{
                   height: 44,

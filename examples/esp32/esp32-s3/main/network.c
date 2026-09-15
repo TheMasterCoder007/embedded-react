@@ -449,7 +449,12 @@ bool network_start(void)
 
     CHECK(esp_netif_init());
     CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    /* With assertions compiled out (NDEBUG) this returns NULL instead of aborting inside. */
+    if (!esp_netif_create_default_wifi_sta())
+    {
+        ESP_LOGE(TAG, "esp_netif_create_default_wifi_sta failed");
+        return false;
+    }
     const wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     CHECK(esp_wifi_init(&init_cfg));
 
