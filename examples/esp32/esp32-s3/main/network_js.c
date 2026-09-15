@@ -92,12 +92,10 @@ static JSValue js_connect(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 /** @brief `__erWifi.forget()`. */
 static JSValue js_forget(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-    (void)ctx;
     (void)this_val;
     (void)argc;
     (void)argv;
-    network_forget();
-    return JS_UNDEFINED;
+    return JS_NewBool(ctx, network_forget());
 }
 
 /** @brief `__erWifi.status()`. */

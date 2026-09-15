@@ -293,6 +293,16 @@ static void on_time_sync(struct timeval* tv)
     atomic_store(&s_synced, true);
 }
 
+/** @brief Zeroes a buffer. Unlike a memset of a local about to go out of scope, the compiler cannot drop it. */
+static void wipe(void* p, size_t n)
+{
+    volatile unsigned char* b = (volatile unsigned char*)p;
+    while (n--)
+    {
+        *b++ = 0;
+    }
+}
+
 /** @brief Reads a string key, leaving @p out alone when it is missing or does not fit. */
 static void read_key(nvs_handle_t h, const char* key, char* out, size_t cap)
 {
@@ -302,6 +312,7 @@ static void read_key(nvs_handle_t h, const char* key, char* out, size_t cap)
     {
         memcpy(out, tmp, len);
     }
+    wipe(tmp, sizeof(tmp));
 }
 
 /** @brief Writes string keys and commits, returning whether they were saved; @p value NULL erases @p key. */
@@ -418,13 +429,11 @@ bool network_start(void)
 #if CONFIG_NVS_ENCRYPTION
     CHECK(erase_plaintext_once());
 #endif
-    char pass[65] = "";
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK)
     {
         read_key(h, "tz", s_tz, sizeof(s_tz));
         read_key(h, "ssid", s_status.ssid, sizeof(s_status.ssid)); /* no other task yet: no lock */
-        read_key(h, "pass", pass, sizeof(pass));
         nvs_close(h);
     }
     apply_time_zone();
@@ -451,13 +460,21 @@ bool network_start(void)
     CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     if (s_status.ssid[0] != '\0')
     {
+        /* The saved password is read only here, and wiped before anything can return. */
+        char pass[65] = "";
+        if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK)
+        {
+            read_key(h, "pass", pass, sizeof(pass));
+            nvs_close(h);
+        }
         wifi_config_t cfg;
         make_config(&cfg, s_status.ssid, pass);
-        CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-        memset(&cfg, 0, sizeof(cfg));
+        wipe(pass, sizeof(pass));
+        err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+        wipe(&cfg, sizeof(cfg));
+        CHECK(err);
         s_status.state = NETWORK_CONNECTING;
     }
-    memset(pass, 0, sizeof(pass));
 
     /* Started on each IP_EVENT_STA_GOT_IP. Nothing waits on it: the frame loop polls. */
     esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_ER_SNTP_SERVER);
@@ -540,7 +557,7 @@ bool network_connect(const char* ssid, const char* password)
     reset_retry();
     esp_wifi_disconnect(); /* leave the current network; reported as ASSOC_LEAVE, which is ignored */
     const esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
-    memset(&cfg, 0, sizeof(cfg));
+    wipe(&cfg, sizeof(cfg));
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
@@ -559,11 +576,11 @@ bool network_connect(const char* ssid, const char* password)
     return true;
 }
 
-void network_forget(void)
+bool network_forget(void)
 {
     if (!s_started)
     {
-        return;
+        return false;
     }
     esp_timer_stop(s_retry_timer);
     atomic_store(&s_resume_after_scan, false);
@@ -580,8 +597,12 @@ void network_forget(void)
     esp_wifi_set_config(WIFI_IF_STA, &cfg);
     static const char* const keys[] = {"ssid", "pass"};
     static const char* const none[] = {NULL, NULL};
-    write_keys(keys, none, 2);
+    if (!write_keys(keys, none, 2))
+    {
+        return false; /* still saved, so the board rejoins it at the next boot */
+    }
     ESP_LOGI(TAG, "network forgotten");
+    return true;
 }
 
 void network_status(NetworkStatus* out)

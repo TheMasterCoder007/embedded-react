@@ -107,8 +107,12 @@ int network_scan_results(NetworkAp* out, int max);
  */
 bool network_connect(const char* ssid, const char* password);
 
-/** @brief Leaves the current network and deletes the saved one. */
-void network_forget(void);
+/**
+ * @brief Leaves the current network and deletes the saved one.
+ *
+ * @return false if WiFi is off, or if deleting the saved network failed (the board rejoins it at the next boot).
+ */
+bool network_forget(void);
 
 /** @brief Reads the station's state. */
 void network_status(NetworkStatus* out);

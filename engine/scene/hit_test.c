@@ -1311,9 +1311,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                         }
                         terminate_responder_if_active(touch, &rdata);
                         grant_responder(touch, claimant, &rdata);
-                        /* The gesture is the claimant's now, not a tap on what the finger started on. */
-                        if (claimant != press_target)
-                            cancel_press(touch, x, y);
+                        /* The gesture is the claimant's now, a drag and not a tap, even when the claimant is
+                         * the node the finger pressed. */
+                        cancel_press(touch, x, y);
                     }
                     else
                     {
