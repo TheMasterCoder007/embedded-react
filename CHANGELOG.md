@@ -91,6 +91,9 @@ See the README for the release process.
 
 ### Fixed
 
+- `<TextInput editable={false}>` no longer accepts typing, in either flow. The engine was turning
+  `editable` 0 back into 1.
+
 - In Flow A, `<Modal backdropColor>` now works as a prop, as it already did in Flow B. Flow A read it only
   from the style and silently dropped the prop, so the thermostat's settings sheet had the default
   see-through dim instead of its solid backdrop.

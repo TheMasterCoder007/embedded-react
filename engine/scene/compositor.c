@@ -3574,7 +3574,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text_input.placeholder[ER_PLACEHOLDER_MAX] = '\0';
             node->props.text_input.placeholder_color = props->placeholder_color;
             node->props.text_input.cursor_color = props->cursor_color;
-            node->props.text_input.editable = props->editable ? props->editable : 1U;
+            node->props.text_input.editable = props->editable ? 1U : 0U;
             node->props.text_input.secure = props->secure_text_entry ? 1U : 0U;
             /* If 'text' is provided, set it as the current input value. */
             if (props->text[0] != '\0')

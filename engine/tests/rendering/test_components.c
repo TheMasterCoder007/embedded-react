@@ -466,6 +466,51 @@ static void test_text_input_secure(void)
     printf("PASS: test_text_input_secure\n");
 }
 
+/**
+ * @brief A TextInput with editable = 0 ignores keys even while focused, and default props stay editable.
+ */
+static void test_text_input_read_only(void)
+{
+    init_backend();
+    s_change_count = 0;
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_auto();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 0;
+    er_node_set_props(ti, &p);
+    er_event_set(ti, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
+    er_tree_append_child(root, ti);
+    er_tree_set_root(root);
+    er_text_input_set_text(ti, "Hi");
+    er_commit();
+
+    er_text_input_focus(ti);
+    embedded_renderer_key(0, "X");
+    assert(strcmp(er_text_input_get_text(ti), "Hi") == 0 && "A read-only input must ignore typing");
+    embedded_renderer_key(ER_KEY_BACKSPACE, NULL);
+    assert(strcmp(er_text_input_get_text(ti), "Hi") == 0 && "A read-only input must ignore backspace");
+    assert(s_change_count == 0 && "A read-only input must not report a change");
+
+    er_props_default(&p);
+    p.width = 200;
+    p.height = 36;
+    er_node_set_props(ti, &p);
+    embedded_renderer_key(0, "!");
+    assert(strcmp(er_text_input_get_text(ti), "Hi!") == 0 && "Default props must leave the input editable");
+
+    er_text_input_blur();
+    printf("PASS: test_text_input_read_only\n");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Tests: Modal
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -598,6 +643,7 @@ int main(void)
     test_switch_renders();
     test_text_input_keyboard();
     test_text_input_secure();
+    test_text_input_read_only();
     test_modal_visible();
     test_flatlist_scrolls();
 
