@@ -28,3 +28,11 @@ CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 # framebuffer through.
 CONFIG_ESP_WIFI_NVS_ENABLED=n
 CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE=n
+
+# The saved settings are encrypted (NVS encryption), with keys the HMAC peripheral derives from a key in
+# eFuse. The first boot writes a random key into BLOCK_KEY5, read-protected so no software can read it
+# back. That write is PERMANENT. KEY5 is the key block the S3 cannot use for flash encryption, so it takes
+# nothing flash encryption would need. CONFIG_NVS_ENCRYPTION=n keeps them in plain text instead.
+CONFIG_NVS_ENCRYPTION=y
+CONFIG_NVS_SEC_KEY_PROTECT_USING_HMAC=y
+CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=5

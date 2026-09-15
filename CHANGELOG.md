@@ -15,7 +15,12 @@ See the README for the release process.
 - The ESP32-S3 example has a Wi-Fi build (`sdkconfig.defaults.wifi`). The thermostat's settings get a Wi-Fi
   page (scan, pick a network, type its password on the on-screen keyboard) and a time-zone picker, both
   saved on the board, and its clock sets itself over NTP. Wi-Fi is a build of its own because it needs
-  internal RAM the board is short of, which it takes from the main task's stack headroom.
+  internal RAM the board is short of, which it takes from the main task's stack headroom. The saved
+  settings are encrypted; the first boot writes the key into the chip's eFuses, which is permanent.
+
+- `<TextInput secureTextEntry>` draws a dot for each character typed, in both flows; Flow B used to
+  accept the prop and show the text anyway. The thermostat's Wi-Fi password field uses it, with a
+  SHOW button.
 
 - `ErRuntimeConfig.install_host_globals` gives a host's own JS globals to every context the app runs in,
   including the fresh one after `er_runtime_reset`, before any app code runs.

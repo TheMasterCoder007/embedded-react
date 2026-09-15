@@ -384,6 +384,7 @@ export function WifiPage({theme, onDone}) {
  */
 function PasswordPage({theme, ssid, onCancel, onJoin}) {
   const [pw, setPw] = useState('');
+  const [show, setShow] = useState(false);
   const [err, setErr] = useState('');
   const join = () => {
     if (pw.length < 8 || pw.length > 64) {
@@ -398,25 +399,34 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
         <Button theme={theme} label="CANCEL" onPress={onCancel} />
         <Button theme={theme} label="JOIN" strong onPress={join} />
       </Header>
-      <TextInput
-        value={pw}
-        onChangeText={t => {
-          setPw(t);
-          setErr('');
-        }}
-        onSubmitEditing={join}
-        placeholder="Tap to type the password"
-        placeholderTextColor={theme.dim}
-        style={{
-          height: 44,
-          borderRadius: 9,
-          paddingLeft: 12,
-          paddingRight: 12,
-          fontSize: 16,
-          color: theme.fg,
-          backgroundColor: theme.trackBg,
-        }}
-      />
+      <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+        <TextInput
+          value={pw}
+          secureTextEntry={!show}
+          onChangeText={t => {
+            setPw(t);
+            setErr('');
+          }}
+          onSubmitEditing={join}
+          placeholder="Tap to type the password"
+          placeholderTextColor={theme.dim}
+          style={{
+            flex: 1,
+            height: 44,
+            borderRadius: 9,
+            paddingLeft: 12,
+            paddingRight: 12,
+            fontSize: 16,
+            color: theme.fg,
+            backgroundColor: theme.trackBg,
+          }}
+        />
+        <Button
+          theme={theme}
+          label={show ? 'HIDE' : 'SHOW'}
+          onPress={() => setShow(!show)}
+        />
+      </View>
       <Text
         style={{
           fontSize: 10,

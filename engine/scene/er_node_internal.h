@@ -330,6 +330,7 @@ typedef struct
     uint32_t placeholder_color;
     uint32_t cursor_color;
     uint8_t editable;
+    uint8_t secure; /**< Draw a dot per character (secureTextEntry). */
 } ERTextInputProps;
 
 /**

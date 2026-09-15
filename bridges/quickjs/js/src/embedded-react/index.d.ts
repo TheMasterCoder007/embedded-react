@@ -509,6 +509,7 @@ export interface TextInputProps extends TouchEventProps {
   placeholder?: string;
   placeholderTextColor?: string;
   editable?: boolean;
+  secureTextEntry?: boolean;
   visible?: boolean;
   onChangeText?: (text: string) => void;
   onSubmitEditing?: (event: NativeEvent<'submitEditing'>) => void;

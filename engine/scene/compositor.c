@@ -2120,6 +2120,39 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
 }
 
 /**
+ * @brief Draws a TextInput's text as one dot per character (secureTextEntry), on the line the text uses.
+ *
+ * Only whole dots inside the content box are drawn.
+ *
+ * @param[in] text  The input's text (UTF-8).
+ * @param[in] par   Its text params: the content box as the clip, the color and the font.
+ *
+ * @return Width of the dots, which is where the cursor goes.
+ */
+static int paint_masked_text(const char* text, const ERTextRenderParams* par)
+{
+    int line_h = 0;
+    er_text_measure("", par->font_size, par->font_family, 0, 0, NULL, &line_h);
+    const int d = (par->font_size * 3 + 4) / 8; /* 6 px at 16 px */
+    const int gap = (par->font_size / 4 > 2) ? par->font_size / 4 : 2;
+    const int y = par->clip.y + (line_h - d) / 2;
+    const bool fits = y >= par->clip.y && y + d <= par->clip.y + par->clip.h;
+    const int right = par->clip.x + par->clip.w;
+    int x = par->clip.x + gap / 2;
+    int count = 0;
+    for (const char* p = text; *p; p++)
+    {
+        if (((unsigned char)*p & 0xC0U) == 0x80U)
+            continue; /* a continuation byte: the same character */
+        if (fits && x + d <= right)
+            er_rrect_fill_bordered(par->color, 0x00000000U, 0, x, y, d, d, d / 2);
+        x += d + gap;
+        count++;
+    }
+    return count * (d + gap);
+}
+
+/**
  * @brief Recursively renders a node and its children depth-first.
  *
  * translate_x / translate_y accumulate the total scroll offset contributed by all
@@ -2754,14 +2787,20 @@ static void render_node_content(
                 par.font_family = tip->font_family;
                 par.number_of_lines = 1;
                 par.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
-                er_text_render(&par);
+                const bool masked = tip->secure && !show_ph;
+                int text_w = 0;
+                if (masked)
+                    text_w = paint_masked_text(n->input_text, &par);
+                else
+                    er_text_render(&par);
 
                 /* Blinking cursor when focused and not showing placeholder. */
                 if (n->is_focused && !show_ph && cursor_blink_on(s_now_ms))
                 {
-                    int text_w = 0, text_h = 0;
-                    er_text_measure(
-                        n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
+                    int text_h = 0;
+                    if (!masked)
+                        er_text_measure(
+                            n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
                     int cursor_x = px + pad_l + text_w;
                     const int max_cx = px + w - pad_r - 2;
                     if (cursor_x > max_cx)
@@ -3536,6 +3575,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text_input.placeholder_color = props->placeholder_color;
             node->props.text_input.cursor_color = props->cursor_color;
             node->props.text_input.editable = props->editable ? props->editable : 1U;
+            node->props.text_input.secure = props->secure_text_entry ? 1U : 0U;
             /* If 'text' is provided, set it as the current input value. */
             if (props->text[0] != '\0')
                 er_text_input_set_text(node, props->text);

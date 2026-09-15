@@ -238,8 +238,8 @@ objects are absent (the simulator, other boards), the sheet leaves the pages out
 hand.
 
 **What it costs**, measured on the board with the thermostat idle:
-- Internal RAM: WiFi takes 36 KB once it is up, leaving 16 KB once it has joined a network; a scan and a
-  join never took it below 5.8 KB. Linking it in accounts for 18.7 KB of that, nearly all PHY and driver
+- Internal RAM: Wi-Fi takes 36 KB once it is up, leaving 15 KB once it has joined a network; a scan and a
+  join took it as low as 5.8 KB before the settings were encrypted, which takes 0.6 KB more. Linking it in accounts for 18.7 KB of that, nearly all PHY and driver
   code and data that have to sit in internal RAM. To make room, the WiFi build shrinks the main task stack
   from 64 to 36 KB, moves the core-1 render worker's 24 KB stack to PSRAM, and keeps WiFi's static buffers
   to four each way. Every build keeps the QuickJS bridge's tables (22 KB) in PSRAM, which costs nothing
@@ -251,11 +251,21 @@ hand.
   fifth slower.
 - Frame time: against the default build, an idle frame's commit goes from 2.34 to 2.38 ms and its present
   from 0.87 to 1.03 ms.
-- Flash: the app image grows by about 610 KB (the factory partition is 3 MB). WiFi itself writes nothing
+- Flash: the app image grows by about 615 KB (the factory partition is 3 MB). WiFi itself writes nothing
   to flash: the PHY calibrates at every boot, and the only writes are the app saving a network or a time
   zone.
-- The saved password is stored unencrypted in NVS, and the password field shows what you type
-  (`TextInput` has no masking yet).
+
+**The saved settings are encrypted**, network password included, with NVS encryption: its keys come from
+the HMAC peripheral and a key in eFuse. **The first boot writes a random key into eFuse `BLOCK_KEY5`, and
+that is permanent.** The block is read-protected, so no software, this firmware included, can read the key
+back, and a flash dump alone cannot be decrypted. KEY5 is the key block the S3 cannot use for flash
+encryption, so it takes nothing flash encryption would need. Encryption costs about 0.6 KB of internal
+RAM and 6 KB of flash. If KEY5 already holds a different key, WiFi
+does not start and the log says why; `CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID` picks another block. That first
+boot also erases the settings once, so a password an unencrypted build saved does not linger in flash:
+pick the network again. To keep the settings in plain text and leave the eFuses alone, set
+`CONFIG_NVS_ENCRYPTION=n` in `sdkconfig.defaults.wifi` before the first flash. The password field draws a
+dot per character (`secureTextEntry`), with a **SHOW** button beside it.
 
 ## Known tuning points / gotchas
 

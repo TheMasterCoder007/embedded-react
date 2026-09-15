@@ -124,6 +124,12 @@ describe('buildProps', () => {
     ).toEqual({visible: true, backdropColor: '#000000'});
   });
 
+  it('forwards a <TextInput secureTextEntry> prop', () => {
+    expect(
+      buildProps('TextInput', {style: {}, value: 'pw', secureTextEntry: true}),
+    ).toEqual({value: 'pw', secureTextEntry: true});
+  });
+
   it('resolves an <Image source> string to imageName', () => {
     expect(buildProps('Image', {style: {}, source: 'wx_sun'})).toEqual({
       imageName: 'wx_sun',

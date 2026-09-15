@@ -312,6 +312,45 @@ static void make_config(wifi_config_t* cfg, const char* ssid, const char* passwo
     cfg->sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 }
 
+#if CONFIG_NVS_ENCRYPTION
+/** @brief Erases the settings partition on the first encrypted boot. A password an unencrypted build saved
+    would otherwise stay readable in flash until NVS reused its page. */
+static esp_err_t erase_plaintext_once(void)
+{
+    nvs_handle_t h;
+    uint8_t done = 0;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK)
+    {
+        nvs_get_u8(h, "encrypted", &done);
+        nvs_close(h);
+    }
+    if (done)
+    {
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "first encrypted boot: erasing the saved settings");
+    esp_err_t err = nvs_flash_erase();
+    if (err == ESP_OK)
+    {
+        err = nvs_flash_init();
+    }
+    if (err == ESP_OK)
+    {
+        err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    }
+    if (err == ESP_OK)
+    {
+        err = nvs_set_u8(h, "encrypted", 1);
+        if (err == ESP_OK)
+        {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    return err;
+}
+#endif
+
 bool network_start(void)
 {
     /* NVS holds what the app saves: the network and the time zone. WiFi keeps nothing of its own there. */
@@ -322,6 +361,9 @@ bool network_start(void)
         err = nvs_flash_init();
     }
     CHECK(err);
+#if CONFIG_NVS_ENCRYPTION
+    CHECK(erase_plaintext_once());
+#endif
     char pass[65] = "";
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK)

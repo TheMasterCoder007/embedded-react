@@ -27,6 +27,7 @@ export const PASSTHROUGH = [
   'placeholder',
   'placeholderTextColor',
   'editable',
+  'secureTextEntry',
   'animating',
   'visible',
   'backdropColor', // <Modal>'s scrim, as React Native take it (the style key works too)

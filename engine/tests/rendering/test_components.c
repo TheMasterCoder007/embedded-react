@@ -357,6 +357,115 @@ static void test_text_input_keyboard(void)
     printf("PASS: test_text_input_keyboard\n");
 }
 
+/**
+ * @brief Most runs of one color along any row of a box in the test framebuffer.
+ *
+ * @param[in] argb  Color to look for.
+ * @param[in] x     Box left edge.
+ * @param[in] y     Box top edge.
+ * @param[in] w     Box width.
+ * @param[in] h     Box height.
+ *
+ * @return The largest number of separate runs on one row.
+ */
+static int max_runs_in_box(uint32_t argb, int x, int y, int w, int h)
+{
+    int best = 0;
+    for (int row = y; row < y + h; row++)
+    {
+        int runs = 0;
+        bool in_run = false;
+        for (int col = x; col < x + w; col++)
+        {
+            const bool hit = s_fb[row * 320 + col] == argb;
+            if (hit && !in_run)
+                runs++;
+            in_run = hit;
+        }
+        if (runs > best)
+            best = runs;
+    }
+    return best;
+}
+
+/**
+ * @brief Leftmost column of a box in the test framebuffer that holds a color.
+ *
+ * @param[in] argb  Color to look for.
+ * @param[in] x     Box left edge.
+ * @param[in] y     Box top edge.
+ * @param[in] w     Box width.
+ * @param[in] h     Box height.
+ *
+ * @return The column, or -1 when the color is not there.
+ */
+static int first_col_in_box(uint32_t argb, int x, int y, int w, int h)
+{
+    for (int col = x; col < x + w; col++)
+        for (int row = y; row < y + h; row++)
+            if (s_fb[row * 320 + col] == argb)
+                return col;
+    return -1;
+}
+
+/**
+ * @brief A secureTextEntry TextInput draws a dot per character in place of the text, with the cursor after
+ *        the dots, and draws the text again once the prop is cleared.
+ */
+static void test_text_input_secure(void)
+{
+    init_backend();
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_auto();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.background_color = 0xFF1A2840U;
+    p.color = 0xFFFFFFFFU;
+    p.cursor_color = 0xFFFF0000U;
+    p.font_size = 16;
+    p.editable = 1;
+    p.secure_text_entry = 1;
+    p.padding_horizontal = p.padding_vertical = -32768; /* unset, so the field's own padding applies */
+    er_node_set_props(ti, &p);
+    er_tree_append_child(root, ti);
+    er_tree_set_root(root);
+    er_text_input_set_text(ti, "a\303\251b"); /* three characters in four bytes */
+    er_commit();
+
+    /* The content box: the field's default 4 px / 3 px padding, no border. */
+    const int cx = ti->computed.x + 4;
+    const int cy = ti->computed.y + 3;
+    const int cw = ti->computed.w - 8;
+    const int ch = ti->computed.h - 6;
+    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) == 3 && "One dot per character, not per byte");
+
+    /* At 16 px the dots are 6 px wide and 4 px apart, the first 2 px in; the cursor goes after the last. */
+    er_text_input_set_text(ti, "WWWWWW");
+    er_text_input_focus(ti);
+    const uint32_t phase = (uint32_t)(er_now_ms64() % 1000U); /* the cursor shows for the first half of 1 s */
+    if (phase >= 500U)
+        embedded_renderer_tick(1000U - phase);
+    er_commit();
+    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) == 6 && "A dot per character");
+    assert(first_col_in_box(0xFFFF0000U, cx, cy, cw, ch) == cx + 6 * 10 && "The cursor must follow the dots");
+
+    p.secure_text_entry = 0;
+    er_node_set_props(ti, &p);
+    er_commit();
+    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) != 6 && "No dots once secureTextEntry is cleared");
+
+    er_text_input_blur();
+    printf("PASS: test_text_input_secure\n");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Tests: Modal
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -488,6 +597,7 @@ int main(void)
     test_activity_indicator_renders();
     test_switch_renders();
     test_text_input_keyboard();
+    test_text_input_secure();
     test_modal_visible();
     test_flatlist_scrolls();
 
