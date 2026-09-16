@@ -406,6 +406,10 @@ static void install_globals(void)
     {
         install_persist(s_ctx);
     }
+    if (s_cfg.install_host_globals)
+    {
+        s_cfg.install_host_globals(s_ctx);
+    }
 }
 
 /** @brief Reports an uncaught exception to the log sink + captures it; frees the eval result. */

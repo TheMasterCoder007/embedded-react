@@ -1993,6 +1993,34 @@ static int edge_opaque_inset(int border_w, uint32_t border_c, int radius)
     return band > radius ? band : radius;
 }
 
+/* A Modal's backdrop when it sets none (backdrop_color 0, er_scene.h): a translucent dim. */
+#define ER_MODAL_DEFAULT_BACKDROP 0x99000000U
+
+/**
+ * @brief Whether a shown Modal's backdrop paints every pixel of a screen rect at full alpha.
+ *
+ * The backdrop fills the whole root before anything of the Modal's own, so when it is opaque everything
+ * painted before the Modal is overwritten: a settings sheet over a busy screen then repaints only itself,
+ * not the screen it hides. A translucent backdrop hides nothing.
+ *
+ * @param[in] m            Modal node.
+ * @param[in] rx,ry,rw,rh  Screen rect to test coverage of.
+ *
+ * @return true when the rect lies inside the root and the backdrop is opaque.
+ */
+static bool modal_backdrop_covers(const ERNode* m, int rx, int ry, int rw, int rh)
+{
+    const uint32_t bd = m->modal_backdrop_color ? m->modal_backdrop_color : ER_MODAL_DEFAULT_BACKDROP;
+    if (!m->modal_visible || m->props.view.opacity != 255U || (bd >> 24) != 0xFFU)
+        return false;
+    const ERNode* root = er_get_root_node();
+    if (!root)
+        return false;
+    const int x0 = (int)root->computed.x;
+    const int y0 = (int)root->computed.y;
+    return rx >= x0 && ry >= y0 && rx + rw <= x0 + (int)root->computed.w && ry + rh <= y0 + (int)root->computed.h;
+}
+
 /**
  * @brief Whether a node's own background paints every pixel of a screen rect at full alpha.
  *
@@ -2037,8 +2065,10 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
         case ER_NODE_PRESSABLE:
         case ER_NODE_FLAT_LIST:
             break;
+        case ER_NODE_MODAL:
+            return modal_backdrop_covers(c, rx, ry, rw, rh); /* its backdrop, not its box */
         default:
-            return false; /* Text/Image/Vector/Arc/Switch leave gaps; Modal paints past its own box. */
+            return false; /* Text/Image/Vector/Arc/Switch leave gaps. */
     }
 
     const ERViewProps* vp = &c->props.view;
@@ -2087,6 +2117,40 @@ static bool node_covers_opaque(const ERNode* c, int translate_x, int translate_y
     const int y1 = c->animated.y - translate_y + c->animated.h - in_b;
 
     return rx >= x0 && ry >= y0 && (rx + rw) <= x1 && (ry + rh) <= y1;
+}
+
+/**
+ * @brief Draws a TextInput's text as one dot per character (secureTextEntry), on the line the text uses.
+ *
+ * Only whole dots inside the content box are drawn.
+ *
+ * @param[in] text  The input's text (UTF-8).
+ * @param[in] par   Its text params: the content box as the clip, the color and the font.
+ *
+ * @return Width of the dots, which is where the cursor goes.
+ */
+static int paint_masked_text(const char* text, const ERTextRenderParams* par)
+{
+    const uint8_t size = er_text_clamp_font_size(par->font_size);
+    int line_h = 0;
+    er_text_measure("", size, par->font_family, 0, 0, NULL, &line_h);
+    const int d = (size * 3 + 4) / 8; /* 6 px at 16 px */
+    const int gap = (size / 4 > 2) ? size / 4 : 2;
+    const int y = par->clip.y + (line_h - d) / 2;
+    const bool fits = y >= par->clip.y && y + d <= par->clip.y + par->clip.h;
+    const int right = par->clip.x + par->clip.w;
+    int x = par->clip.x + gap / 2;
+    int count = 0;
+    for (const char* p = text; *p; p++)
+    {
+        if (((unsigned char)*p & 0xC0U) == 0x80U)
+            continue; /* a continuation byte: the same character */
+        if (fits && x + d <= right)
+            er_rrect_fill_bordered(par->color, 0x00000000U, 0, x, y, d, d, d / 2);
+        x += d + gap;
+        count++;
+    }
+    return count * (d + gap);
 }
 
 /**
@@ -2559,7 +2623,7 @@ static void render_node_content(
                 ERNode* root = er_get_root_node();
                 if (root)
                 {
-                    const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : 0x99000000U;
+                    const uint32_t bd = n->modal_backdrop_color ? n->modal_backdrop_color : ER_MODAL_DEFAULT_BACKDROP;
                     er_blit_fill(bd, root->computed.x, root->computed.y, root->computed.w, root->computed.h);
                     n->modal_scrim_shown = 1U;
                 }
@@ -2724,14 +2788,20 @@ static void render_node_content(
                 par.font_family = tip->font_family;
                 par.number_of_lines = 1;
                 par.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
-                er_text_render(&par);
+                const bool masked = tip->secure && !show_ph;
+                int text_w = 0;
+                if (masked)
+                    text_w = paint_masked_text(n->input_text, &par);
+                else
+                    er_text_render(&par);
 
                 /* Blinking cursor when focused and not showing placeholder. */
                 if (n->is_focused && !show_ph && cursor_blink_on(s_now_ms))
                 {
-                    int text_w = 0, text_h = 0;
-                    er_text_measure(
-                        n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
+                    int text_h = 0;
+                    if (!masked)
+                        er_text_measure(
+                            n->input_text, par.font_size, tip->font_family, 0, par.font_weight, &text_w, &text_h);
                     int cursor_x = px + pad_l + text_w;
                     const int max_cx = px + w - pad_r - 2;
                     if (cursor_x > max_cx)
@@ -3505,7 +3575,8 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text_input.placeholder[ER_PLACEHOLDER_MAX] = '\0';
             node->props.text_input.placeholder_color = props->placeholder_color;
             node->props.text_input.cursor_color = props->cursor_color;
-            node->props.text_input.editable = props->editable ? props->editable : 1U;
+            node->props.text_input.editable = props->editable ? 1U : 0U;
+            node->props.text_input.secure = props->secure_text_entry ? 1U : 0U;
             /* If 'text' is provided, set it as the current input value. */
             if (props->text[0] != '\0')
                 er_text_input_set_text(node, props->text);

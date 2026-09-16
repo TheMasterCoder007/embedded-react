@@ -509,6 +509,7 @@ export interface TextInputProps extends TouchEventProps {
   placeholder?: string;
   placeholderTextColor?: string;
   editable?: boolean;
+  secureTextEntry?: boolean;
   visible?: boolean;
   onChangeText?: (text: string) => void;
   onSubmitEditing?: (event: NativeEvent<'submitEditing'>) => void;
@@ -539,8 +540,8 @@ export interface ActivityIndicatorProps extends TouchEventProps {
 export interface ModalProps extends TouchEventProps {
   style?: StyleProp<ModalStyle>;
   children?: ReactNode;
-  /** Shows or hides the modal. Unlike other components this does not mean style `display`. */
   visible?: boolean;
+  backdropColor?: string;
   ref?: Ref<NodeHandle>;
 }
 

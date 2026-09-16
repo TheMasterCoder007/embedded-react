@@ -78,9 +78,14 @@ on-device examples.
 - **`components/weather.jsx`** is the current conditions plus a scrolling 14-day outlook, each row a baked
   `<Image>` icon and a hi/lo range bar. Static, so it never re-renders during a drag.
 - **`components/clock.jsx`** is the header clock and the settings sheet's clock setter (Flow A only). The
-  boards have no RTC, so the time is an offset you set on top of `Date.now()` — the engine clock, counting
-  from boot — and a power cycle loses it. `components/calendar.js` does the date math, since the runtime
-  has `Date.now()` but no `Date` objects.
+  time is an offset on top of `Date.now()`. Set by hand, `Date.now()` counts from boot and a power cycle
+  loses the setting; on an ESP32-S3 built with WiFi the clock sets itself from the network (see
+  [that example's README](../../examples/esp32/esp32-s3/README.md#wifi)).
+  `components/calendar.js` does the date math, since the runtime has `Date.now()` but no `Date` objects.
+- **`components/network.jsx`** is the settings sheet's WI-FI and TIME ZONE pages (Flow A only): scan, pick
+  a network, type its password on the on-screen keyboard, pick a time zone. They drive the host's
+  `__erWifi` and `__erClock`, so they appear only where a host provides them (the ESP32-S3 WiFi build),
+  and the sheet widens to two columns to fit them.
 
 ### Where the two flows differ
 

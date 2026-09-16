@@ -29,11 +29,13 @@ import {
   fmtDate,
 } from './calendar.js';
 
-// The clock is an offset onto Date.now(): the local time you set, minus Date.now() at that moment. The
-// target boards have no RTC, so Date.now() is the engine clock counting from boot, and the offset turns it
-// into local time. It lives outside React state, so stepping it re-renders the two clock views rather
-// than the whole thermostat. Nothing saves it: after a power cycle the clock has to be set again.
+// The clock is an offset onto Date.now(): local time minus Date.now(). Set by hand, Date.now() is the
+// engine clock counting from boot and nothing saves the offset, so a power cycle loses it. A host with
+// network time (the ESP32-S3 built with WiFi) anchors Date.now() to UTC and exposes
+// __erClock.utcOffsetMs(), so there the offset is just the time zone. It lives outside React state, so a
+// change re-renders the two clock views rather than the whole thermostat.
 let offset = null; // null until the clock has been set
+let netOffset = null; // the host's offset as last applied; null until it has synced
 const listeners = new Set();
 const subscribe = fn => {
   listeners.add(fn);
@@ -66,9 +68,29 @@ function useMinuteTick(off) {
   }, [off]);
 }
 
+/**
+ * Follows the host's network time when there is one: takes its offset on the first sync and whenever it
+ * changes (daylight saving). Checked once a second; a hand-set nudge in between stands until then.
+ */
+function useNetworkTime() {
+  useEffect(() => {
+    const host = globalThis.__erClock;
+    if (!host) return undefined;
+    const id = setInterval(() => {
+      const v = host.utcOffsetMs();
+      if (v !== null && v !== netOffset) {
+        netOffset = v;
+        setOffset(v);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+}
+
 /** The header readout. Tapping it opens the settings sheet, where the clock is set. */
 export const HeaderClock = memo(function HeaderClock({theme, onPress}) {
   const off = useOffset();
+  useNetworkTime();
   useMinuteTick(off);
   const p = off === null ? null : clockParts(Date.now() + off);
   return (
@@ -189,7 +211,11 @@ export function ClockSetter({theme}) {
   return (
     <View style={{gap: 9}}>
       <Text style={{fontSize: 10, letterSpacing: 2, color: theme.dim}}>
-        {off === null ? 'CLOCK • NOT SET' : 'CLOCK'}
+        {off === null
+          ? 'CLOCK • NOT SET'
+          : off === netOffset
+            ? 'CLOCK • NETWORK'
+            : 'CLOCK'}
       </Text>
       <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
         <RepeatStepper dir={-1} onStep={step} theme={theme} />

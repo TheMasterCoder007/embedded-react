@@ -1930,6 +1930,109 @@ static int test_pointer_events_box_none_passes_through(void)
 }
 
 /**
+ * @brief A drag that scrolls a ScrollView ends the press it began as: the row the finger started on gets
+ *        its press-out and no press on release. On a list whose content fits, nothing scrolls, so the
+ *        same drag still presses.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_scroll_cancels_press(void)
+{
+    for (int fits = 0; fits <= 1; fits++)
+    {
+        ERNode* root = create_root();
+        ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
+        ERProps sp = props_default();
+        sp.width = 200;
+        sp.height = 100;
+        er_node_set_props(sv, &sp);
+
+        ERNode* row = er_node_create(ER_NODE_PRESSABLE);
+        ERProps rp = props_default();
+        rp.width = 200;
+        rp.height = fits ? 50 : 400; /* shorter than the viewport, or taller */
+        er_node_set_props(row, &rp);
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
+        er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
+        er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+
+        er_tree_append_child(sv, row);
+        er_tree_append_child(root, sv);
+        er_commit();
+
+        /* Down on the row, then up 2 px a frame, as a finger moves: past the 5 px slop by the third move. */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 40);
+        for (int y = 38; y >= 20; y -= 2)
+        {
+            embedded_renderer_tick(16U);
+            touch_move(100, y);
+        }
+        embedded_renderer_touch(0, ER_TOUCH_UP, 100, 20);
+
+        if (counts.press_in_count != 1 || counts.press_out_count != 1)
+            return fail("a pressed row did not get exactly one press-in and one press-out");
+        if (!fits && counts.press_count != 0)
+            return fail("a drag that scrolled the list pressed the row it started on");
+        if (fits && counts.press_count != 1)
+            return fail("a drag on a list that cannot scroll lost its press");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief A drag the pressed node claims for itself ends its press: once its own move-should-set takes the
+ *        gesture, releasing inside it is not a tap. A move too short to claim still presses.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_self_claimed_drag_cancels_press(void)
+{
+    for (int claims = 0; claims <= 1; claims++)
+    {
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        rec.should_claim = true;
+        rec.min_abs_dx = 20; /* claim only when |dx| >= 20 */
+
+        ERNode* node = er_node_create(ER_NODE_PRESSABLE);
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        er_node_set_props(node, &p);
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        er_event_set(node, ER_EVENT_PRESS, on_press, &counts);
+        er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, &counts);
+        er_event_set(node, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+        wire_responder(node, &rec);
+        er_responder_query_set(node, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+
+        er_tree_append_child(root, node);
+        er_commit();
+
+        const int end_x = claims ? 40 : 20; /* |dx| 30 claims; |dx| 10 does not */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+        touch_move(end_x, 10);
+        embedded_renderer_touch(0, ER_TOUCH_UP, end_x, 10);
+
+        if (rec.grant_count != claims)
+            return fail("the node's own move-should-set claim did not happen as set up");
+        if (counts.press_in_count != 1 || counts.press_out_count != 1)
+            return fail("a pressed node did not get exactly one press-in and one press-out");
+        if (claims && counts.press_count != 0)
+            return fail("a drag the pressed node claimed for itself still pressed it");
+        if (!claims && counts.press_count != 1)
+            return fail("a short move the node did not claim lost its press");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Builds a horizontally scrollable ScrollView holding one inert (handler-less) child.
  *
  * @param[in] parent          Node to append the ScrollView to.
@@ -2921,6 +3024,10 @@ int main(void)
     if (test_box_none_scroll_view_defers_to_outer() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_new_scene_stops_orphan_scroller() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_scroll_cancels_press() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_self_claimed_drag_cancels_press() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;

@@ -15,8 +15,8 @@
  */
 
 // Calendar math on "local milliseconds": the local wall time, counted from 1970 as if it were UTC. The
-// runtime has Date.now() but no Date objects, and the clock is set by hand in local time, so there is no
-// time zone to handle — the offset the user sets absorbs it.
+// runtime has Date.now() but no Date objects, so there is no time zone to handle here: the clock's offset
+// onto Date.now() absorbs it, whether it was set by hand or comes from the host's network time.
 
 export const MINUTE = 60000;
 const HOUR = 60 * MINUTE;

@@ -760,6 +760,7 @@ extern "C"
         uint32_t placeholder_color;               /**< Placeholder color; 0 = dim gray (0xFF888888). */
         uint32_t cursor_color;                    /**< Cursor bar color; 0 = same as color field. */
         uint8_t editable;                         /**< 1 = editable (default), 0 = read-only. */
+        uint8_t secure_text_entry;                /**< 1 = a dot per character (passwords), 0 = the text. */
 
         /* --- Modal --- */
         uint8_t modal_visible;   /**< 1 = shown, 0 = hidden (default). */

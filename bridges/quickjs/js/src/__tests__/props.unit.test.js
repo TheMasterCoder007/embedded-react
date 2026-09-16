@@ -118,6 +118,18 @@ describe('buildProps', () => {
     });
   });
 
+  it('forwards a <Modal backdropColor> prop, as Flow B and React Native take it', () => {
+    expect(
+      buildProps('Modal', {style: {}, visible: true, backdropColor: '#000000'}),
+    ).toEqual({visible: true, backdropColor: '#000000'});
+  });
+
+  it('forwards a <TextInput secureTextEntry> prop', () => {
+    expect(
+      buildProps('TextInput', {style: {}, value: 'pw', secureTextEntry: true}),
+    ).toEqual({value: 'pw', secureTextEntry: true});
+  });
+
   it('resolves an <Image source> string to imageName', () => {
     expect(buildProps('Image', {style: {}, source: 'wx_sun'})).toEqual({
       imageName: 'wx_sun',

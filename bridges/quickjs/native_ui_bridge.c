@@ -1144,6 +1144,7 @@ typedef enum
     PROP_PLACEHOLDER_TEXT_COLOR,
     PROP_CURSOR_COLOR,
     PROP_EDITABLE,
+    PROP_SECURE_TEXT_ENTRY,
     PROP_VISIBLE,
     PROP_BACKDROP_COLOR,
     PROP_MIN,
@@ -1266,6 +1267,7 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_PLACEHOLDER_TEXT_COLOR] = "placeholderTextColor",
     [PROP_CURSOR_COLOR] = "cursorColor",
     [PROP_EDITABLE] = "editable",
+    [PROP_SECURE_TEXT_ENTRY] = "secureTextEntry",
     [PROP_VISIBLE] = "visible",
     [PROP_BACKDROP_COLOR] = "backdropColor",
     [PROP_MIN] = "min",
@@ -2253,6 +2255,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_COL(PROP_PLACEHOLDER_TEXT_COLOR, placeholder_color);
     ER_COL(PROP_CURSOR_COLOR, cursor_color);
     ER_U8(PROP_EDITABLE, editable);
+    ER_U8(PROP_SECURE_TEXT_ENTRY, secure_text_entry);
 
     /* Modal. */
     ER_U8(PROP_VISIBLE, modal_visible);

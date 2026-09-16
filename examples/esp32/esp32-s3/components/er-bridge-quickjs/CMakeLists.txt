@@ -20,6 +20,7 @@ idf_component_register(
          "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)
     INCLUDE_DIRS "${BRIDGE_DIR}"
     REQUIRES engine quickjs
+    LDFRAGMENTS "linker_psram.lf" # the bridge's tables live in PSRAM (see the file)
 )
 
 # Same rationale as the engine component: don't let IDF's -Werror fail on the bridge's

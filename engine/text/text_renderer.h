@@ -21,6 +21,29 @@
 #include <stdint.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Requested font size is clamped to this range before the registry is asked.
+ *
+ * The floor is where a bitmap glyph stops being legible; the ceiling sits well above the largest
+ * baked face (48), so it only catches a nonsense request — the registry picks the nearest size it
+ * actually has either way. Drawing, BOTH measure paths and anything sized to match the text clamp through
+ * er_text_clamp_font_size(), because measuring at one size and drawing at another lays the text out wrong.
+ */
+#define TEXT_FONT_SIZE_MIN 8U
+#define TEXT_FONT_SIZE_MAX 96U
+
+/** @brief Clamps a requested font size to [TEXT_FONT_SIZE_MIN, TEXT_FONT_SIZE_MAX]. */
+static inline uint8_t er_text_clamp_font_size(uint8_t sz)
+{
+    if (sz < TEXT_FONT_SIZE_MIN)
+        return TEXT_FONT_SIZE_MIN;
+    return (sz > TEXT_FONT_SIZE_MAX) ? TEXT_FONT_SIZE_MAX : sz;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Types: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 

@@ -5897,15 +5897,16 @@ function emitTextInput(el, scope, out, env, state) {
         field: 'cursor_color',
         expr: colorLiteral(String(evalStatic(node, scope))),
       });
-    else if (name === 'editable') {
+    else if (name === 'editable' || name === 'secureTextEntry') {
+      const field = name === 'editable' ? 'editable' : 'secure_text_entry';
       try {
         staticAssigns.push({
-          field: 'editable',
+          field,
           expr: evalStatic(node, scope) ? '1' : '0',
         });
       } catch {
         dynAssigns.push({
-          field: 'editable',
+          field,
           code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
         });
       }
@@ -5913,7 +5914,6 @@ function emitTextInput(el, scope, out, env, state) {
       [
         'autoFocus',
         'keyboardType',
-        'secureTextEntry',
         'maxLength',
         'multiline',
         'autoCapitalize',
@@ -5928,7 +5928,7 @@ function emitTextInput(el, scope, out, env, state) {
     } else
       throw aotError(
         `AOT: <TextInput> prop "${name}" is not supported`,
-        'supported props: value, onChangeText, placeholder, placeholderTextColor, cursorColor, editable, style.',
+        'supported props: value, onChangeText, placeholder, placeholderTextColor, cursorColor, editable, secureTextEntry, style.',
       );
   }
 

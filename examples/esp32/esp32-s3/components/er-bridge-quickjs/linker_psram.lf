@@ -1,0 +1,10 @@
+# Place the QuickJS bridge's static tables (.bss) in external PSRAM instead of internal DRAM.
+#
+# About 22 KB: the node-handle table and its free stack, the vector-op staging buffer, the timer table, the
+# prop atom/slot caches and the keyboard-layout tables. They are read per bridge call, not per pixel, so
+# the PSRAM cache absorbs them, and the internal RAM they held is what WiFi needs on this board.
+# Requires CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (sdkconfig.defaults).
+[mapping:er_bridge_psram_bss]
+archive: liber-bridge-quickjs.a
+entries:
+    * (extram_bss)

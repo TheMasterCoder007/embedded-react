@@ -2930,6 +2930,28 @@ import { View, Text, TextInput } from 'embedded-react';
     expect(c).toContain('p.editable = 0;');
   });
 
+  it('masks a secureTextEntry TextInput, fixed or from state', () => {
+    const fixed = gen(`${T}
+      export function App() {
+        return (<TextInput value="hi" secureTextEntry />);
+      }`);
+    expect(fixed).toContain('p.secure_text_entry = 1;');
+    const toggled = gen(`import { useState } from 'react';
+import { View, Text, TextInput, Pressable } from 'embedded-react';
+      export function App() {
+        const [show, setShow] = useState(false);
+        return (
+          <View>
+            <TextInput value="hi" secureTextEntry={!show} />
+            <Pressable onPress={() => setShow(!show)}><Text>SHOW</Text></Pressable>
+          </View>
+        );
+      }`);
+    expect(toggled).toMatch(
+      /p\.secure_text_entry = \(uint8_t\)\(\(.*s_state\.show.*\) \? 1 : 0\);/,
+    );
+  });
+
   it('rejects a non-function onChangeText', () => {
     expect(() =>
       gen(`${T}
