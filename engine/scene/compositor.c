@@ -3136,6 +3136,14 @@ void er_node_destroy(ERNode* node)
     er_layout_anim_cancel_node(node->tag);
     /* A touch handler destroying nodes mid-dispatch must not let the rest of the dispatch reach their slots. */
     er_input_forget_node(node->tag);
+    /* The focus goes with the input, or the next node in its slot would take the typing. No blur: the node is
+     * gone. The keyboard it brought up still has to be erased. */
+    if (node->tag == s_focused_input_tag)
+    {
+        s_focused_input_tag = ER_INVALID_TAG;
+        s_kbd_dirty = true;
+        s_kbd_layer = 0;
+    }
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */

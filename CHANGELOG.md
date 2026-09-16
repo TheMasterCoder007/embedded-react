@@ -113,6 +113,10 @@ See the README for the release process.
   that took its place. The touch still bubbles up to the ancestors above it, and the new node can't claim
   the gesture.
 
+- Unmounting the focused `<TextInput>` now drops the focus with it. A node mounted right after could
+  receive the typing meant for the old input, and the on-screen keyboard could stay drawn with nothing
+  focused.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
