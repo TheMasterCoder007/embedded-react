@@ -4791,9 +4791,11 @@ void er_tree_set_root(ERNode* root)
 void er_reset(void)
 {
     fade_cache_invalidate();
-    /* Empty the node pool and clear the scene root. er_node_create pops the free list or bumps
-     * s_next_tag and memsets each slot on allocation, so resetting the counters is a complete reset —
-     * nothing scans s_nodes for stale in_use flags. */
+    /* Empty the node pool and clear the scene root. Every slot is marked unused, not just the allocator
+     * rewound: the per-frame sweeps walk the pool by in_use, and a tag or ERNodeRef held from before the
+     * reset (by a handler that reset the scene mid-dispatch, say) must stop resolving to its old node. */
+    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
+        s_nodes[i].in_use = false;
     s_next_tag = 0;
     s_free_count = 0;
     s_root_tag = ER_INVALID_TAG;

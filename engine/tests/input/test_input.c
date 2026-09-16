@@ -3004,6 +3004,66 @@ static int test_ancestor_replaced_during_negotiation(void)
     return EXIT_SUCCESS;
 }
 
+/** @brief Event callback: empties the scene, as a reload from inside a handler would. */
+static void on_event_reset_scene(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    er_reset();
+}
+
+/** @brief Should-set query callback: empties the scene, then claims the responder. */
+static bool query_reset_and_claim(ERNode* node, const EREventData* data, void* user_data)
+{
+    on_event_reset_scene(node, data, user_data);
+    return true;
+}
+
+/**
+ * @brief Resetting the scene from a handler ends every node in it, even ones whose slots nothing reuses: the
+ *        rest of the touch reaches none of them, and the pool reports them gone.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_scene_reset_during_touch(void)
+{
+    {
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        ERNode* target = append_view(root, 10, 10, 40, 40);
+        wire_responder(target, &rec);
+        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_reset_and_claim, &rec);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (er_node_in_use_count() != 0)
+            return fail("nodes from before a reset are still reported in use");
+        if (rec.grant_count != 0 || rec.release_count != 0)
+            return fail("a node whose own query reset the scene was granted the touch");
+    }
+    {
+        ERNode* root = create_root();
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        ERNode* row = create_pressable(10, 10, 40, 40, &counts);
+        er_tree_append_child(root, row);
+        er_event_set(row, ER_EVENT_PRESS_OUT, on_event_reset_scene, NULL);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        if (counts.press_in_count != 1)
+            return fail("the row was not pressed, so the scenario proves nothing");
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (counts.press_count != 0)
+            return fail("releasing on a row whose onPressOut reset the scene still pressed it");
+    }
+    return EXIT_SUCCESS;
+}
+
 /**
  * @brief Checks that the auto-scroll grant honours pointer_events: a ScrollView declared
  *        box-none or none is transparent to a pan aimed at itself, while a plain one scrolls.
@@ -3977,6 +4037,8 @@ int main(void)
     if (test_ancestor_replaced_while_bubbling() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_ancestor_replaced_during_negotiation() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_scene_reset_during_touch() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;

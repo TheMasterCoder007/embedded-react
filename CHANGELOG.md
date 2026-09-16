@@ -117,6 +117,10 @@ See the README for the release process.
   receive the typing meant for the old input, and the on-screen keyboard could stay drawn with nothing
   focused.
 
+- `er_reset()` now ends every node of the old scene. A handler that resets the scene in the middle of a
+  touch no longer has the rest of that touch reach the old nodes, and `er_node_in_use_count()` reports 0
+  afterwards instead of the old scene's count.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
