@@ -4798,6 +4798,7 @@ void er_reset(void)
         s_nodes[i].in_use = false;
     s_next_tag = 0;
     s_free_count = 0;
+    s_parallel_unsafe = 0; /* the old scene's vectors, arcs and shadow casters are gone with it */
     s_root_tag = ER_INVALID_TAG;
     s_focused_input_tag = ER_INVALID_TAG;
     s_last_cursor_phase = 2U;

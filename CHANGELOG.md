@@ -121,6 +121,9 @@ See the README for the release process.
   touch no longer has the rest of that touch reach the old nodes, and `er_node_in_use_count()` reports 0
   afterwards instead of the old scene's count.
 
+- On boards that render on more than one core, reloading from a scene with an `<Svg>`, `<Dial>` or shadow into
+  one without no longer leaves rendering on a single core for the rest of the session.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole

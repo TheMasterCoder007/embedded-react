@@ -260,6 +260,41 @@ static int host_worker_id(void)
     return 0; /* the render thread */
 }
 
+/** @brief Props with every layout field AUTO and full opacity, the base every node below starts from. */
+static ERProps auto_props(void)
+{
+    ERProps p = {0};
+    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+    p.min_width = p.max_width = p.min_height = p.max_height = ER_LAYOUT_AUTO;
+    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
+    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
+    p.padding_horizontal = p.padding_vertical = ER_LAYOUT_AUTO;
+    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
+    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
+    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
+    p.flex_basis = ER_LAYOUT_AUTO;
+    p.opacity = 255U;
+    return p;
+}
+
+/**
+ * @brief Empties the scene and installs a full-framebuffer root.
+ *
+ * @return The root.
+ */
+static ERNode* new_scene(void)
+{
+    er_reset();
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = auto_props();
+    rp.width = FB_W;
+    rp.height = FB_H;
+    rp.background_color = 0xFF101828U;
+    er_node_set_props(root, &rp);
+    er_tree_set_root(root);
+    return root;
+}
+
 #endif /* ERUI_RENDER_WORKERS > 1 */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -338,26 +373,8 @@ int main(void)
         static const EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
         embedded_renderer_set_backend(&be); /* re-inits worker contexts; workers stay installed */
 
-        er_reset();
-
-        ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = {0};
-        rp.left = rp.top = rp.right = rp.bottom = ER_LAYOUT_AUTO;
-        rp.min_width = rp.max_width = rp.min_height = rp.max_height = ER_LAYOUT_AUTO;
-        rp.padding = rp.padding_left = rp.padding_top = ER_LAYOUT_AUTO;
-        rp.padding_right = rp.padding_bottom = ER_LAYOUT_AUTO;
-        rp.padding_horizontal = rp.padding_vertical = ER_LAYOUT_AUTO;
-        rp.margin = rp.margin_left = rp.margin_top = ER_LAYOUT_AUTO;
-        rp.margin_right = rp.margin_bottom = ER_LAYOUT_AUTO;
-        rp.gap = rp.row_gap = rp.column_gap = ER_LAYOUT_AUTO;
-        rp.flex_basis = ER_LAYOUT_AUTO;
-        rp.opacity = 255U;
-        const ERProps base = rp; /* AUTO-initialised template for the children */
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFF101828U;
-        er_node_set_props(root, &rp);
-        er_tree_set_root(root);
+        ERNode* root = new_scene();
+        const ERProps base = auto_props(); /* AUTO-initialised template for the children */
 
         /* A 40px-tall tile whose color changes drive the partial-damage round below. */
         ERNode* tile = er_node_create(ER_NODE_VIEW);
@@ -451,6 +468,33 @@ int main(void)
             return fail("equivalence: parallel and serial framebuffers differ (partial damage)");
 
         embedded_renderer_set_workers(&hooks); /* restore for the uninstall test below */
+    }
+
+    /* ---- A reset ends the old scene's hold on single-core rendering. ---- */
+    {
+        ERNode* root = new_scene();
+        ERNode* arc = er_node_create(ER_NODE_ARC);
+        ERProps ap = auto_props();
+        ap.position = ER_POS_ABSOLUTE;
+        ap.left = 10;
+        ap.top = 10;
+        ap.width = 40;
+        ap.height = 40;
+        ap.arc_width = 6;
+        ap.arc_max = 100.0f;
+        ap.arc_value = 50.0f;
+        er_node_set_props(arc, &ap);
+        er_tree_append_child(root, arc);
+
+        const uint32_t forks = er_parallel_frames();
+        er_commit();
+        if (er_parallel_frames() != forks)
+            return fail("reset: a scene with an Arc must render single-core, or the scenario proves nothing");
+
+        new_scene();
+        er_commit();
+        if (er_parallel_frames() != forks + 1)
+            return fail("reset: a scene without an Arc still rendered single-core after a reset from one with");
     }
 
     /* ---- Uninstall: back to the exact single-core path. ---- */
