@@ -3134,6 +3134,16 @@ void er_node_destroy(ERNode* node)
     er_anim_unbind_node(node->tag);
     er_anim_cancel_node(node->tag);
     er_layout_anim_cancel_node(node->tag);
+    /* A touch handler destroying nodes mid-dispatch must not let the rest of the dispatch reach their slots. */
+    er_input_forget_node(node->tag);
+    /* The focus goes with the input, or the next node in its slot would take the typing. No blur: the node is
+     * gone. The keyboard it brought up still has to be erased. */
+    if (node->tag == s_focused_input_tag)
+    {
+        s_focused_input_tag = ER_INVALID_TAG;
+        s_kbd_dirty = true;
+        s_kbd_layer = 0;
+    }
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */
@@ -4781,11 +4791,14 @@ void er_tree_set_root(ERNode* root)
 void er_reset(void)
 {
     fade_cache_invalidate();
-    /* Empty the node pool and clear the scene root. er_node_create pops the free list or bumps
-     * s_next_tag and memsets each slot on allocation, so resetting the counters is a complete reset —
-     * nothing scans s_nodes for stale in_use flags. */
+    /* Empty the node pool and clear the scene root. Every slot is marked unused, not just the allocator
+     * rewound: the per-frame sweeps walk the pool by in_use, and a tag or ERNodeRef held from before the
+     * reset (by a handler that reset the scene mid-dispatch, say) must stop resolving to its old node. */
+    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
+        s_nodes[i].in_use = false;
     s_next_tag = 0;
     s_free_count = 0;
+    s_parallel_unsafe = 0; /* the old scene's vectors, arcs and shadow casters are gone with it */
     s_root_tag = ER_INVALID_TAG;
     s_focused_input_tag = ER_INVALID_TAG;
     s_last_cursor_phase = 2U;

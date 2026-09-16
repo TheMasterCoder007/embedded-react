@@ -2155,6 +2155,23 @@ typedef struct
     int value_changes;
 } DialRecord;
 
+/**
+ * @brief Destroys a node and everything under it, children first, as the JS bridge does.
+ *
+ * @param[in] node  Root of the subtree to destroy.
+ */
+static void destroy_subtree(ERNode* node)
+{
+    ERNode* child = er_node_first_child(node);
+    while (child)
+    {
+        ERNode* next = er_node_next_sibling(child);
+        destroy_subtree(child);
+        child = next;
+    }
+    er_node_destroy(node);
+}
+
 /** @brief Event callback: unmounts a node, and mounts one in its place, as a React commit in the handler would. */
 static void on_event_unmount(ERNode* node, const EREventData* data, void* user_data)
 {
@@ -2165,7 +2182,7 @@ static void on_event_unmount(ERNode* node, const EREventData* data, void* user_d
         return;
     er_tree_remove_child(unmount->parent, unmount->victim);
     if (!unmount->detach_only)
-        er_node_destroy(unmount->victim);
+        destroy_subtree(unmount->victim);
     unmount->victim = NULL;
     if (unmount->mount)
         unmount->mounted = unmount->mount(unmount->parent, unmount->mount_ctx);
@@ -2285,6 +2302,51 @@ static bool query_unmount_and_claim(ERNode* node, const EREventData* data, void*
     return true;
 }
 
+/** @brief Should-set query callback: unmounts a node (see on_event_unmount), then declines the responder. */
+static bool query_unmount_and_decline(ERNode* node, const EREventData* data, void* user_data)
+{
+    on_event_unmount(node, data, user_data);
+    return false;
+}
+
+/**
+ * @brief Mounts a View with mount_view() that also claims the responder on touch-down.
+ *
+ * @param[in] parent  Node to append it to.
+ * @param[in] ctx     ResponderRecord receiving its events; its should_claim decides the claim.
+ *
+ * @return The View.
+ */
+static ERNode* mount_claiming_view(ERNode* parent, void* ctx)
+{
+    ERNode* node = mount_view(parent, ctx);
+    er_responder_query_set(node, ER_QUERY_START_SHOULD_SET, query_should_claim, ctx);
+    return node;
+}
+
+/**
+ * @brief Creates an absolutely positioned View and appends it to a parent.
+ *
+ * @param[in] parent  Node to append it to.
+ * @param[in] x,y     Position inside the parent.
+ * @param[in] w,h     Size in pixels.
+ *
+ * @return The View.
+ */
+static ERNode* append_view(ERNode* parent, int16_t x, int16_t y, int16_t w, int16_t h)
+{
+    ERNode* node = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_default();
+    p.position = ER_POS_ABSOLUTE;
+    p.left = x;
+    p.top = y;
+    p.width = w;
+    p.height = h;
+    er_node_set_props(node, &p);
+    er_tree_append_child(parent, node);
+    return node;
+}
+
 /**
  * @brief The pressed node can be gone before its press even starts: the should-set queries and the
  *        grant are app code, and under the JS bridge that code can commit a React update that unmounts
@@ -2342,6 +2404,7 @@ static int test_press_target_unmounted_during_grant(void)
         er_event_set(container, ER_EVENT_RESPONDER_GRANT, on_event_unmount, &unmount);
 
         embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        er_commit(); /* lay the new node out under the finger, so releasing there would press it */
         embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
 
         if (unmount.victim != NULL)
@@ -2746,6 +2809,258 @@ static int test_scroll_responder_replaced_on_release(void)
     if (successor_scrolls != 0)
         return fail("a ScrollView mounted into the released scroller's slot inherited its fling");
 
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief A responder destroyed mid-drag, by its own onResponderMove or by a commit between moves, gets nothing
+ *        more of the gesture, and neither does a node mounted into its pool slot. The gesture stays claimed, so
+ *        the ScrollView behind it does not take over the rest of the drag.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_responder_destroyed_mid_drag(void)
+{
+    for (int in_handler = 0; in_handler <= 1; in_handler++)
+    {
+        for (int replace = 0; replace <= 1; replace++)
+        {
+            ERNode* root = create_root();
+            int scroll_events = 0;
+            ERNode* sv = create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
+            ERNode* content = er_node_first_child(sv);
+
+            ResponderRecord rec = {0};
+            rec.should_claim = true;
+            ERNode* target = append_view(content, 10, 10, 40, 40);
+            wire_responder(target, &rec);
+            er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+            er_commit();
+
+            ResponderRecord successor = {0};
+            UnmountOnEvent unmount = {content, target, false, replace ? mount_view : NULL, &successor, NULL};
+            if (in_handler)
+                er_event_set(target, ER_EVENT_RESPONDER_MOVE, on_event_unmount, &unmount);
+
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+            if (rec.grant_count != 1)
+                return fail("the touched node did not take the gesture, so the scenario proves nothing");
+            touch_move(30, 20);
+            if (!in_handler)
+                on_event_unmount(NULL, NULL, &unmount);
+            er_commit();
+
+            if (unmount.victim != NULL)
+                return fail("the responder was never unmounted");
+            if (replace && unmount.mounted != target)
+                return fail("the new node did not reuse the responder's slot, so the scenario proves nothing");
+
+            const int moves_before = rec.move_count;
+            touch_move(40, 20);
+            touch_move(50, 20);
+            embedded_renderer_touch(0, ER_TOUCH_UP, 50, 20);
+
+            if (rec.move_count != moves_before || rec.release_count != 0 || rec.terminate_count != 0)
+                return fail("a responder destroyed mid-drag was handed the rest of the gesture");
+            if (successor.grant_count != 0 || successor.move_count != 0 || successor.release_count != 0
+                || successor.terminate_count != 0)
+                return fail("a node mounted into a destroyed responder's slot was handed the rest of its gesture");
+            if (scroll_events != 0)
+                return fail("the ScrollView behind a responder destroyed mid-drag took over the rest of the drag");
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief A dial destroyed mid-drag, by its own onValueChange or by a commit between moves, is dragged no further.
+ *        A dial mounted into its pool slot is neither dragged nor held by that finger: a second finger can still
+ *        drag it, and lifting the first releases nothing.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_arc_destroyed_mid_drag(void)
+{
+    const int bottom_x = 70;
+    const int bottom_y = 70 + 42;
+
+    for (int in_handler = 0; in_handler <= 1; in_handler++)
+    {
+        ERNode* root = create_root();
+        DialRecord dial = {0};
+        ERNode* arc = mount_dial(root, &dial);
+        er_commit();
+
+        DialRecord successor = {0};
+        UnmountOnEvent unmount = {root, NULL, false, mount_dial, &successor, NULL};
+        if (in_handler)
+            er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_event_unmount, &unmount);
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
+        if (dial.rec.grant_count != 1)
+            return fail("a touch on the ring did not start a drag, so the scenario proves nothing");
+
+        unmount.victim = arc;
+        touch_move(DIAL_RIGHT_X, DIAL_RIGHT_Y);
+        if (!in_handler)
+            on_event_unmount(NULL, NULL, &unmount);
+        er_commit();
+
+        if (unmount.victim != NULL)
+            return fail("the dial was never unmounted");
+        if (unmount.mounted != arc)
+            return fail("the new dial did not reuse the old one's slot, so the scenario proves nothing");
+
+        touch_move(bottom_x, bottom_y);
+        if (successor.value_changes != 0 || successor.rec.grant_count != 0 || successor.rec.move_count != 0)
+            return fail("a dial mounted into a dragged dial's slot was dragged by that finger");
+
+        embedded_renderer_touch(1, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
+        embedded_renderer_touch(1, ER_TOUCH_UP, DIAL_TOP_X, DIAL_TOP_Y);
+        if (successor.rec.grant_count != 1 || successor.value_changes != 1)
+            return fail("a dial mounted into a dragged dial's slot was still held by the old drag's finger");
+
+        embedded_renderer_touch(0, ER_TOUCH_UP, bottom_x, bottom_y);
+        if (successor.rec.release_count != 1)
+            return fail("lifting the old drag's finger released the dial mounted into its slot");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief A raw touch bubbles along the ancestors the touched node had when it was dispatched. A handler that
+ *        swaps out a subtree on that path hands nothing to a node mounted into one of its pool slots, and the
+ *        ancestors above the swap still receive the touch.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_ancestor_replaced_while_bubbling(void)
+{
+    ERNode* root = create_root();
+    EventCounts outer;
+    memset(&outer, 0, sizeof(outer));
+    ERNode* grand = append_view(root, 0, 0, 120, 120);
+    er_event_set(grand, ER_EVENT_TOUCH_START, on_touch_start, &outer);
+    ERNode* parent = append_view(grand, 0, 0, 80, 80);
+    ERNode* leaf = append_view(parent, 10, 10, 40, 40);
+    er_commit();
+
+    EventCounts successor;
+    memset(&successor, 0, sizeof(successor));
+    UnmountOnEvent unmount = {grand, parent, false, mount_pressable, &successor, NULL};
+    er_event_set(leaf, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+    if (unmount.victim != NULL)
+        return fail("onTouchStart never unmounted the touched node's parent");
+    if (unmount.mounted != parent)
+        return fail("the new node did not reuse the parent's slot, so the scenario proves nothing");
+    if (successor.touch_start_count != 0)
+        return fail("a node mounted into an ancestor's slot received the touch-start bubbling through it");
+    if (outer.touch_start_count != 1)
+        return fail("the touch-start stopped bubbling at the swapped subtree instead of reaching the node above it");
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Responder negotiation asks the ancestors the touched node had when it began. A should-set query that
+ *        swaps out a subtree on that path lets no node mounted into one of its pool slots claim the touch, and
+ *        the ancestor above the swap is still asked.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_ancestor_replaced_during_negotiation(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord outer = {0};
+    outer.should_claim = true;
+    ERNode* grand = append_view(root, 0, 0, 120, 120);
+    wire_responder(grand, &outer);
+    er_responder_query_set(grand, ER_QUERY_START_SHOULD_SET, query_should_claim, &outer);
+    ERNode* parent = append_view(grand, 0, 0, 80, 80);
+    ERNode* leaf = append_view(parent, 10, 10, 40, 40);
+    er_commit();
+
+    ResponderRecord successor = {0};
+    successor.should_claim = true;
+    UnmountOnEvent unmount = {grand, parent, false, mount_claiming_view, &successor, NULL};
+    er_responder_query_set(leaf, ER_QUERY_START_SHOULD_SET, query_unmount_and_decline, &unmount);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+    if (unmount.victim != NULL)
+        return fail("the should-set query never unmounted the touched node's parent");
+    if (unmount.mounted != parent)
+        return fail("the new node did not reuse the parent's slot, so the scenario proves nothing");
+    if (successor.grant_count != 0)
+        return fail("a node mounted into an ancestor's slot claimed the touch in its place");
+    if (outer.grant_count != 1 || outer.release_count != 1)
+        return fail("negotiation stopped at the swapped subtree instead of asking the node above it");
+
+    return EXIT_SUCCESS;
+}
+
+/** @brief Event callback: empties the scene, as a reload from inside a handler would. */
+static void on_event_reset_scene(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    er_reset();
+}
+
+/** @brief Should-set query callback: empties the scene, then claims the responder. */
+static bool query_reset_and_claim(ERNode* node, const EREventData* data, void* user_data)
+{
+    on_event_reset_scene(node, data, user_data);
+    return true;
+}
+
+/**
+ * @brief Resetting the scene from a handler ends every node in it, even ones whose slots nothing reuses: the
+ *        rest of the touch reaches none of them, and the pool reports them gone.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_scene_reset_during_touch(void)
+{
+    {
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        ERNode* target = append_view(root, 10, 10, 40, 40);
+        wire_responder(target, &rec);
+        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_reset_and_claim, &rec);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (er_node_in_use_count() != 0)
+            return fail("nodes from before a reset are still reported in use");
+        if (rec.grant_count != 0 || rec.release_count != 0)
+            return fail("a node whose own query reset the scene was granted the touch");
+    }
+    {
+        ERNode* root = create_root();
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        ERNode* row = create_pressable(10, 10, 40, 40, &counts);
+        er_tree_append_child(root, row);
+        er_event_set(row, ER_EVENT_PRESS_OUT, on_event_reset_scene, NULL);
+        er_commit();
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        if (counts.press_in_count != 1)
+            return fail("the row was not pressed, so the scenario proves nothing");
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (counts.press_count != 0)
+            return fail("releasing on a row whose onPressOut reset the scene still pressed it");
+    }
     return EXIT_SUCCESS;
 }
 
@@ -3714,6 +4029,16 @@ int main(void)
     if (test_responder_replaced_during_move() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_scroll_responder_replaced_on_release() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_responder_destroyed_mid_drag() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_arc_destroyed_mid_drag() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_ancestor_replaced_while_bubbling() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_ancestor_replaced_during_negotiation() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_scene_reset_during_touch() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;

@@ -98,6 +98,21 @@ typedef struct
     int last_y;    /**< Y of the last touch dispatched for this finger. */
 } ERPendingMove;
 
+/**
+ * @brief A node's ancestors, snapshotted for a walk that calls app code at each one.
+ *
+ * Bubbling a raw touch and negotiating the responder both visit the ancestors the touched node had when the
+ * walk began, and any handler along the way can destroy nodes further up and create others in their pool
+ * slots. The walk stays registered while it runs so er_input_forget_node() can blank a destroyed node's
+ * entry, rather than the walk reaching whatever node inherits that tag.
+ */
+typedef struct ERChainWalk
+{
+    uint16_t* tags;            /**< Leaf-to-root tags; a destroyed node's entry reads ER_INVALID_TAG. */
+    int len;                   /**< Entries in tags. */
+    struct ERChainWalk* outer; /**< The walk a handler interrupted by dispatching again, or NULL. */
+} ERChainWalk;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -112,6 +127,9 @@ static bool s_coalesce_moves = true;
 
 /** @brief Guards er_input_flush_moves() against a handler re-entering the frame path. */
 static bool s_flushing_moves = false;
+
+/** @brief Innermost ancestor walk in progress, linked to the walks it interrupted. */
+static ERChainWalk* s_chain_walks = NULL;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -623,21 +641,54 @@ static void dispatch_to_node_data(ERNode* node, EREventType event, const EREvent
 }
 
 /**
- * @brief Dispatches a raw touch event from target up through ancestors.
+ * @brief Snapshots a node's ancestors and registers the walk over them.
  *
- * @param[in] target  Original target node.
- * @param[in] event   Raw touch event type.
- * @param[in] data    Event payload to forward to each handler.
+ * Every chain_walk_begin() is paired with a chain_walk_end() once the last handler along the chain returns.
+ *
+ * @param[out] walk   Walk to register.
+ * @param[out] tags   Caller buffer of ERUI_MAX_NODES tags; receives the chain, leaf first.
+ * @param[in]  start  Leaf node; NULL gives an empty chain.
  */
-static void dispatch_bubble_data(ERNode* target, EREventType event, const EREventData* data)
+static void chain_walk_begin(ERChainWalk* walk, uint16_t* tags, const ERNode* start)
 {
-    ERNode* node = target;
-    while (node)
+    walk->tags = tags;
+    walk->len = 0;
+    for (const ERNode* node = start; node && walk->len < (int)ERUI_MAX_NODES; node = er_get_node(node->parent_tag))
+        tags[walk->len++] = node->tag;
+
+    walk->outer = s_chain_walks;
+    s_chain_walks = walk;
+}
+
+/**
+ * @brief Unregisters the innermost walk, started by chain_walk_begin().
+ *
+ * @param[in] walk  The walk to end.
+ */
+static void chain_walk_end(const ERChainWalk* walk)
+{
+    s_chain_walks = walk->outer;
+}
+
+/**
+ * @brief Dispatches a raw touch event from target up through the ancestors it had when the dispatch began.
+ *
+ * @param[out] chain   Scratch buffer of ERUI_MAX_NODES tags for the walk.
+ * @param[in]  target  Original target node.
+ * @param[in]  event   Raw touch event type.
+ * @param[in]  data    Event payload to forward to each handler.
+ */
+static void dispatch_bubble_data(uint16_t* chain, const ERNode* target, EREventType event, const EREventData* data)
+{
+    ERChainWalk walk;
+    chain_walk_begin(&walk, chain, target);
+    for (int i = 0; i < walk.len; i++)
     {
+        ERNode* node = er_get_node(walk.tags[i]);
         if (node_takes_own_touches(node))
             dispatch_to_node_data(node, event, data);
-        node = er_get_node(node->parent_tag);
     }
+    chain_walk_end(&walk);
 }
 
 /**
@@ -695,29 +746,6 @@ static bool track_touch_velocity(ERTouchState* touch, int x, int y)
 }
 
 /**
- * @brief Builds a leaf-to-root array of node tags starting from a given node.
- *
- * chain[0] is start (leaf); chain[return_value - 1] is the root-most ancestor reached.
- *
- * @param[in]  start    Leaf node to start from.
- * @param[out] chain    Output tag buffer (caller-allocated).
- * @param[in]  max_len  Capacity of chain.
- *
- * @return Number of tags written into chain.
- */
-static int build_ancestor_chain(const ERNode* start, uint16_t* chain, int max_len)
-{
-    int count = 0;
-    const ERNode* node = start;
-    while (node && count < max_len)
-    {
-        chain[count++] = node->tag;
-        node = er_get_node(node->parent_tag);
-    }
-    return count;
-}
-
-/**
  * @brief Asks one node whether it wants the responder.
  *
  * @param[in] node   Node to ask; may be NULL.
@@ -739,14 +767,14 @@ static ERNode* query_claims(ERNode* node, ERResponderQuery query, const EREventD
 }
 
 /**
- * @brief Runs capture-then-bubble responder negotiation along an ancestor chain.
+ * @brief Runs capture-then-bubble responder negotiation along a node's ancestors.
  *
  * Iterates root→leaf (capture phase) then leaf→root (bubble phase), calling the
  * corresponding query callback on each node. Returns the first node whose callback
  * returns true, or NULL if no node claims the responder.
  *
- * @param[in]  chain          Tag array built by build_ancestor_chain (chain[0]=leaf).
- * @param[in]  chain_len      Number of entries in chain.
+ * @param[out] chain          Scratch buffer of ERUI_MAX_NODES tags for the walk.
+ * @param[in]  start          Leaf node the negotiation starts from.
  * @param[in]  capture_query  Query type for the capture phase.
  * @param[in]  bubble_query   Query type for the bubble phase.
  * @param[in]  data           Event data forwarded to each callback.
@@ -754,39 +782,37 @@ static ERNode* query_claims(ERNode* node, ERResponderQuery query, const EREventD
  *
  * @return The claiming node, or NULL when no node claims the responder.
  */
-static ERNode* negotiate_responder(const uint16_t* chain,
-                                   int chain_len,
+static ERNode* negotiate_responder(uint16_t* chain,
+                                   const ERNode* start,
                                    ERResponderQuery capture_query,
                                    ERResponderQuery bubble_query,
                                    const EREventData* data,
                                    ERClaimPhase* out_phase)
 {
-    if (out_phase)
-        *out_phase = ER_CLAIM_NONE;
+    ERChainWalk walk;
+    chain_walk_begin(&walk, chain, start);
+    ERNode* claimant = NULL;
+    ERClaimPhase phase = ER_CLAIM_NONE;
 
     /* Capture phase: root → leaf */
-    for (int i = chain_len - 1; i >= 0; i--)
+    for (int i = walk.len - 1; i >= 0 && !claimant; i--)
     {
-        ERNode* node = query_claims(er_get_node(chain[i]), capture_query, data);
-        if (node)
-        {
-            if (out_phase)
-                *out_phase = ER_CLAIM_CAPTURE;
-            return node;
-        }
+        claimant = query_claims(er_get_node(walk.tags[i]), capture_query, data);
+        if (claimant)
+            phase = ER_CLAIM_CAPTURE;
     }
     /* Bubble phase: leaf → root */
-    for (int i = 0; i < chain_len; i++)
+    for (int i = 0; i < walk.len && !claimant; i++)
     {
-        ERNode* node = query_claims(er_get_node(chain[i]), bubble_query, data);
-        if (node)
-        {
-            if (out_phase)
-                *out_phase = ER_CLAIM_BUBBLE;
-            return node;
-        }
+        claimant = query_claims(er_get_node(walk.tags[i]), bubble_query, data);
+        if (claimant)
+            phase = ER_CLAIM_BUBBLE;
     }
-    return NULL;
+
+    chain_walk_end(&walk);
+    if (out_phase)
+        *out_phase = phase;
+    return claimant;
 }
 
 /**
@@ -854,14 +880,15 @@ static void arc_drag_end(const ERTouchState* touch, uint8_t finger_id);
  * @param[in,out] touch      Touch state to cancel.
  * @param[in]     finger_id  Finger this slot belongs to (releases only a drag IT owns).
  * @param[in]     x,y        Touch coordinates.
+ * @param[out]    chain      Scratch buffer of ERUI_MAX_NODES tags for the bubbling cancel.
  */
-static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
+static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y, uint16_t* chain)
 {
     if (!touch->active)
         return;
 
     const EREventData rdata = gesture_data(touch, x, y);
-    dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_CANCEL, &rdata);
+    dispatch_bubble_data(chain, er_node_deref(touch->touch_target), ER_EVENT_TOUCH_CANCEL, &rdata);
     ERNode* press_target = er_node_deref(touch->press_target);
     if (press_target && touch->inside)
         dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
@@ -1068,6 +1095,14 @@ void er_input_reset(void)
     memset(s_pending_moves, 0, sizeof(s_pending_moves));
     s_flushing_moves = false;
 
+    /* A reset from inside a handler recycles every tag without destroying a node, so a walk still in progress
+     * must not reach any of them. Each walk unregisters itself as it returns. */
+    for (ERChainWalk* walk = s_chain_walks; walk; walk = walk->outer)
+    {
+        for (int i = 0; i < walk->len; i++)
+            walk->tags[i] = ER_INVALID_TAG;
+    }
+
     /* Zero momentum velocities on every pool node so that scroll state from a previous
      * scene (or a previous test) cannot outlive the backend reset and fire a stale
      * event callback.  er_get_node() returns NULL for unused slots. */
@@ -1078,6 +1113,18 @@ void er_input_reset(void)
         {
             n->scroll_vel_x = 0.0f;
             n->scroll_vel_y = 0.0f;
+        }
+    }
+}
+
+void er_input_forget_node(uint16_t tag)
+{
+    for (ERChainWalk* walk = s_chain_walks; walk; walk = walk->outer)
+    {
+        for (int i = 0; i < walk->len; i++)
+        {
+            if (walk->tags[i] == tag)
+                walk->tags[i] = ER_INVALID_TAG;
         }
     }
 }
@@ -1209,11 +1256,15 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
     ERTouchState* touch = &s_touches[finger_id];
 
+    /* Every ancestor walk below uses this one buffer: each walk ends before the next begins, and a handler that
+     * dispatches again gets a buffer of its own. */
+    uint16_t chain[ERUI_MAX_NODES];
+
     switch (phase)
     {
         case ER_TOUCH_DOWN:
         {
-            cancel_touch(touch, finger_id, x, y);
+            cancel_touch(touch, finger_id, x, y, chain);
 
             ERNode* hit = hit_test(x, y);
             ERNode* press_target = nearest_press_target(hit);
@@ -1246,7 +1297,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             touch->touch_target = er_node_ref(hit);
 
             const EREventData ddata = gesture_data(touch, x, y);
-            dispatch_bubble_data(hit, ER_EVENT_TOUCH_START, &ddata);
+            dispatch_bubble_data(chain, hit, ER_EVENT_TOUCH_START, &ddata);
 
             hit = er_node_deref(touch->touch_target);
 
@@ -1257,15 +1308,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
              * that is how a Pressable inside a claiming container still reports its own taps. */
             if (hit)
             {
-                uint16_t chain[ERUI_MAX_NODES];
-                const int chain_len = build_ancestor_chain(hit, chain, ERUI_MAX_NODES);
                 ERClaimPhase claim_phase = ER_CLAIM_NONE;
-                ERNode* claimant = negotiate_responder(chain,
-                                                       chain_len,
-                                                       ER_QUERY_START_SHOULD_SET_CAPTURE,
-                                                       ER_QUERY_START_SHOULD_SET,
-                                                       &ddata,
-                                                       &claim_phase);
+                ERNode* claimant = negotiate_responder(
+                    chain, hit, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &ddata, &claim_phase);
                 if (claimant)
                 {
                     const bool claimant_is_pressed = claimant == er_node_deref(touch->press_target);
@@ -1350,7 +1395,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             const EREventData rdata = gesture_data(touch, x, y);
             const int dx = rdata.dx;
             const int dy = rdata.dy;
-            dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_MOVE, &rdata);
+            dispatch_bubble_data(chain, er_node_deref(touch->touch_target), ER_EVENT_TOUCH_MOVE, &rdata);
 
             ERNode* press_target = er_node_deref(touch->press_target);
             if (press_target)
@@ -1386,10 +1431,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             ERNode* touch_target = er_node_deref(touch->touch_target);
             if (touch_target)
             {
-                uint16_t chain[ERUI_MAX_NODES];
-                const int chain_len = build_ancestor_chain(touch_target, chain, ERUI_MAX_NODES);
                 ERNode* claimant = negotiate_responder(
-                    chain, chain_len, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata, NULL);
+                    chain, touch_target, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata, NULL);
                 responder = er_node_deref(touch->responder);
 
                 if (claimant && claimant != responder)
@@ -1493,7 +1536,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
              * rest before lifting should not launch the content.) */
             const EREventData udata = gesture_data(touch, x, y);
 
-            dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_END, &udata);
+            dispatch_bubble_data(chain, er_node_deref(touch->touch_target), ER_EVENT_TOUCH_END, &udata);
             press_target = er_node_deref(touch->press_target);
             if (press_target)
             {
@@ -1572,7 +1615,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
         }
         case ER_TOUCH_CANCEL:
         {
-            cancel_touch(touch, finger_id, x, y);
+            cancel_touch(touch, finger_id, x, y, chain);
             break;
         }
         default:

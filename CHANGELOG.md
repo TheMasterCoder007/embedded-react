@@ -109,6 +109,21 @@ See the README for the release process.
   `onTouchStart` or `onResponderGrant` no longer starts a drag, and a node mounted while the finger is still
   down, even by that same handler, no longer picks up the rest of the touch.
 
+- A touch handler that replaces an ancestor of the touched node no longer hands the touch to the node
+  that took its place. The touch still bubbles up to the ancestors above it, and the new node can't claim
+  the gesture.
+
+- Unmounting the focused `<TextInput>` now drops the focus with it. A node mounted right after could
+  receive the typing meant for the old input, and the on-screen keyboard could stay drawn with nothing
+  focused.
+
+- `er_reset()` now ends every node of the old scene. A handler that resets the scene in the middle of a
+  touch no longer has the rest of that touch reach the old nodes, and `er_node_in_use_count()` reports 0
+  afterwards instead of the old scene's count.
+
+- On boards that render on more than one core, reloading from a scene with an `<Svg>`, `<Dial>` or shadow into
+  one without no longer leaves rendering on a single core for the rest of the session.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole

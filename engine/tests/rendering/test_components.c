@@ -519,6 +519,100 @@ static void test_text_input_read_only(void)
     printf("PASS: test_text_input_read_only\n");
 }
 
+/** @brief Event callback: counts the events it receives into an int. */
+static void count_event(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (*(int*)user_data)++;
+}
+
+/**
+ * @brief Creates an editable 200x36 TextInput at the top of a parent.
+ *
+ * @param[in] parent  Node to append it to.
+ *
+ * @return The TextInput.
+ */
+static ERNode* append_text_input(ERNode* parent)
+{
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    ERProps p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 1;
+    er_node_set_props(ti, &p);
+    er_tree_append_child(parent, ti);
+    return ti;
+}
+
+/**
+ * @brief Destroying the focused TextInput takes the focus with it. A node created into its pool slot, the next one
+ *        the engine hands out, is not typed into, focused or blurred, and the on-screen keyboard is erased.
+ */
+static void test_text_input_destroyed_while_focused(void)
+{
+    for (int as_input = 0; as_input <= 1; as_input++)
+    {
+        for (int refocus = 0; refocus <= 1; refocus++)
+        {
+            init_backend();
+            s_change_count = 0;
+            er_reset();
+
+            ERNode* root = er_node_create(ER_NODE_VIEW);
+            ERProps p = props_auto();
+            p.width = 320;
+            p.height = 240;
+            p.background_color = 0xFF000000U;
+            er_node_set_props(root, &p);
+            er_tree_set_root(root);
+
+            ERNode* ti = append_text_input(root);
+            er_text_input_focus(ti);
+            er_commit();
+            er_commit(); /* past the first frame's full repaint, so the next commit repaints only what changed */
+#if ERUI_ONSCREEN_KEYBOARD
+            assert(s_fb[239 * 320] != 0xFF000000U && "The keyboard must be on screen, or the scenario proves nothing");
+#endif
+
+            const uint16_t slot = ti->tag;
+            er_tree_remove_child(root, ti);
+            er_node_destroy(ti);
+
+            ERNode* next = as_input ? append_text_input(root) : er_node_create(ER_NODE_VIEW);
+            if (!as_input)
+                er_tree_append_child(root, next);
+            assert(next->tag == slot && "The new node must reuse the input's slot, or the scenario proves nothing");
+            int focus_events = 0;
+            er_event_set(next, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
+            er_event_set(next, ER_EVENT_FOCUS, count_event, &focus_events);
+            er_event_set(next, ER_EVENT_BLUR, count_event, &focus_events);
+
+            if (refocus)
+            {
+                er_text_input_focus(append_text_input(root));
+                assert(focus_events == 0 && "Focusing another input must not blur the node in the old input's slot");
+                er_text_input_blur();
+            }
+            else
+            {
+                embedded_renderer_key(0, "a");
+                assert(next->input_text[0] == '\0' && s_change_count == 0
+                       && "A node in a destroyed input's slot must not take its typing");
+                assert(focus_events == 0 && "A node in a destroyed input's slot must not be focused or blurred");
+
+                er_commit();
+#if ERUI_ONSCREEN_KEYBOARD
+                assert(s_fb[239 * 320] == 0xFF000000U
+                       && "The keyboard must be erased with the input it was typing into");
+#endif
+            }
+        }
+    }
+    printf("PASS: test_text_input_destroyed_while_focused\n");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Tests: Modal
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -652,6 +746,7 @@ int main(void)
     test_text_input_keyboard();
     test_text_input_secure();
     test_text_input_read_only();
+    test_text_input_destroyed_while_focused();
     test_modal_visible();
     test_flatlist_scrolls();
 
