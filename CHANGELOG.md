@@ -101,6 +101,10 @@ See the README for the release process.
 - Dragging a scrollable list no longer presses the row the drag started on when you let go. Once the
   ScrollView (or a pan) takes the gesture, the row gets its press-out and no press, as in React Native.
 
+- A container that takes the gesture on touch-down with `onStartShouldSetResponderCapture` no longer
+  lets the `<Pressable>` under the finger fire `onPress` on release. A container that claims without
+  capturing still leaves the press alone, as in React Native.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
