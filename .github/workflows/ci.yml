@@ -65,11 +65,13 @@ jobs:
       # pass it would rot unbuilt, like any off-by-default config. ERUI_PERF_STATS rides along for
       # the same reason: the frame instrumentation (er_perf.h, including the per-worker blit
       # accounting) compiles to stubs in the default build, so tests/rendering/test_perf.c only
-      # exercises the real thing here.
+      # exercises the real thing here. The on-screen keyboard rides along too: it is OFF by default, so
+      # the keyboard assertions in the engine tests compile out everywhere else, and 2 workers + FULL
+      # transforms + keyboard is the configuration the ESP32-S3 example actually ships.
       - name: Configure (2 render workers)
         run: >
           cmake -S engine -B engine/build-ci-mt
-          -DERUI_RENDER_WORKERS=2 -DERUI_TRANSFORMS=FULL -DERUI_PERF_STATS=ON
+          -DERUI_RENDER_WORKERS=2 -DERUI_TRANSFORMS=FULL -DERUI_PERF_STATS=ON -DERUI_ONSCREEN_KEYBOARD=ON
       - name: Build (2 render workers)
         run: cmake --build engine/build-ci-mt
       - name: Test (2 render workers)
