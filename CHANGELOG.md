@@ -109,9 +109,9 @@ See the README for the release process.
   `onTouchStart` or `onResponderGrant` no longer starts a drag, and a node mounted while the finger is still
   down, even by that same handler, no longer picks up the rest of the touch.
 
-- A touch handler that replaces an ancestor of the touched node no longer hands the touch to the node
-  that took its place. The touch still bubbles up to the ancestors above it, and the new node can't claim
-  the gesture.
+- A touch handler that replaces the touched node or one of its ancestors no longer hands the touch to the
+  node that took its place. The touch still bubbles up to the original ancestors that are left, even when
+  the touched node unmounted itself, and the new node can't claim the gesture.
 
 - Unmounting the focused `<TextInput>` now drops the focus with it. A node mounted right after could
   receive the typing meant for the old input, and the on-screen keyboard could stay drawn with nothing
