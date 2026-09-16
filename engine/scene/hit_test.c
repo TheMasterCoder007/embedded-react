@@ -39,6 +39,20 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Which phase of a responder negotiation the winner claimed in.
+ *
+ * A capture claim is made root→leaf, so it takes the gesture from everything below the claimant; a
+ * bubble claim is made leaf→root, so the claimant is the deepest node that wanted it. Touch-down has
+ * to tell the two apart: only the first cancels the press of the node under the finger.
+ */
+typedef enum
+{
+    ER_CLAIM_NONE = 0, /**< Nobody claimed the responder. */
+    ER_CLAIM_CAPTURE,  /**< Claimed in the capture phase. */
+    ER_CLAIM_BUBBLE    /**< Claimed in the bubble phase. */
+} ERClaimPhase;
+
+/**
  * @brief Per-finger press and gesture tracking state.
  */
 typedef struct
@@ -710,11 +724,12 @@ static int build_ancestor_chain(const ERNode* start, uint16_t* chain, int max_le
  * corresponding query callback on each node. Returns the first node whose callback
  * returns true, or NULL if no node claims the responder.
  *
- * @param[in] chain          Tag array built by build_ancestor_chain (chain[0]=leaf).
- * @param[in] chain_len      Number of entries in chain.
- * @param[in] capture_query  Query type for the capture phase.
- * @param[in] bubble_query   Query type for the bubble phase.
- * @param[in] data           Event data forwarded to each callback.
+ * @param[in]  chain          Tag array built by build_ancestor_chain (chain[0]=leaf).
+ * @param[in]  chain_len      Number of entries in chain.
+ * @param[in]  capture_query  Query type for the capture phase.
+ * @param[in]  bubble_query   Query type for the bubble phase.
+ * @param[in]  data           Event data forwarded to each callback.
+ * @param[out] out_phase      Receives the phase the claim was won in; may be NULL.
  *
  * @return The claiming node, or NULL when no node claims the responder.
  */
@@ -722,8 +737,12 @@ static ERNode* negotiate_responder(const uint16_t* chain,
                                    int chain_len,
                                    ERResponderQuery capture_query,
                                    ERResponderQuery bubble_query,
-                                   const EREventData* data)
+                                   const EREventData* data,
+                                   ERClaimPhase* out_phase)
 {
+    if (out_phase)
+        *out_phase = ER_CLAIM_NONE;
+
     /* Capture phase: root → leaf */
     for (int i = chain_len - 1; i >= 0; i--)
     {
@@ -732,7 +751,11 @@ static ERNode* negotiate_responder(const uint16_t* chain,
             continue;
         const ERResponderQueryHandler* h = &node->queries[(uint8_t)capture_query];
         if (h->fn && h->fn(node, data, h->user_data))
+        {
+            if (out_phase)
+                *out_phase = ER_CLAIM_CAPTURE;
             return node;
+        }
     }
     /* Bubble phase: leaf → root */
     for (int i = 0; i < chain_len; i++)
@@ -742,7 +765,11 @@ static ERNode* negotiate_responder(const uint16_t* chain,
             continue;
         const ERResponderQueryHandler* h = &node->queries[(uint8_t)bubble_query];
         if (h->fn && h->fn(node, data, h->user_data))
+        {
+            if (out_phase)
+                *out_phase = ER_CLAIM_BUBBLE;
             return node;
+        }
     }
     return NULL;
 }
@@ -778,10 +805,14 @@ static void terminate_responder_if_active(ERTouchState* touch, const EREventData
  */
 static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData* data)
 {
-    touch->responder_tag = node->tag;
+    const uint16_t tag = node->tag;
+    touch->responder_tag = tag;
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
 
-    if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
+    /* The grant handler is app code, and app code can unmount the node it was just handed — so come
+     * back to it by tag rather than reading the pointer it was called with. */
+    node = er_get_node(tag);
+    if (node && (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST))
     {
         touch->initial_scroll_x = node->scroll_offset_x;
         touch->initial_scroll_y = node->scroll_offset_y;
@@ -1186,6 +1217,46 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             const EREventData ddata = gesture_data(touch, x, y);
             dispatch_bubble_data(hit, ER_EVENT_TOUCH_START, &ddata);
+
+            /* Gesture responder negotiation: start-should-set. It settles BEFORE the press begins,
+             * because a capture claim takes the gesture from everything below the claimant — the node
+             * under the finger never presses, so it must not be handed a press-in to take back. A claim
+             * won by bubbling is the deepest node that wanted the gesture, and leaves the press alone:
+             * that is how a Pressable inside a claiming container still reports its own taps. */
+            if (hit)
+            {
+                uint16_t chain[ERUI_MAX_NODES];
+                const int chain_len = build_ancestor_chain(hit, chain, ERUI_MAX_NODES);
+                ERClaimPhase claim_phase = ER_CLAIM_NONE;
+                ERNode* claimant = negotiate_responder(chain,
+                                                       chain_len,
+                                                       ER_QUERY_START_SHOULD_SET_CAPTURE,
+                                                       ER_QUERY_START_SHOULD_SET,
+                                                       &ddata,
+                                                       &claim_phase);
+                if (claimant)
+                {
+                    const uint16_t claimant_tag = claimant->tag;
+                    grant_responder(touch, claimant, &ddata);
+                    if (claim_phase == ER_CLAIM_CAPTURE && claimant_tag != touch->press_target_tag)
+                    {
+                        /* The touch is the claimant's gesture, not a press: nothing in, nothing held,
+                         * nothing to fire when the finger lifts. */
+                        touch->press_target_tag = ER_INVALID_TAG;
+                        touch->inside = false;
+                        touch->long_press_cancelled = true;
+                    }
+                }
+            }
+
+            /* Everything above — the raw touch, the should-set queries, the grant — is app code, and
+             * under the JS bridge it can commit a React update that unmounts the pressed node and hands
+             * its pool slot to another. So the press begins from a fresh lookup by tag, not from the
+             * pointer taken before any of them ran, and a node that went away presses nothing. */
+            press_target = er_get_node(touch->press_target_tag);
+            if (!press_target)
+                touch->press_target_tag = ER_INVALID_TAG;
+
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
 
             /* Auto-focus TextInput on press; blur any focused TextInput when tapping
@@ -1195,16 +1266,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             else
                 er_text_input_blur();
 
-            /* Gesture responder negotiation: start-should-set */
             if (hit)
             {
-                uint16_t chain[ERUI_MAX_NODES];
-                const int chain_len = build_ancestor_chain(hit, chain, ERUI_MAX_NODES);
-                ERNode* claimant = negotiate_responder(
-                    chain, chain_len, ER_QUERY_START_SHOULD_SET_CAPTURE, ER_QUERY_START_SHOULD_SET, &ddata);
-                if (claimant)
-                    grant_responder(touch, claimant, &ddata);
-
                 /* Built-in Arc drag-to-set: an adjustable Arc under the finger takes the gesture natively —
                  * over a JS claimant and ahead of any ScrollView's auto-scroll — and jumps to the touched
                  * point. The responder stays with it until release, so a scroller never steals the drag. */
@@ -1286,7 +1349,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 uint16_t chain[ERUI_MAX_NODES];
                 const int chain_len = build_ancestor_chain(touch_target, chain, ERUI_MAX_NODES);
                 ERNode* claimant = negotiate_responder(
-                    chain, chain_len, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata);
+                    chain, chain_len, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata, NULL);
 
                 if (claimant && claimant != responder)
                 {

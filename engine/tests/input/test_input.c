@@ -2033,6 +2033,168 @@ static int test_self_claimed_drag_cancels_press(void)
 }
 
 /**
+ * @brief A container that takes the gesture at touch-down decides whether the node under the finger
+ *        presses at all. Claiming in the capture phase takes the touch from everything below it, so the
+ *        row gets no press-in, no long press and no press on release. Claiming by bubbling does not:
+ *        a Pressable inside a container that wants the gesture still reports its own taps.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_start_capture_suppresses_press(void)
+{
+    for (int capture = 0; capture <= 1; capture++)
+    {
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        rec.should_claim = true;
+
+        ERNode* container = er_node_create(ER_NODE_VIEW);
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 0;
+            p.top = 0;
+            p.width = 80;
+            p.height = 80;
+            er_node_set_props(container, &p);
+            wire_responder(container, &rec);
+            er_responder_query_set(container,
+                                   capture ? ER_QUERY_START_SHOULD_SET_CAPTURE : ER_QUERY_START_SHOULD_SET,
+                                   query_should_claim,
+                                   &rec);
+        }
+
+        ERNode* row = er_node_create(ER_NODE_PRESSABLE);
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 10;
+            p.top = 10;
+            p.width = 40;
+            p.height = 40;
+            er_node_set_props(row, &p);
+            er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
+            er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
+            er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+            er_event_set(row, ER_EVENT_LONG_PRESS, on_long_press, &counts);
+        }
+
+        er_tree_append_child(container, row);
+        er_tree_append_child(root, container);
+        er_commit();
+
+        /* A tap on the row: down and straight back up, never moving. */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        /* The same touch held past the long-press threshold. */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_tick(600U);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (rec.grant_count != 2)
+            return fail("the container did not take the gesture at both touch-downs");
+
+        /* Both touches press when the container only bubbles; the held one's release is consumed by
+         * the long press, so it is the tap alone that fires onPress. */
+        const int pressed = capture ? 0 : 1;
+        if (counts.press_in_count != 2 * pressed || counts.press_out_count != 2 * pressed)
+            return fail("a captured touch-down still gave the row a press-in");
+        if (counts.press_count != pressed)
+            return fail("a captured touch-down still pressed the row on release");
+        if (counts.long_press_count != pressed)
+            return fail("a captured touch-down still held the row into a long press");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief The node a responder-grant handler unmounts, and the parent to unlink it from.
+ */
+typedef struct
+{
+    ERNode* parent;
+    ERNode* victim;
+} UnmountOnGrant;
+
+/** @brief ER_EVENT_RESPONDER_GRANT callback: unmounts a node, as a React commit in the handler would. */
+static void on_grant_unmount(ERNode* node, const EREventData* data, void* user_data)
+{
+    UnmountOnGrant* unmount = user_data;
+    (void)node;
+    (void)data;
+    if (!unmount->victim)
+        return;
+    er_tree_remove_child(unmount->parent, unmount->victim);
+    er_node_destroy(unmount->victim);
+    unmount->victim = NULL;
+}
+
+/**
+ * @brief The pressed node can be gone before its press even starts: the should-set queries and the
+ *        grant are app code, and under the JS bridge that code can commit a React update that unmounts
+ *        it. A destroyed node keeps its handlers until its pool slot is reused, so a press-in carried
+ *        across the grant on a raw pointer still calls them.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_press_target_unmounted_during_grant(void)
+{
+    ERNode* root = create_root();
+    ResponderRecord rec = {0};
+    rec.should_claim = true;
+
+    ERNode* container = er_node_create(ER_NODE_VIEW);
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 0;
+        p.top = 0;
+        p.width = 80;
+        p.height = 80;
+        er_node_set_props(container, &p);
+        /* Bubbling, not capturing: the path that leaves the press in place is the one that has to
+         * survive the node underneath it going away. */
+        er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+    }
+
+    ERNode* row = er_node_create(ER_NODE_PRESSABLE);
+    EventCounts counts;
+    memset(&counts, 0, sizeof(counts));
+    {
+        ERProps p = props_default();
+        p.position = ER_POS_ABSOLUTE;
+        p.left = 10;
+        p.top = 10;
+        p.width = 40;
+        p.height = 40;
+        er_node_set_props(row, &p);
+        er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
+        er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
+        er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+    }
+
+    er_tree_append_child(container, row);
+    er_tree_append_child(root, container);
+    er_commit();
+
+    UnmountOnGrant unmount = {container, row};
+    er_event_set(container, ER_EVENT_RESPONDER_GRANT, on_grant_unmount, &unmount);
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+    if (unmount.victim != NULL)
+        return fail("the grant handler never unmounted the pressed node");
+    if (counts.press_in_count != 0 || counts.press_out_count != 0 || counts.press_count != 0)
+        return fail("a node unmounted during the responder grant was still pressed");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Builds a horizontally scrollable ScrollView holding one inert (handler-less) child.
  *
  * @param[in] parent          Node to append the ScrollView to.
@@ -3028,6 +3190,10 @@ int main(void)
     if (test_scroll_cancels_press() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_self_claimed_drag_cancels_press() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_start_capture_suppresses_press() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_press_target_unmounted_during_grant() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;
