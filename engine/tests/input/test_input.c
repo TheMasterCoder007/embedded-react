@@ -81,6 +81,7 @@ typedef struct
     bool should_claim;         /**< Value returned by the query callbacks. */
     int min_abs_dx;            /**< Minimum |dx| required before claiming (0 = always). */
     bool yield_on_termination; /**< Value returned by ER_QUERY_TERMINATION_REQUEST. */
+    int query_count;           /**< Should-set queries asked through query_should_claim. */
     int grant_count;
     int reject_count;
     int move_count;
@@ -458,6 +459,7 @@ static bool query_should_claim(ERNode* node, const EREventData* data, void* user
 {
     ResponderRecord* rec = user_data;
     (void)node;
+    rec->query_count++;
     if (rec->min_abs_dx > 0 && data->dx < rec->min_abs_dx && data->dx > -rec->min_abs_dx)
         return false;
     return rec->should_claim;
@@ -2212,6 +2214,30 @@ static ERNode* mount_pressable(ERNode* parent, void* ctx)
 }
 
 /**
+ * @brief The parent mount_pressable_under() mounts into, and what receives the Pressable's events.
+ */
+typedef struct
+{
+    ERNode* parent;
+    EventCounts* counts;
+} MountUnder;
+
+/**
+ * @brief Mounts a Pressable with mount_pressable(), under the parent ctx names rather than the one passed.
+ *
+ * @param[in] parent  Ignored.
+ * @param[in] ctx     MountUnder naming the parent and the EventCounts.
+ *
+ * @return The Pressable.
+ */
+static ERNode* mount_pressable_under(ERNode* parent, void* ctx)
+{
+    const MountUnder* under = ctx;
+    (void)parent;
+    return mount_pressable(under->parent, under->counts);
+}
+
+/**
  * @brief Mounts an adjustable dial at 20,20 (100x100, 16 px band, value 25 of 100), recording its events.
  *
  * @param[in] parent  Node to append it to.
@@ -2310,7 +2336,7 @@ static bool query_unmount_and_decline(ERNode* node, const EREventData* data, voi
 }
 
 /**
- * @brief Mounts a View with mount_view() that also claims the responder on touch-down.
+ * @brief Mounts a View with mount_view() that also claims the responder on touch-down, in capture and bubble.
  *
  * @param[in] parent  Node to append it to.
  * @param[in] ctx     ResponderRecord receiving its events; its should_claim decides the claim.
@@ -2320,6 +2346,7 @@ static bool query_unmount_and_decline(ERNode* node, const EREventData* data, voi
 static ERNode* mount_claiming_view(ERNode* parent, void* ctx)
 {
     ERNode* node = mount_view(parent, ctx);
+    er_responder_query_set(node, ER_QUERY_START_SHOULD_SET_CAPTURE, query_should_claim, ctx);
     er_responder_query_set(node, ER_QUERY_START_SHOULD_SET, query_should_claim, ctx);
     return node;
 }
@@ -2485,6 +2512,60 @@ static int test_touch_target_unmounted_by_touch_start(void)
         if (successor.touch_move_count != 0 || successor.touch_end_count != 0 || successor.press_count != 0)
             return fail(in_handler ? "a node onTouchStart mounted into the touched node's slot was handed its touch"
                                    : "a node that later took the touched node's slot was handed its touch");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief A node that unmounts itself from its own onTouchStart still bubbles it to the ancestors it had when the
+ *        finger landed, whether it was detached, destroyed, or destroyed and its pool slot handed to a node
+ *        mounted elsewhere. The ancestors of that new node are not handed the touch.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_touch_start_bubbles_from_unmounted_target(void)
+{
+    enum
+    {
+        DETACH,
+        DESTROY,
+        REPLACE_ELSEWHERE
+    };
+    for (int mode = DETACH; mode <= REPLACE_ELSEWHERE; mode++)
+    {
+        ERNode* root = create_root();
+        EventCounts ancestors;
+        memset(&ancestors, 0, sizeof(ancestors));
+        ERNode* grand = append_view(root, 0, 0, 120, 120);
+        er_event_set(grand, ER_EVENT_TOUCH_START, on_touch_start, &ancestors);
+        ERNode* parent = append_view(grand, 0, 0, 80, 80);
+        er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &ancestors);
+        ERNode* target = append_view(parent, 10, 10, 40, 40);
+
+        EventCounts strangers;
+        memset(&strangers, 0, sizeof(strangers));
+        ERNode* other = append_view(root, 130, 0, 100, 100);
+        er_event_set(other, ER_EVENT_TOUCH_START, on_touch_start, &strangers);
+        er_commit();
+
+        EventCounts successor;
+        memset(&successor, 0, sizeof(successor));
+        MountUnder under = {other, &successor};
+        UnmountOnEvent unmount = {
+            parent, target, mode == DETACH, mode == REPLACE_ELSEWHERE ? mount_pressable_under : NULL, &under, NULL};
+        er_event_set(target, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (unmount.victim != NULL)
+            return fail("onTouchStart never unmounted the touched node");
+        if (mode == REPLACE_ELSEWHERE && unmount.mounted != target)
+            return fail("the new node did not reuse the touched node's slot, so the scenario proves nothing");
+        if (ancestors.touch_start_count != 2)
+            return fail("a node that unmounted itself in onTouchStart did not bubble it to its original ancestors");
+        if (strangers.touch_start_count != 0 || successor.touch_start_count != 0)
+            return fail("a node mounted into the touched node's slot carried its touch-start up its own ancestors");
     }
     return EXIT_SUCCESS;
 }
@@ -2967,40 +3048,48 @@ static int test_ancestor_replaced_while_bubbling(void)
 
 /**
  * @brief Responder negotiation asks the ancestors the touched node had when it began. A should-set query that
- *        swaps out a subtree on that path lets no node mounted into one of its pool slots claim the touch, and
- *        the ancestor above the swap is still asked.
+ *        swaps out a subtree further along that path, in either phase, lets no node mounted into one of its pool
+ *        slots be asked or claim the touch, and the ancestor above the swap is still asked.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
  */
 static int test_ancestor_replaced_during_negotiation(void)
 {
-    ERNode* root = create_root();
-    ResponderRecord outer = {0};
-    outer.should_claim = true;
-    ERNode* grand = append_view(root, 0, 0, 120, 120);
-    wire_responder(grand, &outer);
-    er_responder_query_set(grand, ER_QUERY_START_SHOULD_SET, query_should_claim, &outer);
-    ERNode* parent = append_view(grand, 0, 0, 80, 80);
-    ERNode* leaf = append_view(parent, 10, 10, 40, 40);
-    er_commit();
+    for (int capture = 0; capture <= 1; capture++)
+    {
+        ERNode* root = create_root();
+        ResponderRecord outer = {0};
+        outer.should_claim = true;
+        ERNode* grand = append_view(root, 0, 0, 120, 120);
+        wire_responder(grand, &outer);
+        er_responder_query_set(grand, ER_QUERY_START_SHOULD_SET, query_should_claim, &outer);
+        ERNode* parent = append_view(grand, 0, 0, 80, 80);
+        ERNode* leaf = append_view(parent, 10, 10, 40, 40);
+        er_commit();
 
-    ResponderRecord successor = {0};
-    successor.should_claim = true;
-    UnmountOnEvent unmount = {grand, parent, false, mount_claiming_view, &successor, NULL};
-    er_responder_query_set(leaf, ER_QUERY_START_SHOULD_SET, query_unmount_and_decline, &unmount);
+        ResponderRecord successor = {0};
+        successor.should_claim = true;
+        UnmountOnEvent unmount = {grand, parent, false, mount_claiming_view, &successor, NULL};
+        /* Capture runs root to leaf, so the swap is made from above it; bubble runs leaf to root, from below. */
+        if (capture)
+            er_responder_query_set(grand, ER_QUERY_START_SHOULD_SET_CAPTURE, query_unmount_and_decline, &unmount);
+        else
+            er_responder_query_set(leaf, ER_QUERY_START_SHOULD_SET, query_unmount_and_decline, &unmount);
 
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
-    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
 
-    if (unmount.victim != NULL)
-        return fail("the should-set query never unmounted the touched node's parent");
-    if (unmount.mounted != parent)
-        return fail("the new node did not reuse the parent's slot, so the scenario proves nothing");
-    if (successor.grant_count != 0)
-        return fail("a node mounted into an ancestor's slot claimed the touch in its place");
-    if (outer.grant_count != 1 || outer.release_count != 1)
-        return fail("negotiation stopped at the swapped subtree instead of asking the node above it");
-
+        if (unmount.victim != NULL)
+            return fail("the should-set query never unmounted the touched node's parent");
+        if (unmount.mounted != parent)
+            return fail("the new node did not reuse the parent's slot, so the scenario proves nothing");
+        if (successor.query_count != 0)
+            return fail("a node mounted into an ancestor's slot was asked whether it wants the touch");
+        if (successor.grant_count != 0)
+            return fail("a node mounted into an ancestor's slot claimed the touch in its place");
+        if (outer.grant_count != 1 || outer.release_count != 1)
+            return fail("negotiation stopped at the swapped subtree instead of asking the node above it");
+    }
     return EXIT_SUCCESS;
 }
 
@@ -4017,6 +4106,8 @@ int main(void)
     if (test_press_target_unmounted_during_grant() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_touch_target_unmounted_by_touch_start() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_touch_start_bubbles_from_unmounted_target() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_arc_unmounted_by_touch_start_does_not_drag() != EXIT_SUCCESS)
         return EXIT_FAILURE;
