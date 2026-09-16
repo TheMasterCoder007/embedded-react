@@ -718,6 +718,27 @@ static int build_ancestor_chain(const ERNode* start, uint16_t* chain, int max_le
 }
 
 /**
+ * @brief Asks one node whether it wants the responder.
+ *
+ * @param[in] node   Node to ask; may be NULL.
+ * @param[in] query  Query to run.
+ * @param[in] data   Event data forwarded to the callback.
+ *
+ * @return The node when it claims and is still the same live node afterwards, otherwise NULL.
+ */
+static ERNode* query_claims(ERNode* node, ERResponderQuery query, const EREventData* data)
+{
+    if (!node_takes_own_touches(node))
+        return NULL;
+    const ERResponderQueryHandler* h = &node->queries[(uint8_t)query];
+    if (!h->fn)
+        return NULL;
+    /* The query is app code: a node it unmounted claims nothing, whatever now holds its slot. */
+    const ERNodeRef ref = er_node_ref(node);
+    return h->fn(node, data, h->user_data) ? er_node_deref(ref) : NULL;
+}
+
+/**
  * @brief Runs capture-then-bubble responder negotiation along an ancestor chain.
  *
  * Iterates root→leaf (capture phase) then leaf→root (bubble phase), calling the
@@ -746,11 +767,8 @@ static ERNode* negotiate_responder(const uint16_t* chain,
     /* Capture phase: root → leaf */
     for (int i = chain_len - 1; i >= 0; i--)
     {
-        ERNode* node = er_get_node(chain[i]);
-        if (!node_takes_own_touches(node))
-            continue;
-        const ERResponderQueryHandler* h = &node->queries[(uint8_t)capture_query];
-        if (h->fn && h->fn(node, data, h->user_data))
+        ERNode* node = query_claims(er_get_node(chain[i]), capture_query, data);
+        if (node)
         {
             if (out_phase)
                 *out_phase = ER_CLAIM_CAPTURE;
@@ -760,11 +778,8 @@ static ERNode* negotiate_responder(const uint16_t* chain,
     /* Bubble phase: leaf → root */
     for (int i = 0; i < chain_len; i++)
     {
-        ERNode* node = er_get_node(chain[i]);
-        if (!node_takes_own_touches(node))
-            continue;
-        const ERResponderQueryHandler* h = &node->queries[(uint8_t)bubble_query];
-        if (h->fn && h->fn(node, data, h->user_data))
+        ERNode* node = query_claims(er_get_node(chain[i]), bubble_query, data);
+        if (node)
         {
             if (out_phase)
                 *out_phase = ER_CLAIM_BUBBLE;
@@ -845,11 +860,9 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
     if (!touch->active)
         return;
 
-    ERNode* touch_target = er_node_deref(touch->touch_target);
-    ERNode* press_target = er_node_deref(touch->press_target);
-
     const EREventData rdata = gesture_data(touch, x, y);
-    dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_CANCEL, &rdata);
+    dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_CANCEL, &rdata);
+    ERNode* press_target = er_node_deref(touch->press_target);
     if (press_target && touch->inside)
         dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
 
@@ -943,6 +956,19 @@ static ERNode* nearest_arc_drag_target(ERNode* hit, int x, int y)
         n = er_get_node(n->parent_tag);
     }
     return NULL;
+}
+
+/**
+ * @brief Looks a dial up again after app code has run, for a drag that may only start on one still on screen.
+ *
+ * @param[in] ref  The dial.
+ *
+ * @return The dial, or NULL once it is destroyed, detached or hidden.
+ */
+static ERNode* arc_on_screen(ERNodeRef ref)
+{
+    ERNode* arc = er_node_deref(ref);
+    return (arc && !arc->subtree_hidden) ? arc : NULL;
 }
 
 /**
@@ -1262,6 +1288,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             press_target = er_node_deref(touch->press_target);
 
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
+            press_target = er_node_deref(touch->press_target);
 
             /* Auto-focus TextInput on press; blur any focused TextInput when tapping
              * anything else so the keyboard is dismissed on outside taps. */
@@ -1288,9 +1315,12 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     /* Ending the old responder and granting the arc are app code too, and can unmount it. */
                     const ERNodeRef arc_ref = er_node_ref(arc);
                     terminate_responder_if_active(touch, &ddata);
-                    arc = er_node_deref(arc_ref);
+                    arc = arc_on_screen(arc_ref);
                     if (arc)
-                        arc = grant_responder(touch, arc, &ddata);
+                    {
+                        grant_responder(touch, arc, &ddata);
+                        arc = arc_on_screen(arc_ref);
+                    }
                 }
                 if (arc)
                 {
@@ -1311,8 +1341,6 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             if (!touch->active)
                 break;
 
-            ERNode* touch_target = er_node_deref(touch->touch_target);
-            ERNode* press_target = er_node_deref(touch->press_target);
             touch->last_x = x;
             touch->last_y = y;
 
@@ -1322,8 +1350,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             const EREventData rdata = gesture_data(touch, x, y);
             const int dx = rdata.dx;
             const int dy = rdata.dy;
-            dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_MOVE, &rdata);
+            dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_MOVE, &rdata);
 
+            ERNode* press_target = er_node_deref(touch->press_target);
             if (press_target)
             {
                 int sx = 0, sy = 0;
@@ -1354,21 +1383,27 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             }
 
             /* Move-should-set negotiation: any node in the chain may claim the responder */
+            ERNode* touch_target = er_node_deref(touch->touch_target);
             if (touch_target)
             {
                 uint16_t chain[ERUI_MAX_NODES];
                 const int chain_len = build_ancestor_chain(touch_target, chain, ERUI_MAX_NODES);
                 ERNode* claimant = negotiate_responder(
                     chain, chain_len, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, ER_QUERY_MOVE_SHOULD_SET, &rdata, NULL);
+                responder = er_node_deref(touch->responder);
 
                 if (claimant && claimant != responder)
                 {
+                    const ERNodeRef claimant_ref = er_node_ref(claimant);
                     bool yields = true;
                     if (responder)
                     {
                         const ERResponderQueryHandler* rq = &responder->queries[ER_QUERY_TERMINATION_REQUEST];
                         if (rq->fn)
+                        {
                             yields = rq->fn(responder, &rdata, rq->user_data);
+                            responder = er_node_deref(touch->responder);
+                        }
                     }
 
                     if (yields)
@@ -1383,20 +1418,23 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                             responder->scroll_vel_y = 0.0f;
                         }
                         terminate_responder_if_active(touch, &rdata);
-                        grant_responder(touch, claimant, &rdata);
+                        claimant = er_node_deref(claimant_ref);
+                        if (claimant)
+                            grant_responder(touch, claimant, &rdata);
                         /* The gesture is the claimant's now, a drag and not a tap, even when the claimant is
                          * the node the finger pressed. */
                         cancel_press(touch, x, y);
                     }
                     else
                     {
-                        reject_responder(claimant, &rdata);
+                        reject_responder(er_node_deref(claimant_ref), &rdata);
                     }
                 }
             }
 
             /* Auto-scroll: if no responder was claimed and the pan exceeds slop, find the
              * nearest ScrollView ancestor and grant it automatically. */
+            touch_target = er_node_deref(touch->touch_target);
             if (touch->responder.tag == ER_INVALID_TAG && touch_target)
             {
                 const int abs_dx = dx < 0 ? -dx : dx;
@@ -1406,10 +1444,10 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     ERNode* sv = find_scroll_view_ancestor(touch_target);
                     if (sv)
                     {
-                        grant_responder(touch, sv, &rdata);
+                        sv = grant_responder(touch, sv, &rdata);
                         /* A scroller that can move takes the drag as a scroll, so releasing must not press
                            the row it started on. One whose content fits leaves a jittery tap a tap. */
-                        if (scroll_view_can_scroll(sv))
+                        if (sv && scroll_view_can_scroll(sv))
                             cancel_press(touch, x, y);
                     }
                 }
@@ -1420,17 +1458,18 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 ERNode* active = er_node_deref(touch->responder);
                 if (active && (active->type == ER_NODE_SCROLL_VIEW || active->type == ER_NODE_FLAT_LIST))
                 {
-                    er_scroll_view_set_offset(
-                        active, touch->initial_scroll_x - (float)dx, touch->initial_scroll_y - (float)dy);
-
                     /* Update live velocity so that TOUCH_UP always inherits the most recent movement
                      * speed, even when UP follows MOVE in the same tick. The content moves OPPOSITE the
-                     * finger, hence the sign flip on the shared sample. */
+                     * finger, hence the sign flip on the shared sample. It goes first because moving the
+                     * content fires onScroll, which is app code. */
                     if (vel_sampled)
                     {
                         active->scroll_vel_x = -touch->vel_x;
                         active->scroll_vel_y = -touch->vel_y;
                     }
+
+                    er_scroll_view_set_offset(
+                        active, touch->initial_scroll_x - (float)dx, touch->initial_scroll_y - (float)dy);
                 }
             }
             break;
@@ -1440,7 +1479,6 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             if (!touch->active)
                 break;
 
-            ERNode* touch_target = er_node_deref(touch->touch_target);
             ERNode* press_target = er_node_deref(touch->press_target);
             bool inside = false;
             if (press_target)
@@ -1455,7 +1493,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
              * rest before lifting should not launch the content.) */
             const EREventData udata = gesture_data(touch, x, y);
 
-            dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_END, &udata);
+            dispatch_bubble_data(er_node_deref(touch->touch_target), ER_EVENT_TOUCH_END, &udata);
+            press_target = er_node_deref(touch->press_target);
             if (press_target)
             {
                 /* Every dispatch below can run app code, and under the synchronous QuickJS root that code
@@ -1510,12 +1549,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             if (responder)
             {
                 dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &udata);
+                responder = er_node_deref(touch->responder);
 
                 /* Final velocity update for ScrollView responders: if real time elapsed
                  * between the last MOVE and this UP (finger held still before release),
                  * re-sample to capture deceleration.  Velocity was already set during the
                  * last MOVE and is kept unchanged when elapsed == 0. */
-                if (responder->type == ER_NODE_SCROLL_VIEW || responder->type == ER_NODE_FLAT_LIST)
+                if (responder && (responder->type == ER_NODE_SCROLL_VIEW || responder->type == ER_NODE_FLAT_LIST))
                 {
                     const uint32_t now_ms = er_now_ms();
                     const uint32_t elapsed = now_ms - touch->prev_move_time_ms;
