@@ -466,6 +466,16 @@ void er_layout_anim_reset(void);
 void er_input_reset(void);
 
 /**
+ * @brief Drops a node from every ancestor chain a touch dispatch is still walking. Called by er_node_destroy.
+ *
+ * The touch state holds nodes by ERNodeRef, which stops resolving on its own. A chain holds bare tags instead,
+ * because its buffer is ERUI_MAX_NODES entries on the stack and a ref is four times the size.
+ *
+ * @param[in] tag  Tag of the node being destroyed.
+ */
+void er_input_forget_node(uint16_t tag);
+
+/**
  * @brief Advances input gesture timers by delta_ms milliseconds.
  *
  * @param[in] delta_ms  Milliseconds elapsed since the last tick.

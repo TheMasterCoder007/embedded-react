@@ -3134,6 +3134,8 @@ void er_node_destroy(ERNode* node)
     er_anim_unbind_node(node->tag);
     er_anim_cancel_node(node->tag);
     er_layout_anim_cancel_node(node->tag);
+    /* A touch handler destroying nodes mid-dispatch must not let the rest of the dispatch reach their slots. */
+    er_input_forget_node(node->tag);
     /* A destroyed node that was still linked into the tree changes its siblings' layout. */
     mark_layout_dirty();
     /* Guard against overflow (would only occur on a double-free bug in the caller). */

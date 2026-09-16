@@ -109,6 +109,10 @@ See the README for the release process.
   `onTouchStart` or `onResponderGrant` no longer starts a drag, and a node mounted while the finger is still
   down, even by that same handler, no longer picks up the rest of the touch.
 
+- A touch handler that replaces an ancestor of the touched node no longer hands the touch to the node
+  that took its place. The touch still bubbles up to the ancestors above it, and the new node can't claim
+  the gesture.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole
