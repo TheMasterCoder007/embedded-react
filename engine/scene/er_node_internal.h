@@ -352,6 +352,18 @@ typedef struct
 } ERResponderQueryHandler;
 
 /**
+ * @brief A reference to one node that stops resolving once that node is destroyed.
+ *
+ * A tag alone is a pool slot, and a destroyed node's slot is handed to the next node created — possibly by
+ * the very handler that destroyed it. Held across app code, a tag can name a node that was never involved.
+ */
+typedef struct
+{
+    uint16_t tag;
+    uint32_t serial;
+} ERNodeRef;
+
+/**
  * @brief Full internal scene graph node.
  *
  * ERNode* in the public API points to one of these slots in the static pool.
@@ -363,6 +375,7 @@ struct ERNode
     uint16_t parent_tag;
     uint16_t first_child_tag;
     uint16_t next_sibling_tag;
+    uint32_t serial; /**< Unique to this node among every node ever created: tells it from a later node in its slot. */
     ERNodeType type;
     bool in_use;
     bool dirty;
@@ -501,6 +514,24 @@ struct ERNode
  * @return Pointer to the node if the tag is valid and the node is in use, otherwise NULL.
  */
 ERNode* er_get_node(uint16_t tag);
+
+/**
+ * @brief Makes a reference to a node that er_node_deref() resolves only while that same node lives.
+ *
+ * @param[in] node  Node to reference; NULL makes a reference that never resolves.
+ *
+ * @return The reference.
+ */
+ERNodeRef er_node_ref(const ERNode* node);
+
+/**
+ * @brief Resolves a reference made by er_node_ref().
+ *
+ * @param[in] ref  Reference to resolve.
+ *
+ * @return The node, or NULL once it has been destroyed — even if another node now occupies its slot.
+ */
+ERNode* er_node_deref(ERNodeRef ref);
 
 /**
  * @brief Returns the current scene root node.

@@ -74,9 +74,9 @@ typedef struct
     float vel_y;                /**< Finger velocity Y in px/ms at the last sampled move. */
     float initial_scroll_x;     /**< ScrollView scroll_offset_x when the responder was granted. */
     float initial_scroll_y;     /**< ScrollView scroll_offset_y when the responder was granted. */
-    uint16_t press_target_tag;
-    uint16_t touch_target_tag;
-    uint16_t responder_tag; /**< Node currently owning this touch as the gesture responder. */
+    ERNodeRef press_target;
+    ERNodeRef touch_target;
+    ERNodeRef responder; /**< Node currently owning this touch as the gesture responder. */
 } ERTouchState;
 
 /**
@@ -125,9 +125,9 @@ static bool s_flushing_moves = false;
 static void reset_touch(ERTouchState* touch)
 {
     memset(touch, 0, sizeof(*touch));
-    touch->press_target_tag = ER_INVALID_TAG;
-    touch->touch_target_tag = ER_INVALID_TAG;
-    touch->responder_tag = ER_INVALID_TAG;
+    touch->press_target = er_node_ref(NULL);
+    touch->touch_target = er_node_ref(NULL);
+    touch->responder = er_node_ref(NULL);
 }
 
 /**
@@ -784,12 +784,10 @@ static ERNode* negotiate_responder(const uint16_t* chain,
  */
 static void terminate_responder_if_active(ERTouchState* touch, const EREventData* data)
 {
-    if (touch->responder_tag == ER_INVALID_TAG)
-        return;
-    ERNode* responder = er_get_node(touch->responder_tag);
+    ERNode* responder = er_node_deref(touch->responder);
     if (responder)
         dispatch_to_node_data(responder, ER_EVENT_RESPONDER_TERMINATE, data);
-    touch->responder_tag = ER_INVALID_TAG;
+    touch->responder = er_node_ref(NULL);
 }
 
 /**
@@ -802,21 +800,24 @@ static void terminate_responder_if_active(ERTouchState* touch, const EREventData
  * @param[in,out] touch  Touch slot to update.
  * @param[in]     node   Node to grant.
  * @param[in]     data   Event data forwarded to the grant callback.
+ *
+ * @return The granted node, or NULL when the grant handler unmounted it.
  */
-static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData* data)
+static ERNode* grant_responder(ERTouchState* touch, ERNode* node, const EREventData* data)
 {
-    const uint16_t tag = node->tag;
-    touch->responder_tag = tag;
+    const ERNodeRef ref = er_node_ref(node);
+    touch->responder = ref;
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
 
-    /* The grant handler is app code, and app code can unmount the node it was just handed — so come
-     * back to it by tag rather than reading the pointer it was called with. */
-    node = er_get_node(tag);
+    /* The grant handler is app code, and app code can unmount the node it was just handed — so look it
+     * up again rather than reading the pointer it was called with. */
+    node = er_node_deref(ref);
     if (node && (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST))
     {
         touch->initial_scroll_x = node->scroll_offset_x;
         touch->initial_scroll_y = node->scroll_offset_y;
     }
+    return node;
 }
 
 /**
@@ -833,24 +834,6 @@ static void reject_responder(ERNode* node, const EREventData* data)
 static void arc_drag_end(const ERTouchState* touch, uint8_t finger_id);
 
 /**
- * @brief Looks the touch target up again after app code has run, forgetting it when it went away.
- *
- * Handlers can commit a React update that unmounts the node the finger landed on. Dropping its tag keeps a
- * node that later takes over the pool slot from being handed the rest of the touch.
- *
- * @param[in,out] touch  Touch slot whose target to re-fetch.
- *
- * @return The touch target, or NULL when it is gone.
- */
-static ERNode* refetch_touch_target(ERTouchState* touch)
-{
-    ERNode* node = er_get_node(touch->touch_target_tag);
-    if (!node)
-        touch->touch_target_tag = ER_INVALID_TAG;
-    return node;
-}
-
-/**
  * @brief Cancels an active touch sequence.
  *
  * @param[in,out] touch      Touch state to cancel.
@@ -862,8 +845,8 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
     if (!touch->active)
         return;
 
-    ERNode* touch_target = er_get_node(touch->touch_target_tag);
-    ERNode* press_target = er_get_node(touch->press_target_tag);
+    ERNode* touch_target = er_node_deref(touch->touch_target);
+    ERNode* press_target = er_node_deref(touch->press_target);
 
     const EREventData rdata = gesture_data(touch, x, y);
     dispatch_bubble_data(touch_target, ER_EVENT_TOUCH_CANCEL, &rdata);
@@ -885,10 +868,10 @@ static void cancel_touch(ERTouchState* touch, uint8_t finger_id, int x, int y)
  */
 static void cancel_press(ERTouchState* touch, int x, int y)
 {
-    ERNode* press_target = er_get_node(touch->press_target_tag);
+    ERNode* press_target = er_node_deref(touch->press_target);
     if (press_target && touch->inside)
         dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
-    touch->press_target_tag = ER_INVALID_TAG;
+    touch->press_target = er_node_ref(NULL);
     touch->inside = false;
     touch->long_press_cancelled = true;
 }
@@ -967,7 +950,7 @@ static ERNode* nearest_arc_drag_target(ERNode* hit, int x, int y)
  */
 static ERNode* active_arc_drag(const ERTouchState* touch, uint8_t finger_id)
 {
-    ERNode* r = er_get_node(touch->responder_tag);
+    ERNode* r = er_node_deref(touch->responder);
     return (r && r->type == ER_NODE_ARC && r->arc_drag_finger == (int8_t)finger_id) ? r : NULL;
 }
 
@@ -1087,7 +1070,7 @@ void er_input_tick(uint32_t delta_ms)
             touch->elapsed_ms += delta_ms;
 
         /* The hold time is the target's own delayLongPress when it set one, otherwise the default. */
-        ERNode* press_target = er_get_node(touch->press_target_tag);
+        ERNode* press_target = er_node_deref(touch->press_target);
         const uint32_t threshold =
             (press_target && press_target->long_press_ms) ? press_target->long_press_ms : ER_LONG_PRESS_MS;
 
@@ -1233,13 +1216,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             touch->prev_move_time_ms = er_now_ms();
             touch->vel_x = 0.0f;
             touch->vel_y = 0.0f;
-            touch->press_target_tag = press_target ? press_target->tag : ER_INVALID_TAG;
-            touch->touch_target_tag = hit ? hit->tag : ER_INVALID_TAG;
+            touch->press_target = er_node_ref(press_target);
+            touch->touch_target = er_node_ref(hit);
 
             const EREventData ddata = gesture_data(touch, x, y);
             dispatch_bubble_data(hit, ER_EVENT_TOUCH_START, &ddata);
 
-            hit = refetch_touch_target(touch);
+            hit = er_node_deref(touch->touch_target);
 
             /* Gesture responder negotiation: start-should-set. It settles BEFORE the press begins,
              * because a capture claim takes the gesture from everything below the claimant — the node
@@ -1259,13 +1242,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                                                        &claim_phase);
                 if (claimant)
                 {
-                    const uint16_t claimant_tag = claimant->tag;
+                    const bool claimant_is_pressed = claimant == er_node_deref(touch->press_target);
                     grant_responder(touch, claimant, &ddata);
-                    if (claim_phase == ER_CLAIM_CAPTURE && claimant_tag != touch->press_target_tag)
+                    if (claim_phase == ER_CLAIM_CAPTURE && !claimant_is_pressed)
                     {
                         /* The touch is the claimant's gesture, not a press: nothing in, nothing held,
                          * nothing to fire when the finger lifts. */
-                        touch->press_target_tag = ER_INVALID_TAG;
+                        touch->press_target = er_node_ref(NULL);
                         touch->inside = false;
                         touch->long_press_cancelled = true;
                     }
@@ -1274,11 +1257,9 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             /* Everything above — the raw touch, the should-set queries, the grant — is app code, and
              * under the JS bridge it can commit a React update that unmounts the pressed node and hands
-             * its pool slot to another. So the press begins from a fresh lookup by tag, not from the
-             * pointer taken before any of them ran, and a node that went away presses nothing. */
-            press_target = er_get_node(touch->press_target_tag);
-            if (!press_target)
-                touch->press_target_tag = ER_INVALID_TAG;
+             * its pool slot to another. So the press begins from a fresh lookup, not from the pointer
+             * taken before any of them ran, and a node that went away presses nothing. */
+            press_target = er_node_deref(touch->press_target);
 
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
 
@@ -1290,7 +1271,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                 er_text_input_blur();
 
             /* The grant and the press-in are app code too: a node unmounted by either starts no drag. */
-            hit = refetch_touch_target(touch);
+            hit = er_node_deref(touch->touch_target);
             if (hit)
             {
                 /* Built-in Arc drag-to-set: an adjustable Arc under the finger takes the gesture natively —
@@ -1302,13 +1283,17 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                  * value (and so that lifting either finger doesn't end the other's drag). */
                 if (arc && arc->arc_drag_finger >= 0 && arc->arc_drag_finger != (int8_t)finger_id)
                     arc = NULL;
+                if (arc && er_node_deref(touch->responder) != arc)
+                {
+                    /* Ending the old responder and granting the arc are app code too, and can unmount it. */
+                    const ERNodeRef arc_ref = er_node_ref(arc);
+                    terminate_responder_if_active(touch, &ddata);
+                    arc = er_node_deref(arc_ref);
+                    if (arc)
+                        arc = grant_responder(touch, arc, &ddata);
+                }
                 if (arc)
                 {
-                    if (touch->responder_tag != arc->tag)
-                    {
-                        terminate_responder_if_active(touch, &ddata);
-                        grant_responder(touch, arc, &ddata);
-                    }
                     arc->arc_drag_finger = (int8_t)finger_id;
                     /* Latch which end of a RANGE band this gesture owns, ONCE, at the point it started —
                      * so dragging one setpoint past the other does not hand the finger to its neighbour. */
@@ -1326,8 +1311,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             if (!touch->active)
                 break;
 
-            ERNode* touch_target = er_get_node(touch->touch_target_tag);
-            ERNode* press_target = er_get_node(touch->press_target_tag);
+            ERNode* touch_target = er_node_deref(touch->touch_target);
+            ERNode* press_target = er_node_deref(touch->press_target);
             touch->last_x = x;
             touch->last_y = y;
 
@@ -1354,7 +1339,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             }
 
             /* Dispatch move to the current gesture responder */
-            ERNode* responder = er_get_node(touch->responder_tag);
+            ERNode* responder = er_node_deref(touch->responder);
             if (responder)
                 dispatch_to_node_data(responder, ER_EVENT_RESPONDER_MOVE, &rdata);
 
@@ -1412,7 +1397,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             /* Auto-scroll: if no responder was claimed and the pan exceeds slop, find the
              * nearest ScrollView ancestor and grant it automatically. */
-            if (touch->responder_tag == ER_INVALID_TAG && touch_target)
+            if (touch->responder.tag == ER_INVALID_TAG && touch_target)
             {
                 const int abs_dx = dx < 0 ? -dx : dx;
                 const int abs_dy = dy < 0 ? -dy : dy;
@@ -1432,7 +1417,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             /* Apply incremental scroll to any active ScrollView responder. */
             {
-                ERNode* active = er_get_node(touch->responder_tag);
+                ERNode* active = er_node_deref(touch->responder);
                 if (active && (active->type == ER_NODE_SCROLL_VIEW || active->type == ER_NODE_FLAT_LIST))
                 {
                     er_scroll_view_set_offset(
@@ -1455,8 +1440,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             if (!touch->active)
                 break;
 
-            ERNode* touch_target = er_get_node(touch->touch_target_tag);
-            ERNode* press_target = er_get_node(touch->press_target_tag);
+            ERNode* touch_target = er_node_deref(touch->touch_target);
+            ERNode* press_target = er_node_deref(touch->press_target);
             bool inside = false;
             if (press_target)
             {
@@ -1475,13 +1460,13 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             {
                 /* Every dispatch below can run app code, and under the synchronous QuickJS root that code
                  * can commit a React update that unmounts this node — returning its pool slot, possibly to
-                 * a different node. So re-fetch by TAG between dispatches and stop if it went away, rather
+                 * a different node. So look it up again between dispatches and stop if it went away, rather
                  * than carrying the raw pointer across a callback. */
-                const uint16_t press_tag = press_target->tag;
+                const ERNodeRef press_ref = er_node_ref(press_target);
                 if (touch->inside)
                 {
                     dispatch_to_node(press_target, ER_EVENT_PRESS_OUT, x, y);
-                    press_target = er_get_node(press_tag);
+                    press_target = er_node_deref(press_ref);
                 }
                 if (inside && press_target)
                 {
@@ -1509,7 +1494,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                             vd.value = new_val ? 1.0f : 0.0f;
                             vd.value_start = vd.value;
                             vh->fn(press_target, &vd, vh->user_data);
-                            press_target = er_get_node(press_tag);
+                            press_target = er_node_deref(press_ref);
                         }
                     }
                     /* A long press that reached a handler REPLACES the tap: the gesture already did its
@@ -1521,7 +1506,7 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 
             /* Release the gesture responder */
             arc_drag_end(touch, finger_id);
-            ERNode* responder = er_get_node(touch->responder_tag);
+            ERNode* responder = er_node_deref(touch->responder);
             if (responder)
             {
                 dispatch_to_node_data(responder, ER_EVENT_RESPONDER_RELEASE, &udata);

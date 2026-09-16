@@ -69,6 +69,7 @@ static ERNode s_nodes[ERUI_MAX_NODES];
 static uint16_t s_next_tag = 0;
 static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node slots available for reuse. */
 static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
+static uint32_t s_node_serial = 0;           /**< Next ERNode::serial; er_reset keeps counting, so no serial repeats. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint64_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
@@ -2980,6 +2981,23 @@ ERNode* er_get_node(uint16_t tag)
     return s_nodes[tag].in_use ? &s_nodes[tag] : NULL;
 }
 
+ERNodeRef er_node_ref(const ERNode* node)
+{
+    ERNodeRef ref = {ER_INVALID_TAG, 0U};
+    if (node)
+    {
+        ref.tag = node->tag;
+        ref.serial = node->serial;
+    }
+    return ref;
+}
+
+ERNode* er_node_deref(ERNodeRef ref)
+{
+    ERNode* node = er_get_node(ref.tag);
+    return (node && node->serial == ref.serial) ? node : NULL;
+}
+
 ERNode* er_get_root_node(void)
 {
     return er_get_node(s_root_tag);
@@ -3033,6 +3051,7 @@ ERNode* er_node_create(ERNodeType type)
     memset(n, 0, sizeof(ERNode));
 
     n->tag = tag;
+    n->serial = s_node_serial++;
     n->parent_tag = ER_INVALID_TAG;
     n->first_child_tag = ER_INVALID_TAG;
     n->next_sibling_tag = ER_INVALID_TAG;

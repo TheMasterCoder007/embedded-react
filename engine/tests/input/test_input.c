@@ -33,6 +33,13 @@
 #define XF_TOO_BIG_W (ERUI_XFORM_W + 10)
 #define XF_TOO_BIG_H (ERUI_XFORM_H + 10)
 
+/* Points on the ring of the dial mount_dial() builds: centre 70,70, mid-band radius 50 - 16/2 = 42. Both are
+ * inside the default sweep, and set different values. */
+#define DIAL_TOP_X 70
+#define DIAL_TOP_Y (70 - 42)
+#define DIAL_RIGHT_X (70 + 42)
+#define DIAL_RIGHT_Y 70
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -2111,16 +2118,28 @@ static int test_start_capture_suppresses_press(void)
 }
 
 /**
- * @brief The node an event handler unmounts, and the parent to unlink it from.
+ * @brief The node an event handler unmounts, the parent to unlink it from, and what it mounts in its place.
  */
 typedef struct
 {
     ERNode* parent;
     ERNode* victim;
-    bool detach_only; /**< Unlink the victim but keep it alive, rather than destroying it. */
+    bool detach_only;                            /**< Unlink the victim but keep it alive, rather than destroying it. */
+    ERNode* (*mount)(ERNode* parent, void* ctx); /**< Mounts a new node after the unmount, or NULL. */
+    void* mount_ctx;
+    ERNode* mounted; /**< What mount returned — the victim's pool slot, when it was destroyed. */
 } UnmountOnEvent;
 
-/** @brief Event callback: unmounts a node, as a React commit in the handler would. */
+/**
+ * @brief What a dial built by mount_dial() receives.
+ */
+typedef struct
+{
+    ResponderRecord rec;
+    int value_changes;
+} DialRecord;
+
+/** @brief Event callback: unmounts a node, and mounts one in its place, as a React commit in the handler would. */
 static void on_event_unmount(ERNode* node, const EREventData* data, void* user_data)
 {
     UnmountOnEvent* unmount = user_data;
@@ -2132,6 +2151,8 @@ static void on_event_unmount(ERNode* node, const EREventData* data, void* user_d
     if (!unmount->detach_only)
         er_node_destroy(unmount->victim);
     unmount->victim = NULL;
+    if (unmount->mount)
+        unmount->mounted = unmount->mount(unmount->parent, unmount->mount_ctx);
 }
 
 /** @brief ER_EVENT_VALUE_CHANGE callback: counts the changes into an int. */
@@ -2143,146 +2164,189 @@ static void on_value_change_count(ERNode* node, const EREventData* data, void* u
 }
 
 /**
+ * @brief Mounts a Pressable at 10,10 (40x40), counting its events.
+ *
+ * @param[in] parent  Node to append it to.
+ * @param[in] ctx     EventCounts receiving its events.
+ *
+ * @return The Pressable.
+ */
+static ERNode* mount_pressable(ERNode* parent, void* ctx)
+{
+    ERNode* node = create_pressable(10, 10, 40, 40, ctx);
+    er_tree_append_child(parent, node);
+    return node;
+}
+
+/**
+ * @brief Mounts an adjustable dial at 20,20 (100x100, 16 px band, value 25 of 100), recording its events.
+ *
+ * @param[in] parent  Node to append it to.
+ * @param[in] ctx     DialRecord receiving its events.
+ *
+ * @return The dial.
+ */
+static ERNode* mount_dial(ERNode* parent, void* ctx)
+{
+    DialRecord* dial = ctx;
+    ERNode* arc = er_node_create(ER_NODE_ARC);
+    ERProps p;
+    er_props_default(&p);
+    p.position = ER_POS_ABSOLUTE;
+    p.left = 20;
+    p.top = 20;
+    p.width = 100;
+    p.height = 100;
+    p.arc_width = 16;
+    p.arc_value = 25.0f;
+    p.arc_max = 100.0f;
+    p.arc_step = 5.0f;
+    p.arc_adjustable = 1;
+    er_node_set_props(arc, &p);
+    wire_responder(arc, &dial->rec);
+    er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_value_change_count, &dial->value_changes);
+    er_tree_append_child(parent, arc);
+    return arc;
+}
+
+/**
  * @brief The pressed node can be gone before its press even starts: the should-set queries and the
  *        grant are app code, and under the JS bridge that code can commit a React update that unmounts
  *        it. A destroyed node keeps its handlers until its pool slot is reused, so a press-in carried
- *        across the grant on a raw pointer still calls them.
+ *        across the grant on a raw pointer still calls them — and a node the grant mounts into that slot
+ *        is not the one the finger pressed.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
  */
 static int test_press_target_unmounted_during_grant(void)
 {
-    ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
-
-    ERNode* container = er_node_create(ER_NODE_VIEW);
+    for (int replace = 0; replace <= 1; replace++)
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(container, &p);
-        /* Bubbling, not capturing: the path that leaves the press in place is the one that has to
-         * survive the node underneath it going away. */
-        er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        rec.should_claim = true;
+
+        ERNode* container = er_node_create(ER_NODE_VIEW);
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 0;
+            p.top = 0;
+            p.width = 80;
+            p.height = 80;
+            er_node_set_props(container, &p);
+            /* Bubbling, not capturing: the path that leaves the press in place is the one that has to
+             * survive the node underneath it going away. */
+            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+        }
+
+        ERNode* row = er_node_create(ER_NODE_PRESSABLE);
+        EventCounts counts;
+        memset(&counts, 0, sizeof(counts));
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 10;
+            p.top = 10;
+            p.width = 40;
+            p.height = 40;
+            er_node_set_props(row, &p);
+            er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
+            er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
+            er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
+        }
+
+        er_tree_append_child(container, row);
+        er_tree_append_child(root, container);
+        er_commit();
+
+        EventCounts successor;
+        memset(&successor, 0, sizeof(successor));
+        UnmountOnEvent unmount = {container, row, false, replace ? mount_pressable : NULL, &successor, NULL};
+        er_event_set(container, ER_EVENT_RESPONDER_GRANT, on_event_unmount, &unmount);
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
+
+        if (unmount.victim != NULL)
+            return fail("the grant handler never unmounted the pressed node");
+        if (replace && unmount.mounted != row)
+            return fail("the grant's new node did not reuse the pressed node's slot, so the scenario proves nothing");
+        if (counts.press_in_count != 0 || counts.press_out_count != 0 || counts.press_count != 0)
+            return fail("a node unmounted during the responder grant was still pressed");
+        if (successor.press_in_count != 0 || successor.press_out_count != 0 || successor.press_count != 0)
+            return fail("a node the grant mounted into the pressed node's slot was pressed in its place");
     }
-
-    ERNode* row = er_node_create(ER_NODE_PRESSABLE);
-    EventCounts counts;
-    memset(&counts, 0, sizeof(counts));
-    {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(row, &p);
-        er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
-        er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
-        er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
-    }
-
-    er_tree_append_child(container, row);
-    er_tree_append_child(root, container);
-    er_commit();
-
-    UnmountOnEvent unmount = {container, row, false};
-    er_event_set(container, ER_EVENT_RESPONDER_GRANT, on_event_unmount, &unmount);
-
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
-    embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
-
-    if (unmount.victim != NULL)
-        return fail("the grant handler never unmounted the pressed node");
-    if (counts.press_in_count != 0 || counts.press_out_count != 0 || counts.press_count != 0)
-        return fail("a node unmounted during the responder grant was still pressed");
-
     return EXIT_SUCCESS;
 }
 
 /**
  * @brief A node that unmounts itself from its own onTouchStart takes no further part in the touch: no
- *        responder is negotiated from it, and a node that later takes over its pool slot is not handed
- *        the moves and release of a finger that never touched it.
+ *        responder is negotiated from it, and a node that takes over its pool slot — mounted by that same
+ *        handler, or later — is not handed the moves and release of a finger that never touched it.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
  */
 static int test_touch_target_unmounted_by_touch_start(void)
 {
-    ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
-
-    ERNode* container = er_node_create(ER_NODE_VIEW);
+    for (int in_handler = 0; in_handler <= 1; in_handler++)
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(container, &p);
-        wire_responder(container, &rec);
-        er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+        ERNode* root = create_root();
+        ResponderRecord rec = {0};
+        rec.should_claim = true;
+
+        ERNode* container = er_node_create(ER_NODE_VIEW);
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 0;
+            p.top = 0;
+            p.width = 80;
+            p.height = 80;
+            er_node_set_props(container, &p);
+            wire_responder(container, &rec);
+            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+        }
+
+        ERNode* target = er_node_create(ER_NODE_VIEW);
+        {
+            ERProps p = props_default();
+            p.position = ER_POS_ABSOLUTE;
+            p.left = 10;
+            p.top = 10;
+            p.width = 40;
+            p.height = 40;
+            er_node_set_props(target, &p);
+        }
+
+        er_tree_append_child(container, target);
+        er_tree_append_child(root, container);
+        er_commit();
+
+        EventCounts successor;
+        memset(&successor, 0, sizeof(successor));
+        UnmountOnEvent unmount = {container, target, false, in_handler ? mount_pressable : NULL, &successor, NULL};
+        er_event_set(target, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
+
+        if (unmount.victim != NULL)
+            return fail("onTouchStart never unmounted the touched node");
+        if (!in_handler)
+            unmount.mounted = mount_pressable(container, &successor);
+        if (unmount.mounted != target)
+            return fail("the new node did not reuse the unmounted node's slot, so the scenario proves nothing");
+        er_commit();
+
+        touch_move(30, 20);
+        embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
+
+        if (rec.grant_count != 0)
+            return fail("a responder was negotiated from a node unmounted by its own onTouchStart");
+        if (successor.touch_move_count != 0 || successor.touch_end_count != 0 || successor.press_count != 0)
+            return fail(in_handler ? "a node onTouchStart mounted into the touched node's slot was handed its touch"
+                                   : "a node that later took the touched node's slot was handed its touch");
     }
-
-    ERNode* target = er_node_create(ER_NODE_VIEW);
-    {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(target, &p);
-    }
-
-    er_tree_append_child(container, target);
-    er_tree_append_child(root, container);
-    er_commit();
-
-    UnmountOnEvent unmount = {container, target, false};
-    er_event_set(target, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
-
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
-
-    if (unmount.victim != NULL)
-        return fail("onTouchStart never unmounted the touched node");
-    if (rec.grant_count != 0)
-        return fail("a node unmounted by its own onTouchStart still negotiated a responder");
-
-    /* The pool hands the freed slot to the next node created, well away from the finger. */
-    ERNode* successor = er_node_create(ER_NODE_VIEW);
-    if (successor != target)
-        return fail("the unmounted node's slot was not reused, so the scenario proves nothing");
-    EventCounts counts;
-    memset(&counts, 0, sizeof(counts));
-    {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 150;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(successor, &p);
-        er_event_set(successor, ER_EVENT_TOUCH_MOVE, on_touch_move, &counts);
-        er_event_set(successor, ER_EVENT_TOUCH_END, on_touch_end, &counts);
-    }
-    er_tree_append_child(root, successor);
-    er_commit();
-
-    touch_move(30, 20);
-    embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
-
-    if (counts.touch_move_count != 0 || counts.touch_end_count != 0)
-        return fail("a node that took the unmounted node's slot was handed its touch");
-    if (rec.grant_count != 0)
-        return fail("a move negotiated a responder from the unmounted node's successor");
-
     return EXIT_SUCCESS;
 }
 
@@ -2298,55 +2362,66 @@ static int test_arc_unmounted_by_touch_start_does_not_drag(void)
     for (int destroy = 0; destroy <= 1; destroy++)
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
-        int value_changes = 0;
-
-        ERNode* arc = er_node_create(ER_NODE_ARC);
-        {
-            ERProps p;
-            er_props_default(&p);
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 20;
-            p.top = 20;
-            p.width = 100;
-            p.height = 100;
-            p.arc_width = 16;
-            p.arc_value = 25.0f;
-            p.arc_max = 100.0f;
-            p.arc_step = 5.0f;
-            p.arc_adjustable = 1;
-            er_node_set_props(arc, &p);
-            wire_responder(arc, &rec);
-            er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_value_change_count, &value_changes);
-        }
-        er_tree_append_child(root, arc);
+        DialRecord dial = {0};
+        ERNode* arc = mount_dial(root, &dial);
         er_commit();
 
-        /* Centre 70,70 and mid-band radius 50 - 16/2 = 42. The top and the right of the ring are both
-         * inside the default sweep, and set different values. */
-        const int top_x = 70, top_y = 70 - 42;
-        const int right_x = 70 + 42, right_y = 70;
-
         /* An armed handler with nothing to unmount: the touch drags, so the scenario can tell. */
-        UnmountOnEvent unmount = {root, NULL, destroy == 0};
+        UnmountOnEvent unmount = {root, NULL, destroy == 0, NULL, NULL, NULL};
         er_event_set(arc, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, top_x, top_y);
-        embedded_renderer_touch(0, ER_TOUCH_UP, top_x, top_y);
-        if (rec.grant_count != 1 || value_changes != 1)
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
+        embedded_renderer_touch(0, ER_TOUCH_UP, DIAL_TOP_X, DIAL_TOP_Y);
+        if (dial.rec.grant_count != 1 || dial.value_changes != 1)
             return fail("a touch on the ring did not drag the dial, so the scenario proves nothing");
 
-        rec.grant_count = 0;
-        value_changes = 0;
+        dial.rec.grant_count = 0;
+        dial.value_changes = 0;
 
         unmount.victim = arc;
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, right_x, right_y);
-        embedded_renderer_touch(0, ER_TOUCH_UP, right_x, right_y);
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_RIGHT_X, DIAL_RIGHT_Y);
+        embedded_renderer_touch(0, ER_TOUCH_UP, DIAL_RIGHT_X, DIAL_RIGHT_Y);
 
         if (unmount.victim != NULL)
             return fail("onTouchStart never unmounted the dial");
-        if (rec.grant_count != 0 || value_changes != 0)
+        if (dial.rec.grant_count != 0 || dial.value_changes != 0)
             return fail(destroy ? "a dial destroyed by its own onTouchStart still started a drag"
                                 : "a dial detached by its own onTouchStart still started a drag");
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
+ * @brief The native drag grants the dial the responder before it latches the finger, and the grant is app
+ *        code: a dial it unmounts takes no drag, and neither does a dial it mounts into the same pool slot.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_arc_unmounted_by_grant_does_not_drag(void)
+{
+    for (int replace = 0; replace <= 1; replace++)
+    {
+        ERNode* root = create_root();
+        DialRecord dial = {0};
+        ERNode* arc = mount_dial(root, &dial);
+        er_commit();
+
+        DialRecord successor = {0};
+        UnmountOnEvent unmount = {root, arc, false, replace ? mount_dial : NULL, &successor, NULL};
+        er_event_set(arc, ER_EVENT_RESPONDER_GRANT, on_event_unmount, &unmount);
+
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
+        er_commit();
+        touch_move(DIAL_RIGHT_X, DIAL_RIGHT_Y);
+        embedded_renderer_touch(0, ER_TOUCH_UP, DIAL_RIGHT_X, DIAL_RIGHT_Y);
+
+        if (unmount.victim != NULL)
+            return fail("onResponderGrant never unmounted the dial");
+        if (replace && unmount.mounted != arc)
+            return fail("the grant's new dial did not reuse the old one's slot, so the scenario proves nothing");
+        if (dial.value_changes != 0)
+            return fail("a dial unmounted by its own onResponderGrant was still dragged");
+        if (successor.value_changes != 0 || successor.rec.move_count != 0 || successor.rec.release_count != 0)
+            return fail("a dial the grant mounted into the old one's slot was dragged by its touch");
     }
     return EXIT_SUCCESS;
 }
@@ -3355,6 +3430,8 @@ int main(void)
     if (test_touch_target_unmounted_by_touch_start() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_arc_unmounted_by_touch_start_does_not_drag() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_arc_unmounted_by_grant_does_not_drag() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_pointer_events_box_only() != EXIT_SUCCESS)
         return EXIT_FAILURE;
