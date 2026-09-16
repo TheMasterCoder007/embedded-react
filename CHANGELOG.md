@@ -105,6 +105,10 @@ See the README for the release process.
   lets the `<Pressable>` under the finger fire `onPress` on release. A container that claims without
   capturing still leaves the press alone, as in React Native.
 
+- A node that an `onTouchStart` handler unmounts now drops out of that touch. A `<Dial>` removed that way
+  no longer starts a drag, and a node mounted while the finger is still down no longer picks up the rest
+  of the touch.
+
 - Beside a timestamp, whole-number math inside `Math.floor`, `ceil`, `round`, `trunc`, `abs`, `min` and
   `max`, and `%`, is now worked out in 64 bits in Flow B, as JS would. It was cut to 32 bits first, so
   `Date.now() + Math.trunc(n * 100000 / 2)` saturated. `Math.abs`, `min` and `max` of ints also stay whole

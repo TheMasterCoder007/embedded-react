@@ -833,6 +833,24 @@ static void reject_responder(ERNode* node, const EREventData* data)
 static void arc_drag_end(const ERTouchState* touch, uint8_t finger_id);
 
 /**
+ * @brief Looks the touch target up again after app code has run, forgetting it when it went away.
+ *
+ * Handlers can commit a React update that unmounts the node the finger landed on. Dropping its tag keeps a
+ * node that later takes over the pool slot from being handed the rest of the touch.
+ *
+ * @param[in,out] touch  Touch slot whose target to re-fetch.
+ *
+ * @return The touch target, or NULL when it is gone.
+ */
+static ERNode* refetch_touch_target(ERTouchState* touch)
+{
+    ERNode* node = er_get_node(touch->touch_target_tag);
+    if (!node)
+        touch->touch_target_tag = ER_INVALID_TAG;
+    return node;
+}
+
+/**
  * @brief Cancels an active touch sequence.
  *
  * @param[in,out] touch      Touch state to cancel.
@@ -924,6 +942,9 @@ static ERNode* nearest_arc_drag_target(ERNode* hit, int x, int y)
         if (n->type == ER_NODE_ARC)
         {
             if (!n->props.arc.adjustable)
+                return NULL;
+
+            if (n->subtree_hidden)
                 return NULL;
 
             if (!node_takes_own_touches(n))
@@ -1218,6 +1239,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             const EREventData ddata = gesture_data(touch, x, y);
             dispatch_bubble_data(hit, ER_EVENT_TOUCH_START, &ddata);
 
+            hit = refetch_touch_target(touch);
+
             /* Gesture responder negotiation: start-should-set. It settles BEFORE the press begins,
              * because a capture claim takes the gesture from everything below the claimant — the node
              * under the finger never presses, so it must not be handed a press-in to take back. A claim
@@ -1266,6 +1289,8 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
             else
                 er_text_input_blur();
 
+            /* The grant and the press-in are app code too: a node unmounted by either starts no drag. */
+            hit = refetch_touch_target(touch);
             if (hit)
             {
                 /* Built-in Arc drag-to-set: an adjustable Arc under the finger takes the gesture natively —
