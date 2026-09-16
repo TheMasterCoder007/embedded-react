@@ -805,10 +805,14 @@ static void terminate_responder_if_active(ERTouchState* touch, const EREventData
  */
 static void grant_responder(ERTouchState* touch, ERNode* node, const EREventData* data)
 {
-    touch->responder_tag = node->tag;
+    const uint16_t tag = node->tag;
+    touch->responder_tag = tag;
     dispatch_to_node_data(node, ER_EVENT_RESPONDER_GRANT, data);
 
-    if (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST)
+    /* The grant handler is app code, and app code can unmount the node it was just handed — so come
+     * back to it by tag rather than reading the pointer it was called with. */
+    node = er_get_node(tag);
+    if (node && (node->type == ER_NODE_SCROLL_VIEW || node->type == ER_NODE_FLAT_LIST))
     {
         touch->initial_scroll_x = node->scroll_offset_x;
         touch->initial_scroll_y = node->scroll_offset_y;
@@ -1232,18 +1236,26 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                                                        &claim_phase);
                 if (claimant)
                 {
+                    const uint16_t claimant_tag = claimant->tag;
                     grant_responder(touch, claimant, &ddata);
-                    if (claim_phase == ER_CLAIM_CAPTURE && claimant != press_target)
+                    if (claim_phase == ER_CLAIM_CAPTURE && claimant_tag != touch->press_target_tag)
                     {
                         /* The touch is the claimant's gesture, not a press: nothing in, nothing held,
                          * nothing to fire when the finger lifts. */
-                        press_target = NULL;
                         touch->press_target_tag = ER_INVALID_TAG;
                         touch->inside = false;
                         touch->long_press_cancelled = true;
                     }
                 }
             }
+
+            /* Everything above — the raw touch, the should-set queries, the grant — is app code, and
+             * under the JS bridge it can commit a React update that unmounts the pressed node and hands
+             * its pool slot to another. So the press begins from a fresh lookup by tag, not from the
+             * pointer taken before any of them ran, and a node that went away presses nothing. */
+            press_target = er_get_node(touch->press_target_tag);
+            if (!press_target)
+                touch->press_target_tag = ER_INVALID_TAG;
 
             dispatch_to_node(press_target, ER_EVENT_PRESS_IN, x, y);
 
