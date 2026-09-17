@@ -41,6 +41,9 @@ See the README for the release process.
 
 ### Changed
 
+- A list no longer repaints on scroll steps that move it by less than a whole pixel, such as the slow end of a
+  fling, since nothing on screen changes.
+
 - A Modal with an opaque `backdropColor` no longer redraws the screen it hides each time something in it
   changes, such as a list scrolling inside a settings sheet.
 
@@ -90,6 +93,9 @@ See the README for the release process.
   build with the typed-array intrinsic, where the tape can be passed as a `Float32Array`.
 
 ### Fixed
+
+- `er_scroll_view_set_offset` given NaN now leaves that axis where it is. It used to store the NaN, which the
+  renderer and touch handling then converted to an integer, which is undefined behavior.
 
 - `<TextInput editable={false}>` no longer accepts typing, in either flow. The engine was turning
   `editable` 0 back into 1.
