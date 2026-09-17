@@ -5769,6 +5769,10 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
     if (!node || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
         return;
 
+    /* NaN passes every clamp below and has no whole-pixel value: leave that axis where it is. */
+    x = er_nan_or(x, node->scroll_offset_x);
+    y = er_nan_or(y, node->scroll_offset_y);
+
     /* Clamp to valid scroll range.  The maximum offset is content_size − viewport_size,
      * floored at 0 so we never scroll past the start or beyond the end. */
     float max_x = (float)(node->scroll_content_w - node->computed.w);

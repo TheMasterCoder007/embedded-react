@@ -94,6 +94,9 @@ See the README for the release process.
 
 ### Fixed
 
+- `er_scroll_view_set_offset` given NaN now leaves that axis where it is. It used to store the NaN, which the
+  renderer and touch handling then converted to an integer, which is undefined behavior.
+
 - `<TextInput editable={false}>` no longer accepts typing, in either flow. The engine was turning
   `editable` 0 back into 1.
 

@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -466,6 +467,33 @@ static void test_subpixel_step_repaints_nothing(void)
 }
 
 /**
+ * @brief A NaN offset leaves that axis where it is; the other axis still scrolls.
+ */
+static void test_nan_offset_keeps_axis(void)
+{
+    printf("test_nan_offset_keeps_axis\n");
+    TestCtx tctx;
+    EmbeddedRenderBackend be;
+    setup_backend(&tctx, &be);
+
+    ERNode *sv, *c0, *c1, *c2;
+    build_scene(&sv, &c0, &c1, &c2);
+
+    ScrollRecord rec = {0};
+    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+
+    er_scroll_view_set_offset(sv, 0.0f, 40.0f);
+    er_scroll_view_set_offset(sv, 0.0f, NAN);
+    ASSERT_EQ(rec.count, 1); /* nothing changed: no second event */
+
+    er_scroll_view_set_offset(sv, NAN, 60.0f);
+    ASSERT_EQ(rec.count, 2);
+    ASSERT_FLOAT_NEAR(rec.last_x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(rec.last_y, 60.0f, 0.001f);
+    er_commit();
+}
+
+/**
  * @brief Scrolled-out children are clipped and produce no fill inside the viewport.
  *
  * After scrolling down 100 px child0 (red, layout y=0..100) maps to screen y=-100..0.
@@ -683,6 +711,7 @@ int main(void)
     test_offset_clamp_max();
     test_scroll_event_dedup();
     test_subpixel_step_repaints_nothing();
+    test_nan_offset_keeps_axis();
     test_clip_hides_scrolled_out();
     test_clip_shows_scrolled_in();
     test_gesture_claims_scroll_view();
