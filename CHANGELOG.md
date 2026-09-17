@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+
+## [0.14.0] - 2026-09-17
 ### Added
 
 - The ESP32-S3 example has a Wi-Fi build (`sdkconfig.defaults.wifi`). The thermostat's settings get a Wi-Fi
@@ -1212,7 +1214,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.0...v0.11.1
