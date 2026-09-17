@@ -1546,8 +1546,9 @@ extern "C"
      * @brief Programmatically sets the scroll offset of a ScrollView node.
      *
      * The offset is clamped to the valid range [0, content_size − viewport_size] on each
-     * axis.  If the new offset differs from the current one the node is marked dirty and
-     * ER_EVENT_SCROLL is dispatched with the updated scroll_x / scroll_y values.
+     * axis.  If the new offset differs from the current one, ER_EVENT_SCROLL is dispatched with
+     * the updated scroll_x / scroll_y values, and the node is marked dirty when the content lands
+     * on a different whole pixel (a sub-pixel step repaints nothing).
      *
      * @param[in] node  ScrollView node to update.
      * @param[in] x     Desired horizontal scroll offset in pixels.

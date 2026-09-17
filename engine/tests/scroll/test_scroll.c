@@ -425,6 +425,47 @@ static void test_scroll_event_dedup(void)
 }
 
 /**
+ * @brief A step that stays within the same whole pixel repaints nothing, but still reports the scroll.
+ *
+ * Content is placed at the whole-pixel offset, so 10.0 -> 10.4 -> 10.9 draws the same frame three times;
+ * crossing into pixel 11 must repaint again.
+ */
+static void test_subpixel_step_repaints_nothing(void)
+{
+    printf("test_subpixel_step_repaints_nothing\n");
+    TestCtx tctx;
+    EmbeddedRenderBackend be;
+    setup_backend(&tctx, &be);
+
+    ERNode *sv, *c0, *c1, *c2;
+    build_scene(&sv, &c0, &c1, &c2);
+    er_commit();
+
+    ScrollRecord rec = {0};
+    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+
+    er_scroll_view_set_offset(sv, 0.0f, 10.0f);
+    er_commit();
+
+    er_scroll_view_set_offset(sv, 0.0f, 10.4f);
+    tctx.fill_count = 0;
+    er_commit();
+    ASSERT_EQ(tctx.fill_count, 0);
+    ASSERT_EQ(rec.count, 2);
+    ASSERT_FLOAT_NEAR(rec.last_y, 10.4f, 0.001f);
+
+    er_scroll_view_set_offset(sv, 0.0f, 10.9f);
+    tctx.fill_count = 0;
+    er_commit();
+    ASSERT_EQ(tctx.fill_count, 0);
+
+    er_scroll_view_set_offset(sv, 0.0f, 11.2f);
+    tctx.fill_count = 0;
+    er_commit();
+    ASSERT(tctx.fill_count > 0);
+}
+
+/**
  * @brief Scrolled-out children are clipped and produce no fill inside the viewport.
  *
  * After scrolling down 100 px child0 (red, layout y=0..100) maps to screen y=-100..0.
@@ -641,6 +682,7 @@ int main(void)
     test_offset_clamp_negative();
     test_offset_clamp_max();
     test_scroll_event_dedup();
+    test_subpixel_step_repaints_nothing();
     test_clip_hides_scrolled_out();
     test_clip_shows_scrolled_in();
     test_gesture_claims_scroll_view();

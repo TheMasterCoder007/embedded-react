@@ -5790,9 +5790,13 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
     if (x == node->scroll_offset_x && y == node->scroll_offset_y)
         return;
 
+    /* Content is placed at the whole-pixel offset, so a step that stays within the same pixel (the slow tail
+     * of a fling) changes nothing on screen and needs no repaint. */
+    const bool moved = (int)x != (int)node->scroll_offset_x || (int)y != (int)node->scroll_offset_y;
     node->scroll_offset_x = x;
     node->scroll_offset_y = y;
-    er_mark_dirty_upward(node);
+    if (moved)
+        er_mark_dirty_upward(node);
 
     const EREventHandler* h = &node->events[ER_EVENT_SCROLL];
     if (h->fn)

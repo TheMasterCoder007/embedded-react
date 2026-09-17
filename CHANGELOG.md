@@ -41,6 +41,9 @@ See the README for the release process.
 
 ### Changed
 
+- A list no longer repaints on scroll steps that move it by less than a whole pixel, such as the slow end of a
+  fling, since nothing on screen changes.
+
 - A Modal with an opaque `backdropColor` no longer redraws the screen it hides each time something in it
   changes, such as a list scrolling inside a settings sheet.
 
