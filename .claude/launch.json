@@ -41,6 +41,15 @@
         "3337"
       ],
       "port": 3337
+    },
+    {
+      "name": "docs-site",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd website && exec npm start -- --port 3400 --no-open"
+      ],
+      "port": 3400
     }
   ]
 }
