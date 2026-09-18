@@ -1,0 +1,31 @@
+/**
+ * Site-wide overrides on top of the Infima defaults that Docusaurus ships.
+ */
+
+:root {
+  --ifm-color-primary: #0369a1;
+  --ifm-color-primary-dark: #035e91;
+  --ifm-color-primary-darker: #035989;
+  --ifm-color-primary-darkest: #024a71;
+  --ifm-color-primary-light: #1c78aa;
+  --ifm-color-primary-lighter: #2980af;
+  --ifm-color-primary-lightest: #4f96bd;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #38bdf8;
+  --ifm-color-primary-dark: #32aadf;
+  --ifm-color-primary-darker: #30a1d3;
+  --ifm-color-primary-darkest: #2784ae;
+  --ifm-color-primary-light: #4cc4f9;
+  --ifm-color-primary-lighter: #56c7f9;
+  --ifm-color-primary-lightest: #74d1fa;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* White on the bright dark-mode cyan is unreadable. */
+[data-theme='dark'] .button--primary {
+  color: #04121f;
+}

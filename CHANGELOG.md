@@ -10,6 +10,10 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
+  every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
 
 ## [0.14.0] - 2026-09-17
 ### Added
