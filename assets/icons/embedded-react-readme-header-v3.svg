@@ -2,34 +2,23 @@
 <title>Embedded React README header</title>
 <desc>Wide rounded header strip: the icon, the embeddedReact wordmark and the tagline on navy with a faint dot grid. Text is outlined to paths.</desc>
 <defs>
-
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="2.2" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-
-    <filter id="nucleus" x="-300%" y="-300%" width="700%" height="700%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="5.5" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-
     <radialGradient id="bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#0d2035"/>
+      <stop offset="0%" stop-color="#0d2035"/>
       <stop offset="100%" stop-color="#040b16"/>
     </radialGradient>
-
-    <radialGradient id="chip" cx="100" cy="100" r="68" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#112030"/>
-      <stop offset="55%"  stop-color="#091828"/>
-      <stop offset="100%" stop-color="#060f1e"/>
+    <radialGradient id="chip" cx="100" cy="100" r="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#112a42"/>
+      <stop offset="60%" stop-color="#0a1b2d"/>
+      <stop offset="100%" stop-color="#06111f"/>
     </radialGradient>
-
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="nucleus" x="-300%" y="-300%" width="700%" height="700%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   
   <radialGradient id="bannerBg" cx="50%" cy="50%" r="70%">
     <stop offset="0%" stop-color="#0d2035"/>
@@ -57,143 +46,76 @@
 </g>
 <g transform="translate(201.9, 70.0) scale(0.68)">
 
-  <!-- ── Background disc ── -->
   <circle cx="100" cy="100" r="98" fill="url(#bg)"/>
-  <circle cx="100" cy="100" r="97.5" fill="none" stroke="#38BDF8" stroke-width="0.6" stroke-opacity="0.12"/>
 
-  <!-- ══════════════════════════
-       16 QFN PADS · 22.5° pitch
-       ══════════════════════════ -->
-  <g fill="#38BDF8" fill-opacity="0.9" filter="url(#glow)">
-    <g transform="translate(100,100) rotate(0)">    <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(22.5)"> <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(45)">   <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(67.5)"> <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(90)">   <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(112.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(135)">  <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(157.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(180)">  <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(202.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(225)">  <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(247.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(270)">  <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(292.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(315)">  <rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
-    <g transform="translate(100,100) rotate(337.5)"><rect x="74" y="-4" width="10" height="8" rx="1.5"/></g>
+  <!-- 16 package pads -->
+  <g fill="#38BDF8" filter="url(#glow)" transform="translate(100,100)">
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(0)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(22.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(45)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(67.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(90)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(112.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(135)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(157.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(180)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(202.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(225)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(247.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(270)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(292.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(315)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(337.5)"/>
   </g>
 
-  <!-- ── Chip body ── -->
-  <circle cx="100" cy="100" r="68"
-          fill="url(#chip)"
-          stroke="#38BDF8" stroke-width="1.4" stroke-opacity="0.5"
-          filter="url(#glow)"/>
+  <!-- Chip body -->
+  <circle cx="100" cy="100" r="66" fill="url(#chip)" stroke="#38BDF8" stroke-width="2.2" stroke-opacity="0.65" filter="url(#glow)"/>
 
-
-
-  <!-- ═══════════════════════════════════════════════════
-       PCB TRACES — all bends are 45°, no 90° corners
-       Width hierarchy: 1.5 power · 1.3 data · 1.0 signal
-       ═══════════════════════════════════════════════════ -->
-
-  <!-- Signal traces (1.0) -->
-  <g stroke="#38BDF8" stroke-width="1.0" stroke-linecap="round"
-     stroke-linejoin="round" fill="none"
-     stroke-opacity="0.72" filter="url(#glow)">
-
-    <!-- Top-left: 45° NW leg → straight up -->
-    <polyline points="86,74 78,66 78,58"/>
-    <!-- Top-right: 45° NE leg → straight up -->
-    <polyline points="114,74 122,66 122,58"/>
-
-    <!-- Corner top-left: pure 45° diagonal -->
-    <line x1="79"  y1="79"  x2="62"  y2="62"/>
-    <!-- Corner top-right: pure 45° diagonal -->
-    <line x1="121" y1="79"  x2="138" y2="62"/>
-
-    <!-- Corner bottom-left: pure 45° diagonal -->
-    <line x1="79"  y1="121" x2="62"  y2="138"/>
-    <!-- Corner bottom-right: pure 45° diagonal -->
-    <line x1="121" y1="121" x2="138" y2="138"/>
-
-    <!-- Bottom-left: straight down → 45° SW leg -->
-    <polyline points="86,126 78,134 78,142"/>
-    <!-- Bottom-right: straight down → 45° SE leg -->
-    <polyline points="114,126 122,134 122,142"/>
-
-  </g>
-
-  <!-- Data traces (1.3) -->
-  <g stroke="#38BDF8" stroke-width="1.3" stroke-linecap="round"
-     stroke-linejoin="round" fill="none"
-     stroke-opacity="0.76" filter="url(#glow)">
-
-    <!-- Top-center: straight up -->
-    <line x1="100" y1="70"  x2="100" y2="58"/>
-    <!-- Bottom-center: straight down -->
-    <line x1="100" y1="130" x2="100" y2="142"/>
-
-  </g>
-
-
-  <!-- ═════════════════════════════
-       VIA PADS — annular ring + dot
-       ═════════════════════════════ -->
-  <g filter="url(#glow)">
-    <g fill="none" stroke="#38BDF8" stroke-width="1.15" stroke-opacity="0.68">
-      <circle cx="78"  cy="58"  r="3.5"/>
-      <circle cx="100" cy="58"  r="3.5"/>
-      <circle cx="122" cy="58"  r="3.5"/>
-      <circle cx="62"  cy="62"  r="3.5"/>
-      <circle cx="138" cy="62"  r="3.5"/>
-
-      <circle cx="62"  cy="138" r="3.5"/>
-      <circle cx="138" cy="138" r="3.5"/>
-      <circle cx="78"  cy="142" r="3.5"/>
-      <circle cx="100" cy="142" r="3.5"/>
-      <circle cx="122" cy="142" r="3.5"/>
+  <!-- Traces out of the core, each ending in a via -->
+  <g transform="translate(100,100)" filter="url(#glow)">
+    <g stroke="#38BDF8" stroke-width="1.8" stroke-linecap="round" stroke-opacity="0.8">
+      <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(22.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(67.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(112.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(157.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(202.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(247.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(292.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(337.5)"/>
     </g>
-    <g fill="#38BDF8" fill-opacity="0.88">
-      <circle cx="78"  cy="58"  r="1.4"/>
-      <circle cx="100" cy="58"  r="1.4"/>
-      <circle cx="122" cy="58"  r="1.4"/>
-      <circle cx="62"  cy="62"  r="1.4"/>
-      <circle cx="138" cy="62"  r="1.4"/>
-
-      <circle cx="62"  cy="138" r="1.4"/>
-      <circle cx="138" cy="138" r="1.4"/>
-      <circle cx="78"  cy="142" r="1.4"/>
-      <circle cx="100" cy="142" r="1.4"/>
-      <circle cx="122" cy="142" r="1.4"/>
+    <g fill="none" stroke="#38BDF8" stroke-width="1.6" stroke-opacity="0.8">
+      <circle cx="55" cy="0" r="4.2" transform="rotate(22.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(67.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(112.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(157.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(202.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(247.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(292.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(337.5)"/>
+    </g>
+    <g fill="#38BDF8">
+      <circle cx="55" cy="0" r="1.7" transform="rotate(22.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(67.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(112.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(157.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(202.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(247.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(292.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(337.5)"/>
     </g>
   </g>
 
-  <!-- ── Mask: covers trace end-caps so they disappear behind the hub ring ── -->
-  <circle cx="100" cy="100" r="30" fill="url(#chip)"/>
+  <!-- Core -->
+  <circle cx="100" cy="100" r="40" fill="#07182a" stroke="#38BDF8" stroke-width="1.6" stroke-opacity="0.8" filter="url(#glow)"/>
 
-  <!-- ── Hub ring ── -->
-  <circle cx="100" cy="100" r="30"
-          fill="none" stroke="#38BDF8"
-          stroke-width="0.9" stroke-opacity="0.72"
-          filter="url(#glow)"/>
-
-  <!-- ════════════════════════════════════════
-       REACT ATOM
-       Three orbital ellipses at 0°, 60°, 120°
-       ════════════════════════════════════════ -->
-  <g transform="translate(100,100)"
-     stroke="#38BDF8" stroke-width="1.6"
-     fill="none" stroke-opacity="0.9"
-     filter="url(#glow)">
-    <ellipse rx="24" ry="8"/>
-    <ellipse rx="24" ry="8" transform="rotate(60)"/>
-    <ellipse rx="24" ry="8" transform="rotate(120)"/>
+  <!-- React atom -->
+  <g transform="translate(100,100)" stroke="#38BDF8" stroke-width="3" fill="none" filter="url(#glow)">
+    <ellipse rx="33" ry="12"/>
+    <ellipse rx="33" ry="12" transform="rotate(60)"/>
+    <ellipse rx="33" ry="12" transform="rotate(120)"/>
   </g>
-
-  <!-- ── Nucleus ── -->
-  <circle cx="100" cy="100" r="4.5" fill="#38BDF8" filter="url(#nucleus)"/>
-  <circle cx="98.2" cy="98.2" r="1.8" fill="white" fill-opacity="0.42"/>
-
+  <circle cx="100" cy="100" r="6" fill="#38BDF8" filter="url(#nucleus)"/>
+  <circle cx="98" cy="98" r="2.2" fill="white" fill-opacity="0.45"/>
 </g>
 <g transform="translate(363.9, 173.0)">
   <path d="M28.80 0.96L28.80 0.96Q22.66 0.96 18.14-1.49Q13.63-3.94 11.14-8.45Q8.64-12.96 8.64-18.91L8.64-18.91L8.64-33.89Q8.64-39.94 11.14-44.40Q13.63-48.86 18.14-51.31Q22.66-53.76 28.80-53.76Q34.94-53.76 39.46-51.31Q43.97-48.86 46.46-44.40Q48.96-39.94 48.96-33.89L48.96-33.89L48.96-24.58L16.13-24.58L16.13-18.91Q16.13-12.48 19.44-8.98Q22.75-5.47 28.80-5.47L28.80-5.47Q33.89-5.47 37.10-7.49Q40.32-9.50 41.18-13.34L41.18-13.34L48.77-13.34Q47.71-6.72 42.34-2.88Q36.96 0.96 28.80 0.96ZM16.13-30.53L41.47-30.53L41.47-33.89Q41.47-40.32 38.21-43.82Q34.94-47.33 28.80-47.33L28.80-47.33Q22.75-47.33 19.44-43.82Q16.13-40.32 16.13-33.89L16.13-33.89L16.13-30.53ZM68.45 0L61.34 0L61.34-52.80L68.06-52.80L68.06-46.27L68.64-46.27Q69.02-49.25 70.85-51.17L70.85-51.17Q73.15-53.76 77.28-53.76L77.28-53.76Q81.60-53.76 84.10-50.69L84.10-50.69Q85.44-48.86 86.11-46.27L86.11-46.27L86.59-46.27Q86.98-49.25 88.80-51.17L88.80-51.17Q91.20-53.76 95.33-53.76L95.33-53.76Q100.22-53.76 102.96-50.11Q105.70-46.46 105.70-40.42L105.70-40.42L105.70 0L98.59 0L98.59-40.42Q98.59-43.87 97.06-45.84Q95.52-47.81 92.74-47.81Q89.95-47.81 88.32-45.84Q86.69-43.87 86.69-40.42L86.69-40.42L86.69 0L80.35 0L80.35-40.42Q80.35-43.97 78.77-45.89Q77.18-47.81 74.40-47.81Q71.62-47.81 70.08-45.89Q68.54-43.97 68.45-40.42L68.45-40.42L68.45 0ZM140.83 0.96L140.83 0.96Q134.21 0.96 130.18-2.69L130.18-2.69Q127.10-5.28 126.34-9.31L126.34-9.31L126.34-9.31L126.34 0L118.75 0L118.75-70.08L126.34-70.08L126.34-55.01L126.24-43.49L126.34-43.49Q127.20-47.42 130.18-50.11L130.18-50.11Q134.30-53.76 140.83-53.76L140.83-53.76Q148.80-53.76 153.60-48.48Q158.40-43.20 158.40-34.18L158.40-34.18L158.40-18.53Q158.40-9.60 153.60-4.32Q148.80 0.96 140.83 0.96ZM138.43-5.66L138.43-5.66Q144.19-5.66 147.46-9.12Q150.72-12.58 150.72-18.91L150.72-18.91L150.72-33.89Q150.72-40.22 147.46-43.68Q144.19-47.14 138.43-47.14L138.43-47.14Q132.86-47.14 129.60-43.63Q126.34-40.13 126.34-33.89L126.34-33.89L126.34-18.91Q126.34-12.67 129.60-9.17Q132.86-5.66 138.43-5.66ZM192.96 0.96L192.96 0.96Q186.82 0.96 182.30-1.49Q177.79-3.94 175.30-8.45Q172.80-12.96 172.80-18.91L172.80-18.91L172.80-33.89Q172.80-39.94 175.30-44.40Q177.79-48.86 182.30-51.31Q186.82-53.76 192.96-53.76Q199.10-53.76 203.62-51.31Q208.13-48.86 210.62-44.40Q213.12-39.94 213.12-33.89L213.12-33.89L213.12-24.58L180.29-24.58L180.29-18.91Q180.29-12.48 183.60-8.98Q186.91-5.47 192.96-5.47L192.96-5.47Q198.05-5.47 201.26-7.49Q204.48-9.50 205.34-13.34L205.34-13.34L212.93-13.34Q211.87-6.72 206.50-2.88Q201.12 0.96 192.96 0.96ZM180.29-30.53L205.63-30.53L205.63-33.89Q205.63-40.32 202.37-43.82Q199.10-47.33 192.96-47.33L192.96-47.33Q186.91-47.33 183.60-43.82Q180.29-40.32 180.29-33.89L180.29-33.89L180.29-30.53ZM245.09 0.96L245.09 0.96Q237.22 0.96 232.37-4.32Q227.52-9.60 227.52-18.53L227.52-18.53L227.52-34.18Q227.52-43.20 232.32-48.48Q237.12-53.76 245.09-53.76L245.09-53.76Q251.71-53.76 255.84-50.11L255.84-50.11Q258.72-47.42 259.58-43.49L259.58-43.49L259.68-43.49L259.58-55.01L259.58-70.08L267.17-70.08L267.17 0L259.58 0L259.58-9.31L259.58-9.31Q258.82-5.28 255.84-2.69L255.84-2.69Q251.71 0.96 245.09 0.96ZM247.49-5.66L247.49-5.66Q253.15-5.66 256.37-9.17Q259.58-12.67 259.58-18.91L259.58-18.91L259.58-33.89Q259.58-40.13 256.37-43.63Q253.15-47.14 247.49-47.14L247.49-47.14Q241.73-47.14 238.46-43.68Q235.20-40.22 235.20-33.89L235.20-33.89L235.20-18.91Q235.20-12.58 238.46-9.12Q241.73-5.66 247.49-5.66ZM299.81 0.96L299.81 0.96Q291.94 0.96 287.09-4.32Q282.24-9.60 282.24-18.53L282.24-18.53L282.24-34.18Q282.24-43.20 287.04-48.48Q291.84-53.76 299.81-53.76L299.81-53.76Q306.43-53.76 310.56-50.11L310.56-50.11Q313.44-47.42 314.30-43.49L314.30-43.49L314.40-43.49L314.30-55.01L314.30-70.08L321.89-70.08L321.89 0L314.30 0L314.30-9.31L314.30-9.31Q313.54-5.28 310.56-2.69L310.56-2.69Q306.43 0.96 299.81 0.96ZM302.21-5.66L302.21-5.66Q307.87-5.66 311.09-9.17Q314.30-12.67 314.30-18.91L314.30-18.91L314.30-33.89Q314.30-40.13 311.09-43.63Q307.87-47.14 302.21-47.14L302.21-47.14Q296.45-47.14 293.18-43.68Q289.92-40.22 289.92-33.89L289.92-33.89L289.92-18.91Q289.92-12.58 293.18-9.12Q296.45-5.66 302.21-5.66ZM357.12 0.96L357.12 0.96Q350.98 0.96 346.46-1.49Q341.95-3.94 339.46-8.45Q336.96-12.96 336.96-18.91L336.96-18.91L336.96-33.89Q336.96-39.94 339.46-44.40Q341.95-48.86 346.46-51.31Q350.98-53.76 357.12-53.76Q363.26-53.76 367.78-51.31Q372.29-48.86 374.78-44.40Q377.28-39.94 377.28-33.89L377.28-33.89L377.28-24.58L344.45-24.58L344.45-18.91Q344.45-12.48 347.76-8.98Q351.07-5.47 357.12-5.47L357.12-5.47Q362.21-5.47 365.42-7.49Q368.64-9.50 369.50-13.34L369.50-13.34L377.09-13.34Q376.03-6.72 370.66-2.88Q365.28 0.96 357.12 0.96ZM344.45-30.53L369.79-30.53L369.79-33.89Q369.79-40.32 366.53-43.82Q363.26-47.33 357.12-47.33L357.12-47.33Q351.07-47.33 347.76-43.82Q344.45-40.32 344.45-33.89L344.45-33.89L344.45-30.53ZM409.25 0.96L409.25 0.96Q401.38 0.96 396.53-4.32Q391.68-9.60 391.68-18.53L391.68-18.53L391.68-34.18Q391.68-43.20 396.48-48.48Q401.28-53.76 409.25-53.76L409.25-53.76Q415.87-53.76 420.00-50.11L420.00-50.11Q422.88-47.42 423.74-43.49L423.74-43.49L423.84-43.49L423.74-55.01L423.74-70.08L431.33-70.08L431.33 0L423.74 0L423.74-9.31L423.74-9.31Q422.98-5.28 420.00-2.69L420.00-2.69Q415.87 0.96 409.25 0.96ZM411.65-5.66L411.65-5.66Q417.31-5.66 420.53-9.17Q423.74-12.67 423.74-18.91L423.74-18.91L423.74-33.89Q423.74-40.13 420.53-43.63Q417.31-47.14 411.65-47.14L411.65-47.14Q405.89-47.14 402.62-43.68Q399.36-40.22 399.36-33.89L399.36-33.89L399.36-18.91Q399.36-12.58 402.62-9.12Q405.89-5.66 411.65-5.66Z" fill="#e6edf5" fill-opacity="0.88"/>
