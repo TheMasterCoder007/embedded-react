@@ -1,4 +1,6 @@
-# Embedded React
+<h1 align="center">
+  <img src="assets/icons/embedded-react-readme-header-v3.png" alt="Embedded React" width="100%">
+</h1>
 
 **React Native for embedded MCUs.**
 Write a React app, compile it, flash it onto a microcontroller — the UI runs *on the device*, with no browser, no phone, and no OS required.

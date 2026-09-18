@@ -1,4 +1,6 @@
-# embedded-react
+<h1 align="center">
+  <img src="https://raw.githubusercontent.com/TheMasterCoder007/embedded-react/master/assets/icons/embedded-react-readme-header-v3.png" alt="Embedded React" width="100%">
+</h1>
 
 **React Native for embedded MCUs** — write JSX, run it on a microcontroller. This npm package is the
 **JavaScript layer**: the React-Native-style component API you import, the
@@ -10,7 +12,7 @@ React  →  react-reconciler  →  host-config.js  →  NativeUI.*  →  er_scen
 ```
 
 > ### Part of a monorepo
-> This package is just the `bridges/quickjs/js` folder of the **embedded-react** project. The C rendering
+> This package is just the `bridges/quickjs/js` folder of the **Embedded React** project. The C rendering
 > engine, the hardware backends, the runnable examples, the demo apps, and the simulator all live in the
 > main repo — **https://github.com/TheMasterCoder007/embedded-react**. The engine itself is distributed
 > separately as C source (CMake `FetchContent`, the ESP-IDF Component Registry, and PlatformIO) — see the
@@ -381,7 +383,7 @@ different QuickJS is rejected, not run as garbage) and registers the assets befo
 is the firmware-vs-config split: the firmware (desktop exe / ESP32 image) ships once; the `.erpkg`
 ships and updates independently.
 
-> Two CRCs are different things: the container's internal CRC32 is embedded-react's own integrity
+> Two CRCs are different things: the container's internal CRC32 is Embedded React's own integrity
 > check (universal). A bootloader's transfer/flash CRC is a separate,
 > project-specific step layered on the `.erpkg` by your upload toolchain.
 
