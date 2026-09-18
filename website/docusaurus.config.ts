@@ -7,7 +7,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const repoUrl = 'https://github.com/TheMasterCoder007/embedded-react';
 
 const config: Config = {
-  title: 'embedded-react',
+  title: 'Embedded React',
   tagline: 'React Native for embedded MCUs. Write React, flash it, and the UI runs on the chip.',
   favicon: 'img/favicon.png',
 
@@ -60,9 +60,9 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'embedded-react',
+      title: 'Embedded React',
       logo: {
-        alt: 'embedded-react',
+        alt: 'Embedded React',
         src: 'img/logo.svg',
       },
       items: [

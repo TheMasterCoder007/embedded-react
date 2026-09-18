@@ -1,4 +1,4 @@
-# embedded-react
+# Embedded React
 
 **React Native for embedded MCUs.**
 Write a React app, compile it, flash it onto a microcontroller — the UI runs *on the device*, with no browser, no phone, and no OS required.
@@ -33,7 +33,7 @@ export default function App() {
 
 Most projects that pair "React" with an "ESP32" run **React in a web browser** on your phone or laptop, talking to the microcontroller over REST or BLE. The MCU is just a backend; the component tree, layout, and rendering all live somewhere else.
 
-**embedded-react is the opposite.** It takes React Native's approach: React is a *component and reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (`div`, CSS, the browser layout engine) for native ones (`View`, Yoga, native draw calls). embedded-react does that swap again, one level deeper — the host primitives are a **pure C99 engine drawing straight into a framebuffer or SPI display**, with no operating system underneath and no JavaScript engine required.
+**Embedded React is the opposite.** It takes React Native's approach: React is a *component and reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (`div`, CSS, the browser layout engine) for native ones (`View`, Yoga, native draw calls). Embedded React does that swap again, one level deeper — the host primitives are a **pure C99 engine drawing straight into a framebuffer or SPI display**, with no operating system underneath and no JavaScript engine required.
 
 You write the same JSX components, the same `Animated` API, and the same Yoga-flexbox styles you'd use on iOS or Android. Your app runs on an ESP32, STM32, or RP2040 instead of a phone.
 
@@ -105,7 +105,7 @@ backend, or the toolchain — read on.
 
 A microcontroller has no operating system — no app switcher, no system chrome, no browser, no
 settings service, no other apps to hand anything to. The React Native modules that wrap those
-services have nothing to wrap here, so embedded-react doesn't ship them. **Their absence is a
+services have nothing to wrap here, so Embedded React doesn't ship them. **Their absence is a
 decision, not missing work**, and it won't change. Reaching for one fails at build time (`No
 matching export … for import "StatusBar"` in Flow A, `AOT: unknown element <StatusBar>` in Flow B)
 rather than silently doing nothing on the device.
@@ -368,7 +368,7 @@ Each top-level folder has its own README. Engine contributors start with
 
 `engine/` deliberately doesn't know about React. `er_scene.h` is a pure C ABI — anything that can call C functions can drive it. That layering is exactly what makes the two-flow design possible: Flow A drives the engine from a JS reconciler, Flow B drives it from generated C, and both share one renderer. It also leaves the door open to other frontends (Lua UI, JSON UI loaders, a visual editor that emits a scene-graph format) without forking the engine.
 
-That doesn't change the project's identity. **embedded-react is React Native for embedded MCUs.** React is the developer-facing model; the engine's neutrality is an implementation choice that keeps the two flows honest.
+That doesn't change the project's identity. **Embedded React is React Native for embedded MCUs.** React is the developer-facing model; the engine's neutrality is an implementation choice that keeps the two flows honest.
 
 ---
 

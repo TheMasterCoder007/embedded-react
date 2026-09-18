@@ -1,0 +1,22 @@
+.wordmark {
+  font-family: 'JetBrains Mono Variable', var(--ifm-font-family-monospace), serif;
+  font-variant-ligatures: none;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+
+.embedded {
+  font-weight: 300;
+  opacity: 0.85;
+}
+
+/* The logo's cyan, darkened on light backgrounds so it stays readable. */
+.react {
+  font-weight: 800;
+  color: #0369a1;
+}
+
+[data-theme='dark'] .react {
+  color: #38bdf8;
+  text-shadow: 0 0 0.6em rgba(56, 189, 248, 0.45);
+}
