@@ -65,8 +65,8 @@ npm create embedded-react@latest my-watch -- --template watch-face
 `npm create embedded-react@latest -- --list` prints the current list.
 
 :::tip[Heading for a board without PSRAM?]
-Start from `thermostat` or `watch-face`. Both compile with the ahead-of-time flow and come with a
-ready-made `build:aot` script. The minimal starter does not compile ahead of time yet; see
+Every template builds for the ahead-of-time flow. The `thermostat` and `watch-face` templates also
+come with a ready-made `build:aot` script, already set to a panel size. See
 [Your first board](/getting-started/first-board#flow-b-ahead-of-time).
 :::
 
@@ -128,7 +128,7 @@ version number through the channels below. You only need this once you are
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.14.0
+  GIT_TAG        v0.14.1
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -140,7 +140,7 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 Flow B needs only the engine, which is on the ESP-IDF Component Registry:
 
 ```bash
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.1"
 ```
 
 Flow A uses CMake `FetchContent` instead. It also needs QuickJS, which is a plain CMake project and
@@ -151,7 +151,7 @@ not an ESP-IDF component, so the registry cannot pull it. The
   <TabItem value="pio" label="PlatformIO">
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.14.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.14.1
 ```
 
 This installs the engine, which covers Flow B. Flow A on PlatformIO is best-effort; the ESP-IDF

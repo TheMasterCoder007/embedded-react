@@ -95,18 +95,9 @@ idf.py -p PORT flash monitor
 
 The board guides cover where the generated files go and the wiring for each example.
 
-:::warning[The minimal starter does not compile ahead of time yet]
-The starter's logo pulse is an `Animated.loop` around a two-step `Animated.sequence` on a single
-value, which the AOT compiler rejects:
-
-```text
-AOT: the same animated value is driven more than once in this composition
-```
-
-Everything else in the starter compiles. Remove the pulse, or begin from the `thermostat` or
-`watch-face` template, both of which build cleanly for Flow B. [The AOT subset](/guides/aot-subset)
-lists what is and is not supported.
-:::
+The ahead-of-time compiler accepts a subset of the API, and tells you at build time, with the file
+and line, when an app steps outside it. [The AOT subset](/guides/aot-subset) lists what is and is not
+supported.
 
 ## Bringing up a different board
 

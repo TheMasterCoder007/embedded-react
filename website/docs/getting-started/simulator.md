@@ -46,19 +46,19 @@ An app can read the screen size and choose a layout, so one codebase serves an 8
 240×320 one. The `thermostat` template does this. Resize the simulator to watch it switch.
 :::
 
-## Font size warnings
+## Baked font sizes
 
-On the first build of the starter you will see a message like this:
+Fonts are baked to bitmaps at build time, so only the sizes that were baked exist on the device. The
+built-in font comes in seven sizes: 10, 12, 16, 20, 24, 32, and 48. Use any other size, and the build
+tells you what will happen instead:
 
 ```text
-embedded-react: 2 font size(s) the app uses are not baked and will render at the nearest baked size:
+embedded-react: 1 font size(s) the app uses are not baked and will render at the nearest baked size:
   15px → renders at 16px in the built-in font (baked: 10, 12, 16, 20, 24, 32, 48)
 ```
 
-Fonts are baked to bitmaps at build time, so only the sizes that were baked exist on the device. The
-built-in font comes in seven sizes; anything else snaps to the nearest one. Either use a baked size,
-or import your own `.ttf`/`.otf` and list the sizes you need. [Assets](/concepts/assets) explains
-how.
+Either use a baked size, or import your own `.ttf`/`.otf` and list the sizes you need.
+[Assets](/concepts/assets) explains how.
 
 ## Share a build
 

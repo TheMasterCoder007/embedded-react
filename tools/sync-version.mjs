@@ -162,6 +162,12 @@ const MANIFESTS = [
   {path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite},
   {path: 'engine/include/er_version.h', read: headerRead, write: headerWrite},
   {path: 'README.md', read: readmeRead, write: readmeWrite},
+  // The docs site repeats the README's installation snippets, in the same three formats.
+  {
+    path: 'website/docs/getting-started/installation.md',
+    read: readmeRead,
+    write: readmeWrite,
+  },
   {
     path: 'examples/esp32/esp32-s3/CMakeLists.txt',
     read: gitTagRead,
