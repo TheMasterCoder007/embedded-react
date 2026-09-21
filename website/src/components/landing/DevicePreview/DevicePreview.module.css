@@ -1,0 +1,51 @@
+.device {
+  margin: 0;
+  padding: 9px 9px 0;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 16px;
+  background: #0b1524;
+  box-shadow:
+    0 0 2.5rem rgba(56, 189, 248, 0.22),
+    0 20px 40px -10px rgba(0, 0, 0, 0.8);
+}
+
+.screen {
+  width: 236px;
+  height: 142px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #1a1a2e;
+  font-family: Inter, var(--ifm-font-family-base);
+}
+
+.screen p {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+  color: #fff;
+}
+
+.screen .tap {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #e94560;
+}
+
+.device figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0 0.45rem;
+  font-family: var(--er-font-mono);
+  font-size: 0.65rem;
+  color: #9fc3da;
+}
+
+.device figcaption i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--er-cyan);
+  box-shadow: 0 0 6px var(--er-cyan);
+}

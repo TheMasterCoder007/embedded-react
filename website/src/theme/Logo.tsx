@@ -5,7 +5,7 @@ import {useThemeConfig} from '@docusaurus/theme-common';
 import ThemedImage from '@theme/ThemedImage';
 import type {Props} from '@theme/Logo';
 
-import Wordmark from '@site/src/components/Wordmark';
+import Wordmark from '@site/src/components/Wordmark/Wordmark';
 
 /**
  * The stock navbar logo, with the plain-text title swapped for the wordmark.

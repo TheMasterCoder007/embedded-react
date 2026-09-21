@@ -12,6 +12,20 @@
   --ifm-color-primary-lightest: #4f96bd;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  /* Brand: the icon's navy and cyan, and the wordmark's typeface. */
+  --er-navy-deep: #040b16;
+  --er-navy: #0a1828;
+  --er-navy-light: #0d2035;
+  --er-cyan: #38bdf8;
+  --er-font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ifm-font-family-monospace: var(--er-font-mono);
+  --ifm-footer-background-color: var(--er-navy-deep);
+}
+
+code,
+pre {
+  font-variant-ligatures: none;
 }
 
 [data-theme='dark'] {
@@ -23,6 +37,21 @@
   --ifm-color-primary-lighter: #56c7f9;
   --ifm-color-primary-lightest: #74d1fa;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+
+  /* Navy instead of the stock neutral grey. */
+  --ifm-background-color: #07111f;
+  --ifm-background-surface-color: var(--er-navy);
+  --ifm-navbar-background-color: rgba(7, 17, 31, 0.85);
+  --ifm-toc-border-color: rgba(56, 189, 248, 0.12);
+}
+
+[data-theme='dark'] .navbar {
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.1);
+}
+
+.footer--dark {
+  border-top: 1px solid rgba(56, 189, 248, 0.1);
 }
 
 /* White on the bright dark-mode cyan is unreadable. */

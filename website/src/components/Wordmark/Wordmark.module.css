@@ -16,7 +16,12 @@
   color: #0369a1;
 }
 
-[data-theme='dark'] .react {
+.onDark {
+  color: #e6edf5;
+}
+
+[data-theme='dark'] .react,
+.onDark .react {
   color: #38bdf8;
   text-shadow: 0 0 0.6em rgba(56, 189, 248, 0.45);
 }
