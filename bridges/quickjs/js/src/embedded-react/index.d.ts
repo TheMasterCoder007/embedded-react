@@ -809,7 +809,7 @@ export interface AnimationConfig {
 
 export interface Animation {
   start(callback?: (result: {finished: boolean}) => void): void;
-  stop?(): void;
+  stop(): void;
 }
 
 export const Animated: {
@@ -826,7 +826,10 @@ export const Animated: {
     config?: {stopTogether?: boolean},
   ): Animation;
   stagger(delay: number, animations: Animation[]): Animation;
-  loop(animation: Animation, config?: {iterations?: number}): Animation;
+  loop(
+    animation: Animation,
+    config?: {iterations?: number; resetBeforeIteration?: boolean},
+  ): Animation;
   delay(ms: number): Animation;
 };
 

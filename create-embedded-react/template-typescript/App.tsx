@@ -22,7 +22,7 @@ export function App() {
       ]),
     );
     anim.start();
-    return () => anim.stop && anim.stop();
+    return () => anim.stop();
   }, []);
 
   return (
@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   logo: {width: 60, height: 60, marginBottom: 10},
-  title: {color: '#e8edf4', fontSize: 17, marginBottom: 14},
+  title: {color: '#e8edf4', fontSize: 20, marginBottom: 14},
   button: {
     backgroundColor: '#1e2a44',
     borderColor: '#4f86f7',
@@ -75,7 +75,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 20,
   },
-  buttonText: {color: '#cfe0ff', fontSize: 15},
+  buttonText: {color: '#cfe0ff', fontSize: 16},
   hintBox: {alignItems: 'center', marginTop: 16, gap: 2},
   hint: {color: '#5f6b7a', fontSize: 12},
 });

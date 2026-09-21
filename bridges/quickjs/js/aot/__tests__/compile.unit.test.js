@@ -818,6 +818,13 @@ describe('AOT animation completeness', () => {
         const b = useAnimatedValue(0);
         return (<View onPress={() => { ${body} }} ${style ? `style={${style}}` : ''}><Text>x</Text></View>);
       }`);
+  // The body of a generated animation callback (a C function; its closing brace is the only one in column 0).
+  const cbBody = (c, name) =>
+    c.match(
+      new RegExp(
+        `static void ${name}\\(bool finished, void\\* user_data\\)\\n\\{[^]*?\\n\\}`,
+      ),
+    )[0];
 
   it('chains Animated.sequence steps via on_complete', () => {
     const c = app(`Animated.sequence([
@@ -929,13 +936,124 @@ describe('AOT animation completeness', () => {
     ).toThrow(/same animated value/);
   });
 
-  it('rejects Animated.loop around a multi-step sequence', () => {
+  it('loops a same-value sequence by chaining its last step back to the first', () => {
+    const c = app(`Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1.12, duration: 800 }),
+      Animated.timing(a, { toValue: 1, duration: 800 }),
+    ])).start();`);
+    const [, id] = c.match(/static void er_seqcb_(\d+)_1\(/);
+    // First start (inline) → step 1 → back to step 0, forever.
+    expect(c).toContain(`cfg${id}_0.on_complete = er_seqcb_${id}_1;`);
+    expect(c).toContain(`cfg${id}_1.on_complete = er_seqcb_${id}_0;`);
+    expect(cbBody(c, `er_seqcb_${id}_0`)).toContain(
+      'er_anim_value_animate(s_av_a, (float)(1.12f)',
+    );
+    expect(c).not.toContain('.loop = true'); // the chain repeats, not the engine
+    expect(c).not.toContain('s_loop'); // endless, and a sequence carries on from where it ended
+  });
+
+  it('ends a chain when a step is interrupted, reporting finished=false', () => {
+    const c = app(`Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 300 }),
+      Animated.timing(a, { toValue: 0, duration: 300 }),
+    ]).start(({ finished }) => {});`);
+    const [, id] = c.match(/static void er_seqcb_(\d+)_1\(/);
+    expect(cbBody(c, `er_seqcb_${id}_1`)).toMatch(
+      /if \(!finished\)\s*\{\s*er_donecb_\d+\(false, NULL\);\s*return;\s*\}/,
+    );
+  });
+
+  it('counts the iterations of a looped sequence and then completes', () => {
+    const c = app(`Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 100 }),
+      Animated.timing(b, { toValue: 1, duration: 100 }),
+    ]), { iterations: 3 }).start(() => {});`);
+    expect(c).toMatch(/s_loop(\d+)_n = 1;/);
+    expect(c).toMatch(
+      /if \(s_loop\d+_n >= 3\)\s*\{\s*er_donecb_\d+\(true, NULL\);\s*return;\s*\}\s*s_loop\d+_n\+\+;/,
+    );
+  });
+
+  it('puts a counted single-animation loop back where it started before each repeat', () => {
+    const c = app(
+      `Animated.loop(Animated.timing(a, { toValue: 1, duration: 100 }), { iterations: 2 }).start();`,
+    );
+    expect(c).toMatch(/s_loop(\d+)_from = er_anim_value_get\(s_av_a\);/);
+    expect(c).toMatch(/er_anim_value_set\(s_av_a, s_loop\d+_from\);/);
+    expect(c).not.toContain('.loop = true');
+  });
+
+  it('loops a spring by chaining it, since the engine repeats only a timing', () => {
+    const c = app(`Animated.loop(Animated.spring(a, { toValue: 1 })).start();`);
+    expect(c).toContain('ER_ANIM_SPRING');
+    expect(c).toMatch(/\.on_complete = er_seqcb_\d+_0;/);
+    expect(c).toMatch(/er_anim_value_set\(s_av_a, s_loop\d+_from\);/);
+  });
+
+  it('adds a looped sequence’s trailing delay before each repeat, not the first run', () => {
+    const c = app(`Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 100 }),
+      Animated.timing(a, { toValue: 0, duration: 100 }),
+      Animated.delay(500),
+    ])).start();`);
+    const [, id] = c.match(/static void er_seqcb_(\d+)_0\(/);
+    expect((c.match(/\.delay_ms = 500;/g) || []).length).toBe(1);
+    expect(cbBody(c, `er_seqcb_${id}_0`)).toContain('.delay_ms = 500;');
+  });
+
+  it('rejects a loop whose steps all finish instantly', () => {
     expect(() =>
       app(`Animated.loop(Animated.sequence([
+      Animated.timing(a, { toValue: 1, duration: 0 }),
+      Animated.timing(a, { toValue: 0, duration: 0 }),
+    ])).start();`),
+    ).toThrow(/finishes instantly/);
+  });
+
+  it('rejects a looped sequence nested inside another composition', () => {
+    expect(() =>
+      app(`Animated.parallel([
+      Animated.loop(Animated.sequence([
+        Animated.timing(a, { toValue: 1, duration: 100 }),
+        Animated.timing(b, { toValue: 1, duration: 100 }),
+      ])),
+    ]).start();`),
+    ).toThrow(/inside another composition/);
+  });
+
+  it('rejects looping a parallel', () => {
+    expect(() =>
+      app(`Animated.loop(Animated.parallel([
       Animated.timing(a, { toValue: 1, duration: 100 }),
       Animated.timing(b, { toValue: 1, duration: 100 }),
     ])).start();`),
-    ).toThrow(/loop currently wraps a single/);
+    ).toThrow(/looping a parallel\/stagger is not yet supported/);
+  });
+
+  it('starts and stops an animation held in a const', () => {
+    const c = gen(`${A}
+      import { useEffect } from 'react';
+      export function App() {
+        const [on, setOn] = useState(false);
+        const a = useAnimatedValue(0);
+        useEffect(() => {
+          if (!on) return;
+          const anim = Animated.loop(
+            Animated.sequence([
+              Animated.timing(a, { toValue: 1, duration: 300 }),
+              Animated.timing(a, { toValue: 0, duration: 300 }),
+            ]),
+          );
+          anim.start();
+          return () => anim.stop();
+        }, [on]);
+        return (<View onPress={() => setOn(!on)} style={{ opacity: a }} />);
+      }`);
+    expect(c).toMatch(/er_anim_value_animate\(s_av_a, \(float\)\(1\)/);
+    // stop() halts the value where it is; the cancellation ends the chain.
+    expect(c).toMatch(
+      /static void er_effect_\d+_cleanup\(void\)\s*\{\s*er_anim_value_set\(s_av_a, er_anim_value_get\(s_av_a\)\);\s*\}/,
+    );
   });
 
   it('rejects mismatched interpolate ranges', () => {

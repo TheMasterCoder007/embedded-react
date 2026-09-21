@@ -15,6 +15,24 @@ See the README for the release process.
 - A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
   every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
 
+## [0.14.1] - 2026-09-21
+### Added
+
+- Flow B compiles `Animated.loop` around an `Animated.sequence`, such as a pulse that grows and shrinks,
+  as well as counted loops (`iterations`) and looped springs. An animation can be kept in a `const` and
+  stopped later with `anim.stop()`, which the TypeScript types now declare as always present.
+
+### Fixed
+
+- The default starter now builds with `build --aot` and without font-size warnings. Flow B rejected its
+  looped logo pulse, and its title and button text used sizes that aren't baked (17 and 15, now 20 and 16).
+
+- In Flow B, a sequence now stops when one of its steps is interrupted, as it does in the simulator. It
+  used to carry on, and could leave two animations driving the same value.
+
+- The CYD example README's quick start closes its first code block before the orientation note, so the
+  note renders as text, and the copy button grabs only the shell commands.
+
 ## [0.14.0] - 2026-09-17
 ### Added
 
@@ -1218,7 +1236,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.11.1...v0.12.0
