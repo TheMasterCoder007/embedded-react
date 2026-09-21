@@ -100,32 +100,24 @@ if (hasWasm) {
   );
 }
 
-// 4. Flow B (AOT) → app.gen.c. Pure JS (no wasm). The template app uses Animated.loop, which AOT doesn't
-//    support yet, so use a minimal AOT-subset app via an explicit entry.
-writeFileSync(
-  resolve(proj, 'aot-app.jsx'),
-  `import { useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'embedded-react';
-export function App() {
-  const [c, setC] = useState(0);
-  return (
-    <View style={s.r}>
-      <Text style={s.t}>count is {c}</Text>
-      <Pressable onPress={() => setC((n) => n + 1)}><Text style={s.t}>tap</Text></Pressable>
-    </View>
-  );
-}
-const s = StyleSheet.create({ r: { flex: 1 }, t: { color: '#fff', fontSize: 20 } });
-`,
-);
+// 4. Flow B (AOT) → app.gen.c. Pure JS (no wasm). Builds the scaffolded starter itself, at a no-PSRAM
+//    board's size, so a starter the AOT compiler rejects fails here rather than on a user's first build.
 run(
   'npx',
-  ['embedded-react', 'build', '--aot', 'aot-app.jsx', '--out', 'dist-aot'],
+  [
+    'embedded-react',
+    'build',
+    '--aot',
+    '--screen',
+    '240x320',
+    '--out',
+    'dist-aot',
+  ],
   proj,
 );
 ok(
   existsSync(resolve(proj, 'dist-aot/app.gen.c')),
-  'embedded-react build --aot → dist-aot/app.gen.c',
+  'embedded-react build --aot (the starter) → dist-aot/app.gen.c',
 );
 
 // 4b. Flow B from a TypeScript entry (App.tsx). The compiler strips the types and must emit C — proving the

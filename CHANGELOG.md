@@ -10,7 +10,19 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Added
+
+- Flow B compiles `Animated.loop` around an `Animated.sequence`, such as a pulse that grows and shrinks,
+  as well as counted loops (`iterations`) and looped springs. An animation can be kept in a `const` and
+  stopped later with `anim.stop()`, which the TypeScript types now declare as always present.
+
 ### Fixed
+
+- The default starter now builds with `build --aot` and without font-size warnings. Flow B rejected its
+  looped logo pulse, and its title and button text used sizes that aren't baked (17 and 15, now 20 and 16).
+
+- In Flow B, a sequence now stops when one of its steps is interrupted, as it does in the simulator. It
+  used to carry on, and could leave two animations driving the same value.
 
 - The CYD example README's quick start closes its first code block before the orientation note, so the
   note renders as text, and the copy button grabs only the shell commands.

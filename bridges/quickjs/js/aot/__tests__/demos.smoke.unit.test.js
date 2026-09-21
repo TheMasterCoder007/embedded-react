@@ -21,6 +21,7 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {compileSource, bakeSvgArtifacts, demoMarker} from '../compile.mjs';
+import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
 
 // Regression guard: the AOT-targeted demos must keep compiling end-to-end (no thrown "AOT: …"). This is
 // the cheap counterpart to a full compile-and-screenshot harness — it would have caught any compiler change
@@ -63,6 +64,33 @@ describe('AOT demo compile smoke', () => {
     expect(r.c).toContain('p.arc_range ='); // AUTO's two-setpoint band is state-driven
     expect(r.c).toContain('ER_EVENT_VALUE_CHANGE'); // the drag is native; JS only stores what it reports
     expect(r.handlers).toBeGreaterThan(0);
+  });
+});
+
+// The scaffolder's default starters are a newcomer's first build, in either flow — so they must compile
+// ahead of time for a no-PSRAM board and use only the font sizes the built-in font is baked at.
+describe('create-embedded-react starters build clean', () => {
+  const starters = ['template/App.jsx', 'template-typescript/App.tsx'].map(
+    rel => [
+      rel,
+      readFileSync(resolve(demosDir, '../create-embedded-react', rel), 'utf8'),
+    ],
+  );
+
+  it.each(starters)('%s compiles for a 240×320 panel', (rel, src) => {
+    const r = compileSource(src, 'starter', {
+      screen: {width: 240, height: 320},
+      filename: rel,
+    });
+    // The logo pulse: a looped out-and-back sequence on one value, chained through on_complete.
+    expect(r.c).toMatch(/\.on_complete = er_seqcb_\d+_0;/);
+    expect(r.c).toContain('er_anim_value_animate(s_av_pulse,');
+  });
+
+  it.each(starters)('%s uses only baked font sizes', (rel, src) => {
+    const used = analyzeFontSizes(src);
+    expect(used.dynamic).toEqual([]);
+    expect(findSizeGaps({sizes: used.sizes}).gaps).toEqual([]);
   });
 });
 
