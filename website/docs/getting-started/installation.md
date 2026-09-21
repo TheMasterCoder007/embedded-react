@@ -3,9 +3,162 @@ title: "Installation"
 description: "Create a project with create-embedded-react and install the toolchain for your target."
 ---
 
-:::note[Placeholder]
-This page is scaffolded and not yet written.
-Until it is, the current source of truth is [create-embedded-react/README.md](https://github.com/TheMasterCoder007/embedded-react/blob/master/create-embedded-react/README.md).
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Requirements
+
+- **Node.js 18 or newer.** That is everything the simulator needs. The engine ships prebuilt as
+  WebAssembly inside the npm package, so there is no native toolchain to install.
+- A firmware toolchain (ESP-IDF, the Pico SDK, …) only once you [flash a board](/getting-started/first-board).
+
+## Create a project
+
+<Tabs groupId="language">
+  <TabItem value="js" label="JavaScript" default>
+
+```bash
+npm create embedded-react@latest my-app
+```
+
+  </TabItem>
+  <TabItem value="ts" label="TypeScript">
+
+```bash
+npm create embedded-react@latest my-app -- --ts
+```
+
+The TypeScript starter adds a `tsconfig.json`, type declarations for asset imports (`.png`,
+`.ttf`, …) and an `npm run typecheck` script.
+
+  </TabItem>
+</Tabs>
+
+Then install and start the simulator:
+
+```bash
+cd my-app
+npm install
+npm run dev
+```
+
+`npm run dev` serves the simulator at [http://localhost:3333](http://localhost:3333). The next page,
+[Run it in the simulator](/getting-started/simulator), covers what you can do there.
+
+### Start from a demo
+
+The starter is deliberately minimal: a card with a pulsing logo and a counter button. To begin from
+a complete app instead, pass a template:
+
+```bash
+npm create embedded-react@latest my-thermostat -- --template thermostat
+npm create embedded-react@latest my-watch -- --template watch-face
+```
+
+| Template | What you get |
+|---|---|
+| `starter` | The minimal starter (the default) |
+| `starter-ts` | The starter in TypeScript (same as `--ts`) |
+| `thermostat` | A thermostat with a draggable dial and a 14-day weather panel |
+| `watch-face` | A digital watch face and a bubble level, sized for a 240×280 panel |
+
+`npm create embedded-react@latest -- --list` prints the current list.
+
+:::tip[Heading for a board without PSRAM?]
+Start from `thermostat` or `watch-face`. Both compile with the ahead-of-time flow and come with a
+ready-made `build:aot` script. The minimal starter does not compile ahead of time yet; see
+[Your first board](/getting-started/first-board#flow-b-ahead-of-time).
 :::
 
-Create a project with create-embedded-react and install the toolchain for your target.
+## What you get
+
+```text
+my-app/
+  index.jsx      entry point: registers <App/>
+  App.jsx        your UI
+  assets/        images and fonts; import them and they are baked automatically
+  package.json
+```
+
+The project depends on two packages: `embedded-react` and `react`. Its scripts wrap the
+`embedded-react` command-line tool:
+
+| Script | Runs | What it does |
+|---|---|---|
+| `npm run dev` | `embedded-react dev` | The browser simulator, with hot reload |
+| `npm run dev:device` | `embedded-react dev --device` | Hot reload on a connected board over USB (Flow A) |
+| `npm run build` | `embedded-react build` | The device artifact for Flow A: `dist/app.erpkg` |
+| `npm run export` | `embedded-react export` | A self-contained static copy of the simulator, to share or host |
+
+`npx embedded-react --help` lists every command and flag.
+
+## Adding to an existing project
+
+```bash
+npm install embedded-react react@18.3.1
+```
+
+:::warning[Use React 18.3.1 exactly]
+`embedded-react` pins `react` to `18.3.1`. If your project resolves a different version you end up
+with two copies of React, and the app renders a blank screen with a `useRef of null` error.
+:::
+
+Add an entry file that registers your root component, then run `npx embedded-react dev`:
+
+```jsx title="index.jsx"
+import {AppRegistry} from 'embedded-react';
+import {App} from './App.jsx';
+
+AppRegistry.registerComponent('my-app', () => App);
+```
+
+The CLI looks for `./index.jsx`, then `./src/index.jsx`, then the `main` field of `package.json`.
+Pass a path to use a different entry: `npx embedded-react dev path/to/entry.jsx`.
+
+## The engine, for firmware
+
+The npm package is the app side. The firmware side needs the C engine, which ships at the same
+version number through the channels below. You only need this once you are
+[wiring up a board](/getting-started/first-board); the example projects already do it for you.
+
+<Tabs>
+  <TabItem value="cmake" label="CMake" default>
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(embedded-react
+  GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
+  GIT_TAG        v0.14.0
+  SOURCE_SUBDIR  engine)
+FetchContent_MakeAvailable(embedded-react)
+target_link_libraries(my_firmware PRIVATE embedded-react)
+```
+
+  </TabItem>
+  <TabItem value="idf" label="ESP-IDF">
+
+Flow B needs only the engine, which is on the ESP-IDF Component Registry:
+
+```bash
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.0"
+```
+
+Flow A uses CMake `FetchContent` instead. It also needs QuickJS, which is a plain CMake project and
+not an ESP-IDF component, so the registry cannot pull it. The
+[ESP32-S3 example](/guides/boards/esp32-s3) is a template you can copy out.
+
+  </TabItem>
+  <TabItem value="pio" label="PlatformIO">
+
+```ini
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.14.0
+```
+
+This installs the engine, which covers Flow B. Flow A on PlatformIO is best-effort; the ESP-IDF
+route is the supported one.
+
+  </TabItem>
+</Tabs>
+
+The engine is backend-agnostic: you supply the code that pushes pixels to your display. See
+[Engine and backends](/concepts/engine-and-backends).
