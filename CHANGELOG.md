@@ -10,6 +10,10 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- The CYD example README's quick start closes its first code block before the orientation note, so the
+  note renders as text, and the copy button grabs only the shell commands.
 
 ## [0.14.0] - 2026-09-17
 ### Added

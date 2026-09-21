@@ -28,6 +28,8 @@ You need **ESP-IDF v5.3 or newer** installed and active in your shell (tested on
 ```bash
 cd bridges/quickjs/js
 ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # writes dist/app.gen.c
+cd ../../..
+```
 
 > **Orientation.** The example ships in the panel's **native portrait (240x320)**. Set `BOARD_ROTATE_90`
 > to `1` in `main/board.h` for landscape 320x240 — it swaps the panel axes and the touch axes together.
@@ -40,8 +42,6 @@ ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # writes dis
 > mirror flipped, which is why only `(true,true)` and `(false,false)` are valid there and the two
 > differ by 180°. Software rotation in the engine is a feature of the `esp32-lcd` backend (RGB/parallel
 > panels), not this SPI one — here orientation is the panel's own MADCTL.
-cd ../../..
-```
 
 **2. Build and flash.** Plug the board into your computer via the **USB-C** port, then:
 
@@ -143,7 +143,7 @@ the SPI backend (no QuickJS). Generate `app.gen.c` separately with step 1 above.
 You can also pull the engine as a managed component from the ESP-IDF Component Registry:
 
 ```bash
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.3.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.0"
 ```
 
 Then drop `app.gen.c` / `app.gen.h` into `main/` and supply a backend. Note the SPI backend
