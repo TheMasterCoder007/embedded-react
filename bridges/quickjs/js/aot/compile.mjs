@@ -2702,11 +2702,8 @@ function emitAnimEntry(entry, env, idx, onCompleteCb) {
  *  `duration` is this node's own run length in ms, used to offset later siblings in a sequence/stagger;
  *  null = unknown (spring/decay/loop), which is illegal to sequence anything after. */
 function flattenAnim(node, env, baseDelay, loop) {
-  if (
-    node?.type !== 'CallExpression' ||
-    node.callee.type !== 'MemberExpression' ||
-    node.callee.object?.name !== 'Animated'
-  )
+  node = resolveAnim(node, env);
+  if (!isAnimatedCall(node))
     throw aotError(
       'AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)',
     );
@@ -2786,31 +2783,89 @@ function flattenAnim(node, env, baseDelay, loop) {
     const r = flattenAnim(args[0], env, baseDelay, true);
     if (r.entries.length !== 1)
       throw aotError(
-        'AOT: Animated.loop currently wraps a single Animated.timing/spring/decay (looping a sequence/parallel is not yet supported)',
+        'AOT: an Animated.loop inside another composition can only wrap a single Animated.timing/spring/decay',
+        'a loop around a sequence works when the loop is the animation you start: Animated.loop(Animated.sequence([...])).start().',
       );
     return {entries: r.entries, duration: null};
   }
   throw aotError(`AOT: Animated.${kind}(...) is not a supported animation`);
 }
 
-/** Lowers `Animated.sequence([...]).start()` to an on_complete CHAIN: step 0 starts inline (in the handler),
- *  and each step's completion callback starts the next. Unlike the flat delay_ms path this is correct when
- *  steps share a value (out-and-back) — er_anim_value_animate cancels the running anim on a value, so
- *  synchronous same-value animates would cancel each other — and needs no fixed duration (spring/decay OK).
- *  delay() entries fold into the next step's delay_ms. Nested parallel/stagger/loop in a sequence throws. */
-function compileSequenceChain(seqNode, env, ctx, doneCb = null) {
+const ANIM_KINDS = new Set([
+  'timing',
+  'spring',
+  'decay',
+  'sequence',
+  'parallel',
+  'stagger',
+  'delay',
+  'loop',
+]);
+
+/** True for an `Animated.timing/spring/…/loop(…)` call: an animation, not a value. */
+const isAnimatedCall = n =>
+  n?.type === 'CallExpression' &&
+  n.callee.type === 'MemberExpression' &&
+  n.callee.object?.name === 'Animated' &&
+  ANIM_KINDS.has(n.callee.property?.name);
+
+/** An animation handle (`anim` after `const anim = Animated.loop(…)`) resolved to the call it names. */
+const resolveAnim = (node, env) =>
+  node?.type === 'Identifier' && env.animLocals?.has(node.name)
+    ? env.animLocals.get(node.name)
+    : node;
+
+/** One Animated.timing/spring/decay call as a chain step, started `extraDelay` ms later than its own delay. */
+function animStep(node, env, extraDelay) {
+  const kind = node.callee.property.name;
+  const valRef = node.arguments[0];
+  if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name))
+    throw aotError(
+      `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
+    );
+  const get = animConfigGetter(node.arguments[1]);
+  const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
+  return {
+    cVar: env.anims.get(valRef.name).cVar,
+    kind,
+    get,
+    delayMs: extraDelay + ownDelay,
+    loop: false,
+  };
+}
+
+/** The C handle of every value an animation drives. */
+function animValues(node, env, acc = new Set()) {
+  node = resolveAnim(node, env);
+  if (!isAnimatedCall(node))
+    throw aotError(
+      'AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)',
+    );
+  const kind = node.callee.property.name;
+  const args = node.arguments;
+  if (kind === 'timing' || kind === 'spring' || kind === 'decay')
+    acc.add(animStep(node, env, 0).cVar);
+  else if (kind === 'loop') animValues(args[0], env, acc);
+  else if (kind !== 'delay') {
+    const list = kind === 'stagger' ? args[1] : args[0];
+    for (const child of list?.elements ?? [])
+      if (child) animValues(child, env, acc);
+  }
+  return acc;
+}
+
+/** The steps of an `Animated.sequence([...])` for an on_complete chain. A delay() folds into the next step's
+ *  delay_ms; `trailingDelay` is what follows the last step. A nested parallel/stagger/loop throws. */
+function sequenceSteps(seqNode, env) {
   const list = seqNode.arguments[0];
   if (list?.type !== 'ArrayExpression')
     throw aotError('AOT: Animated.sequence(...) needs an array of animations');
   const steps = [];
   let pendingDelay = 0;
-  for (const child of list.elements) {
-    if (!child) continue;
-    if (
-      child.type !== 'CallExpression' ||
-      child.callee.type !== 'MemberExpression' ||
-      child.callee.object?.name !== 'Animated'
-    )
+  for (const el of list.elements) {
+    if (!el) continue;
+    const child = resolveAnim(el, env);
+    if (!isAnimatedCall(child))
       throw aotError(
         'AOT: Animated.sequence entries must be Animated.timing/spring/decay/delay(...)',
       );
@@ -2825,41 +2880,136 @@ function compileSequenceChain(seqNode, env, ctx, doneCb = null) {
       throw aotError(
         'AOT: Animated.sequence entries must be Animated.timing/spring/decay/delay (a nested parallel/stagger/loop inside a sequence is not yet supported — keep the sequence flat)',
       );
-    const valRef = child.arguments[0];
-    if (valRef?.type !== 'Identifier' || !env.anims?.has(valRef.name))
-      throw aotError(
-        `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
-      );
-    const get = animConfigGetter(child.arguments[1]);
-    const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
-    steps.push({
-      cVar: env.anims.get(valRef.name).cVar,
-      kind,
-      get,
-      delayMs: pendingDelay + ownDelay,
-      loop: false,
-    });
+    steps.push(animStep(child, env, pendingDelay));
     pendingDelay = 0;
   }
-  if (!steps.length) return [];
-  const seqId = ctx.out.seqN++; // GLOBAL: callback names are file-scope, so must be unique across handlers
-  let firstLines = [];
-  // Build from the tail so each step knows its successor's callback name. Step 0 runs inline; the rest
-  // become on_complete callbacks pushed to out.animCbs (emitted at file scope).
-  for (let i = steps.length - 1; i >= 0; i--) {
-    // The last step's on_complete is the .start(onComplete) callback (if any) — the sequence is "done".
-    const nextCb = i < steps.length - 1 ? `er_seqcb_${seqId}_${i + 1}` : doneCb;
-    const lines = emitAnimEntry(steps[i], env, `${seqId}_${i}`, nextCb);
-    if (i === 0) firstLines = lines;
-    else ctx.out.animCbs.push({name: `er_seqcb_${seqId}_${i}`, body: lines});
-  }
-  return firstLines;
+  return {steps, trailingDelay: pendingDelay};
 }
 
-/** Compiles `<animation>.start()` — a single Animated.timing/spring/decay or a composition
- *  (sequence/parallel/stagger/delay/loop). A top-level sequence chains via on_complete (compileSequenceChain);
- *  everything else flattens to one ERAnimConfig + er_anim_value_animate per atomic entry, composition
- *  expressed through per-entry delay_ms. Native-driven; sets no React state. */
+/**
+ * Emits steps as an on_complete CHAIN: step 0 starts inline and each step's completion callback starts the
+ * next. Unlike the flat delay_ms path this is correct when steps share a value — er_anim_value_animate
+ * cancels the running anim on a value, so starting them together would cancel all but the last — and needs
+ * no fixed duration. A step that is interrupted (finished == false) ends the chain, as it does in JS.
+ *
+ * `loop` makes the last step start the first again: {iterations (negative = forever), resetTo (the value to
+ * put back where it started before each repeat, or null), trailingDelay (ms before each repeat)}.
+ */
+function emitAnimChain(steps, env, ctx, doneCb, loop = null) {
+  const seqId = ctx.out.seqN++; // GLOBAL: callback names are file-scope, so must be unique across handlers
+  const cb = i => `er_seqcb_${seqId}_${i}`;
+  const done = finished =>
+    doneCb ? [`        ${doneCb}(${finished}, NULL);`] : [];
+  const interrupted = [
+    '    if (!finished)',
+    '    {',
+    ...done('false'),
+    '        return;',
+    '    }',
+  ];
+  const last = loop ? cb(0) : doneCb;
+  // Built from the tail so each step knows its successor's callback name.
+  for (let i = steps.length - 1; i >= 1; i--) {
+    const next = i < steps.length - 1 ? cb(i + 1) : last;
+    ctx.out.animCbs.push({
+      name: cb(i),
+      body: [
+        ...interrupted,
+        ...emitAnimEntry(steps[i], env, `${seqId}_${i}`, next),
+      ],
+    });
+  }
+  const next0 = steps.length > 1 ? cb(1) : last;
+  const first = emitAnimEntry(steps[0], env, `${seqId}_0`, next0);
+  if (!loop) return first;
+
+  // The repeat: cb(0) runs when the last step finishes, and starts step 0 again.
+  const lines = [];
+  const repeat = [...interrupted];
+  if (loop.iterations >= 0) {
+    const n = `s_loop${seqId}_n`;
+    ctx.out.effectDecls.push(`static int ${n};`);
+    lines.push(`    ${n} = 1;`);
+    repeat.push(
+      `    if (${n} >= ${loop.iterations})`,
+      '    {',
+      ...done('true'),
+      '        return;',
+      '    }',
+      `    ${n}++;`,
+    );
+  }
+  if (loop.resetTo) {
+    const from = `s_loop${seqId}_from`;
+    ctx.out.effectDecls.push(`static float ${from};`);
+    lines.push(`    ${from} = er_anim_value_get(${loop.resetTo});`);
+    repeat.push(`    er_anim_value_set(${loop.resetTo}, ${from});`);
+  }
+  const again = {...steps[0], delayMs: steps[0].delayMs + loop.trailingDelay};
+  repeat.push(...emitAnimEntry(again, env, `${seqId}_0`, next0));
+  ctx.out.animCbs.push({name: cb(0), body: repeat});
+  return [...lines, ...first];
+}
+
+/**
+ * Compiles `Animated.loop(animation, config?).start()`, or returns null for the flat path. An endless loop of
+ * one timing is the engine's own cfg.loop; anything else (a sequence, a spring or decay, a counted loop) is a
+ * chain whose last step starts the first again. As in JS, a looped single animation goes back to where it
+ * started before each repeat (resetBeforeIteration), and a looped sequence carries on from where it ended.
+ */
+function compileLoopStart(loopNode, env, ctx, doneCb) {
+  const inner = resolveAnim(loopNode.arguments[0], env);
+  const kind = isAnimatedCall(inner) ? inner.callee.property.name : null;
+  const get = animConfigGetter(loopNode.arguments[1]);
+  let iterations = -1;
+  if (get('iterations')) {
+    let v;
+    try {
+      v = evalStatic(get('iterations'), foldScope(env, env.consts ?? {}));
+    } catch {
+      throw aotError(
+        'AOT: Animated.loop iterations must be known at build time',
+        'use a number or a module-level constant.',
+      );
+    }
+    // JS loops forever on anything but a whole number.
+    iterations = Number.isInteger(v) ? Math.min(v, INT_MAX) : -1;
+  }
+  const reset = evalStaticOr(get('resetBeforeIteration'), env, true) !== false;
+  let steps;
+  let trailingDelay = 0;
+  let resetTo = null;
+  if (kind === 'sequence') {
+    ({steps, trailingDelay} = sequenceSteps(inner, env));
+  } else if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
+    if (kind === 'timing' && iterations < 0 && reset) return null;
+    steps = [animStep(inner, env, 0)];
+    if (reset) resetTo = steps[0].cVar;
+  } else {
+    throw aotError(
+      'AOT: Animated.loop can repeat a timing, spring, decay or sequence (looping a parallel/stagger is not yet supported)',
+    );
+  }
+  if (!steps.length) return [];
+  if (iterations === 0) return doneCb ? [`    ${doneCb}(true, NULL);`] : [];
+  // A timing with no duration and no delay completes inside er_anim_value_animate, so a loop made only of
+  // those would restart itself forever without returning.
+  const instant = s =>
+    s.kind === 'timing' &&
+    s.delayMs === 0 &&
+    Math.round(Number(evalStaticOr(s.get('duration'), env, 250))) === 0;
+  if (trailingDelay === 0 && steps.every(instant))
+    throw aotError(
+      'AOT: every step of this Animated.loop finishes instantly, so it would never stop repeating',
+      'give a step a duration or a delay.',
+    );
+  return emitAnimChain(steps, env, ctx, doneCb, {
+    iterations,
+    resetTo,
+    trailingDelay,
+  });
+}
+
 /** Compiles a `.start(onComplete)` completion callback to a file-scope C fn (ERAnimCompleteFn) set as the
  *  animation's on_complete; its body runs setters/refs/etc. and re-applies state via app_update if needed. */
 function emitCompletionCb(fnNode, env, state, ctx) {
@@ -2888,19 +3038,24 @@ function emitCompletionCb(fnNode, env, state, ctx) {
   return name;
 }
 
+/** Compiles `<animation>.start()` — a single Animated.timing/spring/decay or a composition
+ *  (sequence/parallel/stagger/delay/loop). A sequence, and a loop the engine cannot repeat on its own, become
+ *  an on_complete chain (emitAnimChain); everything else flattens to one ERAnimConfig + er_anim_value_animate
+ *  per atomic entry, composition expressed through per-entry delay_ms. Native-driven; sets no React state. */
 function compileAnimateStart(expr, env, state, ctx) {
   // .start(onComplete?) — an optional completion callback fired when the animation finishes.
   const doneCb = isFn(expr.arguments[0])
     ? emitCompletionCb(expr.arguments[0], env, state, ctx)
     : null;
-  const receiver = expr.callee.object;
-  if (
-    receiver?.type === 'CallExpression' &&
-    receiver.callee.type === 'MemberExpression' &&
-    receiver.callee.object?.name === 'Animated' &&
-    receiver.callee.property.name === 'sequence'
-  ) {
-    return compileSequenceChain(receiver, env, ctx, doneCb);
+  const receiver = resolveAnim(expr.callee.object, env);
+  const kind = isAnimatedCall(receiver) ? receiver.callee.property.name : null;
+  if (kind === 'sequence') {
+    const {steps} = sequenceSteps(receiver, env);
+    return steps.length ? emitAnimChain(steps, env, ctx, doneCb) : [];
+  }
+  if (kind === 'loop') {
+    const lines = compileLoopStart(receiver, env, ctx, doneCb);
+    if (lines) return lines;
   }
   const {entries} = flattenAnim(receiver, env, 0, false);
   if (doneCb && entries.length > 1)
@@ -3335,6 +3490,18 @@ function compileHandlerExprImpl(expr, env, state, ctx, indent) {
       ];
     return [`${indent}${r.cVar}${expr.operator};`];
   }
+  // `anim.stop()` stops every value the animation drives where it is. The cancellation reports finished ==
+  // false, which also ends a sequence or loop chain.
+  if (
+    expr.type === 'CallExpression' &&
+    expr.callee.type === 'MemberExpression' &&
+    expr.callee.property.name === 'stop' &&
+    isAnimatedCall(resolveAnim(expr.callee.object, env))
+  ) {
+    return [...animValues(expr.callee.object, env)].map(
+      v => `${indent}er_anim_value_set(${v}, er_anim_value_get(${v}));`,
+    );
+  }
   // Animated.*(…).start() — single timing/spring/decay OR a sequence/parallel/stagger/delay/loop
   // composition; native-driven, sets no React state, needs no app_update.
   if (
@@ -3409,6 +3576,18 @@ function compileStmts(list, env, state, ctx, indent) {
           );
         if (!decl.init)
           throw new Error('AOT: a handler local must have an initializer');
+        // `const anim = Animated.loop(…)` holds no C value: `anim.start()` and `anim.stop()` compile the
+        // animation it names.
+        if (isAnimatedCall(decl.init)) {
+          const locals = new Map(env.locals);
+          locals.delete(decl.id.name);
+          env = {
+            ...env,
+            locals,
+            animLocals: new Map(env.animLocals).set(decl.id.name, decl.init),
+          };
+          continue;
+        }
         // A cleanup closure outlives the call that created it, so when one is emitted (a dep-driven
         // effect) the body's own locals become file-scope slots instead of C locals.
         const hoist = ctx.hoist && list === ctx.bodyList;

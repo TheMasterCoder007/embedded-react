@@ -205,6 +205,79 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `looped animations and their stop() pass the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      // The starter's pulse, plus every other shape a loop chain emits: a counted loop's iteration counter
+      // and completion call, a single animation's reset slot, and the stop() a dep-driven cleanup runs.
+      const starter = readFileSync(
+        join(root, 'create-embedded-react', 'template', 'App.jsx'),
+        'utf8',
+      );
+      const loops = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Animated, useAnimatedValue } from 'embedded-react';
+         export function App() {
+           const [on, setOn] = useState(false);
+           const [runs, setRuns] = useState(0);
+           const a = useAnimatedValue(0);
+           const b = useAnimatedValue(0);
+           useEffect(() => {
+             if (!on) return;
+             const anim = Animated.loop(
+               Animated.sequence([
+                 Animated.timing(a, { toValue: 1, duration: 300 }),
+                 Animated.delay(100),
+                 Animated.timing(a, { toValue: 0, duration: 300 }),
+               ]),
+               { iterations: 3 },
+             );
+             anim.start(({ finished }) => setRuns(finished ? runs + 1 : runs));
+             return () => anim.stop();
+           }, [on]);
+           useEffect(() => {
+             Animated.loop(Animated.spring(b, { toValue: 1 }), { iterations: 2 }).start();
+           }, []);
+           return <View onPress={() => setOn(!on)} style={{ flex: 1, opacity: a, width: runs }} />;
+         }`,
+        'loops',
+      );
+      for (const [name, r] of [
+        [
+          'starter',
+          compileSource(starter, 'starter', {
+            screen: {width: 240, height: 320},
+            filename: 'template/App.jsx',
+          }),
+        ],
+        ['loops', loops],
+      ]) {
+        const dir = mkdtempSync(join(tmpdir(), `er-aot-cc-${name}-`));
+        try {
+          writeFileSync(join(dir, 'app.gen.c'), r.c);
+          writeFileSync(join(dir, 'app.gen.h'), r.h);
+          const res = spawnSync(
+            CC,
+            [
+              '-fsyntax-only',
+              '-Wall',
+              '-I',
+              engineInc,
+              '-I',
+              engineCore,
+              join(dir, 'app.gen.c'),
+            ],
+            {encoding: 'utf8'},
+          );
+          expect(res.stderr || '', name).toBe('');
+          expect(res.status, name).toBe(0);
+        } finally {
+          rmSync(dir, {recursive: true, force: true});
+        }
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `helper names inside text do not pull in unused helpers (${CC || 'no cc found'})`,
     () => {
       // The scan for helper calls must not read string literals: this text names four helpers and the app
