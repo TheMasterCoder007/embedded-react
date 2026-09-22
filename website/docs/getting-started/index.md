@@ -20,4 +20,4 @@ npm install
 npm run dev
 ```
 
-If you would rather look before installing anything, open the [playground](../playground.md).
+If you would rather look before installing anything, open the [playground](/playground).

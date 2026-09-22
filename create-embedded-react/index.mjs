@@ -53,7 +53,7 @@ const BUILTINS = [
     lang: 'js',
     dir: resolve(PKG_ROOT, 'template'),
     description:
-      'Minimal starter — a styled card with a pulsing logo and a counter (default).',
+      'The responsive starter — a card with a pulsing logo and a counter (default).',
   },
   {
     name: 'starter-ts',

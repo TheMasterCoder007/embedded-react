@@ -75,5 +75,5 @@ tracked in the [roadmap](./roadmap.md).
 
 - [Getting started](./getting-started/index.md): create a project and see it running in your browser in a
   couple of minutes, with no hardware.
-- [Playground](./playground.md): try it without installing anything.
+- [Playground](/playground): try it without installing anything.
 - [Concepts](./concepts/index.md): how the engine, the flows, and the rendering pipeline fit together.

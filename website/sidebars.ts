@@ -75,7 +75,6 @@ const sidebars: SidebarsConfig = {
         'internals/contributing',
       ],
     },
-    'playground',
     'roadmap',
     'changelog',
   ],

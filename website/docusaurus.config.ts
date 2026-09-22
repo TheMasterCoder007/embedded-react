@@ -13,6 +13,9 @@ const config: Config = {
 
   future: {
     v4: true,
+    faster: {
+      rspackPersistentCache: false,
+    },
   },
 
   url: 'https://embedded-react.dev',

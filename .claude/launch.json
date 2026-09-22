@@ -50,6 +50,15 @@
         "cd website && exec npm start -- --port 3400 --no-open"
       ],
       "port": 3400
+    },
+    {
+      "name": "docs-site-static",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd website && exec npx docusaurus serve --port 3401 --no-open"
+      ],
+      "port": 3401
     }
   ]
 }

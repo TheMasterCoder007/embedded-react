@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Changed
+
+- The starter that `npm create embedded-react` scaffolds is redesigned and responsive: it lays itself out from
+  the panel size, so the same file fits a 240×240 watch face and an 800×480 panel.
+
 ### Added
 
 - A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
