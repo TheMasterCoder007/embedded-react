@@ -1,5 +1,7 @@
 import {transform} from 'sucrase';
 
+import {persistUseState} from './persist';
+
 export type Files = Record<string, string>;
 
 export class CompileError extends Error {
@@ -14,7 +16,15 @@ export class CompileError extends Error {
 }
 
 const ASSET = /\.(png|jpe?g|webp|gif|bmp|svg|ttf|otf)$/i;
-const EXTENSIONS = ['', '.jsx', '.js', '.tsx', '.ts', '/index.jsx', '/index.js'];
+const EXTENSIONS = [
+  '',
+  '.jsx',
+  '.js',
+  '.tsx',
+  '.ts',
+  '/index.jsx',
+  '/index.js',
+];
 
 /** Normalizes `./a/../b` against the importing file's directory. */
 function resolvePath(from: string, spec: string): string {
@@ -32,14 +42,33 @@ function resolvePath(from: string, spec: string): string {
  * ESM to CommonJS) and wrapped in a module function, then a small loader wires the `require`s
  * together. Imports of `react` and `embedded-react` resolve to the vendor bundle the build step
  * staged, and an asset import evaluates to the asset's name, as the simulator's own bundler does.
+ *
+ * @param entry  The file to run.
+ * @param files  The editor's files.
+ * @param vendor  The path to the vendor bundle.
+ * @param generation  Folded into the persisted-state keys; bump it to start from fresh state.
  */
-export function compile(entry: string, files: Files, vendor: string): string {
+export function compile(
+  entry: string,
+  files: Files,
+  vendor: string,
+  generation = 0,
+): string {
   const modules: string[] = [];
   for (const [path, code] of Object.entries(files)) {
     let js: string;
     try {
-      js = transform(code, {
-        transforms: ['jsx', 'imports', ...(/\.tsx?$/.test(path) ? (['typescript'] as const) : [])],
+      // State survives edits, as under the dev server. The rewrite only understands JavaScript;
+      // TypeScript files run without it.
+      const source = /\.tsx?$/.test(path)
+        ? code
+        : persistUseState(code, `${generation}:${path}`);
+      js = transform(source, {
+        transforms: [
+          'jsx',
+          'imports',
+          ...(/\.tsx?$/.test(path) ? (['typescript'] as const) : []),
+        ],
         jsxRuntime: 'automatic',
         production: true,
         filePath: path,
@@ -48,13 +77,17 @@ export function compile(entry: string, files: Files, vendor: string): string {
       const err = e as Error & {loc?: {line: number; column: number}};
       const m = /\((\d+):(\d+)\)\s*$/.exec(err.message);
       throw new CompileError(
-        err.message.replace(/^Error transforming [^:]*: /, '').replace(/\s*\(\d+:\d+\)\s*$/, ''),
+        err.message
+          .replace(/^Error transforming [^:]*: /, '')
+          .replace(/\s*\(\d+:\d+\)\s*$/, ''),
         path,
         err.loc?.line ?? (m ? Number(m[1]) : undefined),
         err.loc?.column ?? (m ? Number(m[2]) : undefined),
       );
     }
-    modules.push(`${JSON.stringify(path)}: function (module, exports, require) {\n${js}\n}`);
+    modules.push(
+      `${JSON.stringify(path)}: function (module, exports, require) {\n${js}\n}`,
+    );
   }
 
   // Everything below runs inside QuickJS. Kept dependency-free and ES2020.

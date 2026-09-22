@@ -28,9 +28,15 @@ type App = {
   pack: Uint8Array | null;
   /** True until the demo's first load, which is not debounced. */
   fresh: boolean;
+  /** Bumped by Reset so the app starts from a fresh state rather than what edits kept alive. */
+  generation: number;
 };
 
 const DEBOUNCE_MS = 300;
+
+// Persisted state is keyed by generation; the engine and its store outlive this component, so
+// every visit (and every Reset) takes a new one and starts from fresh state.
+let nextGeneration = 0;
 
 /**
  * Edit the starter's source and see it run: the files are compiled in the browser and handed to
@@ -82,6 +88,7 @@ export default function Playground(): ReactNode {
           original: src.files,
           pack: pack ? new Uint8Array(pack) : null,
           fresh: true,
+          generation: nextGeneration++,
         });
         setOpen(src.files[ENTRY_FILE] ? ENTRY_FILE : src.entry);
       },
@@ -95,7 +102,7 @@ export default function Playground(): ReactNode {
     const run = () => {
       try {
         sim.load(
-          compile(app.entry, app.files, vendor),
+          compile(app.entry, app.files, vendor, app.generation),
           app.fresh ? app.pack : null,
         );
         setCompileError(null);
@@ -122,7 +129,11 @@ export default function Playground(): ReactNode {
     );
   }, []);
   const reset = () =>
-    setApp(a => (a ? {...a, files: a.original, fresh: false} : a));
+    setApp(a =>
+      a
+        ? {...a, files: a.original, fresh: false, generation: nextGeneration++}
+        : a,
+    );
   const dirty = app
     ? Object.keys(app.files).some(k => app.files[k] !== app.original[k])
     : false;
