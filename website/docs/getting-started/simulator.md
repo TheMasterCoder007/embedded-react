@@ -1,7 +1,7 @@
 ---
-title: "Run it in the simulator"
-sidebar_label: "Simulator"
-description: "Run your app in the browser with npx embedded-react dev, with hot reload and a device frame."
+title: 'Run it in the simulator'
+sidebar_label: 'Simulator'
+description: 'Run your app in the browser with npx embedded-react dev, with hot reload and a device frame.'
 ---
 
 The simulator is the real C engine, compiled to WebAssembly and drawing into a `<canvas>`. Your app
@@ -58,7 +58,7 @@ embedded-react: 1 font size(s) the app uses are not baked and will render at the
 ```
 
 Either use a baked size, or import your own `.ttf`/`.otf` and list the sizes you need.
-[Assets](/concepts/assets) explains how.
+[Assets](../concepts/assets.md) explains how.
 
 ## Share a build
 
@@ -76,9 +76,9 @@ The simulator runs **Flow A** on your computer's CPU. It is exact about layout a
 nothing about two things:
 
 - **Speed and memory.** A laptop is orders of magnitude faster than a microcontroller. Measure on
-  the board; see [Performance](/guides/performance) and [Memory](/guides/memory).
+  the board; see [Performance](../guides/performance.md) and [Memory](../guides/memory.md).
 - **Flow B compatibility.** The ahead-of-time compiler accepts a subset of what runs here. If you
   are targeting a board with no external RAM, run `npx embedded-react build --aot` early and often. See
-  [The AOT subset](/guides/aot-subset).
+  [The AOT subset](../guides/aot-subset.md).
 
-When the app looks right, [put it on a board](/getting-started/first-board).
+When the app looks right, [put it on a board](./first-board.md).

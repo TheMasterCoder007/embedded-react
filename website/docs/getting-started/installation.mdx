@@ -1,6 +1,6 @@
 ---
-title: "Installation"
-description: "Create a project with create-embedded-react and install the toolchain for your target."
+title: 'Installation'
+description: 'Create a project with create-embedded-react and install the toolchain for your target.'
 ---
 
 import Tabs from '@theme/Tabs';
@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 - **Node.js 18 or newer.** That is everything the simulator needs. The engine ships prebuilt as
   WebAssembly inside the npm package, so there is no native toolchain to install.
-- A firmware toolchain (ESP-IDF, the Pico SDK, …) only once you [flash a board](/getting-started/first-board).
+- A firmware toolchain (ESP-IDF, the Pico SDK, …) only once you [flash a board](./first-board.md).
 
 ## Create a project
 
@@ -43,11 +43,11 @@ npm run dev
 ```
 
 `npm run dev` serves the simulator at [http://localhost:3333](http://localhost:3333). The next page,
-[Run it in the simulator](/getting-started/simulator), covers what you can do there.
+[Run it in the simulator](./simulator.md), covers what you can do there.
 
 ### Start from a demo
 
-The starter is deliberately minimal: a card with a pulsing logo and a counter button. To begin from
+The starter is deliberately minimal: a card with a pulsing logo and a counter-button. To begin from
 a complete app instead, pass a template:
 
 ```bash
@@ -55,11 +55,11 @@ npm create embedded-react@latest my-thermostat -- --template thermostat
 npm create embedded-react@latest my-watch -- --template watch-face
 ```
 
-| Template | What you get |
-|---|---|
-| `starter` | The minimal starter (the default) |
-| `starter-ts` | The starter in TypeScript (same as `--ts`) |
-| `thermostat` | A thermostat with a draggable dial and a 14-day weather panel |
+| Template     | What you get                                                       |
+| ------------ | ------------------------------------------------------------------ |
+| `starter`    | The minimal starter (the default)                                  |
+| `starter-ts` | The starter in TypeScript (same as `--ts`)                         |
+| `thermostat` | A thermostat with a draggable dial and a 14-day weather panel      |
 | `watch-face` | A digital watch face and a bubble level, sized for a 240×280 panel |
 
 `npm create embedded-react@latest -- --list` prints the current list.
@@ -67,7 +67,7 @@ npm create embedded-react@latest my-watch -- --template watch-face
 :::tip[Heading for a board with no external RAM?]
 Every template builds for the ahead-of-time flow. The `thermostat` and `watch-face` templates also
 come with a ready-made `build:aot` script, already set to a panel size. See
-[Your first board](/getting-started/first-board#flow-b-ahead-of-time).
+[Your first board](./first-board.md#flow-b-ahead-of-time).
 :::
 
 ## What you get
@@ -83,12 +83,12 @@ my-app/
 The project depends on two packages: `embedded-react` and `react`. Its scripts wrap the
 `embedded-react` command-line tool:
 
-| Script | Runs | What it does |
-|---|---|---|
-| `npm run dev` | `embedded-react dev` | The browser simulator, with hot reload |
-| `npm run dev:device` | `embedded-react dev --device` | Hot reload on a connected board over USB (Flow A) |
-| `npm run build` | `embedded-react build` | The device artifact for Flow A: `dist/app.erpkg` |
-| `npm run export` | `embedded-react export` | A self-contained static copy of the simulator, to share or host |
+| Script               | Runs                          | What it does                                                    |
+| -------------------- | ----------------------------- | --------------------------------------------------------------- |
+| `npm run dev`        | `embedded-react dev`          | The browser simulator, with hot reload                          |
+| `npm run dev:device` | `embedded-react dev --device` | Hot reload on a connected board over USB (Flow A)               |
+| `npm run build`      | `embedded-react build`        | The device artifact for Flow A: `dist/app.erpkg`                |
+| `npm run export`     | `embedded-react export`       | A self-contained static copy of the simulator, to share or host |
 
 `npx embedded-react --help` lists every command and flag.
 
@@ -99,7 +99,7 @@ npm install embedded-react react@18.3.1
 ```
 
 :::warning[Use React 18.3.1 exactly]
-`embedded-react` pins `react` to `18.3.1`. If your project resolves a different version you end up
+`embedded-react` pins `react` to `18.3.1`. If your project resolves a different version, you end up
 with two copies of React, and the app renders a blank screen with a `useRef of null` error.
 :::
 
@@ -119,7 +119,7 @@ Pass a path to use a different entry: `npx embedded-react dev path/to/entry.jsx`
 
 The npm package is the app side. The firmware side needs the C engine, which ships at the same
 version number through the channels below. You only need this once you are
-[wiring up a board](/getting-started/first-board); the example projects already do it for you.
+[wiring up a board](./first-board.md); the example projects already do it for you.
 
 <Tabs>
   <TabItem value="cmake" label="CMake" default>
@@ -145,7 +145,7 @@ idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.1"
 
 Flow A uses CMake `FetchContent` instead. It also needs QuickJS, which is a plain CMake project and
 not an ESP-IDF component, so the registry cannot pull it. The
-[ESP32-S3 example](/guides/boards/esp32-s3) is a template you can copy out.
+[ESP32-S3 example](../guides/boards/esp32-s3.md) is a template you can copy out.
 
   </TabItem>
   <TabItem value="pio" label="PlatformIO">
@@ -161,4 +161,4 @@ route is the supported one.
 </Tabs>
 
 The engine is backend-agnostic: you supply the code that pushes pixels to your display. See
-[Engine and backends](/concepts/engine-and-backends).
+[Engine and backends](../concepts/engine-and-backends.md).
