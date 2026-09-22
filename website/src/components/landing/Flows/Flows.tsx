@@ -13,13 +13,13 @@ const flows = [
     tag: 'Flow A · runtime',
     title: 'React on QuickJS',
     steps: ['JSX', 'esbuild bundle', 'QuickJS bytecode', 'React reconciler on the chip', 'C engine'],
-    body: 'Full runtime dynamism: live state, anything JavaScript can express, and hot reload. Wants a chip with PSRAM, such as the ESP32-S3.',
+    body: 'Full runtime dynamism: live state, anything JavaScript can express, and hot reload. Wants external RAM for the JavaScript heap: PSRAM on an ESP32-S3, or SDRAM on an STM32H7.',
   },
   {
     tag: 'Flow B · ahead of time',
     title: 'JSX compiled to C',
     steps: ['JSX', 'AOT compiler', 'Generated C', 'Linked into firmware', 'C engine'],
-    body: 'State, handlers and animations are baked into C at build time. Smaller, deterministic, and at home on MCUs with no PSRAM.',
+    body: 'State, handlers and animations are baked into C at build time. Smaller, deterministic, and at home on MCUs with only internal RAM.',
   },
 ];
 

@@ -64,7 +64,7 @@ npm create embedded-react@latest my-watch -- --template watch-face
 
 `npm create embedded-react@latest -- --list` prints the current list.
 
-:::tip[Heading for a board without PSRAM?]
+:::tip[Heading for a board with no external RAM?]
 Every template builds for the ahead-of-time flow. The `thermostat` and `watch-face` templates also
 come with a ready-made `build:aot` script, already set to a panel size. See
 [Your first board](/getting-started/first-board#flow-b-ahead-of-time).

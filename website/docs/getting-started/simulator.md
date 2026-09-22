@@ -78,7 +78,7 @@ nothing about two things:
 - **Speed and memory.** A laptop is orders of magnitude faster than a microcontroller. Measure on
   the board; see [Performance](/guides/performance) and [Memory](/guides/memory).
 - **Flow B compatibility.** The ahead-of-time compiler accepts a subset of what runs here. If you
-  are targeting a board without PSRAM, run `npx embedded-react build --aot` early and often. See
+  are targeting a board with no external RAM, run `npx embedded-react build --aot` early and often. See
   [The AOT subset](/guides/aot-subset).
 
 When the app looks right, [put it on a board](/getting-started/first-board).

@@ -11,7 +11,7 @@ const boards = [
   {name: 'ESP32-S3', note: '800×480 RGB panel · Flow A', to: '/guides/boards/esp32-s3'},
   {name: 'ESP32 “CYD”', note: 'No PSRAM · SPI display · Flow B', to: '/guides/boards/esp32-cyd'},
   {name: 'RP2040', note: '240×280 SPI display · Flow B', to: '/guides/boards/rp2040'},
-  {name: 'STM32', note: 'Chrom-ART (DMA2D) backend', to: '/guides/boards/stm32h7'},
+  {name: 'STM32H7', note: 'SDRAM · Chrom-ART backend · Flow A', to: '/guides/boards/stm32h7'},
   {name: 'Linux', note: 'SDL desktop host', to: '/guides/boards/linux'},
   {name: 'Raspberry Pi', note: 'Planned', to: '/guides/boards/raspberry-pi'},
 ];

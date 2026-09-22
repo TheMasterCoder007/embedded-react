@@ -17,7 +17,7 @@ Your board decides this for you more often than not.
 
 | | Flow A: runtime | Flow B: ahead of time |
 |---|---|---|
-| Choose it when | Your chip has PSRAM (for example an ESP32-S3) | Your chip has no PSRAM (classic ESP32, RP2040, most STM32) |
+| Choose it when | Your board has external RAM for the JavaScript heap: PSRAM on an ESP32-S3, or SDRAM on an STM32H7 | Your chip has only its internal RAM (classic ESP32, RP2040, most STM32 boards) |
 | Build command | `npx embedded-react build` | `npx embedded-react build --aot` |
 | Produces | `dist/app.erpkg`: bytecode, assets and a checksum in one file | `dist/app.gen.c`, `app.gen.h` and `assets.generated.c` |
 | Firmware uses it by | Loading it at runtime from flash | Compiling it into the firmware image |

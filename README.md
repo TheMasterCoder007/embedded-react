@@ -63,7 +63,7 @@ JSX  →  esbuild bundle  →  QuickJS bytecode  →  flashed to MCU
                                      framebuffer  →  display
 ```
 
-You keep **full runtime dynamism** — live state, anything JS can express, and hot reload during development. The cost is RAM and per-frame dispatch, so Flow A wants a chip with PSRAM (e.g., ESP32-S3).
+You keep **full runtime dynamism** — live state, anything JS can express, and hot reload during development. The cost is RAM and per-frame dispatch, so Flow A wants external RAM for the JS heap — PSRAM on an ESP32-S3, or SDRAM on an STM32H7.
 
 ### Flow B — C engine + AOT compiler  *(compile-time)*
 
@@ -319,7 +319,7 @@ Pick the flow that fits your board; each command emits **only** the files for th
 | Generates | `dist/app.erpkg` — one binary (bytecode + assets + CRC) | `dist/app.gen.c` + `.h` + `assets.generated.c` |
 | Firmware uses it by | loading it at runtime — `er_runtime_load_container(bytes, len)` | compiling the C into the firmware image |
 | Update the UI by | replacing `app.erpkg` — **no firmware rebuild** | recompile + reflash |
-| Needs | a PSRAM-class chip (hosts QuickJS) | no JS engine — runs on no-PSRAM MCUs |
+| Needs | external RAM for the JS heap (PSRAM or SDRAM) | no JS engine — runs in internal RAM |
 | Reference wiring | [`examples/esp32/esp32-s3/`](examples/esp32/esp32-s3/README.md) | [`examples/esp32/esp32-2432s028r/`](examples/esp32/esp32-2432s028r/README.md) |
 
 The firmware side is small — provide the display backend (five callbacks) and a frame loop. See

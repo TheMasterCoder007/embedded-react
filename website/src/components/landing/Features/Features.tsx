@@ -26,7 +26,7 @@ const features: {icon: IconName; title: string; body: string}[] = [
   },
   {
     icon: 'feather',
-    title: 'Fits chips without PSRAM',
+    title: 'Fits chips with no external RAM',
     body: 'The ahead-of-time flow leaves no JavaScript engine and no garbage collector on the device, so small MCUs are in reach.',
   },
   {

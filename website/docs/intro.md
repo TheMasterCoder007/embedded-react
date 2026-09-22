@@ -29,16 +29,16 @@ That component runs natively on a microcontroller driving a raw SPI or RGB displ
 
 Most projects that pair "React" with an "ESP32" run React **in a web browser** on your phone or
 laptop, talking to the microcontroller over REST or BLE. The MCU is only a backend; the component
-tree, layout and rendering all live somewhere else.
+tree, layout, and rendering all live somewhere else.
 
 Embedded React is the opposite. It takes React Native's approach: React is a *component and
-reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (`div`,
-CSS, the browser layout engine) for native ones (`View`, Yoga, native draw calls). Embedded React
+reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (div,
+CSS, the browser layout engine) for native ones (View, Yoga, native draw calls). Embedded React
 does that swap again, one level deeper. The host primitives are a **pure C99 engine drawing straight
 into a framebuffer or SPI display**.
 
-You write the same JSX components, the same `Animated` API and the same flexbox styles you would
-use on iOS or Android. Your app runs on an ESP32, STM32 or RP2040 instead of a phone.
+You write the same JSX components, the same Animated API, and the same flexbox styles you would
+use on iOS or Android. Your app runs on an ESP32, STM32, or RP2040 instead of a phone.
 
 ## One app, two flows
 
@@ -49,7 +49,7 @@ difference is *when* the dynamism is resolved.
 |---|---|---|
 | How it runs | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip | JSX compiled to C and linked into the firmware |
 | You get | Full runtime dynamism, hot reload on the device, UI updates without reflashing firmware | No JavaScript engine, no garbage collector, a smaller and deterministic binary |
-| Needs | A chip with PSRAM, such as the ESP32-S3 | Nothing extra: runs on MCUs with no PSRAM |
+| Needs | External RAM for the JavaScript heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7 | Nothing extra: runs in internal RAM on MCUs with no external memory |
 | Trade-off | RAM and per-frame dispatch cost | A [subset of the API](/guides/aot-subset) |
 
 Choosing between them is a build flag, not a rewrite. [The two flows](/concepts/two-flows) goes
@@ -57,7 +57,7 @@ deeper.
 
 ## Status
 
-Embedded React is in **beta**. The engine, both flows, the hardware backends below and the
+Embedded React is in **beta**. The engine, both flows, the hardware backends below, and the
 simulators are built and verified on real hardware; from here the work is fixes and features,
 tracked in the [roadmap](/roadmap).
 
@@ -68,7 +68,7 @@ tracked in the [roadmap](/roadmap).
 | RP2040 with a 240×280 SPI display | B | Verified on hardware |
 | Linux desktop (SDL) | A and B | Working |
 | Browser (WebAssembly simulator) | A | Working |
-| STM32 (Chrom-ART backend) | | Backend runs on hardware; example project planned |
+| STM32H7 with SDRAM (Chrom-ART backend) | A | Running on hardware; a public example project is planned |
 | Raspberry Pi | | Planned |
 
 ## Where to go next
@@ -76,4 +76,4 @@ tracked in the [roadmap](/roadmap).
 - [Getting started](/getting-started): create a project and see it running in your browser in a
   couple of minutes, with no hardware.
 - [Playground](/playground): try it without installing anything.
-- [Concepts](/concepts): how the engine, the flows and the rendering pipeline fit together.
+- [Concepts](/concepts): how the engine, the flows, and the rendering pipeline fit together.
