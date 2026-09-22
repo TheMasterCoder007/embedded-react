@@ -11,17 +11,26 @@ type Engine = {
   framebuffer: () => number;
   fbWidth: () => number;
   fbHeight: () => number;
+  /** Forgets persisted state; absent in engines older than the export (then the caller works around it). */
+  clearPersist: (() => void) | null;
   module: {
     _malloc: (n: number) => number;
     _free: (p: number) => void;
     HEAPU8: Uint8Array;
-    cwrap: (name: string, ret: string | null, args: string[]) => (...a: number[]) => number;
+    cwrap: (
+      name: string,
+      ret: string | null,
+      args: string[],
+    ) => (...a: number[]) => number;
+    _er_web_clear_persist?: () => void;
   };
 };
 
 declare global {
   interface Window {
-    createEmbeddedReact?: (opts: {locateFile: (f: string) => string}) => Promise<Engine['module']>;
+    createEmbeddedReact?: (opts: {
+      locateFile: (f: string) => string;
+    }) => Promise<Engine['module']>;
   }
 }
 
@@ -39,23 +48,38 @@ function loadEngine(base: string): Promise<Engine> {
     s.onerror = () => fail(new Error('could not load the engine script'));
     document.head.appendChild(s);
   })
-    .then(() => window.createEmbeddedReact!({locateFile: (f) => `${base}engine/${f}`}))
-    .then((module) => ({
+    .then(() =>
+      window.createEmbeddedReact!({locateFile: f => `${base}engine/${f}`}),
+    )
+    .then(module => ({
       module,
       init: module.cwrap('er_web_init', 'number', ['number', 'number']),
-      loadSource: module.cwrap('er_web_load_source', null, ['number', 'number']),
-      loadPack: module.cwrap('er_web_load_pack', 'number', ['number', 'number']),
+      loadSource: module.cwrap('er_web_load_source', null, [
+        'number',
+        'number',
+      ]),
+      loadPack: module.cwrap('er_web_load_pack', 'number', [
+        'number',
+        'number',
+      ]),
       resize: module.cwrap('er_web_resize', 'number', ['number', 'number']),
       pump: module.cwrap('er_web_pump', null, ['number']),
       touch: module.cwrap('er_web_touch', null, ['number', 'number', 'number']),
       framebuffer: module.cwrap('er_web_framebuffer', 'number', []),
       fbWidth: module.cwrap('er_web_fb_width', 'number', []),
       fbHeight: module.cwrap('er_web_fb_height', 'number', []),
+      clearPersist: module._er_web_clear_persist
+        ? () => module._er_web_clear_persist!()
+        : null,
     }));
   return enginePromise;
 }
 
-const withBytes = (engine: Engine, bytes: Uint8Array, fn: (ptr: number, len: number) => unknown) => {
+const withBytes = (
+  engine: Engine,
+  bytes: Uint8Array,
+  fn: (ptr: number, len: number) => unknown,
+) => {
   const ptr = engine.module._malloc(bytes.length);
   engine.module.HEAPU8.set(bytes, ptr);
   try {
@@ -70,6 +94,8 @@ export type Simulator = {
   load: (source: string, pack: Uint8Array | null) => void;
   /** Changes the panel size; the engine re-runs the current bundle at the new size. */
   resize: (w: number, h: number) => void;
+  /** Forgets persisted state, when the engine supports it. */
+  clearPersist: (() => void) | null;
 };
 
 /**
@@ -97,7 +123,7 @@ export function useSimulator(
     const cleanups: (() => void)[] = [];
 
     loadEngine(base)
-      .then((engine) => {
+      .then(engine => {
         if (stopped) return;
         const ctx = canvas.getContext('2d')!;
         let w = 0;
@@ -130,7 +156,13 @@ export function useSimulator(
           engine.pump(Math.round(Math.min(2147483647, now - prev)));
           prev = now;
           if (!paint || !image) return;
-          image.data.set(new Uint8ClampedArray(engine.module.HEAPU8.buffer, engine.framebuffer(), w * h * 4));
+          image.data.set(
+            new Uint8ClampedArray(
+              engine.module.HEAPU8.buffer,
+              engine.framebuffer(),
+              w * h * 4,
+            ),
+          );
           ctx.putImageData(image, 0, 0);
         };
         const frame = () => {
@@ -147,7 +179,10 @@ export function useSimulator(
         let down = false;
         const toFb = (e: PointerEvent): [number, number] => {
           const r = canvas.getBoundingClientRect();
-          return [Math.round(((e.clientX - r.left) / r.width) * w), Math.round(((e.clientY - r.top) / r.height) * h)];
+          return [
+            Math.round(((e.clientX - r.left) / r.width) * w),
+            Math.round(((e.clientY - r.top) / r.height) * h),
+          ];
         };
         const onDown = (e: PointerEvent) => {
           e.preventDefault();
@@ -177,12 +212,17 @@ export function useSimulator(
         setSim({
           load: (source, pack) => {
             if (pack) withBytes(engine, pack, engine.loadPack);
-            withBytes(engine, new TextEncoder().encode(source), engine.loadSource);
+            withBytes(
+              engine,
+              new TextEncoder().encode(source),
+              engine.loadSource,
+            );
           },
           resize: (nw, nh) => {
             if (nw === w && nh === h) return;
             if (engine.resize(nw, nh)) syncCanvas();
           },
+          clearPersist: engine.clearPersist,
         });
       })
       .catch((e: Error) => setError(e.message));
@@ -191,7 +231,7 @@ export function useSimulator(
       stopped = true;
       cancelAnimationFrame(raf);
       clearInterval(interval);
-      cleanups.forEach((fn) => fn());
+      cleanups.forEach(fn => fn());
     };
     // The engine is brought up once; size changes go through `resize`.
     // eslint-disable-next-line react-hooks/exhaustive-deps

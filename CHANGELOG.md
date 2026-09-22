@@ -17,6 +17,9 @@ See the README for the release process.
 
 ### Added
 
+- The browser simulator's host API gains `er_web_clear_persist()`, which forgets the state `usePersistentState`
+  keeps across hot reloads, so a host can offer a true reset.
+
 - A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
   every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
 

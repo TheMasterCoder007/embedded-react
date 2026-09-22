@@ -137,6 +137,15 @@ extern "C"
     void er_web_reset(void);
 
     /**
+     * @brief Forgets every value usePersistentState has stored, so the next reload starts from the
+     *        app's initial state.
+     *
+     * The store lives outside the JS context, which is what lets state survive er_web_reset() and
+     * er_web_load_source(); a host that wants a clean start (a "reset" button) calls this first.
+     */
+    void er_web_clear_persist(void);
+
+    /**
      * @brief Returns the RGBA present buffer (screen_w * screen_h * 4 bytes, R,G,B,A order).
      *
      * The host wraps this as an ImageData and putImageData()s it to the canvas. Valid after er_web_init().

@@ -34,8 +34,9 @@ type App = {
 
 const DEBOUNCE_MS = 300;
 
-// Persisted state is keyed by generation; the engine and its store outlive this component, so
-// every visit (and every Reset) takes a new one and starts from fresh state.
+// The engine and its persisted-state store outlive this component, so every visit and every Reset
+// must start from fresh state: the store is cleared when the engine can, and the generation folded
+// into the state keys advances regardless, which covers engines without the clear export.
 let nextGeneration = 0;
 
 /**
@@ -112,6 +113,7 @@ export default function Playground(): ReactNode {
       }
     };
     if (app.fresh) {
+      sim.clearPersist?.();
       run();
       return undefined;
     }
@@ -128,12 +130,14 @@ export default function Playground(): ReactNode {
         : a,
     );
   }, []);
-  const reset = () =>
+  const reset = () => {
+    sim?.clearPersist?.();
     setApp(a =>
       a
         ? {...a, files: a.original, fresh: false, generation: nextGeneration++}
         : a,
     );
+  };
   const dirty = app
     ? Object.keys(app.files).some(k => app.files[k] !== app.original[k])
     : false;
