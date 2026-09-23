@@ -126,7 +126,7 @@ Your board usually decides.
 | API               | Everything                                      | [The AOT subset](../guides/aot-subset.md) |
 | Development loop  | Simulator, then hot reload on the device        | Simulator, then rebuild and flash         |
 | Runtime errors    | An on-screen redbox                             | Most are compile errors instead           |
-| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux     | ESP32 "CYD" (no PSRAM), RP2040, Linux     |
+| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux     |
 
 Two things make the choice cheaper than it looks:
 
