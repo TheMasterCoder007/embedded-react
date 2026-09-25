@@ -1,6 +1,6 @@
 # Roadmap
 
-The bulk of embedded-react is built and verified — see the **Status** and **Working
+The bulk of Embedded React is built and verified — see the **Status** and **Working
 examples** tables in the [README](README.md). This file is the single home for what's
 left: known issues, planned work toward 1.0, the performance backlog, and the
 longer-term vision.
@@ -177,7 +177,7 @@ engine. None of these are committed work; they're why the engine stays neutral:
 - **Visual editor runtime** — a desktop GUI designer that emits that JSON format.
 - **Other scripting APIs** — language-agnostic C bindings other runtimes can wrap.
 
-This does not change the project's identity: **embedded-react is React Native for
+This does not change the project's identity: **Embedded React is React Native for
 embedded MCUs.** React is the supported developer path; the engine's neutrality is an
 implementation choice.
 

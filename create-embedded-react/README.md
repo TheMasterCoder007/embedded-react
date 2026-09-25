@@ -12,8 +12,9 @@ npm install
 npm run dev          # WASM simulator with hot reload → http://localhost:3333
 ```
 
-The generated project is a minimal starter — a styled card with a pulsing logo and a `count is N` button —
-wired for the browser simulator (`npm run dev`) and a shareable static export (`npm run export`). Edit
+The generated project is a small starter — a card with the pulsing logo, a `count is N` button and the
+panel size, laid out from `screen.width`/`screen.height` so it fits a 240×240 watch face and an 800×480
+panel alike — wired for the browser simulator (`npm run dev`) and a shareable static export (`npm run export`). Edit
 `App.jsx` and save; it hot-reloads. The same code runs on real hardware through the embedded-react C engine.
 
 ## TypeScript
@@ -46,7 +47,7 @@ npm create embedded-react@latest -- --list
 
 | Template       | What you get                                  |
 | -------------- |-----------------------------------------------|
-| `starter`      | Minimal starter — pulsing logo + counter (the default). |
+| `starter`      | The responsive starter — pulsing logo + counter (the default). |
 | `starter-ts`   | The starter in TypeScript (same as `--ts`).   |
 | `thermostat`   | A thermostat with a 14-day weather panel      |
 | `watch-face`   | A digital watch face + bubble level (RP2040 1.69") |

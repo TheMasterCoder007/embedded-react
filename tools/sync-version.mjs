@@ -162,6 +162,24 @@ const MANIFESTS = [
   {path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite},
   {path: 'engine/include/er_version.h', read: headerRead, write: headerWrite},
   {path: 'README.md', read: readmeRead, write: readmeWrite},
+  // The docs site repeats the README's installation snippets, in the same three formats.
+  {
+    path: 'website/docs/getting-started/installation.mdx',
+    read: readmeRead,
+    write: readmeWrite,
+  },
+  // The playground runs the published package, pinned exactly so it tracks each release. The docs
+  // workflow installs this pin once the release is on npm (the lockfile cannot know the new tarball's
+  // hash until then, which is why that workflow uses `npm install`, not `npm ci`).
+  {
+    path: 'website/package.json',
+    read: text => JSON.parse(text).devDependencies?.['embedded-react'],
+    write: (text, version) => {
+      const obj = JSON.parse(text);
+      obj.devDependencies['embedded-react'] = version;
+      return JSON.stringify(obj, null, 2) + '\n';
+    },
+  },
   {
     path: 'examples/esp32/esp32-s3/CMakeLists.txt',
     read: gitTagRead,

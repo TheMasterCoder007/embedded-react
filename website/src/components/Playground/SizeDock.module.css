@@ -1,0 +1,94 @@
+/* Floats over the preview without taking layout space; wraps so nothing is cut off on a narrow pane. */
+.dock {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 8px;
+  color: #c8d2e0;
+  background: rgba(7, 17, 31, 0.92);
+  backdrop-filter: blur(4px);
+  font-size: 13px;
+}
+
+.collapsed {
+  padding: 0;
+}
+
+.toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.toggle svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.controls label {
+  opacity: 0.65;
+}
+
+.controls select,
+.controls input:not([type='checkbox']),
+.act {
+  padding: 3px 7px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 5px;
+  font: inherit;
+  color: #c8d2e0;
+  background: #0d2035;
+}
+
+.controls input[type='number'] {
+  width: 58px;
+}
+
+.act {
+  cursor: pointer;
+}
+
+.act:hover {
+  border-color: var(--er-cyan);
+}
+
+.chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.sizeLabel {
+  opacity: 0.65;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

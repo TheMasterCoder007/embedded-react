@@ -1,0 +1,92 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Embedded React">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0d2035"/>
+      <stop offset="100%" stop-color="#040b16"/>
+    </radialGradient>
+    <radialGradient id="chip" cx="100" cy="100" r="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#112a42"/>
+      <stop offset="60%" stop-color="#0a1b2d"/>
+      <stop offset="100%" stop-color="#06111f"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="nucleus" x="-300%" y="-300%" width="700%" height="700%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <circle cx="100" cy="100" r="98" fill="url(#bg)"/>
+
+  <!-- 16 package pads -->
+  <g fill="#38BDF8" filter="url(#glow)" transform="translate(100,100)">
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(0)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(22.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(45)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(67.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(90)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(112.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(135)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(157.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(180)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(202.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(225)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(247.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(270)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(292.5)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(315)"/>
+    <rect x="73" y="-5" width="13" height="10" rx="2.2" transform="rotate(337.5)"/>
+  </g>
+
+  <!-- Chip body -->
+  <circle cx="100" cy="100" r="66" fill="url(#chip)" stroke="#38BDF8" stroke-width="2.2" stroke-opacity="0.65" filter="url(#glow)"/>
+
+  <!-- Traces out of the core, each ending in a via -->
+  <g transform="translate(100,100)" filter="url(#glow)">
+    <g stroke="#38BDF8" stroke-width="1.8" stroke-linecap="round" stroke-opacity="0.8">
+      <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(22.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(67.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(112.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(157.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(202.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(247.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(292.5)"/>
+    <line x1="41" y1="0" x2="50.5" y2="0" transform="rotate(337.5)"/>
+    </g>
+    <g fill="none" stroke="#38BDF8" stroke-width="1.6" stroke-opacity="0.8">
+      <circle cx="55" cy="0" r="4.2" transform="rotate(22.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(67.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(112.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(157.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(202.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(247.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(292.5)"/>
+    <circle cx="55" cy="0" r="4.2" transform="rotate(337.5)"/>
+    </g>
+    <g fill="#38BDF8">
+      <circle cx="55" cy="0" r="1.7" transform="rotate(22.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(67.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(112.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(157.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(202.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(247.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(292.5)"/>
+    <circle cx="55" cy="0" r="1.7" transform="rotate(337.5)"/>
+    </g>
+  </g>
+
+  <!-- Core -->
+  <circle cx="100" cy="100" r="40" fill="#07182a" stroke="#38BDF8" stroke-width="1.6" stroke-opacity="0.8" filter="url(#glow)"/>
+
+  <!-- React atom -->
+  <g transform="translate(100,100)" stroke="#38BDF8" stroke-width="3" fill="none" filter="url(#glow)">
+    <ellipse rx="33" ry="12"/>
+    <ellipse rx="33" ry="12" transform="rotate(60)"/>
+    <ellipse rx="33" ry="12" transform="rotate(120)"/>
+  </g>
+  <circle cx="100" cy="100" r="6" fill="#38BDF8" filter="url(#nucleus)"/>
+  <circle cx="98" cy="98" r="2.2" fill="white" fill-opacity="0.45"/>
+</svg>

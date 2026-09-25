@@ -10,6 +10,18 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See the README for the release process.
 
 ## [Unreleased]
+### Changed
+
+- The starter that `npm create embedded-react` scaffolds is redesigned and responsive: it lays itself out from
+  the panel size, so the same file fits a 240×240 watch face and an 800×480 panel.
+
+### Added
+
+- The browser simulator's host API gains `er_web_clear_persist()`, which forgets the state `usePersistentState`
+  keeps across hot reloads, so a host can offer a true reset.
+
+- A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
+  every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
 
 ## [0.14.1] - 2026-09-21
 ### Added

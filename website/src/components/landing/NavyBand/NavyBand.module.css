@@ -1,0 +1,20 @@
+.band {
+  position: relative;
+  overflow: hidden;
+  color: #e6edf5;
+  background: radial-gradient(ellipse 80% 90% at 50% 40%, var(--er-navy-light), var(--er-navy-deep));
+}
+
+.band::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(56, 189, 248, 0.22) 1.2px, transparent 1.2px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse at center, transparent 25%, #000 100%);
+  pointer-events: none;
+}
+
+.content {
+  position: relative;
+}
