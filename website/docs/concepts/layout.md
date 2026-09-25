@@ -28,9 +28,9 @@ The properties it takes:
 | Position   | `position` (`relative` or `absolute`), `top`, `left`, `right`, `bottom`                   |
 | Visibility | `display` (`flex` or `none`), `overflow`, `zIndex`                                        |
 
-`width` and `height` accept a percentage of the parent's content box. So do the four insets: a
-percentage on `left` or `right` is of the containing block's width, on `top` or `bottom` of its
-height.
+`width`, `height` and `flexBasis` accept a percentage of the parent's content box. So do the four
+insets: a percentage on `left` or `right` is of the containing block's width, on `top` or `bottom`
+of its height. Margins, padding, min/max sizes and borders take pixels only.
 
 **Absolute positioning** follows Yoga's rules. An axis is pinned by an explicit length, a
 percentage, or a pair of opposing insets (`left` and `right` together). `aspectRatio` derives the
