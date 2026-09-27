@@ -27,8 +27,8 @@ const [count, setCount] = usePersistentState('count', 0);
 
 `useState` whose value survives a hot reload in the simulators and the on-device dev loop. You rarely
 call it: in those loops the bundler rewrites plain `useState` to this, keyed by component name and
-hook order, so state survives transparently. Reach for it directly when you want a key that is
-explicitly yours. The value must be JSON-serialisable. On a device, and in any release build, it is
+hook order, so the state survives transparently. Reach for it directly when you want a key that is
+explicitly yours. The value must be JSON-serializable. On a device, and in any release build, it is
 exactly `useState`. [Hot reload](../guides/hot-reload.md) explains the keying.
 
 ## useHostValue

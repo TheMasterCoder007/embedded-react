@@ -25,7 +25,7 @@ defaults are desktop-sized.
 | `ERUI_FONT_POOL_BYTES`                                                       | 0                | A static pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                   |
 | `ERUI_SHADOWS`, `ERUI_3D_TRANSFORMS`, `ERUI_GRADIENT`, `ERUI_BILINEAR_SCALE` | varies           | Features that cost code and scratch; off is free                                                                                       |
 
-The vector rasteriser has its own pools, and unlike the pixel scratch they must live in **internal
+The vector rasterize has its own pools, and unlike the pixel scratch they must live in **internal
 RAM** on a PSRAM board, because the scanline loops touch them per pixel:
 
 | Flag                                           | Default | Bounds                                                         |

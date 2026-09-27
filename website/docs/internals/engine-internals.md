@@ -93,7 +93,7 @@ a rotated or scaled arc, which renders through the transform scratch at exactly 
 to include the knob if you need to transform such a dial.
 
 `<Svg>` arcs share this core: a shape that is exactly an arc or a circle (the tape both flows emit for
-`<Arc>` and `<Circle>`) is routed to the same rasteriser rather than tessellated, so it is
+`<Arc>` and `<Circle>`) is routed to the same rasterizer rather than tessellated, so it is
 pixel-identical to a native arc at a fraction of the cost. Half-chords are cached per radius
 (`ERUI_ARC_SPAN_CACHE` entries of `ERUI_ARC_MAX_RADIUS` rows, about 4 KB; a larger radius computes
 its chords directly); the shared cache makes arc nodes single-core, like vector nodes.
@@ -194,7 +194,7 @@ The pool and buffer sizes default desktop-sized; the optional features default o
 
 ### Vector pools
 
-The vector rasteriser's buffers stay in **internal RAM** on a PSRAM board (the scanline loops touch
+The vector rasterizer's buffers stay in **internal RAM** on a PSRAM board (the scanline loops touch
 them per pixel), so they are sized to fit there: about 100 KB of scanline scratch at the defaults,
 plus about 36 KB of per-node storage and 170 KB of edge cache.
 

@@ -80,7 +80,7 @@ only the app into the resident context, where `AppRegistry` re-renders into its 
 React reconciles the old tree into the new one in place. A corrupt upload is rejected and never
 disturbs the running app.
 
-A release firmware should be built without `ER_HOTRELOAD`; ship by packing once and writing the
+Release firmware should be built without `ER_HOTRELOAD`; ship by packing once and writing the
 config partition, as the [ESP32-S3 guide](./boards/esp32-s3.md) describes.
 
 ## What survives
@@ -96,9 +96,9 @@ JavaScript context, so it outlives the reload. The device loop applies the trans
 That keying has consequences worth knowing:
 
 - Editing JSX, styles or handler logic keeps state. That is the common case.
-- Adding, removing or reordering the `useState` calls in a component shifts its keys and resets that
+- Adding, removing, or reordering the `useState` calls in a component shifts its keys and resets that
   component's state. Renaming the component does the same.
-- Values must be JSON-serialisable. A value that is not (a function, say) is kept in memory for
+- Values must be JSON-serializable. A value that is not (a function, say) is kept in memory for
   the session but not persisted across the next reload.
 - `usePersistentState` is exported, so you can use it directly with your own key when you want
   state that is explicitly meant to survive.

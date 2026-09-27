@@ -152,7 +152,7 @@ Both flows perform the same rewrite:
 
 Write `renderItem` as `({item, index}) => …`; the AOT reads that destructuring literally. Those four
 are the only props either flow honours: `horizontal`, `numColumns`, `onEndReached`,
-`ListHeaderComponent`, `ItemSeparatorComponent` and the other virtualisation knobs have no meaning
+`ListHeaderComponent`, `ItemSeparatorComponent` and the other virtualization knobs have no meaning
 here, so the AOT rejects them, Flow A warns once and ignores them, and the types reject them. For
 headers, footers, or separators use a `ScrollView` with `.map` directly.
 

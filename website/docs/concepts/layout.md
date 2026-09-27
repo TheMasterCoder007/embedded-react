@@ -35,7 +35,7 @@ of its height. Margins, padding, min/max sizes and borders take pixels only.
 
 **Absolute positioning** follows Yoga's rules. An axis is pinned by an explicit length, a
 percentage, or a pair of opposing insets (`left` and `right` together). `aspectRatio` derives the
-other axis from a pinned one, and does nothing when both or neither are pinned. An axis left
+other axis from a pinned one and does nothing when both or neither are pinned. An axis left
 unresolved sizes to the node's own content, as a flow child would.
 
 **Text** is measured by the engine's own text layout, in the font and size the node uses, and the
@@ -49,7 +49,7 @@ the nearest size that was. See [Assets](./assets.md).
   `left` means left.
 - **`ScrollView` scrolls whichever axis overflows.** There is no `horizontal` prop; lay the content
   out with `flexDirection: 'row'` and it scrolls sideways. `FlatList` is a thin wrapper over
-  `ScrollView`, not a virtualised list: every row is a real node that stays mounted.
+  `ScrollView`, not a virtualized list: every row is a real node that stays mounted.
 - **A fixed node pool.** The engine allocates `ERUI_MAX_NODES` nodes at compile time (512 by
   default) and never more. A long list has to fit; the [Memory](../guides/memory.md) guide covers
   choosing the number.
