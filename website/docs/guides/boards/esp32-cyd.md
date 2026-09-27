@@ -80,6 +80,12 @@ start-up. If you run short, in order: shrink the strip height with `ER_LCD_BANDE
 more transfers), lower `ERUI_MAX_NODES`, or rebuild the app with a smaller `ER_AOT_LIST_CAP`.
 [Memory](../memory.md) goes through the numbers.
 
+The backend, `backends/esp32-spi-lcd`, works with any `esp_lcd` RGB565 SPI panel. The board brings
+the panel up (SPI bus, panel and IO handle, reset, inversion, orientation, backlight) and passes both
+handles to `er_esp32_spi_lcd_backend_init(panel, io, width, height)`; in banded mode there is nothing
+to call per frame. A full-framebuffer mode exists (`ER_LCD_BANDED` unset) for a board with a big
+enough block, with `er_esp32_spi_lcd_present()` called after each `er_commit()`.
+
 ## Tuning for your board
 
 These generic boards vary unit to unit. Every setting is a `#define` at the top of `main/board.c` or

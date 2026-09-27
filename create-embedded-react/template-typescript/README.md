@@ -35,8 +35,9 @@ npm run build        # → dist/app.erpkg  (QuickJS bytecode + baked assets)
 Upload `dist/app.erpkg` to your device's config region — your firmware loads it with
 `er_runtime_load_container()` (Flow A; needs a PSRAM-class chip). For no-PSRAM boards, compile the app
 ahead-of-time to C instead: `npx embedded-react build --aot` emits `app.gen.c` (+ `assets.generated.c`)
-to compile into your firmware — note the AOT path supports a subset of the API. See the
-[repo](https://github.com/TheMasterCoder007/embedded-react) for board wiring and examples.
+to compile into your firmware — note the AOT path supports a subset of the API. See
+[Your first board](https://embedded-react.dev/getting-started/first-board) for the flows and the
+board guides.
 
 ## Layout
 
@@ -55,4 +56,5 @@ is typed out of the box.
 
 The same `App.tsx` runs on a device through the C engine — interpreted on QuickJS (Flow A) or compiled
 ahead-of-time to C (Flow B). See the [embedded-react repo](https://github.com/TheMasterCoder007/embedded-react)
-for the engine, the hardware backends (ESP32, STM32, …), and the on-device examples.
+for the engine, the hardware backends (ESP32, STM32, …), and the on-device examples, and
+[embedded-react.dev](https://embedded-react.dev) for the documentation.

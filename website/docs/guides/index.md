@@ -28,6 +28,8 @@ Not sure which flow your board wants? [Two flows](../concepts/two-flows.md) has 
   a board over USB, and how state survives each.
 - [The AOT subset](./aot-subset.md): what the ahead-of-time compiler accepts, what it refuses and
   how it tells you, for apps headed to a board without external RAM.
+- [The demo apps](./demos.md): the thermostat and the watch face, what each exercises, and what it
+  took to keep both compiling under Flow B.
 
 ## Fitting the hardware
 

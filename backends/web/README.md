@@ -1,20 +1,10 @@
 # backends/web
 
-The present layer for the **WASM simulator**: the engine is compiled to WebAssembly and renders through the
-software (CPU) backend into an ARGB8888 framebuffer; this layer converts that to RGBA and shows it in a
-`<canvas>`. Lets a React app authored against `embedded-react` run unmodified in a browser preview — the
-shipped, zero-install dev loop for npm consumers.
+The present layer for the WebAssembly simulator: the engine renders through `../software` into an
+ARGB8888 framebuffer, and this layer converts it to RGBA for a `<canvas>` and exposes the C ABI the
+host page drives through `cwrap` (`web_backend.h`: `er_web_init`, `er_web_load_source`,
+`er_web_load_pack`, `er_web_resize`, `er_web_pump`, `er_web_touch`, `er_web_framebuffer`,
+`er_web_clear_persist`, …). Shipped as `npx embedded-react dev` and used by the site's playground.
 
-It sits on top of [`backends/software`](../software/) (which does the actual compositing). The build/run
-instructions and full design live in [`tools/web-sim`](../../tools/web-sim/README.md).
-
-## Files
-
-- [`web_backend.h`](web_backend.h) — the exported C ABI the host page drives via `cwrap`
-  (`er_web_init` / `er_web_pump` / `er_web_touch` / `er_web_framebuffer` / …).
-- [`renderer_backend.c`](renderer_backend.c) — the present layer: ARGB8888 → canvas RGBA swizzle, plus the
-  ABI implementation and (W1) a static demo scene.
-
-**Status:** Working. The `engine → WASM → canvas` pipeline (and the ARGB→RGBA swizzle) renders end to end,
-verified pixel-for-pixel, and drives the full browser dev loop — interactive Flow A bundles
-(`er_web_load_source`), baked asset packs, and Server-Sent hot reload. Shipped as `npx embedded-react dev`.
+**Docs:** [Run it in the simulator](https://embedded-react.dev/getting-started/simulator); the build
+is in `tools/web-sim`.

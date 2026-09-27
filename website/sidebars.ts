@@ -46,6 +46,7 @@ const sidebars: SidebarsConfig = {
         },
         'guides/hot-reload',
         'guides/aot-subset',
+        'guides/demos',
         'guides/performance',
         'guides/memory',
       ],
@@ -69,6 +70,7 @@ const sidebars: SidebarsConfig = {
       link: {type: 'doc', id: 'internals/index'},
       items: [
         'internals/architecture',
+        'internals/engine-internals',
         'internals/writing-a-backend',
         'internals/testing',
         'internals/releasing',

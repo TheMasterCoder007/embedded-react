@@ -1,7 +1,7 @@
 # Roadmap
 
-The bulk of Embedded React is built and verified — see the **Status** and **Working
-examples** tables in the [README](README.md). This file is the single home for what's
+The bulk of Embedded React is built and verified — see the status table in the
+[introduction](https://embedded-react.dev/intro). This file is the single home for what's
 left: known issues, planned work toward 1.0, the performance backlog, and the
 longer-term vision.
 
@@ -58,7 +58,7 @@ stubs / README-only:
 
 ### Examples / board bring-up
 
-Four examples run end-to-end (see README). These are README-only and need wiring:
+Five examples run end-to-end (see the [board guides](https://embedded-react.dev/guides)). These are README-only and need wiring:
 
 - **`examples/stm32h7/`** — first STM32 bring-up. The backend (`backends/dma2d/`) is done;
   what is missing is a board project that wires it to an LTDC panel end to end.
@@ -198,7 +198,7 @@ Deliberately out of scope:
 - **Web-only React APIs** — DOM refs, portals, Suspense, Server Components.
 - **List virtualization** — `FlatList` windowing, or a native recycling list node.
   `FlatList` is a documented `ScrollView` alias in both flows: every row mounts and stays
-  mounted (README: *`FlatList` is a `ScrollView` alias*). Windowing in JS would cost a
+  mounted (see [FlatList](https://embedded-react.dev/api/components#flatlist)). Windowing in JS would cost a
   React commit every time the window shifts — during a flick, every frame — the same
   per-event cost that caps Flow A drag, and Flow B has no runtime reconciler to recompute
   a window at all. A native recycling list node is the only version worth building, and it

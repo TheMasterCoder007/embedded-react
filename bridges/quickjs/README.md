@@ -1,109 +1,34 @@
 # bridges/quickjs
 
-QuickJS bridge — the reference frontend. Hosts a React reconciler inside QuickJS and
-maps React's host-config calls (`createInstance`, `appendChild`, `commitUpdate`, etc.) to
-the engine's `er_scene.h` API.
+The QuickJS bridge, the reference frontend for Flow A. `native_ui_bridge.c` publishes the `NativeUI`
+object into a QuickJS context and forwards each call to `er_scene.h`; the React reconciler in
+[`js/`](js/README.md) drives it. `er_runtime.{c,h}` is the portable host core a firmware calls:
+create the runtime, install the bridge and host globals, load an app, pump it once per frame.
+`er_js_alloc.c` is the allocator that keeps QuickJS's garbage collector working on bare metal;
+`er_hotreload.c` parses the USB reload frames; `er_assets.c` registers an ERPK pack.
 
-This is what makes "write JSX, run it on an MCU" actually work in Flow A (see the
-[root README](../../README.md) for how Flow A and Flow B relate).
+**Docs:** [NativeUI bridge](https://embedded-react.dev/api/native-ui-bridge) (the JavaScript surface,
+`er_runtime`, heap accounting, hosts with external RAM), [Hot reload](https://embedded-react.dev/guides/hot-reload),
+and [Memory](https://embedded-react.dev/guides/memory) for the Flow A heap.
 
-**Status:** Working. `native_ui_bridge.c` publishes the full `NativeUI` surface (nodes, props,
-events, Animated, timers/job-queue, text spans, LayoutAnimation) into QuickJS-ng (v0.15.0, via
-FetchContent), and the React reconciler in `js/` drives it. See [`js/README.md`](js/README.md)
-for the JS layer and its per-feature status.
+## Building
 
-**Lite JS profile:** the runtime creates its context with only the intrinsics the React runtime
-needs — base objects, RegExp, JSON, Map/Set, Promise, plus `performance.now()` and `Date.now()` on
-the engine clock — and the same set runs on device, desktop, simulator, and the test harnesses, so
-dev and hardware expose one JS surface. `Date.now()` counts from boot until the host passes the real
-time to `er_runtime_set_wall_clock()` (from an RTC or an SNTP sync). Extras (full Date objects,
-Proxy, typed arrays, WeakRef, BigInt) are opt-in per host via
-`ErRuntimeConfig.extra_intrinsics`. Device firmware that only runs precompiled bytecode can also
-drop the JS parser entirely with `-DER_BRIDGE_QUICKJS_LITE=ON` (~60 KB flash); the error overlay is
-precompiled bytecode (`overlay/`) so it works there too. Release bytecode is stripped of source
-text + debug tables (~8x smaller); the dev hot-reload loop keeps them for line numbers.
+```
+cmake -S bridges/quickjs -B bridges/quickjs/build -DCMAKE_BUILD_TYPE=Release
+cmake --build bridges/quickjs/build
+ctest --test-dir bridges/quickjs/build --output-on-failure
+```
 
-**`er_runtime` — the portable host core** (`er_runtime.{c,h}`): the few-function QuickJS host every
-integration shares — create the runtime + context, install the bridge + host globals (console,
-screen, and optional persist), load an app (bytecode or source), pump, reset for reload, report/overlay
-errors. Backend-agnostic and platform-neutral (no SDL/IDF/filesystem): the caller owns the display
-backend, where the app bytes come from, and the frame loop. This is how embedded-react drops into 
-custom firmware with ~10 lines of glue (`er_runtime_init` → `er_runtime_load_bytecode` →
-`er_runtime_pump`/`er_commit` per frame). The desktop demo + simulator's `examples/linux/host.c` is
-just an SDL wrapper over it.
+QuickJS-ng is fetched at configure time (`FetchContent`, pinned to `v0.15.0`; bytecode is specific
+to that version). Targets:
 
-**One commit per frame:** host-initiated updates — a native event, a timer, a promise continuation —
-are outside any React batch, so in the reconciler's synchronous mode each `setState` would render and
-commit on its own, and three animations ticking on one frame would pay three full engine commits to
-paint one. `er_bridge_pump()` runs the whole frame inside one batch scope, and inside the batcher the
-renderer installs (`NativeUI.setBatcher` — React's `batchedUpdates`), so the frame ends in one render
-and one `er_commit()`. Events dispatched straight from a panel driver get the same scope around the
-handler. A render outside a frame (the app's first one) still commits on the spot — so layout and
-hit areas are current every time control returns to the host, though a callback part-way through a
-frame still reads the previous commit's rects.
+| Target | What it is |
+|---|---|
+| `er-bridge-quickjs` | The bridge library |
+| `er-bridge-quickjs-smoke` | A link check |
+| `er-bridge-quickjs-runtest` | The headless test harness the JS package's runtime tiers use; also runs `.qbc` bytecode |
+| `er-bridge-quickjs-gctest` | The heap-accounting / GC regression test, registered with ctest |
+| `er-bridge-quickjs-compile` | The bytecode precompiler (JS bundle → QuickJS bytecode); `npm run pack` looks for it, or set `ER_COMPILE_BIN` |
 
-**JS heap + GC accounting** (`er_js_alloc.{c,h}`): QuickJS decides when to collect garbage — and
-enforces `ErRuntimeConfig.memory_limit` — purely from what `js_malloc_usable_size()` reports for each
-allocation. QuickJS's own default implements that for macOS, Windows, and the glibc/Linux/BSD family
-and returns **0 everywhere else**, which includes bare-metal `arm-none-eabi`/newlib and Emscripten. A
-zero there means the GC threshold is never crossed: the collector never runs, JS garbage accumulates
-until the heap is exhausted, and the memory limit cannot cap anything — silently, and only on those
-platforms, so it looks exactly like a leak in the app or the engine. The bridge therefore never uses
-QuickJS's default allocator. When `ErRuntimeConfig.malloc_functions` is NULL it installs its own: the
-platform's usable-size call where one exists, and a size-prefix allocator (one extra word per
-allocation) on bare metal, where nothing can be assumed about the heap behind `malloc`. Override the
-choice with `-DER_BRIDGE_JS_USABLE_SIZE=native|shim` if you know your target.
-
-> **If you supply your own `malloc_functions`** (e.g., to put the JS heap in PSRAM — see
-> `examples/esp32/esp32-s3/main/main.c`), its `js_malloc_usable_size` **must** return the real block
-> size (`heap_caps_get_allocated_size`, `tlsf_block_size`, `malloc_usable_size`, …). `er_runtime_init`
-> probes this at boot and logs a warning if it does not; `er_runtime_gc_accounting_ok()` exposes the
-> same answer to firmware.
-
-### Hosts with external RAM (PSRAM / SDRAM)
-
-Pointing the JS heap at external RAM changes how the board behaves in two ways you can control — when
-the collector walks it, and where the interpreter's call frames live.
-
-**1. Tune when the collector runs.** `ErRuntimeConfig.gc_threshold` sets a floor under QuickJS's
-automatic GC trigger. QuickJS starts that trigger at 256 KB and recomputes it to *live × 1.5* after
-every collection, so a board with a small live set and a multi-MB arena mark-sweeps far more often than
-it needs to — walking the whole object graph over a slow bus each time. The floor is re-asserted on
-every `er_runtime_pump()`, which is what makes it survive the recompute. Keep it well under
-`memory_limit` (`er_runtime_init` warns if it isn't), or the app hits the cap before the collector is
-ever allowed to run. Because it is re-asserted per pump it holds across *frames* — how a React app
-allocates — but not inside one synchronous call that churns past it without yielding. `er_runtime_gc_threshold()` reads back the live value, and `er_runtime_run_gc()`
-collects on demand — set the floor to `SIZE_MAX` and call that at a screen change or an idle frame to
-put the pause somewhere it doesn't show.
-
-Worth knowing when you measure: QuickJS is ref counted first, so ordinary garbage is reclaimed the
-moment the last reference drops. Mark sweep exists for reference *cycles*, and those are what the longer
-GC interval lets accumulate.
-
-**2. The interpreter's own stack is already fast RAM — keep it that way.** QuickJS has no separate JS
-stack: `JS_CallInternal` recurses on the C stack of whatever task calls into JS, so every JS call frame,
-local, and argument lives on your host task's stack, wherever you put it. Nothing in the config controls
- this because the host already does. On ESP-IDF, FreeRTOS task stacks are internal RAM by default
-(external-memory stacks are opt-in) — the ESP32-S3 example runs JS on the main task and just sizes it
-with `CONFIG_ESP_MAIN_TASK_STACK_SIZE`. On STM32, the default linker script puts the main stack in DTCM,
-the fastest RAM on the part. Set `ErRuntimeConfig.max_stack_size` below whatever that stack really is, so
-deep React recursion raises a JS stack-overflow error instead of quietly running off the end of it.
-
-> **Why there is no size-tiered allocator.** One was built and measured for this section — small
-> blocks routed to internal RAM, bulk to PSRAM — and rejected on the numbers (ESP32-S3, 800×480,
-> 2026-08-31): with 160 KB of internal RAM lent to it, holding the hottest ~17% of the live object
-> graph, mark-sweep improved only ~2%, and paths where collection is rare got a few percent *slower*
-> from the per-allocation overhead. Cache-fronted external RAM (the S3's octal PSRAM behind its
-> D-cache) already absorbs the penalty tiering targets, while `gc_threshold` cut 18% on the same
-> workload — so the schedule is the lever, not placement. If a future host has uncached external RAM
-> and profiling shows the mark pass stalling on it, that is the case to revisit.
-
-Targets (CMake): `er-bridge-quickjs` (the bridge lib), `er-bridge-quickjs-smoke` (§0 link check),
-`er-bridge-quickjs-runtest` (headless test harness; also runs `.qbc` bytecode),
-`er-bridge-quickjs-gctest` (heap-accounting/GC regression test, also registered with ctest), and
-`er-bridge-quickjs-compile` (bytecode precompiler: JS bundle → QuickJS bytecode blob / C array for
-MCU flash).
-
-> The bytecode precompiler is a Flow A boot/RAM optimization — it skips the on-device parser, but
-> the QuickJS VM still runs the bytecode. It is **not** the Flow B AOT compiler (which compiles JSX
-> to C and drops QuickJS entirely; that lives in [`js/aot/`](js/aot/)).
+Options: `-DER_BRIDGE_QUICKJS_LITE=ON` drops the JavaScript parser for firmware that only loads
+bytecode; `-DER_BRIDGE_JS_USABLE_SIZE=native|shim` overrides the allocator choice.

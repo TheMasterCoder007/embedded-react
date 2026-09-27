@@ -4,8 +4,8 @@ description: 'The engine invariants, documentation conventions and code style th
 ---
 
 Contributions are welcome on any layer: the engine, a backend, the Flow A bridge, the Flow B
-compiler, the tooling, these docs. This page is the project-wide rules; each top-level folder's
-README has the layer-specific ones, and the [roadmap](/roadmap) has what is planned and what is
+compiler, the tooling, these docs. This page is the project-wide rules; the rest of the Internals
+section has the layer-specific ones, and the [roadmap](/roadmap) has what is planned and what is
 known to be broken.
 
 ## Engine invariants
@@ -82,7 +82,7 @@ round goes stale the moment the code moves; the git log has the history.
 
 ## Changes that need more than code
 
-- **Anything user-facing gets a changelog bullet** under `## [Unreleased]`, short and high level, 
+- **Anything user-facing gets a changelog bullet** under `## [Unreleased]`, short and high level,
   before the change is finished. See [Releasing](./releasing.md).
 - **Anything that changes a version-bearing file** (a manifest, an install pin) must go through
   `sync-version.mjs`; CI checks for drift.
@@ -91,8 +91,8 @@ round goes stale the moment the code moves; the git log has the history.
   prop or rejects it by name.
 - **A new engine feature** needs a CTest case, and if it adds a compile-time flag, a CI pass with
   the flag on. See [Testing](./testing.md).
-- **A change that affects a board** should be checked on that board; the examples' READMEs say how
-  to build and flash each. Hardware results belong in the pull request, with the board named.
+- **A change that affects a board** should be checked on that board; the [board guides](../guides/index.md#boards)
+  say how to build and flash each. Hardware results belong in the pull request, with the board named.
 
 ## The pull request
 

@@ -1,25 +1,13 @@
 # backends/esp32-lcd
 
-ESP32-S3 (and forward-compatible variants) LCD peripheral backend for `esp_lcd` RGB panels.
-CPU-side fill / copy / blend; the LCD peripheral DMAs the framebuffer out to the panel. The
-host drives the frame loop and calls `er_esp32_lcd_present()` after each `er_commit()`.
+ESP32-S3 backend for `esp_lcd` RGB panels: CPU-side fill / copy / blend (with the S3's PIE SIMD unit
+for the blend inner loops), the LCD peripheral DMAs the framebuffer out. The host calls
+`er_esp32_lcd_present()` after each `er_commit()`. It picks direct mode (compositing straight into the
+panel's rotating framebuffers, using the engine's multi-buffer damage replay) or canonical mode (a
+separate framebuffer, copied and optionally rotated on present) at init.
 
-Two operating modes, chosen automatically at init:
+**Docs:** [ESP32-S3 guide, the backend](https://embedded-react.dev/guides/boards/esp32-s3#the-backend).
 
-- **Direct mode** (`ER_LCD_DIRECT`, default 1) — used when the panel is unrotated, the
-  canonical format is RGB565, and the panel exposes 2–3 rotating framebuffers (`num_fbs`).
-  The engine composites straight into the panel framebuffers; its multi-buffer damage replay
-  (`er_set_display_buffer_count` / `er_display_present`) repaints whatever each buffer missed
-  while the others were displayed. Present is just a cache writeback of the dirty window plus
-  a buffer flip. With `num_fbs = 3` there is always a swapped-out buffer ready to draw into,
-  so frames never wait on the display; with 2, the first write after a flip waits up to one
-  refresh for the swap to land.
-- **Canonical mode** — rotated panels, ARGB8888 canonical builds (`ER_LCD_FB_RGB565=0`), and
-  single-framebuffer panels composite into a separate canonical framebuffer; present copies
-  the dirty region to the panel (rotating it if configured).
-
-On the ESP32-S3 the source-over blend and translucent-fill inner loops run on the PIE 128-bit
-SIMD unit, eight pixels per iteration (`ER_LCD_PIE`, default 1; see `pie_blend.c`). An init-time
-self-test verifies the SIMD routines against the scalar reference and disables them on any
-mismatch. Output matches the scalar path within one RGB565 LSB (exact for fully opaque or fully
-transparent pixels).
+Options: `ER_LCD_DIRECT` (default 1), `ER_LCD_FB_RGB565` (default 1; 0 for an ARGB8888 canonical
+build), `ER_LCD_PIE` (default 1; an init-time self-test falls back to the scalar path on any mismatch).
+Used by `examples/esp32/esp32-s3`.

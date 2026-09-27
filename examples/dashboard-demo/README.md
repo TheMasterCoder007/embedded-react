@@ -1,7 +1,6 @@
 # examples/dashboard-demo
 
-Cross-platform UI demo — gauges, charts, controls — that exercises shadows, transforms,
-animations, gradients, and rounded rectangles. The same React source runs against any
-backend; this is the "show off everything" reference app.
+A cross-platform "show off everything" reference app: gauges, charts and controls exercising
+shadows, transforms, animations, gradients and rounded rectangles against any backend.
 
-**Status:** Planned. No code yet.
+**Status:** Planned. No code yet. See [`ROADMAP.md`](../../ROADMAP.md).

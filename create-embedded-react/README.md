@@ -1,59 +1,39 @@
 # create-embedded-react
 
-Scaffold a new [embedded-react](https://www.npmjs.com/package/embedded-react) app — React Native for embedded
-MCUs.
+Scaffold a new [Embedded React](https://embedded-react.dev) app: React Native for embedded MCUs.
 
 ```bash
-npm create embedded-react@latest my-app
-# or: npx create-embedded-react my-app
-
+npm create embedded-react@latest my-app          # add -- --ts for a TypeScript starter
 cd my-app
 npm install
-npm run dev          # WASM simulator with hot reload → http://localhost:3333
+npm run dev                                       # the browser simulator with hot reload → http://localhost:3333
 ```
 
-The generated project is a small starter — a card with the pulsing logo, a `count is N` button and the
-panel size, laid out from `screen.width`/`screen.height` so it fits a 240×240 watch face and an 800×480
-panel alike — wired for the browser simulator (`npm run dev`) and a shareable static export (`npm run export`). Edit
-`App.jsx` and save; it hot-reloads. The same code runs on real hardware through the embedded-react C engine.
-
-## TypeScript
-
-For a TypeScript starter, add `--ts` (or `--typescript`):
-
-```bash
-npm create embedded-react@latest my-app -- --ts
-# or: npx create-embedded-react my-app --ts
-```
-
-The TypeScript template adds a `tsconfig.json`, ambient type declarations for asset imports (png/ttf/…),
-and a `npm run typecheck` script.
+The starter is a responsive card (a pulsing logo, a counter button and the panel size) laid out from
+`screen.width`/`screen.height`, so it fits a 240×240 watch face and an 800×480 panel alike. Edit
+`App.jsx` and save; it hot-reloads. The same code runs on hardware through the C engine.
 
 ## Start from a demo
-
-Pass `--template <name>` (or `-t`) to scaffold from a full demo app instead of the minimal starter — a
-ready-made starting point, or a way to try a real UI on your hardware:
 
 ```bash
 npm create embedded-react@latest my-thermostat -- --template thermostat
 npm create embedded-react@latest my-watch      -- --template watch-face
-```
-
-List everything available:
-
-```bash
 npm create embedded-react@latest -- --list
 ```
 
-| Template       | What you get                                  |
-| -------------- |-----------------------------------------------|
-| `starter`      | The responsive starter — pulsing logo + counter (the default). |
-| `starter-ts`   | The starter in TypeScript (same as `--ts`).   |
-| `thermostat`   | A thermostat with a 14-day weather panel      |
-| `watch-face`   | A digital watch face + bubble level (RP2040 1.69") |
+| Template | What you get |
+|---|---|
+| `starter` | The responsive starter (the default) |
+| `starter-ts` | The starter in TypeScript (same as `--ts`) |
+| `thermostat` | A thermostat with a native dial and a 14-day weather panel |
+| `watch-face` | A digital watch face and a bubble level, sized for a 240×280 panel |
 
-Every template scaffolds the same way — `npm install && npm run dev` for the browser simulator,
-`npm run dev:device` to hot-reload on a board, `npm run build` for the device artifact. The demos are the
-same JSX apps in the monorepo's [`demos/`](https://github.com/TheMasterCoder007/embedded-react/tree/master/demos).
+Every template scaffolds the same way: `npm run dev` for the simulator, `npm run dev:device` for hot
+reload on a board, `npm run build` for the device artifact, `npm run export` for a shareable static
+copy of the simulator.
 
-Part of the [embedded-react monorepo](https://github.com/TheMasterCoder007/embedded-react).
+**Docs:** [Installation](https://embedded-react.dev/getting-started/installation),
+[the simulator](https://embedded-react.dev/getting-started/simulator),
+[your first board](https://embedded-react.dev/getting-started/first-board), and
+[the demo apps](https://embedded-react.dev/guides/demos). Part of the
+[embedded-react monorepo](https://github.com/TheMasterCoder007/embedded-react).

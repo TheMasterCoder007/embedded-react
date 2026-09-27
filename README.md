@@ -3,7 +3,7 @@
 </h1>
 
 **React Native for embedded MCUs.**
-Write a React app, compile it, flash it onto a microcontroller — the UI runs *on the device*, with no browser, no phone, and no OS required.
+Write a React app, compile it, flash it onto a microcontroller. The UI runs *on the device*, with no browser, no phone, and no OS required.
 
 ```jsx
 // src/App.jsx — the same component you'd write for iOS or Android…
@@ -29,399 +29,71 @@ export default function App() {
 
 …runs natively on a microcontroller driving a raw SPI or RGB display.
 
----
-
-## What this is — and what it isn't
-
-Most projects that pair "React" with an "ESP32" run **React in a web browser** on your phone or laptop, talking to the microcontroller over REST or BLE. The MCU is just a backend; the component tree, layout, and rendering all live somewhere else.
-
-**Embedded React is the opposite.** It takes React Native's approach: React is a *component and reconciliation model*, not a DOM thing. React Native swapped the browser's host primitives (`div`, CSS, the browser layout engine) for native ones (`View`, Yoga, native draw calls). Embedded React does that swap again, one level deeper — the host primitives are a **pure C99 engine drawing straight into a framebuffer or SPI display**, with no operating system underneath and no JavaScript engine required.
-
-You write the same JSX components, the same `Animated` API, and the same Yoga-flexbox styles you'd use on iOS or Android. Your app runs on an ESP32, STM32, or RP2040 instead of a phone.
+**Documentation: [embedded-react.dev](https://embedded-react.dev)** — this README is the short version.
 
 ---
 
-## Two ways to ship the same app
+## What this is
 
-The same JSX source can reach the device through one of two flows. Both target the **same C engine** and the same `<View>`/`<Text>`/flexbox model — the only difference is *when* the dynamism is resolved.
+Most projects that pair "React" with an "ESP32" run React in a web browser on your phone, talking to
+the microcontroller over REST or BLE. Embedded React is the opposite. It takes React Native's
+approach one level deeper: the host primitives are a **pure C99 engine drawing straight into a
+framebuffer or SPI display**, with no operating system underneath. You write the same JSX, the same
+`Animated` API, and the same flexbox styles you would use on iOS or Android, and the app runs on an
+ESP32, STM32, or RP2040 instead of a phone.
 
-### Flow A — C engine + QuickJS  *(runtime)*
+The same app reaches the device through one of two flows, both driving the same engine:
 
-The faithful React Native architecture: a real JavaScript runtime ([QuickJS](https://bellard.org/quickjs/)) hosts a React reconciler that drives the native engine at runtime.
+| | Flow A — runtime | Flow B — ahead of time |
+|---|---|---|
+| How it runs | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip | JSX compiled to C and linked into the firmware |
+| Needs | External RAM for the JS heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7 | Internal RAM only; no JS engine on the device |
+| Update the UI by | Replacing `app.erpkg`, no firmware rebuild | Rebuilding and reflashing |
+| Trade-off | RAM and per-frame dispatch | A [subset of the API](https://embedded-react.dev/guides/aot-subset) |
 
-```
-JSX  →  esbuild bundle  →  QuickJS bytecode  →  flashed to MCU
-                                                     ↓
-                              React reconciler runs on QuickJS   (bridges/quickjs/js)
-                                                     ↓
-                              NativeUI bridge → er_scene.h        (bridges/quickjs/*.c)
-                                                     ↓
-                              Yoga layout + render pass           (engine/)
-                                                     ↓
-                              backend fill / copy / blend         (backends/<api>/)
-                                                     ↓
-                                     framebuffer  →  display
-```
+Choosing is a build flag, not a rewrite. [The two flows](https://embedded-react.dev/concepts/two-flows) goes deeper.
 
-You keep **full runtime dynamism** — live state, anything JS can express, and hot reload during development. The cost is RAM and per-frame dispatch, so Flow A wants external RAM for the JS heap — PSRAM on an ESP32-S3, or SDRAM on an STM32H7.
-
-### Flow B — C engine + AOT compiler  *(compile-time)*
-
-The thing React Native *can't* do. An ahead-of-time compiler consumes the same JSX and **emits C** targeting the engine directly — no JS engine, no garbage collector, no reconciler on the device. The component tree, `useState` state machine, event handlers, and animations are all baked into C at compile time.
+## Quick start
 
 ```
-JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c / app.gen.h  →  compiled into firmware
-                                                                                    ↓
-                                                          calls er_scene.h directly  (engine/)
+npm create embedded-react@latest my-app          # add -- --ts for TypeScript
+cd my-app && npm install && npm run dev          # the browser simulator, with hot reload
 ```
 
-Smaller binary, far less RAM, deterministic — at the cost of giving up runtime JS. This is what makes **no-PSRAM microcontrollers** (the class of hardware the browser/RN approaches structurally exclude) viable. The AOT path is built and verified on hardware today.
-
-**One model, one engine, two flows.** A developer writes the same RN-style JSX either way; the choice of runtime-vs-compiled is a build decision, not a rewrite.
-
----
+Or try it with nothing installed in the [playground](https://embedded-react.dev/playground).
+[Getting started](https://embedded-react.dev/getting-started) takes it from there to a board.
 
 ## Status
 
-Beta. The engine, both flows, the backends that run on hardware, and the simulators are
-built and verified; from here the work is fixes and feature additions (tracked in
-[`ROADMAP.md`](ROADMAP.md)). Here's what is **verified working** vs. still scaffolded:
+Beta. The engine, both flows, the hardware backends and the simulators are built and verified; from
+here the work is fixes and features, tracked in [`ROADMAP.md`](ROADMAP.md).
 
-| Layer | Status | Notes |
-|---|---|---|
-| **C engine** (`engine/`) | Working | Scene graph, Yoga flexbox layout, UTF-8 text + font system, anti-aliased rounded rects, borders, shadows, 2D/3D transforms, opacity compositing, image scaling + tint, gradients, a native analytic arc widget (dials / gauges / progress rings with native value animation and drag-to-set), the `Animated` value engine, zIndex-aware multitouch hit-testing, ScrollView momentum, `display: 'none'` subtree hiding (an LVGL-style page cache: build a page once, then show/hide it instead of rebuilding it), and banded RGB565 rendering for low-RAM boards. Host-side CTest suites pass (layout, text, rendering, animation, input, scroll, resources). |
-| **Flow A** — React on QuickJS (`bridges/quickjs/`) | Working | End-to-end: `NativeUI` bridge, React reconciler, esbuild bundler, bytecode precompiler, build-time image/font bakers, ERPK asset container. Runs on the desktop host and on ESP32-S3 hardware. |
-| **Flow B** — AOT JSX→C (`bridges/quickjs/js/aot/`) | Working | Compiles `useState`, `setState` (incl. updater form), events, conditionals, `.map` lists, child components, refs/`useCallback`/`useMemo`, dynamic styles, the full `Animated` API (timing/spring/decay/sequence/parallel/loop), static + state-driven `Svg`, the native `<Dial>` arc widget, and `PanResponder` (lowered onto the engine's C gesture-responder negotiation, not transpiled). Runs on desktop **and on a no-PSRAM ESP32** (Cheap Yellow Display). |
-| **Backends** (`backends/`) | Partial | `sdl` (desktop), `esp32-lcd` (RGB parallel), `esp32-spi-lcd` (banded RGB565), `pico-spi-lcd` (RP2040), and `dma2d` (STM32 Chrom-ART, F4/F7/H7/U5) run on hardware; `software` (a CPU ARGB compositor) and `web` (the WASM present layer) power the browser simulator. `opengl` and `framebuffer` are stubs. |
-| **SDL simulator** (`tools/simulator/`) | Working | RN-style hot-reload dev loop (maintainer tool): file-watch reload, redbox error overlay, asset re-bake, and transparent `useState` preservation. See [`tools/simulator/`](tools/simulator/README.md). |
-| **WASM simulator** (`tools/web-sim/`) | Working | Browser dev loop — the engine compiled to WebAssembly (Flow A in QuickJS), with hot reload, a responsive/device-frame preview, and a static export. Shipped to consumers as `npx embedded-react dev`. See [`tools/web-sim/`](tools/web-sim/README.md). |
-| **Examples** (`examples/`) | Partial | Four run end-to-end (below). `stm32h7`, `raspberry-pi`, and others are READMEs only. |
-
-This is a beta — some backends and examples are still scaffolds (see the tables above and
-[`ROADMAP.md`](ROADMAP.md)). If you want to build on it, or contribute to the engine, a
-backend, or the toolchain — read on.
-
----
-
-## Intentionally absent React Native APIs
-
-A microcontroller has no operating system — no app switcher, no system chrome, no browser, no
-settings service, no other apps to hand anything to. The React Native modules that wrap those
-services have nothing to wrap here, so Embedded React doesn't ship them. **Their absence is a
-decision, not missing work**, and it won't change. Reaching for one fails at build time (`No
-matching export … for import "StatusBar"` in Flow A, `AOT: unknown element <StatusBar>` in Flow B)
-rather than silently doing nothing on the device.
-
-| React Native API | Why it's N/A on an MCU | Instead |
-|---|---|---|
-| `StatusBar` | There's no OS status bar. Your app owns every pixel of the panel from boot. | Draw your own header `<View>`. |
-| `SafeAreaView`, safe-area insets | No notch, no home indicator, no system overlay — the whole framebuffer is the safe area. | `<View style={{flex: 1}}>`, plus `padding` for a physical bezel. |
-| `AppState` | Nothing to background *to*. The app **is** the firmware; it runs from boot until power-off. | Sleep / wake / dim is a firmware decision — your host loop, not the UI. |
-| `Appearance`, `useColorScheme` | No OS-level light/dark setting to read. | Own the theme in app state and pass it down. |
-| `Linking` | No URL handler, no browser, no second app to deep-link into. | — |
-| `AccessibilityInfo`, `accessibility*` props | No assistive-technology service on the device to query or report to. | — |
-| `Alert` | No OS dialog service. | `<Modal>` — a real engine node you style yourself. |
-| `Dimensions`, `useWindowDimensions` | The panel can't resize or rotate; its size is fixed and known at build time. | The `screen` global — `screen.width` / `screen.height` (the AOT compiler folds them at compile time; set the target with `ER_AOT_SCREEN_W`/`_H`). |
-| `Vibration`, `Share`, `Clipboard`, `PermissionsAndroid`, `BackHandler` | Phone/OS services with no embedded counterpart. | Drive the hardware — haptic motor, buttons — from firmware. |
-| `NativeModules` / Turbo Modules | No OS module registry to register against; the firmware already *is* the native side. | Flow B: `useHostValue(initial)` compiles to a generated `er_app_set_*()` setter your firmware calls. |
-| `fetch`, `XMLHttpRequest`, `WebSocket` | QuickJS ships no networking, and there's no socket stack underneath it. | Do the I/O in firmware (Wi-Fi / BLE) and feed values into the UI. |
-
-Two related notes:
-
-- **`Platform.OS` is `'embedded'`** — there's no `'ios'` / `'android'` branch to take. Write
-  `Platform.select({ embedded: …, default: … })`.
-- **Absent-but-planned is a different list.** Gaps we intend to close (backends, AOT subset limits,
-  still-open API decisions) are tracked in [`ROADMAP.md`](ROADMAP.md); the permanent scope calls
-  live in its **Non-goals** section.
-
----
-
-## `FlatList` is a `ScrollView` alias
-
-`<FlatList>` ships for API compatibility and it renders — but it does **not** virtualize. Both flows
-perform the same rewrite:
-
-```jsx
-<FlatList
-  data={items}
-  keyExtractor={(it) => it.id}
-  renderItem={({ item }) => <Row item={item} />}
-/>
-// renders the same tree as
-<ScrollView>
-  {items.map((item) => <Row key={item.id} item={item} />)}
-</ScrollView>
-```
-
-Keys are the one thing that isn't literal: Flow A supplies each row's key itself — from
-`keyExtractor`, else a key `renderItem` already set, else the index — so you never write the `.map`'s
-`key=` by hand. Flow B ignores keys altogether; it unrolls the rows at compile time, so there is no
-reconciler to key.
-
-Flow A does it at render time (`FlatList` is a plain component, not a host tag); Flow B does it at
-compile time (`emitFlatList`). `ER_NODE_FLAT_LIST` exists in the engine, but it sits next to
-`ER_NODE_SCROLL_VIEW` in every compositor, layout, and hit-test switch — identical behaviour — so
-neither flow emits it.
-
-**Every row mounts and stays mounted.** No windowing, no recycling, no cell reuse. Three limits
-follow, and they are worth sizing *before* you write the list:
-
-| Limit | What it costs | Why |
-|---|---|---|
-| **Node budget** | `rows × nodes-per-row` slots out of `ERUI_MAX_NODES` | The scene graph is a fixed `.bss` array (`static ERNode s_nodes[ERUI_MAX_NODES]`), and `sizeof(ERNode)` is ~1.3–1.6 KB depending on the feature set. |
-| **Layout** | Every row is measured and flexed on every layout pass | Layout walks the whole tree; off-screen rows are not exempt. |
-| **Flow A commit** | One bridge round-trip per node, per mount | Marshaling props across JS→C dominates a Flow A commit (see the ROADMAP's performance notes). |
-
-Painting is the one thing that *is* bounded: the scroller clips to its viewport, so off-screen rows
-draw no pixels, and the damage-clip prune skips whole subtrees on a partial repaint.
-
-The node budget is the hard wall, and it is small. Board configs in this repo:
-
-| Config | `ERUI_MAX_NODES` |
-|---|---|
-| Engine default | 512 |
-| ESP32-S3 (800×480) | 512 |
-| CYD — `esp32-2432s028r` | 44 |
-| RP2040-Touch-LCD 1.69" | 48 |
-| Simulator / web-sim | 4096 |
-
-Overflow is **silent**: `er_node_create` returns `NULL` past the cap, the bridge hands back an invalid
-handle, and those rows simply never appear. A 40-row list of 3-node rows needs 120 slots for the rows
-alone, before the rest of your UI — more than the two MCU boards above have in total. Budget the pool,
-or don't scroll a long list.
-
-### What's supported
-
-Both flows accept the same four props — `data`, `renderItem`, `keyExtractor`, `style` — and nothing
-else. Write `renderItem` as `({ item, index }) => …`: Flow B reads that destructuring literally at
-compile time and rejects any other signature, so it's the portable form.
-
-Anything else is a virtualization or platform knob with no meaning here: `horizontal`, `numColumns`,
-`inverted`, `onEndReached`, `initialNumToRender`, `windowSize`, `getItemLayout`,
-`removeClippedSubviews`, `ListHeaderComponent`, `ItemSeparatorComponent`, `onRefresh`, and friends.
-Flow B **fails the build** on them (`AOT: <FlatList> prop "horizontal" is not supported`); Flow A
-`console.warn`s once and ignores them, so a list that renders in the simulator still compiles for the
-device. TypeScript rejects them too, via `FlatListProps`.
-
-For any of those, use a `<ScrollView>` and `.map` directly — you get a header, a footer, and separators
-for free, and it's the same tree either way.
-
-### If you need a long list
-
-Don't mount it. The options, cheapest first: paginate it yourself (render a page at a time with
-prev/next), render a fixed window against a scroll offset you own in state, or split the data across
-screens. True virtualization would need JS-driven windowing — a React commit every time the window
-shifts, which during a flick is every frame, and exactly the per-event JS cost that caps Flow A drag at
-~24 fps (see **Known issues** in [`ROADMAP.md`](ROADMAP.md)). It is a deliberate **non-goal**, not
-deferred work: these panels show a few dozen rows, not thousands.
-
----
-
-## `Button`, `ImageBackground` and `SectionList` are JSX, not nodes
-
-Upstream React Native implements these three in JavaScript, over primitives it already has. So do we —
-they add no engine node type, and each one is a fixed rewrite you could have written yourself:
-
-| Component | Renders |
-|---|---|
-| `<Button title="Save" onPress={save} />` | `<Pressable style={…}><Text style={…}>Save</Text></Pressable>` |
-| `<ImageBackground source={bg} style={…}>…</ImageBackground>` | `<View style={…}><Image source={bg} style={StyleSheet.absoluteFill} />…</View>` |
-| `<SectionList sections={…} renderSectionHeader={…} renderItem={…} />` | `<ScrollView>` with each section's header, rows and footer as **flat siblings** |
-
-They exist, so RN source pastes in and runs. Reach for the primitives directly whenever you want
-control — that is what the wrapper is doing anyway.
-
-Three things differ from upstream, all of them forced by the engine rather than chosen:
-
-- **`<Button>` is two nodes, not three.** RN wraps the label in a `<View>` inside its touchable because
-  that touchable takes no style; `<Pressable>` here *is* a styled scene node, so the `<View>` is
-  dropped. At 44 nodes total on a CYD, a node per button is worth having.
-- **`<SectionList>` does not stick its headers.** Sticky headers need a scroll listener re-laying the
-  header out every frame — the per-event JS cost Flow A can least afford. Everything the `FlatList`
-  section above says about the node budget applies here too, plus a header and a footer per section.
-- **`<ImageBackground>`'s picture fills the container's *content* box.** Padding on the container insets
-  the image as well as the children.
-
-`<Button>` takes no `style` — that is upstream's design, and upstream's answer is the same as ours: use
-`<Pressable>` + `<Text>`. Props none of the three honour are named in a one-time `console.warn`, except
-the accessibility / TV-focus / `testID` ones, which are silently ignored so a component stays portable
-back to RN.
-
-**Flow A only, for now.** The AOT has no lowering for any of the three, so a Flow B build fails with
-`AOT: <Button> is not supported in Flow B yet` and the tree to write by hand instead. `<FlatList>`,
-which does compile in both flows, is the exception rather than the rule here.
-
----
-
-## `<TouchableOpacity>` dims on the native driver
-
-`<TouchableOpacity>` is a fourth JSX-over-primitives wrapper, but it is not in the table above because
-it costs no extra node, and it compiles in **both** flows. It is a `<Pressable>` whose `opacity` is bound
-to a press animation: touch-down snaps it to `activeOpacity` (RN's `0.2`), the lift fades it back over
-250 ms, and both ends run in C. The two press handlers hand the engine a target and a duration; nothing
-re-enters JS per frame, and the subtree React just built is not touched at all.
-
-Every `<Pressable>` prop works on it unchanged — the two are interchangeable, and the choice is only
-whether you want the dim. `disabled` is RN's: no press, and no feedback with it.
-
-The one prop it will not share is `opacity`. The press feedback owns that property, and a second writer
-does not blend with it — it races it. An animated `opacity` in the style is therefore ignored (with a
-one-time warning) in Flow A and rejected outright by the AOT, which would otherwise bind the same node
-property twice and let whichever changed last win the frame. RN drops it the same way; it just doesn't
-tell you. If you want to animate opacity yourself, use `<Pressable>` — the dim is only `onPressIn` /
-`onPressOut` driving an `Animated.Value`, which is the whole of `TouchableOpacity.js`. Animating any
-*other* property is fine, `transform` included.
-
-One thing to know before wrapping a screen in one: opacity below 1 makes the node an **opacity
-group**, so the engine composites its whole subtree through an off-screen strip for as long as the fade
-lasts. That is exactly what makes a label dim with its button — but it costs in proportion to the dimmed
-area, so dim the box that reads as the button, not the surrounding page.
-
-Flow B compiles the same source down to the same animated value and the same two handlers, so an AOT
-app gets the feedback with no JS on the device. Two things have to fold at build time there, because
-they decide what the generated C contains: `activeOpacity`, which is baked into the handler as a
-literal, and `disabled`, which decides whether the handlers and the binding are emitted at all — so
-neither can come from state. A `disabled` touchable still renders: it lowers to a plain `<Pressable>`
-with its children, layout and style intact, just without the press handlers and the dim. The AOT also
-rejects a state-driven `opacity` on one, since the press feedback owns that property and would overwrite
-it on the next touch.
-
----
-
-## Working examples
-
-The same demo JSX (`demos/thermostat`, `demos/watch-face`) runs across all four:
-
-| Example | Flow | Hardware | Backend |
+| Board | Flow | Status | Guide |
 |---|---|---|---|
-| [`examples/linux/`](examples/linux/README.md) | A (QuickJS) | desktop | `sdl` |
-| [`examples/esp32/esp32-s3/`](examples/esp32/esp32-s3/README.md) | A (QuickJS) | ESP32-S3 + Waveshare 7" RGB panel | `esp32-lcd` |
-| [`examples/linux-aot/`](examples/linux-aot) | B (AOT) | desktop | `sdl` |
-| [`examples/esp32/esp32-2432s028r/`](examples/esp32/esp32-2432s028r/README.md) | B (AOT) | ESP32-2432S028R "Cheap Yellow Display", **no PSRAM** | `esp32-spi-lcd` |
+| Waveshare ESP32-S3-Touch-LCD-7 (800×480 RGB) | A | Verified on hardware | [ESP32-S3](https://embedded-react.dev/guides/boards/esp32-s3) |
+| ESP32-2432S028R "Cheap Yellow Display" (no PSRAM, SPI) | B | Verified on hardware | [ESP32 CYD](https://embedded-react.dev/guides/boards/esp32-cyd) |
+| Waveshare RP2040-Touch-LCD-1.69 (240×280 SPI) | B | Verified on hardware | [RP2040](https://embedded-react.dev/guides/boards/rp2040) |
+| Linux / macOS / Windows desktop (SDL) | A and B | Working | [Linux](https://embedded-react.dev/guides/boards/linux) |
+| Browser (WebAssembly simulator) | A | Working | [Simulator](https://embedded-react.dev/getting-started/simulator) |
+| STM32H7 with SDRAM (Chrom-ART backend) | A | Running on hardware; public example planned | [STM32H7](https://embedded-react.dev/guides/boards/stm32h7) |
 
----
+## Documentation
 
-## Build & deploy to a device
-
-Shipping an app has **two halves**, meeting at a single generated artifact:
-
-1. **The app (front end)** — you write JSX and build it with the `embedded-react` CLI. This produces the
-   artifact and never touches your firmware.
-2. **The firmware (your C project)** — brings up the display and input and hands the artifact to the engine.
-   **How the artifact reaches the device is yours to decide** (flash partition, SD card, OTA, serial, or
-   compiled in) — the engine is transport-agnostic. The example projects show one wiring each.
-
-Pick the flow that fits your board; each command emits **only** the files for that flow:
-
-| | Flow A — runtime (QuickJS) | Flow B — AOT (compiled) |
-|---|---|---|
-| Build | `embedded-react build` | `embedded-react build --aot` |
-| Generates | `dist/app.erpkg` — one binary (bytecode + assets + CRC) | `dist/app.gen.c` + `.h` + `assets.generated.c` |
-| Firmware uses it by | loading it at runtime — `er_runtime_load_container(bytes, len)` | compiling the C into the firmware image |
-| Update the UI by | replacing `app.erpkg` — **no firmware rebuild** | recompile + reflash |
-| Needs | external RAM for the JS heap (PSRAM or SDRAM) | no JS engine — runs in internal RAM |
-| Reference wiring | [`examples/esp32/esp32-s3/`](examples/esp32/esp32-s3/README.md) | [`examples/esp32/esp32-2432s028r/`](examples/esp32/esp32-2432s028r/README.md) |
-
-The firmware side is small — provide the display backend (five callbacks) and a frame loop. See
-[`bridges/quickjs/README.md`](bridges/quickjs/README.md) for the portable `er_runtime` host core (Flow A),
-and the example READMEs above for end-to-end board wiring.
-
----
-
-## Repo layout
-
-A monorepo with one self-contained CMake/npm project per concern:
-
-```
-engine/      Pure C99 runtime — scene graph, layout, rendering, text, animation.
-             Runtime-agnostic; knows nothing about React. er_scene.h is a plain C ABI.
-
-backends/    Hardware adapters. One folder per rendering API / peripheral. A backend
-             implements five function pointers (fill_rect, copy_rect, blend_rect,
-             optional wait, optional frame_ready) — the rest of the stack is portable.
-
-bridges/     Frontends that drive the engine.
-               quickjs/        Flow A: React reconciler + NativeUI C bridge over QuickJS.
-               quickjs/js/aot/ Flow B: the JSX→C ahead-of-time compiler.
-               quickjs/js/     The npm package (`embedded-react`) — components + reconciler,
-                               bundler, asset bakers, and the `dev`/`export` CLI (cli.mjs).
-
-create-embedded-react/  The `npm create embedded-react` scaffolder + starter template.
-
-demos/       JSX demo apps (thermostat, watch-face) written against the public
-             `embedded-react` API. Each compiles through both Flow A and Flow B.
-
-examples/    End-to-end host integrations — one engine + one backend + one flow,
-             packaged for a specific board (linux, linux-aot, esp32-s3, esp32-2432s028r).
-
-tools/       Developer tooling — the SDL simulator (`simulator/`) and the WASM
-             simulator build + dev server (`web-sim/`).
-```
-
-Each top-level folder has its own README. Engine contributors start with
-[`engine/README.md`](engine/README.md); backend authors with
-[`backends/README.md`](backends/README.md); the Flow A / Flow B bridges with
-[`bridges/README.md`](bridges/README.md). What's planned and known-broken lives in
-[`ROADMAP.md`](ROADMAP.md); project-wide rules in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
----
-
-## Why a runtime-agnostic engine?
-
-`engine/` deliberately doesn't know about React. `er_scene.h` is a pure C ABI — anything that can call C functions can drive it. That layering is exactly what makes the two-flow design possible: Flow A drives the engine from a JS reconciler, Flow B drives it from generated C, and both share one renderer. It also leaves the door open to other frontends (Lua UI, JSON UI loaders, a visual editor that emits a scene-graph format) without forking the engine.
-
-That doesn't change the project's identity. **Embedded React is React Native for embedded MCUs.** React is the developer-facing model; the engine's neutrality is an implementation choice that keeps the two flows honest.
-
----
-
-## Toolchain
-
-From `bridges/quickjs/js/` (pick a demo via the build scripts):
-
-```
-npm run build      # Flow A: bundle JSX → QuickJS bytecode + baked assets
-npm run pack       # Flow A: pack an ERPK app container (bytecode + assets + CRC)
-npm run aot        # Flow B: compile JSX → app.gen.c / app.gen.h
-npm run sim        # SDL hot-reload simulator (file-watch, redbox, state preservation)
-npm run create     # scaffold a new in-repo demo (demos/<name>)
-npm test           # unit tests (vitest)
-npm run parity     # verify Flow A / Flow B render parity
-```
-
-The consumer-facing CLI lives in the npm package: `npx embedded-react dev` (hot reload), `npx
-embedded-react export` (static playground), and `npx embedded-react build [--aot]` (the device artifact —
-see [Build & deploy](#build--deploy-to-a-device)); `npm create embedded-react` scaffolds a fresh standalone
-project. To build the simulator `.wasm` locally, `node tools/web-sim/build.mjs` (needs the Emscripten SDK).
-Getting the built artifact onto the board is firmware-specific — the example projects show how.
-
----
+- [Introduction](https://embedded-react.dev/intro) — what it is and isn't
+- [Getting started](https://embedded-react.dev/getting-started) — install, the simulator, your first board
+- [Concepts](https://embedded-react.dev/concepts) — the two flows, the engine and backends, the rendering pipeline, layout, assets
+- [Guides](https://embedded-react.dev/guides) — per-board setup, hot reload, the AOT subset, performance, memory, the demo apps
+- [API reference](https://embedded-react.dev/api) — components, hooks, styles, `Animated`, the NativeUI bridge, the C engine
+- [Internals](https://embedded-react.dev/internals) — architecture, engine internals, writing a backend, testing, releasing, contributing
 
 ## Install
 
-**Start a new app** (scaffolds a project and opens the browser simulator with hot reload):
+Everything ships at one lockstep version (the same `vX.Y.Z` on every channel).
 
-```
-npm create embedded-react@latest my-app          # add -- --ts for a TypeScript starter
-cd my-app && npm install && npm run dev
-```
-
-Or **start from a demo** — the same apps in [`demos/`](demos/), ready to run and flash:
-
-```
-npm create embedded-react@latest my-app -- --template thermostat   # or watch-face; --list to see all
-```
-
-The whole project ships at **one lockstep version** across the channels below (all the same `vX.Y.Z`):
-
-**npm** — the JSX component API + reconciler (Flow A authoring), the Flow B AOT compiler, and the WASM
-simulator CLI (`npx embedded-react dev`):
+**npm** — the component API and reconciler (Flow A), the Flow B compiler, and the simulator CLI:
 
 ```
 npm install embedded-react
-```
-
-```jsx
-import { View, Text, Pressable, StyleSheet } from 'embedded-react';
 ```
 
 **CMake / FetchContent** — the C engine as a source (you add a backend and your app):
@@ -436,102 +108,46 @@ FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
 ```
 
-**ESP32 (ESP-IDF)** — pick a flow first; the flow decides how you pull the engine:
-
-|                | **Flow A** — interpreted (QuickJS)        | **Flow B** — AOT (compiled)                       |
-| -------------- | ----------------------------------------- | ------------------------------------------------- |
-| Runtime        | QuickJS interprets your JS on-device      | App compiled to C — no JS engine at runtime       |
-| RAM            | needs **PSRAM** (the JS heap)             | runs in **internal RAM** (no-PSRAM boards OK)     |
-| Deploy a UI    | upload `app.erpkg` to a config partition — **no reflash** | linked into the firmware (reflash to update) |
-| Pull the engine | **`FetchContent`** (engine + bridge + QuickJS) | **`idf.py add-dependency`** (registry) *or* `FetchContent` |
-| Step-by-step   | [examples/esp32/esp32-s3](examples/esp32/esp32-s3/README.md) | [examples/esp32/esp32-2432s028r](examples/esp32/esp32-2432s028r/README.md) |
-
-**Flow B** can use the engine as a managed component — the app is compiled C, so the engine is all it
-needs from us (`npx embedded-react build --aot` emits the C):
+**ESP-IDF** — Flow B needs only the engine, which is on the component registry; Flow A uses
+`FetchContent` (it also needs QuickJS, which is not an IDF component):
 
 ```
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.1"
 ```
 
-**Flow A** uses `FetchContent`, not the component registry: it additionally needs QuickJS, which is a
-plain CMake project (not an ESP-IDF component), so the registry's managed-dependency model can't pull it —
-`FetchContent` can. The [esp32-s3 example](examples/esp32/esp32-s3/README.md) is a copy-out-ready template.
-
-**PlatformIO** — the engine (Flow B) installs as a library:
+**PlatformIO** — the engine (Flow B) as a library:
 
 ```ini
 lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.14.1
 ```
 
-Flow A on PlatformIO is best-effort (add the bridge + QuickJS as extra git `lib_deps`); the ESP-IDF +
-`FetchContent` path above is the supported Flow A route.
+[Installation](https://embedded-react.dev/getting-started/installation) has the details for each.
 
-The engine is backend-agnostic — you provide the framebuffer flush (see `backends/` and the `examples/`
-for reference wiring). Tune the `ERUI_*` RAM/feature flags for your board (the defaults are desktop-sized).
-
----
-
-## Building the engine
-
-The root `CMakeLists.txt` builds **nothing** — it only hosts repo-wide `clang-format`
-targets. Each component is its own CMake project; configure whichever you're working on:
+## Repository layout
 
 ```
-# Engine + host tests
-cmake -S engine -B build -DBUILD_TESTING=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
+engine/                 Pure C99 runtime: scene graph, layout, rendering, text, animation.
+backends/               Hardware adapters, one folder per rendering API or peripheral.
+bridges/quickjs/        Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
+bridges/quickjs/js/     The npm package `embedded-react`: components, reconciler, bundler,
+                        asset bakers, the dev/export/build CLI, and the Flow B compiler (aot/).
+create-embedded-react/  The `npm create embedded-react` scaffolder and its templates.
+demos/                  The thermostat and watch-face demo apps; each builds through both flows.
+examples/               Board firmware projects: one engine + one backend + one flow per board.
+tools/                  The SDL simulator, the WebAssembly simulator build, the release scripts.
+website/                The documentation site.
 ```
 
-The engine compiles to a single static library, `embedded-react`. The bridge and the
-examples pull the engine in themselves via a relative `add_subdirectory`. For a board
-bring-up, configure the example directly (e.g. `examples/linux`, or an ESP-IDF build for
-the ESP32 targets) — see that example's README.
+Each folder's README says how to build what is in it and points at the relevant docs page.
+[Architecture](https://embedded-react.dev/internals/architecture) explains how the layers fit.
 
-A new board needs only a C99 compiler, `<math.h>`, and a writable framebuffer (RGB565,
-ARGB8888, or anything the backend converts to). No RTOS required — FreeRTOS, Zephyr, and
-bare-metal all work.
+## Contributing and releasing
 
----
-
-## Architecture and contributing
-
-The engine is intentionally small and self-contained — pure C99, no MCU SDK headers, no
-platform `#ifdef`s. For the internals (Yoga implementation, scratch-buffer model,
-premultiplied-ARGB pipeline, banded rendering, compile-time feature flags) read
-[`engine/README.md`](engine/README.md).
-
-Contributions are welcome on any layer: the engine, a backend, the Flow A bridge, or the
-Flow B AOT compiler. The engine invariants, documentation conventions, and code-style
-rules live in [`CONTRIBUTING.md`](CONTRIBUTING.md); what's planned and known-broken in
+Contributions are welcome on any layer. The rules are in
+[Contributing](https://embedded-react.dev/internals/contributing) (summarised in
+[`CONTRIBUTING.md`](CONTRIBUTING.md)), the release process in
+[Releasing](https://embedded-react.dev/internals/releasing), and what is planned or known-broken in
 [`ROADMAP.md`](ROADMAP.md).
-
----
-
-## Releasing
-
-Every artifact (npm, the engine source bundle, the ESP-IDF component, the PlatformIO library) shares one
-**lockstep** version, synced from the repo-root [`VERSION`](VERSION) file into `package.json`, `library.json`,
-`engine/idf_component.yml`, and `engine/include/er_version.h` (plus a `LICENSE`/`NOTICE` copy per package).
-
-To cut a release:
-
-```
-node tools/release.mjs 0.2.0     # bump VERSION + sync all manifests, commit "release: v0.2.0", tag v0.2.0
-git push --follow-tags           # the Release workflow gates (tag == VERSION) then publishes every channel
-```
-
-- `node tools/sync-version.mjs --check` (also run in CI) fails if any manifest drifts from `VERSION`; the
-  release gate additionally requires the **tag to equal `VERSION`**.
-- The Flow B AOT compiler stamps its version into the generated C and `_Static_assert`s it against the engine
-  header, so an app built against a mismatched engine fails at **compile time**, not on-device.
-- First-time setup (each publisher is gated, so enable channels incrementally):
-  - **npm** uses OIDC **Trusted Publishing** (no token) — configure the trusted publisher on npmjs.com (the
-    package's Settings → repo + `release.yml`), then set repo variable `PUBLISH_NPM=true`.
-  - **ESP-IDF / PlatformIO** use API tokens — add repo secrets `IDF_COMPONENT_API_TOKEN`,
-    `PLATFORMIO_AUTH_TOKEN`, and set the ESP namespace in [`.github/workflows/release.yml`](.github/workflows/release.yml).
-
----
 
 ## License
 

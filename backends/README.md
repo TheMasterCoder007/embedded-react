@@ -1,52 +1,24 @@
 # backends
 
-Reference implementations of the `EmbeddedRenderBackend` struct (five core function pointers:
-`fill_rect`, `copy_rect`, `blend_rect`, `wait`, `frame_ready` — plus optional extensions such as
-banded rendering and the `copy_rect_fmt` opaque native-format blit). The engine is portable;
-backends are not. Each folder is one rendering API or peripheral, not one chip — multiple
-chips can share a backend (any STM32 with DMA2D uses `dma2d/`; any board with no GPU
-falls back to `software/`).
+Reference implementations of `EmbeddedRenderBackend`: the five function pointers (`fill_rect`,
+`copy_rect`, `blend_rect`, `wait`, `frame_ready`) plus the optional extensions (banded rendering,
+the opaque `copy_rect_fmt` blit, multiple display buffers). The engine is portable; backends are
+not. Each folder is one rendering API or peripheral, not one chip.
 
-| Backend | Description | Status |
+**Docs:** [Engine and backends](https://embedded-react.dev/concepts/engine-and-backends) for the
+contract, [Writing a backend](https://embedded-react.dev/internals/writing-a-backend) for the
+conventions (including the inclusive/exclusive dirty-rectangle rule that bites most often).
+
+| Backend | Hardware | Status |
 |---|---|---|
-| `dma2d/` | STM32 DMA2D (Chrom-ART) hardware blitter — F4/F7/H7/U5, SDK-free | **Implemented** |
-| `esp32-lcd/` | ESP32-S3 LCD peripheral + PSRAM framebuffer, CPU blit | **Implemented** |
-| `esp32-spi-lcd/` | Lean SPI-LCD for no-PSRAM ESP32 (single internal-RAM fb, banded flush) | **Implemented** |
-| `pico-spi-lcd/` | Portable SPI-LCD for small MCUs (RP2040 — single RGB565 fb, dirty-rect flush) | **Implemented** |
-| `framebuffer/` | Generic Linux `/dev/fb0` blitter | Planned (README only) |
-| `opengl/` | OpenGL ES 2.0 — RPi, Android, anything with a GL context | Planned (README only) |
-| `sdl/` | SDL2 — desktop dev and host-side test target | **Implemented** |
-| `software/` | Pure CPU blit — works on any board with a writable framebuffer | Stub |
-| `web/` | WebGL/Canvas via WASM | Planned (README only) |
+| `dma2d/` | STM32 DMA2D (Chrom-ART) hardware blitter, F4/F7/H7/U5, SDK-free | Runs on hardware |
+| `esp32-lcd/` | ESP32-S3 `esp_lcd` RGB panels, framebuffer in PSRAM | Runs on hardware |
+| `esp32-spi-lcd/` | SPI panels on a no-PSRAM ESP32: banded RGB565 through internal RAM | Runs on hardware |
+| `pico-spi-lcd/` | SPI panels on the RP2040: one RGB565 framebuffer, dirty-rect flush | Runs on hardware |
+| `sdl/` | SDL2 window: the desktop host and the test target | Working |
+| `software/` | A CPU compositor into an ARGB8888 framebuffer; the reference compositor behind the browser simulator | Working |
+| `web/` | The WebAssembly present layer over `software/` | Working |
+| `framebuffer/` | Linux `/dev/fb0` | Planned |
+| `opengl/` | OpenGL ES 2.0 | Planned |
 
-## Writing a backend
-
-```c
-#include "native_renderer.h"
-
-static void fill (uint32_t argb, int x, int y, int w, int h, void *ctx) { /* ... */ }
-static void copy (const void *src, int stride, int x, int y, int w, int h, void *ctx) { /* ... */ }
-static void blend(const void *src, int stride, uint8_t alpha, int x, int y, int w, int h, void *ctx) { /* ... */ }
-static void wait_fn(void *ctx) { /* may be NULL for synchronous backends */ }
-static void on_frame(void *ctx) { embedded_renderer_tick(16); }
-
-void my_backend_init(void) {
-    static const EmbeddedRenderBackend b = { fill, copy, blend, wait_fn, on_frame, NULL };
-    embedded_renderer_set_backend(&b);
-}
-```
-
-That's it. The engine never includes any platform header — it only calls through the
-struct.
-
-### Dirty-rectangle convention
-
-A backend that accumulates a dirty box for its flush tracks it as **inclusive min corner, exclusive
-max corner** — the same convention as `ERRect` — and names the fields `dx0/dy0` and `dx_end/dy_end`
-so the convention is visible at every use. Empty is `dx_end <= dx0`.
-
-Backends are exactly where code gets copied from one board to the next, and an inclusive box lifted
-into an exclusive flush loop (or the reverse) leaves a one-pixel column of stale panel content — a
-defect that survives every review because both versions look right in isolation. Convert at the panel
-call instead: `esp_lcd_panel_draw_bitmap` takes exclusive bounds, an ST7789-style `set_window` takes
-inclusive ones.
+Each implemented backend's README has its C API and build integration.

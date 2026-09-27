@@ -1,126 +1,23 @@
 # thermostat
 
-A climate control built around a **240° arc dial** — a solid arc that fills from the bottom of the range
-up to the setpoint, with a radial handle riding its leading edge. Touch anywhere on
-the ring to set the target. **HEAT / COOL / AUTO / OFF** each carries their own accent, and AUTO splits the
-readout into a low/high pair with two handles and a warm→cool ramp between them. A settings sheet switches
-theme and units and sets the clock shown in the header.
+A climate control built around a 240° arc dial: touch anywhere on the ring to set the target, with
+HEAT / COOL / AUTO / OFF modes, a settings sheet for theme, units and the clock, and a 14-day weather
+panel. One component, three layouts chosen from the panel size, so one source flexes from a 1280×800
+tablet down to the 240×320 panel on a no-PSRAM ESP32. It exercises the native `<Dial>`, baked images,
+`<Modal>` and responsive layout.
 
-One component, three layouts, chosen from the panel size:
-
-| Layout  | When                            | Contents                            |
-| ------- | ------------------------------- | ----------------------------------- |
-| `split` | ≥ 760 px wide and landscape     | dial + 14-day weather, side by side |
-| `stack` | ≥ 600 px tall and ≥ 330 px wide | the two cards stacked               |
-| `solo`  | anything smaller (e.g. 240×320) | the dial alone                      |
-
-`solo` further adapts to the panel's shape: portrait puts the mode buttons in a row under the dial,
-landscape (a rotated 240×320, or 480×320) puts them in a column beside it — height is the scarce axis
-there, and a button row would spend it. Both fold at compile time, so an AOT build still emits one layout.
-
-Every dimension derives from the host-injected `screen` global, so one source flexes from a 1280×800 wall
-tablet down to the 240×320 panel on a no-PSRAM ESP32.
-
-It exercises four engine features: the native **`<Dial>`** arc widget (a two-setpoint band with built-in
-drag-to-set and a conic gradient), **baked images** (the weather icons — imported PNGs, baked at build
-time), a **`<Modal>`** settings sheet, and the **responsive layout**.
-
-This is a complete `embedded-react` app — the same JSX you'd write as a downstream user. It imports from
-`react` (hooks) and `'embedded-react'` (everything else), exactly like a React Native screen.
-
-## Start from this demo
-
-Scaffold your own copy with the toolchain — no repo checkout required:
+**Docs:** [The demo apps](https://embedded-react.dev/guides/demos#thermostat) explains how it is put
+together and where the two flows differ.
 
 ```bash
-npm create embedded-react@latest my-thermostat -- --template thermostat
-cd my-thermostat
+npm create embedded-react@latest my-thermostat -- --template thermostat   # start from this demo
+
 npm install
-npm run dev          # WASM simulator with hot reload → http://localhost:3333
+npm run dev          # the browser simulator with hot reload → http://localhost:3333
+npm run dev:device   # hot reload on a board over USB
+npm run build        # Flow A → dist/app.erpkg
+npm run build:aot    # Flow B → app.gen.c, baked at 240×320
 ```
 
-## Develop
-
-```bash
-npm install
-npm run dev          # WASM simulator with hot reload → http://localhost:3333
-npm run dev:device   # hot-reload on a real board over USB (pass -- <port> for non-ESP32 boards)
-```
-
-Edit `App.jsx` and save — the simulator hot-reloads and your `useState` is preserved. The browser's device
-toolbar drives the panel size (e.g., 1280×800, 480×800, or 240×320), pixel-accurate to a real display.
-
-Run `npm run dev` **from this folder**. The dev server scopes its `useState`→persist transform to the
-project root, so starting it from the repo root would rewrite the library's own hooks too.
-
-## Build for a device
-
-```bash
-npm run build        # Flow A → dist/app.erpkg   (QuickJS bytecode + baked assets; PSRAM-class chips)
-npm run build:aot    # Flow B → app.gen.c        (compiled to C; no-PSRAM boards, baked at 240×320)
-```
-
-Flow A uploads `app.erpkg` to the device's config region (no reflash); Flow B compiles into firmware. See
-the [embedded-react repo](https://github.com/TheMasterCoder007/embedded-react) for board wiring and the
-on-device examples.
-
-## How it is put together
-
-- **`App.jsx`** picks the layout, owns the model, and contains the whole `solo` branch inline. COOL and
-  HEAT each keep their own setpoint, so switching between them restores what you last set; AUTO has its
-  own low/high pair, held 4 °F apart by pushing the far end along rather than blocking.
-- **`components/dial.jsx`** is the Flow A dial: one native `<Dial>` node (`ER_NODE_ARC`). The engine owns
-  the whole drag — it tracks the finger, quantizes to `step`, and in AUTO latches whichever setpoint the
-  gesture started nearest and keeps the pair 4 °F apart by carrying the far one along — and repaints only the sliver the band swept
-  plus the knob's old and new spots. AUTO's amber→cool blend is a conic gradient anchored to the band, so
-  it always ramps across exactly what is lit. The only thing still done imperatively here is the center
-  number (`updateText`), so a move costs no React work at all; state is committed once, on release.
-- **`components/weather.jsx`** is the current conditions plus a scrolling 14-day outlook, each row a baked
-  `<Image>` icon and a hi/lo range bar. Static, so it never re-renders during a drag.
-- **`components/clock.jsx`** is the header clock and the settings sheet's clock setter (Flow A only). The
-  time is an offset on top of `Date.now()`. Set by hand, `Date.now()` counts from boot and a power cycle
-  loses the setting; on an ESP32-S3 built with WiFi the clock sets itself from the network (see
-  [that example's README](../../examples/esp32/esp32-s3/README.md#wifi)).
-  `components/calendar.js` does the date math, since the runtime has `Date.now()` but no `Date` objects.
-- **`components/network.jsx`** is the settings sheet's WI-FI and TIME ZONE pages (Flow A only): scan, pick
-  a network, type its password on the on-screen keyboard, pick a time zone. They drive the host's
-  `__erWifi` and `__erClock`, so they appear only where a host provides them (the ESP32-S3 WiFi build),
-  and the sheet widens to two columns to fit them.
-
-### Where the two flows differ
-
-`split` and `stack` run the real JS engine (Flow A). `solo` compiles ahead of time to C for boards with no
-JS runtime (Flow B), which constrains it to the AOT subset. That branch is therefore deliberately simpler:
-
-- The settings sheet offers **units only**. A live theme switch would require every color in the tree to
-  be a ternary of literals, so the theme is baked at build time, and this branch is dark-only.
-- AUTO's pair renders as one `<Text>` (`59°-76°`) rather than two tappable numbers. The AOT lowers a
-  `<Text>`'s children to a single `snprintf`, so that is one node against four — and the branch has
-  little node headroom (40 of 44 on the CYD). Which end the steppers move is set by the last drag
-  instead of by tapping a number.
-- The dial's center readout is state-driven rather than imperative: a drag re-renders that `<Text>`
-  instead of calling `updateText`. The DRAG itself is native in both flows, so neither re-renders to move
-  the band.
-
-The dial, its two-setpoint band, and AUTO's conic gradient are _not_ differences — `<Dial>` lowers to the
-same `ER_NODE_ARC` node in both flows.
-
-A few constraints that are worth knowing if you edit this demo:
-
-- Module constants in the `solo` path must fold with `+ - * /` and `?:` only — the AOT's static evaluator
-  has no `Math.min/max/floor`.
-- The center readout is bounded on both axes so it stays inside the ring's hole. The engine's ring-only
-  hit test walks up from whatever the finger landed on, so content parked in the hole is inert while the
-  surrounding ring still drags — but content reaching ACROSS the band takes the ring's own touches back.
-- Text can only use glyphs the built-in font bakes (printable ASCII plus a fixed symbol set), which is why
-  the close button is `×` and the status separator is `•`.
-
-## Assets
-
-`assets/` holds the weather-icon PNGs and the settings cog. `App.jsx` and `components/weather.jsx` import
-them (`import wxSun from './assets/wx_sun.png'`) and the build bakes each into the app artifact
-(premultiplied ARGB8888, flash-resident, registered at boot) — no separate step, no committed generated
-files. Drop a new PNG in `assets/`, import it, and rebuild.
-
-The icons are raster, so one set serves both themes; their gray is the midpoint of the design's dark and
-light cloud colors rather than either one.
+Run `npm run dev` from this folder, not the repository root. `assets/` holds the weather icons and the
+settings cog; import a new PNG and it is baked automatically.

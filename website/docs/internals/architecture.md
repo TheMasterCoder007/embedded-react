@@ -95,8 +95,8 @@ tracking, render orchestration, hit-testing), `layout/` (the Yoga-compatible sol
 line layout), `animation/` (values, curves, the native driver), `resources/` (fonts, images), and
 `core/` (backend glue, the clock, the frame tick). `include/er_scene.h` and `native_renderer.h` are
 the only headers downstream code includes. [Engine and backends](../concepts/engine-and-backends.md)
-and the [C engine](../api/c-engine.md) reference cover it from the outside; `engine/README.md`
-covers the internals.
+and the [C engine](../api/c-engine.md) reference cover it from the outside;
+[Engine internals](./engine-internals.md) covers the inside.
 
 **The backends** (`backends/`) each implement `EmbeddedRenderBackend` for one API: `esp32-lcd`
 (RGB parallel, PSRAM framebuffer), `esp32-spi-lcd` (banded RGB565), `pico-spi-lcd` (RP2040, one
@@ -118,3 +118,24 @@ commit in detail; the [Performance](../guides/performance.md) guide shows how to
 
 For a Flow B frame, the JavaScript half does not exist: an event handler is a C function that writes
 state and props, and the host's `er_commit()` does the rest.
+
+## Building the pieces
+
+Each folder is its own project, and the bridge and the examples pull the engine in themselves with a
+relative `add_subdirectory`; nothing is installed.
+
+| Piece                 | Command                                                                                    | Notes                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Engine and its tests  | `cmake -S engine -B build -DBUILD_TESTING=ON && cmake --build build`                       | A static library, `embedded-react`; `ctest --test-dir build` runs the suites                                                                                 |
+| QuickJS bridge        | `cmake -S bridges/quickjs -B bridges/quickjs/build && cmake --build bridges/quickjs/build` | Also builds `er-bridge-quickjs-runtest` (the headless test harness) and `er-bridge-quickjs-compile` (the bytecode precompiler `npm run pack` needs)          |
+| The npm package       | `cd bridges/quickjs/js && npm install`                                                     | `npm run pack -- <demo>`, `npm run aot -- <demo>`, `npm run sim -- <demo>`, `npm test`, `npm run parity`; the `-- <demo>` names a folder in `demos/`         |
+| Desktop hosts         | `cmake -S examples/linux -B examples/linux/build` (and `examples/linux-aot`)               | [Linux](../guides/boards/linux.md)                                                                                                                           |
+| SDL simulator         | `cmake -S tools/simulator -B tools/simulator/build && cmake --build tools/simulator/build` | Then `npm run sim -- <demo>` from the npm package launches it with a watch loop                                                                              |
+| WebAssembly simulator | `node tools/web-sim/build.mjs`                                                             | Needs the Emscripten SDK (`emcc` on PATH); writes the wasm and stages it into the package's `sim/`. `node tools/web-sim/dev.mjs [demo]` is the repo dev loop |
+| Board examples        | `idf.py build flash`, the Pico SDK's CMake                                                 | One [guide](../guides/index.md#boards) per board                                                                                                             |
+| This site             | `cd website && npm install && npm start`                                                   | `npm run build` for the static site; the changelog and roadmap pages are generated from the repo-root files on every start and build                         |
+
+The bytecode precompiler is not the Flow B compiler: it turns a Flow A bundle into QuickJS bytecode
+that the VM still runs, while the Flow B compiler in `bridges/quickjs/js/aot/` emits C and drops
+QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
+someone changing the engine or the bridge needs Emscripten.

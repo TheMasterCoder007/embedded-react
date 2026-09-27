@@ -87,11 +87,46 @@ Below `er_runtime`, for a host that drives QuickJS itself, the bridge exposes
 `er_bridge_install(ctx)`, `er_bridge_pump(ctx)`, `er_bridge_run_bytecode(ctx, buf, len)`,
 `er_bridge_now_ms()` and `er_bridge_release_runtime()`.
 
+## The lite JavaScript profile
+
+The runtime creates its context with only the intrinsics React needs: base objects, `RegExp`,
+`JSON`, `Map`/`Set`, `Promise`, plus `performance.now()` and `Date.now()` on the engine clock. The
+same set runs on the device, the desktop, the simulator and the test harnesses, so development and
+hardware expose one JavaScript surface. `Date.now()` counts from boot until the host passes the real
+time to `er_runtime_set_wall_clock()`, from an RTC or an SNTP sync. Extras (full `Date` objects,
+`Proxy`, typed arrays, `WeakRef`, `BigInt`) are opt-in per host through
+`ErRuntimeConfig.extra_intrinsics`.
+
+Firmware that only runs precompiled bytecode can drop the JavaScript parser with
+`-DER_BRIDGE_QUICKJS_LITE=ON`, about 60 KB of flash; the error overlay still works there.
+
 ## Heap accounting
 
-The bridge never uses QuickJS's default allocator. QuickJS decides when to collect garbage from what
-`js_malloc_usable_size` reports, and its default returns 0 on bare-metal and Emscripten targets,
-which silently disables collection. With `malloc_functions` left `NULL` the bridge installs an
-allocator that reports real sizes (a size-prefix allocator on bare metal). The
-[bridge README](https://github.com/TheMasterCoder007/embedded-react/blob/master/bridges/quickjs/README.md)
-covers this and the external-RAM tuning in depth.
+QuickJS decides when to collect garbage, and enforces `memory_limit`, from what
+`js_malloc_usable_size()` reports for each allocation, and its default returns **0 on bare metal and
+Emscripten**. A zero there means the collector never runs and garbage accumulates until the heap is
+exhausted, which looks exactly like a leak. So with `malloc_functions` left `NULL` the bridge installs
+its own allocator, which reports real sizes everywhere (a size-prefix allocator on bare metal).
+
+If you supply your own `malloc_functions`, to put the heap in PSRAM or SDRAM as the ESP32-S3 example
+does, its `js_malloc_usable_size` **must** return the real block size
+(`heap_caps_get_allocated_size`, `tlsf_block_size`, `malloc_usable_size`). `er_runtime_init` warns
+at boot if it does not, and `er_runtime_gc_accounting_ok()` reports it to firmware.
+
+## Hosts with external RAM
+
+Two settings matter once the JavaScript heap is in PSRAM or SDRAM.
+
+**`gc_threshold`** sets a floor under QuickJS's GC trigger. QuickJS recomputes that trigger to 1.5×
+the live set after every collection, so a small app in a multi-megabyte arena mark-sweeps far more
+often than it needs to, walking the object graph over a slow bus each time; a floor cut 18% off a
+measured workload on the ESP32-S3. Keep it well under `memory_limit` (`er_runtime_init` warns
+otherwise). `er_runtime_run_gc()` collects on demand if you would rather put the pause at a screen
+change or an idle frame. (A tiered allocator that placed hot objects in internal RAM was measured at
+about 2% and is not offered; the schedule is the lever, not placement.)
+
+**`max_stack_size`.** QuickJS has no stack of its own: every JavaScript call frame lives on the C
+stack of the task that calls into it. Keep that task's stack in internal RAM (the ESP32-S3 example
+sizes the main task with `CONFIG_ESP_MAIN_TASK_STACK_SIZE`; an STM32's default linker script already
+puts it in DTCM) and set `max_stack_size` below its real size, so deep recursion raises a JavaScript
+stack-overflow error rather than running off the end.

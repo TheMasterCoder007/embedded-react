@@ -32,7 +32,7 @@ touch stream, which stops a `ScrollView` ancestor auto-scrolling under it. Most 
 
 ## View
 
-The building block: a box with flexbox layout, background, borders, shadow and transform.
+The building block: a box with flexbox layout, background, borders, shadow, and transform.
 
 ```jsx
 <View
@@ -102,10 +102,13 @@ A `Pressable` that dims while held. Every `Pressable` prop works unchanged.
 | --------------- | -------- | --------------------------------------- |
 | `activeOpacity` | `number` | Opacity while held, 0 to 1. Default 0.2 |
 
-The fade runs on the native driver, so it costs no re-render. It owns the node's `opacity`: an
+The fade runs on the native driver, so it costs no re-render. It owns the node's `opacity`: 
 animated opacity in `style` is ignored here (and rejected by the AOT); animate opacity yourself with
-a `Pressable` instead. A dimmed node composites its whole subtree offscreen, so dim the box that
-reads as the button rather than the surrounding screen.
+a `Pressable` instead. Any other property, `transform` included, is fine. A dimmed node composites
+its whole subtree offscreen, so dim the box that reads as the button rather than the surrounding
+screen.
+
+**Flow B:** `activeOpacity` and `disabled` must be literals, not state.
 
 ## ScrollView
 
@@ -137,13 +140,44 @@ stays mounted.
 | `keyExtractor` | `(item, index) => string \| number` |       |
 | `style`        | style                               |       |
 
-Those four are the only props either flow honours; the AOT rejects any other at compile time. For
-headers, footers, separators or `onEndReached`, use a `ScrollView` with `.map` directly.
+Both flows perform the same rewrite:
+
+```jsx
+<FlatList data={items} keyExtractor={it => it.id} renderItem={({item}) => <Row item={item} />} />
+// renders the same tree as
+<ScrollView>
+  {items.map(item => <Row key={item.id} item={item} />)}
+</ScrollView>
+```
+
+Write `renderItem` as `({item, index}) => …`; the AOT reads that destructuring literally. Those four
+are the only props either flow honours: `horizontal`, `numColumns`, `onEndReached`,
+`ListHeaderComponent`, `ItemSeparatorComponent` and the other virtualisation knobs have no meaning
+here, so the AOT rejects them, Flow A warns once and ignores them, and the types reject them. For
+headers, footers, or separators use a `ScrollView` with `.map` directly.
+
+**Every row mounts and stays mounted**, and each row's nodes come out of a fixed pool
+(`ERUI_MAX_NODES`) that is small on the boards that need lists most:
+
+| Config                 | `ERUI_MAX_NODES` |
+| ---------------------- | ---------------- |
+| Engine default         | 512              |
+| ESP32-S3 (800×480)     | 512              |
+| ESP32 CYD              | 44               |
+| RP2040-Touch-LCD 1.69" | 48               |
+| Simulator              | 4096             |
+
+Overflow is silent: rows past the cap never appear. A 40-row list of 3-node rows needs 120 slots
+before the rest of the UI, more than the two MCU boards above have in total. For a long list,
+paginate it, render a fixed window against a scroll offset you own, or split it across screens.
+Virtualization is a deliberate non-goal: it would cost a React commit on every scroll frame, and
+these panels show a few dozen rows, not thousands.
 
 ## SectionList
 
-Also a `ScrollView` alias: no virtualisation, no sticky headers. Headers, rows and footers are flat
-siblings, as in React Native.
+Also a `ScrollView` alias: no virtualisation, no sticky headers. Headers, rows, and footers are flat
+siblings, as in React Native, so the `FlatList` node budget applies plus a header and a footer per
+section.
 
 | Prop                                         | Type                                                   | Notes                                                                                                                           |
 | -------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -157,8 +191,8 @@ siblings, as in React Native.
 
 ## Button
 
-React Native's pre-styled button: a `Pressable` around one centred `Text`. It takes no `style`, as
-upstream; build the `Pressable` and `Text` yourself when you need one.
+React Native's pre-styled button: a `Pressable` around one centred `Text`, two nodes. It takes no
+`style`, as upstream; build the `Pressable` and `Text` yourself when you need one.
 
 | Prop       | Type          | Notes                                   |
 | ---------- | ------------- | --------------------------------------- |
@@ -167,7 +201,12 @@ upstream; build the `Pressable` and `Text` yourself when you need one.
 | `color`    | colour        | Fill colour, replacing the default blue |
 | `disabled` | `boolean`     | Greys it out and detaches `onPress`     |
 
-Accessibility, TV-focus and `testID` props are accepted and ignored. **Flow A only** for now.
+Accessibility, TV-focus, and `testID` props are accepted and ignored. **Flow A only** for now.
+
+`Button`, `ImageBackground` and `SectionList` are JavaScript over the primitives, as in React Native,
+so they add no engine node type. They exist, so a React Native source pastes in and runs; reach for the
+primitives directly when you want control. The AOT has no lowering for them yet and says which tree
+to write instead.
 
 ## ImageBackground
 
@@ -247,7 +286,7 @@ than centred on screen. The AOT honours the same style. **Flow B:** `visible` is
 
 ## Dial
 
-The engine's native arc widget: dials, gauges and progress rings as one node, drawn analytically,
+The engine's native arc widget: dials, gauges, and progress rings as one node, drawn analytically,
 animated natively, with built-in drag-to-set.
 
 ```jsx
@@ -345,9 +384,40 @@ Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECT
 children; a state-driven `<Path d>` is not supported, and `visible` on an `<Svg>` is rejected (wrap
 it in a `View`).
 
+## Intentionally absent React Native APIs
+
+A microcontroller has no operating system: no app switcher, no system chrome, no browser, no
+settings service, no other app to hand anything to. The React Native modules that wrap those services
+have nothing to wrap here, so Embedded React does not ship them. **Their absence is a decision, not
+missing work**, and it will not change. Reaching for one fails at build time (`No matching export …
+for import "StatusBar"` in Flow A, `AOT: unknown element <StatusBar>` in Flow B) rather than silently
+doing nothing on the device.
+
+| React Native API                                                       | Why it does not apply on an MCU                                                        | Instead                                                                                           |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `StatusBar`                                                            | There is no OS status bar; your app owns every pixel from boot                         | Draw your own header `<View>`                                                                     |
+| `SafeAreaView`, safe-area insets                                       | No notch, no home indicator, no system overlay: the whole framebuffer is the safe area | `<View style={{flex: 1}}>`, plus `padding` for a physical bezel                                   |
+| `AppState`                                                             | Nothing to background _to_; the app is the firmware and runs from boot to power-off    | Sleep, wake and dim are firmware decisions in your host loop                                      |
+| `Appearance`, `useColorScheme`                                         | No OS light/dark setting to read                                                       | Own the theme in app state and pass it down                                                       |
+| `Linking`                                                              | No URL handler, no browser, no second app to deep-link into                            |                                                                                                   |
+| `AccessibilityInfo`, `accessibility*` props                            | No assistive-technology service on the device                                          |                                                                                                   |
+| `Alert`                                                                | No OS dialog service                                                                   | `<Modal>`, a real engine node you style yourself                                                  |
+| `Dimensions`, `useWindowDimensions`                                    | The panel cannot resize or rotate; its size is fixed and known at build time           | The [`screen` global](./hooks.md#the-screen-global)                                               |
+| `Vibration`, `Share`, `Clipboard`, `PermissionsAndroid`, `BackHandler` | Phone and OS services with no embedded counterpart                                     | Drive the hardware (a haptic motor, buttons) from firmware                                        |
+| `NativeModules`, Turbo Modules                                         | No OS module registry; the firmware already _is_ the native side                       | Flow B: [`useHostValue`](./hooks.md#usehostvalue). Flow A: `ErRuntimeConfig.install_host_globals` |
+| `fetch`, `XMLHttpRequest`, `WebSocket`                                 | QuickJS ships no networking, and there is no socket stack underneath it                | Do the I/O in firmware (Wi-Fi, BLE) and feed values into the UI                                   |
+
+Two related notes:
+
+- **`Platform.OS` is `'embedded'`.** There is no `'ios'` or `'android'` branch to take; write
+  `Platform.select({embedded: …, default: …})`.
+- **Absent-but-planned is a different list.** Gaps that will close (backends, AOT subset limits,
+  open API decisions) are in the [roadmap](/roadmap); the permanent scope calls live in its
+  non-goals section.
+
 ## PanResponder
 
-Recognises drags, swipes and flings through the engine's responder system. Create it once per
+Recognizes drags, swipes, and flings through the engine's responder system. Create it once per
 component and keep it in a ref; re-creating it per render loses the drag.
 
 ```jsx

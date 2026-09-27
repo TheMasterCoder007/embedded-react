@@ -23,6 +23,10 @@ See the README for the release process.
 - A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
   every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
 
+- The READMEs are now short pointers to the site, which is the one source of truth; the material they held (the
+  engine internals, the bridge's external-RAM notes, the boards' WiFi and backend detail, the demo write-ups)
+  moved there.
+
 ## [0.14.1] - 2026-09-21
 ### Added
 
