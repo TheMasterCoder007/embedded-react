@@ -40,7 +40,7 @@
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
     "@types/react": "^19.0.0",
-    "embedded-react": "0.14.1",
+    "embedded-react": "0.15.0",
     "esbuild": "0.28.2",
     "typescript": "~6.0.2"
   },
