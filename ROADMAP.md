@@ -7,8 +7,9 @@ longer-term vision.
 
 It is intentionally honest. If something here looks unfinished, it is — the engine,
 both flows, the backends that run on hardware, and the simulators all work today, but
-this is a beta. From here on the work is fixes and feature additions, not
-re-architecture.
+this is a beta. Flow B is being rebuilt around loadable packages (see
+[Flow B](#flow-b--compiled-loadable-packages)); everything else is fixes and feature
+additions.
 
 ---
 
@@ -74,13 +75,47 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
   exists for this future case; the JS-facing API does not.
 - **SDL keyboard → input.** Mouse is forwarded as touch; hardware keyboard feed into the
   engine is still TODO (needed for `TextInput` on the desktop host).
+- **Red error screen.** An uncaught JS exception shows the same error screen as a Flow B
+  fault, with the message and stack, instead of failing silently.
 
-### Flow B — AOT JSX→C (compile-time)
+### Flow B — compiled, loadable packages
 
-- **`Button` / `ImageBackground` / `SectionList` lowering.** The three JS-only RN wrappers
-  render in Flow A; the AOT rejects them by name with the tree to write by hand. The first
-  two are fixed rewrites like `emitFlatList`; a section is a header *plus* a variable-length
-  `.map`, which is the part the unroller has no shape for.
+Flow B will stop generating C that is compiled into the firmware. The compiler will
+produce a package in the same `.erpkg` container Flow A uses, and a fixed Flow B runtime
+in the firmware checks and runs it. There is no JS engine and no heap, and changing the
+UI needs no firmware rebuild. Tracked under the
+[`flow-b`](https://github.com/TheMasterCoder007/embedded-react/labels/flow-b) label.
+
+- **One firmware for every panel.** A package holds every screen size the project
+  declares. The firmware passes the panel size at boot and the package picks its layout.
+  The build compiles every declared size, so a layout that fails on one panel fails the
+  build.
+- **Fixed memory.** The firmware reserves one block of RAM, and the package states exactly
+  how much it needs. The program, text, vector data, and assets are read in place from
+  flash. A package that does not fit shows the error screen instead of loading.
+- **Nothing in a package can crash the device.** The runtime checks the whole package
+  before it runs: every offset and index in range, every jump valid, every native import
+  matched by signature. While running, node references are checked handles, handlers have
+  an instruction budget, and every fixed limit reports overflow. Any failure stops the app
+  and shows a red error screen with the reason and the source location.
+- **On-device hot reload** over the Flow A reload transport. The new package is checked
+  in a staging slot before the swap, and the last good package is kept for rollback.
+- **Parity with Flow A** through bounded, native versions of what Flow B lacks:
+  conditionals that mount and unmount, full list and string operations, structs,
+  `useReducer`, `useContext`, custom hooks, and `Button` / `ImageBackground` /
+  `SectionList`.
+- **Native modules** for work outside the UI (network, sensors, storage). A typed
+  TypeScript interface is implemented in C by the firmware, and the same interface works
+  in Flow A.
+
+Order: restructure the compiler (split `aot/compile.mjs`, then add a typed intermediate
+representation), then build the runtime and the package output, then multi-panel packages
+and hot reload, then parity. The current C output keeps working until the package path
+passes the same tests, and is then retired. Boards with no spare flash partition link the
+package into the firmware instead.
+
+Carried over from the C output:
+
 - Resolve the live-vs-snapshot `toValue` gap (see Known issues).
 - Imperative refs / `Animated` sequence / parallel / loop / interpolate hardening on the
   no-PSRAM hardware path.
