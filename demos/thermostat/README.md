@@ -11,6 +11,7 @@ together and where the two flows differ.
 
 ```bash
 npm create embedded-react@latest my-thermostat -- --template thermostat   # start from this demo
+cd my-thermostat
 
 npm install
 npm run dev          # the browser simulator with hot reload → http://localhost:3333

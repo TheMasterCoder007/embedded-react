@@ -82,7 +82,7 @@ no reconciler. The component tree, the `useState` state machine, event handlers 
 all resolved at compile time.
 
 ```text
-JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c + app.gen.h + assets.generated.c
+JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c/.h + assets.generated.c/.h
                                                                    ↓
                                                     compiled into the firmware
                                                                    ↓

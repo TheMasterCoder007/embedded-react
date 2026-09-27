@@ -37,7 +37,7 @@ website/                This site.
 ## The boundary
 
 One line runs through the whole design: **the engine does not know who is calling it.**
-`er_scene.h` is a C API for creating nodes, setting props, arranging a tree and committing a frame.
+`er_scene.h` is a C API for creating nodes, setting props, arranging a tree, and committing a frame.
 The engine never imports React, never sees JSX, never includes a platform header. That neutrality
 is not a stylistic preference; it is what makes the two flows possible.
 
@@ -87,13 +87,14 @@ pack. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
 app's JSX with Babel, folds module-level constants (including the `screen` size), and emits
 `app.gen.c`: node construction, a `useState` state machine, handlers as C functions, animations as
 engine calls, `PanResponder` configs as responder registrations. It rejects anything it cannot lower,
-by message, at build time. `screenshot-smoke.mjs` renders the result for the parity harness.
+by message, at build time. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds
+the AOT desktop host, and checks that one rendered frame has content.
 
-**The engine** (`engine/`) is organised by what it does: `scene/` (node pool, tree, props, dirty
+**The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty
 tracking, render orchestration, hit-testing), `layout/` (the Yoga-compatible solver), `rendering/`
 (rounded rectangles, shadows, transforms, images, vectors, the arc widget), `text/` (UTF-8, glyphs,
-line layout), `animation/` (values, curves, the native driver), `resources/` (fonts, images), and
-`core/` (backend glue, the clock, the frame tick). `include/er_scene.h` and `native_renderer.h` are
+line layout), `animation/` (values, curves, the native driver), `font/` (the built-in fonts and the font
+registry), and `core/` (backend glue, the clock, the frame tick). `include/er_scene.h` and `native_renderer.h` are
 the only headers downstream code includes. [Engine and backends](../concepts/engine-and-backends.md)
 and the [C engine](../api/c-engine.md) reference cover it from the outside;
 [Engine internals](./engine-internals.md) covers the inside.

@@ -13,16 +13,20 @@ import {CREATE_COMMAND} from '../content';
 import styles from './Hero.module.css';
 
 // DevicePreview draws this app's output; keep the two in step.
-const sample = `import {View, Text, Pressable} from 'embedded-react';
+const sample = `import {useState} from 'react';
+import {View, Text, Pressable} from 'embedded-react';
 
-export default function App() {
+export function App() {
+  const [taps, setTaps] = useState(0);
   return (
     <View style={{flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
       <Text style={{color: '#fff', fontSize: 24}}>
         Hello from an ESP32.
       </Text>
-      <Pressable onPress={() => console.log('tapped')}>
-        <Text style={{color: '#e94560', marginTop: 12}}>Tap me</Text>
+      <Pressable onPress={() => setTaps(taps + 1)}>
+        <Text style={{color: '#e94560', marginTop: 12}}>
+          Tapped {taps} times
+        </Text>
       </Pressable>
     </View>
   );
@@ -51,7 +55,7 @@ export default function Hero(): ReactNode {
         </div>
         {/* The code, with the device it produces overlapping its corner. */}
         <div className={styles.visual}>
-          <CodeWindow title="src/App.jsx" code={sample} />
+          <CodeWindow title="App.jsx" code={sample} />
           <DevicePreview className={styles.device} />
         </div>
       </div>

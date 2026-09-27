@@ -114,9 +114,10 @@ selects USB. If you adapt the example to a board with the same expander, keep th
 `backends/esp32-lcd` does the fills, copies and blends on the CPU (on the S3's SIMD unit for the
 blend loops) and lets the LCD peripheral DMA the framebuffer out; the host calls
 `er_esp32_lcd_present()` after each `er_commit()`. With an unrotated RGB565 panel that exposes two or
-three framebuffers it composites straight into them (the default, `ER_LCD_DIRECT`); three
-framebuffers means a frame never waits on the display. A rotated panel or an ARGB8888 build goes
-through a separate canonical framebuffer instead, copied to the panel on present.
+three framebuffers it can composite straight into them (`ER_LCD_DIRECT`); three framebuffers means
+a frame never waits on the display. This example asks the panel for one framebuffer, so it takes the
+copy path: the engine draws into a separate canonical framebuffer that is copied to the panel on
+present. A rotated panel or an ARGB8888 build always takes the copy path.
 
 ## Adapting the example to another board
 
@@ -138,12 +139,13 @@ pixels through an `esp_lcd` panel handle.
   `board.c`. A shifted or rolling image means porch or clock; swapped red and blue means byte order.
 - **The CH422G expander** drives the backlight, LCD-reset, and touch-reset lines from `board.c`. If
   the backlight stays off, the config byte and output mask there are what to check.
-- **The GT911** shares the panel's I²C bus. The reset sequence latches address `0x5D`, and point
-  coordinates are read from register `0x8150`; taps in the wrong place usually mean an axis swap.
-- **Task stack.** QuickJS and the reconciler recurse deeply; the main task stack is 64 KB and the
+- **The GT911** shares the panel's I²C bus; taps in the wrong place usually mean an axis swap.
+- **Task stack.** QuickJS and the reconciler recurse deeply; the main task stack is 64 KB, and the
   JavaScript stack limit is set to three quarters of it. A JS "stack overflow" or a FreeRTOS stack
   panic means raise it.
-- **PSRAM mode.** The defaults assume octal PSRAM at 80 MHz. A quad-PSRAM board needs
+- **PSRAM and flash speed.** The defaults run octal PSRAM and flash at 120 MHz, an experimental
+  IDF feature that dual-core rendering needs. Flash above 80 MHz depends on the flash chip, so on
+  another board drop both to 80 MHz if it fails to boot. A quad-PSRAM board needs
   `CONFIG_SPIRAM_MODE_QUAD`.
 - **First boot pauses** while the bytecode loader reads about 940 KB; that is not a hang.
 - **The config partition** is found by its label `config`; keep the label if you resize it, and
@@ -193,9 +195,9 @@ the eFuses alone, set `CONFIG_NVS_ENCRYPTION=n` in `sdkconfig.defaults.wifi` bef
 
 ## Measuring
 
-Build with `-DER_PERF_OVERLAY=1` to draw a metrics panel in the bottom-right corner of the panel.
-It shows this host's own numbers (FPS, CPU load, free PSRAM, and internal RAM) followed by the
-engine's frame instrumentation: last and worst frame times, the split between JavaScript, layout,
+The example always draws a metrics panel in the bottom-right corner of the screen with this host's
+own numbers: FPS, CPU load, free PSRAM, and internal RAM. Build with `idf.py -DER_PERF_DETAIL=1` to
+add the engine's frame instrumentation: last and worst frame times, the split between JavaScript, layout,
 raster, and present, and the region the worst frame repainted. `main.c` closes each frame before the
 pacing delay, so `FRM` is work time, the same basis as the CPU-load line.
 

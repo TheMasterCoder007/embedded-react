@@ -17,7 +17,7 @@ const features: {icon: IconName; title: string; body: string}[] = [
   {
     icon: 'chip',
     title: 'A pure C99 engine',
-    body: 'Scene graph, Yoga flexbox layout, anti-aliased shapes, shadows, transforms and gradients, drawn straight into a framebuffer or SPI display.',
+    body: 'Scene graph, Yoga-compatible flexbox layout, anti-aliased shapes, shadows, transforms and gradients, drawn straight into a framebuffer or SPI display.',
   },
   {
     icon: 'split',

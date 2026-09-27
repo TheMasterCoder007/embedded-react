@@ -112,8 +112,9 @@ import {App} from './App.jsx';
 AppRegistry.registerComponent('my-app', () => App);
 ```
 
-The CLI looks for `./index.jsx`, then `./src/index.jsx`, then the `main` field of `package.json`.
-Pass a path to use a different entry: `npx embedded-react dev path/to/entry.jsx`.
+The CLI looks for `index.jsx`, `index.tsx`, then `App.jsx` (each at the root, then under `src/`),
+then the `source` or `main` field of `package.json`. `build --aot` looks for `App.jsx` or `App.tsx`
+instead. Pass a path to use a different entry: `npx embedded-react dev path/to/entry.jsx`.
 
 ## The engine, for firmware
 

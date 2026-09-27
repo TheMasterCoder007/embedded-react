@@ -124,7 +124,7 @@ const depPinWrite = dep => (text, version) => {
   return JSON.stringify(obj, null, 2) + '\n';
 };
 
-// ESP32 example CMakeLists — the Flow A / Flow B fetch templates pin the embedded-react release they pull
+// Example CMakeLists (ESP32 + RP2040) — the Flow A / Flow B fetch templates pin the embedded-react release they pull
 // when copied OUT of the monorepo (`FetchContent ... GIT_TAG vX.Y.Z`). The pin must track the release, or a
 // copied-out template re-drifts every bump and fetches the wrong tag. The regex matches only the
 // `GIT_TAG <space> vX.Y.Z` form (the embedded_react declare) — NOT QuickJS's `GIT_TAG ${QUICKJS_GIT_TAG}`
@@ -135,7 +135,7 @@ const gitTagWrite = (text, version) =>
   text.replace(GIT_TAG_PIN, `$1${version}`);
 
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
-// install pins, and the ESP32 example fetch-template tags.
+// install pins, and the example fetch-template tags.
 const MANIFESTS = [
   {path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite},
   {
@@ -187,6 +187,11 @@ const MANIFESTS = [
   },
   {
     path: 'examples/esp32/esp32-2432s028r/CMakeLists.txt',
+    read: gitTagRead,
+    write: gitTagWrite,
+  },
+  {
+    path: 'examples/rp2040/rp2040-touch-lcd-1.69/CMakeLists.txt',
     read: gitTagRead,
     write: gitTagWrite,
   },

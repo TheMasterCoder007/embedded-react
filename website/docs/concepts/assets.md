@@ -13,7 +13,7 @@ An app imports a file and uses what the import returns. That is the whole API.
 
 ```jsx
 import logo from './assets/logo.png';   // the baked image's name: "logo"
-import Inter from './assets/Inter.ttf';  // the baked font family: "Inter"
+import Inter from './assets/Inter.ttf';  // the baked font family: "Inter" (Flow A only)
 
 <Image source={logo} style={{width: 64, height: 64}} />
 <Text style={{fontFamily: Inter, fontSize: 18}}>Hi</Text>
@@ -42,7 +42,7 @@ character with no glyph, since the engine draws `?` for it and nothing else woul
 ## The built-in font
 
 Text with no `fontFamily` uses the engine's built-in font, a bake of Inter that ships inside the
-engine at seven sizes: **10, 12, 16, 20, 24, 32 and 48** pixels. Any other size snaps to the
+engine at seven sizes: **10, 12, 16, 20, 24, 32, and 48** pixels. Any other size snaps to the
 nearest of those, and the build says so:
 
 ```text
@@ -54,7 +54,8 @@ Use one of those sizes, or import your own font and bake the sizes you need.
 
 ## Configuring the bake
 
-Per-app overrides live in `assets.config.js` next to your entry file:
+Per-app overrides live in `assets.config.js` in the project root, the directory you run the build
+from:
 
 ```js
 export default {
@@ -77,17 +78,21 @@ export default {
 The same baked bytes ship two ways, and the flow decides which.
 
 **Flow A packs them into the container.** `npx embedded-react build` writes `dist/app.erpkg`,
-which holds the app's bytecode and an ERPK asset pack, with a CRC32 and the QuickJS version it was
+which holds the app's bytecode, the vendor bytecode (React and the library) it runs on, and an ERPK
+asset pack, with a CRC32 and the QuickJS version it was
 built for. The firmware loads the container, registers the assets, then mounts the app. Assets
 update together with the app and never need a firmware rebuild.
 
 ```text
-app.erpkg:  "ERCF" | format version | crc32 | QuickJS tag | bytecode | ERPK asset pack
+app.erpkg:  "ERCF" | format version | crc32 | QuickJS tag | section count | sections
+
+sections:   vendor bytecode | alignment pad (optional) | ERPK asset pack | app bytecode
 ```
 
-**Flow B compiles them in.** `npx embedded-react build --aot` also writes `assets.generated.c`,
-which exposes `er_register_assets()`. The firmware calls it once at boot, and every image and font
-is registered straight from flash: zero RAM, since the engine reads the bytes in place.
+**Flow B compiles them in.** `npx embedded-react build --aot` also writes `assets.generated.c` and
+`.h`, which expose `er_register_assets()`. The firmware calls it once at boot, and every image is
+registered straight from flash: zero RAM, since the engine reads the bytes in place. Flow B draws
+all text in the built-in font; the compiler rejects `fontFamily`.
 
 Either way the engine holds each image in a registry slot (`ERUI_IMAGE_REGISTRY_MAX`, 128 by
 default, about 80 bytes each). Past the limit, registration is refused and the image simply does not
@@ -98,6 +103,6 @@ draw, so a board that shrinks the registry should keep it at or above its asset 
 An `.svg` import is baked at build time into a compact vector op-tape the engine's rasteriser
 draws directly, with a raster fallback for files that use features it cannot represent. Pass it to
 `<Svg source={…}>`. Shapes that change at runtime use the `<Svg>` element's own children
-(`<Path>`, `<Circle>`, `<Arc>`) instead, and dials, gauges and progress rings have their own native
+(`<Path>`, `<Circle>`, `<Arc>`) instead, and dials, gauges, and progress rings have their own native
 `<Dial>` node that is far cheaper than a re-tessellated arc. The [components reference](../api/components.md)
 covers all three.

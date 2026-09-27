@@ -49,6 +49,6 @@ parttool.py write_partition --partition-name=config --input dist/app.erpkg
 ```
 
 Optional builds: `idf.py -DER_HOTRELOAD=1 build flash` for hot reload over the native USB port
-(`npx embedded-react dev --device`), `-DER_PERF_OVERLAY=1` for the on-panel metrics, and
+(`npx embedded-react dev --device`), `-DER_PERF_DETAIL=1` to add the engine's frame timings to the on-panel metrics, and
 `idf.py -B build-wifi -D SDKCONFIG=sdkconfig.wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi" build flash`
-for the WiFi build.
+for the Wi-Fi build.

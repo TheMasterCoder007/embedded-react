@@ -30,9 +30,10 @@ Two habits the suites depend on:
 - **The first commits after `er_reset` repaint everything.** Settle with two commits, and poison
   the framebuffer before checking that a change repainted only its own rectangle.
 
-CI runs the suite six times with different compile-time flags (gradients on, two render workers,
-occlusion culling off, 3D transforms, shadows with a decoupled transform scratch), because a flag
-that is off by default is code that is otherwise never compiled. A new `ERUI_*` flag needs a pass.
+CI runs the suite six times with different compile-time flags (gradients on, two render workers
+with full transforms and the on-screen keyboard, occlusion culling off, 3D transforms, shadows with
+a decoupled transform scratch), because a flag that is off by default is code that is otherwise
+never compiled. A new `ERUI_*` flag needs a pass.
 
 ## The bridge: C tests and smoke
 
@@ -52,11 +53,11 @@ runs the JavaScript runtime tiers against both.
 
 From `bridges/quickjs/js`:
 
-| Command                 | What it runs                                                                                                                                                                                                                                           | Needs                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| `npm test`              | Vitest over `src/**/__tests__/*.unit.test.js`: pure JavaScript, no engine. The style splitter, prop helpers, the AOT compiler's unit and smoke tests, and a parity test that keeps the type declarations, the bridge's prop tables and the AOT in step | Node                                   |
-| `npm run test:runtime`  | `test/runtime/*.runtime.test.jsx`, each bundled and run inside QuickJS plus the real engine in a headless harness (no window), with a `check()`/`report()` API the C runner reads                                                                      | The `er-bridge-quickjs-runtest` binary |
-| `npm run test:bytecode` | The same suite, each bundle precompiled to `.qbc` bytecode and loaded through `JS_ReadObject`: the path a device takes                                                                                                                                 | Also `er-bridge-quickjs-compile`       |
+| Command                 | What it runs                                                                                                                                                                                                                                                        | Needs                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `npm test`              | Vitest over every `__tests__/*.unit.test.*` in the package: pure JavaScript, no engine. The style splitter, prop helpers, the AOT compiler's unit and smoke tests, and a parity test that keeps the type declarations, the bridge's prop tables and the AOT in step | Node                                   |
+| `npm run test:runtime`  | `test/runtime/*.runtime.test.{jsx,js}`, each bundled and run inside QuickJS plus the real engine in a headless harness (no window), with a `check()`/`report()` API the C runner reads                                                                              | The `er-bridge-quickjs-runtest` binary |
+| `npm run test:bytecode` | The same suite, each bundle precompiled to `.qbc` bytecode and loaded through `JS_ReadObject`: the path a device takes                                                                                                                                              | Also `er-bridge-quickjs-compile`       |
 
 Build the harness once, without SDL:
 
@@ -81,8 +82,9 @@ not call `compileToBytecode`: the simulator wasm is not built in CI's unit job.
 `demos.smoke` compiles the thermostat and the watch face at their board sizes and the two starter
 templates at 240×320, and `cc-compile.smoke` hands the generated C to the system compiler with
 `-fsyntax-only -Wall`, which catches the class of error a C compiler rejects but the generator does
-not, such as a pointer-versus-int ternary from a mixed text expression. A separate CI job builds
-the watch face and the thermostat's compact layout all the way through `gcc`.
+not, such as a pointer-versus-int ternary from a mixed text expression. A separate CI job compiles
+the watch face and the thermostat's `solo` layout and syntax-checks the output with `gcc`, which also
+evaluates the engine version `_Static_assert`.
 
 The starters are a guardrail: a newcomer's first build must compile ahead of time and use only baked
 font sizes, so the smoke test asserts both. Changing the template means keeping those green.
@@ -90,20 +92,20 @@ font sizes, so the smoke test asserts both. Changing the template means keeping 
 ## Parity
 
 `npm run parity` renders the same demo through both flows and asserts the framebuffers match
-pixel for pixel. Flow A packs the demo into a container and renders it headlessly through the
-desktop host; Flow B compiles it to C, rebuilds the AOT desktop host and renders that. Optional taps
-drive both through the same interaction, so dynamic state is compared too. Because the engine, fonts
+within a small per-pixel tolerance. It opens real SDL windows, so it needs a display and does not run
+in CI. Flow A packs the demo into a container and renders it through the desktop host; Flow B compiles it to C, rebuilds the AOT desktop host, and renders that. Optional taps
+drive both through the same interaction, so the dynamic state is compared too. Because the engine, fonts,
 and backend are shared, a correct demo renders byte-identically, and any difference is a real Flow A
 to Flow B divergence; the harness is how an animated-transform binding bug was once caught. Each
 responsive scenario feeds one screen size to both paths.
 
-Known residue: about a 1% sub-pixel divergence in dial and text rendering sits under the harness's
+Known residue: a small subpixel divergence in dial and text rendering sits under the harness's
 tolerance, and Flow A gets no baked assets unless it loads from a container, which is why the
 harness packs one.
 
 ## Consumer smoke
 
-`node tools/consumer-smoke.mjs` packs the npm package, installs it into a throwaway project and
+`node tools/consumer-smoke.mjs` packs the npm package, installs it into a throwaway project, and
 runs the consumer commands: the AOT build, the TypeScript template's typecheck, and (when the
 prebuilt wasm is present) the Flow A container build. It guards the bugs the repository's own tests
 cannot see because they only appear once the package is packed and installed elsewhere: a file
@@ -113,10 +115,11 @@ is why CI runs it.
 
 ## On hardware
 
-Nothing above runs on a board. For a change that touches a backend, the frame loop, memory sizing
+Nothing above runs on a board. For a change that touches a backend, the frame loop, memory sizing,
 or anything timing-related, build and flash the relevant example and say so in the pull request:
-what board, what you saw. The perf overlay (`-DER_PERF_OVERLAY=1`) gives numbers to quote, and the
-ESP32 examples log free RAM at boot and after start-up. Host-side benchmarks have misled this
+what board, what you saw. The perf overlay gives numbers to quote (on the ESP32-S3 it is always on, and
+`idf.py -DER_PERF_DETAIL=1` adds the engine's frame timings), and the ESP32 examples log free RAM
+after boot. Host-side benchmarks have misled this
 project more than once (a pixel-move scroll that measured 12 to 28× faster on a laptop gained 15%
 on the board), so a claim about speed is a claim about a board.
 

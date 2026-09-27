@@ -72,7 +72,7 @@ a dashboard wants it at the default.
   workload on the S3. Placement (a tiered allocator) was tried and measured at about 2%, and is not
   offered.
 - **Bytecode, not source.** `embedded-react build` ships QuickJS bytecode with source text and
-  debug tables stripped, about 8× smaller than source, and the device never runs the parser. A
+  debug tables stripped, about 8× smaller than unstripped bytecode, and the device never runs the parser. A
   firmware that only ever loads bytecode can drop the parser entirely with
   `-DER_BRIDGE_QUICKJS_LITE=ON`, saving about 60 KB of flash.
 
@@ -86,8 +86,10 @@ once per frame.
 ## Measuring on the device
 
 The engine keeps a per-frame timing split and resource counters, retains the **worst frame seen**
-with its whole split, and can draw it in the corner of the panel. Build the host with
-`-DER_PERF_OVERLAY=1` (the ESP32-S3 example supports it directly):
+with its whole split, and can draw it in the corner of the panel. Define `ER_PERF_OVERLAY=1` for
+both the engine and the host (a compile definition, not a CMake option); the timing lines follow it.
+The ESP32-S3 example always draws the overlay, but adds these lines only when built with
+`idf.py -DER_PERF_DETAIL=1`:
 
 ```text
 FRM 18.4 PK 2013.1      last frame / worst frame, ms
@@ -96,7 +98,9 @@ PK J1900 L12 R80 P9     the WORST frame's split: what to blame the spike on
 PKDRT 800x40 32k        the WORST frame's repainted region
 VEC 3/8 IMG 5/32        vector and image slots in use, out of the pool
 RST P0.4 C7.2 B22.1 S0.9 W96k   raster split: pre-pass, composite, blit, sweep + pixels written
+PKR P1 C20 B58 S1 W384k the WORST frame's raster split
 JSS D2.1 R7.4 M3.8 C9.0 JS split: dispatch, reconcile, marshal, commit
+PKJ D40 R1400 M460 C90  the WORST frame's JS split
 ```
 
 The `PK` lines are the point. A frame that spikes once and recovers is invisible to an FPS counter,
@@ -107,14 +111,14 @@ pre-pass (scales with the node pool), the composite (scales with damage area), t
 bandwidth) and the sweep; the JS line into delivering events, React's render, marshalling into the
 engine, and the commit the pump drove.
 
-A host without the overlay can still collect the numbers: `ER_PERF_STATS=1` compiles the
-instrumentation in without drawing, and `er_perf_get_last()`/`er_perf_get_worst()` read it. The
+A host without the overlay can still collect the numbers: `ER_PERF_STATS=1` (the engine's
+`-DERUI_PERF_STATS=ON`) compiles the instrumentation in without drawing, and `er_perf_get_last()`/`er_perf_get_worst()` read it. The
 engine has no clock of its own; hand it one with `er_perf_set_clock()` or the phase times read 0.
 
 Two other ways to see cost:
 
-- The ESP32-S3 log prints `alive:` lines with frame counts, and both ESP32 examples log free RAM
-  at boot and after start-up.
+- The ESP32-S3 log prints `alive:` lines with frame counts and free internal RAM; the CYD logs free
+  RAM at boot and after start-up.
 - The simulator is exact about layout and pixels but not about speed: a laptop is orders of
   magnitude faster than the target. Measure on the board.
 

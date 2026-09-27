@@ -1,6 +1,6 @@
 # __APP_NAME__
 
-A new [embedded-react](https://github.com/TheMasterCoder007/embedded-react) app — React Native for embedded MCUs. **TypeScript** starter.
+A new [Embedded React](https://github.com/TheMasterCoder007/embedded-react) app — React Native for embedded MCUs. **TypeScript** starter.
 
 ## Develop
 

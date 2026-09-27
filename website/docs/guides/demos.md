@@ -15,9 +15,11 @@ npm create embedded-react@latest my-watch -- --template watch-face
 
 A scaffolded copy has `npm run dev` (the browser simulator), `npm run dev:device` (hot reload on a
 board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `app.gen.c` at
-the panel size the demo targets). Inside the repository, `npm run sim -- thermostat`,
-`npm run pack -- …` and `npm run aot -- …` from `bridges/quickjs/js` build a demo against the in-repo
-library with no install.
+the panel size the demo targets). Inside the repository, `npm run sim -- thermostat` and
+`npm run pack -- …` from `bridges/quickjs/js` build a demo against the in-repo library with no
+install. `npm run aot` does too, but reads the panel size from the environment and otherwise assumes
+800×480, where the thermostat does not compile:
+`ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
 
 ## Thermostat
 
@@ -85,8 +87,8 @@ the first render's state, hence the `pageRef` mirror.
 - Components live in `App.jsx`: the compiler inlines same-file components and does not resolve
   local `.jsx` imports.
 - Pure `View` and `Text`, no `<Svg>`, so the RP2040 build trims the vector pools to the floor.
-- Only colours, opacity, sizes, and margins can be state-driven, which is why the level dot and the
-  swipe track move with `marginLeft`/`marginTop` rather than `left`/`top`.
+- `left` and `top` cannot be state-driven, while margins can, which is why the level dot and the
+  swipe track move with `marginLeft`/`marginTop`.
 - Module-scope constants fold to literals; `Math.*` is only available inside dynamic expressions,
   so the clock digits are computed inline from the `t` state.
 - A handler can call a helper as a statement but not read one mid-expression, which is why the
@@ -100,7 +102,7 @@ the first render's state, hence the `pageRef` mirror.
 ```bash
 cd bridges/quickjs/js
 npm run create -- my-app     # creates demos/my-app, wired to the in-repo build tools
-cd ../../demos/my-app
+cd ../../../demos/my-app
 npm run sim
 ```
 

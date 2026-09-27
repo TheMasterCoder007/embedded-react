@@ -26,6 +26,6 @@ idf.py set-target esp32              # first time only
 idf.py -p PORT flash monitor         # Ctrl-] leaves the monitor
 ```
 
-After editing the JSX, repeat step 1 and flash again. `main/board.c` holds every board-specific
-`#define` (inversion, BGR, mirroring, touch calibration, `BOARD_ROTATE_90`); the engine's pools are
+After editing the JSX, repeat step 1 and flash again. `main/board.c` holds the board-specific
+`#define`s (inversion, BGR, mirroring, touch calibration) and `main/board.h` holds `BOARD_ROTATE_90`; the engine's pools are
 trimmed for the board in `components/engine/CMakeLists.txt`.

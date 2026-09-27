@@ -6,11 +6,13 @@
 Write a React app, compile it, flash it onto a microcontroller. The UI runs *on the device*, with no browser, no phone, and no OS required.
 
 ```jsx
-// src/App.jsx — the same component you'd write for iOS or Android…
-import {View, Text, Animated, Pressable, useRef, useEffect} from 'embedded-react';
+// App.jsx — the same component you'd write for iOS or Android…
+import {useState, useEffect} from 'react';
+import {Text, Animated, Pressable, useAnimatedValue} from 'embedded-react';
 
-export default function App() {
-    const opacity = useRef(new Animated.Value(0)).current;
+export function App() {
+    const opacity = useAnimatedValue(0);
+    const [taps, setTaps] = useState(0);
 
     useEffect(() => {
         Animated.timing(opacity, {toValue: 1, duration: 400, useNativeDriver: true}).start();
@@ -19,8 +21,8 @@ export default function App() {
     return (
         <Animated.View style={{opacity, flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
             <Text style={{color: '#fff', fontSize: 24}}>Hello from an ESP32.</Text>
-            <Pressable onPress={() => console.log('tapped')}>
-                <Text style={{color: '#e94560', marginTop: 12}}>Tap me</Text>
+            <Pressable onPress={() => setTaps(taps + 1)}>
+                <Text style={{color: '#e94560', marginTop: 12}}>Tapped {taps} times</Text>
             </Pressable>
         </Animated.View>
     );
@@ -93,7 +95,7 @@ Everything ships at one lockstep version (the same `vX.Y.Z` on every channel).
 **npm** — the component API and reconciler (Flow A), the Flow B compiler, and the simulator CLI:
 
 ```
-npm install embedded-react
+npm install embedded-react react@18.3.1     # embedded-react pins React to 18.3.1
 ```
 
 **CMake / FetchContent** — the C engine as a source (you add a backend and your app):

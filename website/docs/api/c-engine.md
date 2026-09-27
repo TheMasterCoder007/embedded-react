@@ -51,14 +51,16 @@ builds the tree from JavaScript.
 `ERProps` is one flat struct covering every node type; `er_props_default()` initialises it and
 `er_node_set_props(node, &props)` applies it, marking the node dirty. Its fields follow the
 header's groups: layout (the Yoga properties, with `_pct` companions for percentage width, height and
-insets), view visuals (background, borders, radii, opacity), interaction (`pointer_events`, `display`),
-text (`text`, `font_size`, `font_weight`, colour, alignment, ellipsis), image (name, resize mode,
-tint), transform (the matrix and origin), shadow, and the per-widget groups for activity indicator,
-switch, text input, modal, arc and gradient.
+insets, plus `display`), view visuals (background, borders, radii, opacity), interaction
+(`pointer_events`, `hit_slop_*`, `long_press_ms`), text (`text`, `font_size`, `font_weight`, colour,
+alignment, ellipsis), image (name, resize mode, tint), transform (`transform_translate_x/y`,
+`_scale_x/y`, `_rotate_z`, `_rotate_x/y`, `_perspective`, `_origin_x/y`), shadow, and the per-widget
+groups for activity indicator, switch, text input, modal, arc and gradient.
 
 Two calls set what a prop bag cannot hold: `er_node_set_text_spans(node, spans, count)` for
-per-run text styling, and `er_node_set_vector_ops(node, ops, paints, ...)` for an `Svg` node's shape
-tape, with `er_node_set_vector_dirty_rect` to limit its next repaint to a sub-region.
+per-run text styling, and
+`er_node_set_vector_ops(node, ops, n_ops, paints, n_paints, grads, n_grads)` for an `Svg` node's
+shape tape, with `er_node_set_vector_dirty_rect` to limit its next repaint to a sub-region.
 
 ## Commit and damage
 
@@ -69,8 +71,8 @@ host can flush one transfer window per region. `er_layout_pass_count()` and
 `er_text_measure_count()` count work done, for tests and tuning.
 
 A page-flipping display tells the engine how many buffers it rotates with
-`er_set_display_buffer_count(n)` and reports each flip with `er_display_present()`; the engine then
-replays damage into every buffer so none is stale.
+`er_set_display_buffer_count(n)` (read back with `er_get_display_buffer_count()`) and reports each
+flip with `er_display_present()`; the engine then replays damage into every buffer so none is stale.
 
 ## Events and input
 
@@ -79,15 +81,20 @@ long press, press in/out, touch start/move/end/cancel, the responder lifecycle, 
 value change (`Switch`, `Dial`), text input events. `er_responder_query_set(node, ...)` registers
 the should-set predicate the engine asks during gesture negotiation. Touches arrive from the host
 through `embedded_renderer_touch(id, phase, x, y)`; `er_touch_active_count()` reports fingers down.
+Moves are coalesced to the newest one per finger per frame;
+`embedded_renderer_set_touch_coalescing(false)` dispatches every sample instead, and `embedded_renderer_flush_touch()` /
+`embedded_renderer_has_pending_touch()` let a host dispatch them before its own commit. A physical
+keyboard feeds the focused text input through `embedded_renderer_key(keycode, utf8)`.
 `er_scroll_view_set_offset` scrolls programmatically; `er_text_input_focus`/`blur`/`get_text`/
-`set_text` drive a text input; `er_keyboard_set_config` swaps the on-screen keyboard.
+`set_text` drive a text input; `er_keyboard_set_config` swaps the on-screen keyboard;
+`er_arc_get_value(node)` reads a `Dial`'s current value.
 
 ## Animation
 
 The engine animates two things: a node property directly, and a standalone value bound to one or
 more properties.
 
-- `er_anim_start(node, prop, &cfg)` / `er_anim_cancel(node, prop)` animate a property in place.
+- `er_anim_start(node, prop, to, &cfg)` / `er_anim_cancel(node, prop)` animate a property in place.
 - `er_anim_value_create()` makes a standalone float; `er_anim_value_bind(v, node, prop)` and
   `er_anim_value_bind_interpolated(v, node, prop, &map)` attach it, `er_anim_value_animate(v,
 to, &cfg)` drives it, `er_anim_value_set`/`get` read and write it, `er_anim_value_unbind_all` and
@@ -99,16 +106,21 @@ to, &cfg)` drives it, `er_anim_value_set`/`get` read and write it, `er_anim_valu
 `ERAnimConfig` selects the algorithm (`ER_ANIM_TIMING`, `ER_ANIM_SPRING`, `ER_ANIM_DECAY`), the
 easing (`ER_EASE_LINEAR` through `ER_EASE_ELASTIC_OUT`, or `ER_EASE_BEZIER` with four control
 points), `duration_ms` and `delay_ms`, the spring's `stiffness`, `damping`, `mass` and `velocity`,
-decay's `deceleration`, `loop` and `loop_reverse`, and an `on_complete` callback. Layout
-animations are armed with `er_layout_anim_configure_next(&cfg)` and take effect on the next commit.
+decay's `deceleration`, `loop` and `loop_reverse`, and an `on_complete` callback.
+
+Layout animations take their own `ERLayoutAnimConfig` (timing or spring, a `uint16_t duration_ms`,
+easing and spring constants): `er_layout_anim_configure_next(&cfg)` arms it for the next commit, and
+`ER_LAYOUT_ANIM_EASE_IN_EASE_OUT`, `ER_LAYOUT_ANIM_LINEAR` and `ER_LAYOUT_ANIM_SPRING` are ready-made.
+`er_layout_anim_has_pending()` reports an armed config the next commit has not consumed yet.
 
 ## Assets
 
-`er_image_load(name, ...)` and `er_image_load_rgb565(name, ...)` register an image under a name;
-`er_font_register(family, size, ...)` registers one baked size of a font and `er_font_load` a font
-blob. All reference the bytes in place, so flash-resident assets cost no RAM. The generated
-`er_register_assets()` from a Flow B build calls these for you; a Flow A container registers its
-pack on load. `er_text_measure` and `er_text_measure_spans` measure text the way layout does.
+`er_image_load(name, argb, w, h)` and `er_image_load_rgb565(name, rgb565, w, h)` register an image
+under a name; `er_font_register(family, font)` registers one baked size of a font (a `BitmapFont`,
+which carries its pixel size). These reference the bytes in place, so flash-resident assets cost no
+RAM; `er_font_load(name, buf, len)` instead copies a font blob into the `ERUI_FONT_POOL_BYTES` pool.
+The generated `er_register_assets()` from a Flow B build calls these for you; a Flow A container
+registers its pack on load.
 
 ## Time
 
@@ -120,7 +132,9 @@ due animations. `er_now_ms()` and `er_now_ms64()` read it; JavaScript's `perform
 
 `native_renderer.h` declares `EmbeddedRenderBackend`: `fill_rect`, `copy_rect`, `blend_rect`,
 `wait`, `frame_ready` and a `ctx` pointer, plus the optional banded rendering (`band_height`,
-`band_begin`, `band_flush`) and format-aware copy (`copy_rect_fmt`) extensions.
+`band_begin`, `band_flush`) and format-aware copy (`copy_rect_fmt`) extensions. A multicore host
+also passes its render threads with `embedded_renderer_set_workers()` and calls
+`er_render_worker_exec(k)` on worker `k` when dispatched (only with `ERUI_RENDER_WORKERS` above 1).
 [Engine and backends](../concepts/engine-and-backends.md) explains the contract and
 [Writing a backend](../internals/writing-a-backend.md) the conventions.
 

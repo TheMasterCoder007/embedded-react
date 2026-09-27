@@ -13,12 +13,12 @@ propagates it everywhere it needs to appear.
 Day to day, add notes under `## [Unreleased]` in `CHANGELOG.md` as changes land. A release then is:
 
 ```bash
-node tools/release.mjs 0.15.0            # on master, with a clean tree
+node tools/release.mjs 0.15.0            # on master, nothing staged
 git push --follow-tags
 ```
 
 `release.mjs` does five things, in order: sets `VERSION`; runs `sync-version.mjs --set`, which
-writes the version into every manifest and pin (twenty files at the time of writing); stamps the
+writes the version into every manifest and pin (twenty-one files at the time of writing); stamps the
 changelog, promoting `## [Unreleased]` to `## [0.15.0] - <date>` with a compare link; commits
 exactly those files as `release: v0.15.0`, never sweeping in unrelated changes; and tags `v0.15.0`.
 `--dry-run` prints the plan and changes nothing. It refuses to run off `master` unless told
@@ -36,7 +36,7 @@ What `sync-version` keeps in step:
 | `engine/include/er_version.h`                                | The engine's own version, which the AOT compiler `_Static_assert`s against                                         |
 | `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                     |
 | `website/package.json`                                       | The engine the playground runs                                                                                     |
-| `examples/esp32/*/CMakeLists.txt`                            | The `FetchContent` tag a copied-out example fetches                                                                |
+| `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
 
 `node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
 so a hand-edited version cannot land. A missing file is skipped, so a renamed manifest silently

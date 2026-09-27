@@ -115,6 +115,6 @@ There is no official datasheet for these boards; the map comes from the communit
 
 Copy the example folder out on its own and `idf.py build` fetches the engine and the SPI backend
 from GitHub. Flow B needs nothing else, no QuickJS. The engine is also on the ESP-IDF Component
-Registry (`idf.py add-dependency "TheMasterCoder007/embedded-react^0.14.1"`), but the SPI backend is
+Registry ([Installation](../../getting-started/installation.mdx) has the command), but the SPI backend is
 not, so with the registry route you vendor or fetch the backend yourself; that is why the example
 defaults to `FetchContent`, which covers both.

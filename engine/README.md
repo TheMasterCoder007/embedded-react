@@ -11,23 +11,23 @@ buffers, damage tracking, the arc widget, frame instrumentation, and every `ERUI
 
 ## Layout
 
-| Folder | What lives here |
-|---|---|
-| `include/` | Public headers: `er_scene.h` (scene API) and `native_renderer.h` (backend interface). The only headers downstream code includes directly. |
-| `core/` | Backend glue, frame tick, time advance. |
-| `scene/` | Node pool, tree, props, dirty tracking, render-pass orchestration, hit-testing. |
-| `layout/` | Yoga-compatible flexbox. |
-| `rendering/` | Painters: rounded rectangles, shadows, transforms, image scaling, vectors, the arc widget. |
-| `text/` | UTF-8 decoder, glyph rasteriser, multi-line layout. |
-| `animation/` | `Animated.Value` engine, timing/spring/decay curves, native driver. |
-| `resources/` | Font registry, font blob loader, font bitmaps, built-in font data. |
-| `platform/` | Reserved for platform-abstraction hooks. Empty today. |
-| `tests/` | Host-side CTest suites. |
+| Folder       | What lives here                                                                                                                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `include/`   | Public headers: `er_scene.h` (scene API), `native_renderer.h` (backend interface), `er_perf.h` / `perf_overlay.h` (instrumentation), `font_bitmap.h`, `er_version.h`. The only headers downstream code includes directly. |
+| `core/`      | Backend glue, frame tick, time advance.                                                                                                                                                                                   |
+| `scene/`     | Node pool, tree, props, dirty tracking, render-pass orchestration, hit-testing.                                                                                                                                           |
+| `layout/`    | Yoga-compatible flexbox.                                                                                                                                                                                                  |
+| `rendering/` | Painters: rounded rectangles, shadows, transforms, gradients, image scaling, vectors, the arc rasteriser, the perf overlay.                                                                                               |
+| `text/`      | UTF-8 decoder, glyph rasteriser, multi-line layout.                                                                                                                                                                       |
+| `animation/` | `Animated.Value` engine, timing/spring/decay curves, native driver.                                                                                                                                                       |
+| `font/`      | Font registry, font blob loader, font bitmaps, built-in font data.                                                                                                                                                        |
+| `platform/`  | Reserved for platform-abstraction hooks. Empty today.                                                                                                                                                                     |
+| `tests/`     | Host-side CTest suites.                                                                                                                                                                                                   |
 
 ## Building
 
-The engine is a CMake static library named `embedded-react`. Configure it from this folder; it
-pulls in nothing else:
+The engine is a CMake static library named `embedded-react`. It pulls in nothing else; from the
+repository root:
 
 ```
 cmake -S engine -B build -DBUILD_TESTING=ON
@@ -35,8 +35,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Feature and pool sizes are `ERUI_*` CMake options with desktop-sized defaults; a board turns them
-down. [Memory](https://embedded-react.dev/guides/memory) walks through sizing them.
+Feature and pool sizes are `ERUI_*` CMake options: pools default desktop-sized (a board turns them
+down) and optional features default off. [Memory](https://embedded-react.dev/guides/memory) walks
+through sizing them.
 
 ## Rules
 

@@ -15,11 +15,11 @@ Every host component accepts these, on top of its own.
 | `style`                                                      | style object or array | See [Styles](./styles.md). Arrays and falsy entries are flattened, as in React Native                                                                                                        |
 | `visible`                                                    | `boolean`             | `false` prunes the subtree from layout, rendering and hit-testing without unmounting it; the nodes and their React state stay. A `display` in `style` wins over it                           |
 | `ref`                                                        | `Ref<NodeHandle>`     | Receives the engine node handle, for [`updateVector`/`updateText`](#imperative-updates)                                                                                                      |
-| `onLayout`                                                   | `(e) => void`         | `e.layout` is `{x, y, width, height}` in the parent's coordinates, after the commit that laid it out                                                                                         |
+| `onLayout`                                                   | `(e) => void`         | `e.layout` is `{x, y, width, height}` in screen coordinates, before any scroll offset or transform, after the commit that laid it out                                                        |
 | `onTouchStart`, `onTouchMove`, `onTouchEnd`, `onTouchCancel` | `(e) => void`         | Raw touches. They bubble from the node that was hit up through its ancestors, whatever the responder system decides. `onTouchCancel` fires when a sequence is abandoned rather than finished |
 
 A touch event carries `{type, x, y, dx, dy, vx, vy}`: the point in screen pixels, the distance
-travelled since touch-down, and the velocity in px/ms over the most recent move. That makes a flick
+traveled since touch-down, and the velocity in px/ms over the most recent move. That makes a flick
 `onTouchEnd={e => e.vx > 0.4 && next()}`, with no gesture recogniser needed.
 
 **Responder props.** Every component also accepts the gesture responder handlers
@@ -102,7 +102,7 @@ A `Pressable` that dims while held. Every `Pressable` prop works unchanged.
 | --------------- | -------- | --------------------------------------- |
 | `activeOpacity` | `number` | Opacity while held, 0 to 1. Default 0.2 |
 
-The fade runs on the native driver, so it costs no re-render. It owns the node's `opacity`: 
+The fade runs on the native driver, so it costs no re-render. It owns the node's `opacity`:
 animated opacity in `style` is ignored here (and rejected by the AOT); animate opacity yourself with
 a `Pressable` instead. Any other property, `transform` included, is fine. A dimmed node composites
 its whole subtree offscreen, so dim the box that reads as the button rather than the surrounding
@@ -130,7 +130,7 @@ responder inside it (a `PanResponder`, a `Dial adjustable`) takes the touch away
 
 ## FlatList
 
-A thin alias for `ScrollView`, **not** a virtualised list: every row mounts as a real engine node and
+A thin wrapper over `ScrollView`, **not** a virtualized list: every row mounts as a real engine node and
 stays mounted.
 
 | Prop           | Type                                | Notes |
@@ -175,7 +175,7 @@ these panels show a few dozen rows, not thousands.
 
 ## SectionList
 
-Also a `ScrollView` alias: no virtualisation, no sticky headers. Headers, rows, and footers are flat
+Also, a thin `ScrollView` wrapper: no virtualization, no sticky headers. Headers, rows, and footers are flat
 siblings, as in React Native, so the `FlatList` node budget applies plus a header and a footer per
 section.
 
@@ -356,8 +356,8 @@ import gauge from './gauge.svg';
 | Prop              | Type              | Notes                                                                                                                                             |
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored |
-| `width`, `height` | number or string  | The render box, react-native-svg style; a `style` width/height wins                                                                               |
-| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`                                                                                      |
+| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** takes numbers only             |
+| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers                                                            |
 | paint props       |                   | See below; set on `<Svg>` they apply to every shape                                                                                               |
 
 **Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`

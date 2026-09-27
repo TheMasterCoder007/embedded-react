@@ -23,7 +23,7 @@ the engine sees the frame's changes together.
 ```text
 prop writes → dirty flags
      ↓
-layout      the flexbox solve, and text measurement, for the parts that changed
+layout      the flexbox solve and text measurement, when a prop or the tree changed
      ↓
 damage      which rectangles of the screen must be repainted
      ↓
@@ -32,10 +32,11 @@ render      composite each damaged rectangle, back to front
 present     the backend pushes the changed rows to the panel
 ```
 
-**Layout.** The solver walks only what is dirty. Changing a colour does not re-lay-out anything;
-changing a size re-solves that node's container and whatever depends on it. Text measurement,
-which is the expensive part of layout, is memoised per pass so a deep tree does not re-measure the
-same string on the way down.
+**Layout.** Any prop change, tree mutation, or node removal flags the next commit for layout, and
+layout then re-solves the whole tree from the root; a color change triggers it as much as a size
+change does. A `setProps` with identical values flags nothing. Frames where only animations, scroll
+offsets, or the text cursor changed skip layout entirely. Text measurement, the expensive part, is
+memoised within a pass so a deep tree does not re-measure the same string on the way down.
 
 **Damage.** The engine tracks up to 16 **disjoint** dirty rectangles per commit (`ER_DAMAGE_RECTS_MAX`),
 not one bounding box. A dial updating in the top-left corner and a clock in the bottom-right
@@ -71,11 +72,11 @@ a small band buffer, and the panel's own memory kept the rest of the picture.
   an app that keeps its updates small stays fast on any board. Full-screen changes are fine, but
   not sixty times a second on a 240 MHz core.
 - **Animate natively.** An `Animated` value the engine drives costs no JavaScript per frame and
-  damages only what it moves. The same motion done with `setState` every 16 ms re-renders, re-diffs
+  damages only what it moves. The same motion done with `setState` every 16 ms re-renders, re-diffs,
   and re-commits each time.
 - **Keep transformed and translucent subtrees small.** They are the only things that go through
   scratch memory, and a change inside a transformed subtree repaints the whole subtree.
-- **Hide pages, don't unmount them.** `display: 'none'` drops a subtree out of layout, render and
+- **Hide pages, don't unmount them.** `display: 'none'` drops a subtree out of layout, render, and
   hit-testing while keeping its nodes and state. It costs nothing per frame, and switching back is a
   repaint rather than a rebuild.
 

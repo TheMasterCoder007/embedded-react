@@ -28,7 +28,8 @@ The properties it takes:
 | Position   | `position` (`relative` or `absolute`), `top`, `left`, `right`, `bottom`                   |
 | Visibility | `display` (`flex` or `none`), `overflow`, `zIndex`                                        |
 
-`width`, `height` and `flexBasis` accept a percentage of the parent's content box. So do the four
+`width`, `height` and `flexBasis` accept a percentage of the parent's content box, or of its
+padding box for an absolutely positioned child. So do the four
 insets: a percentage on `left` or `right` is of the containing block's width, on `top` or `bottom`
 of its height. Margins, padding, min/max sizes and borders take pixels only.
 
@@ -47,8 +48,8 @@ the nearest size that was. See [Assets](./assets.md).
 - **No right-to-left layout.** There is no `direction` property and no `start`/`end` edges;
   `left` means left.
 - **`ScrollView` scrolls whichever axis overflows.** There is no `horizontal` prop; lay the content
-  out with `flexDirection: 'row'` and it scrolls sideways. `FlatList` is an alias for `ScrollView`,
-  not a virtualised list: every row is a real node that stays mounted.
+  out with `flexDirection: 'row'` and it scrolls sideways. `FlatList` is a thin wrapper over
+  `ScrollView`, not a virtualised list: every row is a real node that stays mounted.
 - **A fixed node pool.** The engine allocates `ERUI_MAX_NODES` nodes at compile time (512 by
   default) and never more. A long list has to fit; the [Memory](../guides/memory.md) guide covers
   choosing the number.
@@ -56,8 +57,8 @@ the nearest size that was. See [Assets](./assets.md).
   layout, rendering and hit-testing, but its nodes, props and React state survive. Its computed
   rectangle collapses to zero, so it takes no space and `onLayout` reports an empty box. This is
   the cheap way to switch between pages: build each once, then flip `display`.
-- **`onLayout` reports the box in the parent's coordinates**, after the commit that laid it
-  out. Layout is only current once a commit has run, so code that reads a rectangle part-way
+- **`onLayout` reports the box in screen coordinates**, not the parent's as React Native does,
+  and before any scroll offset or transform. It fires after the commit that laid the node out. Layout is only current once a commit has run, so code that reads a rectangle part-way
   through a frame sees the previous commit's answer.
 
 ## Layout that moves

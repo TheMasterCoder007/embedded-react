@@ -24,6 +24,7 @@ for (const {src, out, title, slug} of pages) {
     '---',
     `title: ${title}`,
     `slug: ${slug}`,
+    `custom_edit_url: https://github.com/TheMasterCoder007/embedded-react/edit/master/${src}`,
     'mdx:',
     '  format: md', // CommonMark, not MDX: the root files use raw <tags> and HTML comments freely.
     '---',

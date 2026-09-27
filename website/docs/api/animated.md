@@ -34,6 +34,8 @@ useEffect(() => {
 tied to the component and destroys it on unmount, which is the form to prefer. A value has:
 
 - `setValue(v)`: set it at once, pushing to everything bound to it.
+- `destroy()`: release its engine slot. The engine's value pool is fixed-size, so a
+  `new Animated.Value` that outlives its screen must be destroyed; `useAnimatedValue` does this for you.
 - `interpolate({inputRange, outputRange, extrapolate?, extrapolateLeft?, extrapolateRight?})`: a
   derived value mapped through a piecewise-linear curve, up to 8 breakpoints. Both ranges are
   numbers; a value bound to a rotation axis is read in degrees, so `outputRange: [0, 360]` is a
@@ -43,9 +45,11 @@ tied to the component and destroys it on unmount, which is the form to prefer. A
 ## Where a value can go
 
 `Animated.View`, `Animated.Text` and `Animated.Image` accept values in `backgroundColor`, `opacity`,
-`color` and any `transform` axis (`scale` binds both axes). `Dial` accepts one in `value` and
-`valueStart` without an `Animated.` prefix. `Animated.createAnimatedComponent` wraps another
-component. A `TouchableOpacity` owns its own `opacity` for the press feedback, so animate opacity on
+`color` and any `transform` axis (`scale` binds both axes). The wrappers are pass-through, kept for
+React Native parity: a plain `View` or `Pressable` binds an animated style the same way, in both flows.
+**Flow B** binds `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` and `rotate`/`rotateZ`, not
+`rotateX`/`rotateY`. `Dial` also accepts one in `value` and `valueStart`.
+`Animated.createAnimatedComponent` wraps another component. A `TouchableOpacity` owns its own `opacity` for the press feedback, so animate opacity on
 a `Pressable` instead.
 
 ## Animations
@@ -89,8 +93,9 @@ setExpanded(true);
 Call `configureNext(config, onDone?)` before a state change and the next commit tweens every node
 whose computed rectangle moved, from where it was to where it now belongs, in the engine. The config
 is consumed by that one commit. `Presets.easeInEaseOut`, `Presets.linear` and `Presets.spring` are
-the React Native ones (300 ms timings, or the default spring); the shorthands
-`LayoutAnimation.easeInEaseOut()`, `linear()` and `spring()` configure and return; `create(duration,
+the React Native ones (300 ms, 500 ms and a 700 ms spring); the shorthands
+`LayoutAnimation.easeInEaseOut(onDone?)`, `linear()` and `spring()` call `configureNext` with that
+preset and return nothing; `create(duration,
 type, property)`, `Types` and `Properties` build a custom config. Nodes appearing for the first time
 snap into place rather than animating from nothing.
 

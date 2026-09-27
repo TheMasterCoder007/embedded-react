@@ -9,7 +9,7 @@ export default function DevicePreview({className}: {className?: string}): ReactN
     <figure className={clsx(styles.device, className)}>
       <div className={styles.screen}>
         <p>Hello from an ESP32.</p>
-        <p className={styles.tap}>Tap me</p>
+        <p className={styles.tap}>Tapped 0 times</p>
       </div>
       <figcaption>
         <i /> running on the chip

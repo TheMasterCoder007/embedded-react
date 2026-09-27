@@ -59,7 +59,9 @@ style={{transform: [{rotate: '45deg'}, {scale: pulse}], transformOrigin: [0.5, 1
 `{rotate}`, `{rotateX}`, `{rotateY}`, `{rotateZ}` or `{perspective}`. Rotations are CSS angle strings
 (`'45deg'`, `'0.5rad'`). Every axis except `perspective` can be an `Animated.Value`; `scale` binds
 both axes at once. `transformOrigin` is a fractional `[x, y]` pivot in 0 to 1, default the centre.
-`rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`.
+`rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`. **Flow B** takes a
+transform only as `Animated.Value`s on `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` or
+`rotate`/`rotateZ`; a static transform is rejected.
 
 A transformed subtree renders through the transform scratch buffer, whose size caps the largest node
 that can rotate or scale; see [Memory](../guides/memory.md).
@@ -78,32 +80,43 @@ carries no other weights), `fontStyle` (`'italic'` is a synthetic slant), `textA
 `textDecorationLine` (`underline`, `line-through`), `lineHeight`, `letterSpacing`.
 
 Only baked font sizes exist on the device; another size snaps to the nearest baked one. See
-[Assets](../concepts/assets.md). **Flow B:** `fontFamily` and `textAlign` are not in the subset.
+[Assets](../concepts/assets.md). **Flow B:** see [what it does not accept](#flow-b).
 
 Two components add a property of their own: `Modal` reads `backdropColor` for its scrim, and
 `TextInput` reads `cursorColor` for the caret.
 
 ## Colours
 
-Flow A parses `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and named colours. **Flow B**
-accepts hex and named colours only, and a state-driven colour must be a literal or a ternary of
-literals.
+Flow A parses `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the lowercase names
+`transparent`, `black`, `white`, `red`, `green`, `blue`, `gray`/`grey`, `yellow`, `cyan`, `magenta`
+and `orange`. **Flow B** accepts `#rgb`, `#rrggbb`, `#rrggbbaa` and the first six of those names
+only, and a state-driven color must be a literal or a ternary of literals. Neither flow parses
+`#rgba` in a style.
 
 ## StyleSheet
 
 `StyleSheet.create(styles)` returns its argument; it exists for parity and for the Flow B compiler,
 which treats a `StyleSheet.create` reference as the static layer of a style. `StyleSheet.flatten`
-merges an array into one object.
+merges an array into one object. `StyleSheet.hairlineWidth` is `1` and `StyleSheet.absoluteFill` is
+`{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0}`; Flow B cannot reference either, so
+write the values out.
 
 **Flow B:** a style object holding any state-driven value may contain only keys the compiler can
-update at runtime (colours, opacity, sizes, margins, padding, the flex alignment enums, `position`,
+update at runtime (colors, opacity, sizes, margins, padding, the flex alignment enums, `position`,
 `display`). Keep the rest in `StyleSheet.create` and overlay the dynamic part:
 `style={[styles.btn, {backgroundColor: on ? A : B}]}`, with the static layer a `StyleSheet.create`
 reference rather than an inline object.
 
+## Flow B
+
+The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
+`aspectRatio`, `flexWrap`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
+border widths and colors, the shadow keys and `elevation`, `transformOrigin`, `fontFamily`,
+`fontStyle`, `textAlign` or `textDecorationLine`. `Text`'s `numberOfLines` and `ellipsizeMode` are
+not read.
+
 ## Animated values in styles
 
 An `Animated.Value` can sit directly in `backgroundColor`, `opacity`, `color`, any `transform` axis,
-and a `Dial`'s `value`/`valueStart`, on an `Animated.View`, `Animated.Text`, `Animated.Image` or
-`Dial`. The engine binds the value to the property and drives it natively; no JavaScript runs per
+and a `Dial`'s `value`/`valueStart`, on any element; the `Animated.*` wrappers are pass-through. The engine binds the value to the property and drives it natively; no JavaScript runs per
 frame. See [Animated](./animated.md).

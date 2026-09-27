@@ -31,7 +31,12 @@ target board without leaving the tab.
 
 Inside the repository, `npm run sim -- thermostat` from `bridges/quickjs/js` runs esbuild in watch
 mode and launches the SDL simulator, which reloads the window on change. It reads a demo's source
-directly against the in-repo library, with no install step.
+directly against the in-repo library, with no install step. Build the simulator once first, from
+the repository root:
+
+```bash
+cmake -S tools/simulator -B tools/simulator/build && cmake --build tools/simulator/build
+```
 
 The SDL simulator is the maintainers' tool: it runs the real C engine natively, so it works under
 gdb and lldb, and it has a redbox overlay for JavaScript errors. Press **R** for a clean reset that
@@ -45,6 +50,10 @@ running, then swaps to the new one with no reboot and no blank "reloading" momen
 ```bash
 idf.py -DER_HOTRELOAD=1 build flash     # the receiver is compiled out of a default build
 ```
+
+The board must also already hold a container from `embedded-react build`, written to the config
+partition as the [ESP32-S3 guide](./boards/esp32-s3.md) describes: the dev loop sends only your app,
+and runs it against the vendor section already on the board.
 
 Then, with both of the board's USB ports plugged in (the UART port for flashing, the native USB
 port for reload):
@@ -60,7 +69,7 @@ was built without the receiver, the dev loop says which rather than hanging. The
 come back over the same port, prefixed `▸`.
 
 Only your changed app code crosses the wire. The boot container is split into a **vendor** section
-(React, the reconciler and the library, about 1 MB of bytecode, run first) and a small **app** section
+(React, the reconciler and the library, about 140 KB of stripped bytecode, run first) and a small **app** section
 (your bytecode and assets, run last). The vendor half never changes between saves, so the dev loop
 ships just the app slice, and a reload stays quick however large the app grows.
 
@@ -80,8 +89,9 @@ State survives because of a build-time transform, not runtime magic. In every ho
 bundler rewrites each `useState(init)` in _your_ files (never the library's) to
 `usePersistentState("file::Component#n", init)`, keyed by the component's name and the hook's
 order within it. The store behind that hook lives on the C side of the runtime, outside the
-JavaScript context, so it outlives the reload. On a device, or in a release build, there is no
-transform and no store, and `useState` is exactly `useState`.
+JavaScript context, so it outlives the reload. The device loop applies the transform too, and an
+`ER_HOTRELOAD` firmware installs the store. A release build has neither, and `useState` is exactly
+`useState`.
 
 That keying has consequences worth knowing:
 

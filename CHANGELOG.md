@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Versioning is lockstep across all distribution channels (npm, GitHub Release,
 ESP-IDF Component Registry, PlatformIO) — a single version drives every artifact.
-See the README for the release process.
+See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
 ### Changed

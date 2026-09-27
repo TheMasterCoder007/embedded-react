@@ -35,18 +35,18 @@ Two design rules run through all of it:
 - **No allocation while rendering.** Scratch buffers for opacity groups, transforms and shadows
   are statically allocated and sized by compile-time flags. A render pass never calls `malloc`, so
   it can never fail for lack of heap, and its memory cost is known before the firmware boots.
-- **Everything is a compile-time flag.** Shadows, 3D transforms, bilinear scaling, gradients, the
-  node pool, the scratch buffer sizes, the number of damage rectangles: each is an `ERUI_*` CMake
-  option, with desktop-sized defaults that a board turns down. The RP2040 example runs the same
-  engine as the 800×480 ESP32-S3, with smaller numbers. [Memory](../guides/memory.md) walks
-  through sizing them.
+- **Everything is a compile-time flag.** Shadows, 3D transforms, bilinear scaling and gradients
+  are `ERUI_*` CMake options that default off, so a board opts into what it uses. The node pool and
+  scratch buffer sizes are `ERUI_*` CMake values, and the damage-rectangle budget is the
+  `ER_DAMAGE_RECTS_MAX` define. The RP2040 example runs the same engine as the 800×480 ESP32-S3,
+  with smaller numbers. [Memory](../guides/memory.md) walks through sizing them.
 
 ## Pixels
 
 The engine composes in **premultiplied ARGB8888**: four bytes per pixel, with the colour channels
 already multiplied by alpha. Every buffer it hands a backend is in that format, and so are baked
 images. The one exception is `fill_rect`'s colour, which is straight-alpha `0xAARRGGBB` because
-that is what a style sheet writes; the engine premultiplies it once per call.
+that is what a style sheet writes; the backend premultiplies it before compositing.
 
 A backend converts to its panel's native format, usually RGB565, inside its callbacks. The engine
 does not know or care what the panel wants.
@@ -58,15 +58,15 @@ uses `dma2d`; any board driving an SPI panel from an RP2040 uses `pico-spi-lcd`.
 is portable, backends are deliberately not: they are where the SDK calls and the DMA descriptors
 live.
 
-| Backend                 | Hardware                                                                         | Status           |
-| ----------------------- | -------------------------------------------------------------------------------- | ---------------- |
-| `esp32-lcd`             | ESP32-S3 RGB-parallel panels, framebuffer in PSRAM                               | Runs on hardware |
-| `esp32-spi-lcd`         | SPI panels on an ESP32 with no PSRAM: one internal-RAM framebuffer, banded flush | Runs on hardware |
-| `pico-spi-lcd`          | SPI panels on the RP2040: one RGB565 framebuffer, dirty-rect flush               | Runs on hardware |
-| `dma2d`                 | STM32 Chrom-ART hardware blitter                                                 | Runs on hardware |
-| `sdl`                   | SDL2 window: the desktop host and the test target                                | Working          |
-| `software` + `web`      | A CPU compositor and the WebAssembly present layer behind the browser simulator  | Working          |
-| `framebuffer`, `opengl` | Linux `/dev/fb0`, OpenGL ES                                                      | Planned          |
+| Backend                 | Hardware                                                                                                   | Status           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------- |
+| `esp32-lcd`             | ESP32-S3 RGB-parallel panels, framebuffer in PSRAM                                                         | Runs on hardware |
+| `esp32-spi-lcd`         | SPI panels on an ESP32 with no PSRAM: two band buffers (`ER_LCD_BANDED=1`) or one internal-RAM framebuffer | Runs on hardware |
+| `pico-spi-lcd`          | SPI panels on the RP2040: one RGB565 framebuffer, dirty-rect flush                                         | Runs on hardware |
+| `dma2d`                 | STM32 Chrom-ART hardware blitter                                                                           | Runs on hardware |
+| `sdl`                   | SDL2 window: the desktop host and the test target                                                          | Working          |
+| `software` + `web`      | A CPU compositor and the WebAssembly present layer behind the browser simulator                            | Working          |
+| `framebuffer`, `opengl` | Linux `/dev/fb0`, OpenGL ES                                                                                | Planned          |
 
 ### The interface
 
@@ -77,7 +77,7 @@ opaque context pointer.
 #include "native_renderer.h"
 
 static void fill (uint32_t argb, int x, int y, int w, int h, void *ctx) { /* solid rectangle */ }
-static void copy (const void *src, int stride, int x, int y, int w, int h, void *ctx) { /* opaque pixels */ }
+static void copy (const void *src, int stride, int x, int y, int w, int h, void *ctx) { /* premultiplied pixels, source-over */ }
 static void blend(const void *src, int stride, uint8_t alpha, int x, int y, int w, int h, void *ctx) { /* translucent pixels */ }
 static void wait_fn(void *ctx) { /* block until the panel has taken the last frame; may be NULL */ }
 static void on_frame(void *ctx) { /* a frame is ready; may be NULL */ }
@@ -88,11 +88,13 @@ void my_backend_init(void) {
 }
 ```
 
-- `fill_rect` paints a solid rectangle.
-- `copy_rect` writes opaque premultiplied pixels into the framebuffer.
-- `blend_rect` composites translucent pixels at a global alpha. Anti-aliased edges, text and
-  shadows all arrive through this call, so a backend that stubs it out paints hard edges and no
-  text.
+- `fill_rect` paints a solid rectangle, composited over the framebuffer when its alpha is below 255.
+- `copy_rect` composites premultiplied pixels source-over. Most are opaque, but anti-aliased text
+  rows and translucent images arrive here too, so a backend that only copies opaque pixels paints
+  text with black fringes.
+- `blend_rect` composites premultiplied pixels at a global alpha. Vector and arc edges, gradients,
+  shadows, and transformed and translucent content all arrive through this call, so a backend that
+  stubs it out loses every one of them.
 - `wait` blocks until the hardware has finished with the previous frame, for DMA-driven panels.
 - `frame_ready` says a frame is complete and can be presented.
 
@@ -100,8 +102,9 @@ Three optional extensions cover hardware that the basic contract would waste:
 
 - **Banded rendering.** A backend with no RAM for a full framebuffer sets `band_height` and
   provides `band_begin`/`band_flush`. The engine then renders each frame's damage as horizontal
-  strips through a band buffer of that many rows (about 19 KB for a 240-wide RGB565 panel), and
-  the panel's own memory retains the rest. This is how the no-PSRAM ESP32 drives a 240×320 panel
+  strips through a band buffer of that many rows, and the panel's own memory retains the rest.
+  The ESP32 SPI backend keeps two 40-row RGB565 band buffers, about 38 KB for a 240-wide panel,
+  so it can draw one strip while the other flushes. This is how the no-PSRAM ESP32 drives a 240×320 panel
   in 16-bit colour.
 - **Format-aware copy.** `copy_rect_fmt` receives an image that the engine has already proved
   fully opaque, in its baked format (ARGB8888 or RGB565), as one call for the whole rectangle. A
@@ -120,5 +123,5 @@ maximum corner, and a backend that mixes the two leaves a one-pixel column of st
 The engine does not run a loop of its own. The **host**, which is your firmware or one of the
 example projects, owns the frame loop: it polls touch, advances the engine's clock, lets the
 frontend commit, and presents. In Flow A that is a few lines around `er_runtime`, the portable
-QuickJS host core; in Flow B it is a call to the generated `er_app_build()` at boot and
-`er_commit()` each frame. The board examples are the reference for each.
+QuickJS host core; in Flow B it is `er_register_assets()` and the generated `er_app_build(w, h)` at
+boot, then `er_app_tick(dt)` and `er_commit()` each frame. The board examples are the reference for each.

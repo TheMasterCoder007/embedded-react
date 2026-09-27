@@ -9,14 +9,18 @@ onto a microcontroller. The UI runs _on the device_: no browser, no phone, and n
 required.
 
 ```jsx title="App.jsx"
+import {useState} from 'react';
 import {View, Text, Pressable} from 'embedded-react';
 
-export default function App() {
+export function App() {
+  const [taps, setTaps] = useState(0);
   return (
     <View style={{flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
       <Text style={{color: '#fff', fontSize: 24}}>Hello from an ESP32.</Text>
-      <Pressable onPress={() => console.log('tapped')}>
-        <Text style={{color: '#e94560', marginTop: 12}}>Tap me</Text>
+      <Pressable onPress={() => setTaps(taps + 1)}>
+        <Text style={{color: '#e94560', marginTop: 12}}>
+          Tapped {taps} times
+        </Text>
       </Pressable>
     </View>
   );
@@ -66,7 +70,7 @@ tracked in the [roadmap](./roadmap.md).
 | ESP32-S3 with an 800×480 RGB panel           | A       | Verified on hardware                                     |
 | ESP32 "Cheap Yellow Display" (no PSRAM, SPI) | B       | Verified on hardware                                     |
 | RP2040 with a 240×280 SPI display            | B       | Verified on hardware                                     |
-| Linux desktop (SDL)                          | A and B | Working                                                  |
+| Linux, macOS or Windows desktop (SDL)        | A and B | Working                                                  |
 | Browser (WebAssembly simulator)              | A       | Working                                                  |
 | STM32H7 with SDRAM (Chrom-ART backend)       | A       | Running on hardware; a public example project is planned |
 | Raspberry Pi                                 |         | Planned                                                  |

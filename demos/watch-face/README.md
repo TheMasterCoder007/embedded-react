@@ -10,6 +10,7 @@ the host-fed values, and the AOT house rules it follows.
 
 ```bash
 npm create embedded-react@latest my-watch -- --template watch-face   # start from this demo
+cd my-watch
 
 npm install
 npm run dev          # the browser simulator with hot reload; set the size to 240×280

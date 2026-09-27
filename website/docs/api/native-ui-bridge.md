@@ -16,22 +16,24 @@ React reconciler  →  host-config.js  →  NativeUI.*  →  native_ui_bridge.c 
 
 Everything the library calls, grouped:
 
-| Group            | Methods                                                                                                                                                                           |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tree             | `createNode(type)`, `destroyNode(h)`, `setRoot(h)`, `appendChild(parent, child)`, `insertBefore(parent, child, before)`, `removeChild(parent, child)`                             |
-| Props            | `setProps(h, props)`, `setTextSpans(h, spans)`, `setVectorOps(h, ops, paints, gradients)`, `setEvent(h, name, handler)`                                                           |
-| Frame            | `commit()`, `tick(dtMs)`, `now()`, `setBatcher(fn)`                                                                                                                               |
-| Timers           | `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval` (the web globals are these)                                                                                          |
-| Animation        | `animValueCreate`, `animValueDestroy`, `animValueSet`, `animValueGet`, `animValueAnimate`, `animValueBind`, `animValueBindInterpolated`, `animUnbind`, `animStop`                 |
-| Layout animation | `configureNextLayoutAnimation(config)`                                                                                                                                            |
-| Keyboard         | `setKeyboardConfig(config)`                                                                                                                                                       |
-| Limits           | `maxVectorOps`, `maxVectorPaints`, `maxVectorGrads`: the engine's compiled-in vector pool sizes, so the library can warn before the engine refuses                                |
-| Instrumentation  | `perfCallbackBegin/End`, `perfRenderBegin/End`, `perfMarshalBegin/End`: the marks behind the JS sub-split in the [perf overlay](../guides/performance.md#measuring-on-the-device) |
+| Group            | Methods                                                                                                                                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tree             | `createNode(type)`, `destroyNode(h)`, `setRoot(h)`, `appendChild(parent, child)`, `insertBefore(parent, child, before)`, `removeChild(parent, child)`                                                                       |
+| Props            | `setProps(h, props)`, `setTextSpans(h, spans)`, `setVectorOps(h, ops, paints, gradients, dirtyRect)`, `setEvent(h, name, handler)`                                                                                          |
+| Frame            | `commit()`, `tick(dtMs)`, `now()`, `setBatcher(fn)`                                                                                                                                                                         |
+| Animation        | `animValueCreate`, `animValueDestroy`, `animValueSet`, `animValueGet`, `animValueAnimate`, `animValueBind`, `animValueBindInterpolated`, `animUnbind`, `animStop`                                                           |
+| Layout animation | `configureNextLayoutAnimation(config)`, `hasPendingLayoutAnimation()`                                                                                                                                                       |
+| Keyboard         | `setKeyboardConfig(config)`                                                                                                                                                                                                 |
+| Limits           | `maxVectorOps`, `maxVectorPaints`, `maxVectorGrads`: the engine's compiled-in vector pool sizes, so the library can warn before the engine refuses                                                                          |
+| Instrumentation  | `perfCallbackBegin/End`, `perfRenderBegin/End`, `perfMarshalBegin/End`: the marks behind the JS sub-split in the [perf overlay](../guides/performance.md#measuring-on-the-device), present only in an `ER_PERF_STATS` build |
 
 `setProps` takes the flattened style plus top-level props as one bag. The bridge interns prop names
 and caches the last parsed string per enum and colour prop, and hashes the bag to skip an unchanged
 one, which is what made `setProps` cheap enough on the ESP32-S3: string identity, not parsing, is the
 common case.
+
+The web timers (`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`) are plain globals the
+bridge installs beside `NativeUI`, run by the pump off the engine clock.
 
 **One commit per frame.** `setBatcher` installs React's `batchedUpdates`, and the pump runs every
 callback of a frame inside it, so however many timers and events fire, the frame ends in one render
@@ -43,7 +45,7 @@ A Flow A firmware does not install `NativeUI` itself either. It uses `er_runtime
 core in `bridges/quickjs/er_runtime.h`, which owns the QuickJS runtime and context, installs the
 bridge and the host globals (`console`, `screen`, the optional persist store), loads an app, pumps
 it, and shows errors. It has no platform dependencies: the caller provides the display backend, the
-app bytes and the frame loop.
+app bytes, and the frame loop.
 
 ```c
 ErRuntimeConfig cfg = {
@@ -64,24 +66,29 @@ for (;;) {
 }
 ```
 
-| Function                                                                            | Purpose                                                                                                                                                    |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `er_runtime_init(cfg)`                                                              | Creates the runtime and context with the lite JavaScript profile, installs the bridge and globals. Warns if a supplied allocator cannot report block sizes |
-| `er_runtime_load_container(bytes, len)`                                             | Loads an `app.erpkg`: checks the CRC and QuickJS version, registers the asset pack, runs the bytecode                                                      |
-| `er_runtime_load_bytecode(bytes, len)`, `er_runtime_load_source(src, len, name)`    | Load a bare bytecode blob, or source text (development hosts)                                                                                              |
-| `er_runtime_pump()`                                                                 | Services the frame: microtasks, due timers, React's passive effects, all inside one batch scope                                                            |
-| `er_runtime_reset()`                                                                | Tears down the context and rebuilds it, for a full reload                                                                                                  |
-| `er_runtime_clear_persist()`                                                        | Forgets the persisted-state store                                                                                                                          |
-| `er_runtime_set_wall_clock(ms)`                                                     | Sets what `Date.now()` returns, from an RTC or NTP                                                                                                         |
-| `er_runtime_show_error()`                                                           | Draws the on-screen redbox for the last JavaScript error                                                                                                   |
-| `er_runtime_run_gc()`, `er_runtime_gc_threshold()`, `er_runtime_gc_accounting_ok()` | Collect on demand, read the live threshold, and check that the allocator's size accounting works                                                           |
+| Function                                                                            | Purpose                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `er_runtime_init(cfg)`                                                              | Creates the runtime and context with the lite JavaScript profile, installs the bridge and globals. Warns if a supplied allocator cannot report block sizes                                    |
+| `er_runtime_load_container(bytes, len)`                                             | Loads an `app.erpkg`: checks the CRC and QuickJS version, registers the asset pack, runs the bytecode. Returns an `ErContainerStatus`; `er_runtime_container_status_str()` names it for a log |
+| `er_runtime_load_container_ex(bytes, len, copy_assets)`                             | The same; `copy_assets = true` copies the asset pack so a reusable staging buffer (a hot-reload upload) can be freed at once                                                                  |
+| `er_runtime_load_bytecode(bytes, len)`, `er_runtime_load_source(src, len, name)`    | Load a bare bytecode blob, or source text (development hosts)                                                                                                                                 |
+| `er_runtime_pump()`                                                                 | Services the frame: microtasks, due timers, React's passive effects, all inside one batch scope                                                                                               |
+| `er_runtime_reset()`                                                                | Tears down the context and rebuilds it, for a full reload                                                                                                                                     |
+| `er_runtime_clear_persist()`                                                        | Forgets the persisted-state store                                                                                                                                                             |
+| `er_runtime_set_wall_clock(ms)`                                                     | Sets what `Date.now()` returns, from an RTC or NTP                                                                                                                                            |
+| `er_runtime_show_error()`, `er_runtime_last_error()`                                | Draw the on-screen redbox for the last JavaScript error; return its message and stack                                                                                                         |
+| `er_runtime_show_message(title, body, hint)`                                        | The same red panel with your own text, e.g. for a config that failed to load                                                                                                                  |
+| `er_runtime_run_gc()`, `er_runtime_gc_threshold()`, `er_runtime_gc_accounting_ok()` | Collect on demand, read the live threshold, and check that the allocator's size accounting works                                                                                              |
+| `er_runtime_set_gc_threshold(bytes)`                                                | Change the GC floor at runtime, e.g. higher while an animation runs                                                                                                                           |
+| `er_runtime_shutdown()`                                                             | Frees the context and runtime; the engine and backend are left as they are                                                                                                                    |
 
-`ErRuntimeConfig` also takes `malloc_functions` (to place the heap in external RAM; its
-`js_malloc_usable_size` must return real block sizes or the collector never runs), `max_stack_size`
+`ErRuntimeConfig` also takes `screen_scale` (what `screen.scale` reports; 1.0 when unset),
+`malloc_functions` (to place the heap in external RAM; its `js_malloc_usable_size` must return real
+block sizes or the collector never runs), `max_stack_size`
 (set below the host task's real stack so deep recursion is a JavaScript error rather than a crash),
 `install_persist`, `install_host_globals` (a hook to add objects of your own, as the ESP32-S3
 example does for WiFi), and `extra_intrinsics` (opt in to `Date` objects, `Proxy`, typed arrays,
-`WeakRef`, `BigInt`, which the default profile leaves out).
+`WeakRef`, `BigInt` or `eval`, which the default profile leaves out).
 
 Below `er_runtime`, for a host that drives QuickJS itself, the bridge exposes
 `er_bridge_install(ctx)`, `er_bridge_pump(ctx)`, `er_bridge_run_bytecode(ctx, buf, len)`,
@@ -91,11 +98,12 @@ Below `er_runtime`, for a host that drives QuickJS itself, the bridge exposes
 
 The runtime creates its context with only the intrinsics React needs: base objects, `RegExp`,
 `JSON`, `Map`/`Set`, `Promise`, plus `performance.now()` and `Date.now()` on the engine clock. The
-same set runs on the device, the desktop, the simulator and the test harnesses, so development and
+same set runs on the device, the desktop, the simulator, and the test harnesses, so development and
 hardware expose one JavaScript surface. `Date.now()` counts from boot until the host passes the real
 time to `er_runtime_set_wall_clock()`, from an RTC or an SNTP sync. Extras (full `Date` objects,
-`Proxy`, typed arrays, `WeakRef`, `BigInt`) are opt-in per host through
-`ErRuntimeConfig.extra_intrinsics`.
+`Proxy`, typed arrays, `WeakRef`, `BigInt`, and `eval`/`Function` in a build with the parser) are
+opt-in per host through `ErRuntimeConfig.extra_intrinsics` (`ER_JS_INTRINSIC_DATE`, `_PROXY`,
+`_TYPED_ARRAYS`, `_WEAK_REF`, `_BIGINT`, `_EVAL`).
 
 Firmware that only runs precompiled bytecode can drop the JavaScript parser with
 `-DER_BRIDGE_QUICKJS_LITE=ON`, about 60 KB of flash; the error overlay still works there.

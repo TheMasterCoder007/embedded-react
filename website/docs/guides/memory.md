@@ -20,9 +20,8 @@ defaults are desktop-sized.
 | `ERUI_SCRATCH_BAND_H`                                                        | `ERUI_SCRATCH_H` | Shrink to render tall fades in more, smaller passes                                                                                    |
 | `ERUI_XFORM_W`, `ERUI_XFORM_H`                                               | scratch size     | The transform source, the one buffer that cannot be banded; decouple it when strips are screen-wide but only small widgets rotate      |
 | `ERUI_FADE_CACHE_W/H`                                                        | 0 (off)          | Caches a translucent subtree during a pure opacity animation, roughly doubling fade frame rates; put it in external RAM                |
-| `ER_DAMAGE_RECTS_MAX`                                                        | 16               | Disjoint dirty rectangles per commit; 4 → 16 costs about 1.1 KB of `.bss`                                                              |
+| `ER_DAMAGE_RECTS_MAX`                                                        | 16               | Disjoint dirty rectangles per commit; 4 → 16 costs about 1.1 KB of `.bss`. A compile definition, not a CMake option                    |
 | `ERUI_IMAGE_REGISTRY_MAX`                                                    | 128              | Registered images, about 80 bytes each. Past the limit an image is refused and does not draw, so keep it at or above the asset count   |
-| `ERUI_FONT_SIZES`                                                            | 7                | Pre-rasterised sizes of the built-in font                                                                                              |
 | `ERUI_FONT_POOL_BYTES`                                                       | 0                | A static pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                   |
 | `ERUI_SHADOWS`, `ERUI_3D_TRANSFORMS`, `ERUI_GRADIENT`, `ERUI_BILINEAR_SCALE` | varies           | Features that cost code and scratch; off is free                                                                                       |
 
@@ -35,7 +34,7 @@ RAM** on a PSRAM board, because the scanline loops touch them per pixel:
 | `ERUI_VECTOR_PAINTS_MAX`                       | 16      | Shapes per `<Svg>`                                             |
 | `ERUI_VECTOR_MAX_PTS`, `ERUI_VECTOR_MAX_EDGES` | 2048    | Flattened points, and edges, in one shape                      |
 | `ERUI_VECTOR_MAX_ROW`                          | 1024    | The widest vector node, in pixels                              |
-| `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`   |         | The arc widget's shared span cache, about 4 KB at the defaults |
+| `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`   | 255, 8  | The arc widget's shared span cache, about 4 KB at the defaults |
 
 Turn the perf overlay on and its `VEC n/8 IMG n/128` line shows the pools filling; a screen missing an
 asset reads as a full image pool.
@@ -53,7 +52,7 @@ The biggest single number on most boards, and the backend's to choose:
 
 ## Flow A: the JavaScript heap
 
-Flow A adds QuickJS, React, the reconciler and your app's live objects. Three settings in
+Flow A adds QuickJS, React, the reconciler and your app's live objects. Four settings in
 `ErRuntimeConfig` control it:
 
 - **`memory_limit`** caps the heap so an app that leaks gets a JavaScript out-of-memory error rather
@@ -67,11 +66,13 @@ Flow A adds QuickJS, React, the reconciler and your app's live objects. Three se
 - **`gc_threshold`** sets a floor under QuickJS's collection trigger. With a large external heap the
   default trigger recomputes to 1.5× the live set and mark-sweeps far too often; a floor cut 18% off
   a measured workload on the S3.
+- **`max_stack_size`** is the JavaScript stack-overflow guard; set it below the calling task's stack,
+  as the next paragraph explains. Left 0, QuickJS keeps its own default.
 
 The interpreter's **stack** is the C stack of the task that calls into it: every JavaScript frame
 lives there. Keep that task's stack in internal RAM and size it generously; the ESP32-S3 example uses
-a 64 KB main task stack and gives JavaScript three quarters of it. A JS "stack overflow" or an RTOS
-stack panic means raise it.
+a 64 KB main task stack and sets `max_stack_size` to three quarters of it. A JS "stack overflow" or
+an RTOS stack panic means raise it.
 
 Sizes to plan around, measured on the ESP32-S3 with the thermostat: the vendor bytecode (React, the
 reconciler and the library) is about 140 KB in the container, and the QuickJS bridge's own tables
@@ -88,11 +89,11 @@ are 22 KB, which sit in PSRAM at no measurable cost. Flow B has none of this.
 | Node pool          | default                      | lowered                                               | sized to the watch face             |
 | Image registry     | default                      | 16                                                    | 8                                   |
 | Damage rectangles  | 16                           | 4                                                     | 4                                   |
-| Shadows, gradients | on                           | shadows off                                           | shadows, gradients and keyboard off |
+| Shadows, gradients | shadows off                  | shadows off                                           | shadows, gradients and keyboard off |
 | Free after boot    | logged at boot               | ~181 KB internal                                      | fits with the framebuffer           |
 
-The two ESP32 examples log free RAM at boot and again after start-up; watch the second number as you
-add features. The three `CMakeLists.txt` files are the worked examples of the flags above.
+The CYD logs free RAM at boot and again after start-up, the ESP32-S3 once after boot and in every
+`alive:` line; watch the later number as you add features. The three `CMakeLists.txt` files are the worked examples of the flags above.
 
 ## Symptoms and causes
 

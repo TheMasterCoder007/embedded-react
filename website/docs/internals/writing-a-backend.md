@@ -23,16 +23,17 @@ static const EmbeddedRenderBackend backend = {fill, copy, blend, wait_fn, on_fra
 embedded_renderer_set_backend(&backend);
 ```
 
-- **`fill_rect`** paints a solid rectangle. The colour is straight-alpha `0xAARRGGBB`; the engine
-  premultiplies internally, and an alpha below 255 means blend, not replace.
-- **`copy_rect`** writes a premultiplied ARGB8888 buffer into the framebuffer. `stride` is the
-  source row stride in bytes. The engine only calls it for content it treats as opaque, but the
-  buffer's own alpha may still be below 255 in anti-aliased edges; most backends blend it.
-- **`blend_rect`** composites a premultiplied ARGB8888 buffer at a global `alpha`. Per channel:
-  `out = src + dst * (1 - srcA * alpha / 255)`, with `src` already premultiplied. Every
-  anti-aliased edge, every glyph, every shadow and every translucent group arrives here. A backend
-  that stubs it paints hard edges and no text, and the engine's own tests guard against exactly that
-  (a stubbed blend once let a pixel-equivalence test pass against a blank screen).
+- **`fill_rect`** paints a solid rectangle. The colour is straight-alpha `0xAARRGGBB`, and an alpha
+  below 255 means blend, not replace (anti-aliased rounded corners arrive this way). 1-bit glyphs
+  arrive as runs of fills.
+- **`copy_rect`** composites a premultiplied ARGB8888 buffer source-over: a pixel with alpha 255
+  replaces, a lower alpha blends, 0 leaves the destination alone. `stride` is the source row stride
+  in bytes. Images and anti-aliased glyph rows arrive here, so a backend that copies the bytes
+  verbatim draws text in black boxes.
+- **`blend_rect`** composites a premultiplied ARGB8888 buffer at a global `alpha`: scale every source
+  channel, alpha included, by `alpha / 255`, then source-over, `out = src + dst * (1 - srcA / 255)`.
+  Vector and arc anti-aliasing, gradients, shadows, transformed content and translucent groups
+  arrive here. A backend that leaves it NULL draws none of that, and nothing warns.
 - **`wait`** blocks until the hardware has finished consuming the previous frame's pixels, for
   DMA-driven panels. NULL for a synchronous backend.
 - **`frame_ready`** says a frame is complete. NULL if you present from your own loop.
@@ -67,14 +68,14 @@ takes exclusive bounds, an ST7789-style `set_window` takes inclusive ones.
 ## Optional extensions
 
 **Banded rendering**, for a board with no RAM for a framebuffer. Set `band_height` and provide
-`band_begin(x, y, w, h)` and `band_flush()`. The engine then renders each commit's damage as
-full-width horizontal strips: for each strip it calls `band_begin`, emits fill/copy/blend calls with
-**band-local** Y (already offset by the strip's top) into a `screen_w × band_height` buffer, then
-calls `band_flush` to push it to the panel, whose own memory retains the rest of the picture. Band
-tiling is applied when ops are emitted, not as a clip, so transform and opacity scratch sources do
-not truncate at a seam. `esp32-spi-lcd` keeps two band buffers and ping-pongs them, compositing the
-next strip while the panel DMAs the previous one; without that overlap a large repaint shows as a
-stepped top-to-bottom wave.
+`band_begin(x, y, w, h)` and `band_flush()`. The engine then renders each commit's damaged rows as
+full-width horizontal strips of at most `band_height` rows: for each strip it calls `band_begin`,
+emits fill/copy/blend calls with **band-local** Y (already offset by the strip's top) into a
+`screen_w × band_height` buffer, then calls `band_flush` to push it to the panel, whose own memory
+retains the rest of the picture. Band tiling is applied when ops are emitted, not as a clip, so
+transform and opacity scratch sources do not truncate at a seam. `esp32-spi-lcd` keeps two band
+buffers and ping-pongs them, compositing the next strip while the panel DMAs the previous one;
+without that overlap a large repaint shows as a stepped top-to-bottom wave.
 
 **Format-aware copy.** Provide `copy_rect_fmt(src, stride, fmt, x, y, w, h)` and the engine hands
 you images it has proved fully opaque, in their baked format (`ER_IMG_ARGB8888` or
@@ -133,9 +134,10 @@ fetched sources. Keep the backend free of the engine's internals: `native_render
 
 ## Testing a backend
 
-The engine's CTest suites run against the host `software` path, so they verify the engine, not your
-callbacks. For a backend, the useful checks are: a solid `fill_rect` of the whole screen in each
-primary (byte order and inversion), a `copy_rect` of a baked image (stride and format), a `blend_rect`
-of text over a colour (premultiplied maths), and a dirty-rect flush of a one-pixel-wide change at
-each screen edge (the inclusive/exclusive convention). `-DER_PERF_OVERLAY=1` then shows what present
-costs per frame.
+The engine's CTest suites paint through their own in-test callbacks, so they verify the engine, not
+yours. For a backend, the useful checks are: a solid `fill_rect` of the whole screen in each primary
+(byte order and inversion), a `copy_rect` of a baked image (stride and format), text and a
+translucent `blend_rect` over a color (premultiplied maths), and a dirty-rect flush of a
+one-pixel-wide change at each screen edge (the inclusive/exclusive convention). Then compile the engine and your host with
+the C define `ER_PERF_OVERLAY=1` (not a CMake option of the engine's; it turns on `ER_PERF_STATS`
+too), mark the present phase, and the perf overlay shows what present costs per frame.

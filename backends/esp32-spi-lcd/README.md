@@ -1,11 +1,12 @@
 # backends/esp32-spi-lcd
 
-SPI-LCD backend for **no-PSRAM ESP32** boards: the internal-RAM counterpart to `esp32-lcd`. By default
-it renders banded (`ER_LCD_BANDED=1`): the engine repaints only the dirty rows, one full-width strip
-at a time, into two ping-pong DMA-capable RGB565 band buffers (`width × ER_LCD_BANDED_ROWS × 2` bytes
-each, about 19 KB at 240 wide and 40 rows), and the panel's own GRAM retains everything else. Full
-16-bit color at a fraction of a framebuffer's RAM. A full-framebuffer mode (RGB565, or RGB332 with
-`ER_SPI_LCD_FB8=1`) exists for boards with a big enough block.
+SPI-LCD backend for **no-PSRAM ESP32** boards: the internal-RAM counterpart to `esp32-lcd`. Built with
+`ER_LCD_BANDED=1` (as the CYD example is) it renders banded: the engine repaints only the dirty rows,
+one full-width strip at a time, into two ping-pong DMA-capable RGB565 band buffers
+(`width × ER_LCD_BANDED_ROWS × 2` bytes each, about 19 KB at 240 wide and the default 40 rows), and
+the panel's own GRAM retains everything else. Full 16-bit color at a fraction of a framebuffer's RAM.
+Without it (the source default, `ER_LCD_BANDED=0`) it keeps a full framebuffer, RGB565 or RGB332
+with `ER_SPI_LCD_FB8=1`, for boards with a big enough block.
 
 **Docs:** [ESP32 CYD guide](https://embedded-react.dev/guides/boards/esp32-cyd#how-it-fits-without-psram)
 (how it fits, tuning, the `ER_SPI_LCD_SWAP_BGR` panel-order flag) and

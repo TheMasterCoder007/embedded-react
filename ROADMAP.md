@@ -67,9 +67,8 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
 
 ### Flow A — React on QuickJS (runtime)
 
-- **On-device hot reload.** A dev-server / socket transport that pushes fresh bytecode to
-  the board over serial / Wi-Fi (OTA), so the device gets the same edit-save-see loop the
-  simulator has. The "later luxury", deferred deliberately.
+- **Wireless hot reload.** On-device hot reload ships over USB serial; a Wi-Fi transport
+  would give the same edit-save-see loop without a cable.
 - **Runtime asset registration.** A `NativeUI.loadImage` / `loadFont` path for
   dynamically generated or OTA-delivered assets. `er_font_load` (blob → pool) already
   exists for this future case; the JS-facing API does not.
@@ -123,7 +122,7 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —
 > `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
-> `--aot` → `app.gen.c` (Flow B). The AOT subset still excludes animation composition (see Flow B above).
+> `--aot` → `app.gen.c` (Flow B).
 
 ---
 
@@ -146,8 +145,8 @@ highest-impact first.
   a `strncmp` registry scan per text op).
 - **Batch anti-aliased corner and 1-bit glyph blits** into a per-row buffer, one
   `copy`/`blend` per row, instead of per-pixel / per-span.
-- **Draw only the border ring** of bordered rounded rects; fill the interior once
-  (currently overdrawn).
+- **Draw only the border ring** of bordered rounded rects with an opaque background too; today
+  only a transparent or translucent background gets the ring, and an opaque one is overdrawn.
 - **Clamp software-composite loops once per row** instead of a per-pixel bounds check.
 - **Step transform source coordinates incrementally** (and consider fixed-point) instead
   of a float matrix-multiply + bilinear sample per output pixel.

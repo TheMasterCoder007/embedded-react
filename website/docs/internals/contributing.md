@@ -13,7 +13,7 @@ known to be broken.
 Three rules are not negotiable, because they are what keeps the engine portable to any MCU:
 
 - **No platform headers.** Pure C99. No `stm32h7xx_hal.h`, no `esp_lcd.h`, no `<windows.h>`. The
-  engine needs `<stdint.h>`, `<string.h>`, `<stdlib.h>` and `<math.h>` and nothing else. Hardware
+  engine uses only the C standard library headers. Hardware
   specifics live in `backends/`.
 - **No React, or any frontend, in the engine.** It does not import React and makes no assumptions
   about who calls `er_scene.h`. Bindings to React, or to anything else, live in `bridges/`. That
@@ -31,7 +31,7 @@ exposes two targets; run the first before committing:
 ```bash
 cmake -S . -B build
 cmake --build build --target format        # rewrite in place
-cmake --build build --target format-check  # the CI dry-run: --Werror, no edits
+cmake --build build --target format-check  # dry run: --Werror, no edits
 ```
 
 **JavaScript** is formatted by Prettier with the root `.prettierrc.cjs`. Prettier is a dev tool of
@@ -47,8 +47,17 @@ npm run format:check   # dry-run
 A bare `npx prettier` from the repository root resolves a different Prettier and flags unrelated
 files; use the package's.
 
-**Markdown** for this site is also formatted by that Prettier, with `--prose-wrap preserve`, which
-is what keeps the tables aligned.
+**Markdown** for this site is formatted by the same Prettier, but `npm run format` covers only
+JavaScript, so pass the pages explicitly. `--prose-wrap preserve` keeps the line breaks as written
+and still aligns the tables:
+
+```bash
+cd bridges/quickjs/js
+npx prettier --prose-wrap preserve --write "../../../website/docs/**/*.{md,mdx}" \
+  "!../../../website/docs/{changelog,roadmap}.md"
+```
+
+Neither formatter runs in CI, so run them before you push.
 
 ## Documentation conventions
 

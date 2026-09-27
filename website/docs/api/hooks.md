@@ -22,7 +22,7 @@ See [Animated](./animated.md).
 ## usePersistentState
 
 ```jsx
-const [count, setCount] = usePersistentState(0);
+const [count, setCount] = usePersistentState('count', 0);
 ```
 
 `useState` whose value survives a hot reload in the simulators and the on-device dev loop. You rarely

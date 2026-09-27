@@ -35,9 +35,9 @@ Each of these has an example firmware project in the repository and a guide here
 | Waveshare ESP32-S3-Touch-LCD-7         | 800×480 RGB, capacitive touch | A      | ESP-IDF v6    | [ESP32-S3](../guides/boards/esp32-s3.md)   |
 | ESP32-2432S028R "Cheap Yellow Display" | 240×320 SPI, resistive touch  | B      | ESP-IDF v5.3+ | [ESP32 CYD](../guides/boards/esp32-cyd.md) |
 | Waveshare RP2040-Touch-LCD-1.69        | 240×280 SPI, capacitive touch | B      | Pico SDK      | [RP2040](../guides/boards/rp2040.md)       |
-| Linux desktop                          | SDL window                    | A or B | CMake, SDL2   | [Linux](../guides/boards/linux.md)         |
+| Linux, macOS or Windows desktop        | SDL window                    | A or B | CMake, SDL2   | [Linux](../guides/boards/linux.md)         |
 
-No board yet? The [Linux host](../guides/boards/linux.md) runs the same firmware-side code in a desktop
+No board yet? The [desktop host](../guides/boards/linux.md) runs the same firmware-side code in a desktop
 window, which makes it a good way to learn the C side before hardware arrives.
 
 ## Flow A: runtime
@@ -64,7 +64,7 @@ parttool.py write_partition --partition-name=config --input dist/app.erpkg
 ```
 
 `parttool.py` ships with ESP-IDF. The board restarts into your app, and the log shows
-`React mounted at 800x480`. From now on, repeat only step 2.
+`config loaded`. From now on, repeat only step 2.
 
 :::info[Hot reload on the device]
 Firmware built with `-DER_HOTRELOAD=1` accepts live updates over USB: `npm run dev:device`
