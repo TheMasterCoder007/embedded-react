@@ -1,0 +1,7 @@
+.loading {
+  display: grid;
+  place-items: center;
+  height: calc(100dvh - var(--ifm-navbar-height));
+  font-family: var(--er-font-mono);
+  color: var(--ifm-color-emphasis-600);
+}

@@ -1,0 +1,27 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.primary,
+.primary:hover {
+  color: #04121f;
+  background: var(--er-cyan);
+  border-color: var(--er-cyan);
+}
+
+.primary:hover {
+  box-shadow: 0 0 1.5rem rgba(56, 189, 248, 0.45);
+}
+
+.ghost,
+.ghost:hover {
+  color: #e6edf5;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(230, 237, 245, 0.25);
+}
+
+.ghost:hover {
+  border-color: var(--er-cyan);
+}

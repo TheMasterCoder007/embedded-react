@@ -1,0 +1,80 @@
+.flows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.flow {
+  padding: 1.6rem;
+}
+
+.flow h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.tag {
+  margin: 0 0 0.5rem;
+  font-family: var(--er-font-mono);
+  font-size: 0.75rem;
+  color: var(--ifm-color-primary);
+}
+
+.body {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.6;
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0;
+  margin: 1.1rem 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  font-family: var(--er-font-mono);
+  font-size: 0.75rem;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+}
+
+[data-theme='dark'] .steps li {
+  border-color: rgba(56, 189, 248, 0.16);
+}
+
+/* The arrow leads each step, so a wrapped row never ends on a dangling arrow. */
+.steps li:not(:first-child) {
+  margin-left: 1.6rem;
+  position: relative;
+}
+
+.steps li:not(:first-child)::before {
+  content: '→';
+  position: absolute;
+  left: -1.25rem;
+  color: var(--ifm-color-primary);
+}
+
+.steps li:last-child,
+[data-theme='dark'] .steps li:last-child {
+  color: var(--ifm-color-primary);
+  border-color: var(--ifm-color-primary);
+}
+
+.more {
+  margin: 2rem 0 0;
+  font-weight: 600;
+}
+
+@media (max-width: 996px) {
+  .flows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

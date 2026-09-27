@@ -1,0 +1,37 @@
+.section {
+  padding: 5rem 0;
+}
+
+.tinted {
+  background: var(--ifm-color-emphasis-100);
+  border-block: 1px solid var(--ifm-color-emphasis-200);
+}
+
+[data-theme='dark'] .tinted {
+  background: var(--er-navy-deep);
+  border-color: rgba(56, 189, 248, 0.1);
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  font-family: var(--er-font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+}
+
+.title {
+  max-width: 44rem;
+  margin: 0 0 2.5rem;
+  font-size: clamp(1.6rem, 3vw, 2.25rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 996px) {
+  .section {
+    padding: 3.5rem 0;
+  }
+}

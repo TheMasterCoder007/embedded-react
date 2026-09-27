@@ -1,22 +1,14 @@
-# examples/esp32 — ESP32 hosts
+# examples/esp32
 
-ESP32-family host integrations, one folder per board/variant. Each subfolder is a self-contained
-ESP-IDF project (FetchContents its deps), so paths in their READMEs are relative to the **repo root**
-and IDF commands run from **inside the variant folder**.
+ESP32-family hosts, one self-contained ESP-IDF project per board. Each fetches its dependencies at
+configure time, so it can be copied out of the repository and built on its own.
 
-```
-esp32/
-  esp32-s3/     ESP32-S3 + PSRAM — Flow A (QuickJS interprets precompiled bytecode). The current,
-                working integration (Waveshare ESP32-S3-Touch-LCD-7). See esp32-s3/README.md.
-```
+| Folder | Board | Flow | Guide |
+|---|---|---|---|
+| `esp32-s3/` | Waveshare ESP32-S3-Touch-LCD-7 (800×480 RGB, PSRAM) | A, QuickJS runtime | [ESP32-S3](https://embedded-react.dev/guides/boards/esp32-s3) |
+| `esp32-2432s028r/` | "Cheap Yellow Display" (240×320 SPI, no PSRAM) | B, compiled C | [ESP32 CYD](https://embedded-react.dev/guides/boards/esp32-cyd) |
 
-## Planned
-
-- **A no-PSRAM ESP32 variant** (its own folder here) — without external RAM the QuickJS heap has
-  nowhere to live, so this one will use the **AOT path** (JSX compiled to C against `er_scene.h`, no
-  JS runtime) once Flow A and its examples are complete. Not started yet.
-
-Build/flash a specific variant from its own folder, e.g.:
+Build and flash from inside the board's folder:
 
 ```bash
 cd examples/esp32/esp32-s3

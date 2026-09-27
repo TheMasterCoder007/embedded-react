@@ -1,26 +1,20 @@
-# tools/simulator
+# tools/simulator — the SDL simulator
 
-The embedded-react **simulator** — the dev tool with **hot reload**. It runs your JSX app on the
-desktop SDL host and live-reloads the window whenever you save, the React Native inner loop on
-embedded. (The desktop *demo* lives at `examples/linux` and is just a demo; this is the dev tool.)
+The desktop hot-reload simulator: runs a demo on the native SDL host (`examples/linux/host.c`) and
+reloads the window whenever a file is saved, with component state preserved and a red box for
+JavaScript errors. It is the maintainers' engine-debug tool, since the real C engine runs natively
+under gdb or lldb; the shipped app-developer loop is the browser simulator (`npx embedded-react dev`).
 
-It reuses the shared desktop host core (`examples/linux/host.c`) and adds a file-watch + full-remount
-reload loop (`sim_main.c`).
-
-## Use
+**Docs:** [Hot reload](https://embedded-react.dev/guides/hot-reload#on-the-desktop).
 
 ```
-# one-time: build the simulator binary
+# once: build the simulator binary
 cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake]
 cmake --build tools/simulator/build
 
-# then run the SDL simulator against a demo, by name, from the JS package:
+# then run it against a demo, by name, from the JS package
 cd bridges/quickjs/js && npm run sim -- thermostat
-# (omit the name for the default demo; `npm run build -- <demo>` / `npm run pack -- <demo>` build it too)
 ```
 
-`npm run sim` runs `esbuild --watch` (rebundling on save) and launches the simulator, which reloads on
-change. It reads `demos/<name>/index.jsx` directly against the in-repo library — no install needed. (For
-the browser/WASM simulator instead, `cd demos/<name> && npm install && npm run dev`.) Remaining work
-(on-device hot reload, Fast Refresh, a prebuilt sim binary) is tracked in
-[`/ROADMAP.md`](../../ROADMAP.md).
+`npm run sim` runs esbuild in watch mode and launches the simulator, reading `demos/<name>/index.jsx`
+directly against the in-repo library. Press R for a clean reset that also forgets persisted state.

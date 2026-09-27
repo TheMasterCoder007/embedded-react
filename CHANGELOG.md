@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Versioning is lockstep across all distribution channels (npm, GitHub Release,
 ESP-IDF Component Registry, PlatformIO) — a single version drives every artifact.
-See the README for the release process.
+See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- The starter that `npm create embedded-react` scaffolds is redesigned and responsive: it lays itself out from
+  the panel size, so the same file fits a 240×240 watch face and an 800×480 panel.
+
+### Added
+
+- The browser simulator's host API gains `er_web_clear_persist()`, which forgets the state `usePersistentState`
+  keeps across hot reloads, so a host can offer a true reset.
+
+- A documentation site under `website/` (Docusaurus), deployed to https://embedded-react.dev by GitHub Pages on
+  every push to `master`. It republishes this changelog and the roadmap from the repo-root files.
+
+- The READMEs are now short pointers to the site, which is the one source of truth; the material they held (the
+  engine internals, the bridge's external-RAM notes, the boards' WiFi and backend detail, the demo write-ups)
+  moved there.
 
 ## [0.14.1] - 2026-09-21
 ### Added

@@ -1,6 +1,8 @@
 # examples/raspberry-pi
 
-Raspberry Pi 4 / 5 sample app — `backends/opengl/` for KMS or X11 output, or
-`backends/framebuffer/` for direct `/dev/fb0` rendering.
+Raspberry Pi 4 / 5 sample app, through `backends/opengl/` (KMS or X11) or `backends/framebuffer/`
+(`/dev/fb0`).
 
-**Status:** Planned. No code yet.
+**Status:** Planned. No code yet. See the
+[Raspberry Pi guide](https://embedded-react.dev/guides/boards/raspberry-pi) for what works on a Pi
+today.

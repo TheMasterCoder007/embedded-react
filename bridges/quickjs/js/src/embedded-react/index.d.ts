@@ -218,7 +218,7 @@ export type StyleProp<T> = T | false | null | undefined | StyleProp<T>[];
 
 // --- Events ----------------------------------------------------------------
 
-/** The laid-out box reported by `onLayout`, in parent coordinates. */
+/** The laid-out box reported by `onLayout`, in screen coordinates (not parent-relative). */
 export interface LayoutRectangle {
   x: number;
   y: number;
@@ -838,6 +838,7 @@ export function useAnimatedValue(initial?: number): AnimatedValue;
 
 /** Like useState, but the value survives a dev hot reload. */
 export function usePersistentState<S>(
+  key: string,
   initialState: S | (() => S),
 ): [S, (value: S | ((prev: S) => S)) => void];
 

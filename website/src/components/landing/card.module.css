@@ -1,0 +1,18 @@
+/* The bordered surface shared by the feature, flow and board tiles. */
+.card {
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 14px;
+  background: var(--ifm-background-surface-color);
+  transition:
+    border-color 0.2s,
+    transform 0.2s;
+}
+
+[data-theme='dark'] .card {
+  border-color: rgba(56, 189, 248, 0.16);
+}
+
+.interactive:hover,
+[data-theme='dark'] .interactive:hover {
+  border-color: var(--ifm-color-primary);
+}

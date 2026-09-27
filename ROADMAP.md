@@ -1,7 +1,7 @@
 # Roadmap
 
-The bulk of embedded-react is built and verified — see the **Status** and **Working
-examples** tables in the [README](README.md). This file is the single home for what's
+The bulk of Embedded React is built and verified — see the status table in the
+[introduction](https://embedded-react.dev/intro). This file is the single home for what's
 left: known issues, planned work toward 1.0, the performance backlog, and the
 longer-term vision.
 
@@ -58,7 +58,7 @@ stubs / README-only:
 
 ### Examples / board bring-up
 
-Four examples run end-to-end (see README). These are README-only and need wiring:
+Five examples run end-to-end (see the [board guides](https://embedded-react.dev/guides)). These are README-only and need wiring:
 
 - **`examples/stm32h7/`** — first STM32 bring-up. The backend (`backends/dma2d/`) is done;
   what is missing is a board project that wires it to an LTDC panel end to end.
@@ -67,9 +67,8 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 
 ### Flow A — React on QuickJS (runtime)
 
-- **On-device hot reload.** A dev-server / socket transport that pushes fresh bytecode to
-  the board over serial / Wi-Fi (OTA), so the device gets the same edit-save-see loop the
-  simulator has. The "later luxury", deferred deliberately.
+- **Wireless hot reload.** On-device hot reload ships over USB serial; a Wi-Fi transport
+  would give the same edit-save-see loop without a cable.
 - **Runtime asset registration.** A `NativeUI.loadImage` / `loadFont` path for
   dynamically generated or OTA-delivered assets. `er_font_load` (blob → pool) already
   exists for this future case; the JS-facing API does not.
@@ -123,7 +122,7 @@ Four examples run end-to-end (see README). These are README-only and need wiring
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —
 > `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
-> `--aot` → `app.gen.c` (Flow B). The AOT subset still excludes animation composition (see Flow B above).
+> `--aot` → `app.gen.c` (Flow B).
 
 ---
 
@@ -146,8 +145,8 @@ highest-impact first.
   a `strncmp` registry scan per text op).
 - **Batch anti-aliased corner and 1-bit glyph blits** into a per-row buffer, one
   `copy`/`blend` per row, instead of per-pixel / per-span.
-- **Draw only the border ring** of bordered rounded rects; fill the interior once
-  (currently overdrawn).
+- **Draw only the border ring** of bordered rounded rects with an opaque background too; today
+  only a transparent or translucent background gets the ring, and an opaque one is overdrawn.
 - **Clamp software-composite loops once per row** instead of a per-pixel bounds check.
 - **Step transform source coordinates incrementally** (and consider fixed-point) instead
   of a float matrix-multiply + bilinear sample per output pixel.
@@ -177,7 +176,7 @@ engine. None of these are committed work; they're why the engine stays neutral:
 - **Visual editor runtime** — a desktop GUI designer that emits that JSON format.
 - **Other scripting APIs** — language-agnostic C bindings other runtimes can wrap.
 
-This does not change the project's identity: **embedded-react is React Native for
+This does not change the project's identity: **Embedded React is React Native for
 embedded MCUs.** React is the supported developer path; the engine's neutrality is an
 implementation choice.
 
@@ -198,7 +197,7 @@ Deliberately out of scope:
 - **Web-only React APIs** — DOM refs, portals, Suspense, Server Components.
 - **List virtualization** — `FlatList` windowing, or a native recycling list node.
   `FlatList` is a documented `ScrollView` alias in both flows: every row mounts and stays
-  mounted (README: *`FlatList` is a `ScrollView` alias*). Windowing in JS would cost a
+  mounted (see [FlatList](https://embedded-react.dev/api/components#flatlist)). Windowing in JS would cost a
   React commit every time the window shifts — during a flick, every frame — the same
   per-event cost that caps Flow A drag, and Flow B has no runtime reconciler to recompute
   a window at all. A native recycling list node is the only version worth building, and it

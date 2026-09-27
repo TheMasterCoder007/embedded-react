@@ -1,0 +1,73 @@
+.hero {
+  padding: 5.5rem 0 6rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: 3.5rem;
+  align-items: center;
+}
+
+.pill {
+  display: inline-block;
+  margin: 0 0 1.25rem;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 999px;
+  font-family: var(--er-font-mono);
+  font-size: 0.75rem;
+  color: #9fc3da;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.title {
+  margin: 0 0 1rem;
+  font-size: clamp(2.1rem, 5.2vw, 4rem);
+  line-height: 1.1;
+}
+
+.lead {
+  margin: 0 0 0.5rem;
+  font-size: clamp(1.3rem, 2.4vw, 1.7rem);
+  font-weight: 700;
+  color: #fff;
+}
+
+.sub {
+  margin: 0 0 2rem;
+  max-width: 34rem;
+  font-size: 1.1rem;
+  line-height: 1.6;
+  color: #9fc3da;
+}
+
+.buttons {
+  margin-bottom: 1.5rem;
+}
+
+.visual {
+  position: relative;
+  padding-bottom: 7rem;
+}
+
+.device {
+  position: absolute;
+  right: -0.75rem;
+  bottom: 0;
+}
+
+@media (max-width: 996px) {
+  .hero {
+    padding: 3rem 0 4rem;
+  }
+
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2.5rem;
+  }
+
+  .device {
+    right: 0.5rem;
+  }
+}

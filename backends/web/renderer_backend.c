@@ -343,6 +343,12 @@ void er_web_touch(int phase, int x, int y)
 }
 
 EMSCRIPTEN_KEEPALIVE
+void er_web_clear_persist(void)
+{
+    er_runtime_clear_persist();
+}
+
+EMSCRIPTEN_KEEPALIVE
 void er_web_reset(void)
 {
     /* Hot reload: drop the JS context + reset the engine, then re-run the stored bundle (full remount). */

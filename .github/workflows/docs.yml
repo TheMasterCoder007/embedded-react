@@ -1,0 +1,88 @@
+# Builds the documentation site (website/) and deploys it to GitHub Pages at https://embedded-react.dev.
+#
+# Pull requests only build, so a broken link or a bad MDX file fails the check before it lands.
+# Pushes to master that touch the site (or the root CHANGELOG/ROADMAP it republishes, or the starter template the
+# playground runs) deploy.
+#
+# One-time repo setup: Settings → Pages → Source = "GitHub Actions", and add the custom domain there
+# (the CNAME file in website/static/ keeps it across deploys).
+name: Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'website/**'
+      - 'CHANGELOG.md'
+      - 'ROADMAP.md'
+      - 'create-embedded-react/template/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'CHANGELOG.md'
+      - 'ROADMAP.md'
+      - 'create-embedded-react/template/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      # The playground runs the published `embedded-react` at the version the site pins, which the release
+      # script bumps in the release commit. The npm publish runs in parallel from the same push, so wait
+      # for that version to exist before installing it; `npm install` (not `npm ci`) because the lockfile
+      # cannot carry the new tarball's hash until it is published.
+      - name: Wait for the pinned embedded-react on npm
+        run: |
+          ver=$(node -p "require('./package.json').devDependencies['embedded-react']")
+          for i in $(seq 1 40); do
+            if npm view "embedded-react@$ver" version >/dev/null 2>&1; then
+              echo "embedded-react@$ver is on npm"
+              exit 0
+            fi
+            echo "embedded-react@$ver not on npm yet (attempt $i/40), waiting 30s"
+            sleep 30
+          done
+          echo "embedded-react@$ver never appeared on npm" >&2
+          exit 1
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
