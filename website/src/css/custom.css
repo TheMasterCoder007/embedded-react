@@ -46,8 +46,24 @@ pre {
 }
 
 [data-theme='dark'] .navbar {
-  backdrop-filter: blur(10px);
   border-bottom: 1px solid rgba(56, 189, 248, 0.1);
+}
+
+/* Blur on a pseudo-element: backdrop-filter on .navbar itself would trap the
+   fixed-position mobile menu inside the 60px bar. */
+[data-theme='dark'] .navbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The mobile menu inherits the navbar's translucent background; make it solid
+   so page text doesn't show through. */
+[data-theme='dark'] .navbar-sidebar {
+  background-color: var(--ifm-background-color);
 }
 
 .footer--dark {

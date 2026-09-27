@@ -15,6 +15,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The starter that `npm create embedded-react` scaffolds is redesigned and responsive: it lays itself out from
   the panel size, so the same file fits a 240×240 watch face and an 800×480 panel.
 
+- The documentation site opens in dark mode for new visitors, whatever their system theme. The toggle still
+  switches to light, and the site remembers that choice.
+
 ### Added
 
 - The browser simulator's host API gains `er_web_clear_persist()`, which forgets the state `usePersistentState`
@@ -26,6 +29,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The READMEs are now short pointers to the site, which is the one source of truth; the material they held (the
   engine internals, the bridge's external-RAM notes, the boards' WiFi and backend detail, the demo write-ups)
   moved there.
+
+### Fixed
+
+- The documentation site's menu opens on phones in dark mode. It had been clipped to the height of the top bar,
+  so tapping the menu button seemed to do nothing.
 
 ## [0.14.1] - 2026-09-21
 ### Added
