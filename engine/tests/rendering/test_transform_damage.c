@@ -46,6 +46,7 @@ typedef struct
 {
     int x0, y0, x1, y1;
     int ops;
+    int blends;
 } Extent;
 
 static Extent g_ext;
@@ -55,6 +56,7 @@ static void ext_reset(void)
     g_ext.x0 = g_ext.y0 = 1 << 29;
     g_ext.x1 = g_ext.y1 = -(1 << 29);
     g_ext.ops = 0;
+    g_ext.blends = 0;
 }
 
 static void ext_add(int x, int y, int w, int h)
@@ -93,6 +95,7 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
     (void)stride;
     (void)alpha;
     (void)ctx;
+    g_ext.blends++;
     ext_add(x, y, w, h);
 }
 
@@ -687,6 +690,82 @@ static int check_nested_transform_no_damage(int screen)
     return EXIT_SUCCESS;
 }
 
+/* Scenario 7: a scale animation that has come to rest at 1 is no transform at all, and must repaint on
+ * the translate-only path rather than through the transform scratch. 0 is the unset sentinel, but a node
+ * whose scale is bound to an Animated.Value (a focus lift such as whileFocus={{scale: 1.04}}) holds an
+ * explicit 1.0 once the animation settles. Treated as a scale, every repaint touching it captured the
+ * whole subtree into the scratch and blended it back out row by row.
+ *
+ * The opaque fill of a node painted directly reaches the backend as a fill; the capture path writes it
+ * into the scratch and emits blend ops instead, so the blend count tells the two apart.
+ *
+ * @param[in] screen  Root size.
+ */
+static int check_identity_scale_uncaptured(int screen)
+{
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = props_default();
+    rp.width = screen;
+    rp.height = screen;
+    rp.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &rp);
+
+    ERNode* card = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.width = 40;
+    cp.height = 40;
+    cp.margin_left = 80;
+    cp.margin_top = 80;
+    cp.background_color = 0xFF3366FFU;
+    er_node_set_props(card, &cp);
+
+    er_tree_append_child(root, card);
+    er_tree_set_root(root);
+    er_commit();
+
+    /* Lift, then settle back to rest: the bound scale ends at an explicit 1.0. */
+    ERAnimValueHandle lift = er_anim_value_create(1.04f);
+    er_anim_value_bind(lift, card, ER_PROP_SCALE_X);
+    er_anim_value_bind(lift, card, ER_PROP_SCALE_Y);
+    ERAnimConfig cfg = {0};
+    cfg.type = ER_ANIM_TIMING;
+    cfg.duration_ms = 100U;
+    er_anim_value_animate(lift, 1.0f, &cfg);
+    embedded_renderer_tick(200U);
+    er_commit();
+
+    const bool at_rest = card->has_transform && card->tp_scale_x == 1.0f && card->tp_scale_y == 1.0f;
+    const bool complex = er_node_has_complex_transform(card);
+
+    cp.background_color = 0xFFEE5522U;
+    er_node_set_props(card, &cp);
+    ext_reset();
+    er_commit();
+
+    printf("identity scale: has_transform=%d complex=%d, recolour paint ops=%d blends=%d\n",
+           (int)card->has_transform,
+           (int)complex,
+           g_ext.ops,
+           g_ext.blends);
+
+    er_anim_value_destroy(lift);
+    er_node_destroy(root);
+
+    if (!at_rest)
+        return fail("the settled scale animation did not leave an explicit 1.0 on the node");
+    if (complex)
+        return fail("a scale of exactly 1 is treated as a complex transform");
+    if (g_ext.ops == 0)
+        return fail("the recolour repainted nothing");
+    if (g_ext.blends != 0)
+        return fail("a node at scale 1 repainted through the transform scratch");
+
+    printf("PASS: a scale at rest at 1 repaints on the translate-only path\n");
+    return EXIT_SUCCESS;
+}
+
 #endif /* ERUI_TRANSFORMS_FULL */
 
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
@@ -805,6 +884,10 @@ int main(void)
         return rc;
 
     rc = check_nested_transform_no_damage(300);
+    if (rc != EXIT_SUCCESS)
+        return rc;
+
+    rc = check_identity_scale_uncaptured(screen);
     if (rc != EXIT_SUCCESS)
         return rc;
 #endif
