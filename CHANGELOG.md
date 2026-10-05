@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- In Flow A, a render that runs out of engine nodes (`ERUI_MAX_NODES`) or bridge handles now says so on
+  stderr. The nodes that did not fit, and every child they would have held, used to be dropped without a
+  word, so an app past the limit showed a blank or partial screen with nothing in the log.
 
 ## [0.15.0] - 2026-09-27
 ### Changed
