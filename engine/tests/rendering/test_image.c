@@ -904,5 +904,102 @@ int main(void)
         er_node_destroy(root);
     }
 
+    /* -----------------------------------------------------------------------
+     * A damage-clipped repaint over an image, which produces only the part
+     * inside the damage, matches the full repaint there and writes nothing
+     * outside it: an upscaled ARGB image, an unscaled RGB565 image on the CPU
+     * expansion path, and an unscaled tinted one on the general path, each
+     * larger than the repainted rect.
+     * ---------------------------------------------------------------------- */
+    {
+        /* No copy_rect_fmt, so RGB565 1:1 expands on the CPU. Setting the backend resets the image
+         * registry, so the images load after it. */
+        embedded_renderer_set_backend(&be);
+        er_image_load("test2x2", img2x2, 2, 2);
+        static uint16_t img565[32 * 32];
+        for (int i = 0; i < 32 * 32; i++)
+            img565[i] = (uint16_t)(i * 2654435761u >> 16);
+        er_image_load_rgb565("clip565", img565, 32, 32);
+
+        static const struct
+        {
+            const char* image;
+            uint32_t tint;
+            const char* what;
+        } k_cases[] = {
+            {"test2x2", 0u, "scaled"},
+            {"clip565", 0u, "unscaled rgb565"},
+            {"clip565", 0x80FF40u, "unscaled tinted"},
+        };
+        for (size_t k = 0; k < sizeof(k_cases) / sizeof(k_cases[0]); k++)
+        {
+            reset(&tc);
+            er_reset();
+
+            ERNode* root = er_node_create(ER_NODE_VIEW);
+            ERProps rp = props_default();
+            rp.width = FB_W;
+            rp.height = FB_H;
+            er_node_set_props(root, &rp);
+
+            ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+            ERProps ip = props_default();
+            ip.width = 32;
+            ip.height = 32;
+            ip.margin_left = 4;
+            ip.margin_top = 4;
+            strncpy(ip.image_name, k_cases[k].image, ER_IMAGE_NAME_MAX);
+            ip.resize_mode = ER_RESIZE_STRETCH;
+            ip.tint_color = k_cases[k].tint;
+            er_node_set_props(img_node, &ip);
+
+            ERNode* overlay = er_node_create(ER_NODE_VIEW);
+            ERProps op = props_default();
+            op.position = ER_POS_ABSOLUTE;
+            op.left = 13;
+            op.top = 17;
+            op.width = 6;
+            op.height = 5;
+            op.background_color = 0x01000000u;
+            er_node_set_props(overlay, &op);
+
+            er_tree_append_child(root, img_node);
+            er_tree_append_child(root, overlay);
+            er_tree_set_root(root);
+            er_commit();
+
+            static uint32_t full[FB_W * FB_H];
+            memcpy(full, fb, sizeof(full));
+            /* The stub fill_rect draws nothing, so the repaint shows only what the image emits. */
+            for (int y = 17; y < 22; y++)
+                for (int x = 13; x < 19; x++)
+                    fb[y * FB_W + x] = 0xDEADBEEFu;
+            fb[0] = 0xDEADBEEFu; /* outside the damage: must survive */
+
+            op.background_color = 0x02000000u;
+            er_node_set_props(overlay, &op);
+            er_commit();
+
+            if (fb[0] != 0xDEADBEEFu)
+            {
+                fprintf(stderr, "FAIL: clipped %s image repaint: wrote outside the damaged rect\n", k_cases[k].what);
+                return EXIT_FAILURE;
+            }
+            fb[0] = full[0];
+            if (memcmp(fb, full, sizeof(full)) != 0)
+            {
+                fprintf(
+                    stderr, "FAIL: clipped %s image repaint: pixels differ from the full repaint\n", k_cases[k].what);
+                return EXIT_FAILURE;
+            }
+
+            er_tree_remove_child(root, overlay);
+            er_tree_remove_child(root, img_node);
+            er_node_destroy(overlay);
+            er_node_destroy(img_node);
+            er_node_destroy(root);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
