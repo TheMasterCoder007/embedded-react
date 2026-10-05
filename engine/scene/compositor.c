@@ -3300,6 +3300,7 @@ static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
     node->props.view.shadow_radius = props->shadow_radius;
     node->props.view.elevation = props->elevation;
     node->props.view.gradient_type = props->gradient_type;
+    node->props.view.gradient_corner = props->gradient_corner;
     node->props.view.gradient_angle = props->gradient_angle;
     node->props.view.gradient_stop_count = props->gradient_stop_count;
     for (int gi = 0; gi < ER_GRADIENT_MAX_STOPS; gi++)

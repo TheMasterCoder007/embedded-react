@@ -4523,6 +4523,92 @@ import { View, StyleSheet } from 'embedded-react';
   });
 });
 
+describe('AOT View backgroundGradient', () => {
+  const D = `import { useState } from 'react';
+import { View, StyleSheet } from 'embedded-react';
+`;
+  const view = grad =>
+    gen(`${D}
+      export function App() {
+        return (<View style={{width: 200, height: 100, backgroundGradient: ${grad}}} />);
+      }`);
+
+  it('lowers a linear CSS angle to the engine angle, with evenly spaced stops', () => {
+    const c = view(
+      "{type: 'linear', angle: 90, stops: [{color: '#000000'}, {color: '#808080'}, {color: '#ffffff'}]}",
+    );
+    expect(c).toContain('p.gradient_type = ER_GRADIENT_LINEAR;');
+    expect(c).toContain('p.gradient_corner = ER_GRADIENT_CORNER_NONE;');
+    expect(c).toContain('p.gradient_angle = 90.0f;'); // CSS 90 (to right) = engine 90 (left→right)
+    expect(c).toContain('p.gradient_stop_count = 3;');
+    expect(c).toContain('p.gradient_stops[1].color = 0xFF808080u;');
+    expect(c).toContain('p.gradient_stops[1].position = 0.5f;');
+    expect(c).toContain('p.gradient_stops[2].position = 1.0f;');
+  });
+
+  it('defaults to `to bottom` and lowers a `to` side and corner', () => {
+    const stops = "stops: [{color: '#ff0000'}, {color: '#0000ff'}]";
+    expect(view(`{type: 'linear', ${stops}}`)).toContain(
+      'p.gradient_angle = 0.0f;',
+    );
+    expect(view(`{type: 'linear', to: 'top', ${stops}}`)).toContain(
+      'p.gradient_angle = 180.0f;',
+    );
+    const corner = view(`{type: 'linear', to: 'bottom right', ${stops}}`);
+    expect(corner).toContain(
+      'p.gradient_corner = ER_GRADIENT_CORNER_BOTTOM_RIGHT;',
+    );
+  });
+
+  it('raises an offset below an earlier one, as CSS and Flow A do', () => {
+    const c = view(
+      "{type: 'radial', stops: [{color: '#000', offset: 0.6}, {color: '#fff', offset: 0.2}]}",
+    );
+    expect(c).toContain('p.gradient_type = ER_GRADIENT_RADIAL;');
+    expect(c).toContain('p.gradient_stops[0].position = 0.6f;');
+    expect(c).toContain('p.gradient_stops[1].position = 0.6f;');
+  });
+
+  it('takes it from a StyleSheet', () => {
+    const c = gen(`${D}
+      const styles = StyleSheet.create({
+        hero: { backgroundGradient: {type: 'linear', angle: 45, stops: [{color: '#111'}, {color: '#eee'}]} },
+      });
+      export function App() {
+        return (<View style={styles.hero} />);
+      }`);
+    expect(c).toContain('p.gradient_angle = 135.0f;');
+  });
+
+  it.each([
+    [
+      "{type: 'conic', stops: [{color: '#000'}, {color: '#fff'}]}",
+      /'linear' \| 'radial'/,
+    ],
+    ["{type: 'linear', stops: [{color: '#000'}]}", /needs 2 to 4 stops, got 1/],
+    [
+      "{type: 'linear', to: 'center', stops: [{color: '#000'}, {color: '#fff'}]}",
+      /unsupported to "center"/,
+    ],
+    [
+      "{type: 'radial', angle: 90, stops: [{color: '#000'}, {color: '#fff'}]}",
+      /radial gradient takes no angle/,
+    ],
+  ])('rejects %s', (grad, msg) => {
+    expect(() => view(grad)).toThrow(msg);
+  });
+
+  it('rejects a state-driven gradient as static only', () => {
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<View style={{backgroundGradient: on ? {type: 'linear', stops: [{color: '#000'}, {color: '#fff'}]} : null}} />);
+      }`),
+    ).toThrow(/state-driven value for style "backgroundGradient"/);
+  });
+});
+
 describe('AOT style diagnostics', () => {
   const D = `import { useState } from 'react';
 import { View, StyleSheet } from 'embedded-react';

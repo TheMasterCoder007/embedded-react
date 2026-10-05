@@ -141,6 +141,94 @@ const pctOrPx = (pxField, pctField) => v => {
   return [{field: pxField, expr: dim(v)}];
 };
 
+/** Formats a finite number as a C float literal (`1` → `1.0f`; `1f` is not C). */
+const floatLiteral = n => {
+  if (!Number.isFinite(n))
+    throw new Error(`expected a finite number, got ${JSON.stringify(n)}`);
+  return Number.isInteger(n) ? `${n}.0f` : `${n}f`;
+};
+
+/**
+ * Resolves gradient stops the way native_ui_bridge.c's apply_gradient_stops() does: a missing offset spaces
+ * the stops evenly, and an offset below an earlier one is raised to it (CSS), so the stops always ascend.
+ *
+ * @param {Array<{color: string, offset?: number}>} stops  Authored stops (at most ER_GRADIENT_MAX_STOPS).
+ * @returns {Array<{color: string, position: string}>} C literals for each stop's color and position.
+ */
+export function gradientStopLiterals(stops) {
+  let last = -Infinity;
+  return stops.map((st, i) => {
+    const offset =
+      st.offset === undefined ? i / (stops.length - 1) : Number(st.offset);
+    last = Math.max(last, offset);
+    return {color: colorLiteral(st.color), position: floatLiteral(last)};
+  });
+}
+
+/** CSS `to <side-or-corner>` → CSS angle (sides) or ERGradientCorner (corners), as in native_ui_bridge.c. */
+const GRADIENT_TO = {
+  top: {angle: 0, corner: 'ER_GRADIENT_CORNER_NONE'},
+  right: {angle: 90, corner: 'ER_GRADIENT_CORNER_NONE'},
+  bottom: {angle: 180, corner: 'ER_GRADIENT_CORNER_NONE'},
+  left: {angle: 270, corner: 'ER_GRADIENT_CORNER_NONE'},
+  'top right': {angle: 0, corner: 'ER_GRADIENT_CORNER_TOP_RIGHT'},
+  'bottom right': {angle: 0, corner: 'ER_GRADIENT_CORNER_BOTTOM_RIGHT'},
+  'bottom left': {angle: 0, corner: 'ER_GRADIENT_CORNER_BOTTOM_LEFT'},
+  'top left': {angle: 0, corner: 'ER_GRADIENT_CORNER_TOP_LEFT'},
+};
+
+/**
+ * Lowers a View `backgroundGradient` to the gradient fields. Every field is written, so a later style
+ * source's gradient fully replaces an earlier one's. Flow A skips a malformed gradient; here it is an error.
+ *
+ * @param {object} g  {type: 'linear', angle?, to?, stops} | {type: 'radial', stops}.
+ * @returns {Array<{field:string, expr:string}>} ERProps writes.
+ */
+function lowerBackgroundGradient(g) {
+  if (typeof g !== 'object' || (g.type !== 'linear' && g.type !== 'radial'))
+    throw new Error(
+      "backgroundGradient: expected {type: 'linear' | 'radial', stops: [...]}",
+    );
+  const stops = Array.isArray(g.stops) ? g.stops : [];
+  if (stops.length < 2 || stops.length > 4)
+    throw new Error(
+      `backgroundGradient: needs 2 to 4 stops, got ${stops.length}`,
+    );
+  let cssAngle = 180;
+  let corner = 'ER_GRADIENT_CORNER_NONE';
+  if (g.type === 'radial') {
+    if (g.angle !== undefined || g.to !== undefined)
+      throw new Error(
+        'backgroundGradient: a radial gradient takes no angle or to',
+      );
+  } else if (g.angle !== undefined) {
+    cssAngle = g.angle;
+  } else if (g.to !== undefined) {
+    const to = Object.hasOwn(GRADIENT_TO, g.to) ? GRADIENT_TO[g.to] : null;
+    if (!to)
+      throw new Error(
+        `backgroundGradient: unsupported to "${g.to}" (one of ${Object.keys(GRADIENT_TO).join(', ')})`,
+      );
+    cssAngle = to.angle;
+    corner = to.corner;
+  }
+  const out = [
+    {
+      field: 'gradient_type',
+      expr: g.type === 'radial' ? 'ER_GRADIENT_RADIAL' : 'ER_GRADIENT_LINEAR',
+    },
+    {field: 'gradient_corner', expr: corner},
+    // The engine measures from top→bottom; CSS's 0deg points to the top.
+    {field: 'gradient_angle', expr: floatLiteral(180 - cssAngle)},
+    {field: 'gradient_stop_count', expr: String(stops.length)},
+  ];
+  gradientStopLiterals(stops).forEach((st, i) => {
+    out.push({field: `gradient_stops[${i}].color`, expr: st.color});
+    out.push({field: `gradient_stops[${i}].position`, expr: st.position});
+  });
+  return out;
+}
+
 /**
  * Per-style-key lowering. Each entry maps a style value to one or more { field, expr } ERProps writes
  * (field = ERProps C member, expr = C source for the value). `flex` expands to several fields.
@@ -215,6 +303,7 @@ const KEYS = {
 
   // View visual
   backgroundColor: v => [{field: 'background_color', expr: colorLiteral(v)}],
+  backgroundGradient: lowerBackgroundGradient,
   borderRadius: v => [{field: 'border_radius', expr: dim(v)}],
   // Per-corner radii; the engine reads 0 in one of these as "use borderRadius" (same as Flow A).
   borderTopLeftRadius: v => [{field: 'border_top_left_radius', expr: dim(v)}],

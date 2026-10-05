@@ -79,6 +79,8 @@ expression is refused, so express a calculation as a chain of `const`s and terna
   A state-driven color must be a color literal or a ternary of literals.
 - A `View`'s `backgroundColor` alpha is ignored (the fill is opaque); borders and vector paints do
   blend. For a "10% tint" fill, pre-mix a solid color.
+- A `View`'s `backgroundGradient` must be static, with 2 to 4 stops; an unknown `type` or `to`, or an
+  `angle`/`to` on a radial gradient, is a compile error rather than the silent skip Flow A applies.
 - Static or state-driven is decided per style key, so constants and state can share one inline
   object. A state-driven value works on colors, `opacity`, sizes, margins, padding, `gap`,
   `flexGrow`/`flexShrink`, border radii, `borderWidth`, `zIndex`, `fontSize`, `lineHeight`,

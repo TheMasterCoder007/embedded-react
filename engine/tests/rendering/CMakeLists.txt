@@ -105,6 +105,10 @@ add_test(NAME rendering_components COMMAND test_components)
 
 add_executable(test_gradient test_gradient.c)
 target_link_libraries(test_gradient PRIVATE embedded-react)
+# test_gradient needs engine/core, engine/rendering and engine/scene (er_push_clip_rect, er_gradient_render and the
+# node's ERViewProps) to repaint one gradient under a damage clip and compare it with the full frame.
+target_include_directories(test_gradient PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering
+                                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_gradient COMMAND test_gradient)
 
 add_executable(test_damage_rects test_damage_rects.c)

@@ -28,6 +28,10 @@
  *
  * Dispatches to the linear or radial rasterizer based on vp->gradient_type.  Each rasterizer
  * writes one row of premultiplied ARGB8888 pixels at a time and flushes it via er_blit_blend.
+ * Stops are interpolated in premultiplied space (as CSS does) and quantized with a 4x4 ordered
+ * dither keyed to framebuffer coordinates, so long, low-contrast ramps show no 8-bit steps and a
+ * partial repaint matches the full one.  Only the rows and columns inside the active clip rect are
+ * assembled, so a small damage rect over a large gradient costs only its own pixels.
  *
  * The fill is clipped to the node's rounded-rect silhouette, resolved from vp's border_radius and
  * per-corner overrides through the same er_rrect_clamp_radii / er_rrect_row geometry the background

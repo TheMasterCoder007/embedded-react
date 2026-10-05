@@ -11,6 +11,16 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Added
+
+- `View` takes a `backgroundGradient` style: `{type: 'linear', angle | to, stops}` or `{type: 'radial', stops}`,
+  with CSS `linear-gradient()` / `radial-gradient()` semantics, including `to <corner>` lines that follow the
+  box's aspect ratio. It needs a build with `ERUI_GRADIENT` (radial also `ERUI_GRADIENT_RADIAL`); without
+  `ERUI_GRADIENT` the `View` paints its `backgroundColor`. Flow B lowers a static gradient. View gradients now interpolate their stops
+  premultiplied, dither the ramp with a 4x4 ordered pattern, and compute only the pixels inside the damage
+  clip. As in CSS, a gradient stop whose offset is below an earlier one, here or in a `Dial`'s
+  `indicatorGradient`, is raised to it.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 

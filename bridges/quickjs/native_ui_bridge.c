@@ -1170,6 +1170,7 @@ typedef enum
     PROP_VALUE_START,
     PROP_MIN_SPAN,
     PROP_INDICATOR_GRADIENT,
+    PROP_BACKGROUND_GRADIENT,
     PROP_COUNT_,
 } PropId;
 
@@ -1293,6 +1294,7 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_VALUE_START] = "valueStart",
     [PROP_MIN_SPAN] = "minSpan",
     [PROP_INDICATOR_GRADIENT] = "indicatorGradient",
+    [PROP_BACKGROUND_GRADIENT] = "backgroundGradient",
 };
 
 /** @brief (atom, id) pair; s_prop_atoms is sorted by atom value once, for prop_id_from_atom()'s bsearch. */
@@ -1957,28 +1959,17 @@ static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
 }
 
 /**
- * @brief Reads a Dial `indicatorGradient` ({type: 'conic'|'radial', stops: [{color, offset}]}) into the
- *        View-gradient fields, which ER_NODE_ARC reads as its indicator paint.
+ * @brief Reads a gradient's `stops` ([{color, offset}], at most ER_GRADIENT_MAX_STOPS) into the gradient fields.
+ *
+ * A missing offset spaces the stops evenly. As in CSS, an offset below an earlier one is raised to it, so the
+ * stops the rasterizer sees always ascend.
  *
  * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched value (JS_UNDEFINED if absent).
+ * @param[in]     v    Gradient object.
  * @param[in,out] p    Props to update.
  */
-static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_gradient_stops(JSContext* ctx, JSValueConst v, ERProps* p)
 {
-    if (JS_IsUndefined(v) || JS_IsNull(v) || !JS_IsObject(v))
-    {
-        return;
-    }
-    JSValue t = JS_GetPropertyStr(ctx, v, "type");
-    const char* ts = JS_ToCString(ctx, t);
-    if (ts)
-    {
-        p->gradient_type = (strcmp(ts, "radial") == 0) ? ER_GRADIENT_RADIAL : ER_GRADIENT_CONIC;
-        JS_FreeCString(ctx, ts);
-    }
-    JS_FreeValue(ctx, t);
-
     JSValue stops = JS_GetPropertyStr(ctx, v, "stops");
     if (JS_IsArray(stops))
     {
@@ -2002,6 +1993,10 @@ static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
             {
                 JS_ToFloat64(ctx, &o, ov);
             }
+            if (n > 0 && o < p->gradient_stops[n - 1].position)
+            {
+                o = p->gradient_stops[n - 1].position;
+            }
             if (to_color(ctx, cv, &c))
             {
                 p->gradient_stops[n].color = c;
@@ -2015,6 +2010,112 @@ static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
         p->gradient_stop_count = n;
     }
     JS_FreeValue(ctx, stops);
+}
+
+/**
+ * @brief Reads a Dial `indicatorGradient` ({type: 'conic'|'radial', stops: [{color, offset}]}) into the
+ *        View-gradient fields, which ER_NODE_ARC reads as its indicator paint.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     v    Pre-fetched value (JS_UNDEFINED if absent).
+ * @param[in,out] p    Props to update.
+ */
+static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+{
+    if (JS_IsUndefined(v) || JS_IsNull(v) || !JS_IsObject(v))
+    {
+        return;
+    }
+    JSValue t = JS_GetPropertyStr(ctx, v, "type");
+    const char* ts = JS_ToCString(ctx, t);
+    if (ts)
+    {
+        p->gradient_type = (strcmp(ts, "radial") == 0) ? ER_GRADIENT_RADIAL : ER_GRADIENT_CONIC;
+        JS_FreeCString(ctx, ts);
+    }
+    JS_FreeValue(ctx, t);
+    apply_gradient_stops(ctx, v, p);
+}
+
+/** @brief CSS `to <side-or-corner>` keyword → CSS angle (sides) or ERGradientCorner (corners). */
+static const struct
+{
+    const char* to;
+    float css_angle;
+    uint8_t corner;
+} k_gradient_to[] = {
+    {"top", 0.0f, ER_GRADIENT_CORNER_NONE},
+    {"right", 90.0f, ER_GRADIENT_CORNER_NONE},
+    {"bottom", 180.0f, ER_GRADIENT_CORNER_NONE},
+    {"left", 270.0f, ER_GRADIENT_CORNER_NONE},
+    {"top right", 0.0f, ER_GRADIENT_CORNER_TOP_RIGHT},
+    {"bottom right", 0.0f, ER_GRADIENT_CORNER_BOTTOM_RIGHT},
+    {"bottom left", 0.0f, ER_GRADIENT_CORNER_BOTTOM_LEFT},
+    {"top left", 0.0f, ER_GRADIENT_CORNER_TOP_LEFT},
+};
+
+/**
+ * @brief Reads a View `backgroundGradient` into the View-gradient fields.
+ *
+ * {type: 'linear', angle?, to?, stops} follows CSS linear-gradient(): `angle` in degrees with 0 pointing to
+ * the top and 90 to the right, or `to` as a side or corner ('right', 'bottom left', …); the default is
+ * 'bottom'. {type: 'radial', stops} is radial-gradient(circle farthest-corner at center, …). Stops are
+ * interpolated premultiplied, as CSS does; at most ER_GRADIENT_MAX_STOPS are kept.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     v    Pre-fetched value (JS_UNDEFINED if absent).
+ * @param[in,out] p    Props to update.
+ */
+static void apply_background_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+{
+    if (!JS_IsObject(v))
+    {
+        return;
+    }
+    JSValue t = JS_GetPropertyStr(ctx, v, "type");
+    const char* ts = JS_ToCString(ctx, t);
+    JS_FreeValue(ctx, t);
+    if (!ts)
+    {
+        return;
+    }
+    const bool radial = strcmp(ts, "radial") == 0;
+    const bool linear = strcmp(ts, "linear") == 0;
+    JS_FreeCString(ctx, ts);
+    if (!radial && !linear)
+    {
+        return;
+    }
+    p->gradient_type = radial ? ER_GRADIENT_RADIAL : ER_GRADIENT_LINEAR;
+
+    float css_angle = 180.0f;
+    JSValue av = JS_GetPropertyStr(ctx, v, "angle");
+    JSValue tov = JS_GetPropertyStr(ctx, v, "to");
+    double a;
+    if (JS_IsNumber(av) && JS_ToFloat64(ctx, &a, av) == 0)
+    {
+        css_angle = (float)a;
+    }
+    else if (JS_IsString(tov))
+    {
+        const char* to = JS_ToCString(ctx, tov);
+        for (size_t i = 0; to && i < sizeof(k_gradient_to) / sizeof(k_gradient_to[0]); i++)
+        {
+            if (strcmp(to, k_gradient_to[i].to) == 0)
+            {
+                css_angle = k_gradient_to[i].css_angle;
+                p->gradient_corner = k_gradient_to[i].corner;
+                break;
+            }
+        }
+        JS_FreeCString(ctx, to);
+    }
+    JS_FreeValue(ctx, av);
+    JS_FreeValue(ctx, tov);
+    /* The engine measures from top→bottom; CSS's 0deg points to the top. */
+    p->gradient_angle = 180.0f - css_angle;
+
+    apply_gradient_stops(ctx, v, p);
 }
 
 /**
@@ -2155,6 +2256,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
 
     /* View visual. */
     ER_COL(PROP_BACKGROUND_COLOR, background_color);
+    apply_background_gradient(ctx, s_prop_slots[PROP_BACKGROUND_GRADIENT], &p);
     apply_opacity(ctx, s_prop_slots[PROP_OPACITY], &p);
     ER_DIM(PROP_BORDER_RADIUS, border_radius);
     ER_DIM(PROP_BORDER_TOP_LEFT_RADIUS, border_top_left_radius);

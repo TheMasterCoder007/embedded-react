@@ -37,11 +37,37 @@ The [Layout](../concepts/layout.md) page explains the solver and where it differ
 
 ## Paint
 
-| Property          | Notes                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backgroundColor` | Animatable. **Flow B:** the alpha of a `View` background is ignored (opaque fill); pre-mix a tint                                                 |
-| `opacity`         | 0 to 1, animatable. Below 1 the subtree composites through offscreen scratch; keep such nodes small                                               |
-| `pointerEvents`   | `'auto' \| 'none' \| 'box-none' \| 'box-only'`. A style entry here (React Native also allows it as a prop), because that is what the engine reads |
+| Property             | Notes                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backgroundColor`    | Animatable. **Flow B:** the alpha of a `View` background is ignored (opaque fill); pre-mix a tint                                                 |
+| `backgroundGradient` | A linear or radial gradient painted instead of `backgroundColor`; see [Gradients](#gradients)                                                     |
+| `opacity`            | 0 to 1, animatable. Below 1 the subtree composites through offscreen scratch; keep such nodes small                                               |
+| `pointerEvents`      | `'auto' \| 'none' \| 'box-none' \| 'box-only'`. A style entry here (React Native also allows it as a prop), because that is what the engine reads |
+
+### Gradients
+
+```jsx
+<View style={{backgroundGradient: {type: 'linear', to: 'bottom right', stops: [{color: '#0f172a'}, {color: '#38bdf8'}]}}} />
+<View style={{backgroundGradient: {type: 'radial', stops: [{color: '#ffffff'}, {color: '#ffffff00', offset: 0.7}]}}} />
+```
+
+`backgroundGradient` paints a `View` the way CSS `linear-gradient()` and `radial-gradient()` do. A
+linear gradient takes `angle` in degrees (0 points to the top, 90 to the right) or `to` with a side
+(`'top'`, `'right'`, `'bottom'`, `'left'`) or a corner (`'top right'` and so on); the default is
+`to: 'bottom'`. A corner follows the box's aspect ratio, as in CSS, so the two other corners share
+the middle colour. A radial gradient is `circle farthest-corner at center`.
+
+`stops` holds up to 4 `{color, offset?}` entries; a missing `offset` spaces the stops evenly, and an
+offset below an earlier one is raised to it. Stops are interpolated premultiplied, so a fade to
+transparent keeps its colour, and the ramp is dithered so long, dark ramps show no 8-bit bands. The
+gradient is clipped to `borderRadius`, and a partial repaint only computes the damaged pixels.
+
+The gradient needs a build with `ERUI_GRADIENT`; without it the `View` paints its
+`backgroundColor`, so set both for a fallback. A radial gradient also needs
+`ERUI_GRADIENT_RADIAL`: a build with `ERUI_GRADIENT` but without it paints neither the gradient nor
+the `backgroundColor`. **Flow B** takes a static
+gradient only, with 2 to 4 stops; a state-driven one is rejected. Switch between two `View`s, or
+between two `StyleSheet.create` entries, instead.
 
 ## Borders
 

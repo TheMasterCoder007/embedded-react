@@ -205,6 +205,47 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `a View backgroundGradient passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      const r = compileSource(
+        `import { View } from 'embedded-react';
+         export function App() {
+           return (
+             <View style={{ flex: 1 }}>
+               <View style={{ height: 80, backgroundGradient: { type: 'linear', to: 'bottom right',
+                              stops: [{ color: '#0f172a' }, { color: '#38bdf8', offset: 0.8 }] } }} />
+               <View style={{ height: 80, backgroundGradient: { type: 'radial',
+                              stops: [{ color: '#ffffff' }, { color: '#00000000' }] } }} />
+             </View>
+           );
+         }`,
+        'gradient',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-gradient-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const res = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-I',
+            engineInc,
+            '-I',
+            engineCore,
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(res.stderr || '').toBe('');
+        expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `looped animations and their stop() pass the C syntax check (${CC || 'no cc found'})`,
     () => {
       // The starter's pulse, plus every other shape a loop chain emits: a counted loop's iteration counter
