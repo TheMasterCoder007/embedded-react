@@ -431,6 +431,9 @@ struct ERNode
     float scroll_vel_y;            /**< Momentum velocity Y in px/ms (positive = content moving down). */
     int16_t scroll_content_w;      /**< Bounding width of all children; computed after layout (ScrollView only). */
     int16_t scroll_content_h;      /**< Bounding height of all children; computed after layout (ScrollView only). */
+    int16_t scroll_painted_x; /**< Whole-pixel offset the viewport's pixels were last painted at (ScrollView only). */
+    int16_t scroll_painted_y; /**< @see scroll_painted_x */
+    bool scroll_pending;      /**< Offset moved since the last commit; the commit moves or repaints the viewport. */
     /* Transform props: raw values copied from ERProps */
     float tp_translate_x; /**< X translation in pixels. */
     float tp_translate_y; /**< Y translation in pixels. */

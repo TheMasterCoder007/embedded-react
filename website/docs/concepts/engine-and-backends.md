@@ -98,7 +98,7 @@ void my_backend_init(void) {
 - `wait` blocks until the hardware has finished with the previous frame, for DMA-driven panels.
 - `frame_ready` says a frame is complete and can be presented.
 
-Three optional extensions cover hardware that the basic contract would waste:
+Four optional extensions cover hardware that the basic contract would waste:
 
 - **Banded rendering.** A backend with no RAM for a full framebuffer sets `band_height` and
   provides `band_begin`/`band_flush`. The engine then renders each frame's damage as horizontal
@@ -110,6 +110,9 @@ Three optional extensions cover hardware that the basic contract would waste:
   fully opaque, in its baked format (ARGB8888 or RGB565), as one call for the whole rectangle. A
   DMA2D blitter turns that into a single transfer; an RGB565 framebuffer turns a 565 source into a
   row copy.
+- **Framebuffer move.** `move_rect` copies a rectangle within the framebuffer. A ScrollView that
+  scrolls a few rows then moves the viewport it already painted and repaints only the exposed strip,
+  instead of the whole viewport.
 - **Multiple display buffers.** A page-flipping panel tells the engine how many buffers it
   rotates through, and the engine replays each frame's damage into every buffer so none is left
   stale.

@@ -10,6 +10,13 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Backends can provide an optional `move_rect` that copies a rectangle within the framebuffer, and the
+  software backend (so the browser simulator) does. A ScrollView that scrolls by less than its viewport then
+  moves the pixels it already painted and repaints only the exposed strip, when everything under the
+  viewport is a solid background. Otherwise, and on backends without `move_rect`, the viewport is repainted
+  in full as before.
 
 ## [0.15.0] - 2026-09-27
 ### Changed
