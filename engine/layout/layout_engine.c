@@ -54,9 +54,9 @@ typedef struct
 /**
  * @brief Per-pass memoisation slot for measure_content(), keyed by node tag.
  *
- * measure_content() is pure intrinsic sizing — for a given tag it depends only on that
- * node's own subtree, which nothing mutates during a layout pass — so its result is a
- * constant for the whole er_layout_compute() call. Without this cache, compute_layout()
+ * measure_content() depends only on that node's own subtree, which nothing mutates during
+ * a layout pass, and on the width it is offered — so for a given (tag, avail) pair its result
+ * is a constant for the whole er_layout_compute() call. Without this cache, compute_layout()
  * re-measures every child once per Pass 1 it participates in *and* recurses into that
  * same child, so a leaf at ancestor depth d gets remeasured d times. The `gen` tag makes
  * the cache self-invalidating across passes without a memset: a slot is only valid when
@@ -65,6 +65,7 @@ typedef struct
 typedef struct
 {
     int16_t w, h;
+    int16_t avail; /**< Width the cached size was measured against (ER_LAYOUT_AUTO = unconstrained). */
     uint16_t gen;
 } MeasureCacheEntry;
 
@@ -423,7 +424,7 @@ static int16_t solo_axis_pos(const int16_t start,
     return (int16_t)(start + div_round(pos2, 2));
 }
 
-static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h);
+static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* out_w, int16_t* out_h);
 
 /**
  * @brief Measures a child's intrinsic content size at most once, on first use.
@@ -435,15 +436,16 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h);
  * demand and is shared between the two axes when both need it.
  *
  * @param[in]      tag       Tag of the child to measure.
+ * @param[in]      avail_w   Width the child may occupy, or ER_LAYOUT_AUTO when unconstrained.
  * @param[in,out]  measured  Set to true once this call has measured; skips re-measuring.
  * @param[out]     iw        Receives the intrinsic width (only written on the first call).
  * @param[out]     ih        Receives the intrinsic height (only written on the first call).
  */
-static void measure_lazy(const uint16_t tag, bool* measured, int16_t* iw, int16_t* ih)
+static void measure_lazy(const uint16_t tag, const int16_t avail_w, bool* measured, int16_t* iw, int16_t* ih)
 {
     if (*measured)
         return;
-    measure_content(tag, iw, ih);
+    measure_content(tag, avail_w, iw, ih);
     *measured = true;
 }
 
@@ -461,20 +463,26 @@ static void measure_lazy(const uint16_t tag, bool* measured, int16_t* iw, int16_
  * Flex grow/shrink is intentionally ignored here (this is max-content sizing); the parent applies
  * flex distribution later against the available space.
  *
+ * When the width is known — an explicit width, or `avail_w` from the parent — a wrapping row
+ * breaks its children into lines at that width and reports the summed line heights, as Yoga
+ * does, so an auto-height `flexWrap` container grows to hold every line. The constraint is passed
+ * on to children whose width it bounds (column children, and the items of a wrapping row).
+ *
  * The walk is self-contained — it never reads or writes s_scratch / s_line_cross — so it is safe
  * to call from within compute_layout's Pass 1 without disturbing the in-progress layout state.
  *
- * @param[in]  tag    Tag of the node to measure.
+ * @param[in]  tag      Tag of the node to measure.
+ * @param[in]  avail_w  Width the node may occupy, or ER_LAYOUT_AUTO when unconstrained.
  * @param[out] out_w  Receives the intrinsic width in pixels.
  * @param[out] out_h  Receives the intrinsic height in pixels.
  */
-static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
+static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* out_w, int16_t* out_h)
 {
-    /* Per-pass memoisation: measure_content(tag) is a pure function of that node's own
+    /* Per-pass memoisation: measure_content(tag, avail_w) is a pure function of that node's own
      * subtree for the duration of one er_layout_compute() call, so a cache hit here is
      * exactly what turns the O(depth) remeasurement into O(1) per node per pass. */
     const bool cacheable = tag < (uint16_t)ERUI_MAX_NODES;
-    if (cacheable && s_measure_cache[tag].gen == s_measure_gen)
+    if (cacheable && s_measure_cache[tag].gen == s_measure_gen && s_measure_cache[tag].avail == avail_w)
     {
         *out_w = s_measure_cache[tag].w;
         *out_h = s_measure_cache[tag].h;
@@ -544,20 +552,34 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
         {
             s_measure_cache[tag].w = *out_w;
             s_measure_cache[tag].h = *out_h;
+            s_measure_cache[tag].avail = avail_w;
             s_measure_cache[tag].gen = s_measure_gen;
         }
         return;
     }
 
     /* Container / leaf View: derive content size from in-flow children (only when an axis is auto). */
+    const ERPadding pad = er_layout_padding(L);
     int16_t content_w = 0, content_h = 0;
     if (n->first_child_tag != ER_INVALID_TAG && (exp_w == ER_LAYOUT_AUTO || exp_h == ER_LAYOUT_AUTO))
     {
         const bool is_row = is_row_dir(L->flex_direction);
         const int16_t main_gap = is_row ? edge_or(L->column_gap, L->gap) : edge_or(L->row_gap, L->gap);
+        const int16_t cross_gap = is_row ? edge_or(L->row_gap, L->gap) : edge_or(L->column_gap, L->gap);
+        const int16_t box_w = (exp_w != ER_LAYOUT_AUTO) ? exp_w : avail_w;
+        const int16_t inner_w = (box_w == ER_LAYOUT_AUTO)
+                                    ? ER_LAYOUT_AUTO
+                                    : (int16_t)(box_w > pad.left + pad.right ? box_w - pad.left - pad.right : 0);
+        /* A wrapping row with a known width breaks into lines; the main axis is then the widest
+         * line and the cross axis the summed line heights plus the gaps between them. */
+        const bool wraps = is_row && L->flex_wrap != ER_WRAP_NOWRAP && inner_w != ER_LAYOUT_AUTO;
+        const bool bounds_children = !is_row || wraps;
         int32_t main_sum = 0;
         int16_t cross_max = 0;
+        int32_t wrapped_cross = 0;
+        int32_t widest_line = 0;
         int count = 0;
+        int line_count = 0;
         for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
         {
             ERNode* c = er_get_node(ct);
@@ -566,13 +588,32 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
             if (c->layout.position != ER_POS_ABSOLUTE && c->layout.display != ER_DISPLAY_NONE)
             {
                 int16_t cw = 0, ch = 0;
-                measure_content(ct, &cw, &ch);
                 const ERLayoutSpec* cl = &c->layout;
-                const int16_t outer_w =
-                    (int16_t)(cw + edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
+                const int16_t margin_x =
+                    (int16_t)(edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
+                const int16_t child_avail =
+                    bounds_children ? (int16_t)(inner_w > margin_x ? inner_w - margin_x : 0) : ER_LAYOUT_AUTO;
+                measure_content(ct, inner_w == ER_LAYOUT_AUTO ? ER_LAYOUT_AUTO : child_avail, &cw, &ch);
+                const int16_t outer_w = (int16_t)(cw + margin_x);
                 const int16_t outer_h =
                     (int16_t)(ch + edge_or(cl->margin_top, cl->margin) + edge_or(cl->margin_bottom, cl->margin));
-                if (is_row)
+                if (wraps)
+                {
+                    if (line_count > 0 && main_sum + main_gap + outer_w > inner_w)
+                    {
+                        wrapped_cross += cross_max + cross_gap;
+                        if (main_sum > widest_line)
+                            widest_line = main_sum;
+                        main_sum = 0;
+                        cross_max = 0;
+                        line_count = 0;
+                    }
+                    main_sum += (line_count > 0 ? main_gap : 0) + outer_w;
+                    if (outer_h > cross_max)
+                        cross_max = outer_h;
+                    line_count++;
+                }
+                else if (is_row)
                 {
                     main_sum += outer_w;
                     if (outer_h > cross_max)
@@ -588,7 +629,13 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
             }
             ct = c->next_sibling_tag;
         }
-        if (count > 1)
+        if (wraps)
+        {
+            if (widest_line > main_sum)
+                main_sum = widest_line;
+            cross_max = (int16_t)(wrapped_cross + cross_max > INT16_MAX ? INT16_MAX : wrapped_cross + cross_max);
+        }
+        else if (count > 1)
             main_sum += (int32_t)main_gap * (count - 1);
         if (main_sum > INT16_MAX)
             main_sum = INT16_MAX;
@@ -604,8 +651,6 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
         }
     }
 
-    const ERPadding pad = er_layout_padding(L);
-
     const int16_t iw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(content_w + pad.left + pad.right);
     const int16_t ih = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(content_h + pad.top + pad.bottom);
     *out_w = clamp_size(iw, L->min_width, L->max_width);
@@ -614,6 +659,7 @@ static void measure_content(const uint16_t tag, int16_t* out_w, int16_t* out_h)
     {
         s_measure_cache[tag].w = *out_w;
         s_measure_cache[tag].h = *out_h;
+        s_measure_cache[tag].avail = avail_w;
         s_measure_cache[tag].gen = s_measure_gen;
     }
 }
@@ -706,6 +752,20 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             bool measured = false;
             int16_t intr_w = 0, intr_h = 0;
 
+            /* Width the child may occupy, offered to its measurement so a wrapping row inside it
+             * breaks into lines: a percentage of this node's width, or — in a column, where the
+             * child's width is the cross axis — the content width less its horizontal margins. */
+            int16_t avail_w = ER_LAYOUT_AUTO;
+            if (cl->width_pct > 0.0f)
+                avail_w = (int16_t)((float)(is_row ? main_size : cross_avail) * cl->width_pct / 100.0f + 0.5f);
+            else if (!is_row && cl->width == ER_LAYOUT_AUTO)
+            {
+                const int16_t margin_x =
+                    (int16_t)(edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
+                avail_w = clamp_size(
+                    (int16_t)(cross_avail > margin_x ? cross_avail - margin_x : 0), cl->min_width, cl->max_width);
+            }
+
             /* Base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > intrinsic. */
             int16_t hypo_main;
             if (cl->flex_basis_pct > 0.0f)
@@ -726,7 +786,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                     hypo_main = mainsz;
                 else
                 {
-                    measure_lazy(ct, &measured, &intr_w, &intr_h);
+                    measure_lazy(ct, avail_w, &measured, &intr_w, &intr_h);
                     hypo_main = is_row ? intr_w : intr_h;
                 }
             }
@@ -751,7 +811,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 hypo_cross = 0; /* placeholder — overwritten by the aspect_ratio branch below */
             else
             {
-                measure_lazy(ct, &measured, &intr_w, &intr_h);
+                measure_lazy(ct, avail_w, &measured, &intr_w, &intr_h);
                 hypo_cross = is_row ? intr_h : intr_w;
             }
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
@@ -1376,7 +1436,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (!have_w || !have_h)
             {
                 int16_t intr_w = 0, intr_h = 0;
-                measure_content(ct, &intr_w, &intr_h);
+                measure_content(ct, have_w ? (int16_t)(cw + 0.5f) : ER_LAYOUT_AUTO, &intr_w, &intr_h);
                 if (!have_w)
                     cw = (float)intr_w;
                 if (!have_h)
