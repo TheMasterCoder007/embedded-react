@@ -494,6 +494,54 @@ static void test_nan_offset_keeps_axis(void)
 }
 
 /**
+ * @brief er_scroll_view_get_offset() reports the offset and the clamp range; other nodes are refused.
+ */
+static void test_get_offset(void)
+{
+    printf("test_get_offset\n");
+    TestCtx tctx;
+    EmbeddedRenderBackend be;
+    setup_backend(&tctx, &be);
+
+    ERNode *sv, *c0, *c1, *c2;
+    build_scene(&sv, &c0, &c1, &c2);
+    /* content 200x300, viewport 200x200  →  max_x = 0, max_y = 100 */
+
+    float x = -1.0f, y = -1.0f, max_x = -1.0f, max_y = -1.0f;
+    ASSERT(er_scroll_view_get_offset(sv, &x, &y, &max_x, &max_y));
+    ASSERT_FLOAT_NEAR(x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(y, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(max_x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(max_y, 100.0f, 0.001f);
+
+    er_scroll_view_set_offset(sv, 0.0f, 40.5f);
+    ASSERT(er_scroll_view_get_offset(sv, &x, &y, &max_x, &max_y));
+    ASSERT_FLOAT_NEAR(y, 40.5f, 0.001f);
+
+    er_scroll_view_set_offset(sv, 999.0f, 999.0f);
+    ASSERT(er_scroll_view_get_offset(sv, &x, &y, &max_x, &max_y));
+    ASSERT_FLOAT_NEAR(x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(y, 100.0f, 0.001f);
+
+    /* 150 px of content in a 200 px viewport: the range floors at 0 rather than going negative. */
+    ERProps p = make_props();
+    p.width = 200;
+    p.height = 50;
+    er_node_set_props(c0, &p);
+    er_node_set_props(c1, &p);
+    er_node_set_props(c2, &p);
+    er_commit();
+    ASSERT(er_scroll_view_get_offset(sv, &x, &y, &max_x, &max_y));
+    ASSERT_FLOAT_NEAR(max_y, 0.0f, 0.001f);
+
+    x = y = max_x = max_y = -1.0f;
+    ASSERT(!er_scroll_view_get_offset(c0, &x, &y, &max_x, &max_y));
+    ASSERT(!er_scroll_view_get_offset(NULL, &x, &y, &max_x, &max_y));
+    ASSERT_FLOAT_NEAR(x, -1.0f, 0.001f); /* outputs untouched */
+    ASSERT_FLOAT_NEAR(max_y, -1.0f, 0.001f);
+}
+
+/**
  * @brief Scrolled-out children are clipped and produce no fill inside the viewport.
  *
  * After scrolling down 100 px child0 (red, layout y=0..100) maps to screen y=-100..0.
@@ -712,6 +760,7 @@ int main(void)
     test_scroll_event_dedup();
     test_subpixel_step_repaints_nothing();
     test_nan_offset_keeps_axis();
+    test_get_offset();
     test_clip_hides_scrolled_out();
     test_clip_shows_scrolled_in();
     test_gesture_claims_scroll_view();
