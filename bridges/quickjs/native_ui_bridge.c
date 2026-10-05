@@ -189,6 +189,9 @@ static int s_batch_depth = 0;
 /** @brief A commit was asked for while a batch scope was open, and still owes a run. */
 static bool s_commit_pending = false;
 
+/** @brief createNode has failed since it last succeeded, and said so: one warning per run of failures. */
+static bool s_create_failing = false;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — batch scopes
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -3008,6 +3011,10 @@ static JSValue js_perf_render_end(JSContext* ctx, JSValueConst this_val, int arg
 /**
  * @brief NativeUI.createNode(typeString) — creates a node and returns its handle.
  *
+ * A node the engine pool or the handle table has no room for comes back as handle 0. The reconciler
+ * creates children before their parents, so that drops the node and every child it would have held;
+ * the first failure of a run is reported on stderr, as the timer and completion pools report theirs.
+ *
  * @param[in] ctx   QuickJS context.
  * @param[in] this  JS this (unused).
  * @param[in] argc  Argument count.
@@ -3033,14 +3040,28 @@ ER_BRIDGE_MARSHAL_FN(js_create_node)
 
     if (!node)
     {
+        if (!s_create_failing)
+        {
+            fprintf(
+                stderr, "createNode: node pool full (ERUI_MAX_NODES = %d); nodes are dropped\n", (int)ERUI_MAX_NODES);
+            s_create_failing = true;
+        }
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
     const int32_t handle = handle_alloc(node);
     if (handle == ER_BRIDGE_HANDLE_INVALID)
     {
         er_node_destroy(node);
+        if (!s_create_failing)
+        {
+            fprintf(stderr,
+                    "createNode: handle table full (ER_BRIDGE_MAX_HANDLES = %d); nodes are dropped\n",
+                    ER_BRIDGE_MAX_HANDLES);
+            s_create_failing = true;
+        }
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
+    s_create_failing = false;
     return JS_NewInt32(ctx, handle);
 }
 
@@ -4843,6 +4864,7 @@ void er_bridge_install(JSContext* ctx)
        swallow the new app's first commit. */
     s_batch_depth = 0;
     s_commit_pending = false;
+    s_create_failing = false;
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native_ui = JS_NewObject(ctx);
