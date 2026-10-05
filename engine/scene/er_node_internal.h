@@ -223,6 +223,7 @@ typedef struct
 
     /* Gradient (requires ERUI_GRADIENT) */
     uint8_t gradient_type;                                /**< ERGradientType. */
+    uint8_t gradient_corner;                              /**< ERGradientCorner (overrides gradient_angle). */
     float gradient_angle;                                 /**< Angle in degrees (0 = top→bottom, 90 = left→right). */
     uint8_t gradient_stop_count;                          /**< Number of active stops [0–ER_GRADIENT_MAX_STOPS]. */
     ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */

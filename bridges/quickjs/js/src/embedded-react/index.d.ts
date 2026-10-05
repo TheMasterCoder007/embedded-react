@@ -66,6 +66,33 @@ export type TransformStyle =
   | {perspective: number};
 
 /**
+ * A View background gradient, as CSS draws one (stops interpolated premultiplied, at most 4 kept; a missing
+ * offset spaces the stops evenly). It paints instead of `backgroundColor` and is clipped to `borderRadius`.
+ */
+export type BackgroundGradient =
+  | {
+      /** linear-gradient(): `angle` in degrees (0 points to the top, 90 to the right) or a `to` side or
+       *  corner; the default is `to: 'bottom'`. A corner follows the box's aspect ratio, as in CSS. */
+      type: 'linear';
+      angle?: number;
+      to?:
+        | 'top'
+        | 'right'
+        | 'bottom'
+        | 'left'
+        | 'top right'
+        | 'bottom right'
+        | 'bottom left'
+        | 'top left';
+      stops: Array<{color: string; offset?: number}>;
+    }
+  | {
+      /** radial-gradient(circle farthest-corner at center, …). */
+      type: 'radial';
+      stops: Array<{color: string; offset?: number}>;
+    };
+
+/**
  * Value type of an untyped style entry. Styles stay open (a not-yet-declared key is not an error), and the
  * union covers the object- and array-valued entries — `shadowOffset`, `transformOrigin`, `transform` — so
  * they are legal both under their own declarations and through the index signature.
@@ -77,6 +104,7 @@ export type StyleValue =
   | TransformStyle[]
   | ShadowOffset
   | TransformOrigin
+  | BackgroundGradient
   | undefined;
 
 /** A single style object. Properties mirror the React Native subset the engine supports. */
@@ -158,6 +186,7 @@ export interface ViewStyle {
 
   // Paint.
   backgroundColor?: string | AnimatedValue;
+  backgroundGradient?: BackgroundGradient;
   opacity?: number | AnimatedValue;
 
   // Border.

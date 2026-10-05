@@ -52,6 +52,7 @@ import {
   NODE_TYPES,
   DYN_FIELDS,
   colorLiteral,
+  gradientStopLiterals,
 } from './style-map.mjs';
 import {
   flattenSvg,
@@ -5834,16 +5835,14 @@ function emitDial(el, scope, out, env, state) {
           field: 'gradient_stop_count',
           expr: String(stops.length),
         });
-      stops.forEach((st, i) => {
-        const off =
-          typeof st.offset === 'number' ? st.offset : i / (stops.length - 1);
+      gradientStopLiterals(stops).forEach((st, i) => {
         staticAssigns.push({
           field: `gradient_stops[${i}].color`,
-          expr: colorLiteral(String(st.color)),
+          expr: st.color,
         });
         staticAssigns.push({
           field: `gradient_stops[${i}].position`,
-          expr: floatLit(off),
+          expr: st.position,
         });
       });
     } else if (name === 'onChange') onChangeFn = node;

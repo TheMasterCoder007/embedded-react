@@ -15,7 +15,9 @@
  */
 
 #include "er_scene.h"
+#include "gradient.h"
 #include "native_renderer.h"
+#include "renderer_internal.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -198,6 +200,10 @@ static int fail(const char* msg)
  *   - Linear diagonal gradient (45°): corner pixels match stop endpoints.
  *   - Radial gradient: center pixel = stop[0], corner pixel ≈ stop[1].
  *   - Degenerate gradient (stop_count < 2): no-op; background_color used.
+ *   - Ordered dither: a low-contrast ramp averages to its exact value, flat colours stay exact.
+ *   - Premultiplied interpolation: a fade to transparent keeps its colour.
+ *   - CSS `to <corner>`: the neighbouring corners sit on the 50% line for a non-square box.
+ *   - Damage clip: a clipped repaint reproduces the full frame's pixels inside the clip.
  *   - Bilinear vs nearest-neighbor scale: smoke-test showing render completes without crash.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
@@ -533,6 +539,190 @@ int main(void)
             return fail("per-corner radius: the square bottom-left corner was clipped");
         if (((px(&tc, FB_W - 1, FB_H - 1) >> 24) & 0xFFu) == 0)
             return fail("per-corner radius: the square bottom-right corner was clipped");
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 8: ordered dither.
+     *
+     * A 4-level ramp over 64 px is 16 px per 8-bit step without dithering. With it, every 4x4 block
+     * averages to the exact ramp value at its centre (within a tenth of a level), and pixels only ever
+     * take the two levels around that value.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps p;
+        memset(&p, 0, sizeof(p));
+        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+        p.width = FB_W;
+        p.height = FB_H;
+        p.opacity = 255;
+        p.gradient_type = ER_GRADIENT_LINEAR;
+        p.gradient_angle = 90.0f;
+        p.gradient_stop_count = 2;
+        p.gradient_stops[0].color = 0xFF101010;
+        p.gradient_stops[0].position = 0.0f;
+        p.gradient_stops[1].color = 0xFF141414;
+        p.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &p);
+
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+
+        if (px(&tc, 0, 5) != 0xFF101010 || px(&tc, FB_W - 1, 9) != 0xFF141414)
+            return fail("dither: the end stops must stay exact");
+        for (int bx = 0; bx + 4 <= FB_W; bx += 4)
+        {
+            int sum = 0;
+            for (int yy = 8; yy < 12; yy++)
+            {
+                for (int xx = bx; xx < bx + 4; xx++)
+                {
+                    const int r = (int)((px(&tc, xx, yy) >> 16) & 0xFFu);
+                    const float exact = 16.0f + 4.0f * (float)xx / (float)(FB_W - 1);
+                    if (r < (int)exact || r > (int)exact + 1)
+                        return fail("dither: a pixel left the two levels around its exact value");
+                    sum += r;
+                }
+            }
+            const float want = 16.0f + 4.0f * ((float)bx + 1.5f) / (float)(FB_W - 1);
+            if (fabsf((float)sum / 16.0f - want) > 0.1f)
+            {
+                printf("  block x=%d: mean %.3f, exact %.3f\n", bx, (double)((float)sum / 16.0f), (double)want);
+                return fail("dither: a 4x4 block does not average to the exact ramp value");
+            }
+        }
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 9: premultiplied interpolation — white fading to transparent black stays white.
+     *
+     * CSS interpolates stops premultiplied, so the midpoint is half-covered WHITE (r == a), not the
+     * grey that blending straight-alpha channels toward transparent black produces.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps p;
+        memset(&p, 0, sizeof(p));
+        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+        p.width = FB_W;
+        p.height = FB_H;
+        p.opacity = 255;
+        p.gradient_type = ER_GRADIENT_LINEAR;
+        p.gradient_angle = 0.0f;
+        p.gradient_stop_count = 2;
+        p.gradient_stops[0].color = 0xFFFFFFFF;
+        p.gradient_stops[0].position = 0.0f;
+        p.gradient_stops[1].color = 0x00000000;
+        p.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &p);
+
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+
+        for (int yy = 0; yy < FB_H; yy++)
+        {
+            const uint32_t c = px(&tc, 7, yy);
+            if (((c >> 16) & 0xFFu) != ((c >> 24) & 0xFFu))
+                return fail("premultiplied: a fade to transparent darkened its colour");
+        }
+        const int mid_a = (int)((px(&tc, 7, FB_H / 2) >> 24) & 0xFFu);
+        if (mid_a < 120 || mid_a > 135)
+            return fail("premultiplied: the midpoint is not half covered");
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 10: CSS `to bottom right` on a 2:1 box.
+     *
+     * The gradient line is perpendicular to the top-right/bottom-left diagonal, so those two corners
+     * share the 50% colour; a fixed 135° angle would give them different colours on a non-square box.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps p;
+        memset(&p, 0, sizeof(p));
+        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+        p.width = FB_W;
+        p.height = FB_H / 2;
+        p.opacity = 255;
+        p.gradient_type = ER_GRADIENT_LINEAR;
+        p.gradient_corner = ER_GRADIENT_CORNER_BOTTOM_RIGHT;
+        p.gradient_stop_count = 2;
+        p.gradient_stops[0].color = 0xFF000000;
+        p.gradient_stops[0].position = 0.0f;
+        p.gradient_stops[1].color = 0xFFFF0000;
+        p.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &p);
+
+        memset(tc.fb, 0, sizeof(tc.fb));
+        er_commit();
+
+        const int tl = (int)((px(&tc, 0, 0) >> 16) & 0xFFu);
+        const int br = (int)((px(&tc, FB_W - 1, FB_H / 2 - 1) >> 16) & 0xFFu);
+        const int tr = (int)((px(&tc, FB_W - 1, 0) >> 16) & 0xFFu);
+        const int bl = (int)((px(&tc, 0, FB_H / 2 - 1) >> 16) & 0xFFu);
+        if (tl != 0 || br != 255)
+            return fail("to bottom right: the start and end corners must hold the end stops");
+        if (tr < 120 || tr > 135 || bl < 120 || bl > 135)
+        {
+            printf("  top-right %d, bottom-left %d\n", tr, bl);
+            return fail("to bottom right: the neighbouring corners must sit on the 50% line");
+        }
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 11: a repaint under a damage clip reproduces the full frame inside the clip and leaves the
+     * rest untouched — the dither is keyed to framebuffer coordinates, not to the window it was
+     * assembled in, so a small repaint never seams against the pixels around it. Covers the diagonal
+     * per-pixel path and the two axis-aligned paths (rows reused along x, one colour per row along y).
+     * ----------------------------------------------------------------------- */
+    {
+        static const float angles[] = {30.0f, 90.0f, 0.0f};
+        static uint32_t full[FB_W * FB_H];
+        for (size_t ai = 0; ai < sizeof(angles) / sizeof(angles[0]); ai++)
+        {
+            ERProps p;
+            memset(&p, 0, sizeof(p));
+            p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
+            p.width = FB_W;
+            p.height = FB_H;
+            p.opacity = 255;
+            p.border_radius = 12;
+            p.gradient_type = ER_GRADIENT_LINEAR;
+            p.gradient_angle = angles[ai];
+            p.gradient_stop_count = 3;
+            p.gradient_stops[0].color = 0xFF0B0D12;
+            p.gradient_stops[0].position = 0.0f;
+            p.gradient_stops[1].color = 0xCC1A2B3C;
+            p.gradient_stops[1].position = 0.4f;
+            p.gradient_stops[2].color = 0xFF202830;
+            p.gradient_stops[2].position = 1.0f;
+            er_node_set_props(root, &p);
+
+            memset(tc.fb, 0, sizeof(tc.fb));
+            er_commit();
+            memcpy(full, tc.fb, sizeof(full));
+
+            const int cx = 3, cy = 5, cw = 21, ch = 13; /* crosses the rounded top-left corner */
+            memset(tc.fb, 0, sizeof(tc.fb));
+            er_push_clip_rect(cx, cy, cw, ch);
+            er_gradient_render(&root->props.view, 0, 0, FB_W, FB_H);
+            er_pop_clip_rect();
+            for (int yy = 0; yy < FB_H; yy++)
+            {
+                for (int xx = 0; xx < FB_W; xx++)
+                {
+                    const bool inside = xx >= cx && xx < cx + cw && yy >= cy && yy < cy + ch;
+                    const uint32_t want = inside ? full[yy * FB_W + xx] : 0u;
+                    if (px(&tc, xx, yy) != want)
+                    {
+                        printf("  angle %.0f at (%d,%d): got %08X, want %08X\n",
+                               (double)angles[ai],
+                               xx,
+                               yy,
+                               px(&tc, xx, yy),
+                               want);
+                        return fail("damage clip: the clipped repaint differs from the full frame");
+                    }
+                }
+            }
+        }
     }
 
 #else /* ERUI_GRADIENT == 0 */

@@ -417,6 +417,22 @@ extern "C"
     } ERGradientType;
 
     /**
+     * @brief CSS `to <corner>` direction for a View-background linear gradient.
+     *
+     * A corner direction depends on the box's aspect ratio (the gradient line is perpendicular to the
+     * diagonal joining the two neighbouring corners, as CSS linear-gradient defines it), so it is resolved
+     * at render time from the laid-out size. ER_GRADIENT_CORNER_NONE uses gradient_angle instead.
+     */
+    typedef enum
+    {
+        ER_GRADIENT_CORNER_NONE = 0,         /**< Direction from gradient_angle (default). */
+        ER_GRADIENT_CORNER_TOP_RIGHT = 1,    /**< `to top right`. */
+        ER_GRADIENT_CORNER_BOTTOM_RIGHT = 2, /**< `to bottom right`. */
+        ER_GRADIENT_CORNER_BOTTOM_LEFT = 3,  /**< `to bottom left`. */
+        ER_GRADIENT_CORNER_TOP_LEFT = 4,     /**< `to top left`. */
+    } ERGradientCorner;
+
+    /**
      * @brief One color stop in a gradient.
      *
      * Stops should be ordered by ascending position. The gradient is extrapolated with the
@@ -804,6 +820,7 @@ extern "C"
 
         /* --- Gradient (View-family; requires ERUI_GRADIENT at build time) --- */
         uint8_t gradient_type;       /**< ERGradientType — default ER_GRADIENT_NONE. */
+        uint8_t gradient_corner;     /**< ERGradientCorner; overrides gradient_angle for a LINEAR gradient. */
         float gradient_angle;        /**< Angle in degrees: 0 = top→bottom, 90 = left→right. */
         uint8_t gradient_stop_count; /**< Number of valid entries in gradient_stops [0–ER_GRADIENT_MAX_STOPS]. */
         ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */
