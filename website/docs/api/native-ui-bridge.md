@@ -27,6 +27,11 @@ Everything the library calls, grouped:
 | Limits           | `maxVectorOps`, `maxVectorPaints`, `maxVectorGrads`: the engine's compiled-in vector pool sizes, so the library can warn before the engine refuses                                                                          |
 | Instrumentation  | `perfCallbackBegin/End`, `perfRenderBegin/End`, `perfMarshalBegin/End`: the marks behind the JS sub-split in the [perf overlay](../guides/performance.md#measuring-on-the-device), present only in an `ER_PERF_STATS` build |
 
+One method is there for app code rather than the library: `scrollTo(h, x, y)` scrolls the
+`ScrollView` whose handle a `ref` received, clamped to its range, fires its `onScroll`, and returns
+`[x, y, maxX, maxY]` after the move. A coordinate that is not a number keeps that axis, so
+`scrollTo(h, NaN, NaN)` only reads. It returns `undefined` for a node that is not a `ScrollView`.
+
 `setProps` takes the flattened style plus top-level props as one bag. The bridge interns prop names
 and caches the last parsed string per enum and colour prop, and hashes the bag to skip an unchanged
 one, which is what made `setProps` cheap enough on the ESP32-S3: string identity, not parsing, is the

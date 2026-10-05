@@ -2905,6 +2905,24 @@ static void anchor_arc_children(ERNode* node)
 }
 
 /**
+ * @brief The largest scroll offset a ScrollView accepts on each axis.
+ *
+ * Content size minus viewport size from the last layout pass, floored at 0 so a ScrollView whose content
+ * fits never scrolls.
+ *
+ * @param[in]  node   ScrollView or FlatList node.
+ * @param[out] max_x  Largest horizontal offset in pixels.
+ * @param[out] max_y  Largest vertical offset in pixels.
+ */
+static void scroll_max_offset(const ERNode* node, float* max_x, float* max_y)
+{
+    const float mx = (float)(node->scroll_content_w - node->computed.w);
+    const float my = (float)(node->scroll_content_h - node->computed.h);
+    *max_x = mx > 0.0f ? mx : 0.0f;
+    *max_y = my > 0.0f ? my : 0.0f;
+}
+
+/**
  * @brief Walks the subtree and updates scroll_content_w / scroll_content_h on all ScrollViews.
  *
  * Called after the layout pass so content-size clamping is based on freshly-computed rects.
@@ -5764,6 +5782,17 @@ void er_tick(uint32_t delta_ms)
     s_now_ms += delta_ms;
 }
 
+bool er_scroll_view_get_offset(const ERNode* node, float* x, float* y, float* max_x, float* max_y)
+{
+    if (!node || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
+        return false;
+
+    *x = node->scroll_offset_x;
+    *y = node->scroll_offset_y;
+    scroll_max_offset(node, max_x, max_y);
+    return true;
+}
+
 void er_scroll_view_set_offset(ERNode* node, float x, float y)
 {
     if (!node || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
@@ -5773,14 +5802,9 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
     x = er_nan_or(x, node->scroll_offset_x);
     y = er_nan_or(y, node->scroll_offset_y);
 
-    /* Clamp to valid scroll range.  The maximum offset is content_size − viewport_size,
-     * floored at 0 so we never scroll past the start or beyond the end. */
-    float max_x = (float)(node->scroll_content_w - node->computed.w);
-    float max_y = (float)(node->scroll_content_h - node->computed.h);
-    if (max_x < 0.0f)
-        max_x = 0.0f;
-    if (max_y < 0.0f)
-        max_y = 0.0f;
+    /* Clamp to the valid scroll range, so we never scroll past the start or beyond the end. */
+    float max_x, max_y;
+    scroll_max_offset(node, &max_x, &max_y);
 
     if (x < 0.0f)
         x = 0.0f;

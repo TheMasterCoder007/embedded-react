@@ -85,7 +85,8 @@ Moves are coalesced to the newest one per finger per frame;
 `embedded_renderer_set_touch_coalescing(false)` dispatches every sample instead, and `embedded_renderer_flush_touch()` /
 `embedded_renderer_has_pending_touch()` let a host dispatch them before its own commit. A physical
 keyboard feeds the focused text input through `embedded_renderer_key(keycode, utf8)`.
-`er_scroll_view_set_offset` scrolls programmatically; `er_text_input_focus`/`blur`/`get_text`/
+`er_scroll_view_set_offset` scrolls programmatically and `er_scroll_view_get_offset` reads the
+offset back with the range it clamps to; `er_text_input_focus`/`blur`/`get_text`/
 `set_text` drive a text input; `er_keyboard_set_config` swaps the on-screen keyboard;
 `er_arc_get_value(node)` reads a `Dial`'s current value.
 

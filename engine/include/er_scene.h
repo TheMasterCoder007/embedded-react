@@ -1558,6 +1558,23 @@ extern "C"
     void er_scroll_view_set_offset(ERNode* node, float x, float y);
 
     /**
+     * @brief Reads a ScrollView's scroll offset and the largest offset it accepts on each axis.
+     *
+     * The largest offset is content_size − viewport_size from the last layout pass, floored at 0: the
+     * range er_scroll_view_set_offset() clamps to.
+     *
+     * @param[in]  node   ScrollView (or FlatList) node to read.
+     * @param[out] x      Current horizontal scroll offset in pixels.
+     * @param[out] y      Current vertical scroll offset in pixels.
+     * @param[out] max_x  Largest horizontal scroll offset in pixels.
+     * @param[out] max_y  Largest vertical scroll offset in pixels.
+     *
+     * @return true when @p node is a ScrollView or FlatList (outputs written); false otherwise
+     *         (outputs untouched).
+     */
+    bool er_scroll_view_get_offset(const ERNode* node, float* x, float* y, float* max_x, float* max_y);
+
+    /**
      * @brief Registers an event handler on a node.
      *
      * Replaces any previously registered handler for the same event type.

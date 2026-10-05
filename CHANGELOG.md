@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- `er_scroll_view_get_offset()` reads a ScrollView's offset and the largest offset it accepts on each axis.
+  In Flow A, `NativeUI.scrollTo(handle, x, y)` scrolls the ScrollView a `ref` points at and returns
+  `[x, y, maxX, maxY]`, so app code can bring a row into view; a NaN coordinate keeps that axis.
 
 ## [0.15.0] - 2026-09-27
 ### Changed
