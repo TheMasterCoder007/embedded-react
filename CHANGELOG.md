@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- A transform whose scale is exactly 1, such as a scale animation that has come back to rest, no longer
+  renders its node and children through the transform buffer on every repaint. It is drawn directly, as a
+  node with no scale is, so it repaints faster and keeps its shadow.
 
 ## [0.15.0] - 2026-09-27
 ### Changed

@@ -336,7 +336,9 @@ bool er_transform_is_translate_only(const ERNode* n)
     if (n->tp_rotate_x != 0.0f || n->tp_rotate_y != 0.0f || n->tp_perspective != 0.0f)
         return false;
 #endif
-    return n->tp_scale_x == 0.0f && n->tp_scale_y == 0.0f && n->tp_rotate_z == 0.0f;
+    /* 0 is the unset sentinel; an explicit 1, such as a scale animation at rest, is the same identity. */
+    return (n->tp_scale_x == 0.0f || n->tp_scale_x == 1.0f) && (n->tp_scale_y == 0.0f || n->tp_scale_y == 1.0f)
+           && n->tp_rotate_z == 0.0f;
 }
 
 #if ERUI_3D_TRANSFORMS

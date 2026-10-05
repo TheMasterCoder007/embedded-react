@@ -385,8 +385,10 @@ static int test_singular_arc_still_drags(void)
     ap.arc_adjustable = 1;
     ap.arc_track_color = 0xFF404040U;
     ap.arc_indicator_color = 0xFF00A0FFU;
-    ap.transform_scale_x = 1.0f; /* a real transform on the capture path, and the identity matrix */
-    ap.transform_scale_y = 1.0f;
+    /* A real transform on the capture path, as close to identity as one gets: scale 1 exactly is
+     * translate-only and never captures. */
+    ap.transform_scale_x = 0.99f;
+    ap.transform_scale_y = 0.99f;
     er_node_set_props(arc, &ap);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
     er_tree_append_child(root, arc);
@@ -423,7 +425,7 @@ static int test_singular_arc_still_drags(void)
         return fail("a touch on the painted ring of a just-collapsed dial did not start a drag");
     embedded_renderer_touch(0, ER_TOUCH_UP, ring_x, ring_y);
 
-    printf("arc scale 1 -> .0005 (singular): ring still dragged through the stale window\n");
+    printf("arc scale .99 -> .0005 (singular): ring still dragged through the stale window\n");
     return EXIT_SUCCESS;
 }
 
@@ -452,8 +454,9 @@ int main(void)
 
     static const Scenario k_scenarios[] = {
         /* The issue's repro: det = 2.5e-7, an order of magnitude under the 1e-6 affine epsilon, from a
-         * settled identity whose paint is exactly the raw box the fallback is about to use. */
-        {{1.0f, 0.0f, 0.0f, true}, {0.0005f, 0.0f, 0.0f, false}, "scale 1 -> .0005 (singular)"},
+         * settled near-identity whose paint is all but the raw box the fallback is about to use. Scale 1
+         * exactly is translate-only: it never captures, so it has no stale window to test. */
+        {{0.99f, 0.0f, 0.0f, true}, {0.0005f, 0.0f, 0.0f, false}, "scale .99 -> .0005 (singular)"},
         /* The same crossing from a settled state whose paint is NOT the raw box, so the tap is on
          * pixels only the transform put there. */
         {{0.5f, 0.0f, 0.0f, true}, {0.0005f, 0.0f, 0.0f, false}, "scale .5 -> .0005 (singular)"},
