@@ -338,6 +338,46 @@ int main(void)
     }
     check("copy of a ScrollView that was repainted untracked", true);
 
+    /* A container that paints nothing, whose box overlaps the viewport's top rows (a section header with a
+     * margin, say): it has no pixels there, so a copy repaints the exposed strip and not its box. */
+    install(true);
+    er_reset();
+    ERNode* page = view(NULL, FB_W, FB_H, 0xFF102030U);
+    ERProps hp;
+    er_props_default(&hp);
+    hp.position = ER_POS_ABSOLUTE;
+    hp.width = FB_W;
+    hp.height = 40;
+    ERNode* header = er_node_create(ER_NODE_VIEW);
+    er_node_set_props(header, &hp);
+    er_tree_append_child(page, header);
+    view(header, 20, 8, 0xFFFFFFFFU);
+    sp.border_width = 0;
+    ERNode* list = er_node_create(ER_NODE_SCROLL_VIEW);
+    er_node_set_props(list, &sp);
+    er_tree_append_child(page, list);
+    ERNode* items = view(list, 110, ROWS * 12, 0);
+    for (int i = 0; i < ROWS; i++)
+        view(items, 110, 12, 0xFF000000U | (uint32_t)(i * 2246822519U >> 8));
+    er_tree_set_root(page);
+    er_commit();
+    g_ctx.moves = 0;
+    g_ctx.painted_px = 0;
+    er_scroll_view_set_offset(list, 0.0f, 6.0f);
+    er_commit();
+    /* The exposed 6 px strip with its damage margins stays under 110 x 22 pixels; the header's 10
+     * overlapping rows, repainted where they are and where the move carried them, would more than double
+     * that. */
+    if (g_ctx.moves != 1 || g_ctx.painted_px > 110 * 22)
+    {
+        fprintf(stderr,
+                "FAIL paint-free container: expected 1 move and a strip, got %d move(s), %ld pixels\n",
+                g_ctx.moves,
+                g_ctx.painted_px);
+        g_failures++;
+    }
+    check("copy beside a paint-free container", true);
+
     if (g_failures)
         return EXIT_FAILURE;
     printf("scroll copy: all checks passed\n");

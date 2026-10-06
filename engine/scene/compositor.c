@@ -4912,17 +4912,16 @@ static bool rect_intersect(int* x, int* y, int* w, int* h, int cx, int cy, int c
 }
 
 /**
- * @brief Whether a node's own paint inside the viewport is the same at every pixel, so moving it is exact.
+ * @brief Whether a container's own paint can be moved with the viewport: no transform, opacity, shadow or
+ *        gradient, so it paints at most a background and a border.
  *
- * True when it paints nothing there, or a solid background whose border band and rounded corners stay
- * clear of the viewport. Transforms, opacity, shadows and gradients are refused outright.
+ * @param[in]  a       Node to check.
+ * @param[out] border  Its widest border edge.
+ * @param[out] radius  Its largest corner radius.
  *
- * @param[in] a              Ancestor of the ScrollView, or the ScrollView itself.
- * @param[in] vx,vy,vw,vh    The viewport's visible screen rect.
- *
- * @return true when moving the viewport's pixels leaves this node's paint unchanged.
+ * @return false for anything but a plain container (View, ScrollView, Pressable, FlatList).
  */
-static bool paints_uniformly_over(const ERNode* a, int vx, int vy, int vw, int vh)
+static bool is_plain_container(const ERNode* a, int* border, int* radius)
 {
 #if ERUI_TRANSFORMS_FULL
     if (er_node_has_complex_transform(a))
@@ -4942,15 +4941,45 @@ static bool paints_uniformly_over(const ERNode* a, int vx, int vy, int vw, int v
         vp->border_width, vp->border_left_width, vp->border_top_width, vp->border_right_width, vp->border_bottom_width};
     const int16_t radii[] = {
         vp->border_radius, vp->border_tl_radius, vp->border_tr_radius, vp->border_br_radius, vp->border_bl_radius};
-    int border = 0, radius = 0;
+    *border = 0;
+    *radius = 0;
     for (int i = 0; i < 5; i++)
     {
-        if (edges[i] > border)
-            border = edges[i];
-        if (radii[i] > radius)
-            radius = radii[i];
+        if (edges[i] > *border)
+            *border = edges[i];
+        if (radii[i] > *radius)
+            *radius = radii[i];
     }
-    if ((vp->background_color >> 24) == 0U && border == 0)
+    return true;
+}
+
+/**
+ * @brief Whether a node paints no pixels of its own: a plain container with no background and no border.
+ *        Its descendants are separate nodes and paint for themselves.
+ */
+static bool paints_nothing(const ERNode* a)
+{
+    int border, radius;
+    return is_plain_container(a, &border, &radius) && (a->props.view.background_color >> 24) == 0U && border == 0;
+}
+
+/**
+ * @brief Whether a node's own paint inside the viewport is the same at every pixel, so moving it is exact.
+ *
+ * True when it paints nothing there, or a solid background whose border band and rounded corners stay
+ * clear of the viewport. Transforms, opacity, shadows and gradients are refused outright.
+ *
+ * @param[in] a              Ancestor of the ScrollView, or the ScrollView itself.
+ * @param[in] vx,vy,vw,vh    The viewport's visible screen rect.
+ *
+ * @return true when moving the viewport's pixels leaves this node's paint unchanged.
+ */
+static bool paints_uniformly_over(const ERNode* a, int vx, int vy, int vw, int vh)
+{
+    int border, radius;
+    if (!is_plain_container(a, &border, &radius))
+        return false;
+    if ((a->props.view.background_color >> 24) == 0U && border == 0)
         return true; /* paints nothing */
     const int inset = border + radius;
     int bx, by, bw, bh;
@@ -5008,14 +5037,17 @@ static bool scroll_by_copy(ERNode* sv, ERDamageSet* dmg, int rb_x0, int rb_y0, i
     }
 
     /* Foreign footprints: every node outside the scrolled subtree and its ancestor chain whose last paint
-     * reaches into the viewport. */
+     * reaches into the viewport. A container that paints nothing has no pixels there to repaint: its box
+     * only bounds its children, which are checked on their own. Counting it would damage, say, a whole
+     * section header whose transparent margin overlaps the viewport's edge, and the damage set would grow
+     * that strip into a repaint of the viewport. */
     ERRect foreign[ER_SCROLL_FOREIGN_MAX];
     int foreign_count = 0;
     long foreign_area = 0;
     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
     {
         ERNode* n = er_get_node(tag);
-        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv)
+        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || paints_nothing(n))
             continue;
         bool skip = false;
         for (int i = 0; i < depth && !skip; i++)
@@ -5098,7 +5130,7 @@ static bool scroll_by_copy(ERNode* sv, ERDamageSet* dmg, int rb_x0, int rb_y0, i
     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
     {
         ERNode* n = er_get_node(tag);
-        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv)
+        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || paints_nothing(n))
             continue;
         int fx = (int)n->last_paint_rect.x, fy = (int)n->last_paint_rect.y, fw = (int)n->last_paint_rect.w,
             fh = (int)n->last_paint_rect.h;
