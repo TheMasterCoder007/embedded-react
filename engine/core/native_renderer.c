@@ -640,6 +640,17 @@ void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int
     }
 }
 
+bool er_blit_can_move(void)
+{
+    return g_backend && g_backend->move_rect && g_backend->band_height == 0;
+}
+
+void er_blit_move(int sx, int sy, int w, int h, int dx, int dy)
+{
+    if (w > 0 && h > 0)
+        g_backend->move_rect(sx, sy, w, h, dx, dy, g_backend->ctx);
+}
+
 void er_blit_perf_reset(void)
 {
     for (int i = 0; i < ERUI_RENDER_WORKERS; i++)

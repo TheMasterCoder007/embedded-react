@@ -110,6 +110,16 @@ extern "C"
         /** @brief Copy a fully opaque src in the given format into the framebuffer (replace). */
         void (*copy_rect_fmt)(
             const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx);
+
+        /*------------------------------------------------------------------------------------------------
+         - Framebuffer move (optional). Copies the w x h pixels at (src_x, src_y) to (dst_x, dst_y) within
+           the framebuffer; the two rects may overlap (memmove semantics). The engine uses it to scroll a
+           ScrollView by moving the pixels it already painted and repainting only the exposed strip.
+           Never called in banded mode. Leave NULL to repaint scrolled viewports in full.
+         ------------------------------------------------------------------------------------------------*/
+
+        /** @brief Move a framebuffer rect to another position in the framebuffer (overlap allowed). */
+        void (*move_rect)(int src_x, int src_y, int w, int h, int dst_x, int dst_y, void* ctx);
     } EmbeddedRenderBackend;
 
     /**

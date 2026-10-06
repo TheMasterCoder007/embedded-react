@@ -299,6 +299,19 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
 bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h);
 
 /**
+ * @brief Whether the backend can move framebuffer pixels (move_rect set, full-framebuffer mode).
+ */
+bool er_blit_can_move(void);
+
+/**
+ * @brief Moves the w x h framebuffer pixels at (sx, sy) to (dx, dy); the rects may overlap.
+ *
+ * Unclipped and unaccounted: the caller has already bounded both rects to the screen. Only valid
+ * when er_blit_can_move() is true and no scratch target is active.
+ */
+void er_blit_move(int sx, int sy, int w, int h, int dx, int dy);
+
+/**
  * @brief Blends a source buffer onto the framebuffer at a given global opacity via the active backend.
  *
  * @param[in] src     Pointer to the source pixel buffer (ARGB8888, premultiplied).

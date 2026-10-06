@@ -103,6 +103,13 @@ static bool s_force_full_repaint = true;
  * the span between them into the repaint. */
 static ERDamageSet s_removed_set;
 
+#define ER_SCROLL_PENDING_MAX 8 /**< ScrollViews that can scroll by copy in one commit; more repaint in full. */
+
+/* ScrollViews whose offset moved since the last commit (scroll_pending set), for the next commit to settle
+ * by moving their painted viewport or repainting it (resolve_scroll_moves). */
+static uint16_t s_scroll_pending[ER_SCROLL_PENDING_MAX];
+static uint8_t s_scroll_pending_count = 0U;
+
 /* Layout-dirty gate: er_commit() re-runs the flex + text-measure layout pass only when
  * something that can change a computed rect has happened since the last commit (a prop set,
  * a tree mutation, or a node destroy). Animations mutate render-only props and never set this,
@@ -4809,6 +4816,7 @@ void er_reset(void)
         s_comp_ctx[i].has_dirty = false;
     er_damage_set_clear(&s_removed_set);
     er_damage_set_clear(&s_last_paint_set);
+    s_scroll_pending_count = 0U;
     s_force_full_repaint = true;
     s_layout_dirty = true;
     s_subtree_bounds_dirty = false; /* the next commit's layout pass recomputes them */
@@ -4861,6 +4869,318 @@ static void render_slice_job(int worker, void* arg)
     er_push_clip_rect(j->x0, sy0, j->x1 - j->x0, sy1 - sy0);
     render_tree(j->root, j->full_recomposite, false, 0, j->kbd_y);
     er_pop_clip_rect();
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Scroll by copy
+ *
+ * A ScrollView whose offset moved repaints its whole viewport by default: every child's screen rect changed,
+ * so the pre-pass damages all of them. When nothing else on screen shares the viewport's pixels, the commit
+ * instead moves the pixels already painted there by the scroll delta (backend move_rect) and repaints only
+ * the exposed strip, plus whatever else changed. What makes that exact:
+ *   - every descendant's last_paint_rect moves by the same delta, so the pre-pass sees an unchanged child as
+ *     unchanged and a changed one damages its moved trail, which is where its old pixels now are;
+ *   - each ancestor, the ScrollView included, paints a translation-invariant underlay inside the viewport
+ *     (a solid background that covers it, no gradient, shadow, border band, opacity or transform there);
+ *   - any other node painted into the viewport (an overlay, an earlier sibling) is repainted where it is and
+ *     where the move carried its pixels, as is any vacated footprint.
+ * Anything else falls back to the full-viewport repaint.
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#define ER_SCROLL_FOREIGN_MAX 16 /**< Foreign footprints inside one viewport before the copy gives up. */
+#define ER_SCROLL_DEPTH_MAX 64   /**< Ancestor chain length the copy can check. */
+
+/**
+ * @brief Intersects (x,y,w,h) with (cx,cy,cw,ch) in place.
+ *
+ * @param[in,out] x,y,w,h      Rect to narrow.
+ * @param[in]     cx,cy,cw,ch  Rect to intersect it with.
+ *
+ * @return false when the intersection is empty.
+ */
+static bool rect_intersect(int* x, int* y, int* w, int* h, int cx, int cy, int cw, int ch)
+{
+    const int x0 = *x > cx ? *x : cx;
+    const int y0 = *y > cy ? *y : cy;
+    const int x1 = (*x + *w < cx + cw) ? *x + *w : cx + cw;
+    const int y1 = (*y + *h < cy + ch) ? *y + *h : cy + ch;
+    *x = x0;
+    *y = y0;
+    *w = x1 - x0;
+    *h = y1 - y0;
+    return *w > 0 && *h > 0;
+}
+
+/**
+ * @brief Whether a container's own paint can be moved with the viewport: no transform, opacity, shadow or
+ *        gradient, so it paints at most a background and a border.
+ *
+ * @param[in]  a       Node to check.
+ * @param[out] border  Its widest border edge.
+ * @param[out] radius  Its largest corner radius.
+ *
+ * @return false for anything but a plain container (View, ScrollView, Pressable, FlatList).
+ */
+static bool is_plain_container(const ERNode* a, int* border, int* radius)
+{
+#if ERUI_TRANSFORMS_FULL
+    if (er_node_has_complex_transform(a))
+        return false;
+#endif
+    if (a->type != ER_NODE_VIEW && a->type != ER_NODE_SCROLL_VIEW && a->type != ER_NODE_PRESSABLE
+        && a->type != ER_NODE_FLAT_LIST)
+        return false;
+    const ERViewProps* vp = &a->props.view;
+    if (vp->opacity != 255U || vp->shadow_opacity > 0.0f || vp->elevation != 0U)
+        return false;
+#if ERUI_GRADIENT
+    if (vp->gradient_type != ER_GRADIENT_NONE && vp->gradient_stop_count >= 2U)
+        return false;
+#endif
+    const int16_t edges[] = {
+        vp->border_width, vp->border_left_width, vp->border_top_width, vp->border_right_width, vp->border_bottom_width};
+    const int16_t radii[] = {
+        vp->border_radius, vp->border_tl_radius, vp->border_tr_radius, vp->border_br_radius, vp->border_bl_radius};
+    *border = 0;
+    *radius = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        if (edges[i] > *border)
+            *border = edges[i];
+        if (radii[i] > *radius)
+            *radius = radii[i];
+    }
+    return true;
+}
+
+/**
+ * @brief Whether a node paints no pixels of its own: a plain container with no background and no border.
+ *        Its descendants are separate nodes and paint for themselves.
+ */
+static bool paints_nothing(const ERNode* a)
+{
+    int border, radius;
+    return is_plain_container(a, &border, &radius) && (a->props.view.background_color >> 24) == 0U && border == 0;
+}
+
+/**
+ * @brief Whether a node's own paint inside the viewport is the same at every pixel, so moving it is exact.
+ *
+ * True when it paints nothing there, or a solid background whose border band and rounded corners stay
+ * clear of the viewport. Transforms, opacity, shadows and gradients are refused outright.
+ *
+ * @param[in] a              Ancestor of the ScrollView, or the ScrollView itself.
+ * @param[in] vx,vy,vw,vh    The viewport's visible screen rect.
+ *
+ * @return true when moving the viewport's pixels leaves this node's paint unchanged.
+ */
+static bool paints_uniformly_over(const ERNode* a, int vx, int vy, int vw, int vh)
+{
+    int border, radius;
+    if (!is_plain_container(a, &border, &radius))
+        return false;
+    if ((a->props.view.background_color >> 24) == 0U && border == 0)
+        return true; /* paints nothing */
+    const int inset = border + radius;
+    int bx, by, bw, bh;
+    if (!node_screen_rect(a, &bx, &by, &bw, &bh))
+        return false;
+    bx += inset;
+    by += inset;
+    bw -= 2 * inset;
+    bh -= 2 * inset;
+    return vx >= bx && vy >= by && vx + vw <= bx + bw && vy + vh <= by + bh;
+}
+
+/**
+ * @brief Scrolls one ScrollView by moving its painted viewport; false to repaint the viewport instead.
+ *
+ * On success the pixels are moved, descendants' footprints follow them, and the exposed strip, the foreign
+ * footprints and the moved copies of vacated footprints are damaged and reported.
+ *
+ * @param[in,out] sv                       ScrollView whose offset moved since its pixels were painted.
+ * @param[in,out] dmg                      The commit's damage set.
+ * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Root bounds the damage and the reported rects are clamped to.
+ *
+ * @return true when the viewport was moved; false when nothing was changed and it must be repainted.
+ */
+static bool scroll_by_copy(ERNode* sv, ERDamageSet* dmg, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+{
+    if (s_display_buffer_count != 1 || !er_blit_can_move() || s_kbd_avoid_y != 0)
+        return false;
+    if (sv->subtree_hidden || sv->source_dirty || !sv->has_last_paint)
+        return false;
+    int sx, sy, sw, sh;
+    if (!node_screen_rect(sv, &sx, &sy, &sw, &sh))
+        return false;
+    if (sx != (int)sv->last_paint_rect.x || sy != (int)sv->last_paint_rect.y || sw != (int)sv->last_paint_rect.w
+        || sh != (int)sv->last_paint_rect.h)
+        return false; /* the viewport itself moved or resized */
+    int vx = sx, vy = sy, vw = sw, vh = sh;
+    clip_rect_to_clippers(sv, &vx, &vy, &vw, &vh);
+    if (!rect_intersect(&vx, &vy, &vw, &vh, rb_x0, rb_y0, rb_x1 - rb_x0, rb_y1 - rb_y0))
+        return false;
+    const int mx = (int)sv->scroll_painted_x - (int)sv->scroll_offset_x; /* screen shift of the content */
+    const int my = (int)sv->scroll_painted_y - (int)sv->scroll_offset_y;
+    if (mx == 0 && my == 0)
+        return true;
+    if (mx >= vw || -mx >= vw || my >= vh || -my >= vh)
+        return false;
+
+    uint16_t chain[ER_SCROLL_DEPTH_MAX];
+    int depth = 0;
+    for (ERNode* a = sv; a; a = er_get_node(a->parent_tag))
+    {
+        if (depth == ER_SCROLL_DEPTH_MAX || !paints_uniformly_over(a, vx, vy, vw, vh))
+            return false;
+        chain[depth++] = a->tag;
+    }
+
+    /* Foreign footprints: every node outside the scrolled subtree and its ancestor chain whose last paint
+     * reaches into the viewport. A container that paints nothing has no pixels there to repaint: its box
+     * only bounds its children, which are checked on their own. Counting it would damage, say, a whole
+     * section header whose transparent margin overlaps the viewport's edge, and the damage set would grow
+     * that strip into a repaint of the viewport. */
+    ERRect foreign[ER_SCROLL_FOREIGN_MAX];
+    int foreign_count = 0;
+    long foreign_area = 0;
+    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+    {
+        ERNode* n = er_get_node(tag);
+        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || paints_nothing(n))
+            continue;
+        bool skip = false;
+        for (int i = 0; i < depth && !skip; i++)
+            skip = (chain[i] == tag);
+        for (ERNode* a = er_get_node(n->parent_tag); a && !skip; a = er_get_node(a->parent_tag))
+            skip = (a == sv);
+        if (skip)
+            continue;
+        int fx = (int)n->last_paint_rect.x, fy = (int)n->last_paint_rect.y, fw = (int)n->last_paint_rect.w,
+            fh = (int)n->last_paint_rect.h;
+        clip_rect_to_clippers(n, &fx, &fy, &fw, &fh);
+        if (!rect_intersect(&fx, &fy, &fw, &fh, vx, vy, vw, vh))
+            continue;
+        if (foreign_count == ER_SCROLL_FOREIGN_MAX)
+            return false;
+        foreign[foreign_count].x = (int16_t)fx;
+        foreign[foreign_count].y = (int16_t)fy;
+        foreign[foreign_count].w = (int16_t)fw;
+        foreign[foreign_count].h = (int16_t)fh;
+        foreign_count++;
+        foreign_area += 2L * fw * fh;
+    }
+    if (foreign_area * 2L > (long)vw * vh)
+        return false; /* overlays cover too much: the copy would save little */
+
+    /* Committed from here: descendants' footprints follow the pixels. */
+    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+    {
+        ERNode* n = er_get_node(tag);
+        if (!n || !n->has_last_paint || n == sv)
+            continue;
+        for (ERNode* a = er_get_node(n->parent_tag); a; a = er_get_node(a->parent_tag))
+        {
+            if (a == sv)
+            {
+                n->last_paint_rect.x = (int16_t)(n->last_paint_rect.x + mx);
+                n->last_paint_rect.y = (int16_t)(n->last_paint_rect.y + my);
+                break;
+            }
+        }
+    }
+
+    /* The part of the viewport that still shows content after the move, and where it came from. */
+    int dx = vx + mx, dy = vy + my, dw = vw, dh = vh;
+    rect_intersect(&dx, &dy, &dw, &dh, vx, vy, vw, vh);
+    er_blit_move(dx - mx, dy - my, dw, dh, dx, dy);
+    report_repaint_clamped(dx, dy, dw, dh, rb_x0, rb_y0, rb_x1, rb_y1);
+
+    /* Exposed strips: the rows and columns of the viewport the moved pixels no longer cover. */
+    if (my != 0)
+    {
+        const int ey = my > 0 ? vy : vy + vh + my;
+        const int eh = my > 0 ? my : -my;
+        add_damage(dmg, vx, ey, vw, eh, rb_x0, rb_y0, rb_x1, rb_y1);
+        report_repaint_clamped(vx, ey, vw, eh, rb_x0, rb_y0, rb_x1, rb_y1);
+    }
+    if (mx != 0)
+    {
+        const int ex = mx > 0 ? vx : vx + vw + mx;
+        const int ew = mx > 0 ? mx : -mx;
+        add_damage(dmg, ex, vy, ew, vh, rb_x0, rb_y0, rb_x1, rb_y1);
+        report_repaint_clamped(ex, vy, ew, vh, rb_x0, rb_y0, rb_x1, rb_y1);
+    }
+
+    /* Foreign footprints are repainted where they are and where the move carried their pixels; vacated
+     * footprints (already damaged in place) also where their pixels went. Repainting a foreign node needs
+     * its chain dirty; the scrolled subtree is already (mark_reflow_upward at the offset change). */
+    for (int i = 0; i < foreign_count; i++)
+    {
+        const ERRect* f = &foreign[i];
+        add_damage(dmg, f->x, f->y, f->w, f->h, rb_x0, rb_y0, rb_x1, rb_y1);
+        report_repaint_clamped(f->x, f->y, f->w, f->h, rb_x0, rb_y0, rb_x1, rb_y1);
+        int cx = f->x + mx, cy = f->y + my, cw = f->w, ch = f->h;
+        if (rect_intersect(&cx, &cy, &cw, &ch, vx, vy, vw, vh))
+        {
+            add_damage(dmg, cx, cy, cw, ch, rb_x0, rb_y0, rb_x1, rb_y1);
+            report_repaint_clamped(cx, cy, cw, ch, rb_x0, rb_y0, rb_x1, rb_y1);
+        }
+    }
+    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+    {
+        ERNode* n = er_get_node(tag);
+        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || paints_nothing(n))
+            continue;
+        int fx = (int)n->last_paint_rect.x, fy = (int)n->last_paint_rect.y, fw = (int)n->last_paint_rect.w,
+            fh = (int)n->last_paint_rect.h;
+        bool foreign_node = true;
+        for (int i = 0; i < depth && foreign_node; i++)
+            foreign_node = (chain[i] != tag);
+        for (ERNode* a = er_get_node(n->parent_tag); a && foreign_node; a = er_get_node(a->parent_tag))
+            foreign_node = (a != sv);
+        clip_rect_to_clippers(n, &fx, &fy, &fw, &fh);
+        if (foreign_node && rect_intersect(&fx, &fy, &fw, &fh, vx, vy, vw, vh))
+            mark_reflow_upward(n);
+    }
+    for (uint8_t ri = 0U; ri < s_removed_set.count; ri++)
+    {
+        int cx = s_removed_set.r[ri].x + mx, cy = s_removed_set.r[ri].y + my, cw = s_removed_set.r[ri].w,
+            ch = s_removed_set.r[ri].h;
+        if (rect_intersect(&cx, &cy, &cw, &ch, vx, vy, vw, vh))
+        {
+            add_damage(dmg, cx, cy, cw, ch, rb_x0, rb_y0, rb_x1, rb_y1);
+            report_repaint_clamped(cx, cy, cw, ch, rb_x0, rb_y0, rb_x1, rb_y1);
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Settles every ScrollView whose offset moved since the last commit.
+ *
+ * With `tracking` (a damage-clipped commit) each one scrolls by copy when it can and otherwise falls back
+ * to repainting its viewport; a full repaint needs neither. Either way the viewport's pixels now show the
+ * current offset.
+ *
+ * @param[in]     tracking                 Whether this commit repaints by damage (false for a full repaint).
+ * @param[in,out] dmg                      The commit's damage set.
+ * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Root bounds the damage and the reported rects are clamped to.
+ */
+static void resolve_scroll_moves(bool tracking, ERDamageSet* dmg, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+{
+    for (uint8_t i = 0U; i < s_scroll_pending_count; i++)
+    {
+        ERNode* sv = er_get_node(s_scroll_pending[i]);
+        if (!sv || !sv->scroll_pending)
+            continue; /* destroyed (and possibly reused) since the offset changed */
+        if (tracking && !scroll_by_copy(sv, dmg, rb_x0, rb_y0, rb_x1, rb_y1))
+            er_mark_dirty_upward(sv);
+        sv->scroll_pending = false;
+        sv->scroll_painted_x = (int16_t)sv->scroll_offset_x;
+        sv->scroll_painted_y = (int16_t)sv->scroll_offset_y;
+    }
+    s_scroll_pending_count = 0U;
 }
 
 void er_commit(void)
@@ -5021,6 +5341,7 @@ void er_commit(void)
          * folded into every buffer's debt below (so each rotating buffer repaints fully when next
          * rendered); for single-buffer it simply repaints the one framebuffer. */
         root->dirty = true;
+        resolve_scroll_moves(false, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
     }
     else
     {
@@ -5038,6 +5359,9 @@ void er_commit(void)
              * (partly) off-screen is never reported as repainted when it was not. */
             report_repaint_clamped(v->x, v->y, v->w, v->h, rb_x0, rb_y0, rb_x1, rb_y1);
         }
+        /* After the vacated footprints (the copy re-damages them where it moves their pixels), before the
+         * per-node walk (which then measures scrolled children against their moved footprints). */
+        resolve_scroll_moves(true, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
 #if ERUI_ONSCREEN_KEYBOARD
         /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
         if (s_kbd_dirty)
@@ -5800,7 +6124,27 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
     node->scroll_offset_x = x;
     node->scroll_offset_y = y;
     if (moved)
-        er_mark_dirty_upward(node);
+    {
+        /* The next commit moves the painted viewport and repaints only the exposed strip when it can
+         * (scroll_by_copy), else the whole viewport. Until then the chain is dirty, not the ScrollView's own
+         * box, so the pre-pass does not damage the whole viewport by itself. */
+        if (!node->scroll_pending && s_scroll_pending_count < ER_SCROLL_PENDING_MAX)
+        {
+            node->scroll_pending = true;
+            s_scroll_pending[s_scroll_pending_count++] = node->tag;
+        }
+        if (node->scroll_pending)
+        {
+            mark_reflow_upward(node);
+        }
+        else
+        {
+            /* No slot left: the next commit repaints the viewport at this offset, so that is what it shows. */
+            er_mark_dirty_upward(node);
+            node->scroll_painted_x = (int16_t)node->scroll_offset_x;
+            node->scroll_painted_y = (int16_t)node->scroll_offset_y;
+        }
+    }
 
     const EREventHandler* h = &node->events[ER_EVENT_SCROLL];
     if (h->fn)

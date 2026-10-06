@@ -84,6 +84,14 @@ per-pixel alpha, no read-modify-write. On DMA2D this is a single M2M/PFC transfe
 framebuffer a 565 source is a row `memcpy`. Leave it NULL and the engine expands non-ARGB sources on
 the CPU and goes through `copy_rect`.
 
+**Framebuffer move.** Provide `move_rect(src_x, src_y, w, h, dst_x, dst_y)` and a ScrollView that
+scrolls by less than its viewport moves the pixels it already painted and repaints only the strip the
+scroll exposed. Copy the rectangle within your framebuffer with `memmove` semantics: the source and
+destination overlap on every call. The moved rectangle is part of the commit's `er_get_dirty_rects()`;
+a backend that accumulates its own dirty box from paint calls adds the destination itself. It is never
+called in banded mode or with more than one display buffer. Leave it NULL and a scrolled viewport is
+repainted in full. The `software` backend provides it.
+
 **Multiple display buffers.** A page-flipping panel renders into a buffer that was last shown one
 or two presents ago, so plain incremental damage would leave the rest of it stale. Call
 `er_set_display_buffer_count(2)` (or 3) once at init and `er_display_present()` after each flip; the

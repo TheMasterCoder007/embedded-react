@@ -262,6 +262,43 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/**
+ * @brief Moves a framebuffer rect to another position; the two may overlap.
+ *
+ * Rows are walked away from the destination so an overlapping move never reads a row it already
+ * overwrote; memmove covers the horizontal overlap within a row.
+ *
+ * @param[in] src_x  Left edge of the source rect.
+ * @param[in] src_y  Top edge of the source rect.
+ * @param[in] w      Width in pixels.
+ * @param[in] h      Height in pixels.
+ * @param[in] dst_x  Left edge of the destination.
+ * @param[in] dst_y  Top edge of the destination.
+ * @param[in] ctx    Pointer to the SoftCtx.
+ */
+static void move_rect_cb(int src_x, int src_y, int w, int h, int dst_x, int dst_y, void* ctx)
+{
+    SoftCtx* c = ctx;
+    if (w <= 0 || h <= 0 || src_x < 0 || src_y < 0 || dst_x < 0 || dst_y < 0 || src_x + w > c->fb_w
+        || dst_x + w > c->fb_w || src_y + h > c->fb_h || dst_y + h > c->fb_h)
+        return;
+    const size_t bytes = (size_t)w * sizeof(uint32_t);
+    if (dst_y <= src_y)
+    {
+        for (int row = 0; row < h; row++)
+            memmove(c->fb + (size_t)(dst_y + row) * c->fb_w + dst_x,
+                    c->fb + (size_t)(src_y + row) * c->fb_w + src_x,
+                    bytes);
+    }
+    else
+    {
+        for (int row = h - 1; row >= 0; row--)
+            memmove(c->fb + (size_t)(dst_y + row) * c->fb_w + dst_x,
+                    c->fb + (size_t)(src_y + row) * c->fb_w + src_x,
+                    bytes);
+    }
+}
+
 bool er_software_backend_init(int fb_w, int fb_h)
 {
     if (fb_w <= 0 || fb_h <= 0)
@@ -284,6 +321,7 @@ bool er_software_backend_init(int fb_w, int fb_h)
     s_backend.band_height = 0; /* full-framebuffer path */
     s_backend.band_begin = NULL;
     s_backend.band_flush = NULL;
+    s_backend.move_rect = move_rect_cb;
 
     embedded_renderer_set_backend(&s_backend);
     return true;
