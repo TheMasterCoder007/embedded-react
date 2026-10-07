@@ -21,14 +21,14 @@
 //   Flow A (interpreted): pack-container.mjs bundles demos/<demo>/index.jsx, precompiles it to QuickJS
 //                         bytecode and bakes its images/fonts into dist/app.erpkg → the QuickJS desktop
 //                         host (examples/linux) renders that headlessly (ER_SHOT) to a BMP.
-//   Flow B (AOT):         aot/compile.mjs compiles demos/<demo>/App.jsx → C, the AOT host
+//   Flow B (AOT):         aot/compile.mts compiles demos/<demo>/App.jsx → C, the AOT host
 //                         (examples/linux-aot) is rebuilt and renders headlessly (ER_AOT_SHOT) to a BMP.
 //
 // Flow A renders from a CONTAINER, not from the bare dist/app.bundle.js, because the desktop host only
 // registers baked assets when it loads one (examples/linux ships no assets of its own — it mirrors the
 // device's uploaded-config model). Handed a plain .js path it loads source and nothing else, so every
 // <Image> in the demo would simply be absent from Flow A's frame while Flow B — which links the assets
-// aot/compile.mjs bakes into assets.generated.c — painted it. That also puts Flow A on the bytecode the
+// aot/compile.mts bakes into assets.generated.c — painted it. That also puts Flow A on the bytecode the
 // MCU actually runs, which is the path this harness means to model.
 //
 // Then the two BMPs are pixel-diffed. Because the engine, fonts, and backend are shared, a correct demo
@@ -72,7 +72,7 @@ const FLOW_B_EXE = join(
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
 const CONTAINER = join(JS_DIR, 'dist/app.erpkg');
 const PACK_MJS = join(JS_DIR, 'pack-container.mjs');
-const COMPILE_MJS = join(JS_DIR, 'aot/compile.mjs');
+const AOT_COMPILER = join(JS_DIR, 'aot/compile.mts');
 const OUT_DIR = join(JS_DIR, 'dist/parity');
 
 // Per-pixel tolerance: max allowed per-channel delta before a pixel counts as "differing", and the max
@@ -192,7 +192,7 @@ function runScenario(s) {
   });
 
   // --- Flow B: compile (AOT) → rebuild the baked host → render ---
-  run(process.execPath, [COMPILE_MJS, s.demo], screenEnv);
+  run(process.execPath, [AOT_COMPILER, s.demo], screenEnv);
   run('cmake', ['--build', FLOW_B_BUILD], screenEnv);
   run(FLOW_B_EXE, [], {
     ER_AOT_SHOT: outB,

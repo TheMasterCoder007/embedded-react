@@ -28,10 +28,10 @@
 // data.length x (nodes per row) slots out of the fixed ERUI_MAX_NODES pool. See "FlatList is a
 // ScrollView alias" in the top-level README for the limits and when to reach for something else.
 //
-// This mirrors the AOT's emitFlatList (bridges/quickjs/js/aot/compile.mjs), which performs the same
-// rewrite at compile time. The two flows accept the SAME four props on purpose — a list that renders
-// in the simulator must also compile for the device, so anything Flow B rejects is warned about here
-// rather than silently forwarded.
+// This mirrors the AOT's emitFlatList (bridges/quickjs/js/aot/compiler/elements/flat-list.mts),
+// which performs the same rewrite at compile time. The two flows accept the SAME four props on
+// purpose — a list that renders in the simulator must also compile for the device, so anything
+// Flow B rejects is warned about here rather than silently forwarded.
 import {createElement} from 'react';
 import {ScrollView} from './components.js';
 import {pushKeyedChild} from './list-child.js';

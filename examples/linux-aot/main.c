@@ -83,7 +83,7 @@ int main(void)
     }
 
     /* Framebuffer size. Defaults to whatever the app was compiled for (see above); the parity harness
-       overrides it via ER_AOT_SCREEN_W/H — the same vars that seed screen.width/height in aot/compile.mjs,
+       overrides it via ER_AOT_SCREEN_W/H — the same vars that seed screen.width/height in the AOT compiler,
        so setting them for the generate step alone already gives a matching window. */
     const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
     const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);

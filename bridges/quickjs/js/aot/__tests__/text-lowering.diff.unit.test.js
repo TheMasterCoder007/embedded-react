@@ -30,7 +30,7 @@ import {writeFileSync, mkdtempSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync, execFileSync} from 'node:child_process';
-import {compileSource} from '../compile.mjs';
+import {compileSource} from '../compile.mts';
 
 /** First working C compiler, or null (the suite still passes on a toolchain-less machine). */
 function findCC() {
@@ -157,7 +157,7 @@ export function App() {${decls(v)}
  * copied. Fixtures below compile EXTRACTED snippets, so without this they face a stricter environment
  * than the code they came from: GCC's -Wformat-truncation fires on the intended fixed-slot truncation
  * and -Werror turns it into a failure, while clang has no such warning and stays silent. Deriving it
- * keeps the two from drifting if compile.mjs ever changes what it suppresses.
+ * keeps the two from drifting if the compiler ever changes what it suppresses.
  */
 const GENERATED_PRAGMAS = (() => {
   const c = compileSource(

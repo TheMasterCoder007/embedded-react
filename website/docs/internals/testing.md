@@ -126,7 +126,7 @@ on the board), so a claim about speed is a claim about a board.
 ## What CI runs
 
 Every push and pull request runs five jobs, all required to merge: **JS tests + version drift**
-(`npm test` plus `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
+(`npm test`, `npm run typecheck` and `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
 bridge build + heap-accounting test** (two allocator builds, each with the runtime and bytecode
 tiers), **AOT compile smoke** (generated C through `gcc`), and **Consumer smoke**. The docs site has
 its own workflow that builds on a pull request and deploys on `master`.

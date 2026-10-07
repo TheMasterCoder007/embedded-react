@@ -29,11 +29,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: bridges/quickjs/js/package-lock.json
       - run: npm ci
       - run: npx vitest run
+      - run: npm run typecheck
       - name: Version + LICENSE/NOTICE in sync with VERSION
         run: node ../../../tools/sync-version.mjs --check
 
@@ -191,7 +192,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: bridges/quickjs/js/package-lock.json
       - run: npm ci
@@ -199,12 +200,12 @@ jobs:
       # evaluates the version-pin _Static_assert, so an ABI/version mismatch fails here.
       - name: watch-face → C → gcc
         run: |
-          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mjs watch-face
+          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mts watch-face
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
       - name: thermostat (solo) → C → gcc
         run: |
-          ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mjs thermostat
+          ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mts thermostat
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
 
@@ -226,5 +227,8 @@ jobs:
           version: 4.0.13
       - name: Build the prebuilt WASM simulator
         run: node tools/web-sim/build.mjs
+      - name: Install the package's dependencies
+        working-directory: bridges/quickjs/js
+        run: npm ci
       - name: Pack → install → build (Flow A + AOT)
         run: node tools/consumer-smoke.mjs

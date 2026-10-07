@@ -186,7 +186,7 @@ export function buildProps(type, props, flatStyle) {
   }
   // <Svg> takes width/height as DIRECT props (the react-native-svg convention) — the engine sizes the
   // vector node from them. Fold them into the resolved style (an explicit style width/height still wins)
-  // so Flow A matches the Flow B AOT, which reads svg.props.width/height directly (compile.mjs emitSvgBox).
+  // so Flow A matches the Flow B AOT, which reads svg.props.width/height directly (aot/compiler/svg.mts emitSvgBox).
   if (type === 'Svg') {
     if (flat.width === undefined && props.width !== undefined)
       flat.width = props.width;

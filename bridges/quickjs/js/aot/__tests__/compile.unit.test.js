@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect, vi} from 'vitest';
-import {compileSource} from '../compile.mjs';
+import {compileSource} from '../compile.mts';
 import {flattenSvg} from '../../src/embedded-react/svg-ops.js';
 
 // The Flow B AOT compiler turns an App.jsx source string into C. These tests assert on the generated C
@@ -2057,7 +2057,7 @@ describe('AOT diagnostics', () => {
     vi.stubEnv('ER_AOT_SCREEN_W', w);
     vi.stubEnv('ER_AOT_SCREEN_H', h);
     vi.resetModules();
-    const {compileSource: compileAtScreen} = await import('../compile.mjs');
+    const {compileSource: compileAtScreen} = await import('../compile.mts');
     try {
       compileAtScreen(
         `${PRE}\nexport function App() { const [n, setN] = useState(0); return (<Pressable onPress={() => setN(window.x)}><Text>{n}</Text></Pressable>); }`,

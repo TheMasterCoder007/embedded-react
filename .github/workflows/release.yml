@@ -36,7 +36,7 @@ jobs:
           fetch-depth: 0 # full history so the "tag is on master" gate can compute a merge-base
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
           cache: npm
           cache-dependency-path: bridges/quickjs/js/package-lock.json
@@ -75,7 +75,7 @@ jobs:
       - name: AOT compile smoke
         working-directory: bridges/quickjs/js
         run: |
-          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mjs watch-face
+          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mts watch-face
           gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
 
       # Build the prebuilt WASM simulator (engine + QuickJS + backends → embedded-react.{js,wasm}) and stage
@@ -104,9 +104,8 @@ jobs:
         if: ${{ vars.PUBLISH_NPM == 'true' }}
         working-directory: bridges/quickjs/js
         run: |
-          # OIDC trusted publishing needs npm >= 11.5.1. Pin the npm 11 line — not @latest — because
-          # npm 12 dropped Node 20 support (EBADENGINE on this runner's Node), and 11.x is the newest
-          # major that runs on Node 20.
+          # OIDC trusted publishing needs npm >= 11.5.1. Pinned to the npm 11 line rather than @latest, so a
+          # new npm major never lands mid-release.
           npm install -g npm@11
           # Idempotent: skip if this exact version is already on the registry, so a re-run (after a
           # transient failure or a partial release) never dies on "cannot publish over existing version".
@@ -115,7 +114,11 @@ jobs:
           if npm view "$pkg@$ver" version >/dev/null 2>&1; then
             echo "$pkg@$ver already published — skipping"
           else
-            npm publish --provenance --access public
+            # Publish the staged copy: the same files, with the TypeScript compiled to JavaScript, since an
+            # installed package cannot run TypeScript (tools/stage-npm-package.mjs). Assigned first, so a
+            # failed staging stops the step instead of publishing an empty path.
+            staged=$(node ../../../tools/stage-npm-package.mjs)
+            npm publish "$staged" --provenance --access public
           fi
 
       # The scaffolder (`npm create embedded-react`). Lockstep version; needs its OWN trusted publisher

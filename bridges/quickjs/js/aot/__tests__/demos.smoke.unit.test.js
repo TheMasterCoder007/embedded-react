@@ -20,7 +20,7 @@ import {resolve, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {compileSource, bakeSvgArtifacts, demoMarker} from '../compile.mjs';
+import {compileSource, bakeSvgArtifacts, demoMarker} from '../compile.mts';
 import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
 
 // Regression guard: the AOT-targeted demos must keep compiling end-to-end (no thrown "AOT: …"). This is
@@ -98,7 +98,7 @@ describe('create-embedded-react starters build clean', () => {
 // `#ifndef ER_AOT_DEMO_<demo>` guard and the regenerate command in its own error text. Point the guard at
 // a scratch demo while testing on hardware, and the example stops building for everyone — with an error
 // telling them to run the command that does not satisfy it.
-// The two AOT entry points must agree on the demo marker: `npm run aot -- <demo>` (aot/compile.mjs) and
+// The two AOT entry points must agree on the demo marker: `npm run aot -- <demo>` (aot/compile.mts) and
 // `embedded-react build --aot` (cli.mjs), which each demo's own `build:aot` script runs. A hardcoded name
 // in either one emits a marker no board example can match.
 describe('AOT entry points agree on the demo marker', () => {
