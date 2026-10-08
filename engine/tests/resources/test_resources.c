@@ -215,6 +215,57 @@ static int test_image_format_and_opacity(void)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Tests: Image unload + known opacity
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Verifies er_image_unload frees a slot for a new name and er_image_load_argb trusts the caller's opacity.
+ *
+ * @return 0 on success, 1 on failure.
+ */
+static int test_image_unload_and_known_opacity(void)
+{
+    image_registry_init();
+
+    static const uint32_t opaque_px[4] = {0xFF112233U, 0xFFFFFFFFU, 0xFF000000U, 0xFF445566U};
+    static const uint32_t translucent_px[4] = {0xFF112233U, 0xFF445566U, 0x80102030U, 0xFF778899U};
+
+    /* The flag is taken as given, with no scan: the caller (a decoder) already knows it. */
+    CHECK(er_image_load_argb("known", translucent_px, 2, 2, true), "load_argb: registered");
+    const ImageEntry* e = image_registry_get("known");
+    CHECK(e && e->format == ER_IMG_ARGB8888 && e->opaque && e->buf == translucent_px, "load_argb: opaque as given");
+    CHECK(er_image_load_argb("known", opaque_px, 2, 2, false), "load_argb: replace in place");
+    e = image_registry_get("known");
+    CHECK(e && !e->opaque && e->buf == opaque_px, "load_argb: non-opaque as given");
+    CHECK(!er_image_load_argb("bad", opaque_px, 0, 2, true), "load_argb: zero width rejected");
+    CHECK(!er_image_load_argb(NULL, opaque_px, 2, 2, true), "load_argb: NULL name rejected");
+
+    er_image_unload("known");
+    CHECK(image_registry_get("known") == NULL, "unload: name no longer resolves");
+    CHECK(image_registry_in_use() == 0U, "unload: slot freed");
+    er_image_unload("known");
+    er_image_unload("never-registered");
+    er_image_unload(NULL);
+    CHECK(image_registry_in_use() == 0U, "unload: unknown names are ignored");
+
+    /* A full registry takes a new name once one image is unloaded, and the others stay addressable. */
+    char name[16];
+    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
+    {
+        snprintf(name, sizeof(name), "img%d", i);
+        CHECK(er_image_load_argb(name, opaque_px, 1, 1, true), "unload: fill to capacity");
+    }
+    CHECK(!er_image_load_argb("late", opaque_px, 1, 1, true), "unload: new name rejected when full");
+    er_image_unload("img0");
+    CHECK(er_image_load_argb("late", opaque_px, 1, 1, true), "unload: freed slot takes a new name");
+    CHECK(image_registry_get("late") != NULL, "unload: new name resolves");
+    snprintf(name, sizeof(name), "img%d", (int)ERUI_IMAGE_REGISTRY_MAX - 1);
+    CHECK(ERUI_IMAGE_REGISTRY_MAX < 2U || image_registry_get(name) != NULL, "unload: other entries kept");
+
+    return s_fail;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Tests: Font registry replace
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -374,6 +425,7 @@ int main(void)
 {
     (void)test_image_replace();
     (void)test_image_format_and_opacity();
+    (void)test_image_unload_and_known_opacity();
     (void)test_font_registry_replace();
     (void)test_font_blob_reuse();
     (void)test_font_register_public();

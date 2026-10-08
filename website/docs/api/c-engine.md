@@ -122,6 +122,12 @@ RAM; `er_font_load(name, buf, len)` instead copies a font blob into the `ERUI_FO
 The generated `er_register_assets()` from a Flow B build calls these for you; a Flow A container
 registers its pack on load.
 
+`er_image_load_argb(name, argb, w, h, opaque)` registers premultiplied ARGB8888 like `er_image_load()`,
+but takes the opacity from the caller instead of scanning every pixel for it, which suits a decoder that
+already knows whether it produced alpha. `er_image_unload(name)` frees the name's registry slot; Image
+nodes naming it draw nothing until it is registered again. The engine keeps no reference to the pixels
+afterwards, so the caller may free them, as long as no node still draws the image before the next commit.
+
 ## Time
 
 The engine has one clock, advanced by the host: `embedded_renderer_tick(dt_ms)` moves it and runs

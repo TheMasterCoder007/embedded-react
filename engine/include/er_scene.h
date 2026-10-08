@@ -1240,6 +1240,34 @@ extern "C"
     void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h);
 
     /**
+     * @brief Registers premultiplied ARGB8888 pixels whose opacity the caller already knows.
+     *
+     * Same ownership and replacement rules as er_image_load(), without its scan of every pixel
+     * for opacity: a decoder that produced the pixels knows it already, and the scan of a
+     * full-width image costs about a millisecond on the thread that registers it.
+     *
+     * @param[in] name      Null-terminated image asset name.
+     * @param[in] argb_buf  Premultiplied ARGB8888 pixel data (row-major), caller-owned.
+     * @param[in] w         Image width in pixels.
+     * @param[in] h         Image height in pixels.
+     * @param[in] opaque    Every alpha is 0xFF; opaque images take the copy path.
+     *
+     * @return false when the registry is full or an argument is invalid.
+     */
+    bool er_image_load_argb(const char* name, const void* argb_buf, int w, int h, bool opaque);
+
+    /**
+     * @brief Removes a registered image and frees its registry slot.
+     *
+     * Image nodes naming it draw nothing until the name is registered again. The engine keeps no
+     * reference to the pixels afterwards, so the caller may free them; it must not unload an image
+     * that a node draws before the next commit.
+     *
+     * @param[in] name  Null-terminated image asset name; unknown names are ignored.
+     */
+    void er_image_unload(const char* name);
+
+    /**
      * @brief Starts an animation on a node property.
      *
      * Any previously running animation on the same node+prop is cancelled before

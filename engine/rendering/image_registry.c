@@ -54,7 +54,7 @@ static bool scan_opaque(const void* buf, int w, int h, ERImageFormat format)
     return true;
 }
 
-bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format)
+static bool store_entry(const char* name, const void* buf, int w, int h, ERImageFormat format, int opaque)
 {
     if (!name || !buf || w <= 0 || h <= 0)
         return false;
@@ -84,7 +84,7 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
             s_entries[i].w = w;
             s_entries[i].h = h;
             s_entries[i].format = (uint8_t)format;
-            s_entries[i].opaque = scan_opaque(buf, w, h, format);
+            s_entries[i].opaque = opaque < 0 ? scan_opaque(buf, w, h, format) : opaque != 0;
             return true;
         }
         if (!s_entries[i].in_use && free_slot < 0)
@@ -107,9 +107,33 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
     e->w = w;
     e->h = h;
     e->format = (uint8_t)format;
-    e->opaque = scan_opaque(buf, w, h, format);
+    e->opaque = opaque < 0 ? scan_opaque(buf, w, h, format) : opaque != 0;
     e->in_use = true;
     return true;
+}
+
+bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format)
+{
+    return store_entry(name, buf, w, h, format, -1);
+}
+
+bool image_registry_store_argb(const char* name, const void* buf, int w, int h, bool opaque)
+{
+    return store_entry(name, buf, w, h, ER_IMG_ARGB8888, opaque ? 1 : 0);
+}
+
+void image_registry_remove(const char* name)
+{
+    if (!name)
+        return;
+    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
+    {
+        if (s_entries[i].in_use && strncmp(s_entries[i].name, name, IMAGE_NAME_MAX) == 0)
+        {
+            memset(&s_entries[i], 0, sizeof(s_entries[i]));
+            return;
+        }
+    }
 }
 
 unsigned image_registry_in_use(void)
