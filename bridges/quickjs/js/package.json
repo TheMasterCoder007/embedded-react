@@ -85,7 +85,9 @@
     "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs,mts}\""
   },
   "dependencies": {
+    "@babel/code-frame": "^7.29.7",
     "@babel/core": "^7.29.7",
+    "@babel/parser": "^7.29.9",
     "@babel/plugin-syntax-jsx": "^7.29.7",
     "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.28.1",
@@ -103,7 +105,7 @@
     "@types/react": "18.3.1",
     "prettier": "^3.4.2",
     "typescript": "^5.5.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "optionalDependencies": {
     "serialport": "^12.0.0"

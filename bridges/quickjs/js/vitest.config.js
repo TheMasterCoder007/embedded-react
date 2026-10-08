@@ -30,7 +30,6 @@ export default defineConfig({
     ],
     environment: 'node',
   },
-  // Let .jsx unit tests use the automatic JSX runtime (same as the bundle build). vitest 3 transforms
-  // with esbuild, which defaults to the classic runtime, so this must be set explicitly.
-  esbuild: {jsx: 'automatic'},
+  // .jsx unit tests use the automatic JSX runtime, as the bundle build does.
+  oxc: {jsx: {runtime: 'automatic'}},
 });

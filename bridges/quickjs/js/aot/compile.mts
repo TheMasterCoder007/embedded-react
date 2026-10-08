@@ -47,7 +47,9 @@
  *   compiler/diagnostics.mts     aotError / withLoc / formatAotError — locate + hint unsupported syntax
  *   compiler/static-eval.mts     evalStatic — fold the compile-time-constant subset (styles, initials)
  *   compiler/c-syntax.mts        cstr / floatLit / i64Lit — JS values spelled as C
- *   compiler/expressions.mts     emitExpr — lower a JS expression (state/props/refs) to a C expression
+ *   compiler/expressions.mts     lowerExprWide — lower a JS expression (state/props/refs) to the IR
+ *   compiler/ir/*.mts            the IR the stages lower to (so far: expressions)
+ *   compiler/c/*.mts             the C backend: prints the IR as C (emitExpr returns it as a CExpr)
  *   compiler/parse.mts           parseApp — JSX/TSX source → AST (types stripped, `undefined` normalized)
  *   compiler/collect.mts         moduleScope + collect{State, Components, Callbacks, Memos, Effects}
  *   compiler/animations.mts      collect{Anims,Refs}, Easing, interpolate, Animated.start() chains
