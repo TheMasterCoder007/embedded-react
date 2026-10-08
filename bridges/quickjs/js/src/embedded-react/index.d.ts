@@ -168,6 +168,15 @@ export interface ViewStyle {
   borderSweepLength?: number;
   /** Head position, 0–1 clockwise from the top edge's left end; wraps. Animate it with the native driver. */
   borderSweepPhase?: number | AnimatedValue;
+  /** A conic gradient seen through the border ring: the rotating-gradient border. Up to 6 stops. */
+  borderGradient?: {
+    type: 'conic';
+    width: number;
+    angle?: number;
+    stops: {color: string; offset?: number}[];
+  };
+  /** The conic border gradient's start angle in degrees (0 = up, clockwise); animate it to rotate the light. */
+  borderGradientAngle?: number | AnimatedValue;
 
   // Border.
   borderRadius?: number;

@@ -227,6 +227,12 @@ typedef struct
     float border_sweep_phase;
     float border_sweep_length;
 
+    /* Conic border gradient */
+    int16_t border_gradient_width;
+    float border_gradient_angle;
+    uint8_t border_gradient_stop_count;
+    ERGradientStop border_gradient_stops[ER_BORDER_GRADIENT_MAX_STOPS];
+
     /* Gradient (requires ERUI_GRADIENT) */
     uint8_t gradient_type;                                /**< ERGradientType. */
     float gradient_angle;                                 /**< Angle in degrees (0 = top→bottom, 90 = left→right). */

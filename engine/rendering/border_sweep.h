@@ -17,6 +17,7 @@
 #ifndef EMBEDDED_REACT_BORDER_SWEEP_H
 #define EMBEDDED_REACT_BORDER_SWEEP_H
 
+#include "er_scene.h"
 #include <stdint.h>
 
 /**
@@ -33,6 +34,20 @@
  */
 void er_border_sweep_render(
     int x, int y, int w, int h, int radius, int width, uint32_t argb, float phase, float length);
+
+/**
+ * @brief Draws a conic gradient seen only through a rounded-rect ring `width` px thick inside the box: the
+ * rotating-gradient border. Colours follow the angle around the box centre, CSS conic-gradient style.
+ *
+ * @param[in] x, y, w, h  The node's box in screen pixels.
+ * @param[in] radius      Corner radius of the box.
+ * @param[in] width       Ring thickness in pixels.
+ * @param[in] from        Start angle in degrees: 0 points up, positive turns clockwise.
+ * @param[in] stops       Straight-alpha colour stops at positions 0–1 around the circle, ascending.
+ * @param[in] count       Number of stops.
+ */
+void er_border_conic_render(
+    int x, int y, int w, int h, int radius, int width, float from, const ERGradientStop* stops, int count);
 
 /**
  * @brief How far the sweep reaches in from each edge of the box: the bands a phase change repaints.

@@ -88,8 +88,15 @@ function FocusRing({children}) {
 | `borderSweepLength` | Tail length as a fraction of the perimeter, default `0.3`                                                        |
 | `borderSweepPhase`  | Head position, `0` to `1` clockwise from the left end of the top edge, wrapping. Animatable on the native driver |
 
-A change of `borderSweepPhase` alone repaints the bands along the four edges the ring can reach, not
-the whole box. **Flow A only** for now: the AOT rejects these keys.
+`borderGradient` shows a gradient through a ring of the same kind, for the rotating-gradient border:
+
+| Property              | Notes                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `borderGradient`      | `{type: 'conic', width, angle?, stops}`: a CSS `conic-gradient()` (0 degrees up, clockwise) seen only inside a ring `width` px thick. Up to 6 stops of `{color, offset?}` |
+| `borderGradientAngle` | The conic start angle in degrees, overriding `angle`. Animatable on the native driver: a linear loop of 0 to 360 spins the gradient                                       |
+
+A change of `borderSweepPhase` or `borderGradientAngle` alone repaints the bands along the four edges
+the ring can reach, not the whole box. **Flow A only** for now: the AOT rejects these keys.
 
 ## Transform
 

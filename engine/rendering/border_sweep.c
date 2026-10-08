@@ -83,23 +83,70 @@ int er_border_sweep_reach(int radius, int width)
     return (radius > width ? radius : width) + 2;
 }
 
-void er_border_sweep_render(int x, int y, int w, int h, int radius, int width, uint32_t argb, float phase, float length)
+/** Colour of the ring at a pixel, from its position relative to the box centre: straight ARGB. */
+typedef uint32_t (*RingShader)(float px, float py, const void* ctx);
+
+typedef struct
 {
-    if (w <= 0 || h <= 0 || width <= 0 || (argb >> 24) == 0U || length <= 0.0f)
-        return;
+    float a, b, r; /* the ring's centre line: straight half-lengths and corner radius */
+    float phase, length;
+    uint32_t argb;
+} SweepShader;
+
+static uint32_t sweep_shade(float px, float py, const void* ctx)
+{
+    const SweepShader* s = ctx;
+    const float k = sweep_alpha(perimeter_at(px, py, s->a, s->b, s->r), s->phase, s->length);
+    const uint32_t a8 = (uint32_t)((float)(s->argb >> 24) * k + 0.5f);
+    return (a8 << 24) | (s->argb & 0xFFFFFFU);
+}
+
+typedef struct
+{
+    float from; /* degrees, CSS conic `from`: 0 = up, clockwise */
+    const ERGradientStop* stops;
+    int count;
+} ConicShader;
+
+/** Straight-alpha lerp of two ARGB colours. */
+static uint32_t lerp_argb(uint32_t c0, uint32_t c1, float f)
+{
+    uint32_t out = 0U;
+    for (int shift = 0; shift < 32; shift += 8)
+    {
+        const float v0 = (float)((c0 >> shift) & 0xFFU), v1 = (float)((c1 >> shift) & 0xFFU);
+        out |= (uint32_t)(v0 + (v1 - v0) * f + 0.5f) << shift;
+    }
+    return out;
+}
+
+static uint32_t conic_shade(float px, float py, const void* ctx)
+{
+    const ConicShader* s = ctx;
+    float t = (atan2f(px, -py) * (180.0f / SWEEP_PI) - s->from) / 360.0f;
+    t -= floorf(t);
+    if (t <= s->stops[0].position)
+        return s->stops[0].color;
+    for (int i = 1; i < s->count; i++)
+    {
+        if (t <= s->stops[i].position)
+        {
+            const float span = s->stops[i].position - s->stops[i - 1].position;
+            return lerp_argb(
+                s->stops[i - 1].color, s->stops[i].color, span > 0.0f ? (t - s->stops[i - 1].position) / span : 1.0f);
+        }
+    }
+    return s->stops[s->count - 1].color;
+}
+
+/** Rasterises the anti-aliased ring `width` px inside the rounded box, coloured by `shade`. */
+static void ring_render(int x, int y, int w, int h, int radius, int width, RingShader shade, const void* ctx)
+{
     const int max_r = (w < h ? w : h) / 2;
     const int r = radius < 0 ? 0 : (radius > max_r ? max_r : radius);
     const float hw = (float)w * 0.5f, hh = (float)h * 0.5f;
     const float bw = (float)width;
     const float inner_r = (float)r > bw ? (float)r - bw : 0.0f;
-    /* The ring's centre line, which the sweep travels along. */
-    const float mid = bw * 0.5f;
-    float cr = (float)r - mid;
-    if (cr < 0.0f)
-        cr = 0.0f;
-    const float ca = hw - mid - cr, cb = hh - mid - cr;
-    const float head_a = (float)(argb >> 24) / 255.0f;
-    const uint32_t cr8 = (argb >> 16) & 0xFFU, cg8 = (argb >> 8) & 0xFFU, cb8 = argb & 0xFFU;
 
     int cx0 = x, cy0 = y, cx1 = x + w, cy1 = y + h;
     int gx, gy, gw, gh;
@@ -149,12 +196,12 @@ void er_border_sweep_render(int x, int y, int w, int h, int radius, int width, u
                     uint32_t p = 0U;
                     if (cov > 0.0f)
                     {
-                        const float a = cov * head_a * sweep_alpha(perimeter_at(px, py, ca, cb, cr), phase, length);
-                        const uint32_t a8 = (uint32_t)(a * 255.0f + 0.5f);
+                        const uint32_t c = shade(px, py, ctx);
+                        const uint32_t a8 = (uint32_t)((float)(c >> 24) * cov + 0.5f);
                         if (a8 > 0U)
                         {
-                            p = (a8 << 24) | (((cr8 * a8 + 127U) / 255U) << 16) | (((cg8 * a8 + 127U) / 255U) << 8)
-                                | ((cb8 * a8 + 127U) / 255U);
+                            p = (a8 << 24) | (((((c >> 16) & 0xFFU) * a8 + 127U) / 255U) << 16)
+                                | (((((c >> 8) & 0xFFU) * a8 + 127U) / 255U) << 8) | (((c & 0xFFU) * a8 + 127U) / 255U);
                             any = true;
                         }
                     }
@@ -165,4 +212,27 @@ void er_border_sweep_render(int x, int y, int w, int h, int radius, int width, u
             }
         }
     }
+}
+
+void er_border_sweep_render(int x, int y, int w, int h, int radius, int width, uint32_t argb, float phase, float length)
+{
+    if (w <= 0 || h <= 0 || width <= 0 || (argb >> 24) == 0U || length <= 0.0f)
+        return;
+    const int max_r = (w < h ? w : h) / 2;
+    const int r = radius < 0 ? 0 : (radius > max_r ? max_r : radius);
+    const float mid = (float)width * 0.5f;
+    float cr = (float)r - mid;
+    if (cr < 0.0f)
+        cr = 0.0f;
+    const SweepShader s = {(float)w * 0.5f - mid - cr, (float)h * 0.5f - mid - cr, cr, phase, length, argb};
+    ring_render(x, y, w, h, r, width, sweep_shade, &s);
+}
+
+void er_border_conic_render(
+    int x, int y, int w, int h, int radius, int width, float from, const ERGradientStop* stops, int count)
+{
+    if (w <= 0 || h <= 0 || width <= 0 || count < 1)
+        return;
+    const ConicShader s = {from, stops, count};
+    ring_render(x, y, w, h, radius, width, conic_shade, &s);
 }

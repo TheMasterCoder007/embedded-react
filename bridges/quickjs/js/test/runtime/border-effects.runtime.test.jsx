@@ -17,6 +17,8 @@
 // Runtime e2e: the border ring effects of a View through the real bridge + engine.
 //   • borderSweep* draws a light along the inside of the rounded edge, over the content, and
 //     borderSweepPhase moves it on the native driver,
+//   • borderGradient {type: 'conic'} shows a conic gradient through the ring, and
+//     borderGradientAngle turns it on the native driver,
 //   • dropping the style removes the ring.
 import {createRoot} from '../../src/renderer.js';
 import {Animated, Easing, View} from 'embedded-react';
@@ -91,5 +93,38 @@ check(
   rowLight(1) === 0 && rowLight(H - 2) === 0,
   'dropping the sweep removes the ring',
 );
+
+/** Red channel at (x, y). */
+const red = (x, y) => (__pixel(x, y) >> 16) & 0xff;
+
+// Clear, white at a quarter turn, clear again: from 0 (up) the white points right.
+const CONIC = {
+  type: 'conic',
+  width: 4,
+  stops: [
+    {color: '#ffffff00', offset: 0},
+    {color: '#ffffff', offset: 0.25},
+    {color: '#ffffff00', offset: 0.5},
+  ],
+};
+const turn = new Animated.Value(0);
+root.render(box({borderGradient: CONIC, borderGradientAngle: turn}));
+check(
+  red(W - 2, H / 2) > 0xc0 && red(1, H / 2) === 0,
+  'a conic ring is lit where its stops point (the right edge)',
+);
+check(
+  __pixel(W / 2, H / 2) === BLACK,
+  'the conic ring leaves the content alone',
+);
+turn.setValue(180);
+NativeUI.commit();
+check(
+  red(1, H / 2) > 0xc0 && red(W - 2, H / 2) === 0,
+  'borderGradientAngle 180 turns the light to the left edge',
+);
+
+root.render(box({}));
+check(red(1, H / 2) === 0, 'dropping borderGradient removes the ring');
 
 report('border-effects');

@@ -317,5 +317,42 @@ int main(void)
         }
         memcpy(fb, incremental, sizeof(incremental));
     }
+
+    /* A conic gradient seen through a 4 px ring: clear, white at a quarter turn, clear again. From 0 the
+     * white points right (90 degrees), so the right edge is lit and the left one dark; turning the start
+     * angle by 180 swaps them, repainting only the ring's bands. */
+    er_anim_value_unbind_all(phase);
+    cp.border_sweep_width = 0;
+    cp.border_gradient_width = 4;
+    cp.border_gradient_angle = 0.0f;
+    cp.border_gradient_stop_count = 3;
+    cp.border_gradient_stops[0] = (ERGradientStop){0x00FFFFFFU, 0.0f};
+    cp.border_gradient_stops[1] = (ERGradientStop){0xFFFFFFFFU, 0.25f};
+    cp.border_gradient_stops[2] = (ERGradientStop){0x00FFFFFFU, 0.5f};
+    er_node_set_props(card, &cp);
+    er_commit();
+    const unsigned right = brightness(px_at(&t, 20 + 160 - 2, 80));
+    const unsigned left = brightness(px_at(&t, 20 + 1, 80));
+    if (right < 600 || left > card_bg + 10)
+        return fail("conic ring: the lit side is not where the stops put it");
+    if (brightness(px_at(&t, 100, 80)) != brightness(cp.background_color))
+        return fail("conic ring: drew inside the card");
+
+    ERAnimValueHandle turn = er_anim_value_create(0.0f);
+    er_anim_value_bind(turn, card, ER_PROP_BORDER_GRADIENT_ANGLE);
+    er_commit(); /* binding marks the card for a full repaint; the angle steps after it are what is measured */
+    er_anim_value_set(turn, 180.0f);
+    s_area = 0;
+    er_commit();
+    if (s_area * 5 >= whole_card * 3)
+        return fail("conic ring: an angle step cost more than 60% of repainting the whole card");
+    if (brightness(px_at(&t, 20 + 1, 80)) < 600 || brightness(px_at(&t, 20 + 160 - 2, 80)) > card_bg + 10)
+        return fail("conic ring: turning the start angle by 180 did not move the light across");
+    memcpy(incremental, fb, sizeof(incremental));
+    memset(fb, 0, sizeof(fb));
+    er_force_full_repaint();
+    er_commit();
+    if (memcmp(incremental, fb, sizeof(incremental)) != 0)
+        return fail("conic ring: the turned frame differs from a full repaint");
     return EXIT_SUCCESS;
 }

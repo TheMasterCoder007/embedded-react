@@ -2843,20 +2843,31 @@ static void render_node_content(
         render_tree(child, needs_paint, occluded || buried, child_tx, child_ty);
     }
 
-    /* The border sweep lights the edge over the node's content, like a focus ring. */
-    if (should_render && (n->type == ER_NODE_VIEW || n->type == ER_NODE_PRESSABLE)
-        && n->props.view.border_sweep_width > 0)
+    /* The border gradient and sweep light the edge over the node's content, like a focus ring. */
+    if (should_render && (n->type == ER_NODE_VIEW || n->type == ER_NODE_PRESSABLE))
     {
         const ERViewProps* vp = &n->props.view;
-        er_border_sweep_render(px,
-                               py,
-                               w,
-                               h,
-                               vp->border_tl_radius > 0 ? vp->border_tl_radius : vp->border_radius,
-                               vp->border_sweep_width,
-                               vp->border_sweep_color,
-                               vp->border_sweep_phase,
-                               vp->border_sweep_length > 0.0f ? vp->border_sweep_length : 0.3f);
+        const int radius = vp->border_tl_radius > 0 ? vp->border_tl_radius : vp->border_radius;
+        if (vp->border_gradient_width > 0)
+            er_border_conic_render(px,
+                                   py,
+                                   w,
+                                   h,
+                                   radius,
+                                   vp->border_gradient_width,
+                                   vp->border_gradient_angle,
+                                   vp->border_gradient_stops,
+                                   vp->border_gradient_stop_count);
+        if (vp->border_sweep_width > 0)
+            er_border_sweep_render(px,
+                                   py,
+                                   w,
+                                   h,
+                                   radius,
+                                   vp->border_sweep_width,
+                                   vp->border_sweep_color,
+                                   vp->border_sweep_phase,
+                                   vp->border_sweep_length > 0.0f ? vp->border_sweep_length : 0.3f);
     }
 
     if (clips)
@@ -3320,6 +3331,11 @@ static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
     node->props.view.border_sweep_width = props->border_sweep_width;
     node->props.view.border_sweep_phase = props->border_sweep_phase;
     node->props.view.border_sweep_length = props->border_sweep_length;
+    node->props.view.border_gradient_width = props->border_gradient_width;
+    node->props.view.border_gradient_angle = props->border_gradient_angle;
+    node->props.view.border_gradient_stop_count = props->border_gradient_stop_count;
+    for (int bi = 0; bi < ER_BORDER_GRADIENT_MAX_STOPS; bi++)
+        node->props.view.border_gradient_stops[bi] = props->border_gradient_stops[bi];
     node->props.view.gradient_type = props->gradient_type;
     node->props.view.gradient_angle = props->gradient_angle;
     node->props.view.gradient_stop_count = props->gradient_stop_count;
@@ -5231,10 +5247,13 @@ void er_commit(void)
                  * not the whole box (a focused card under a travelling light). */
                 if (!moved)
                 {
+                    const int ring = n->props.view.border_sweep_width > n->props.view.border_gradient_width
+                                         ? n->props.view.border_sweep_width
+                                         : n->props.view.border_gradient_width;
                     int reach =
                         er_border_sweep_reach(n->props.view.border_tl_radius > 0 ? n->props.view.border_tl_radius
                                                                                  : n->props.view.border_radius,
-                                              n->props.view.border_sweep_width);
+                                              ring);
                     if (reach > rw / 2)
                         reach = (rw + 1) / 2;
                     if (reach > rh / 2)

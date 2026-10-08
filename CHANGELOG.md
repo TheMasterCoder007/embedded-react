@@ -13,6 +13,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Added
 
+- `View` takes `borderGradient: {type: 'conic', width, angle?, stops}`: a CSS `conic-gradient()` seen only
+  through an anti-aliased ring `width` px thick along the rounded edge, over the content, for a
+  rotating-gradient border. `borderGradientAngle` sets the start angle and animates on the native driver; an
+  angle-only change repaints the ring's edge bands. Flow A only.
+
 - `View` takes `borderSweepColor`, `borderSweepWidth`, `borderSweepLength` and `borderSweepPhase`: a light
   travelling around the inside of the rounded edge, over the content, bright at its head and fading along its
   tail. `borderSweepPhase` animates on the native driver, and a phase-only change repaints the bands along the
