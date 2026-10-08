@@ -26,6 +26,11 @@ target_link_libraries(test_anim_transform_damage PRIVATE embedded-react)
 target_include_directories(test_anim_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_anim_transform_damage COMMAND test_anim_transform_damage)
 
+add_executable(test_anim_translate_offscreen test_anim_translate_offscreen.c)
+target_link_libraries(test_anim_translate_offscreen PRIVATE embedded-react)
+target_include_directories(test_anim_translate_offscreen PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_anim_translate_offscreen COMMAND test_anim_translate_offscreen)
+
 add_executable(test_parallel test_parallel.c)
 target_link_libraries(test_parallel PRIVATE embedded-react Threads::Threads)
 # test_parallel needs engine/core for renderer_internal.h (er_parallel_for / worker contexts).
