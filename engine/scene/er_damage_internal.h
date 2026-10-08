@@ -26,11 +26,13 @@
  * ER_DAMAGE_RECTS_MAX rects instead, letting the compositor repaint (and a backend flush) each
  * changed area on its own.
  *
- * Invariant: the stored rects are PAIRWISE DISJOINT and non-abutting. This is load-bearing, not an
- * optimisation — the compositor paints each rect in a separate clipped pass, and a pixel covered by
- * two passes would have translucent content blended into it twice (visibly darker). er_damage_set_add
- * therefore merges any overlapping-or-touching input into the existing rects (cascading, since a
- * merge can grow a rect into contact with another) rather than storing it alongside them.
+ * Invariant: the stored rects are PAIRWISE DISJOINT. This is load-bearing, not an optimisation — the
+ * compositor paints each rect in a separate clipped pass, and a pixel covered by two passes would
+ * have translucent content blended into it twice (visibly darker). er_damage_set_add merges an input
+ * into a rect it overlaps or abuts when their bounding box is mostly their own pixels (cascading,
+ * since a merge can grow a rect into contact with another). When the box would be mostly clean — a
+ * full-width scroll strip and a card overlapping one end of it — it adds only the input's parts
+ * outside that rect instead, so neither drags the other's empty span into the repaint.
  *
  * When the set is full, the incoming rect is merged with whichever stored rect wastes the least area
  * (union area minus the two parts) — so pathological scattered damage degrades gracefully toward the
@@ -50,7 +52,7 @@
  * er_get_dirty_rects(), whose contract it caps. */
 
 /**
- * @brief A small set of pairwise-disjoint, non-abutting dirty rects.
+ * @brief A small set of pairwise-disjoint dirty rects.
  *
  * Zero-initialisation is a valid empty set.
  */
