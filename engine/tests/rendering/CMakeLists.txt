@@ -188,3 +188,27 @@ add_test(NAME rendering_text_padding COMMAND test_text_padding)
 add_executable(test_content_padding test_content_padding.c)
 target_link_libraries(test_content_padding PRIVATE embedded-react)
 add_test(NAME rendering_content_padding COMMAND test_content_padding)
+
+# The software backend's fill / copy / blend rows against a per-pixel reference. The test includes the
+# backend's source to reach its static callbacks. When the host runs AVX2, it is built a second time with
+# -mavx2, which takes the backend's eight-pixel rows; both builds must match the reference bit for bit.
+set(ER_SOFTWARE_BACKEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../backends/software)
+add_executable(test_software_blend test_software_blend.c)
+target_link_libraries(test_software_blend PRIVATE embedded-react)
+target_include_directories(test_software_blend PRIVATE ${ER_SOFTWARE_BACKEND_DIR})
+add_test(NAME rendering_software_blend COMMAND test_software_blend)
+
+include(CheckCSourceRuns)
+set(CMAKE_REQUIRED_FLAGS -mavx2)
+check_c_source_runs("
+#include <immintrin.h>
+int main(void) { volatile int v = 3; __m256i a = _mm256_set1_epi16((short)v); a = _mm256_mullo_epi16(a, a);
+                 return _mm256_extract_epi16(a, 0) == 9 ? 0 : 1; }" ER_HOST_RUNS_AVX2)
+unset(CMAKE_REQUIRED_FLAGS)
+if(ER_HOST_RUNS_AVX2)
+    add_executable(test_software_blend_avx2 test_software_blend.c)
+    target_link_libraries(test_software_blend_avx2 PRIVATE embedded-react)
+    target_include_directories(test_software_blend_avx2 PRIVATE ${ER_SOFTWARE_BACKEND_DIR})
+    target_compile_options(test_software_blend_avx2 PRIVATE -mavx2)
+    add_test(NAME rendering_software_blend_avx2 COMMAND test_software_blend_avx2)
+endif()

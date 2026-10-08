@@ -11,6 +11,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Changed
+
+- The software backend's translucent `fill_rect`, `copy_rect` and `blend_rect` rows process eight pixels per
+  step when the compiler targets AVX2, with the same integer arithmetic as the scalar loops, so the output is
+  bit-identical. Other targets are unchanged. A new test checks both builds against a per-pixel reference.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 
