@@ -932,6 +932,105 @@ static void fixture_abs_aspect_ratio_both_auto(void)
     er_node_destroy(root);
 }
 
+/**
+ * @brief A flow child with a definite cross size and aspectRatio takes its main size from them.
+ *
+ * Row 300x120 holds A (height 80, ratio 3/4), B (height 50%, ratio 2), C (20x20). Yoga sizes A 60 wide
+ * and B 60 tall x 120 wide from the cross size rather than from their (empty) content, so B starts at
+ * 60 and C at 180. In a 200x300 column, D (width 100, ratio 2) is 50 tall and E follows at 50.
+ */
+static void fixture_flow_aspect_from_cross(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 120;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* row = mk(rp, NULL);
+
+    ERRect ra, rb, rc;
+    ERProps ap = props_default();
+    ap.height = 80;
+    ap.aspect_ratio = 0.75f;
+    ERProps bp = props_default();
+    bp.height_pct = 50.0f;
+    bp.aspect_ratio = 2.0f;
+    ERProps kp = props_default();
+    kp.width = 20;
+    kp.height = 20;
+    er_tree_append_child(row, mk(ap, &ra));
+    er_tree_append_child(row, mk(bp, &rb));
+    er_tree_append_child(row, mk(kp, &rc));
+    er_tree_set_root(row);
+    er_commit();
+    pcheck("flow-aspect-from-cross", "row-height", EXPECT, ra, 0, 0, 60, 80);
+    pcheck("flow-aspect-from-cross", "row-height-pct", EXPECT, rb, 60, 0, 120, 60);
+    pcheck("flow-aspect-from-cross", "row-next", EXPECT, rc, 180, 0, 20, 20);
+
+    er_reset();
+    ERProps cp = props_default();
+    cp.width = 200;
+    cp.height = 300;
+    cp.flex_direction = ER_FLEX_COL;
+    cp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* col = mk(cp, NULL);
+
+    ERRect rd, re;
+    ERProps dp = props_default();
+    dp.width = 100;
+    dp.aspect_ratio = 2.0f;
+    er_tree_append_child(col, mk(dp, &rd));
+    er_tree_append_child(col, mk(kp, &re));
+    er_tree_set_root(col);
+    er_commit();
+    pcheck("flow-aspect-from-cross", "col-width", EXPECT, rd, 0, 0, 100, 50);
+    pcheck("flow-aspect-from-cross", "col-next", EXPECT, re, 0, 50, 20, 20);
+    er_reset();
+}
+
+/**
+ * @brief An auto-sized parent measures an aspectRatio child the way layout then places it.
+ *
+ * An auto-width row, absolutely positioned so nothing stretches it, holds a child of height 80 and
+ * ratio 3/4 and a 20x20 sibling: it is 80 wide (60 + 20), as in Yoga.
+ */
+static void fixture_measure_aspect_from_cross(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 200;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect rr, ra;
+    ERProps wp = props_default();
+    wp.position = ER_POS_ABSOLUTE;
+    wp.left = 0;
+    wp.top = 0;
+    wp.flex_direction = ER_FLEX_ROW;
+    wp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* wrap = mk(wp, &rr);
+    er_tree_append_child(root, wrap);
+
+    ERProps ap = props_default();
+    ap.height = 80;
+    ap.aspect_ratio = 0.75f;
+    er_tree_append_child(wrap, mk(ap, &ra));
+    ERProps kp = props_default();
+    kp.width = 20;
+    kp.height = 20;
+    er_tree_append_child(wrap, mk(kp, NULL));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("measure-aspect-from-cross", "parent", EXPECT, rr, 0, 0, 80, 80);
+    pcheck("measure-aspect-from-cross", "child", EXPECT, ra, 0, 0, 60, 80);
+    er_reset();
+}
+
 /** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
 static void fixture_abs_content_overflows(void)
 {
@@ -3000,6 +3099,8 @@ int main(void)
     fixture_abs_pct();
     fixture_abs_aspect_ratio();
     fixture_abs_aspect_ratio_both_auto();
+    fixture_flow_aspect_from_cross();
+    fixture_measure_aspect_from_cross();
     fixture_abs_content_overflows();
     fixture_abs_containing_block();
     fixture_abs_padding_box_edges();
