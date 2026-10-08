@@ -20,6 +20,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -78,6 +81,105 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint3
     const uint32_t b = sb + div255(db * inv);
     return 0xFF000000U | (r << 16) | (g << 8) | b;
 }
+
+#if defined(__AVX2__)
+/*
+ * AVX2 rows: eight pixels at a time, with the same integer arithmetic as over_premul() and div255(), so
+ * every pixel matches the scalar path bit for bit. Columns past the last multiple of eight use the scalar
+ * code. The scalar path is the reference; it is what non-AVX2 builds run.
+ */
+
+/** @brief Each pixel's alpha byte copied into the low byte of that pixel's four 16-bit channels. */
+static inline __m256i alpha16(__m256i px, bool high)
+{
+    const __m256i lo = _mm256_setr_epi8(
+        3, -1, 3, -1, 3, -1, 3, -1, 7, -1, 7, -1, 7, -1, 7, -1, 3, -1, 3, -1, 3, -1, 3, -1, 7, -1, 7, -1, 7, -1, 7, -1);
+    const __m256i hi = _mm256_setr_epi8(11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1,
+                                        11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        11,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1,
+                                        15,
+                                        -1);
+    return _mm256_shuffle_epi8(px, high ? hi : lo);
+}
+
+/** @brief div255() on sixteen 16-bit lanes (inputs up to 255 * 255). */
+static inline __m256i div255_16(__m256i x)
+{
+    x = _mm256_add_epi16(x, _mm256_set1_epi16(0x80));
+    return _mm256_srli_epi16(_mm256_add_epi16(x, _mm256_srli_epi16(x, 8)), 8);
+}
+
+/** @brief Each premultiplied channel of `px` times the 16-bit factors in `f` (lo/hi halves), divided by 255. */
+static inline __m256i scale8(__m256i px, __m256i f_lo, __m256i f_hi)
+{
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i lo = div255_16(_mm256_mullo_epi16(_mm256_unpacklo_epi8(px, zero), f_lo));
+    const __m256i hi = div255_16(_mm256_mullo_epi16(_mm256_unpackhi_epi8(px, zero), f_hi));
+    return _mm256_packus_epi16(lo, hi);
+}
+
+/** @brief over_premul() of eight premultiplied sources onto eight destinations; alpha comes out 0xFF. */
+static inline __m256i over8(__m256i s, __m256i d)
+{
+    const __m256i full = _mm256_set1_epi16(255);
+    const __m256i inv_lo = _mm256_sub_epi16(full, alpha16(s, false));
+    const __m256i inv_hi = _mm256_sub_epi16(full, alpha16(s, true));
+    return _mm256_or_si256(_mm256_add_epi8(s, scale8(d, inv_lo, inv_hi)), _mm256_set1_epi32((int)0xFF000000U));
+}
+
+/** @brief copy_rect_cb()'s row: opaque sources replace, transparent ones keep the destination. */
+static int copy_row8(uint32_t* d, const uint32_t* s, int w)
+{
+    const __m256i alpha_mask = _mm256_set1_epi32((int)0xFF000000U);
+    int col = 0;
+    for (; col + 8 <= w; col += 8)
+    {
+        const __m256i sp = _mm256_loadu_si256((const __m256i*)(s + col));
+        const __m256i a = _mm256_and_si256(sp, alpha_mask);
+        const __m256i opaque = _mm256_cmpeq_epi32(a, alpha_mask);
+        if (_mm256_movemask_epi8(opaque) == -1)
+        {
+            _mm256_storeu_si256((__m256i*)(d + col), sp);
+            continue;
+        }
+        const __m256i clear = _mm256_cmpeq_epi32(a, _mm256_setzero_si256());
+        if (_mm256_movemask_epi8(clear) == -1)
+            continue;
+        const __m256i dp = _mm256_loadu_si256((const __m256i*)(d + col));
+        __m256i out = _mm256_blendv_epi8(over8(sp, dp), sp, opaque);
+        out = _mm256_blendv_epi8(out, dp, clear);
+        _mm256_storeu_si256((__m256i*)(d + col), out);
+    }
+    return col;
+}
+#endif
 
 /**
  * @brief Clips a rectangle to the framebuffer bounds, advancing the source origin to match.
@@ -162,10 +264,18 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
     const uint32_t sr = div255(((argb >> 16) & 0xFFU) * a);
     const uint32_t sg = div255(((argb >> 8) & 0xFFU) * a);
     const uint32_t sb = div255((argb & 0xFFU) * a);
+#if defined(__AVX2__)
+    const __m256i src = _mm256_set1_epi32((int)((a << 24) | (sr << 16) | (sg << 8) | sb));
+#endif
     for (int row = 0; row < h; row++)
     {
         uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-        for (int col = 0; col < w; col++)
+        int col = 0;
+#if defined(__AVX2__)
+        for (; col + 8 <= w; col += 8)
+            _mm256_storeu_si256((__m256i*)(d + col), over8(src, _mm256_loadu_si256((const __m256i*)(d + col))));
+#endif
+        for (; col < w; col++)
             d[col] = over_premul(d[col], a, sr, sg, sb);
     }
 }
@@ -193,7 +303,11 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
     {
         const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
         uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
+#if defined(__AVX2__)
+        for (int col = copy_row8(d, s, w); col < w; col++)
+#else
         for (int col = 0; col < w; col++)
+#endif
         {
             const uint32_t sp = s[col];
             const uint32_t sa = (sp >> 24) & 0xFFU;
@@ -244,7 +358,19 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
     {
         const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
         uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-        for (int col = 0; col < w; col++)
+        int col = 0;
+#if defined(__AVX2__)
+        const __m256i g = _mm256_set1_epi16((short)ga);
+        for (; col + 8 <= w; col += 8)
+        {
+            const __m256i sp = scale8(_mm256_loadu_si256((const __m256i*)(s + col)), g, g);
+            const __m256i dp = _mm256_loadu_si256((const __m256i*)(d + col));
+            const __m256i clear =
+                _mm256_cmpeq_epi32(_mm256_and_si256(sp, _mm256_set1_epi32((int)0xFF000000U)), _mm256_setzero_si256());
+            _mm256_storeu_si256((__m256i*)(d + col), _mm256_blendv_epi8(over8(sp, dp), dp, clear));
+        }
+#endif
+        for (; col < w; col++)
         {
             const uint32_t sp = s[col];
             const uint32_t sa = div255(((sp >> 24) & 0xFFU) * ga);
