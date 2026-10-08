@@ -48,11 +48,14 @@ const BASELINE = join(CACHE, 'baseline.json');
 const META = join(CACHE, 'meta.json');
 
 const DEMOS = ['thermostat', 'watch-face'];
+// The board sizes, plus the rotated 320×240 and 480×800 that reach the thermostat's landscape and stack layouts.
 const SIZES = [
   [240, 320],
   [240, 280],
   [320, 480],
   [800, 480],
+  [320, 240],
+  [480, 800],
 ];
 
 const readCorpus = path =>
