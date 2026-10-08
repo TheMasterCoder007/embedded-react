@@ -644,5 +644,34 @@ int main(void)
             return fail("mixed-weight span render emitted out-of-bounds pixels");
     }
 
+    /* ---- Faux bold breaks at the advance it is drawn with ----
+     * A bold run exactly as wide as its regular measurement does not fit at that width: it breaks
+     * into two lines (in layout's er_text_wrap and in the renderer alike) instead of drawing one
+     * line that overruns the box. */
+    {
+        const char* run = "Hello World";
+        int regular = 0, line_h = 0;
+        er_text_measure(run, 14, NULL, 0, 0, &regular, &line_h);
+        int widest = 0;
+        if (er_text_wrap(run, NULL, 0, 14, NULL, 0, 0, regular, 2, &widest) != 1)
+            return fail("regular run does not fit its own measured width");
+        if (er_text_wrap(run, NULL, 0, 14, NULL, 0, 1, regular, 2, &widest) != 2 || widest > regular)
+            return fail("bold run measured as fitting the regular width");
+
+        ctx_reset(&tc);
+        ERTextRenderParams pb = {0};
+        pb.text = run;
+        pb.clip = (ERRect){0, 0, (int16_t)regular, (int16_t)(3 * line_h)};
+        pb.color = 0xFFFFFFFFU;
+        pb.font_size = 14;
+        pb.font_weight = 1;
+        pb.number_of_lines = 2;
+        er_text_render(&pb);
+        if (tc.max_y <= line_h)
+            return fail("bold run at its regular width did not wrap onto a second line");
+        if (tc.max_x > regular)
+            return fail("bold run drew past its box");
+    }
+
     return EXIT_SUCCESS;
 }

@@ -2964,6 +2964,92 @@ static void fixture_half_pixel_stretch_lines(void)
     stretch_line_case("acs-rhalf", 5, 100, 0, ER_WRAP_WRAP_REVERSE, 4, k_rhx, k_rhw);
 }
 
+/**
+ * @brief Builds a stretched column holding a wrapping row of five 40×20 items, then a 10px marker.
+ *
+ * The row has no height: its auto height must come from its wrapped lines. Column is `col_w`
+ * wide; the row carries `row_gap`/`column_gap` and 5px padding, so its inner width is col_w - 10.
+ * When `nested` is set, the row sits inside an auto-sized column (alignItems flex-start), so the
+ * width constraint has to travel through a measured ancestor.
+ */
+static void build_wrap_auto(int16_t col_w, int16_t gap, bool nested, ERRect* row, ERRect* marker, ERRect* outer)
+{
+    er_reset();
+
+    ERProps cp = props_default();
+    cp.width = col_w;
+    cp.height = 200;
+    cp.flex_direction = ER_FLEX_COL;
+    cp.align_items = nested ? ER_ALIGN_FLEX_START : ER_ALIGN_STRETCH;
+    ERNode* col = mk(cp, NULL);
+
+    ERNode* parent = col;
+    if (nested)
+    {
+        ERProps op = props_default();
+        op.flex_direction = ER_FLEX_COL;
+        parent = mk(op, outer);
+        er_tree_append_child(col, parent);
+    }
+
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.flex_wrap = ER_WRAP_WRAP;
+    rp.row_gap = gap;
+    rp.column_gap = gap;
+    rp.padding = 5;
+    ERNode* wrap = mk(rp, row);
+    er_tree_append_child(parent, wrap);
+    for (int i = 0; i < 5; i++)
+    {
+        ERProps p = props_default();
+        p.width = 40;
+        p.height = 20;
+        er_tree_append_child(wrap, mk(p, NULL));
+    }
+
+    ERProps mp = props_default();
+    mp.height = 10;
+    er_tree_append_child(col, mk(mp, marker));
+
+    er_tree_set_root(col);
+    er_commit();
+}
+
+/** @brief An auto-height wrapping row in a column grows to hold all of its lines. */
+static void fixture_wrap_auto_height(void)
+{
+    ERRect row, marker;
+    /* Inner 90: two 40s per line (80), so five items take three lines: 3*20 + 10 padding. */
+    build_wrap_auto(100, 0, false, &row, &marker, NULL);
+    pcheck("wrap-auto-height", "row", EXPECT, row, 0, 0, 100, 70);
+    pcheck("wrap-auto-height", "marker", EXPECT, marker, 0, 70, 100, 10);
+    er_reset();
+}
+
+/** @brief Gaps count toward line breaking (main) and between lines (cross). */
+static void fixture_wrap_auto_height_gap(void)
+{
+    ERRect row, marker;
+    /* Inner 120: 40+10+40+10+40 = 140 > 120, so two per line → three lines: 3*20 + 2*10 + 10. */
+    build_wrap_auto(130, 10, false, &row, &marker, NULL);
+    pcheck("wrap-auto-gap", "row", EXPECT, row, 0, 0, 130, 90);
+    pcheck("wrap-auto-gap", "marker", EXPECT, marker, 0, 90, 130, 10);
+    er_reset();
+}
+
+/** @brief The width constraint reaches a wrapping row through an auto-sized ancestor. */
+static void fixture_wrap_auto_height_nested(void)
+{
+    ERRect row, marker, outer;
+    /* The ancestor shrinks to the widest line (40+40 + 10 padding = 90), as Yoga's at-most mode does. */
+    build_wrap_auto(100, 0, true, &row, &marker, &outer);
+    pcheck("wrap-auto-nested", "outer", EXPECT, outer, 0, 0, 90, 70);
+    pcheck("wrap-auto-nested", "row", EXPECT, row, 0, 0, 90, 70);
+    pcheck("wrap-auto-nested", "marker", EXPECT, marker, 0, 70, 0, 10);
+    er_reset();
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -3038,6 +3124,9 @@ int main(void)
     fixture_half_pixel_align_content();
     fixture_half_pixel_flex_sizes();
     fixture_half_pixel_stretch_lines();
+    fixture_wrap_auto_height();
+    fixture_wrap_auto_height_gap();
+    fixture_wrap_auto_height_nested();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
@@ -3065,10 +3154,6 @@ int main(void)
  *   - margin: auto centering: margins are fixed pixels; ER_LAYOUT_AUTO margin is treated as 0.
  *   - percentage padding/margin/min/max/position: width%, height% and flex_basis% have fields
  *     (width%/height% covered by the pct-* fixtures above); the rest do not yet.
- *   - width-aware text wrapping / auto height: Text uses single-line measurement unless
- *     number_of_lines is set, so an auto-height container under-sizes wrapped text. (Needs a
- *     width-aware measure pass; the expected height is font-dependent, so a tolerance-based
- *     assertion would be required rather than the exact-rect compare used here.)
  *   - alignItems: baseline: no baseline alignment.
  *   - cross-axis margins under wrap-reverse: Pass 5 places a child with its LEADING cross margin and
  *     then mirrors, so the mirrored child is held off the far edge by the wrong margin. This is the
