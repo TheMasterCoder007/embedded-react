@@ -415,6 +415,7 @@ struct ERNode
                                        answers from props that may have changed since, which is how
                                        clearing a shadow used to erase only the box (issue #140). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
+    bool last_paint_empty;        /**< The last paint was of a container that paints nothing itself. */
     bool last_paint_untransformed; /**< The last paint of this TRANSFORMED node degraded to its raw,
                                         untransformed box: the scratch capture could not be started, so
                                         last_paint_rect holds that box (knob reach and shadow bleed included

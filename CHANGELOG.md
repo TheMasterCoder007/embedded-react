@@ -10,6 +10,13 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+
+### Fixed
+
+- A container that paints nothing itself (no background, border, opacity, shadow, gradient or complex
+  transform) and does not clip no longer repaints its whole box when it only moves or resizes; its children
+  report their own changes. A list growing at its unseen end, such as a virtualized list adding rows during
+  a scroll, made its container repaint the whole viewport on every frame.
 ### Added
 
 - Backends can provide an optional `move_rect` that copies a rectangle within the framebuffer, and the

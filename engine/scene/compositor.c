@@ -1698,6 +1698,7 @@ static uint32_t s_prof_composites = 0; /* composite_with_opacity calls that comp
 #endif
 
 static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int translate_x, int translate_y);
+static bool paints_nothing(const ERNode* a);
 
 /**
  * @brief Renders a node's own content and recurses into its children.
@@ -2389,6 +2390,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         n->last_paint_rect.h = (int16_t)lp_h;
         n->last_paint_untransformed = !doing_affine;
         n->has_last_paint = true;
+        n->last_paint_empty = paints_nothing(n);
     }
 
     /* Shadow: rendered before opacity scratch so the shadow lands in the outer destination
@@ -5524,6 +5526,15 @@ void er_commit(void)
                                    || spans_paint_window(rx, ry, rw, rh));
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
+            /* A container that only MOVED (or resized) and paints nothing, now or last time, has no pixels
+             * of its own to repaint or erase: its children report their own moves. Damaging its box instead
+             * made a list that grows at its unseen end (more rows, a taller spacer) repaint the whole
+             * viewport on every frame of a scroll. A clipping container still damages its box, since a new
+             * clip hides children that did not change, and a changed one (source_dirty) still does: a new
+             * zIndex, say, reorders children that did not change either. */
+            if (!n->source_dirty && paints_nothing(n) && !node_clips_children(n)
+                && (!n->has_last_paint || n->last_paint_empty))
+                continue;
             if (scrim_modal)
             {
                 modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
