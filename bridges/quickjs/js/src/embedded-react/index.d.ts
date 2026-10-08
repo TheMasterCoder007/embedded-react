@@ -160,6 +160,15 @@ export interface ViewStyle {
   backgroundColor?: string | AnimatedValue;
   opacity?: number | AnimatedValue;
 
+  // Border sweep: a light travelling around the rounded edge, over the content.
+  borderSweepColor?: string;
+  /** Ring thickness in px, inside the box; 0 = none. */
+  borderSweepWidth?: number;
+  /** Tail length as a fraction of the perimeter (default 0.3). */
+  borderSweepLength?: number;
+  /** Head position, 0–1 clockwise from the top edge's left end; wraps. Animate it with the native driver. */
+  borderSweepPhase?: number | AnimatedValue;
+
   // Border.
   borderRadius?: number;
   borderTopLeftRadius?: number;

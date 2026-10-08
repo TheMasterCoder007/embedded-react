@@ -11,6 +11,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Added
+
+- `View` takes `borderSweepColor`, `borderSweepWidth`, `borderSweepLength` and `borderSweepPhase`: a light
+  travelling around the inside of the rounded edge, over the content, bright at its head and fading along its
+  tail. `borderSweepPhase` animates on the native driver, and a phase-only change repaints the bands along the
+  edges rather than the whole box. Flow A only.
+
 ### Fixed
 
 - Two damaged areas that overlap or touch are merged into their bounding box only when that box is mostly

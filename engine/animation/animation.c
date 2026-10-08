@@ -297,6 +297,11 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
         case ER_PROP_ROTATE_Y:
             *value = node->tp_rotate_y;
             return true;
+        case ER_PROP_BORDER_SWEEP_PHASE:
+            if (!is_view_node(node))
+                return false;
+            *value = node->props.view.border_sweep_phase;
+            return true;
         case ER_PROP_SWITCH_THUMB:
             if (node->type != ER_NODE_SWITCH)
                 return false;
@@ -461,6 +466,19 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
             if (node->switch_thumb_t == value)
                 return false;
             node->switch_thumb_t = value;
+            return true;
+        }
+        case ER_PROP_BORDER_SWEEP_PHASE:
+        {
+            if (!is_view_node(node))
+                return false;
+            value -= floorf(value); /* a phase wraps: 1.25 is a quarter round past the start */
+            if (node->props.view.border_sweep_phase == value)
+                return false;
+            node->props.view.border_sweep_phase = value;
+            /* Only the ring moved: the damage pre-pass repaints its bands, not the whole box. */
+            if (!node->source_dirty)
+                node->sweep_moved = true;
             return true;
         }
         case ER_PROP_ARC_VALUE:
@@ -865,6 +883,8 @@ static void push_to_value_bindings(ERAnimValue* val)
             /* An animated opacity value changes only the blend, not the subtree's rendered
              * content — mark visual-only so the compositor's fade cache stays valid. Every
              * other prop (position, scale, rotation, color) changes content. */
+            if (bind->prop != ER_PROP_BORDER_SWEEP_PHASE)
+                n->sweep_moved = false; /* anything else changed too: the whole box repaints */
             if (bind->prop == ER_PROP_OPACITY)
                 er_mark_dirty_upward_visual(n);
             else

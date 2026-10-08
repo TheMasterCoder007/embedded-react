@@ -1170,6 +1170,10 @@ typedef enum
     PROP_VALUE_START,
     PROP_MIN_SPAN,
     PROP_INDICATOR_GRADIENT,
+    PROP_BORDER_SWEEP_COLOR,
+    PROP_BORDER_SWEEP_WIDTH,
+    PROP_BORDER_SWEEP_PHASE,
+    PROP_BORDER_SWEEP_LENGTH,
     PROP_COUNT_,
 } PropId;
 
@@ -1293,6 +1297,10 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_VALUE_START] = "valueStart",
     [PROP_MIN_SPAN] = "minSpan",
     [PROP_INDICATOR_GRADIENT] = "indicatorGradient",
+    [PROP_BORDER_SWEEP_COLOR] = "borderSweepColor",
+    [PROP_BORDER_SWEEP_WIDTH] = "borderSweepWidth",
+    [PROP_BORDER_SWEEP_PHASE] = "borderSweepPhase",
+    [PROP_BORDER_SWEEP_LENGTH] = "borderSweepLength",
 };
 
 /** @brief (atom, id) pair; s_prop_atoms is sorted by atom value once, for prop_id_from_atom()'s bsearch. */
@@ -2213,6 +2221,19 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     }
     ER_U8(PROP_SHADOW_RADIUS, shadow_radius);
     ER_U8(PROP_ELEVATION, elevation);
+
+    /* Border sweep (View-family). */
+    ER_COL(PROP_BORDER_SWEEP_COLOR, border_sweep_color);
+    ER_DIM(PROP_BORDER_SWEEP_WIDTH, border_sweep_width);
+    {
+        double d = 0.0;
+        if (!JS_IsUndefined(s_prop_slots[PROP_BORDER_SWEEP_PHASE])
+            && JS_ToFloat64(ctx, &d, s_prop_slots[PROP_BORDER_SWEEP_PHASE]) == 0)
+            p.border_sweep_phase = (float)(d - floor(d));
+        if (!JS_IsUndefined(s_prop_slots[PROP_BORDER_SWEEP_LENGTH])
+            && JS_ToFloat64(ctx, &d, s_prop_slots[PROP_BORDER_SWEEP_LENGTH]) == 0)
+            p.border_sweep_length = (float)d;
+    }
 
     /* ActivityIndicator (RN uses `color` for the spinner tint). */
     ER_COL(PROP_COLOR, indicator_color);
@@ -4064,6 +4085,7 @@ static bool anim_prop_from_name(const char* s, ERAnimProp* out)
         {"color", ER_PROP_COLOR},
         {"value", ER_PROP_ARC_VALUE},            /* Dial value (ER_NODE_ARC) */
         {"valueStart", ER_PROP_ARC_VALUE_START}, /* Dial RANGE low end */
+        {"borderSweepPhase", ER_PROP_BORDER_SWEEP_PHASE},
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
     {

@@ -16,6 +16,7 @@
 
 #include "arc.h"
 #include "arc_widget.h"
+#include "border_sweep.h"
 #include "er_damage_internal.h"
 #include "er_limits.h"
 #include "er_node_internal.h"
@@ -2842,6 +2843,22 @@ static void render_node_content(
         render_tree(child, needs_paint, occluded || buried, child_tx, child_ty);
     }
 
+    /* The border sweep lights the edge over the node's content, like a focus ring. */
+    if (should_render && (n->type == ER_NODE_VIEW || n->type == ER_NODE_PRESSABLE)
+        && n->props.view.border_sweep_width > 0)
+    {
+        const ERViewProps* vp = &n->props.view;
+        er_border_sweep_render(px,
+                               py,
+                               w,
+                               h,
+                               vp->border_tl_radius > 0 ? vp->border_tl_radius : vp->border_radius,
+                               vp->border_sweep_width,
+                               vp->border_sweep_color,
+                               vp->border_sweep_phase,
+                               vp->border_sweep_length > 0.0f ? vp->border_sweep_length : 0.3f);
+    }
+
     if (clips)
         er_pop_clip_rect();
 }
@@ -3299,6 +3316,10 @@ static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
     node->props.view.shadow_opacity = props->shadow_opacity;
     node->props.view.shadow_radius = props->shadow_radius;
     node->props.view.elevation = props->elevation;
+    node->props.view.border_sweep_color = props->border_sweep_color;
+    node->props.view.border_sweep_width = props->border_sweep_width;
+    node->props.view.border_sweep_phase = props->border_sweep_phase;
+    node->props.view.border_sweep_length = props->border_sweep_length;
     node->props.view.gradient_type = props->gradient_type;
     node->props.view.gradient_angle = props->gradient_angle;
     node->props.view.gradient_stop_count = props->gradient_stop_count;
@@ -3652,6 +3673,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     if (props_changed)
     {
         mark_layout_dirty();
+        node->sweep_moved = false; /* a real change repaints the box, not just the sweep's bands */
         if (visual_changed || !node->has_last_paint)
             er_mark_dirty_upward(node);
         else
@@ -5053,6 +5075,9 @@ void er_commit(void)
             if (!n)
                 continue;
 
+            /* Consumed here whichever path measures the node, so a stale flag never narrows a later change. */
+            const bool sweep_only = n->sweep_moved;
+            n->sweep_moved = false;
             if (n->subtree_hidden && !(n->type == ER_NODE_MODAL && n->modal_scrim_shown))
                 continue;
             if (n->overflow_toggled)
@@ -5200,6 +5225,33 @@ void er_commit(void)
                                    || spans_paint_window(rx, ry, rw, rh));
             if (!n->source_dirty && !moved)
                 continue; /* unchanged and in place: contributes nothing to the damage */
+            if (sweep_only && !n->overflow_toggled)
+            {
+                /* Only the sweep's phase changed: repaint the bands along the edges the ring can reach,
+                 * not the whole box (a focused card under a travelling light). */
+                if (!moved)
+                {
+                    int reach =
+                        er_border_sweep_reach(n->props.view.border_tl_radius > 0 ? n->props.view.border_tl_radius
+                                                                                 : n->props.view.border_radius,
+                                              n->props.view.border_sweep_width);
+                    if (reach > rw / 2)
+                        reach = (rw + 1) / 2;
+                    if (reach > rh / 2)
+                        reach = (rh + 1) / 2;
+                    const int bands[4][4] = {{rx, ry, rw, reach},
+                                             {rx, ry + rh - reach, rw, reach},
+                                             {rx, ry + reach, reach, rh - 2 * reach},
+                                             {rx + rw - reach, ry + reach, reach, rh - 2 * reach}};
+                    for (int b = 0; b < 4; b++)
+                    {
+                        int bx = bands[b][0], by = bands[b][1], bw = bands[b][2], bh = bands[b][3];
+                        clip_rect_to_clippers(n, &bx, &by, &bw, &bh);
+                        add_damage(&dmg, bx, by, bw, bh, rb_x0, rb_y0, rb_x1, rb_y1);
+                    }
+                    continue;
+                }
+            }
             if (scrim_modal)
             {
                 modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);

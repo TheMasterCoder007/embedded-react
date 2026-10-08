@@ -221,6 +221,12 @@ typedef struct
     uint8_t shadow_radius; /**< Blur radius in pixels. */
     uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
 
+    /* Border sweep */
+    uint32_t border_sweep_color;
+    int16_t border_sweep_width;
+    float border_sweep_phase;
+    float border_sweep_length;
+
     /* Gradient (requires ERUI_GRADIENT) */
     uint8_t gradient_type;                                /**< ERGradientType. */
     float gradient_angle;                                 /**< Angle in degrees (0 = top→bottom, 90 = left→right). */
@@ -415,6 +421,7 @@ struct ERNode
                                        answers from props that may have changed since, which is how
                                        clearing a shadow used to erase only the box (issue #140). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
+    bool sweep_moved;             /**< Only the border sweep phase changed since the last commit. */
     bool last_paint_untransformed; /**< The last paint of this TRANSFORMED node degraded to its raw,
                                         untransformed box: the scratch capture could not be started, so
                                         last_paint_rect holds that box (knob reach and shadow bleed included
