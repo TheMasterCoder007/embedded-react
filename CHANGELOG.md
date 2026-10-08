@@ -11,6 +11,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Fixed
+
+- A translated node's children move with it. With a translate that takes the plain-offset path (any
+  translate without `ERUI_TRANSFORMS=FULL`, or one without scale or rotation with it), the node itself moved
+  but its children kept painting at their layout boxes, so a header slid off screen left its items behind.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 

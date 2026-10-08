@@ -652,13 +652,32 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
 }
 
 /**
- * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
+ * @brief Whether render_tree paints a node through the translate-only fast path: offset by its
+ * translate, with its whole subtree, instead of through the transform capture.
+ *
+ * @param[in] n  Node to inspect.
+ *
+ * @return true when the node's translate moves its subtree as a plain pixel offset.
+ */
+static bool node_translates_subtree(const ERNode* n)
+{
+#if ERUI_TRANSFORMS_FULL
+    return n->has_transform && !er_node_has_complex_transform(n);
+#else
+    return n->has_transform;
+#endif
+}
+
+/**
+ * @brief Sums the scroll offsets of every ScrollView / FlatList above a node, less the translate of
+ * every ancestor painted through the translate-only fast path.
  *
  * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
- * parent context, so they re-derive it here.
+ * parent context, so they re-derive it here. A translated ancestor moves its descendants with it, so
+ * it counts like a scroll in the opposite direction.
  *
- * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
- * @param[out] sx,sy   Receive the accumulated ancestor scroll.
+ * @param[in]  n       Node to measure from (its own scroll offset and translate are NOT included).
+ * @param[out] sx,sy   Receive the accumulated ancestor offset.
  */
 static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
 {
@@ -671,6 +690,11 @@ static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
         {
             *sx += (int)a->scroll_offset_x;
             *sy += (int)a->scroll_offset_y;
+        }
+        if (node_translates_subtree(a))
+        {
+            *sx -= (int)a->tp_translate_x;
+            *sy -= (int)a->tp_translate_y;
         }
         a = er_get_node(a->parent_tag);
     }
@@ -2301,9 +2325,12 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         else
 #endif
         {
-            /* Translate-only fast path: shift the render position by the prop offsets. */
+            /* Translate-only fast path: shift the render position by the prop offsets, and the
+             * subtree with it (node_ancestor_scroll() measures descendants the same way). */
             px += (int)n->tp_translate_x;
             py += (int)n->tp_translate_y;
+            translate_x -= (int)n->tp_translate_x;
+            translate_y -= (int)n->tp_translate_y;
         }
     }
 
