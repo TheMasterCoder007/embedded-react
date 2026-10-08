@@ -566,7 +566,10 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
         const bool is_row = is_row_dir(L->flex_direction);
         const int16_t main_gap = is_row ? edge_or(L->column_gap, L->gap) : edge_or(L->row_gap, L->gap);
         const int16_t cross_gap = is_row ? edge_or(L->row_gap, L->gap) : edge_or(L->column_gap, L->gap);
-        const int16_t box_w = (exp_w != ER_LAYOUT_AUTO) ? exp_w : avail_w;
+        /* A node's own min/max width bounds what it is offered, so lines break where layout breaks them. */
+        const int16_t offered_w =
+            (avail_w == ER_LAYOUT_AUTO) ? ER_LAYOUT_AUTO : clamp_size(avail_w, L->min_width, L->max_width);
+        const int16_t box_w = (exp_w != ER_LAYOUT_AUTO) ? exp_w : offered_w;
         const int16_t inner_w = (box_w == ER_LAYOUT_AUTO)
                                     ? ER_LAYOUT_AUTO
                                     : (int16_t)(box_w > pad.left + pad.right ? box_w - pad.left - pad.right : 0);
