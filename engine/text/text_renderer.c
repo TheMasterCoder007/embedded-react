@@ -578,10 +578,18 @@ void er_text_render(const ERTextRenderParams* params)
         return;
 
     /* ---- Line breaking (always uses parent ls for measurement). ---- */
+    /* Faux bold draws each glyph a pixel wider, so lines break at the advance they are drawn with:
+     * breaking at the regular advance let a bold line overrun the box by a pixel per glyph. */
     LineSpan lines[TEXT_MAX_LINES];
     bool truncated = false;
-    const int n_lines = break_lines(
-        render_src, font, params->clip.w, ls, (int)params->number_of_lines, lines, TEXT_MAX_LINES, &truncated);
+    const int n_lines = break_lines(render_src,
+                                    font,
+                                    params->clip.w,
+                                    ls + (bold ? 1 : 0),
+                                    (int)params->number_of_lines,
+                                    lines,
+                                    TEXT_MAX_LINES,
+                                    &truncated);
     if (n_lines == 0)
         return;
 
@@ -862,6 +870,7 @@ int er_text_wrap(const char* text,
                  uint8_t font_size,
                  const char* font_family,
                  int16_t letter_spacing,
+                 uint8_t font_weight,
                  int max_w,
                  int max_lines,
                  int* out_width)
@@ -890,7 +899,14 @@ int er_text_wrap(const char* text,
 
     LineSpan lines[TEXT_MAX_LINES];
     bool truncated = false;
-    const int n = break_lines(src, font, max_w, (int)letter_spacing, max_lines, lines, TEXT_MAX_LINES, &truncated);
+    const int n = break_lines(src,
+                              font,
+                              max_w,
+                              (int)letter_spacing + (font_weight != 0U ? 1 : 0),
+                              max_lines,
+                              lines,
+                              TEXT_MAX_LINES,
+                              &truncated);
     for (int i = 0; i < n; i++)
         if (lines[i].px_width > *out_width)
             *out_width = lines[i].px_width;

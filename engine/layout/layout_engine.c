@@ -656,6 +656,7 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
                                      n->props.text.font_size,
                                      n->props.text.font_family,
                                      n->props.text.letter_spacing,
+                                     n->props.text.font_weight,
                                      limit,
                                      (int)n->props.text.number_of_lines,
                                      &wrapped_w);

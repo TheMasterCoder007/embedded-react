@@ -146,6 +146,7 @@ void er_text_measure_spans(const ERTextSpan* spans,
  * @param[in]  font_size       Font size in pixels (clamped to [8, 96]).
  * @param[in]  font_family     Font family name, or NULL for the built-in default.
  * @param[in]  letter_spacing  Extra pixels per glyph advance.
+ * @param[in]  font_weight     0 = normal; non-zero = faux bold, a pixel wider per glyph, as drawn.
  * @param[in]  max_w           Line width in pixels; 0 breaks only at newlines.
  * @param[in]  max_lines       Most lines kept, as numberOfLines; 0 = unlimited.
  * @param[out] out_width       Receives the widest line's width in pixels.
@@ -158,6 +159,7 @@ int er_text_wrap(const char* text,
                  uint8_t font_size,
                  const char* font_family,
                  int16_t letter_spacing,
+                 uint8_t font_weight,
                  int max_w,
                  int max_lines,
                  int* out_width);
