@@ -11,6 +11,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Fixed
+
+- A flow child with `aspectRatio` and a definite cross size (an explicit or percentage height in a row, width
+  in a column) but no main size now takes its main size from them, as in CSS and Yoga. It used to fall back to
+  its content size, so an Image sized by its height alone was as wide as its bitmap, or 0 before it loaded.
+  An auto-sized parent measures such a child the same way.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 
