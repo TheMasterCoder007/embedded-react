@@ -147,4 +147,16 @@ describe('expressions lower to the IR', () => {
       lower('Math.toString(count)', envWith(scalar('count', 'int'))),
     ).toThrow(/unsupported Math\.toString/);
   });
+
+  it("reads an onLayout rect field from the engine's rect", () => {
+    const expr = lower('e.layout.width', {...envWith(), event: 'e'});
+    expect(expr).toMatchObject({kind: 'layout', field: 'width', cType: 'int'});
+    expect(printExpr(expr)).toBe('data->layout_rect.w');
+  });
+
+  it('refuses an onLayout name that is not a rect field', () => {
+    expect(() =>
+      lower('e.layout.toString', {...envWith(), event: 'e'}),
+    ).toThrow(/unknown onLayout rect field "toString"/);
+  });
 });
