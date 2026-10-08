@@ -21,6 +21,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `maxTextSpans`). One left out still falls back to its `ER_AOT_*` variable, now read on each compile rather than
   at import, so one process can compile for several boards. A compile error names the size it was given; with
   a `screen` option it used to report the default.
+  
+### Fixed
+
+- An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
+  height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
+  offers and breaks the row into lines at that width, as Yoga does.
 
 ## [0.15.0] - 2026-09-27
 ### Changed
