@@ -24,6 +24,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   
 ### Fixed
 
+- A Flow B `Math.<name>` or `e.layout.<name>` that names a built-in object property (`Math.toString`,
+  say) fails with an `AOT:` error. It used to compile to invalid C.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.

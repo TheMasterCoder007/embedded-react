@@ -21,8 +21,9 @@
 import {traverse} from '@babel/core';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
-import {i64Lit, floatLit, cstr} from './c-syntax.mts';
+import {floatLit, cstr} from './c-syntax.mts';
 import {panGestureField} from './pan-responder.mts';
+import {toCExpr} from './c/expressions.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {
@@ -31,9 +32,23 @@ import type {
   Env,
   FormatResult,
   ListState,
+  Local,
   ScalarState,
   Scope,
 } from './types.mts';
+import type {
+  FloatMath,
+  IrArithmetic,
+  IrBoolean,
+  IrCompare,
+  IrExpr,
+  IrLocal,
+  IrNumber,
+  IrString,
+  IrTyped,
+  LayoutField,
+  WholeHelper,
+} from './ir/expressions.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -68,6 +83,13 @@ export const CHECKED_OP: Record<string, string> = {
   '*': 'app_mul',
 };
 
+/** The saturating helper each whole-number operator lowers to in the IR. */
+const CHECKED_HELPER: Record<string, WholeHelper> = {
+  '+': 'add',
+  '-': 'sub',
+  '*': 'mul',
+};
+
 /** The range of a C int. */
 const INT_MIN = -(2 ** 31);
 export const INT_MAX = 2 ** 31 - 1;
@@ -83,28 +105,36 @@ const WHOLE_MATH = new Set([
   'max',
 ]);
 
-/** The helper that rounds `a / b` for two ints the way each Math function does. */
-const INT_ROUND_DIV = new Map([
-  ['floor', 'app_floordiv'],
-  ['ceil', 'app_ceildiv'],
-  ['round', 'app_rounddiv'],
-  ['trunc', 'app_div'],
+/** The helper that rounds `a / b` for two whole numbers the way each Math function does. */
+const INT_ROUND_DIV = new Map<string, WholeHelper>([
+  ['floor', 'floordiv'],
+  ['ceil', 'ceildiv'],
+  ['round', 'rounddiv'],
+  ['trunc', 'div'],
 ]);
+
+/** The Math functions of one argument, and of two, that are worked out on floats. */
+const FLOAT_MATH_UNARY = new Set([
+  'sin',
+  'cos',
+  'tan',
+  'sqrt',
+  'abs',
+  'round',
+  'floor',
+  'ceil',
+]);
+const FLOAT_MATH_BINARY = new Set(['min', 'max', 'atan2', 'pow']);
+
+/** The fields of an onLayout rect. */
+const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/**
- * `expr` used as a C condition. JS treats a string as truthy when it is non-empty; a bare char[] in C tests
- * its ADDRESS, which is always true — and real GCC refuses that under -Werror=address.
- *
- * @param expr  The lowered expression.
- *
- * @returns C that is true exactly when JS would find `expr` truthy.
- */
-export const asCond = (expr: CExpr): string =>
-  expr.cType === 'string' ? `(${expr.code}[0] != '\\0')` : expr.code;
+// The modules that still build C from a lowered expression import asCond from here.
+export {asCond} from './c/expressions.mts';
 
 /**
  * A 64-bit timestamp met a float, which would round it.
@@ -189,31 +219,74 @@ export function staticInt(node: t.Node, env: Env): number | null {
 }
 
 /**
- * A compile-time number as C. A whole number too big for an int is a 64-bit constant (`lit`), so whole-number
+ * A compile-time number. A whole number too big for an int is a 64-bit constant (`lit`), so whole-number
  * math keeps it exact; past 64 bits it is a float.
  *
  * @param value  The number.
  *
- * @returns Its C constant.
+ * @returns Its constant.
  */
-function numConst(value: number): CExpr {
-  // floatLit refuses NaN and Infinity (a folded `0 / 0`, say), which have no C literal.
-  if (!Number.isInteger(value)) return {code: floatLit(value), cType: 'float'};
+function numConst(value: number): IrNumber {
+  // A float has no NaN or Infinity literal (a folded `0 / 0`, say); floatLit refuses them here, at the expression.
+  if (!Number.isInteger(value)) {
+    floatLit(value);
+    return {kind: 'number', value, cType: 'float'};
+  }
 
   if (value < -(2 ** 63) || value >= 2 ** 63) {
-    return {code: floatLit(value), cType: 'float'};
+    floatLit(value);
+    return {kind: 'number', value, cType: 'float'};
   }
 
   if (value < INT_MIN || value > INT_MAX) {
-    return {code: i64Lit(value), cType: 'i64', lit: true};
+    return {kind: 'number', value, cType: 'i64', lit: true};
   }
 
-  // `-2147483648` is `-` applied to 2147483648, which does not fit an int.
-  return {
-    code: value === INT_MIN ? '(-2147483647 - 1)' : String(value),
-    cType: 'int',
-  };
+  return {kind: 'number', value, cType: 'int'};
 }
+
+/**
+ * A compile-time string.
+ *
+ * @param value  The string.
+ *
+ * @returns Its constant.
+ */
+const stringConst = (value: string): IrString => ({
+  kind: 'string',
+  value,
+  cType: 'string',
+});
+
+/**
+ * A compile-time boolean, held in an int slot.
+ *
+ * @param value  The boolean.
+ *
+ * @returns Its constant.
+ */
+const boolConst = (value: boolean): IrBoolean => ({
+  kind: 'boolean',
+  value,
+  cType: 'int',
+  isBool: true,
+});
+
+/**
+ * A read of a local, typed as the local is.
+ *
+ * @param local  The local.
+ *
+ * @returns The read.
+ */
+const localRead = (local: Local): IrLocal => ({
+  kind: 'local',
+  local,
+  cType: local.cType,
+  isBool: local.isBool,
+  lit: local.lit,
+  wide: local.wide,
+});
 
 /**
  * `+ - *` or a unary `-`: the operators that can overflow a whole number.
@@ -223,7 +296,8 @@ function numConst(value: number): CExpr {
  * @returns Whether it is one of them.
  */
 const isIntArith = (node: t.Node): boolean =>
-  (node.type === 'BinaryExpression' && Boolean(CHECKED_OP[node.operator])) ||
+  (node.type === 'BinaryExpression' &&
+    Boolean(CHECKED_HELPER[node.operator])) ||
   (node.type === 'UnaryExpression' && node.operator === '-');
 
 /**
@@ -252,7 +326,7 @@ const keepsMath64 = (node: t.Node): boolean =>
  *
  * @returns Whether it is a timestamp.
  */
-export const isTime64 = (expr: CExpr): boolean =>
+export const isTime64 = (expr: IrTyped): boolean =>
   expr.cType === 'i64' && !expr.lit && !expr.wide;
 
 /**
@@ -260,14 +334,13 @@ export const isTime64 = (expr: CExpr): boolean =>
  *
  * @param operands  The operands.
  *
- * @returns The operands, with any 64-bit constant cast to float when one of them is a float.
+ * @returns The operands, with any 64-bit constant converted to float when one of them is a float.
  */
-const litPeers = (...operands: CExpr[]): CExpr[] =>
+const litPeers = (...operands: IrExpr[]): IrExpr[] =>
   operands.some(operand => operand.cType === 'float')
-    ? operands.map(operand =>
-        operand.lit
-          ? {code: `((float)${operand.code})`, cType: 'float'}
-          : operand,
+    ? operands.map(
+        (operand): IrExpr =>
+          operand.lit ? {kind: 'toFloat', operand, cType: 'float'} : operand,
       )
     : operands;
 
@@ -312,12 +385,12 @@ export function constDivisor(node: t.Node, env: Env): number {
  *
  * @returns The lowered expression.
  */
-function emitArith64(
+function lowerArith64(
   node: t.BinaryExpression,
-  left: CExpr,
-  right: CExpr,
+  left: IrExpr,
+  right: IrExpr,
   env: Env,
-): CExpr {
+): IrExpr {
   if (left.cType === 'float' || right.cType === 'float') {
     throw mix64Error();
   }
@@ -337,11 +410,14 @@ function emitArith64(
   if (node.operator === '%') {
     const staticDivisor = staticInt(node.right, env);
     // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
-    if (staticDivisor === 0) return {code: '0', cType: 'int'};
+    if (staticDivisor === 0) return numConst(0);
 
     if (isWide && staticDivisor === null) {
       return {
-        code: `app_mod64(${left.code}, ${right.code})`,
+        kind: 'helper',
+        helper: 'mod',
+        bits: 64,
+        args: [left, right],
         cType: 'i64',
         wide: true,
       };
@@ -349,18 +425,28 @@ function emitArith64(
 
     const divisor = constDivisor(node.right, env);
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
-    if (divisor === 1 || divisor === -1) return {code: '0', cType: 'int'};
+    if (divisor === 1 || divisor === -1) return numConst(0);
 
     if (Math.abs(divisor) <= 0x7fffffff || left.cType === 'int') {
-      return {code: `((int)(${left.code} % ${right.code}))`, cType: 'int'};
+      return {kind: 'narrowRemainder', left, right, cType: 'int'};
     }
 
-    return {code: `(${left.code} % ${right.code})`, cType: 'i64', wide: isWide};
+    return {
+      kind: 'arithmetic',
+      op: '%',
+      left,
+      right,
+      cType: 'i64',
+      wide: isWide,
+    };
   }
 
   // `+ - *`: the saturating 64-bit helper.
   return {
-    code: `${CHECKED_OP[node.operator]}64(${left.code}, ${right.code})`,
+    kind: 'helper',
+    helper: CHECKED_HELPER[node.operator],
+    bits: 64,
+    args: [left, right],
     cType: 'i64',
     wide: isWide,
   };
@@ -377,11 +463,11 @@ function emitArith64(
  *
  * @returns The lowered call, or null when it is not this case.
  */
-function emitTimeRoundDiv(
+function lowerTimeRoundDiv(
   fn: string,
   args: t.CallExpression['arguments'],
   env: Env,
-): CExpr | null {
+): IrExpr | null {
   const division = args[0];
   if (
     !INT_ROUND_DIV.has(fn) ||
@@ -392,8 +478,8 @@ function emitTimeRoundDiv(
     return null;
   }
 
-  const dividend = emitExprWide(division.left, env);
-  const divisor = emitExprWide(division.right, env);
+  const dividend = lowerExprWide(division.left, env);
+  const divisor = lowerExprWide(division.right, env);
   if (!isTime64(dividend) && !isTime64(divisor)) return null;
 
   if (dividend.cType === 'float' || divisor.cType === 'float') {
@@ -404,11 +490,20 @@ function emitTimeRoundDiv(
 
   // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
   if (constDivisor(division.right, env) === -1) {
-    return {code: `app_neg64(${dividend.code})`, cType: 'i64'};
+    return {
+      kind: 'helper',
+      helper: 'neg',
+      bits: 64,
+      args: [dividend],
+      cType: 'i64',
+    };
   }
 
   return {
-    code: `${INT_ROUND_DIV.get(fn)}64(${dividend.code}, ${divisor.code})`,
+    kind: 'helper',
+    helper: INT_ROUND_DIV.get(fn)!,
+    bits: 64,
+    args: [dividend, divisor],
     cType: 'i64',
   };
 }
@@ -427,11 +522,11 @@ function emitTimeRoundDiv(
  *
  * @returns The lowered call, or null when it is not this case.
  */
-function emitIntRoundDiv(
+function lowerIntRoundDiv(
   fn: string,
   args: t.CallExpression['arguments'],
   env: Env,
-): CExpr | null {
+): IrExpr | null {
   const division = args[0];
   if (
     !INT_ROUND_DIV.has(fn) ||
@@ -443,15 +538,18 @@ function emitIntRoundDiv(
   }
 
   // Divide in 64 bits beside a 64-bit value, when both operands are whole numbers and neither is a timestamp.
-  const dividend = emitExprWide(division.left, env);
-  const divisor = emitExprWide(division.right, env);
+  const dividend = lowerExprWide(division.left, env);
+  const divisor = lowerExprWide(division.right, env);
   if (env.math64 || dividend.cType === 'i64' || divisor.cType === 'i64') {
-    const isWhole = (operand: CExpr) =>
+    const isWhole = (operand: IrExpr) =>
       operand.cType === 'int' ||
       (operand.cType === 'i64' && !isTime64(operand));
     if (!isWhole(dividend) || !isWhole(divisor)) return null;
     return {
-      code: `${INT_ROUND_DIV.get(fn)}64(${dividend.code}, ${divisor.code})`,
+      kind: 'helper',
+      helper: INT_ROUND_DIV.get(fn)!,
+      bits: 64,
+      args: [dividend, divisor],
       cType: 'i64',
       wide: true,
     };
@@ -460,7 +558,10 @@ function emitIntRoundDiv(
   // Otherwise divide two ints in 32 bits; anything else is left to the float path.
   if (dividend.cType !== 'int' || divisor.cType !== 'int') return null;
   return {
-    code: `${INT_ROUND_DIV.get(fn)}(${dividend.code}, ${divisor.code})`,
+    kind: 'helper',
+    helper: INT_ROUND_DIV.get(fn)!,
+    bits: 32,
+    args: [dividend, divisor],
     cType: 'int',
   };
 }
@@ -473,7 +574,7 @@ function emitIntRoundDiv(
  *
  * @returns The lowered call.
  */
-function emitMath64(fn: string, argExprs: CExpr[]): CExpr {
+function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
   if (argExprs.some(argExpr => argExpr.cType === 'float')) {
     throw mix64Error();
   }
@@ -490,12 +591,20 @@ function emitMath64(fn: string, argExprs: CExpr[]): CExpr {
       (fn === 'floor' || fn === 'round' || fn === 'ceil' || fn === 'trunc') &&
       argExprs.length === 1
     ) {
-      return {code: argExprs[0].code, cType: 'i64', wide: isWide};
+      return {
+        kind: 'wholeRound',
+        operand: argExprs[0],
+        cType: 'i64',
+        wide: isWide,
+      };
     }
 
     if (fn === 'abs' && argExprs.length === 1) {
       return {
-        code: `app_abs64(${argExprs[0].code})`,
+        kind: 'helper',
+        helper: 'abs',
+        bits: 64,
+        args: [argExprs[0]],
         cType: 'i64',
         wide: isWide,
       };
@@ -503,7 +612,10 @@ function emitMath64(fn: string, argExprs: CExpr[]): CExpr {
 
     if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
       return {
-        code: `app_${fn}64(${argExprs[0].code}, ${argExprs[1].code})`,
+        kind: 'helper',
+        helper: fn,
+        bits: 64,
+        args: [argExprs[0], argExprs[1]],
         cType: 'i64',
         wide: isWide,
       };
@@ -518,14 +630,14 @@ function emitMath64(fn: string, argExprs: CExpr[]): CExpr {
 }
 
 /**
- * Lowers one JS expression to C (see emitExprWide, the located entry point).
+ * Lowers one JS expression to the IR (see lowerExprWide, the located entry point).
  *
  * @param node  The expression.
  * @param env  The expression environment.
  *
  * @returns The lowered expression.
  */
-function emitExprImpl(node: t.Node, env: Env): CExpr {
+function lowerExprImpl(node: t.Node, env: Env): IrExpr {
   // 64-bit int math reaches only through whole-number math (keepsMath64); other nodes are typed as usual.
   if (env.math64 && !keepsMath64(node)) {
     env = {...env, math64: false};
@@ -535,12 +647,14 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
     case 'NumericLiteral':
       return numConst(node.value);
     case 'StringLiteral':
-      return {code: cstr(node.value), cType: 'string'};
+      return stringConst(node.value);
     case 'BooleanLiteral':
-      return {code: node.value ? '1' : '0', cType: 'int', isBool: true};
+      return boolConst(node.value);
     case 'Identifier': {
       // A name resolves to a local first, then to state, then to a compile-time constant.
-      if (env.locals.has(node.name)) return env.locals.get(node.name)!;
+      if (env.locals.has(node.name)) {
+        return localRead(env.locals.get(node.name)!);
+      }
 
       if (env.state.has(node.name)) {
         const stateRecord = env.state.get(node.name)!;
@@ -551,7 +665,8 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         }
 
         return {
-          code: stateRecord.cMember,
+          kind: 'state',
+          state: stateRecord,
           cType: stateRecord.cType,
           isBool: stateRecord.isBool,
         };
@@ -562,11 +677,11 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         if (typeof constValue === 'number') return numConst(constValue);
 
         if (typeof constValue === 'string') {
-          return {code: cstr(constValue), cType: 'string'};
+          return stringConst(constValue);
         }
 
         if (typeof constValue === 'boolean') {
-          return {code: constValue ? '1' : '0', cType: 'int', isBool: true};
+          return boolConst(constValue);
         }
       }
       throw new Error(
@@ -579,7 +694,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         node.operator === '-' ? staticInt(node.argument, env) : null;
       if (staticOperand !== null) return numConst(-staticOperand);
 
-      const operand = emitExprWide(node.argument, env);
+      const operand = lowerExprWide(node.argument, env);
       if (
         (node.operator === '-' || node.operator === '+') &&
         operand.cType === 'string'
@@ -598,14 +713,22 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         const is64Bit = operand.cType === 'i64' || env.math64;
         return is64Bit
           ? {
-              code: `app_neg64(${operand.code})`,
+              kind: 'helper',
+              helper: 'neg',
+              bits: 64,
+              args: [operand],
               cType: 'i64',
               wide: !isTime64(operand),
             }
-          : {code: `app_neg(${operand.code})`, cType: 'int'};
+          : {
+              kind: 'helper',
+              helper: 'neg',
+              bits: 32,
+              args: [operand],
+              cType: 'int',
+            };
       }
 
-      // Parenthesize the operand so `-` on a negative operand emits `(-(-x))`, not `(--x)` (a decrement).
       if (
         node.operator === '-' ||
         node.operator === '+' ||
@@ -613,7 +736,9 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
       ) {
         // Only `!` yields a boolean; unary +/- coerce to a number, so `+flag` drops its boolean-ness.
         return {
-          code: `(${node.operator}(${node.operator === '!' ? asCond(operand) : operand.code}))`,
+          kind: 'unary',
+          op: node.operator,
+          operand,
           cType: node.operator === '!' ? 'int' : operand.cType,
           isBool: node.operator === '!',
         };
@@ -623,7 +748,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
     }
     case 'BinaryExpression': {
       // Fold `+ - *` over two whole-number constants as JS would, so a product past int range stays exact.
-      const leftConst = CHECKED_OP[node.operator]
+      const leftConst = CHECKED_HELPER[node.operator]
         ? staticInt(node.left, env)
         : null;
       const rightConst = leftConst === null ? null : staticInt(node.right, env);
@@ -638,20 +763,20 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
       }
 
       // Lower both operands; besides a 64-bit value, redo whole-number math in 64 bits, as JS never cuts it to 32.
-      let left = emitExprWide(node.left, env);
-      let right = emitExprWide(node.right, env);
+      let left = lowerExprWide(node.left, env);
+      let right = lowerExprWide(node.right, env);
       if (left.cType === 'i64' || right.cType === 'i64') {
         if (left.cType === 'int' && keepsMath64(node.left)) {
-          left = emitExprWide(node.left, {...env, math64: true});
+          left = lowerExprWide(node.left, {...env, math64: true});
         }
 
         if (right.cType === 'int' && keepsMath64(node.right)) {
-          right = emitExprWide(node.right, {...env, math64: true});
+          right = lowerExprWide(node.right, {...env, math64: true});
         }
       }
       [left, right] = litPeers(left, right);
 
-      // Arithmetic: refuse strings, hand 64-bit math to emitArith64, and saturate whole-number `+ - *`.
+      // Arithmetic: refuse strings, hand 64-bit math to lowerArith64, and saturate whole-number `+ - *`.
       if (ARITH.has(node.operator)) {
         if (left.cType === 'string' || right.cType === 'string') {
           // String `+` has no single C value; only a char-buffer destination can lower it, via emitFormat().
@@ -674,30 +799,33 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           isTime64(left) ||
           isTime64(right) ||
           ((left.cType === 'i64' || right.cType === 'i64') &&
-            (CHECKED_OP[node.operator] || node.operator === '%'))
+            (CHECKED_HELPER[node.operator] || node.operator === '%'))
         ) {
-          return emitArith64(node, left, right, env);
+          return lowerArith64(node, left, right, env);
         }
 
         if (node.operator === '/') {
-          return {
-            code: `((float)(${left.code}) / (float)(${right.code}))`,
-            cType: 'float',
-          };
+          return {kind: 'floatDivide', left, right, cType: 'float'};
         }
 
         const cType =
           left.cType === 'float' || right.cType === 'float' ? 'float' : 'int';
-        const checkedHelper = cType === 'int' && CHECKED_OP[node.operator];
+        const checkedHelper = cType === 'int' && CHECKED_HELPER[node.operator];
         if (checkedHelper) {
           return env.math64
             ? {
-                code: `${checkedHelper}64(${left.code}, ${right.code})`,
+                kind: 'helper',
+                helper: checkedHelper,
+                bits: 64,
+                args: [left, right],
                 cType: 'i64',
                 wide: true,
               }
             : {
-                code: `${checkedHelper}(${left.code}, ${right.code})`,
+                kind: 'helper',
+                helper: checkedHelper,
+                bits: 32,
+                args: [left, right],
                 cType: 'int',
               };
         }
@@ -706,22 +834,36 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         if (cType === 'int' && node.operator === '%') {
           const staticDivisor = staticInt(node.right, env);
           if (staticDivisor === 0 || staticDivisor === -1) {
-            return {code: '0', cType: 'int'};
+            return numConst(0);
           }
           if (staticDivisor === null) {
-            return {code: `app_mod(${left.code}, ${right.code})`, cType: 'int'};
+            return {
+              kind: 'helper',
+              helper: 'mod',
+              bits: 32,
+              args: [left, right],
+              cType: 'int',
+            };
           }
         }
 
         // C has no float `%`; fmodf matches JS's `%` exactly, zero and infinite divisors included.
         if (cType === 'float' && node.operator === '%') {
           return {
-            code: `fmodf((float)(${left.code}), (float)(${right.code}))`,
+            kind: 'floatMath',
+            fn: 'mod',
+            args: [left, right],
             cType: 'float',
           };
         }
 
-        return {code: `(${left.code} ${node.operator} ${right.code})`, cType};
+        return {
+          kind: 'arithmetic',
+          op: node.operator as IrArithmetic['op'],
+          left,
+          right,
+          cType,
+        };
       }
 
       // Comparisons: strings through strcmp, everything else as a plain C comparison yielding a boolean.
@@ -736,11 +878,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           if (left.cType !== right.cType) {
             // A strict comparison never coerces, so a string against a number is decided statically.
             if (node.operator === '===' || node.operator === '!==') {
-              return {
-                code: node.operator === '===' ? '0' : '1',
-                cType: 'int',
-                isBool: true,
-              };
+              return boolConst(node.operator === '!==');
             }
 
             throw aotError(
@@ -759,7 +897,10 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           }
 
           return {
-            code: `(strcmp(${left.code}, ${right.code}) ${cOperator} 0)`,
+            kind: 'stringEquals',
+            op: cOperator,
+            left,
+            right,
             cType: 'int',
             isBool: true,
           };
@@ -773,7 +914,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         }
 
         // `true === 1` is false in JS but true in C's int slot; fold it when the other side is surely a number.
-        const isSurelyNumber = (operandNode: t.Node, operand: CExpr) =>
+        const isSurelyNumber = (operandNode: t.Node, operand: IrExpr) =>
           !operand.isBool &&
           (operand.cType === 'float' ||
             operand.cType === 'i64' ||
@@ -789,15 +930,14 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           ((left.isBool && isSurelyNumber(node.right, right)) ||
             (right.isBool && isSurelyNumber(node.left, left)))
         ) {
-          return {
-            code: node.operator === '===' ? '0' : '1',
-            cType: 'int',
-            isBool: true,
-          };
+          return boolConst(node.operator === '!==');
         }
 
         return {
-          code: `(${left.code} ${cOperator} ${right.code})`,
+          kind: 'compare',
+          op: cOperator as IrCompare['op'],
+          left,
+          right,
           cType: 'int',
           isBool: true,
         };
@@ -815,8 +955,8 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
 
       // JS `&&`/`||` return an operand, so with a 64-bit side keep its value instead of collapsing it to 0/1.
       const [left, right] = litPeers(
-        emitExprWide(node.left, env),
-        emitExprWide(node.right, env),
+        lowerExprWide(node.left, env),
+        lowerExprWide(node.right, env),
       );
       if (left.cType === 'i64' || right.cType === 'i64') {
         if (left.cType === 'float' || right.cType === 'float') {
@@ -834,28 +974,24 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           throw bool64Error(`"${operator}"`);
         }
 
-        // Reading `left` twice is safe: expressions have no side effects, and the clock only moves in er_tick().
-        return {
-          code:
-            operator === '||'
-              ? `(${left.code} ? ${left.code} : ${right.code})`
-              : `(${left.code} ? ${right.code} : ${left.code})`,
-          cType: 'i64',
-        };
+        return {kind: 'pick', op: operator, left, right, cType: 'i64'};
       }
 
       // Otherwise the C result is the truth of the expression, a boolean only when both operands are.
       return {
-        code: `(${asCond(left)} ${operator} ${asCond(right)})`,
+        kind: 'logical',
+        op: operator,
+        left,
+        right,
         cType: 'int',
         isBool: Boolean(left.isBool && right.isBool),
       };
     }
     case 'ConditionalExpression': {
-      const test = emitExprWide(node.test, env);
+      const test = lowerExprWide(node.test, env);
       const [consequent, alternate] = litPeers(
-        emitExprWide(node.consequent, env),
-        emitExprWide(node.alternate, env),
+        lowerExprWide(node.consequent, env),
+        lowerExprWide(node.alternate, env),
       );
       // A string branch beside a numeric one is ill-typed C with no single printf spec, so refuse it here.
       if ((consequent.cType === 'string') !== (alternate.cType === 'string')) {
@@ -884,7 +1020,10 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
             ? consequent.cType
             : 'int';
       return {
-        code: `(${asCond(test)} ? ${consequent.code} : ${alternate.code})`,
+        kind: 'conditional',
+        test,
+        consequent,
+        alternate,
         cType,
         isBool: Boolean(consequent.isBool && alternate.isBool),
       };
@@ -896,11 +1035,11 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         if (typeof constValue === 'number') return numConst(constValue);
 
         if (typeof constValue === 'string') {
-          return {code: cstr(constValue), cType: 'string'};
+          return stringConst(constValue);
         }
 
         if (typeof constValue === 'boolean') {
-          return {code: constValue ? '1' : '0', cType: 'int', isBool: true};
+          return boolConst(constValue);
         }
       } catch {
         /* not static — fall through to the dynamic member forms below */
@@ -916,7 +1055,8 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         prop === 'length'
       ) {
         return {
-          code: (env.state.get(object.name) as ListState).countMember,
+          kind: 'listLength',
+          list: env.state.get(object.name) as ListState,
           cType: 'int',
         };
       }
@@ -927,15 +1067,18 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         env.locals.get(object.name)?.struct &&
         prop
       ) {
-        const field = env.locals
-          .get(object.name)!
-          .struct!.fields.find(structField => structField.key === prop);
+        const item = env.locals.get(object.name)!;
+        const field = item.struct!.fields.find(
+          structField => structField.key === prop,
+        );
         if (!field) {
           throw new Error(`AOT: unknown field "${prop}" on a list item`);
         }
 
         return {
-          code: `${env.locals.get(object.name)!.code}.${field.key}`,
+          kind: 'itemField',
+          item,
+          field,
           cType: field.kind === 'string' ? 'string' : field.kind,
         };
       }
@@ -948,7 +1091,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
       ) {
         const ref = env.refs.get(object.name)!;
         ref.used = true;
-        return {code: ref.cVar, cType: ref.cType as CType};
+        return {kind: 'ref', ref, cType: ref.cType as CType};
       }
 
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
@@ -957,7 +1100,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         env.event === object.name &&
         (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')
       ) {
-        return {code: `data->${prop}`, cType: 'int'};
+        return {kind: 'event', field: prop, cType: 'int'};
       }
 
       // `<event>.vx / .vy` — finger velocity (px/ms) at the last move; the engine measures it, a handler cannot.
@@ -966,15 +1109,15 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         env.event === object.name &&
         (prop === 'vx' || prop === 'vy')
       ) {
-        return {code: `data->${prop}`, cType: 'float'};
+        return {kind: 'event', field: prop, cType: 'float'};
       }
 
       // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
       if (object.type === 'Identifier' && env.gesture === object.name && prop) {
-        return panGestureField(prop, env.pan);
+        return {kind: 'foreign', ...panGestureField(prop, env.pan)};
       }
 
-      // `<event>.layout.x / .y / .width / .height` — the onLayout rect (EREventData.layout_rect; ERRect uses w/h).
+      // `<event>.layout.x / .y / .width / .height` — the onLayout rect.
       if (
         object.type === 'MemberExpression' &&
         !object.computed &&
@@ -982,19 +1125,12 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         env.event === object.object.name &&
         (object.property as t.Identifier).name === 'layout'
       ) {
-        const RECT: Record<string, string> = {
-          x: 'x',
-          y: 'y',
-          width: 'w',
-          height: 'h',
-        };
-        const rectField = RECT[prop as string];
-        if (!rectField) {
+        if (!LAYOUT_FIELDS.has(prop as string)) {
           throw new Error(
             `AOT: unknown onLayout rect field "${prop}" (use x / y / width / height)`,
           );
         }
-        return {code: `data->layout_rect.${rectField}`, cType: 'int'};
+        return {kind: 'layout', field: prop as LayoutField, cType: 'int'};
       }
 
       // `Math.PI` — the only Math constant.
@@ -1003,7 +1139,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         object.name === 'Math' &&
         prop === 'PI'
       ) {
-        return {code: '(float)M_PI', cType: 'float'};
+        return {kind: 'pi', cType: 'float'};
       }
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
@@ -1024,13 +1160,7 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         !env.shadowedClock?.has(node)
       ) {
         if ((callee.property as t.Identifier).name === 'now') {
-          return {
-            code:
-              callee.object.name === 'Date'
-                ? 'app_date_now()'
-                : 'app_perf_now()',
-            cType: 'i64',
-          };
+          return {kind: 'clock', clock: callee.object.name, cType: 'i64'};
         }
         if (callee.object.name === 'Date') {
           throw dateObjectError();
@@ -1045,23 +1175,23 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         throw dateObjectError();
       }
 
-      // Math.*: exact integer division first, then 64-bit math, then whole-int abs/min/max/trunc, then libm.
+      // Math.*: exact integer division first, then 64-bit math, then whole-int abs/min/max/trunc, then floats.
       if (
         callee.type === 'MemberExpression' &&
         (callee.object as t.Identifier).name === 'Math'
       ) {
         const fn = (callee.property as t.Identifier).name;
-        const timeDiv = emitTimeRoundDiv(fn, node.arguments, env);
+        const timeDiv = lowerTimeRoundDiv(fn, node.arguments, env);
         if (timeDiv) return timeDiv;
 
-        const intDiv = emitIntRoundDiv(fn, node.arguments, env);
+        const intDiv = lowerIntRoundDiv(fn, node.arguments, env);
         if (intDiv) return intDiv;
 
         const argExprs = litPeers(
-          ...node.arguments.map(argNode => emitExprWide(argNode, env)),
+          ...node.arguments.map(argNode => lowerExprWide(argNode, env)),
         );
         if (argExprs.some(argExpr => argExpr.cType === 'i64')) {
-          return emitMath64(fn, argExprs);
+          return lowerMath64(fn, argExprs);
         }
 
         // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.
@@ -1072,16 +1202,28 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
           if (fn === 'abs' && argExprs.length === 1) {
             return env.math64
               ? {
-                  code: `app_abs64(${argExprs[0].code})`,
+                  kind: 'helper',
+                  helper: 'abs',
+                  bits: 64,
+                  args: [argExprs[0]],
                   cType: 'i64',
                   wide: true,
                 }
-              : {code: `app_abs(${argExprs[0].code})`, cType: 'int'};
+              : {
+                  kind: 'helper',
+                  helper: 'abs',
+                  bits: 32,
+                  args: [argExprs[0]],
+                  cType: 'int',
+                };
           }
 
           if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
             return {
-              code: `app_${fn}(${argExprs[0].code}, ${argExprs[1].code})`,
+              kind: 'helper',
+              helper: fn,
+              bits: 32,
+              args: [argExprs[0], argExprs[1]],
               cType: 'int',
             };
           }
@@ -1090,45 +1232,35 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
         // Math.trunc stays an int: an int as is, a float via app_f2i (toward zero, NaN as 0, saturating).
         if (fn === 'trunc' && argExprs.length === 1) {
           return argExprs[0].cType === 'int'
-            ? {code: argExprs[0].code, cType: 'int'}
-            : {code: `app_f2i((float)(${argExprs[0].code}))`, cType: 'int'};
+            ? {kind: 'wholeRound', operand: argExprs[0], cType: 'int'}
+            : {kind: 'trunc', operand: argExprs[0], cType: 'int'};
         }
 
-        const UNARY: Record<string, string> = {
-          sin: 'sinf',
-          cos: 'cosf',
-          tan: 'tanf',
-          sqrt: 'sqrtf',
-          abs: 'fabsf',
-          round: 'app_roundf',
-          floor: 'floorf',
-          ceil: 'ceilf',
-        };
-
-        if (UNARY[fn] && argExprs.length === 1) {
+        if (FLOAT_MATH_UNARY.has(fn) && argExprs.length === 1) {
           // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
           const roundsToWhole =
             fn === 'round' || fn === 'floor' || fn === 'ceil';
           if (roundsToWhole && argExprs[0].cType === 'int') {
-            return {code: argExprs[0].code, cType: 'int'};
+            return {kind: 'wholeRound', operand: argExprs[0], cType: 'int'};
           }
 
-          const libmCall = `${UNARY[fn]}((float)(${argExprs[0].code}))`;
+          const floatCall: IrExpr = {
+            kind: 'floatMath',
+            fn: fn as FloatMath,
+            args: [argExprs[0]],
+            cType: 'float',
+          };
           // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
           return roundsToWhole
-            ? {code: `app_f2i(${libmCall})`, cType: 'int'}
-            : {code: libmCall, cType: 'float'};
+            ? {kind: 'toInt', operand: floatCall, cType: 'int'}
+            : floatCall;
         }
 
-        const BINARY: Record<string, string> = {
-          min: 'fminf',
-          max: 'fmaxf',
-          atan2: 'atan2f',
-          pow: 'powf',
-        };
-        if (BINARY[fn] && argExprs.length === 2) {
+        if (FLOAT_MATH_BINARY.has(fn) && argExprs.length === 2) {
           return {
-            code: `${BINARY[fn]}((float)(${argExprs[0].code}), (float)(${argExprs[1].code}))`,
+            kind: 'floatMath',
+            fn: fn as FloatMath,
+            args: [argExprs[0], argExprs[1]],
             cType: 'float',
           };
         }
@@ -1159,8 +1291,19 @@ function emitExprImpl(node: t.Node, env: Env): CExpr {
   );
 }
 
-/** emitExpr for the destinations that can hold a 64-bit timestamp: state, refs, locals, text, conditions. */
-export const emitExprWide = withLoc(emitExprImpl);
+/** Lowers one JS expression to the IR, with the expression's location attached to any AOT error it throws. */
+export const lowerExprWide = withLoc(lowerExprImpl);
+
+/**
+ * emitExpr for the destinations that can hold a 64-bit timestamp: state, refs, locals, text, conditions.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ *
+ * @returns The expression as C.
+ */
+export const emitExprWide = (node: t.Node, env: Env): CExpr =>
+  toCExpr(lowerExprWide(node, env));
 
 /**
  * Lowers an expression for a destination that holds an int, a float, or a string. C would narrow a 64-bit

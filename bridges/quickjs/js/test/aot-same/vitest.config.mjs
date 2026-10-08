@@ -29,7 +29,8 @@ export default {
     include: ['aot/**/__tests__/**/*.unit.test.{js,mjs,mts}'],
     environment: 'node',
     pool: 'forks',
-    poolOptions: {forks: {singleFork: true}},
+    maxWorkers: 1,
+    isolate: false,
   },
   resolve: {
     alias: [
@@ -46,5 +47,5 @@ export default {
       },
     ],
   },
-  esbuild: {jsx: 'automatic'},
+  oxc: {jsx: {runtime: 'automatic'}},
 };

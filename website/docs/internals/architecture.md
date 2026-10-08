@@ -88,8 +88,10 @@ module-level constants (including the `screen` size), and emits `app.gen.c`: nod
 `useState` state machine, handlers as C functions, animations as engine calls, `PanResponder` configs
 as responder registrations. It rejects anything it cannot lower, by message, at build time.
 `compile.mts` is the entry point and CLI; each stage is a TypeScript module under `compiler/`, with
-one file per typed element in `compiler/elements/`. `screenshot-smoke.mjs` (`npm run aot:smoke`)
-compiles each demo, builds the AOT desktop host, and checks that one rendered frame has content.
+one file per typed element in `compiler/elements/`. The stages are moving to a typed intermediate
+representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions lower to it so
+far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
+checks that one rendered frame has content.
 
 **The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty
 tracking, render orchestration, hit-testing), `layout/` (the Yoga-compatible solver), `rendering/`
