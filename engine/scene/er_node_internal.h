@@ -415,6 +415,7 @@ struct ERNode
                                        answers from props that may have changed since, which is how
                                        clearing a shadow used to erase only the box (issue #140). */
     bool has_last_paint;          /**< Whether last_paint_rect holds a valid prior-frame rect. */
+    bool last_paint_empty;        /**< The last paint was of a container that paints nothing itself. */
     bool last_paint_untransformed; /**< The last paint of this TRANSFORMED node degraded to its raw,
                                         untransformed box: the scratch capture could not be started, so
                                         last_paint_rect holds that box (knob reach and shadow bleed included
@@ -431,6 +432,9 @@ struct ERNode
     float scroll_vel_y;            /**< Momentum velocity Y in px/ms (positive = content moving down). */
     int16_t scroll_content_w;      /**< Bounding width of all children; computed after layout (ScrollView only). */
     int16_t scroll_content_h;      /**< Bounding height of all children; computed after layout (ScrollView only). */
+    int16_t scroll_painted_x; /**< Whole-pixel offset the viewport's pixels were last painted at (ScrollView only). */
+    int16_t scroll_painted_y; /**< @see scroll_painted_x */
+    bool scroll_pending;      /**< Offset moved since the last commit; the commit moves or repaints the viewport. */
     /* Transform props: raw values copied from ERProps */
     float tp_translate_x; /**< X translation in pixels. */
     float tp_translate_y; /**< Y translation in pixels. */

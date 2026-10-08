@@ -188,3 +188,7 @@ add_test(NAME rendering_text_padding COMMAND test_text_padding)
 add_executable(test_content_padding test_content_padding.c)
 target_link_libraries(test_content_padding PRIVATE embedded-react)
 add_test(NAME rendering_content_padding COMMAND test_content_padding)
+
+add_executable(test_paint_free_container test_paint_free_container.c)
+target_link_libraries(test_paint_free_container PRIVATE embedded-react)
+add_test(NAME rendering_paint_free_container COMMAND test_paint_free_container)
