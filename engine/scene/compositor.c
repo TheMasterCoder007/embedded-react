@@ -3487,6 +3487,15 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.image.image_name[ER_IMAGE_NAME_MAX] = '\0';
             node->props.image.resize_mode = props->resize_mode;
             node->props.image.tint_color = props->tint_color;
+            /* Per-corner radius, falling back to the uniform one, as a View's background resolves it. */
+            node->props.image.radius_tl =
+                props->border_top_left_radius > 0 ? props->border_top_left_radius : props->border_radius;
+            node->props.image.radius_tr =
+                props->border_top_right_radius > 0 ? props->border_top_right_radius : props->border_radius;
+            node->props.image.radius_br =
+                props->border_bottom_right_radius > 0 ? props->border_bottom_right_radius : props->border_radius;
+            node->props.image.radius_bl =
+                props->border_bottom_left_radius > 0 ? props->border_bottom_left_radius : props->border_radius;
             break;
         case ER_NODE_ACTIVITY_INDICATOR:
         {

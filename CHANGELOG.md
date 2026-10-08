@@ -12,6 +12,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- An `Image` with `borderRadius` (or per-corner radii) clips its bitmap to the rounded shape, with the same
+  anti-aliased edge as a rounded background. It used to keep square corners, including under
+  `ImageBackground`'s `imageStyle`.
+
 - A repaint that touches part of a scaled or tinted image (or of an RGB565 image drawn without a
   `copy_rect_fmt` backend) converts only the repainted part instead of the whole image. A small repaint over
   a 1880×880 bilinear-scaled image took about 20 ms on a desktop host, and now takes under 1 ms.

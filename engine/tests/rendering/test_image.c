@@ -1001,5 +1001,66 @@ int main(void)
         }
     }
 
+    /* -----------------------------------------------------------------------
+     * borderRadius clips the bitmap to the rounded silhouette, at 1:1 and scaled:
+     * the corner pixel stays empty, the edges and centre are the image, and the
+     * anti-aliased fringe is partly covered. Radius 0 leaves the corner painted.
+     * ---------------------------------------------------------------------- */
+    {
+        static uint32_t img16[16 * 16];
+        for (int i = 0; i < 16 * 16; i++)
+            img16[i] = 0xFF00FFFF;
+        er_image_load("test16", img16, 16, 16);
+        er_image_load("test16of4", img16, 4, 4); /* the same cyan, scaled up 4x */
+        const char* const names[] = {"test16", "test16of4"};
+        for (int k = 0; k < 2; k++)
+        {
+            for (int radius = 0; radius <= 6; radius += 6)
+            {
+                reset(&tc);
+                er_reset();
+                ERNode* root = er_node_create(ER_NODE_VIEW);
+                ERProps rp = props_default();
+                rp.width = FB_W;
+                rp.height = FB_H;
+                er_node_set_props(root, &rp);
+                ERNode* img_node = er_node_create(ER_NODE_IMAGE);
+                ERProps ip = props_default();
+                ip.width = 16;
+                ip.height = 16;
+                ip.border_radius = (int16_t)radius;
+                strncpy(ip.image_name, names[k], ER_IMAGE_NAME_MAX);
+                ip.resize_mode = ER_RESIZE_COVER;
+                er_node_set_props(img_node, &ip);
+                er_tree_append_child(root, img_node);
+                er_tree_set_root(root);
+                er_commit();
+
+                if (px(&tc, 8, 8) != 0xFF00FFFF || px(&tc, 8, 0) != 0xFF00FFFF || px(&tc, 0, 8) != 0xFF00FFFF
+                    || px(&tc, 15, 8) != 0xFF00FFFF || px(&tc, 8, 15) != 0xFF00FFFF)
+                    return fail("rounded image: centre or edge midpoints are not the image");
+                if (radius == 0 && px(&tc, 0, 0) != 0xFF00FFFF)
+                    return fail("square image: corner not painted");
+                if (radius > 0
+                    && (px(&tc, 0, 0) != 0 || px(&tc, 15, 0) != 0 || px(&tc, 0, 15) != 0 || px(&tc, 15, 15) != 0))
+                    return fail(k ? "rounded image: scaled corner painted" : "rounded image: 1:1 corner painted");
+                if (radius > 0)
+                {
+                    /* Some pixel on the arc is partly covered: the fringe is anti-aliased. */
+                    bool partial = false;
+                    for (int y = 0; y < radius && !partial; y++)
+                        for (int x = 0; x < radius && !partial; x++)
+                            partial = px(&tc, x, y) != 0 && px(&tc, x, y) != 0xFF00FFFF;
+                    if (!partial)
+                        return fail("rounded image: no anti-aliased fringe pixel at the corner");
+                }
+
+                er_tree_remove_child(root, img_node);
+                er_node_destroy(img_node);
+                er_node_destroy(root);
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }

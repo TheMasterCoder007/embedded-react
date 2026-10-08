@@ -18,6 +18,7 @@
 #include "er_limits.h"
 #include "image_registry.h"
 #include "renderer_internal.h"
+#include "rrect.h"
 #include <math.h>
 #include <stddef.h>
 
@@ -29,6 +30,18 @@
 /* One assembled row per render worker: cheap enough to duplicate, and it keeps image
  * blits parallel-safe (see the multi-core render fork in compositor.c). */
 static uint32_t s_row_buf_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+
+/**
+ * @brief A rounded-rect silhouette the image is clipped to: the destination box and its clamped radii.
+ */
+typedef struct
+{
+    int x, y, w, h;
+    int r_tl, r_tr, r_br, r_bl;
+} ImageMask;
+
+/** The calling worker's silhouette while er_image_render() draws a rounded image; NULL otherwise. */
+static const ImageMask* s_mask[ERUI_RENDER_WORKERS];
 
 /** @brief The calling worker's image row buffer. */
 static inline uint32_t* irow(void)
@@ -196,6 +209,97 @@ static bool visible_part(int x, int y, int w, int h, int* x0, int* y0, int* x1, 
 }
 
 /**
+ * @brief Blits one row of image pixels clipped to the rounded silhouette, as a rounded background is.
+ *
+ * The covered span blits as it is; the anti-aliased fringe pixels beside it are faded by the arc's
+ * coverage (the walk er_rrect_fill_corners and the gradient mask make), so an image corner has the
+ * shape a background with the same radius would have.
+ *
+ * @param[in] m       Silhouette.
+ * @param[in] row     Premultiplied pixels; row[i] lands on column dst_x + i.
+ * @param[in] dst_x   Destination column of row[0].
+ * @param[in] y       Destination row.
+ * @param[in] n       Pixels in the row.
+ * @param[in] opaque  The pixels are all opaque: the span replaces the destination.
+ */
+static void mask_row(const ImageMask* m, const uint32_t* row, int dst_x, int y, int n, bool opaque)
+{
+    ERRRectRow rr;
+    er_rrect_row(m->w, m->h, m->r_tl, m->r_tr, m->r_br, m->r_bl, y - m->y, &rr);
+    const int s0 = (m->x + rr.x0 > dst_x) ? m->x + rr.x0 : dst_x;
+    const int s1 = (m->x + rr.x1 < dst_x + n) ? m->x + rr.x1 : dst_x + n;
+    if (s1 > s0)
+    {
+        if (opaque)
+            er_blit_copy(&row[s0 - dst_x], (s1 - s0) * (int)sizeof(uint32_t), s0, y, s1 - s0, 1);
+        else
+            er_blit_blend(&row[s0 - dst_x], (s1 - s0) * (int)sizeof(uint32_t), 255, s0, y, s1 - s0, 1);
+    }
+#if ERUI_BORDER_AA
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
+    {
+        const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
+        if (cov <= 0.0f)
+            break;
+        const int ax = m->x + rr.x0 - 1 - k;
+        if (cov < 1.0f && ax >= dst_x && ax < dst_x + n)
+        {
+            const uint32_t p = er_px_scale_premul(row[ax - dst_x], (uint32_t)(cov * 255.0f + 0.5f));
+            er_blit_blend(&p, (int)sizeof(uint32_t), 255, ax, y, 1, 1);
+        }
+    }
+    for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
+    {
+        const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
+        if (cov <= 0.0f)
+            break;
+        const int ax = m->x + rr.x1 + k;
+        if (cov < 1.0f && ax >= dst_x && ax < dst_x + n && ax < m->x + m->w)
+        {
+            const uint32_t p = er_px_scale_premul(row[ax - dst_x], (uint32_t)(cov * 255.0f + 0.5f));
+            er_blit_blend(&p, (int)sizeof(uint32_t), 255, ax, y, 1, 1);
+        }
+    }
+#endif
+}
+
+/**
+ * @brief Blits rows of image pixels clipped to the rounded silhouette: the rows clear of the corner
+ * arcs as one rectangle, the rows the arcs cut into one by one.
+ *
+ * @param[in] m       Silhouette.
+ * @param[in] rows    First row's pixels; rows[i] lands on column dst_x + i.
+ * @param[in] stride  Row stride in pixels.
+ * @param[in] dst_x   Destination column of each row's first pixel.
+ * @param[in] dst_y   Destination row of the first row.
+ * @param[in] n       Pixels per row.
+ * @param[in] count   Rows.
+ * @param[in] opaque  The pixels are all opaque.
+ */
+static void
+mask_rows(const ImageMask* m, const uint32_t* rows, int stride, int dst_x, int dst_y, int n, int count, bool opaque)
+{
+    const int top = m->y + (m->r_tl > m->r_tr ? m->r_tl : m->r_tr);
+    const int bottom = m->y + m->h - (m->r_bl > m->r_br ? m->r_bl : m->r_br);
+    for (int i = 0; i < count;)
+    {
+        const int y = dst_y + i;
+        if (y < top || y >= bottom)
+        {
+            mask_row(m, rows + (size_t)i * (size_t)stride, dst_x, y, n, opaque);
+            i++;
+            continue;
+        }
+        const int run = ((bottom - y) < (count - i)) ? (bottom - y) : (count - i);
+        if (opaque)
+            er_blit_copy(rows + (size_t)i * (size_t)stride, stride * (int)sizeof(uint32_t), dst_x, y, n, run);
+        else
+            er_blit_blend(rows + (size_t)i * (size_t)stride, stride * (int)sizeof(uint32_t), 255, dst_x, y, n, run);
+        i += run;
+    }
+}
+
+/**
  * @brief Renders a source crop of an image to a destination rectangle.
  *
  * Uses bilinear sampling when ERUI_BILINEAR_SCALE is non-zero, otherwise nearest-neighbor.
@@ -251,6 +355,21 @@ static void render_region(const ImageEntry* img,
              * backend-side); otherwise it degrades to the classic er_blit_copy. */
             const int img_stride = img->w * (int)sizeof(uint32_t);
             const uint32_t* rows = (const uint32_t*)img->buf + (size_t)src_y * (size_t)img->w + (size_t)src_x;
+            const ImageMask* const m = s_mask[er_render_worker_id()];
+            if (m)
+            {
+                int vx0, vy0, vx1, vy1;
+                if (visible_part(dst_x, dst_y, dst_w, dst_h, &vx0, &vy0, &vx1, &vy1))
+                    mask_rows(m,
+                              rows + (size_t)vy0 * (size_t)img->w + (size_t)vx0,
+                              img->w,
+                              dst_x + vx0,
+                              dst_y + vy0,
+                              vx1 - vx0,
+                              vy1 - vy0,
+                              img->opaque);
+                return;
+            }
             if (img->opaque)
                 er_blit_copy_fmt(rows, img_stride, ER_IMG_ARGB8888, dst_x, dst_y, dst_w, dst_h);
             else
@@ -264,7 +383,8 @@ static void render_region(const ImageEntry* img,
          * that is ~1M conversions plus one backend call per scanline. */
         const int stride565 = img->w * (int)sizeof(uint16_t);
         const uint16_t* rows565 = (const uint16_t*)img->buf + (size_t)src_y * (size_t)img->w + (size_t)src_x;
-        if (er_blit_copy_fmt(rows565, stride565, ER_IMG_RGB565, dst_x, dst_y, dst_w, dst_h))
+        const ImageMask* const m565 = s_mask[er_render_worker_id()];
+        if (!m565 && er_blit_copy_fmt(rows565, stride565, ER_IMG_RGB565, dst_x, dst_y, dst_w, dst_h))
             return;
 
         /* CPU fallback (no copy_rect_fmt backend, scratch capture, or inherited alpha): expand each
@@ -282,7 +402,10 @@ static void render_region(const ImageEntry* img,
                 const int cw = (vx1 - cx) < ERUI_MAX_IMG_ROW_PIXELS ? (vx1 - cx) : ERUI_MAX_IMG_ROW_PIXELS;
                 for (int dx = 0; dx < cw; dx++)
                     irow()[dx] = rgb565_to_argb(srow[cx + dx]);
-                er_blit_copy(irow(), cw * (int)sizeof(uint32_t), dst_x + cx, dst_y + dy, cw, 1);
+                if (m565)
+                    mask_row(m565, irow(), dst_x + cx, dst_y + dy, cw, true);
+                else
+                    er_blit_copy(irow(), cw * (int)sizeof(uint32_t), dst_x + cx, dst_y + dy, cw, 1);
             }
         }
         return;
@@ -315,7 +438,10 @@ static void render_region(const ImageEntry* img,
             irow()[dx - vx0] = p;
         }
         /* Tint preserves alpha, so an opaque image stays opaque through every branch above. */
-        if (img->opaque)
+        const ImageMask* const m = s_mask[er_render_worker_id()];
+        if (m)
+            mask_row(m, irow(), dst_x + vx0, dst_y + dy, vis_w, img->opaque);
+        else if (img->opaque)
             er_blit_copy(irow(), vis_w * (int)sizeof(uint32_t), dst_x + vx0, dst_y + dy, vis_w, 1);
         else
             er_blit_blend(irow(), vis_w * (int)sizeof(uint32_t), 255, dst_x + vx0, dst_y + dy, vis_w, 1);
@@ -350,6 +476,12 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
     const uint8_t tr = has_tint ? (uint8_t)((tint >> 16) & 0xFFu) : 0u;
     const uint8_t tg = has_tint ? (uint8_t)((tint >> 8) & 0xFFu) : 0u;
     const uint8_t tb = has_tint ? (uint8_t)(tint & 0xFFu) : 0u;
+
+    /* A rounded image is clipped to its box's silhouette; a square one takes the unmasked paths. */
+    ImageMask mask = {x, y, w, h, props->radius_tl, props->radius_tr, props->radius_br, props->radius_bl};
+    er_rrect_clamp_radii(w, h, &mask.r_tl, &mask.r_tr, &mask.r_br, &mask.r_bl);
+    const int worker = er_render_worker_id();
+    s_mask[worker] = (mask.r_tl > 0 || mask.r_tr > 0 || mask.r_br > 0 || mask.r_bl > 0) ? &mask : NULL;
 
     switch ((ERResizeMode)props->resize_mode)
     {
@@ -434,4 +566,5 @@ void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
             break;
         }
     }
+    s_mask[worker] = NULL;
 }
