@@ -245,6 +245,90 @@ int main(void)
         return fail("two-line height is not close to twice the one-line height");
 
     /* -----------------------------------------------------------------------
+     * Test: a Text is as tall as the lines it breaks into at the width it gets.
+     * Column 120 wide: a short string takes one line, the long one wraps with
+     * no numberOfLines (unlimited) and stops at numberOfLines = 3 when it would
+     * break into more. In a 300-wide row, a flex: 1 Text beside a 200-wide box
+     * wraps at the 100 px it gets, and the row grows to hold it.
+     * -----------------------------------------------------------------------*/
+    {
+        er_reset();
+        ERNode* col = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = TEXT_BOX_W;
+        cp.flex_direction = ER_FLEX_COL;
+        er_node_set_props(col, &cp);
+
+        ERRect r_short = {-1, -1, -1, -1}, r_free = r_short, r_capped = r_short, r_row = r_short, r_flex = r_short;
+        ERNode* t_short = er_node_create(ER_NODE_TEXT);
+        ERProps sp = props_default();
+        sp.font_size = 14;
+        strncpy(sp.text, "Save", ER_TEXT_MAX);
+        er_node_set_props(t_short, &sp);
+        er_event_set(t_short, ER_EVENT_LAYOUT, on_layout_rect, &r_short);
+
+        ERNode* t_free = er_node_create(ER_NODE_TEXT);
+        ERProps fp = props_default();
+        fp.font_size = 14;
+        strncpy(fp.text, k_long, ER_TEXT_MAX);
+        er_node_set_props(t_free, &fp);
+        er_event_set(t_free, ER_EVENT_LAYOUT, on_layout_rect, &r_free);
+
+        ERNode* t_capped = er_node_create(ER_NODE_TEXT);
+        ERProps kp = fp;
+        kp.number_of_lines = 3;
+        er_node_set_props(t_capped, &kp);
+        er_event_set(t_capped, ER_EVENT_LAYOUT, on_layout_rect, &r_capped);
+
+        ERNode* row = er_node_create(ER_NODE_VIEW);
+        ERProps rwp = props_default();
+        rwp.width = 300;
+        rwp.flex_direction = ER_FLEX_ROW;
+        rwp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(row, &rwp);
+        er_event_set(row, ER_EVENT_LAYOUT, on_layout_rect, &r_row);
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        ERProps bxp = props_default();
+        bxp.width = 200;
+        bxp.height = 10;
+        er_node_set_props(box, &bxp);
+        ERNode* t_flex = er_node_create(ER_NODE_TEXT);
+        ERProps xp = fp;
+        xp.flex_grow = 1;
+        xp.flex_shrink = 1;
+        xp.flex_basis = 0;
+        er_node_set_props(t_flex, &xp);
+        er_event_set(t_flex, ER_EVENT_LAYOUT, on_layout_rect, &r_flex);
+
+        er_tree_append_child(col, t_short);
+        er_tree_append_child(col, t_free);
+        er_tree_append_child(col, t_capped);
+        ERNode* page = er_node_create(ER_NODE_VIEW);
+        ERProps pgp = props_default();
+        pgp.flex_direction = ER_FLEX_COL;
+        pgp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(page, &pgp);
+        er_tree_append_child(row, box);
+        er_tree_append_child(row, t_flex);
+        er_tree_append_child(page, col);
+        er_tree_append_child(page, row);
+        er_tree_set_root(page);
+        er_commit();
+
+        const int line = r_short.h;
+        if (line <= 0)
+            return fail("wrap: one-line text has no height");
+        if (r_free.h < 4 * line || r_free.h % line != 0)
+            return fail("wrap: unlimited text is not a whole number of at least four lines at 120 px");
+        if (r_capped.h != 3 * line)
+            return fail("wrap: numberOfLines = 3 does not cap the height at three lines");
+        if (r_flex.w != 100 || r_flex.h <= 2 * line)
+            return fail("wrap: a flex: 1 text in a row does not wrap at the width it gets");
+        if (r_row.h != r_flex.h)
+            return fail("wrap: the row does not grow to hold its wrapped text");
+    }
+
+    /* -----------------------------------------------------------------------
      * Test: aspectRatio — child derives height from explicit width.
      * Container: row 200×200.  Child: width=100, aspect_ratio=2.0 → height=50.
      * -----------------------------------------------------------------------*/
