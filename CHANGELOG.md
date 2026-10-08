@@ -11,6 +11,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Fixed
+
+- A translated node inside a clipping container no longer leaves a trail when it moves after a repaint in
+  which an opaque node covered it. It had recorded its untranslated box as where it last painted, so the next
+  move erased that box instead of the pixels it had painted.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 

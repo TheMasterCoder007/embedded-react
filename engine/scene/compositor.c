@@ -2247,8 +2247,16 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     const bool complex_xf = er_node_has_complex_transform(n);
 #endif
     /* An occluded node never captures a transform source: the scratch render would be thrown away,
-     * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
-    if (n->has_transform && !occluded)
+     * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate).
+     * A translate is still applied: it is arithmetic, and it is where the node and its subtree record
+     * last_paint_rect. Burying is not as transform-free as that gate suggests, since a clipping
+     * container leaves its children's transforms out of its own flag; an occluded translated node
+     * that recorded its untranslated box made the next move erase that box and leave a trail. */
+#if ERUI_TRANSFORMS_FULL
+    if (n->has_transform && !(occluded && complex_xf))
+#else
+    if (n->has_transform)
+#endif
     {
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
         if (complex_xf && er_transform_is_3d(n))
