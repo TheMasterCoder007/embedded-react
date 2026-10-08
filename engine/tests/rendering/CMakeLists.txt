@@ -26,6 +26,11 @@ target_link_libraries(test_anim_transform_damage PRIVATE embedded-react)
 target_include_directories(test_anim_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_anim_transform_damage COMMAND test_anim_transform_damage)
 
+add_executable(test_occluded_translate test_occluded_translate.c)
+target_link_libraries(test_occluded_translate PRIVATE embedded-react)
+target_include_directories(test_occluded_translate PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_occluded_translate COMMAND test_occluded_translate)
+
 add_executable(test_parallel test_parallel.c)
 target_link_libraries(test_parallel PRIVATE embedded-react Threads::Threads)
 # test_parallel needs engine/core for renderer_internal.h (er_parallel_for / worker contexts).
