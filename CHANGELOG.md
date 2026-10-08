@@ -11,6 +11,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Fixed
+
+- Two damaged areas that overlap or touch are merged into their bounding box only when that box is mostly
+  their own pixels. A full-width strip and a small rect overlapping one end of it (a scroll's exposed strip
+  and a card animating over it) used to repaint the full width times both heights; the small rect now adds
+  only its part outside the strip.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 
