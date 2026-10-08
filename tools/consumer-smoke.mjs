@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
-// consumer-smoke.mjs — pack the npm package, install it into a throwaway project, and run the consumer
-// build commands. This guards the bugs the repo's own tests can't see, because they only surface once the
-// package is PACKED and INSTALLED elsewhere: a file missing from the `files` whitelist, ESM-vs-CJS module
-// resolution, and the QuickJS bytecode compile through the prebuilt wasm. (Every consumer regression this
-// project hit — persist-transform recursion, the missing `.cjs`, the un-terminated bytecode buffer — would
-// have been caught here.)
-//
-//   node tools/consumer-smoke.mjs
-//
-// Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
-// tools/web-sim/build.mjs); the AOT path (app.gen.c) and the TypeScript-template typecheck always run.
-// Exits non-zero on any failure.
+/*
+ * consumer-smoke.mjs — pack the npm package, install it into a throwaway project, and run the consumer
+ * build commands. This guards the bugs the repo's own tests can't see, because they only surface once the
+ * package is PACKED and INSTALLED elsewhere: a file missing from the `files` whitelist, ESM-vs-CJS module
+ * resolution, and the QuickJS bytecode compile through the prebuilt wasm. (Every consumer regression this
+ * project hit — persist-transform recursion, the missing `.cjs`, the un-terminated bytecode buffer — would
+ * have been caught here.)
+ *
+ *   node tools/consumer-smoke.mjs
+ *
+ * Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
+ * tools/web-sim/build.mjs); the AOT path (app.gen.c) and the TypeScript-template typecheck always run.
+ * Packs the staged package (tools/stage-npm-package.mjs), so it needs `npm ci` in bridges/quickjs/js.
+ * Exits non-zero on any failure.
+ */
 
 import {execFileSync} from 'node:child_process';
 import {
@@ -38,6 +41,7 @@ import {
 import {tmpdir} from 'node:os';
 import {resolve, dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {stageNpmPackage} from './stage-npm-package.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const JS = resolve(ROOT, 'bridges/quickjs/js');
@@ -60,10 +64,12 @@ const ok = (cond, msg) => {
   if (!cond) process.exitCode = 1;
 };
 
-// 1. Pack exactly what would publish (includes the staged sim/ wasm, if built).
+// 1. Pack exactly what would publish: the staged package, TypeScript compiled to JavaScript (includes the
+//    staged sim/ wasm, if built).
 const tgz = resolve(
   JS,
-  JSON.parse(capture('npm', ['pack', '--json'], JS))[0].filename,
+  JSON.parse(capture('npm', ['pack', '--json', stageNpmPackage()], JS))[0]
+    .filename,
 );
 const hasWasm = existsSync(resolve(JS, 'sim/embedded-react.wasm'));
 console.log(`packed ${tgz}\nprebuilt wasm present: ${hasWasm}\n`);

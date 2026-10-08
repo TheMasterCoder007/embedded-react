@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {compileSource} from '../compile.mjs';
+import {compileSource} from '../compile.mts';
 
 // Date.now() / performance.now() in Flow B: the engine clock as 64-bit whole milliseconds, the same surface
 // Flow A's lite profile gives. These assert on the generated C; cc-compile.smoke compiles it, and

@@ -63,8 +63,10 @@
   "scripts": {
     "build": "node build.mjs",
     "pack": "node pack-container.mjs",
-    "aot": "node aot/compile.mjs",
+    "aot": "node aot/compile.mts",
     "aot:smoke": "node aot/screenshot-smoke.mjs",
+    "aot:baseline": "node test/aot-same/aot-same.mjs baseline",
+    "aot:same": "node test/aot-same/aot-same.mjs check",
     "parity": "node parity.mjs",
     "version:sync": "node ../../../tools/sync-version.mjs",
     "version:check": "node ../../../tools/sync-version.mjs --check",
@@ -78,9 +80,9 @@
     "test:runtime": "node test/runtime/run.mjs",
     "test:bytecode": "node test/runtime/run.mjs --bytecode",
     "test:split": "node test/runtime/split-roundtrip.mjs",
-    "typecheck": "tsc -p tsconfig.types.json",
-    "format": "cd ../../.. && prettier --write \"**/*.{js,jsx,mjs,cjs}\"",
-    "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs}\""
+    "typecheck": "tsc -p tsconfig.types.json && tsc -p tsconfig.aot.json",
+    "format": "cd ../../.. && prettier --write \"**/*.{js,jsx,mjs,cjs,mts}\"",
+    "format:check": "cd ../../.. && prettier --check \"**/*.{js,jsx,mjs,cjs,mts}\""
   },
   "dependencies": {
     "@babel/core": "^7.29.7",
@@ -94,6 +96,10 @@
     "svgson": "^5.3.1"
   },
   "devDependencies": {
+    "@babel/types": "^7.29.8",
+    "@types/babel__code-frame": "^7.27.0",
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "^22.20.4",
     "@types/react": "18.3.1",
     "prettier": "^3.4.2",
     "typescript": "^5.5.0",

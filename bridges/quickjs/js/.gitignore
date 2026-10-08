@@ -1,3 +1,6 @@
 node_modules/
 dist/
 coverage/
+
+# tsc incremental state (tsconfig.*.json are composite projects)
+*.tsbuildinfo

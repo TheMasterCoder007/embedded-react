@@ -10,6 +10,18 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- The Flow B compiler is split from one 8,300-line `aot/compile.mjs` into a module per stage under
+  `aot/compiler/`, and is now written in TypeScript. The generated C is byte-identical and the npm package
+  still ships JavaScript. From a repo checkout the compiler runs as `npm run aot` (or `node aot/compile.mts`)
+  and needs Node 22.18 or later.
+
+- `compileSource` takes the screen size and the buffer caps as options (`screen`, `listCap`, `listStrCap`,
+  `maxTextSpans`). One left out still falls back to its `ER_AOT_*` variable, now read on each compile rather than
+  at import, so one process can compile for several boards. A compile error names the size it was given; with
+  a `screen` option it used to report the default.
+  
 ### Fixed
 
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's

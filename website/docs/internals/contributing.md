@@ -59,6 +59,13 @@ npx prettier --prose-wrap preserve --write "../../../website/docs/**/*.{md,mdx}"
 
 Neither formatter runs in CI, so run them before you push.
 
+**TypeScript.** The Flow B compiler (`aot/compile.mts` and `aot/compiler/`) is TypeScript: `.mts`
+files, checked strictly by `npm run typecheck`. Node runs them as they are by stripping their types,
+so running the compiler or the JS tests from source needs Node 22.18 or later, and only erasable
+syntax is allowed: no `enum`, `namespace` or parameter properties, a relative import names the real
+file (`./switch.mts`), and a type-only import is written `import type`. The published package ships
+JavaScript: `tools/stage-npm-package.mjs` compiles the `.mts` files when a release packs it.
+
 ## Documentation conventions
 
 C files are broken into sections with a banner:
