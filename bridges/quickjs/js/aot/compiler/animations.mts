@@ -175,7 +175,9 @@ export function collectAnims(
             `AOT: the initial value of useAnimatedValue "${decl.id.name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
             'give it a finite starting number: useAnimatedValue(0).',
           );
-          if (init.arguments[0]?.loc) e.aotLoc = init.arguments[0].loc.start;
+          if (init.arguments[0]?.loc) {
+            e.aotLoc = init.arguments[0].loc.start;
+          }
           throw e;
         }
         anims.set(decl.id.name, {
@@ -257,7 +259,9 @@ export function collectRefs(
             `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
             `got ${value === undefined ? 'undefined' : String(value)}.`,
           );
-          if (arg.loc) error.aotLoc = arg.loc.start;
+          if (arg.loc) {
+            error.aotLoc = arg.loc.start;
+          }
           throw error;
         }
 
@@ -427,22 +431,25 @@ export function parseInterp(
 
   // Fold an interpolation range into numeric breakpoints; ranges must be array literals for AOT emission.
   const arr = (node: t.Node | undefined, name: string): number[] => {
-    if (node?.type !== 'ArrayExpression')
+    if (node?.type !== 'ArrayExpression') {
       throw aotError(`AOT: .interpolate() ${name} must be an array literal`);
+    }
     return node.elements.map(e => Number(evalStatic(e!, env.consts ?? {})));
   };
 
   // inputRange and outputRange define the piecewise mapping and must line up point-for-point.
   const input = arr(get('inputRange'), 'inputRange');
   const output = arr(get('outputRange'), 'outputRange');
-  if (input.length < 2 || input.length !== output.length)
+  if (input.length < 2 || input.length !== output.length) {
     throw aotError(
       'AOT: .interpolate() inputRange and outputRange must be the same length (>= 2)',
     );
-  if (input.length > 8)
+  }
+  if (input.length > 8) {
     throw aotError(
       'AOT: .interpolate() supports up to 8 breakpoints (ER_INTERPOLATE_MAX_POINTS)',
     );
+  }
 
   // Convert RN extrapolation strings to engine enum names, defaulting to extend like React Native.
   const ex = (node: t.Node | undefined): string => {
@@ -593,20 +600,22 @@ function flattenAnim(
 ): FlatAnimation {
   // Resolve a named animation handle, then require one of the supported Animated.* calls.
   node = resolveAnim(node, env);
-  if (!isAnimatedCall(node))
+  if (!isAnimatedCall(node)) {
     throw aotError(
       'AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)',
     );
+  }
 
   // Atomic animations drive one useAnimatedValue directly; timing has a known length, spring/decay do not.
   const kind = node.callee.property.name;
   const args = node.arguments;
   if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
     const valRef = args[0];
-    if (valRef?.type !== 'Identifier' || !env.animations?.has(valRef.name))
+    if (valRef?.type !== 'Identifier' || !env.animations?.has(valRef.name)) {
       throw aotError(
         `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
       );
+    }
     const cVar = env.animations.get(valRef.name)!.cVar;
     const get = animConfigGetter(args[1]);
     const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
@@ -650,14 +659,17 @@ function flattenAnim(
       const flatAnim: FlatAnimation = flattenAnim(child, env, start, loop);
       entries.push(...flatAnim.entries);
       if (kind === 'sequence') {
-        if (flatAnim.duration == null)
+        if (flatAnim.duration == null) {
           throw aotError(
             'AOT: an Animated.sequence entry needs a known duration — use Animated.timing / Animated.delay (a spring/decay/loop inside a sequence is not supported; it has no fixed length to offset the next entry by)',
           );
+        }
         off += flatAnim.duration;
       } else {
         const end = start - baseDelay + (flatAnim.duration ?? 0);
-        if (end > groupDur) groupDur = end;
+        if (end > groupDur) {
+          groupDur = end;
+        }
       }
 
       index++;
@@ -668,10 +680,11 @@ function flattenAnim(
     // top-level Animated.sequence is handled separately via on_complete chaining, which does support this.)
     const seen = new Set<string>();
     for (const entry of entries) {
-      if (seen.has(entry.cVar))
+      if (seen.has(entry.cVar)) {
         throw aotError(
           'AOT: the same animated value is driven more than once in this composition — concurrent/flat same-value steps cancel each other. Use a top-level Animated.sequence(...) for multi-step animation of one value.',
         );
+      }
       seen.add(entry.cVar);
     }
     return {
@@ -683,11 +696,12 @@ function flattenAnim(
   // A nested loop can flatten only when it wraps a single atomic animation; complex loops need start-time chaining.
   if (kind === 'loop') {
     const flatAnim: FlatAnimation = flattenAnim(args[0], env, baseDelay, true);
-    if (flatAnim.entries.length !== 1)
+    if (flatAnim.entries.length !== 1) {
       throw aotError(
         'AOT: an Animated.loop inside another composition can only wrap a single Animated.timing/spring/decay',
         'a loop around a sequence works when the loop is the animation you start: Animated.loop(Animated.sequence([...])).start().',
       );
+    }
     return {entries: flatAnim.entries, duration: null};
   }
 
@@ -789,8 +803,12 @@ export function animValues(
     animValues(args[0], env, accumulator);
   } else if (kind !== 'delay') {
     const list = kind === 'stagger' ? args[1] : args[0];
-    for (const child of (list as t.ArrayExpression | undefined)?.elements ?? [])
-      if (child) animValues(child, env, accumulator);
+    for (const child of (list as t.ArrayExpression | undefined)?.elements ??
+      []) {
+      if (child) {
+        animValues(child, env, accumulator);
+      }
+    }
   }
 
   return accumulator;
@@ -993,7 +1011,9 @@ function compileLoopStart(
   } else if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
     if (kind === 'timing' && iterations < 0 && reset) return null;
     steps = [animStep(inner as AnimatedCall, env, 0)];
-    if (reset) resetTo = steps[0].cVar;
+    if (reset) {
+      resetTo = steps[0].cVar;
+    }
   } else {
     throw aotError(
       'AOT: Animated.loop can repeat a timing, spring, decay or sequence (looping a parallel/stagger is not yet supported)',
@@ -1016,11 +1036,12 @@ function compileLoopStart(
     animEntry.kind === 'timing' &&
     animEntry.delayMs === 0 &&
     Math.round(Number(evalStaticOr(animEntry.get('duration'), env, 250))) === 0;
-  if (trailingDelay === 0 && steps.every(instant))
+  if (trailingDelay === 0 && steps.every(instant)) {
     throw aotError(
       'AOT: every step of this Animated.loop finishes instantly, so it would never stop repeating',
       'give a step a duration or a delay.',
     );
+  }
 
   return emitAnimChain(steps, env, ctx, doneCb, {
     iterations,
@@ -1052,15 +1073,17 @@ function emitCompletionCb(
   const locals = new Map<string, Local>(env.locals);
   const param = fnNode.params[0];
   if (param?.type === 'ObjectPattern') {
-    for (const property of param.properties as t.ObjectProperty[])
+    for (const property of param.properties as t.ObjectProperty[]) {
       if (
         ((property.key as t.Identifier)?.name ??
           (property.key as t.StringLiteral)?.value) === 'finished'
-      )
+      ) {
         locals.set((property.value as t.Identifier)?.name ?? 'finished', {
           code: 'finished',
           cType: 'int',
         });
+      }
+    }
   }
 
   // Compile the callback body as statements, then re-render if it changed React state.

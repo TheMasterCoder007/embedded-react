@@ -60,8 +60,9 @@ export function emitFlatList(
   for (const attr of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute')
+    if (attr.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <FlatList> are not supported');
+    }
 
     // skip non-props
     const name = (attr.name as t.JSXIdentifier).name;
@@ -74,46 +75,53 @@ export function emitFlatList(
       renderItem = attrExpr(attr);
     } else if (name === 'style') {
       styleAttr = attr;
-    } else
+    } else {
       throw aotError(
         `AOT: <FlatList> prop "${name}" is not supported`,
         'supported: data, renderItem, keyExtractor, style. For headers/footers/horizontal/onEndReached etc., use <ScrollView> + .map directly.',
       );
+    }
   }
 
   // Require the FlatList inputs needed for the rewrite: a data source and a renderItem callback that destructures its row info.
-  if (!dataNode)
+  if (!dataNode) {
     throw aotError(
       'AOT: <FlatList> needs a data prop',
       '<FlatList data={items} renderItem={({ item }) => <Row item={item} />} />',
     );
-  if (!renderItem || !isFn(renderItem))
+  }
+  if (!renderItem || !isFn(renderItem)) {
     throw aotError(
       'AOT: <FlatList> needs a renderItem function',
       'renderItem={({ item, index }) => <Row item={item} />}',
     );
+  }
   const param = renderItem.params[0];
-  if (!param || param.type !== 'ObjectPattern')
+  if (!param || param.type !== 'ObjectPattern') {
     throw aotError(
       'AOT: FlatList renderItem must destructure ({ item, index })',
       'renderItem={({ item }) => <Row item={item} />}',
     );
+  }
 
   // Extract the local item/index names from renderItem's destructured parameter, rejecting any unsupported row fields or patterns.
   let itemName: string | null = null;
   let indexName: string | null = null;
   for (const prop of param.properties) {
-    if (prop.type !== 'ObjectProperty' || prop.value.type !== 'Identifier')
+    if (prop.type !== 'ObjectProperty' || prop.value.type !== 'Identifier') {
       throw aotError(
         'AOT: FlatList renderItem may destructure only item / index (to plain names)',
       );
-    if ((prop.key as t.Identifier).name === 'item') itemName = prop.value.name;
-    else if ((prop.key as t.Identifier).name === 'index')
+    }
+    if ((prop.key as t.Identifier).name === 'item') {
+      itemName = prop.value.name;
+    } else if ((prop.key as t.Identifier).name === 'index') {
       indexName = prop.value.name;
-    else
+    } else {
       throw aotError(
         `AOT: FlatList renderItem cannot destructure "${(prop.key as t.Identifier).name}" (only item / index)`,
       );
+    }
   }
 
   // Ensure renderItem binds the required item value; index is optional for the generated map callback.
@@ -126,7 +134,9 @@ export function emitFlatList(
 
   // Rewrite renderItem `({ item, index }) => BODY` → a positional `.map` callback `(item, index) => BODY`.
   const cbParams: t.Identifier[] = [{type: 'Identifier', name: itemName}];
-  if (indexName) cbParams.push({type: 'Identifier', name: indexName});
+  if (indexName) {
+    cbParams.push({type: 'Identifier', name: indexName});
+  }
   const cb: t.ArrowFunctionExpression = {
     type: 'ArrowFunctionExpression',
     params: cbParams,

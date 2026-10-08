@@ -83,7 +83,9 @@ export function emitModal(
 
   // Apply modal overlay defaults only for fields the user's style has not already set.
   for (const [field, expr] of DEFAULTS) {
-    if (!hasField(field)) staticAssigns.push({field: field, expr});
+    if (!hasField(field)) {
+      staticAssigns.push({field: field, expr});
+    }
   }
 
   // process element attributes
@@ -156,8 +158,9 @@ export function emitModal(
     });
   } else {
     out.build.push(`    er_props_default(&p);`);
-    for (const a of staticAssigns)
+    for (const a of staticAssigns) {
       out.build.push(`    p.${a.field} = ${a.expr};`);
+    }
     out.build.push(`    er_node_set_props(${nodeId}, &p);`);
   }
 

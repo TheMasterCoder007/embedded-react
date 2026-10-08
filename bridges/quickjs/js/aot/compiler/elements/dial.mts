@@ -158,8 +158,12 @@ export function emitDial(
   );
   const hasField = (field: string) =>
     styleWrites(staticAssigns, dynAssigns, field);
-  if (!hasField('width')) staticAssigns.push({field: 'width', expr: '120'});
-  if (!hasField('height')) staticAssigns.push({field: 'height', expr: '120'});
+  if (!hasField('width')) {
+    staticAssigns.push({field: 'width', expr: '120'});
+  }
+  if (!hasField('height')) {
+    staticAssigns.push({field: 'height', expr: '120'});
+  }
 
   // Fold numeric props when possible; otherwise emit runtime assignments for app_update().
   const numeric = (field: string, node: t.Node, isFloat: boolean): void => {
@@ -202,8 +206,9 @@ export function emitDial(
   for (const attr of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute')
+    if (attr.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <Dial> are not supported');
+    }
 
     // skip non-props
     const name = (attr.name as t.JSXIdentifier).name;
@@ -237,11 +242,12 @@ export function emitDial(
       }
 
       if (typeof token === 'string') {
-        if (!table[token])
+        if (!table[token]) {
           throw aotError(
             `AOT: unsupported <Dial ${name}> "${token}"`,
             `${name} must be one of: ${Object.keys(table).join(' / ')}.`,
           );
+        }
         staticAssigns.push({field, expr: table[token]});
       } else {
         dynAssigns.push({
@@ -261,13 +267,16 @@ export function emitDial(
       }
     } else if (name === 'knobImage') {
       knobImage = imageNameFromSource(node, env);
-      if (knobImage == null)
+      if (knobImage == null) {
         throw aotError(
           'AOT: <Dial knobImage> must resolve to a static asset name',
           "use an imported image (`import knob from './knob.png'` → knobImage={knob}) or a string asset name.",
         );
+      }
       const path = env.imageNames?.get(knobImage);
-      if (path) out.images.set(knobImage, path);
+      if (path) {
+        out.images.set(knobImage, path);
+      }
     } else if (name === 'indicatorGradient') {
       // Allow indicatorGradient to be statically defined but conditionally enabled with a ternary against null/undefined.
       let gradNode: t.Node = node;
@@ -413,11 +422,12 @@ export function emitDial(
     }
 
     // Require a function node so compileValueHandler can bind the dial's value parameters.
-    if (!isFn(onChangeFn))
+    if (!isFn(onChangeFn)) {
       throw aotError(
         'AOT: <Dial onChange> must be an inline function or a useCallback',
         'onChange={(v) => setValue(v)}',
       );
+    }
 
     const handlerName = `er_handler_${out.handlers.length}`;
     out.handlers.push({

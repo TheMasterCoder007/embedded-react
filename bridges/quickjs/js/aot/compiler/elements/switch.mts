@@ -102,16 +102,18 @@ export function emitSwitch(
         | {false?: unknown; true?: unknown}
         | null
         | undefined;
-      if (trackColor?.false != null)
+      if (trackColor?.false != null) {
         staticAssigns.push({
           field: 'track_color_false',
           expr: colorLiteral(String(trackColor.false)),
         });
-      if (trackColor?.true != null)
+      }
+      if (trackColor?.true != null) {
         staticAssigns.push({
           field: 'track_color_true',
           expr: colorLiteral(String(trackColor.true)),
         });
+      }
     } else if (name === 'disabled') {
       /* accepted; the AOT has no disabled-visual yet, so it is a no-op */
     } else {
@@ -151,24 +153,27 @@ export function emitSwitch(
     });
   } else {
     out.build.push(`    er_props_default(&p);`);
-    for (const a of staticAssigns)
+    for (const a of staticAssigns) {
       out.build.push(`    p.${a.field} = ${a.expr};`);
+    }
     out.build.push(`    er_node_set_props(${nodeId}, &p);`);
   }
 
   // Compile onValueChange into a press handler that receives the toggled switch value.
   if (onChangeFn) {
     // Require a controlled switch so onValueChange can receive the next value.
-    if (!isFn(onChangeFn))
+    if (!isFn(onChangeFn)) {
       throw aotError(
         'AOT: onValueChange must be an inline function',
         'onValueChange={(v) => setX(v)}',
       );
-    if (!valueNode)
+    }
+    if (!valueNode) {
       throw aotError(
         'AOT: a <Switch> with onValueChange needs a value prop',
         'controlled switch: <Switch value={on} onValueChange={(v) => setOn(v)} />',
       );
+    }
 
     // Compile onValueChange into an ER_EVENT_PRESS handler, passing the next switch value.
     const handlerName = `er_handler_${out.handlers.length}`;

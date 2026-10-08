@@ -76,8 +76,9 @@ export function emitTextInput(
   for (const attr of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute')
+    if (attr.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <TextInput> are not supported');
+    }
 
     // skip non-props
     const name = (attr.name as t.JSXIdentifier).name;
@@ -164,26 +165,30 @@ export function emitTextInput(
     });
   } else {
     out.build.push(`    er_props_default(&p);`);
-    for (const assign of staticAssigns)
+    for (const assign of staticAssigns) {
       out.build.push(`    p.${assign.field} = ${assign.expr};`);
-    if (placeholder != null)
+    }
+    if (placeholder != null) {
       out.build.push(
         `    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(placeholder)});`,
       );
-    if (text)
+    }
+    if (text) {
       out.build.push(
         `    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`,
       );
+    }
     out.build.push(`    er_node_set_props(${nodeId}, &p);`);
   }
 
   // Compile onChangeText into an ER_EVENT_CHANGE_TEXT handler that receives the edited text.
   if (onChangeFn) {
-    if (!isFn(onChangeFn))
+    if (!isFn(onChangeFn)) {
       throw aotError(
         'AOT: onChangeText must be an inline function',
         'onChangeText={(t) => setText(t)}',
       );
+    }
     const handlerName = `er_handler_${out.handlers.length}`;
     out.handlers.push({
       name: handlerName,

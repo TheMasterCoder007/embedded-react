@@ -130,11 +130,12 @@ export function emitActivityIndicator(
           code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
         });
       }
-    } else
+    } else {
       throw aotError(
         `AOT: <ActivityIndicator> prop "${name}" is not supported`,
         'supported props: color, size, animating, style.',
       );
+    }
   }
 
   // default size: large unless style sets width/height
@@ -159,8 +160,9 @@ export function emitActivityIndicator(
     });
   } else {
     out.build.push(`    er_props_default(&p);`);
-    for (const a of staticAssigns)
+    for (const a of staticAssigns) {
       out.build.push(`    p.${a.field} = ${a.expr};`);
+    }
     out.build.push(`    er_node_set_props(${nodeId}, &p);`);
   }
 

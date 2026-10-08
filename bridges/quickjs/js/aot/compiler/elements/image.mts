@@ -137,7 +137,9 @@ export function resolveImageAttrs(
     imageName = imageNameFromSource(srcExpr, env);
     if (imageName != null) {
       const path = env.imageNames?.get(imageName); // a baked import (vs. a bare {uri} name the app supplies)
-      if (path) out.images.set(imageName, path);
+      if (path) {
+        out.images.set(imageName, path);
+      }
     } else {
       // Fall back to a dynamic runtime image name when the source cannot be folded.
       // Emits it as a runtime string. The engine resolves it against the image registry by name each frame,
@@ -153,7 +155,9 @@ export function resolveImageAttrs(
             'state / list-item field for a dynamic source.',
         );
 
-        if (srcExpr.loc) err.aotLoc = srcExpr.loc.start;
+        if (srcExpr.loc) {
+          err.aotLoc = srcExpr.loc.start;
+        }
         {
           throw err;
         }
@@ -174,7 +178,9 @@ export function resolveImageAttrs(
         `AOT: unsupported <Image resizeMode> "${rm}"`,
         `resizeMode must be one of: ${Object.keys(RESIZE_MODES).join(' / ')}.`,
       );
-      if (rmAttr.loc) e.aotLoc = rmAttr.loc.start;
+      if (rmAttr.loc) {
+        e.aotLoc = rmAttr.loc.start;
+      }
       throw e;
     }
   }
@@ -184,8 +190,9 @@ export function resolveImageAttrs(
   const tcAttr = find('tintColor');
   if (tcAttr) {
     const tc = evalStaticOr(attrExpr(tcAttr), env, null);
-    if (typeof tc === 'string' || typeof tc === 'number')
+    if (typeof tc === 'string' || typeof tc === 'number') {
       tintColor = argbLiteral(tc);
+    }
   }
 
   return {imageName, imageNameDyn, resizeMode, tintColor};
