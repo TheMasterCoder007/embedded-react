@@ -49,6 +49,8 @@ typedef struct
     uint8_t line;     /**< Wrap-line index. */
     uint8_t align;    /**< Resolved align (auto → parent align_items). */
     uint8_t frozen;   /**< Pass 3: 1 once the item's flexed main size is final. */
+    uint8_t cross_measured; /**< The cross size is the intrinsic one, measured at width `measured_w`. */
+    int16_t measured_w;
 } FlexChild;
 
 /**
@@ -426,6 +428,17 @@ static int16_t solo_axis_pos(const int16_t start,
 
 static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* out_w, int16_t* out_h);
 
+/** Whether a Text node's content holds a newline, which starts a line at any width. */
+static bool text_has_newline(const ERNode* n)
+{
+    if (n->props.text.span_count == 0U)
+        return strchr(n->props.text.text, '\n') != NULL;
+    for (uint8_t i = 0; i < n->props.text.span_count; i++)
+        if (strchr(n->props.text.spans[i].text, '\n'))
+            return true;
+    return false;
+}
+
 /**
  * @brief Measures a child's intrinsic content size at most once, on first use.
  *
@@ -447,6 +460,89 @@ static void measure_lazy(const uint16_t tag, const int16_t avail_w, bool* measur
         return;
     measure_content(tag, avail_w, iw, ih);
     *measured = true;
+}
+
+/** A row child's flex basis: flexBasis when set, else its measured width. */
+static int16_t row_basis(const ERLayoutSpec* cl, const int16_t inner_w, const int16_t measured_w)
+{
+    if (cl->flex_basis_pct > 0.0f)
+        return (int16_t)((float)inner_w * cl->flex_basis_pct / 100.0f + 0.5f);
+    return cl->flex_basis != ER_LAYOUT_AUTO ? cl->flex_basis : measured_w;
+}
+
+/**
+ * @brief The height of a non-wrapping row of known width once its children grow or shrink.
+ *
+ * A child's height can depend on its width (a Text that wraps, or a column holding one), and the
+ * max-content pass measured each child at its own width. This distributes the row's free space by
+ * flexGrow, or its overflow by flexShrink weighted by basis, the way Pass 3 will, and measures the
+ * children whose width changes again at that width. Min/max widths are not re-applied. Rows whose
+ * children do not flex keep the max-content height, without a second measurement.
+ *
+ * @param[in] n          The row.
+ * @param[in] inner_w    The row's content width.
+ * @param[in] gap        The gap between its children.
+ * @param[in] measured_h The tallest child's outer height at max-content widths.
+ *
+ * @return The tallest child's outer height at the flexed widths.
+ */
+static int16_t flexed_row_height(const ERNode* n, const int16_t inner_w, const int16_t gap, const int16_t measured_h)
+{
+    int32_t used = 0, grow = 0, shrink = 0;
+    int count = 0;
+    for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
+    {
+        const ERNode* c = er_get_node(ct);
+        if (!c)
+            break;
+        const ERLayoutSpec* cl = &c->layout;
+        if (cl->position != ER_POS_ABSOLUTE && cl->display != ER_DISPLAY_NONE)
+        {
+            int16_t cw = 0, ch = 0;
+            measure_content(ct, ER_LAYOUT_AUTO, &cw, &ch);
+            const int16_t basis = row_basis(cl, inner_w, cw);
+            used += basis + edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin);
+            grow += cl->flex_grow > 0 ? cl->flex_grow : 0;
+            shrink += cl->flex_shrink > 0 ? (int32_t)cl->flex_shrink * basis : 0;
+            count++;
+        }
+        ct = c->next_sibling_tag;
+    }
+    if (count > 1)
+        used += (int32_t)gap * (count - 1);
+    const int32_t free_space = inner_w - used;
+    if (free_space == 0 || (free_space > 0 && grow == 0) || (free_space < 0 && shrink == 0))
+        return measured_h;
+
+    int16_t tallest = 0;
+    for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
+    {
+        const ERNode* c = er_get_node(ct);
+        if (!c)
+            break;
+        const ERLayoutSpec* cl = &c->layout;
+        if (cl->position != ER_POS_ABSOLUTE && cl->display != ER_DISPLAY_NONE)
+        {
+            int16_t cw = 0, ch = 0;
+            measure_content(ct, ER_LAYOUT_AUTO, &cw, &ch);
+            const int16_t basis = row_basis(cl, inner_w, cw);
+            int32_t width = basis;
+            if (free_space > 0 && cl->flex_grow > 0)
+                width += free_space * cl->flex_grow / grow;
+            else if (free_space < 0 && cl->flex_shrink > 0)
+                width += free_space * ((int32_t)cl->flex_shrink * basis) / shrink;
+            if (width < 0)
+                width = 0;
+            if (width != cw && cl->width == ER_LAYOUT_AUTO)
+                measure_content(ct, (int16_t)width, &cw, &ch);
+            const int16_t outer_h =
+                (int16_t)(ch + edge_or(cl->margin_top, cl->margin) + edge_or(cl->margin_bottom, cl->margin));
+            if (outer_h > tallest)
+                tallest = outer_h;
+        }
+        ct = c->next_sibling_tag;
+    }
+    return tallest;
 }
 
 /**
@@ -542,8 +638,31 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
                                 &measured_h);
             }
             const int16_t line_h = (n->props.text.line_height > 0) ? n->props.text.line_height : (int16_t)measured_h;
-            const int lines = (n->props.text.number_of_lines > 1) ? (int)n->props.text.number_of_lines : 1;
-            tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(measured_w + tp.left + tp.right);
+            /* The lines the renderer will break the text into at the content width this node gets,
+             * at most numberOfLines (0 = unlimited, 1 = one line with an ellipsis). Without a known
+             * width only newlines break it. Broken only when it can: a run that fits on one line
+             * keeps its single-line measurement. */
+            const int16_t box_w = (exp_w != ER_LAYOUT_AUTO) ? exp_w : avail_w;
+            const int limit =
+                (box_w == ER_LAYOUT_AUTO) ? 0 : (box_w > tp.left + tp.right + 1 ? box_w - tp.left - tp.right : 1);
+            int lines = 1;
+            int text_w = measured_w;
+            if (n->props.text.number_of_lines != 1U && ((limit > 0 && measured_w > limit) || text_has_newline(n)))
+            {
+                int wrapped_w = 0;
+                lines = er_text_wrap(n->props.text.text,
+                                     n->props.text.spans,
+                                     n->props.text.span_count,
+                                     n->props.text.font_size,
+                                     n->props.text.font_family,
+                                     n->props.text.letter_spacing,
+                                     limit,
+                                     (int)n->props.text.number_of_lines,
+                                     &wrapped_w);
+                if (lines > 1)
+                    text_w = wrapped_w;
+            }
+            tw = (exp_w != ER_LAYOUT_AUTO) ? exp_w : (int16_t)(text_w + tp.left + tp.right);
             th = (exp_h != ER_LAYOUT_AUTO) ? exp_h : (int16_t)(line_h * lines + tp.top + tp.bottom);
         }
         *out_w = clamp_size(tw, L->min_width, L->max_width);
@@ -640,6 +759,8 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
         }
         else if (count > 1)
             main_sum += (int32_t)main_gap * (count - 1);
+        if (is_row && !wraps && inner_w != ER_LAYOUT_AUTO)
+            cross_max = flexed_row_height(n, inner_w, main_gap, cross_max);
         if (main_sum > INT16_MAX)
             main_sum = INT16_MAX;
         if (is_row)
@@ -817,6 +938,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 measure_lazy(ct, avail_w, &measured, &intr_w, &intr_h);
                 hypo_cross = is_row ? intr_h : intr_w;
             }
+            const bool cross_measured = crosssz == ER_LAYOUT_AUTO && cross_pct <= 0.0f && !cross_via_aspect;
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
 
             /* aspect_ratio: if the cross dimension is auto (no explicit size or percentage),
@@ -850,6 +972,8 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             fc->main_min = main_mn;
             fc->main_max = main_mx;
             fc->frozen = 0U;
+            fc->cross_measured = cross_measured ? 1U : 0U;
+            fc->measured_w = intr_w;
             fc->line = 0;
             fc->align = (cl->align_self != ER_ALIGN_AUTO) ? cl->align_self : L->align_items;
             if (fc->align == ER_ALIGN_AUTO)
@@ -1032,6 +1156,23 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                 }
                 break;
             }
+        }
+    }
+
+    /* A row child whose height came from measuring it at its max-content width, and whose width
+     * flexed, is measured again at the width it got: a Text that now wraps, or a column holding one,
+     * is taller. Measurements are memoised, so a child whose width did not change costs nothing. */
+    if (is_row)
+    {
+        for (int i = 0; i < n_inflow; i++)
+        {
+            FlexChild* fc = &s_scratch[i];
+            if (!fc->cross_measured || fc->main == fc->measured_w)
+                continue;
+            const ERNode* c = er_get_node(fc->tag);
+            int16_t mw = 0, mh = 0;
+            measure_content(fc->tag, fc->main, &mw, &mh);
+            fc->cross = clamp_size(mh, c->layout.min_height, c->layout.max_height);
         }
     }
 

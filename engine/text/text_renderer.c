@@ -856,6 +856,47 @@ void er_text_measure_spans(const ERTextSpan* spans,
         *out_height = (int)font->line_height;
 }
 
+int er_text_wrap(const char* text,
+                 const ERTextSpan* spans,
+                 uint8_t span_count,
+                 uint8_t font_size,
+                 const char* font_family,
+                 int16_t letter_spacing,
+                 int max_w,
+                 int max_lines,
+                 int* out_width)
+{
+    s_text_measure_count++;
+    *out_width = 0;
+    const BitmapFont* font = font_registry_get(font_family, er_text_clamp_font_size(font_size));
+    if (!font)
+        return 1;
+
+    /* The same source er_text_render() breaks: span texts merged into one run, measured with the
+     * node's letter spacing. */
+    char merged[ER_TEXT_MAX_SPANS * (ER_SPAN_TEXT_MAX + 1) + 1];
+    const char* src = text;
+    if (span_count > 0U && spans)
+    {
+        size_t pos = 0;
+        for (uint8_t si = 0; si < span_count && pos < sizeof(merged) - 1U; si++)
+            for (const char* s = spans[si].text; *s && pos < sizeof(merged) - 1U;)
+                merged[pos++] = *s++;
+        merged[pos] = '\0';
+        src = merged;
+    }
+    if (!src || !src[0])
+        return 1;
+
+    LineSpan lines[TEXT_MAX_LINES];
+    bool truncated = false;
+    const int n = break_lines(src, font, max_w, (int)letter_spacing, max_lines, lines, TEXT_MAX_LINES, &truncated);
+    for (int i = 0; i < n; i++)
+        if (lines[i].px_width > *out_width)
+            *out_width = lines[i].px_width;
+    return n > 0 ? n : 1;
+}
+
 uint32_t er_text_measure_count(void)
 {
     return s_text_measure_count;

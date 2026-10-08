@@ -12,6 +12,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- An auto-height `Text` is as tall as the lines it wraps into at the width it gets, capped by
+  `numberOfLines`. Layout gave it one line, or exactly `numberOfLines` lines whether the text needed them or
+  not, so wrapped text was cut to its first line and a short label with `numberOfLines={3}` reserved three.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.
