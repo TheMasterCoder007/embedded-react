@@ -50,6 +50,30 @@ static uint32_t rect_area(const ERRect* r)
     return (uint32_t)r->w * (uint32_t)r->h;
 }
 
+/** @brief True when the two rects share at least one pixel (abutting does not count). */
+static bool overlaps(const ERRect* a, const ERRect* b)
+{
+    return a->x < b->x + b->w && b->x < a->x + a->w && a->y < b->y + b->h && b->y < a->y + a->h;
+}
+
+/**
+ * @brief Whether the bounding box of a ∪ b is almost all their own pixels: at most a quarter clean, or a
+ *        few thousand clean pixels, which an extra paint pass would cost more than.
+ *
+ * A full-width scroll strip and a card or menu overlapping it fail this: their box is the full width
+ * times both heights, mostly pixels neither changed, so they stay apart.
+ */
+static bool cheap_union(const ERRect* a, const ERRect* b)
+{
+    ERRect u = *a;
+    bbox_union(&u, b);
+    int ix = (a->x + a->w < b->x + b->w ? a->x + a->w : b->x + b->w) - (a->x > b->x ? a->x : b->x);
+    int iy = (a->y + a->h < b->y + b->h ? a->y + a->h : b->y + b->h) - (a->y > b->y ? a->y : b->y);
+    const uint32_t shared = (ix > 0 && iy > 0) ? (uint32_t)ix * (uint32_t)iy : 0U;
+    const uint32_t waste = rect_area(&u) - rect_area(a) - rect_area(b) + shared;
+    return waste * 4U <= rect_area(&u) || waste <= 4096U;
+}
+
 /**
  * @brief Absorbs into @p acc every stored rect that overlaps or abuts it, cascading until stable.
  *
@@ -65,7 +89,9 @@ static void absorb_touching(ERDamageSet* s, ERRect* acc)
         removed_any = false;
         for (uint8_t i = 0; i < s->count;)
         {
-            if (touch_or_overlap(acc, &s->r[i]))
+            /* An abutting rect stays apart when the box would be mostly clean; an overlapping one is always
+             * absorbed, which keeps the set disjoint. */
+            if (touch_or_overlap(acc, &s->r[i]) && (overlaps(acc, &s->r[i]) || cheap_union(acc, &s->r[i])))
             {
                 bbox_union(acc, &s->r[i]);
                 s->r[i] = s->r[--s->count]; /* swap-remove; re-test the swapped-in rect at i */
@@ -127,7 +153,25 @@ void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h)
     acc.w = w;
     acc.h = h;
 
-    /* Merge with everything the input touches (disjointness invariant), cascading. */
+    /* Overlapping a stored rect whose bounding box with the input would be mostly clean: add only the
+     * parts of the input outside it (up to four bands), each as an input of its own. */
+    for (uint8_t i = 0; i < s->count; i++)
+    {
+        const ERRect r = s->r[i];
+        if (!overlaps(&acc, &r) || cheap_union(&acc, &r))
+            continue;
+        const int ix0 = acc.x > r.x ? acc.x : r.x;
+        const int iy0 = acc.y > r.y ? acc.y : r.y;
+        const int ix1 = (acc.x + acc.w < r.x + r.w) ? acc.x + acc.w : r.x + r.w;
+        const int iy1 = (acc.y + acc.h < r.y + r.h) ? acc.y + acc.h : r.y + r.h;
+        er_damage_set_add(s, acc.x, acc.y, acc.w, iy0 - acc.y);         /* above */
+        er_damage_set_add(s, acc.x, iy1, acc.w, acc.y + acc.h - iy1);   /* below */
+        er_damage_set_add(s, acc.x, iy0, ix0 - acc.x, iy1 - iy0);       /* left */
+        er_damage_set_add(s, ix1, iy0, acc.x + acc.w - ix1, iy1 - iy0); /* right */
+        return;
+    }
+
+    /* Merge with what the input touches (disjointness invariant), cascading. */
     absorb_touching(s, &acc);
 
     if (s->count < (uint8_t)ER_DAMAGE_RECTS_MAX)

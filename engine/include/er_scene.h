@@ -369,6 +369,9 @@ extern "C"
         ER_ARC_CAP_ROUND = 1, /**< Semicircular ends extending half the width past each boundary ray. */
     } ERArcCap;
 
+/** @brief Maximum number of color stops in a View's conic border gradient (stored in every node's props). */
+#define ER_BORDER_GRADIENT_MAX_STOPS 6
+
 /** @brief Maximum number of color stops in a View-background gradient (stored in every node's props). */
 #define ER_GRADIENT_MAX_STOPS 4
 
@@ -474,19 +477,21 @@ extern "C"
      */
     typedef enum
     {
-        ER_PROP_OPACITY = 0,      /**< Transparency (0.0–1.0). */
-        ER_PROP_TRANSLATE_X,      /**< Horizontal translation in pixels. */
-        ER_PROP_TRANSLATE_Y,      /**< Vertical translation in pixels. */
-        ER_PROP_SCALE_X,          /**< Horizontal scale factor. */
-        ER_PROP_SCALE_Y,          /**< Vertical scale factor. */
-        ER_PROP_ROTATE_Z,         /**< Rotation around the Z axis in degrees. */
-        ER_PROP_ROTATE_X,         /**< Rotation around the X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
-        ER_PROP_ROTATE_Y,         /**< Rotation around the Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
-        ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
-        ER_PROP_COLOR,            /**< Foreground ARGB8888 color packed as float bits. */
-        ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
-        ER_PROP_ARC_VALUE,        /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
-        ER_PROP_ARC_VALUE_START,  /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
+        ER_PROP_OPACITY = 0,           /**< Transparency (0.0–1.0). */
+        ER_PROP_TRANSLATE_X,           /**< Horizontal translation in pixels. */
+        ER_PROP_TRANSLATE_Y,           /**< Vertical translation in pixels. */
+        ER_PROP_SCALE_X,               /**< Horizontal scale factor. */
+        ER_PROP_SCALE_Y,               /**< Vertical scale factor. */
+        ER_PROP_ROTATE_Z,              /**< Rotation around the Z axis in degrees. */
+        ER_PROP_ROTATE_X,              /**< Rotation around the X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        ER_PROP_ROTATE_Y,              /**< Rotation around the Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        ER_PROP_BACKGROUND_COLOR,      /**< Background ARGB8888 color packed as float bits. */
+        ER_PROP_COLOR,                 /**< Foreground ARGB8888 color packed as float bits. */
+        ER_PROP_SWITCH_THUMB,          /**< Switch thumb position 0.0 (off) – 1.0 (on). */
+        ER_PROP_ARC_VALUE,             /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
+        ER_PROP_ARC_VALUE_START,       /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
+        ER_PROP_BORDER_SWEEP_PHASE,    /**< Border sweep head position, 0–1 around the perimeter (wraps). */
+        ER_PROP_BORDER_GRADIENT_ANGLE, /**< Conic border gradient start angle in degrees. */
     } ERAnimProp;
 
     /**
@@ -744,6 +749,19 @@ extern "C"
         float shadow_opacity;  /**< 0.0–1.0; 0 = no shadow (default). */
         uint8_t shadow_radius; /**< Blur radius in pixels; 0 = hard edge. */
         uint8_t elevation;     /**< Android-style elevation in dp; synthesises a shadow when shadow_opacity is 0. */
+
+        /* --- Border sweep (View-family): a light travelling around the rounded border --- */
+        uint32_t border_sweep_color; /**< Straight-alpha ARGB8888 at the head; 0 = no sweep. */
+        int16_t border_sweep_width;  /**< Ring thickness in pixels, inside the box; 0 = no sweep. */
+        float border_sweep_phase;    /**< Head position, 0–1 around the perimeter clockwise from top-left. */
+        float border_sweep_length;   /**< Tail as a fraction of the perimeter; 0 = 0.3. */
+
+        /* --- Border gradient (View-family): a conic gradient seen through the border ring --- */
+        int16_t border_gradient_width;      /**< Ring thickness in pixels, inside the box; 0 = none. */
+        float border_gradient_angle;        /**< Start angle in degrees: 0 = up, clockwise (CSS conic `from`). */
+        float border_gradient_size;         /**< Radial: background-size as a multiple of the box; 0 = conic. */
+        uint8_t border_gradient_stop_count; /**< Valid entries in border_gradient_stops. */
+        ERGradientStop border_gradient_stops[ER_BORDER_GRADIENT_MAX_STOPS]; /**< Ascending positions 0–1. */
 
         /* --- ActivityIndicator --- */
         uint32_t indicator_color; /**< Spinner dot color; 0 = 0xFFFFFFFF (white). */

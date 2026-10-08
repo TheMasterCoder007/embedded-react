@@ -49,6 +49,59 @@ The [Layout](../concepts/layout.md) page explains the solver and where it differ
 `borderColor` and the four per-side colours; `borderStyle` (`solid`, `dashed`, `dotted`). Radius
 edges are anti-aliased (`ERUI_BORDER_AA`).
 
+## Border effects
+
+A `View` can draw a ring along the inside of its rounded edge, over its content, for a focus
+highlight. The ring follows the corner radius and is anti-aliased on both edges.
+
+```jsx
+function FocusRing({children}) {
+  const phase = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(phase, {
+        toValue: 1,
+        duration: 2000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    ).start();
+  }, [phase]);
+  return (
+    <Animated.View
+      style={{
+        borderRadius: 16,
+        borderSweepColor: '#7dd3fc',
+        borderSweepWidth: 3,
+        borderSweepPhase: phase,
+      }}>
+      {children}
+    </Animated.View>
+  );
+}
+```
+
+| Property            | Notes                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `borderSweepColor`  | Colour at the head of a light travelling around the edge; it fades to transparent along its tail                 |
+| `borderSweepWidth`  | Ring thickness in px, inside the box; `0` (default) draws nothing                                                |
+| `borderSweepLength` | Tail length as a fraction of the perimeter, default `0.3`                                                        |
+| `borderSweepPhase`  | Head position, `0` to `1` clockwise from the left end of the top edge, wrapping. Animatable on the native driver |
+
+`borderGradient` shows a gradient through a ring of the same kind, for the rotating or moving
+gradient border. It is `{type: 'conic', width, angle?, stops}`, a CSS `conic-gradient()` (0 degrees
+up, clockwise), or `{type: 'radial', width, size?, stops}`, a CSS `radial-gradient()` (ellipse,
+farthest corner) on a background `size` times the box (default 1). Either is seen only inside a ring
+`width` px thick, and takes up to 6 stops of `{color, offset?}`.
+
+`borderGradientAngle` animates it on the native driver. For a conic gradient it is the start angle in
+degrees, overriding `angle`, so a linear loop of 0 to 360 spins it. For a radial one it plays a CSS
+keyframe loop: one turn takes `background-position` from `0% 0%` to `100% 100%` at 180 degrees and
+back.
+
+A change of `borderSweepPhase` or `borderGradientAngle` alone repaints the bands along the four edges
+the ring can reach, not the whole box. **Flow A only** for now: the AOT rejects these keys.
+
 ## Transform
 
 ```jsx

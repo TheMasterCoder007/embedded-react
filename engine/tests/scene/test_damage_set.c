@@ -18,8 +18,8 @@
  * ERDamageSet (er_damage_internal.h): the disjoint dirty-rect set behind the compositor's damage
  * tracking. The properties that matter:
  *
- *   - disjointness: no two stored rects overlap or abut (a pixel covered twice would double-blend
- *     translucent content when the compositor paints each rect in its own pass),
+ *   - disjointness: no two stored rects overlap (a pixel covered twice would double-blend translucent
+ *     content when the compositor paints each rect in its own pass),
  *   - coverage: every added rect is covered by the stored rects, including through cascade merges
  *     and pool saturation (coverage may grow — never shrink),
  *   - graceful saturation: MAX+1 scattered rects still fit by merging the least-wasteful pair.
@@ -49,7 +49,13 @@ static bool rects_touch(const ERRect* a, const ERRect* b)
     return !(a->x + a->w < b->x || b->x + b->w < a->x || a->y + a->h < b->y || b->y + b->h < a->y);
 }
 
-/** @brief Asserts the set's core invariant: pairwise disjoint AND non-abutting. */
+/** @brief True when the two rects share a pixel. */
+static bool rects_overlap(const ERRect* a, const ERRect* b)
+{
+    return a->x < b->x + b->w && b->x < a->x + a->w && a->y < b->y + b->h && b->y < a->y + a->h;
+}
+
+/** @brief Asserts the set's core invariant: pairwise disjoint. */
 static bool check_disjoint(const ERDamageSet* s)
 {
     for (uint8_t i = 0; i < s->count; i++)
@@ -60,7 +66,7 @@ static bool check_disjoint(const ERDamageSet* s)
         }
         for (uint8_t j = (uint8_t)(i + 1U); j < s->count; j++)
         {
-            if (rects_touch(&s->r[i], &s->r[j]))
+            if (rects_overlap(&s->r[i], &s->r[j]))
             {
                 return false;
             }
@@ -192,7 +198,18 @@ static int check_basics(void)
     if (s.count != 0U)
         return fail("clear did not empty the set");
 
-    printf("PASS: basics — empty ignored, disjoint kept apart, overlap/abut merged\n");
+    /* A full-width strip and a narrow rect overlapping its top stay apart: the strip keeps its rect and
+     * only the part of the narrow one above it is added, so no clean span is repainted. */
+    history_reset();
+    if (!add_checked(&s, 0, 150, 200, 20))
+        return fail("invariant after strip add");
+    if (!add_checked(&s, 10, 60, 20, 100))
+        return fail("invariant after card overlapping the strip");
+    if (s.count != 2U || er_damage_set_area(&s) != 200U * 20U + 20U * 90U)
+        return fail("strip and overlapping card were merged into their bounding box");
+    er_damage_set_clear(&s);
+
+    printf("PASS: basics — empty ignored, disjoint kept apart, cheap overlap/abut merged, costly split\n");
     return EXIT_SUCCESS;
 }
 

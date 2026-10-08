@@ -11,6 +11,29 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Added
+
+- `borderGradient` also takes `{type: 'radial', width, size?, stops}`: a CSS `radial-gradient()` on a
+  background `size` times the box, seen through the same ring. `borderGradientAngle` moves it as a keyframe
+  loop moves `background-position`, for the moving shine border. Flow A only.
+
+- `View` takes `borderGradient: {type: 'conic', width, angle?, stops}`: a CSS `conic-gradient()` seen only
+  through an anti-aliased ring `width` px thick along the rounded edge, over the content, for a
+  rotating-gradient border. `borderGradientAngle` sets the start angle and animates on the native driver; an
+  angle-only change repaints the ring's edge bands. Flow A only.
+
+- `View` takes `borderSweepColor`, `borderSweepWidth`, `borderSweepLength` and `borderSweepPhase`: a light
+  travelling around the inside of the rounded edge, over the content, bright at its head and fading along its
+  tail. `borderSweepPhase` animates on the native driver, and a phase-only change repaints the bands along the
+  edges rather than the whole box. Flow A only.
+
+### Fixed
+
+- Two damaged areas that overlap or touch are merged into their bounding box only when that box is mostly
+  their own pixels. A full-width strip and a small rect overlapping one end of it (a scroll's exposed strip
+  and a card animating over it) used to repaint the full width times both heights; the small rect now adds
+  only its part outside the strip.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 

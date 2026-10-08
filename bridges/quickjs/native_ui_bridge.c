@@ -1170,6 +1170,12 @@ typedef enum
     PROP_VALUE_START,
     PROP_MIN_SPAN,
     PROP_INDICATOR_GRADIENT,
+    PROP_BORDER_SWEEP_COLOR,
+    PROP_BORDER_SWEEP_WIDTH,
+    PROP_BORDER_SWEEP_PHASE,
+    PROP_BORDER_SWEEP_LENGTH,
+    PROP_BORDER_GRADIENT,
+    PROP_BORDER_GRADIENT_ANGLE,
     PROP_COUNT_,
 } PropId;
 
@@ -1293,6 +1299,12 @@ static const char* const k_prop_names[PROP_COUNT_] = {
     [PROP_VALUE_START] = "valueStart",
     [PROP_MIN_SPAN] = "minSpan",
     [PROP_INDICATOR_GRADIENT] = "indicatorGradient",
+    [PROP_BORDER_SWEEP_COLOR] = "borderSweepColor",
+    [PROP_BORDER_SWEEP_WIDTH] = "borderSweepWidth",
+    [PROP_BORDER_SWEEP_PHASE] = "borderSweepPhase",
+    [PROP_BORDER_SWEEP_LENGTH] = "borderSweepLength",
+    [PROP_BORDER_GRADIENT] = "borderGradient",
+    [PROP_BORDER_GRADIENT_ANGLE] = "borderGradientAngle",
 };
 
 /** @brief (atom, id) pair; s_prop_atoms is sorted by atom value once, for prop_id_from_atom()'s bsearch. */
@@ -2018,6 +2030,85 @@ static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
 }
 
 /**
+ * @brief Reads a View `borderGradient` ({type: 'conic', width, angle?, stops: [{color, offset?}]}): a conic
+ * gradient seen through the border ring. {type: 'radial', width, size?, angle?, stops} is instead a CSS
+ * radial-gradient on a background `size` times the box, moved by the angle (see er_border_radial_render). `angle` is
+ * the start in degrees (0 = up, clockwise); `borderGradientAngle` overrides it and can be animated.
+ *
+ * @param[in]     ctx  QuickJS context.
+ * @param[in]     v    The style value.
+ * @param[in,out] p    Props being built.
+ */
+static void apply_border_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+{
+    if (!JS_IsObject(v))
+        return;
+    JSValue t = JS_GetPropertyStr(ctx, v, "type");
+    const char* ts = JS_ToCString(ctx, t);
+    JS_FreeValue(ctx, t);
+    const bool conic = ts && strcmp(ts, "conic") == 0;
+    const bool radial = ts && strcmp(ts, "radial") == 0;
+    if (ts)
+        JS_FreeCString(ctx, ts);
+    if (!conic && !radial)
+        return;
+    p->border_gradient_size = 0.0f;
+    if (radial)
+    {
+        JSValue sv = JS_GetPropertyStr(ctx, v, "size");
+        double size = 1.0;
+        if (JS_IsNumber(sv))
+            JS_ToFloat64(ctx, &size, sv);
+        p->border_gradient_size = size > 0.0 ? (float)size : 1.0f;
+        JS_FreeValue(ctx, sv);
+    }
+    JSValue wv = JS_GetPropertyStr(ctx, v, "width");
+    int16_t width = 0;
+    if (to_dim(ctx, wv, &width))
+        p->border_gradient_width = width;
+    JS_FreeValue(ctx, wv);
+    JSValue av = JS_GetPropertyStr(ctx, v, "angle");
+    double a = 0.0;
+    if (JS_IsNumber(av) && JS_ToFloat64(ctx, &a, av) == 0)
+        p->border_gradient_angle = (float)(a - 360.0 * floor(a / 360.0));
+    JS_FreeValue(ctx, av);
+    JSValue stops = JS_GetPropertyStr(ctx, v, "stops");
+    if (JS_IsArray(stops))
+    {
+        JSValue lenv = JS_GetPropertyStr(ctx, stops, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenv);
+        JS_FreeValue(ctx, lenv);
+        if (len > ER_BORDER_GRADIENT_MAX_STOPS)
+            len = ER_BORDER_GRADIENT_MAX_STOPS;
+        uint8_t n = 0;
+        for (int32_t i = 0; i < len; i++)
+        {
+            JSValue st = JS_GetPropertyUint32(ctx, stops, (uint32_t)i);
+            JSValue cv = JS_GetPropertyStr(ctx, st, "color");
+            JSValue ov = JS_GetPropertyStr(ctx, st, "offset");
+            uint32_t c;
+            double o = (len > 1) ? (double)i / (double)(len - 1) : 0.0;
+            if (!JS_IsUndefined(ov))
+                JS_ToFloat64(ctx, &o, ov);
+            if (n > 0 && o < p->border_gradient_stops[n - 1].position)
+                o = p->border_gradient_stops[n - 1].position;
+            if (to_color(ctx, cv, &c))
+            {
+                p->border_gradient_stops[n].color = c;
+                p->border_gradient_stops[n].position = (float)o;
+                n++;
+            }
+            JS_FreeValue(ctx, ov);
+            JS_FreeValue(ctx, cv);
+            JS_FreeValue(ctx, st);
+        }
+        p->border_gradient_stop_count = n;
+    }
+    JS_FreeValue(ctx, stops);
+}
+
+/**
  * @brief Reads obj's own enumerable string keys into s_prop_slots.
  *
  * Keys apply_props() doesn't recognise, and keys whose value is undefined/null/exception (same
@@ -2213,6 +2304,26 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     }
     ER_U8(PROP_SHADOW_RADIUS, shadow_radius);
     ER_U8(PROP_ELEVATION, elevation);
+
+    /* Border sweep (View-family). */
+    ER_COL(PROP_BORDER_SWEEP_COLOR, border_sweep_color);
+    ER_DIM(PROP_BORDER_SWEEP_WIDTH, border_sweep_width);
+    {
+        double d = 0.0;
+        if (!JS_IsUndefined(s_prop_slots[PROP_BORDER_SWEEP_PHASE])
+            && JS_ToFloat64(ctx, &d, s_prop_slots[PROP_BORDER_SWEEP_PHASE]) == 0)
+            p.border_sweep_phase = (float)(d - floor(d));
+        if (!JS_IsUndefined(s_prop_slots[PROP_BORDER_SWEEP_LENGTH])
+            && JS_ToFloat64(ctx, &d, s_prop_slots[PROP_BORDER_SWEEP_LENGTH]) == 0)
+            p.border_sweep_length = (float)d;
+    }
+    apply_border_gradient(ctx, s_prop_slots[PROP_BORDER_GRADIENT], &p);
+    {
+        double d = 0.0;
+        if (!JS_IsUndefined(s_prop_slots[PROP_BORDER_GRADIENT_ANGLE])
+            && JS_ToFloat64(ctx, &d, s_prop_slots[PROP_BORDER_GRADIENT_ANGLE]) == 0)
+            p.border_gradient_angle = (float)(d - 360.0 * floor(d / 360.0));
+    }
 
     /* ActivityIndicator (RN uses `color` for the spinner tint). */
     ER_COL(PROP_COLOR, indicator_color);
@@ -4064,6 +4175,8 @@ static bool anim_prop_from_name(const char* s, ERAnimProp* out)
         {"color", ER_PROP_COLOR},
         {"value", ER_PROP_ARC_VALUE},            /* Dial value (ER_NODE_ARC) */
         {"valueStart", ER_PROP_ARC_VALUE_START}, /* Dial RANGE low end */
+        {"borderSweepPhase", ER_PROP_BORDER_SWEEP_PHASE},
+        {"borderGradientAngle", ER_PROP_BORDER_GRADIENT_ANGLE},
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
     {

@@ -188,3 +188,8 @@ add_test(NAME rendering_text_padding COMMAND test_text_padding)
 add_executable(test_content_padding test_content_padding.c)
 target_link_libraries(test_content_padding PRIVATE embedded-react)
 add_test(NAME rendering_content_padding COMMAND test_content_padding)
+
+add_executable(test_border_sweep test_border_sweep.c)
+target_link_libraries(test_border_sweep PRIVATE embedded-react)
+target_include_directories(test_border_sweep PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_border_sweep COMMAND test_border_sweep)
