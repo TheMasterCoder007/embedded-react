@@ -354,5 +354,32 @@ int main(void)
     er_commit();
     if (memcmp(incremental, fb, sizeof(incremental)) != 0)
         return fail("conic ring: the turned frame differs from a full repaint");
+    /* A radial gradient on a background 3x the box, white at its centre and clear at its farthest corner. At
+     * angle 0 the background sits at 0% 0%, so its centre lies past the box's bottom-right corner and
+     * lights the ring there; at 180 it sits at 100% 100% and lights the top-left instead. */
+    er_anim_value_unbind_all(turn);
+    cp.border_gradient_angle = 0.0f;
+    cp.border_gradient_size = 3.0f;
+    cp.border_gradient_stop_count = 2;
+    cp.border_gradient_stops[0] = (ERGradientStop){0xFFFFFFFFU, 0.0f};
+    cp.border_gradient_stops[1] = (ERGradientStop){0x00FFFFFFU, 1.0f};
+    er_node_set_props(card, &cp);
+    er_commit();
+    const int br_x = 20 + 160 - 12 - 2, br_y = 20 + 120 - 2, tl_x = 20 + 12 + 2, tl_y = 21;
+    if (brightness(px_at(&t, br_x, br_y)) < 400 || brightness(px_at(&t, tl_x, tl_y)) > card_bg + 40)
+        return fail("radial ring: the light is not at the bottom right at angle 0");
+    if (brightness(px_at(&t, 100, 80)) != brightness(cp.background_color))
+        return fail("radial ring: drew inside the card");
+    er_anim_value_bind(turn, card, ER_PROP_BORDER_GRADIENT_ANGLE);
+    er_anim_value_set(turn, 180.0f);
+    er_commit();
+    if (brightness(px_at(&t, tl_x, tl_y)) < 400 || brightness(px_at(&t, br_x, br_y)) > card_bg + 40)
+        return fail("radial ring: the light did not move to the top left at angle 180");
+    memcpy(incremental, fb, sizeof(incremental));
+    memset(fb, 0, sizeof(fb));
+    er_force_full_repaint();
+    er_commit();
+    if (memcmp(incremental, fb, sizeof(incremental)) != 0)
+        return fail("radial ring: the moved frame differs from a full repaint");
     return EXIT_SUCCESS;
 }

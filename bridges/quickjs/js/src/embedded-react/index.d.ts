@@ -169,12 +169,22 @@ export interface ViewStyle {
   /** Head position, 0–1 clockwise from the top edge's left end; wraps. Animate it with the native driver. */
   borderSweepPhase?: number | AnimatedValue;
   /** A conic gradient seen through the border ring: the rotating-gradient border. Up to 6 stops. */
-  borderGradient?: {
-    type: 'conic';
-    width: number;
-    angle?: number;
-    stops: {color: string; offset?: number}[];
-  };
+  borderGradient?:
+    | {
+        type: 'conic';
+        width: number;
+        angle?: number;
+        stops: {color: string; offset?: number}[];
+      }
+    /** CSS radial-gradient (ellipse farthest-corner) on a background `size` times the box (default 1): the
+     *  moving shine border. One 360° turn of the angle moves background-position 0% 0% → 100% 100% → 0% 0%. */
+    | {
+        type: 'radial';
+        width: number;
+        size?: number;
+        angle?: number;
+        stops: {color: string; offset?: number}[];
+      };
   /** The conic border gradient's start angle in degrees (0 = up, clockwise); animate it to rotate the light. */
   borderGradientAngle?: number | AnimatedValue;
 

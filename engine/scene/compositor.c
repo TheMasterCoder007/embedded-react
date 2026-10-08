@@ -2848,7 +2848,18 @@ static void render_node_content(
     {
         const ERViewProps* vp = &n->props.view;
         const int radius = vp->border_tl_radius > 0 ? vp->border_tl_radius : vp->border_radius;
-        if (vp->border_gradient_width > 0)
+        if (vp->border_gradient_width > 0 && vp->border_gradient_size > 0.0f)
+            er_border_radial_render(px,
+                                    py,
+                                    w,
+                                    h,
+                                    radius,
+                                    vp->border_gradient_width,
+                                    vp->border_gradient_size,
+                                    vp->border_gradient_angle,
+                                    vp->border_gradient_stops,
+                                    vp->border_gradient_stop_count);
+        else if (vp->border_gradient_width > 0)
             er_border_conic_render(px,
                                    py,
                                    w,
@@ -3333,6 +3344,7 @@ static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
     node->props.view.border_sweep_length = props->border_sweep_length;
     node->props.view.border_gradient_width = props->border_gradient_width;
     node->props.view.border_gradient_angle = props->border_gradient_angle;
+    node->props.view.border_gradient_size = props->border_gradient_size;
     node->props.view.border_gradient_stop_count = props->border_gradient_stop_count;
     for (int bi = 0; bi < ER_BORDER_GRADIENT_MAX_STOPS; bi++)
         node->props.view.border_gradient_stops[bi] = props->border_gradient_stops[bi];

@@ -19,6 +19,7 @@
 #include <math.h>
 
 #define SWEEP_ROW_MAX 512
+#define SWEEP_SQRT2 1.41421356f
 #define SWEEP_PI 3.14159265f
 /* The head fades in over this much of the perimeter ahead of it, so it has no hard front edge. */
 #define SWEEP_LEAD 0.01f
@@ -120,23 +121,44 @@ static uint32_t lerp_argb(uint32_t c0, uint32_t c1, float f)
     return out;
 }
 
+/** The colour at `t` along ascending stops, held flat before the first and after the last. */
+static uint32_t stops_at(const ERGradientStop* stops, int count, float t)
+{
+    if (t <= stops[0].position)
+        return stops[0].color;
+    for (int i = 1; i < count; i++)
+    {
+        if (t <= stops[i].position)
+        {
+            const float span = stops[i].position - stops[i - 1].position;
+            return lerp_argb(
+                stops[i - 1].color, stops[i].color, span > 0.0f ? (t - stops[i - 1].position) / span : 1.0f);
+        }
+    }
+    return stops[count - 1].color;
+}
+
 static uint32_t conic_shade(float px, float py, const void* ctx)
 {
     const ConicShader* s = ctx;
     float t = (atan2f(px, -py) * (180.0f / SWEEP_PI) - s->from) / 360.0f;
     t -= floorf(t);
-    if (t <= s->stops[0].position)
-        return s->stops[0].color;
-    for (int i = 1; i < s->count; i++)
-    {
-        if (t <= s->stops[i].position)
-        {
-            const float span = s->stops[i].position - s->stops[i - 1].position;
-            return lerp_argb(
-                s->stops[i - 1].color, s->stops[i].color, span > 0.0f ? (t - s->stops[i - 1].position) / span : 1.0f);
-        }
-    }
-    return s->stops[s->count - 1].color;
+    return stops_at(s->stops, s->count, t);
+}
+
+typedef struct
+{
+    float cx, cy;   /* gradient centre, relative to the box centre */
+    float irx, iry; /* reciprocal ellipse radii */
+    const ERGradientStop* stops;
+    int count;
+} RadialShader;
+
+static uint32_t radial_shade(float px, float py, const void* ctx)
+{
+    const RadialShader* s = ctx;
+    const float dx = (px - s->cx) * s->irx, dy = (py - s->cy) * s->iry;
+    return stops_at(s->stops, s->count, sqrtf(dx * dx + dy * dy));
 }
 
 /** Rasterises the anti-aliased ring `width` px inside the rounded box, coloured by `shade`. */
@@ -235,4 +257,23 @@ void er_border_conic_render(
         return;
     const ConicShader s = {from, stops, count};
     ring_render(x, y, w, h, radius, width, conic_shade, &s);
+}
+
+void er_border_radial_render(
+    int x, int y, int w, int h, int radius, int width, float size, float angle, const ERGradientStop* stops, int count)
+{
+    if (w <= 0 || h <= 0 || width <= 0 || count < 1 || size <= 0.0f)
+        return;
+    const float turn = angle / 360.0f - floorf(angle / 360.0f);
+    const float pos = turn < 0.5f ? turn * 2.0f : 2.0f - turn * 2.0f;
+    const float bw = (float)w * size, bh = (float)h * size;
+    /* background-position p puts the background's origin at (box - background) * p; farthest-corner of an
+       ellipse centred in its box has radii half the box times sqrt 2. */
+    const RadialShader s = {((float)w - bw) * pos + bw * 0.5f - (float)w * 0.5f,
+                            ((float)h - bh) * pos + bh * 0.5f - (float)h * 0.5f,
+                            1.0f / (bw * 0.5f * SWEEP_SQRT2),
+                            1.0f / (bh * 0.5f * SWEEP_SQRT2),
+                            stops,
+                            count};
+    ring_render(x, y, w, h, radius, width, radial_shade, &s);
 }

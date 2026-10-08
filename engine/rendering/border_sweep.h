@@ -50,6 +50,22 @@ void er_border_conic_render(
     int x, int y, int w, int h, int radius, int width, float from, const ERGradientStop* stops, int count);
 
 /**
+ * @brief Draws a CSS radial-gradient (ellipse farthest-corner) on a background `size` times the box, seen only
+ * through the ring: the moving shine border. `angle` places the background as a keyframe loop does: one
+ * 360-degree turn takes background-position from 0% 0% to 100% 100% at 180 and back.
+ *
+ * @param[in] x, y, w, h  The node's box in screen pixels.
+ * @param[in] radius      Corner radius of the box.
+ * @param[in] width       Ring thickness in pixels.
+ * @param[in] size        Background size as a multiple of the box (CSS background-size 300% = 3).
+ * @param[in] angle       Loop position in degrees, 0–360.
+ * @param[in] stops       Straight-alpha colour stops at positions 0–1 from the centre out, ascending.
+ * @param[in] count       Number of stops.
+ */
+void er_border_radial_render(
+    int x, int y, int w, int h, int radius, int width, float size, float angle, const ERGradientStop* stops, int count);
+
+/**
  * @brief How far the sweep reaches in from each edge of the box: the bands a phase change repaints.
  *
  * @param[in] radius  Corner radius.

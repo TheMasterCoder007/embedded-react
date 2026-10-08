@@ -230,6 +230,7 @@ typedef struct
     /* Conic border gradient */
     int16_t border_gradient_width;
     float border_gradient_angle;
+    float border_gradient_size;
     uint8_t border_gradient_stop_count;
     ERGradientStop border_gradient_stops[ER_BORDER_GRADIENT_MAX_STOPS];
 

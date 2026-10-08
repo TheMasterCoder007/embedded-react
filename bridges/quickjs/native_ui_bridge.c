@@ -2031,8 +2031,9 @@ static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
 
 /**
  * @brief Reads a View `borderGradient` ({type: 'conic', width, angle?, stops: [{color, offset?}]}): a conic
- * gradient seen through the border ring. `angle` is the start in degrees (0 = up, clockwise);
- * `borderGradientAngle` overrides it and can be animated.
+ * gradient seen through the border ring. {type: 'radial', width, size?, angle?, stops} is instead a CSS
+ * radial-gradient on a background `size` times the box, moved by the angle (see er_border_radial_render). `angle` is
+ * the start in degrees (0 = up, clockwise); `borderGradientAngle` overrides it and can be animated.
  *
  * @param[in]     ctx  QuickJS context.
  * @param[in]     v    The style value.
@@ -2046,10 +2047,21 @@ static void apply_border_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
     const char* ts = JS_ToCString(ctx, t);
     JS_FreeValue(ctx, t);
     const bool conic = ts && strcmp(ts, "conic") == 0;
+    const bool radial = ts && strcmp(ts, "radial") == 0;
     if (ts)
         JS_FreeCString(ctx, ts);
-    if (!conic)
+    if (!conic && !radial)
         return;
+    p->border_gradient_size = 0.0f;
+    if (radial)
+    {
+        JSValue sv = JS_GetPropertyStr(ctx, v, "size");
+        double size = 1.0;
+        if (JS_IsNumber(sv))
+            JS_ToFloat64(ctx, &size, sv);
+        p->border_gradient_size = size > 0.0 ? (float)size : 1.0f;
+        JS_FreeValue(ctx, sv);
+    }
     JSValue wv = JS_GetPropertyStr(ctx, v, "width");
     int16_t width = 0;
     if (to_dim(ctx, wv, &width))

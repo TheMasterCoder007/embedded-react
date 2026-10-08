@@ -13,6 +13,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Added
 
+- `borderGradient` also takes `{type: 'radial', width, size?, stops}`: a CSS `radial-gradient()` on a
+  background `size` times the box, seen through the same ring. `borderGradientAngle` moves it as a keyframe
+  loop moves `background-position`, for the moving shine border. Flow A only.
+
 - `View` takes `borderGradient: {type: 'conic', width, angle?, stops}`: a CSS `conic-gradient()` seen only
   through an anti-aliased ring `width` px thick along the rounded edge, over the content, for a
   rotating-gradient border. `borderGradientAngle` sets the start angle and animates on the native driver; an

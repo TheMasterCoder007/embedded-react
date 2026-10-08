@@ -759,6 +759,7 @@ extern "C"
         /* --- Border gradient (View-family): a conic gradient seen through the border ring --- */
         int16_t border_gradient_width;      /**< Ring thickness in pixels, inside the box; 0 = none. */
         float border_gradient_angle;        /**< Start angle in degrees: 0 = up, clockwise (CSS conic `from`). */
+        float border_gradient_size;         /**< Radial: background-size as a multiple of the box; 0 = conic. */
         uint8_t border_gradient_stop_count; /**< Valid entries in border_gradient_stops. */
         ERGradientStop border_gradient_stops[ER_BORDER_GRADIENT_MAX_STOPS]; /**< Ascending positions 0–1. */
 

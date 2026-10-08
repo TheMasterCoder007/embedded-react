@@ -19,6 +19,7 @@
 //     borderSweepPhase moves it on the native driver,
 //   • borderGradient {type: 'conic'} shows a conic gradient through the ring, and
 //     borderGradientAngle turns it on the native driver,
+//   • borderGradient {type: 'radial', size} moves a radial gradient across the ring with the angle,
 //   • dropping the style removes the ring.
 import {createRoot} from '../../src/renderer.js';
 import {Animated, Easing, View} from 'embedded-react';
@@ -122,6 +123,33 @@ NativeUI.commit();
 check(
   red(1, H / 2) > 0xc0 && red(W - 2, H / 2) === 0,
   'borderGradientAngle 180 turns the light to the left edge',
+);
+
+// White at the centre of a background 3x the box, clear at its farthest corner. At angle 0 the
+// background sits at 0% 0%, so its centre lies past the bottom-right corner; at 180, past the top-left.
+const shine = new Animated.Value(0);
+root.render(
+  box({
+    borderGradient: {
+      type: 'radial',
+      width: 4,
+      size: 3,
+      stops: [{color: '#ffffff'}, {color: '#ffffff00'}],
+    },
+    borderGradientAngle: shine,
+  }),
+);
+const bottomRight = () => red(W - 12, H - 2);
+const topLeft = () => red(12, 1);
+check(
+  bottomRight() > topLeft() + 0x40,
+  'a radial ring at angle 0 is lit at the bottom right',
+);
+shine.setValue(180);
+NativeUI.commit();
+check(
+  topLeft() > bottomRight() + 0x40,
+  'at angle 180 the radial light has moved to the top left',
 );
 
 root.render(box({}));
