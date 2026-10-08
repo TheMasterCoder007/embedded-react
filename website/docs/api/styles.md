@@ -47,7 +47,9 @@ The [Layout](../concepts/layout.md) page explains the solver and where it differ
 
 `borderRadius` and the four per-corner radii; `borderWidth` and the four per-side widths;
 `borderColor` and the four per-side colours; `borderStyle` (`solid`, `dashed`, `dotted`). Radius
-edges are anti-aliased (`ERUI_BORDER_AA`).
+edges are anti-aliased (`ERUI_BORDER_AA`). An `Image` clips its bitmap to its radii, as a `View` clips its background, so a
+rounded cover image needs no wrapper. An `overflow: 'hidden'` parent with a radius still clips its
+children to its rectangle only.
 
 ## Transform
 

@@ -257,6 +257,10 @@ typedef struct
     char image_name[ER_IMAGE_NAME_MAX + 1];
     uint8_t resize_mode; /**< ERResizeMode */
     uint32_t tint_color; /**< Straight-alpha ARGB8888 tint; 0 = no tint. */
+    int16_t radius_tl;   /**< Corner radii the bitmap is clipped to (borderRadius, per corner); 0 = square. */
+    int16_t radius_tr;
+    int16_t radius_br;
+    int16_t radius_bl;
 } ERImageProps;
 
 /**
