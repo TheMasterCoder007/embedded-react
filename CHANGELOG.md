@@ -11,6 +11,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ## [Unreleased]
 
+### Added
+
+- `er_image_unload(name)` removes a registered image and frees its registry slot, so an app that loads images
+  at runtime (an image cache) can give slots back and free the pixels. `er_image_load_argb(name, argb, w, h,
+  opaque)` registers ARGB8888 pixels whose opacity the caller already knows, skipping the scan of every pixel
+  that `er_image_load()` does on the calling thread.
+
 ## [0.15.0] - 2026-09-27
 ### Changed
 

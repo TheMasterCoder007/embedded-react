@@ -289,6 +289,16 @@ void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h
     image_registry_store(name, rgb565_buf, w, h, ER_IMG_RGB565);
 }
 
+bool er_image_load_argb(const char* name, const void* argb_buf, int w, int h, bool opaque)
+{
+    return image_registry_store_argb(name, argb_buf, w, h, opaque);
+}
+
+void er_image_unload(const char* name)
+{
+    image_registry_remove(name);
+}
+
 void er_image_render(const ERImageProps* props, int x, int y, int w, int h)
 {
     if (!props || w <= 0 || h <= 0)

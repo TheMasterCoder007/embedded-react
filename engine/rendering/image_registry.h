@@ -98,6 +98,20 @@ void image_registry_init(void);
 bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format);
 
 /**
+ * @brief image_registry_store() for premultiplied ARGB8888 whose opacity the caller already knows.
+ *
+ * Skips the registration scan, which costs a pass over every pixel on the calling thread.
+ */
+bool image_registry_store_argb(const char* name, const void* buf, int w, int h, bool opaque);
+
+/**
+ * @brief Frees the slot holding name; lookups miss until the name is stored again.
+ *
+ * The registry never owned the pixels, so the caller frees them afterwards.
+ */
+void image_registry_remove(const char* name);
+
+/**
  * @brief Retrieves a registered image entry by name.
  *
  * @param[in] name  Null-terminated asset name to look up.
