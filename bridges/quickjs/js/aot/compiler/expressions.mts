@@ -1306,19 +1306,19 @@ export const emitExprWide = (node: t.Node, env: Env): CExpr =>
 /**
  * Lowers an expression for a destination that holds an int, a float, or a string. C would narrow a 64-bit
  * value (a Date.now() / performance.now() timestamp, or a whole number past the int range) into one of those
- * without a warning, so it is refused here; the destinations that hold 64 bits call emitExprWide.
+ * without a warning, so it is refused here; the destinations that hold 64 bits call lowerExprWide.
  *
- * The result carries its C type, so the caller can pick the right printf spec or assignment. A destination
- * that holds text lowers through emitFormat instead: one printf format plus its arguments.
+ * The result carries its type, so the caller can pick the right printf spec or assignment. A destination
+ * that holds text lowers through lowerText instead.
  *
  * @param node  The expression.
  * @param env  The expression environment.
  *
  * @returns The lowered expression; never 64-bit.
  */
-export function emitExpr(node: t.Node, env: Env): CExpr {
-  const cExpr = emitExprWide(node, env);
-  if (cExpr.cType !== 'i64') return cExpr;
+export function lowerExpr(node: t.Node, env: Env): IrExpr {
+  const expr = lowerExprWide(node, env);
+  if (expr.cType !== 'i64') return expr;
 
   const error = aotError(
     'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
@@ -1331,6 +1331,18 @@ export function emitExpr(node: t.Node, env: Env): CExpr {
   }
 
   throw error;
+}
+
+/**
+ * lowerExpr, as C: what the emitters that do not build the IR yet use.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ *
+ * @returns The expression as C; never 64-bit.
+ */
+export function emitExpr(node: t.Node, env: Env): CExpr {
+  return toCExpr(lowerExpr(node, env));
 }
 
 /**

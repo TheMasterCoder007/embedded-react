@@ -101,7 +101,7 @@ function printNumber(expr: IrNumber): string {
  *
  * @returns C that is true exactly when JS would find it truthy.
  */
-const printCondition = (expr: IrExpr): string =>
+export const printCondition = (expr: IrExpr): string =>
   asCond({code: printExpr(expr), cType: expr.cType});
 
 /**
