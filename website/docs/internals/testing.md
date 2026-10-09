@@ -89,6 +89,19 @@ evaluates the engine version `_Static_assert`.
 The starters are a guardrail: a newcomer's first build must compile ahead of time and use only baked
 font sizes, so the smoke test asserts both. Changing the template means keeping those green.
 
+A refactor of the compiler must leave its output exactly as it was, and the unit tests only assert
+fragments of it. Record a baseline before the change and compare after each step:
+
+```bash
+cd bridges/quickjs/js
+npm run aot:baseline -- --ref HEAD   # without --ref: the working tree as it is now
+npm run aot:same                     # compiles the same inputs again; prints the first difference
+```
+
+The baseline is every `compileSource` call the AOT tests make plus both demos at each board size,
+with the C each one produced or the error it threw. When a change to the output is intended (a
+reworded error, say), check that `aot:same` shows only that change, then record a new baseline.
+
 ## Parity
 
 `npm run parity` renders the same demo through both flows and asserts the framebuffers match
@@ -126,7 +139,7 @@ on the board), so a claim about speed is a claim about a board.
 ## What CI runs
 
 Every push and pull request runs five jobs, all required to merge: **JS tests + version drift**
-(`npm test` plus `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
+(`npm test`, `npm run typecheck` and `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
 bridge build + heap-accounting test** (two allocator builds, each with the runtime and bytecode
 tiers), **AOT compile smoke** (generated C through `gcc`), and **Consumer smoke**. The docs site has
 its own workflow that builds on a pull request and deploys on `master`.

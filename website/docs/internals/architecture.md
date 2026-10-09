@@ -83,12 +83,15 @@ overlay. `er_js_alloc.c` is the allocator that reports real block sizes so Quick
 works on bare metal. `er_hotreload.c` parses the USB reload frames. `er_assets.c` registers an ERPK
 pack. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
 
-**The AOT compiler** (`bridges/quickjs/js/aot/compile.mjs`, with `style-map.mjs`) parses the
-app's JSX with Babel, folds module-level constants (including the `screen` size), and emits
-`app.gen.c`: node construction, a `useState` state machine, handlers as C functions, animations as
-engine calls, `PanResponder` configs as responder registrations. It rejects anything it cannot lower,
-by message, at build time. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds
-the AOT desktop host, and checks that one rendered frame has content.
+**The AOT compiler** (`bridges/quickjs/js/aot/`) parses the app's JSX with Babel, folds
+module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
+`useState` state machine, handlers as C functions, animations as engine calls, `PanResponder` configs
+as responder registrations. It rejects anything it cannot lower, by message, at build time.
+`compile.mts` is the entry point and CLI; each stage is a TypeScript module under `compiler/`, with
+one file per typed element in `compiler/elements/`. The stages are moving to a typed intermediate
+representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions and text lower
+to it so far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
+checks that one rendered frame has content.
 
 **The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty
 tracking, render orchestration, hit-testing), `layout/` (the Yoga-compatible solver), `rendering/`

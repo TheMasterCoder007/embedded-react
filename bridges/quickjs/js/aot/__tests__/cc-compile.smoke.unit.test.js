@@ -28,7 +28,7 @@ import {resolve, dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
-import {compileSource, bakeSvgArtifacts} from '../compile.mjs';
+import {compileSource, bakeSvgArtifacts} from '../compile.mts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const demosDir = join(root, 'demos');

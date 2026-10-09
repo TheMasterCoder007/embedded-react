@@ -381,13 +381,7 @@ function resolveAppComponent(cwd, explicit) {
 
 /** Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. */
 async function buildAot(cwd, explicit, outDir, screen) {
-  // Bake the target panel size (--screen <WxH>) BEFORE importing the compiler: it reads ER_AOT_SCREEN_W/H at
-  // module load to fold a responsive app's `screen.width` branch to the one that board renders.
-  if (screen) {
-    process.env.ER_AOT_SCREEN_W = screen.w;
-    process.env.ER_AOT_SCREEN_H = screen.h;
-  }
-  const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mjs');
+  const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mts');
   const {bakeAssets} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
   const {analyzeFontSizes, warnFontSizes} =
@@ -401,9 +395,12 @@ async function buildAot(cwd, explicit, outDir, screen) {
     const svgArtifacts = await bakeSvgArtifacts(src, appDir);
     // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
     // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
+    // The target panel size (--screen <WxH>) folds a responsive app's `screen.width` branch to the one
+    // that the board renders. Without it, the compiler falls back to ER_AOT_SCREEN_W/H, then 800x480.
     result = compileSource(src, projectIdentity(appPath), {
       filename: appPath,
       svgArtifacts,
+      screen, // null without --screen
     });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
@@ -518,7 +515,7 @@ async function build(args) {
       process.exit(1);
     }
     const raw = args[screenIdx + 1];
-    const m = raw && /^(\d+)x(\d+)$/i.exec(raw);
+    const m = raw && /^([1-9]\d*)x([1-9]\d*)$/i.exec(raw);
     if (!m) {
       console.error(
         `--screen expects <width>x<height> (e.g. --screen 240x320), got: ${raw ?? '(nothing)'}\n`,
@@ -526,7 +523,7 @@ async function build(args) {
       usage();
       process.exit(1);
     }
-    screen = {w: m[1], h: m[2]};
+    screen = {width: Number(m[1]), height: Number(m[2])};
   }
 
   // Consume the flag VALUES so they aren't mistaken for the entry (which is a bare, non-`--` token).

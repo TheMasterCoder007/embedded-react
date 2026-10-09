@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {compileSource} from '../compile.mjs';
+import {compileSource} from '../compile.mts';
 
 // Flow B TypeScript support: an App.tsx is parsed with the `typescript` plugin and scrubbed of all
 // type-only syntax before the JSX→C walker runs. The contract is that the generated C is IDENTICAL to the

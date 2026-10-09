@@ -24,13 +24,12 @@ export default defineConfig({
     include: [
       'src/**/__tests__/**/*.unit.test.{js,jsx}',
       'assets/**/__tests__/**/*.unit.test.{js,jsx}',
-      'aot/**/__tests__/**/*.unit.test.{js,mjs}',
+      'aot/**/__tests__/**/*.unit.test.{js,mjs,mts}',
       'hotreload/**/__tests__/**/*.unit.test.{js,mjs}', // on-device hot-reload transport framing
       '__tests__/**/*.unit.test.{js,mjs}', // package-root dev tooling (sim-server / persist transform)
     ],
     environment: 'node',
   },
-  // Let .jsx unit tests use the automatic JSX runtime (same as the bundle build). vitest 3 transforms
-  // with esbuild, which defaults to the classic runtime, so this must be set explicitly.
-  esbuild: {jsx: 'automatic'},
+  // .jsx unit tests use the automatic JSX runtime, as the bundle build does.
+  oxc: {jsx: {runtime: 'automatic'}},
 });
