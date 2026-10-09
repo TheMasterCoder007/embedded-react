@@ -488,20 +488,17 @@ static ERNode* hit_test_node(ERNode* node, int x, int y)
             const int child_x = node_scrolls ? qx + (int)node->scroll_offset_x : qx;
             const int child_y = node_scrolls ? qy + (int)node->scroll_offset_y : qy;
 
-            uint16_t child_tags[ERUI_MAX_NODES];
-            const int child_count = er_collect_children(node, child_tags, ERUI_MAX_NODES);
-            er_sort_children_by_z_index(child_tags, child_count);
-
-            for (int i = child_count - 1; i >= 0; i--)
+            /* The topmost hit is the last one in paint order; a missed child fails its own bounds check. */
+            ERNode* top_hit = NULL;
+            ERChildCursor cur;
+            for (ERNode* child = er_child_first(&cur, node); child; child = er_child_next(&cur))
             {
-                ERNode* child = er_get_node(child_tags[i]);
-                if (!child)
-                    continue;
-
                 ERNode* child_hit = hit_test_node(child, child_x, child_y);
                 if (child_hit)
-                    return child_hit;
+                    top_hit = child_hit;
             }
+            if (top_hit)
+                return top_hit;
         }
     }
 

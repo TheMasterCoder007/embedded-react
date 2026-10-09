@@ -27,6 +27,16 @@
 /* Forward declaration (full definition in er_node_internal.h) */
 struct ERNode;
 
+/* Keeps a helper's stack frame out of its caller's: a large buffer in a rarely taken path must not be
+ * folded into a frame that is live on every call. noclone stops GCC duplicating it per call site. */
+#if defined(__clang__)
+#define ER_NOINLINE __attribute__((noinline))
+#elif defined(__GNUC__)
+#define ER_NOINLINE __attribute__((noinline, noclone))
+#else
+#define ER_NOINLINE
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Shared render math
  *

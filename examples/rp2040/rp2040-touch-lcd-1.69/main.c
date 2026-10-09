@@ -81,14 +81,14 @@ static uint32_t now_ms(void)
 #define ER_WATCHDOG_MS 1000U
 
 /* Core 0's stack is 8 KB: SCRATCH_Y (PICO_STACK_SIZE, see CMakeLists.txt) plus this lower half in
- * SCRATCH_X. A full repaint of the watch face reaches ~7.5 KB, so one 4 KB bank is not enough. This
+ * SCRATCH_X. The watch face peaks at ~3.1 KB; the rest is headroom for deeper apps. This
  * claims SCRATCH_X the same way the SDK claims it for core 1's stack, so starting core 1 (or placing
  * anything else there) fails to link instead of sharing the memory. */
 static uint32_t __attribute__((section(".stack1"))) s_stack_low[4096 / sizeof(uint32_t)];
 extern uint32_t __StackTop[];
 
 /* The top STACK_GUARD_BYTES of main RAM (2 KB, set in CMakeLists.txt), just below the stack, is a
- * no-access guard. It is bigger than any engine stack frame (the text rasterizer's is ~1.7 KB), so an
+ * no-access guard. It is bigger than any engine stack frame (the largest, the arc sector fill, is ~0.8 KB), so an
  * overflow cannot step over it into the heap. */
 _Static_assert(STACK_GUARD_BYTES >= 256U && (STACK_GUARD_BYTES & (STACK_GUARD_BYTES - 1U)) == 0U,
                "the MPU guard must be a power of two of at least 256 bytes");

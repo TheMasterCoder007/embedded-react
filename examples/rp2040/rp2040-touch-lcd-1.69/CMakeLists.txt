@@ -159,7 +159,7 @@ target_link_libraries(embedded-react-watch
 )
 
 # Core 0's stack is 8 KB: all of SCRATCH_Y here, plus SCRATCH_X, which main.c claims as its lower half
-# (core 1 never runs). A full repaint of the watch face measures ~7.5 KB deep. main.c also puts a 2 KB
+# (core 1 never runs). The watch face peaks at ~3.1 KB; the rest is headroom for deeper apps. main.c also puts a 2 KB
 # MPU guard between the stack and the heap, so an overflow faults instead of corrupting the framebuffer;
 # stack_guard.ld fails the link if .data/.bss ever grow into that guard.
 set(ER_STACK_GUARD_BYTES 2048)

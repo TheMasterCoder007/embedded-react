@@ -21,11 +21,18 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `maxTextSpans`). One left out still falls back to its `ER_AOT_*` variable, now read on each compile rather than
   at import, so one process can compile for several boards. A compile error names the size it was given; with
   a `screen` option it used to report the default.
+
+- Rendering uses far less stack, with identical pixels. Each level of the node tree costs 288 B instead of
+  456 B on the RP2040, and 400 B instead of 1,488 B on the ESP32-S3. Drawing a Text costs 848 B
+  instead of 3,192 B. Touch hit-testing drops its per-level child array as well.
+
+- Anti-aliased text draws faster: 2- and 4-bit fonts look up each coverage level from a small per-glyph
+  table, which replaces four divides per pixel.
   
 ### Fixed
 
-- The RP2040 watch example gives its stack an explicit 8 KB with a guard below it. A full repaint
-  needs about 7.5 KB, past the SDK's 2 KB default, and a deeper app now reboots the board instead of silently
+- The RP2040 watch example gives its stack an explicit 8 KB with a guard below it. The watch face needs
+  about 3.1 KB, past the SDK's 2 KB default, and a deeper app now reboots the board instead of silently
   overwriting the framebuffer.
 
 - A Flow B `Math.<name>` or `e.layout.<name>` that names a built-in object property (`Math.toString`,
