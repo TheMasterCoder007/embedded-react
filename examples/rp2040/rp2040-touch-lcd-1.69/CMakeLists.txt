@@ -155,7 +155,13 @@ target_link_libraries(embedded-react-watch
     hardware_spi
     hardware_i2c
     hardware_pwm
+    hardware_watchdog
 )
+
+# Core 0's stack is 8 KB: all of SCRATCH_Y here, plus SCRATCH_X, which main.c claims as its lower half
+# (core 1 never runs). A full repaint of the watch face measures ~7.5 KB deep. main.c also puts a 2 KB
+# MPU guard between the stack and the heap, so an overflow faults instead of corrupting the framebuffer.
+target_compile_definitions(embedded-react-watch PRIVATE PICO_STACK_SIZE=0x1000)
 
 # Bring-up debug aids (see main.c): -DER_BOARD_DEBUG=1 waits for USB + heartbeat-logs; =2 also holds
 # a color-bar test pattern at boot.

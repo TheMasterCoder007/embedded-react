@@ -34,6 +34,8 @@
 #include "pedometer.h"
 #include "pico_spi_lcd_backend.h"
 
+#include "hardware/structs/mpu.h"
+#include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
 #include <stdio.h>
@@ -75,8 +77,79 @@ static uint32_t now_ms(void)
 #define ER_BOARD_DEBUG 0
 #endif
 
+/** @brief Watchdog timeout. A frame takes tens of ms, so only a hang (or a stack-guard lockup) reaches it. */
+#define ER_WATCHDOG_MS 1000U
+
+/* Core 0's stack is 8 KB: SCRATCH_Y (PICO_STACK_SIZE, see CMakeLists.txt) plus this lower half in
+ * SCRATCH_X. A full repaint of the watch face reaches ~7.5 KB, so one 4 KB bank is not enough. This
+ * claims SCRATCH_X the same way the SDK claims it for core 1's stack, so starting core 1 (or placing
+ * anything else there) fails to link instead of sharing the memory. */
+static uint32_t __attribute__((section(".stack1"))) s_stack_low[4096 / sizeof(uint32_t)];
+extern uint32_t __StackTop[];
+
+/* The top 2 KB of main RAM, just below the stack, is a no-access guard. It is bigger than any engine
+ * stack frame (the text rasterizer's is ~1.7 KB), so an overflow cannot step over it into the heap. */
+#define STACK_GUARD_BYTES 2048U
+#define STACK_GUARD_MPU_SIZE 10U /* MPU region size is 2^(SIZE+1) bytes */
+#define MPU_RASR_XN_BITS (1U << 28)
+
+/** @brief Turns on the MPU guard below the stack; a stack overflow then faults instead of writing the heap. */
+static void stack_guard_install(void)
+{
+    mpu_hw->rbar = ((uint32_t)s_stack_low - STACK_GUARD_BYTES) | M0PLUS_MPU_RBAR_VALID_BITS;
+    mpu_hw->rasr = M0PLUS_MPU_RASR_ENABLE_BITS | (STACK_GUARD_MPU_SIZE << M0PLUS_MPU_RASR_SIZE_LSB) | MPU_RASR_XN_BITS;
+    mpu_hw->ctrl = M0PLUS_MPU_CTRL_PRIVDEFENA_BITS | M0PLUS_MPU_CTRL_ENABLE_BITS;
+}
+
+/** @brief malloc's heap: grows from the end of .bss up to the stack guard, and fails there instead of
+ *  faulting in it. Replaces the SDK's weak _sbrk, which stops at the stack itself. */
+void* _sbrk(int incr)
+{
+    extern char end;
+    static char* heap_end = &end;
+    char* const limit = (char*)s_stack_low - STACK_GUARD_BYTES;
+    if (incr > limit - heap_end)
+    {
+        return (void*)-1;
+    }
+    char* const prev = heap_end;
+    heap_end += incr;
+    return prev;
+}
+
+#if ER_BOARD_DEBUG
+#define STACK_PAINT 0xA5A5A5A5u
+
+/** @brief Fills the unused stack below the caller with a known pattern, for stack_high_water(). */
+static void __attribute__((noinline)) stack_paint(void)
+{
+    uint32_t sp;
+    __asm volatile("mov %0, sp" : "=r"(sp));
+    for (volatile uint32_t* p = s_stack_low; (uint32_t)p < sp - 64u; p++)
+    {
+        *p = STACK_PAINT;
+    }
+}
+
+/** @brief Returns the deepest the stack has reached since stack_paint(), in bytes from its top. */
+static uint32_t stack_high_water(void)
+{
+    const uint32_t* p = s_stack_low;
+    while (p < __StackTop && *p == STACK_PAINT)
+    {
+        p++;
+    }
+    return (uint32_t)(__StackTop - p) * sizeof(uint32_t);
+}
+#endif
+
 int main(void)
 {
+#if ER_BOARD_DEBUG
+    stack_paint();
+#endif
+    stack_guard_install();
+
     /* Bring the panel up FIRST — board_display_init()'s very first action drives the backlight low, so
      * the panel's random power-on GRAM ("rainbow") is never lit. Doing it before stdio_init_all() makes
      * that backlight-off happen as early as the firmware possibly can. The backlight stays off until the
@@ -92,6 +165,10 @@ int main(void)
     }
 #endif
     printf("embedded-react RP2040-Touch-LCD-1.69 host — Flow B (AOT, no QuickJS)\n");
+    if (watchdog_enable_caused_reboot())
+    {
+        printf("rebooted by the watchdog: a hang, or a stack overflow into the guard\n");
+    }
 
     if (!display_ok)
     {
@@ -137,6 +214,7 @@ int main(void)
 #if ER_BOARD_DEBUG < 2
     board_backlight(90); /* debug builds already lit it for the test pattern above */
 #endif
+    watchdog_enable(ER_WATCHDOG_MS, true);
 
     /* Frame loop. The press state machine turns CST816S polls into down/move/up for the engine. */
     uint32_t prev = now_ms();
@@ -145,6 +223,7 @@ int main(void)
     while (true)
     {
         const uint32_t frame_start = now_ms();
+        watchdog_update();
 
         if (touch)
         {
@@ -228,10 +307,12 @@ int main(void)
         s_frames++;
         if (now_ms() - s_last_beat >= 1000U)
         {
-            printf("beat t=%lus fps=%lu steps=%lu\n",
+            printf("beat t=%lus fps=%lu steps=%lu stack=%lu/%lu\n",
                    (unsigned long)(now_ms() / 1000U),
                    (unsigned long)s_frames,
-                   (unsigned long)pedo.steps);
+                   (unsigned long)pedo.steps,
+                   (unsigned long)stack_high_water(),
+                   (unsigned long)((__StackTop - s_stack_low) * sizeof(uint32_t)));
             s_frames = 0;
             s_last_beat = now_ms();
         }
