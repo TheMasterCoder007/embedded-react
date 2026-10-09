@@ -89,8 +89,8 @@ module-level constants (including the `screen` size), and emits `app.gen.c`: nod
 as responder registrations. It rejects anything it cannot lower, by message, at build time.
 `compile.mts` is the entry point and CLI; each stage is a TypeScript module under `compiler/`, with
 one file per typed element in `compiler/elements/`. The stages are moving to a typed intermediate
-representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions and text lower
-to it so far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
+representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions, text, and handler
+statements lower to it so far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
 checks that one rendered frame has content.
 
 **The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty

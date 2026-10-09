@@ -23,16 +23,15 @@ import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {cScalarType, floatLit} from './c-syntax.mts';
 import {
-  CHECKED_OP,
-  asCond,
   mix64Error,
   staticInt,
   isTime64,
   constDivisor,
   emitExprWide,
   emitExpr,
-  emitFormat,
-  formatArgs,
+  lowerExpr,
+  lowerExprWide,
+  lowerText,
 } from './expressions.mts';
 import {isFn} from './collect.mts';
 import {
@@ -52,8 +51,11 @@ import {
   rectEntriesC,
   lineEntriesC,
 } from './svg.mts';
+import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
+import type {IrExpr, IrTyped} from './ir/expressions.mts';
+import type {IrItemValue, IrStmt, IrTimer} from './ir/statements.mts';
 import type {VectorGeometry} from './svg.mts';
 import type {
   CExpr,
@@ -81,29 +83,34 @@ import type {
  */
 export const APP_UPDATE_CALL = '    app_update();';
 
+/** The constant 0, which a remainder by 0 or ±1 stores. */
+const ZERO: IrExpr = {kind: 'number', value: 0, cType: 'int'};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Compiles a list-state setter call (`setItems(...)`) to bounded C array mutations.
+ * Lowers a list-state setter call (`setItems(...)`) to bounded list operations.
  *
  * @param listState  The list state.
  * @param nextList  The setter's argument: the list's next value.
  * @param env  The expression environment.
  *
- * @returns The C statements.
+ * @returns The statements.
  */
-function compileListOp(
+function lowerListOp(
   listState: ListState,
   nextList: t.CallExpression['arguments'][number],
   env: Env,
-): string[] {
-  const {arrayName, countMember, cap: capacity, struct} = listState;
+): IrStmt[] {
+  const {cap: capacity, struct} = listState;
 
   // setItems([...items, a, b]) — append; setItems([]) — clear.
   if (nextList.type === 'ArrayExpression') {
-    if (nextList.elements.length === 0) return [`    ${countMember} = 0;`];
+    if (nextList.elements.length === 0) {
+      return [{kind: 'clearList', list: listState}];
+    }
 
     const [firstElement, ...appendedItems] = nextList.elements;
     if (
@@ -116,7 +123,7 @@ function compileListOp(
     }
 
     // Each appended object literal fills the fields of the next free slot; a full list drops it.
-    const lines = [];
+    const statements: IrStmt[] = [];
     for (const item of appendedItems) {
       if (item!.type !== 'ObjectExpression') {
         throw new Error('AOT: appended list items must be object literals');
@@ -131,27 +138,24 @@ function compileListOp(
           ],
         ),
       );
-      lines.push(`    if (${countMember} < ${capacity})`, '    {');
+      const values: IrItemValue[] = [];
       for (const field of struct.fields) {
         const valueNode = props.get(field.key);
         if (!valueNode) continue;
         if (field.kind === 'string') {
-          lines.push(
-            `        snprintf(${arrayName}[${countMember}].${field.key}, ` +
-              `sizeof(${arrayName}[${countMember}].${field.key}), ` +
-              `${formatArgs(emitFormat(valueNode, env))});`,
-          );
+          values.push({field, text: lowerText(valueNode, env)});
         } else {
-          lines.push(
-            `        ${arrayName}[${countMember}].${field.key} = ${storeCode(emitExpr(valueNode, env), field.kind)};`,
-          );
+          values.push({
+            field,
+            value: storeValue(lowerExpr(valueNode, env), field.kind),
+          });
         }
       }
 
-      lines.push(`        ${countMember}++;`, '    }');
+      statements.push({kind: 'appendItem', list: listState, values});
     }
 
-    return lines;
+    return statements;
   }
 
   // slice(0, end) keeps the first items by JS rules: a negative end counts back, a large or missing one keeps all.
@@ -177,21 +181,23 @@ function compileListOp(
     if (staticEnd !== null) {
       const clampedEnd = Math.max(-capacity, Math.min(capacity, staticEnd));
       if (clampedEnd === -1) {
-        return [`    if (${countMember} > 0) ${countMember}--;`];
+        return [{kind: 'dropLastItem', list: listState}];
       }
       if (clampedEnd >= 0) {
-        return [
-          `    ${countMember} = (${countMember} < ${clampedEnd}) ? ${countMember} : ${clampedEnd};`,
-        ];
+        return [{kind: 'keepFirstItems', list: listState, count: clampedEnd}];
       }
       return [
-        `    ${countMember} = app_slice_len(${countMember}, ${clampedEnd});`,
+        {
+          kind: 'sliceItems',
+          list: listState,
+          end: {kind: 'number', value: clampedEnd, cType: 'int'},
+        },
       ];
     }
 
     // A runtime end goes through app_slice_len, which applies the same JS rules.
     return [
-      `    ${countMember} = app_slice_len(${countMember}, ${asInt(emitExpr(end, env))});`,
+      {kind: 'sliceItems', list: listState, end: asInt(lowerExpr(end, env))},
     ];
   }
 
@@ -213,22 +219,12 @@ function blockList(node: t.Statement): t.Statement[] {
 }
 
 /**
- * Matches `<member>` as a whole C lvalue, so `s_state.label` does not also match `s_state.label2`.
- *
- * @param member  A C lvalue.
- *
- * @returns A pattern that finds it in the C source.
- */
-const readsMember = (member: string): RegExp =>
-  new RegExp(`(^|[^\\w.])${member.replace(/\./g, '\\.')}(?![\\w])`);
-
-/**
  * Checks a value written to a numeric state or ref slot, whose C type came from its initial value. A 64-bit
  * timestamp written to an int slot is recorded in env.found, and compileWidened compiles again with that
  * slot widened to int64_t. It cannot go into a float or boolean slot (a 64-bit constant can go into a float
  * one), and a widened slot takes no floats.
  *
- * @param valueExpr  The lowered value.
+ * @param value  The lowered value.
  * @param slotType  The slot's C kind.
  * @param isBool  The slot holds a boolean.
  * @param slotCName  The slot's C name, for env.found.
@@ -236,20 +232,20 @@ const readsMember = (member: string): RegExp =>
  * @param env  The expression environment.
  */
 function storeCheck(
-  valueExpr: CExpr,
+  value: IrTyped,
   slotType: CType,
   isBool: boolean,
   slotCName: string,
   slotDescription: string,
   env: Env,
 ): void {
-  if (valueExpr.cType === 'i64' && slotType !== 'i64') {
+  if (value.cType === 'i64' && slotType !== 'i64') {
     if (slotType === 'int' && !isBool) {
       env.found.add(slotCName);
       return;
     }
 
-    if (valueExpr.lit && slotType === 'float') return;
+    if (value.lit && slotType === 'float') return;
 
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${slotDescription}`,
@@ -257,58 +253,71 @@ function storeCheck(
     );
   }
 
-  if (slotType === 'i64' && valueExpr.cType === 'float') {
+  if (slotType === 'i64' && value.cType === 'float') {
     throw mix64Error();
   }
 }
 
 /**
- * `valueExpr` as C for an int destination. A float goes through app_f2i: C's own conversion is undefined
- * behavior for NaN or a value past the int range.
+ * `value` for an int destination. A float goes through app_f2i: C's own conversion is undefined behavior for
+ * NaN or a value past the int range.
  *
- * @param valueExpr  The lowered value.
+ * @param value  The lowered value.
  *
- * @returns C for an int.
+ * @returns The value as an int.
  */
-const asInt = (valueExpr: CExpr): string =>
-  valueExpr.cType === 'float' ? `app_f2i(${valueExpr.code})` : valueExpr.code;
+const asInt = (value: IrExpr): IrExpr =>
+  value.cType === 'float'
+    ? {kind: 'toInt', operand: value, cType: 'int'}
+    : value;
 
 /**
- * `valueExpr` as C for a slot of `slotType`: an int slot takes a float the way asInt does.
+ * `value` for a slot of `slotType`: an int slot takes a float the way asInt does.
  *
- * @param valueExpr  The lowered value.
+ * @param value  The lowered value.
  * @param slotType  The slot's C kind.
  *
- * @returns C for the slot.
+ * @returns The value the slot stores.
  */
-const storeCode = (valueExpr: CExpr, slotType: CType): string =>
-  slotType === 'int' ? asInt(valueExpr) : valueExpr.code;
+const storeValue = (value: IrExpr, slotType: CType): IrExpr =>
+  slotType === 'int' ? asInt(value) : value;
 
 /**
- * Emits C to write an expression into a scalar state slot: snprintf for a string buffer (so a `+` chain
- * becomes a format + args), plain assign otherwise.
+ * A read of a ref's current value.
+ *
+ * @param ref  The ref.
+ *
+ * @returns The read.
+ */
+const refRead = (ref: RefRecord): IrExpr => ({
+  kind: 'ref',
+  ref,
+  cType: ref.cType as CType,
+});
+
+/**
+ * Lowers a write of an expression into a scalar state slot: text for a string buffer (so a `+` chain keeps its
+ * parts), a plain value otherwise.
  *
  * @param scalarState  The state slot.
  * @param valueNode  The value.
  * @param env  The expression environment.
- * @param indent  The statement's indentation.
  *
- * @returns The C statement (several lines, joined, for a string that reads itself).
+ * @returns The write.
  */
-function scalarAssign(
+function lowerScalarSet(
   scalarState: ScalarState,
   valueNode: t.Node,
   env: Env,
-  indent: string,
-): string {
+): IrStmt {
   if (scalarState.cType !== 'string') {
     // A 64-bit slot takes int `+ - *` worked out in 64 bits.
-    const valueExpr = emitExprWide(
+    const value = lowerExprWide(
       valueNode,
       scalarState.cType === 'i64' ? {...env, math64: true} : env,
     );
     storeCheck(
-      valueExpr,
+      value,
       scalarState.cType,
       scalarState.isBool,
       scalarState.cField,
@@ -316,27 +325,18 @@ function scalarAssign(
       env,
     );
 
-    return `${indent}${scalarState.cMember} = ${storeCode(valueExpr, scalarState.cType)};`;
+    return {
+      kind: 'setState',
+      state: scalarState,
+      value: storeValue(value, scalarState.cType),
+    };
   }
 
-  // A string slot is written with snprintf, the `+` chain becoming its format and arguments.
-  const format = emitFormat(valueNode, env);
-  // Build in a temporary when the value reads the slot itself: snprintf's source and destination may not overlap.
-  if (
-    format.args.some(formatArg =>
-      readsMember(scalarState.cMember).test(formatArg),
-    )
-  ) {
-    return [
-      `${indent}{`,
-      `${indent}    char next[sizeof(${scalarState.cMember})];`,
-      `${indent}    snprintf(next, sizeof(next), ${formatArgs(format)});`,
-      `${indent}    memcpy(${scalarState.cMember}, next, strlen(next) + 1);`,
-      `${indent}}`,
-    ].join('\n');
-  }
-
-  return `${indent}snprintf(${scalarState.cMember}, sizeof(${scalarState.cMember}), ${formatArgs(format)});`;
+  return {
+    kind: 'setStateText',
+    state: scalarState,
+    text: lowerText(valueNode, env),
+  };
 }
 
 /**
@@ -468,21 +468,20 @@ function imperativeShape(
 
 /**
  * Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)` to: fill a mutable op-tape, push it to the node, and
- * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update.
+ * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update. The shapes'
+ * geometry is still C from the SVG emitter, so the statement carries C lines.
  *
  * @param expr  The updateVector call.
  * @param env  The expression environment.
  * @param ctx  The statement compiler's context.
- * @param indent  The statements' indentation.
  *
- * @returns The C statements.
+ * @returns The statement.
  */
-function compileUpdateVector(
+function lowerUpdateVector(
   expr: t.CallExpression,
   env: Env,
   ctx: StatementContext,
-  indent: string,
-): string[] {
+): IrStmt {
   // The first argument must be a node ref, and the second an array literal of shapes.
   const out = ctx.out;
   const [refArg, shapesArg, dirtyArg] = expr.arguments;
@@ -525,14 +524,13 @@ function compileUpdateVector(
       `{\n${paints.map(paint => '    ' + emitVectorPaint(paint)).join(',\n')}\n};`,
   );
   const lines = [
-    ...decls.map(decl => `${indent}${decl}`),
+    ...decls,
     ...entries.map(
-      (entry, entryIndex) =>
-        `${indent}s_uv${vectorId}_ops[${entryIndex}] = ${entry};`,
+      (entry, entryIndex) => `s_uv${vectorId}_ops[${entryIndex}] = ${entry};`,
     ),
   ];
   lines.push(
-    `${indent}er_node_set_vector_ops(${ref.cVar}, s_uv${vectorId}_ops, ${opCount}, ` +
+    `er_node_set_vector_ops(${ref.cVar}, s_uv${vectorId}_ops, ${opCount}, ` +
       `s_uv${vectorId}_paints, ${paints.length}, NULL, 0);`,
   );
 
@@ -552,29 +550,29 @@ function compileUpdateVector(
       ? 'app_vector_dirty'
       : 'er_node_set_vector_dirty_rect';
     lines.push(
-      `${indent}${dirtyFn}(${ref.cVar}, ${dirtyRect.map(edge => edge.code).join(', ')});`,
+      `${dirtyFn}(${ref.cVar}, ${dirtyRect.map(edge => edge.code).join(', ')});`,
     );
   }
 
-  return lines;
+  return {kind: 'foreign', lines, isIndented: false};
 }
 
 /**
- * setInterval/setTimeout(cb, ms) → a C `er_timer_add(ms, repeat, fn)` expr; registers cb as a timer fn.
+ * Lowers setInterval/setTimeout(cb, ms) to a timer, and registers cb as a timer function of its own.
  *
  * @param expr  The setInterval / setTimeout call.
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param ctx  The statement compiler's context.
  *
- * @returns The C expression; it evaluates to the timer's id.
+ * @returns The timer.
  */
-function compileTimerAdd(
+function lowerTimer(
   expr: t.CallExpression,
   env: Env,
   state: StateTable,
   ctx: StatementContext,
-): string {
+): IrTimer {
   const cb = expr.arguments[0];
   if (!isFn(cb)) {
     throw aotError(
@@ -583,15 +581,10 @@ function compileTimerAdd(
     );
   }
 
-  // A timestamp or float delay goes through ToInt32 and a floor at 0, as Flow A's setTimeout does.
-  const delay = expr.arguments[1] ? emitExprWide(expr.arguments[1], env) : null;
-  const delayMs = !delay
-    ? '0'
-    : delay.cType === 'i64'
-      ? `app_delay_ms64(${delay.code})`
-      : delay.cType === 'float'
-        ? `app_delay_msf(${delay.code})`
-        : delay.code;
+  // Any delay is accepted here; the printer converts a timestamp or float one the way Flow A's setTimeout does.
+  const delay = expr.arguments[1]
+    ? lowerExprWide(expr.arguments[1], env)
+    : null;
   const isRepeating = (expr.callee as t.Identifier).name === 'setInterval';
 
   // Reserve the timer's slot before compiling its body, which may add timers of its own.
@@ -600,12 +593,12 @@ function compileTimerAdd(
   ctx.out.usesTimers = true;
   ctx.out.timerFns.push({name: timerFnName, body: null});
   ctx.out.timerFns[slot].body = compileHandler(cb, env, state, ctx.out);
-  return `er_timer_add((int)(${delayMs}), ${isRepeating ? 'true' : 'false'}, ${timerFnName})`;
+  return {delay, isRepeating, fn: timerFnName};
 }
 
 /**
  * Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params
- * as C locals, then compiles the helper body here in the current env/state/ctx. Guards against recursion.
+ * as locals, then lowers the helper body here in the current env/state/ctx. Guards against recursion.
  *
  * @param helperName  The helper's name.
  * @param helper  The helper.
@@ -613,9 +606,8 @@ function compileTimerAdd(
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param ctx  The statement compiler's context.
- * @param indent  The statements' indentation.
  *
- * @returns The helper's body as C statements.
+ * @returns The helper's body as statements.
  */
 function inlineHelperCall(
   helperName: string,
@@ -624,8 +616,7 @@ function inlineHelperCall(
   env: Env,
   state: StateTable,
   ctx: StatementContext,
-  indent: string,
-): string[] {
+): IrStmt[] {
   // A helper already being inlined further up this call chain is recursive.
   ctx.inlining = ctx.inlining ?? new Set();
   if (ctx.inlining.has(helperName)) {
@@ -671,7 +662,7 @@ function inlineHelperCall(
   ctx.inlining.add(helperName);
   ctx.allowReturn = false;
   try {
-    return compileStmts(statements, {...env, locals}, state, ctx, indent);
+    return lowerStmts(statements, {...env, locals}, state, ctx);
   } finally {
     ctx.allowReturn = outerAllowReturn;
     ctx.inlining.delete(helperName);
@@ -679,31 +670,29 @@ function inlineHelperCall(
 }
 
 /**
- * Compiles one handler ExpressionStatement: a state setter, ref mutation, timer, updateVector, helper call, or
- * Animated.*(...).start() / .stop() (see compileHandlerExpr, the located entry point).
+ * Lowers one handler ExpressionStatement: a state setter, ref mutation, timer, updateVector, helper call, or
+ * Animated.*(...).start() / .stop() (see lowerHandlerExpr, the located entry point).
  *
  * @param expr  The statement's expression.
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param ctx  The statement compiler's context.
- * @param indent  The statements' indentation.
  *
- * @returns The C statements.
+ * @returns The statements.
  */
-function compileHandlerExprImpl(
+function lowerHandlerExprImpl(
   expr: t.Expression,
   env: Env,
   state: StateTable,
   ctx: StatementContext,
-  indent: string,
-): string[] {
+): IrStmt[] {
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
   if (
     expr.type === 'CallExpression' &&
     expr.callee.type === 'Identifier' &&
     expr.callee.name === 'updateVector'
   ) {
-    return compileUpdateVector(expr, env, ctx, indent);
+    return [lowerUpdateVector(expr, env, ctx)];
   }
 
   // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).
@@ -712,7 +701,13 @@ function compileHandlerExprImpl(
     expr.callee.type === 'Identifier' &&
     (expr.callee.name === 'setInterval' || expr.callee.name === 'setTimeout')
   ) {
-    return [`${indent}${compileTimerAdd(expr, env, state, ctx)};`];
+    return [
+      {
+        kind: 'startTimer',
+        timer: lowerTimer(expr, env, state, ctx),
+        idLocal: null,
+      },
+    ];
   }
 
   // clearInterval / clearTimeout(id) → deactivate the timer slot.
@@ -722,9 +717,7 @@ function compileHandlerExprImpl(
     (expr.callee.name === 'clearInterval' ||
       expr.callee.name === 'clearTimeout')
   ) {
-    return [
-      `${indent}er_timer_clear(${asInt(emitExpr(expr.arguments[0], env))});`,
-    ];
+    return [{kind: 'clearTimer', id: asInt(lowerExpr(expr.arguments[0], env))}];
   }
 
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
@@ -738,7 +731,7 @@ function compileHandlerExprImpl(
 
     // Lower the right side in the ref's width and check it fits; a 64-bit `%=` keeps its constant divisor.
     const refEnv = ref.cType === 'i64' ? {...env, math64: true} : env;
-    const valueExpr = emitExprWide(expr.right, refEnv);
+    const valueExpr = lowerExprWide(expr.right, refEnv);
     if (
       expr.operator === '/=' &&
       (ref.cType === 'i64' || isTime64(valueExpr))
@@ -776,7 +769,7 @@ function compileHandlerExprImpl(
           (expr.operator === '/=' && valueExpr.cType === 'float'))) ||
       isFloatMod
     ) {
-      const resultExpr = emitExprWide(
+      const resultExpr = lowerExprWide(
         {
           type: 'BinaryExpression',
           operator: binaryOp ?? expr.operator.slice(0, -1),
@@ -788,7 +781,12 @@ function compileHandlerExprImpl(
       );
 
       return [
-        `${indent}${ref.cVar} = ${storeCode(resultExpr, ref.cType as CType)};`,
+        {
+          kind: 'writeRef',
+          ref,
+          op: '=',
+          value: storeValue(resultExpr, ref.cType as CType),
+        },
       ];
     }
 
@@ -804,7 +802,18 @@ function compileHandlerExprImpl(
         (staticDivisor === null || staticDivisor === 0 || staticDivisor === -1)
       ) {
         return [
-          `${indent}${ref.cVar} = app_div(${ref.cVar}, ${valueExpr.code});`,
+          {
+            kind: 'writeRef',
+            ref,
+            op: '=',
+            value: {
+              kind: 'helper',
+              helper: 'div',
+              bits: 32,
+              args: [refRead(ref), valueExpr],
+              cType: 'int',
+            },
+          },
         ];
       }
 
@@ -812,25 +821,43 @@ function compileHandlerExprImpl(
         expr.operator === '%=' &&
         (staticDivisor === 0 || staticDivisor === -1)
       ) {
-        return [`${indent}${ref.cVar} = 0;`];
+        return [{kind: 'writeRef', ref, op: '=', value: ZERO}];
       }
 
       if (expr.operator === '%=' && staticDivisor === null) {
         return [
-          `${indent}${ref.cVar} = app_mod(${ref.cVar}, ${valueExpr.code});`,
+          {
+            kind: 'writeRef',
+            ref,
+            op: '=',
+            value: {
+              kind: 'helper',
+              helper: 'mod',
+              bits: 32,
+              args: [refRead(ref), valueExpr],
+              cType: 'int',
+            },
+          },
         ];
       }
     }
 
     // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no C overflow on INT64_MIN % -1.
     if (wideModDivisor === 0 || wideModDivisor === 1 || wideModDivisor === -1) {
-      return [`${indent}${ref.cVar} = 0;`];
+      return [{kind: 'writeRef', ref, op: '=', value: ZERO}];
     }
 
-    // Everything else is a plain C assignment or compound assignment.
+    // Everything else is a plain assignment or compound assignment.
     return [
-      `${indent}${ref.cVar} ${expr.operator} ` +
-        `${expr.operator === '=' ? storeCode(valueExpr, ref.cType as CType) : valueExpr.code};`,
+      {
+        kind: 'writeRef',
+        ref,
+        op: expr.operator,
+        value:
+          expr.operator === '='
+            ? storeValue(valueExpr, ref.cType as CType)
+            : valueExpr,
+      },
     ];
   }
 
@@ -845,11 +872,22 @@ function compileHandlerExprImpl(
 
     if (ref.cType === 'int' || ref.cType === 'i64') {
       return [
-        `${indent}${ref.cVar} = ${CHECKED_OP[expr.operator[0]]}${ref.cType === 'i64' ? '64' : ''}(${ref.cVar}, 1);`,
+        {
+          kind: 'writeRef',
+          ref,
+          op: '=',
+          value: {
+            kind: 'helper',
+            helper: expr.operator === '++' ? 'add' : 'sub',
+            bits: ref.cType === 'i64' ? 64 : 32,
+            args: [refRead(ref), {kind: 'number', value: 1, cType: 'int'}],
+            cType: ref.cType,
+          },
+        },
       ];
     }
 
-    return [`${indent}${ref.cVar}${expr.operator};`];
+    return [{kind: 'stepRef', ref, op: expr.operator}];
   }
 
   // `anim.stop()` freezes each driven value; the cancel reports !finished, which ends any sequence or loop chain.
@@ -859,10 +897,12 @@ function compileHandlerExprImpl(
     (expr.callee.property as t.Identifier).name === 'stop' &&
     isAnimatedCall(resolveAnim(expr.callee.object, env))
   ) {
-    return [...animValues(expr.callee.object, env)].map(
-      animValue =>
-        `${indent}er_anim_value_set(${animValue}, er_anim_value_get(${animValue}));`,
-    );
+    return [
+      {
+        kind: 'stopAnimations',
+        handles: [...animValues(expr.callee.object, env)],
+      },
+    ];
   }
 
   // Animated.*(…).start(), atomic or composed, is native-driven, so it sets no state and needs no app_update.
@@ -871,7 +911,13 @@ function compileHandlerExprImpl(
     expr.callee.type === 'MemberExpression' &&
     (expr.callee.property as t.Identifier).name === 'start'
   ) {
-    return compileAnimateStart(expr, env, state, ctx);
+    return [
+      {
+        kind: 'foreign',
+        lines: compileAnimateStart(expr, env, state, ctx),
+        isIndented: true,
+      },
+    ];
   }
 
   // What is left must be a plain call: to a helper or a state setter.
@@ -895,7 +941,6 @@ function compileHandlerExprImpl(
       env,
       state,
       ctx,
-      indent,
     );
   }
 
@@ -913,7 +958,7 @@ function compileHandlerExprImpl(
   ctx.stateChanged = true;
   const setterArg = expr.arguments[0];
   if (targetState.kind === 'list') {
-    return compileListOp(targetState, setterArg, env);
+    return lowerListOp(targetState, setterArg, env);
   }
 
   // A scalar setter takes either an updater function or the new value itself.
@@ -938,42 +983,38 @@ function compileHandlerExprImpl(
       );
     }
 
-    return [
-      scalarAssign(targetState, setterArg.body, {...env, locals}, indent),
-    ];
+    return [lowerScalarSet(targetState, setterArg.body, {...env, locals})];
   }
 
-  return [scalarAssign(targetState, setterArg, env, indent)];
+  return [lowerScalarSet(targetState, setterArg, env)];
 }
 
-/** compileHandlerExprImpl, with the expression's source location attached to any AOT error it throws. */
-const compileHandlerExpr = withLoc(compileHandlerExprImpl);
+/** lowerHandlerExprImpl, with the expression's source location attached to any AOT error it throws. */
+const lowerHandlerExpr = withLoc(lowerHandlerExprImpl);
 
 /**
- * Compiles a list of handler statements to C lines. This one-statement compiler runs event handlers, effect
- * bodies (useEffect), timer callbacks, and inlined helper calls. Supports: `const x = expr` (a C local,
- * visible to later statements), `if (cond) {...} else {...}`, state setters (list setters included), ref
- * writes, timers, updateVector() and Animated.*(...).start(). `ctx` accumulates `stateChanged` (→ trailing
- * app_update), `animIdx` (unique ERAnimConfig locals) and `usedReturn` (an early `return` was lowered, so the
- * body needs a C function of its own). `ctx.allowReturn` and `ctx.bodyList` mark which body a `return` may
- * exit and which statement of it is the tail.
+ * Lowers a list of handler statements to the IR. This one-statement lowering runs event handlers, effect bodies
+ * (useEffect), timer callbacks, and inlined helper calls. Supports: `const x = expr` (a local, visible to later
+ * statements), `if (cond) {...} else {...}`, state setters (list setters included), ref writes, timers,
+ * updateVector() and Animated.*(...).start(). `ctx` accumulates `stateChanged` (→ trailing app_update),
+ * `animIdx` (unique ERAnimConfig locals) and `usedReturn` (an early `return` was lowered, so the body needs a C
+ * function of its own). `ctx.allowReturn` and `ctx.bodyList` mark which body a `return` may exit and which
+ * statement of it is the tail.
  *
  * @param statements  The statements.
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param ctx  The statement compiler's context.
- * @param indent  The statements' indentation.
  *
- * @returns The C statements.
+ * @returns The lowered statements.
  */
-export function compileStmts(
+export function lowerStmts(
   statements: t.Statement[],
   env: Env,
   state: StateTable,
   ctx: StatementContext,
-  indent: string,
-): string[] {
-  const lines = [];
+): IrStmt[] {
+  const lowered: IrStmt[] = [];
   for (
     let statementIndex = 0;
     statementIndex < statements.length;
@@ -1007,7 +1048,7 @@ export function compileStmts(
         }
 
         // A dep-driven effect's cleanup outlives the call, so the body's locals become file-scope slots.
-        const isHoisted = ctx.hoist && statements === ctx.bodyList;
+        const isHoisted = Boolean(ctx.hoist && statements === ctx.bodyList);
         const cName = isHoisted
           ? `${ctx.hoist!.prefix}${decl.id.name}`
           : `l_${decl.id.name}`;
@@ -1023,10 +1064,11 @@ export function compileStmts(
           if (isHoisted) {
             ctx.hoist!.decls.push(`static int ${cName};`);
           }
-          lines.push(
-            `${indent}${isHoisted ? '' : 'int '}${cName} = ${compileTimerAdd(decl.init, env, state, ctx)};`,
-            `${indent}(void)${cName};`,
-          );
+          lowered.push({
+            kind: 'startTimer',
+            timer: lowerTimer(decl.init, env, state, ctx),
+            idLocal: {name: cName, isHoisted},
+          });
           env = {
             ...env,
             locals: new Map(env.locals).set(decl.id.name, {
@@ -1039,19 +1081,14 @@ export function compileStmts(
         }
 
         // Any other initializer must lower to a number, a boolean or a string.
-        const initExpr = emitExprWide(decl.init, env);
+        const initExpr = lowerExprWide(decl.init, env);
         if (initExpr.cType === 'string') {
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
             ctx.hoist!.decls.push(
               `static char ${cName}[${env.caps.listStrCap}];`,
             );
-          } else {
-            lines.push(`${indent}char ${cName}[${env.caps.listStrCap}];`);
           }
-          lines.push(
-            `${indent}snprintf(${cName}, sizeof(${cName}), "%s", ${initExpr.code});`,
-          );
         } else {
           if (
             initExpr.cType !== 'int' &&
@@ -1064,14 +1101,20 @@ export function compileStmts(
             );
           }
 
-          const cType = cScalarType(initExpr.cType);
           if (isHoisted) {
-            ctx.hoist!.decls.push(`static ${cType} ${cName};`);
+            ctx.hoist!.decls.push(
+              `static ${cScalarType(initExpr.cType)} ${cName};`,
+            );
           }
-          lines.push(
-            `${indent}${isHoisted ? '' : cType + ' '}${cName} = ${initExpr.code};`,
-          );
         }
+
+        lowered.push({
+          kind: 'declareLocal',
+          name: cName,
+          init: initExpr,
+          isHoisted,
+          stringCap: env.caps.listStrCap,
+        });
 
         // Later statements read the name as the C local.
         env = {
@@ -1120,47 +1163,30 @@ export function compileStmts(
       if (isTail) {
         if (ctx.cleanup && isFn(statement.argument)) {
           ctx.cleanup.emit(statement.argument, env);
-          lines.push(`${indent}${ctx.cleanup.armed} = 1;`);
+          lowered.push({kind: 'armCleanup', flag: ctx.cleanup.armed});
         }
 
         continue;
       }
 
       ctx.usedReturn = true;
-      lines.push(`${indent}return;`);
+      lowered.push({kind: 'return'});
       continue;
     }
 
-    // `if (…) { … } else { … }` compiles each branch as a nested C block.
+    // `if (…) { … } else { … }` lowers each branch in order: the test, then the consequent, then the alternate.
     if (statement.type === 'IfStatement') {
-      lines.push(
-        `${indent}if (${asCond(emitExprWide(statement.test, env))})`,
-        `${indent}{`,
+      const test = lowerExprWide(statement.test, env);
+      const consequent = lowerStmts(
+        blockList(statement.consequent),
+        env,
+        state,
+        ctx,
       );
-      lines.push(
-        ...compileStmts(
-          blockList(statement.consequent),
-          env,
-          state,
-          ctx,
-          indent + '    ',
-        ),
-      );
-      lines.push(`${indent}}`);
-      if (statement.alternate) {
-        lines.push(`${indent}else`, `${indent}{`);
-        lines.push(
-          ...compileStmts(
-            blockList(statement.alternate),
-            env,
-            state,
-            ctx,
-            indent + '    ',
-          ),
-        );
-        lines.push(`${indent}}`);
-      }
-
+      const alternate = statement.alternate
+        ? lowerStmts(blockList(statement.alternate), env, state, ctx)
+        : null;
+      lowered.push({kind: 'if', test, consequent, alternate});
       continue;
     }
 
@@ -1175,12 +1201,31 @@ export function compileStmts(
       );
     }
 
-    lines.push(
-      ...compileHandlerExpr(statement.expression, env, state, ctx, indent),
-    );
+    lowered.push(...lowerHandlerExpr(statement.expression, env, state, ctx));
   }
 
-  return lines;
+  return lowered;
+}
+
+/**
+ * Lowers handler statements and prints them as C lines (see lowerStmts).
+ *
+ * @param statements  The statements.
+ * @param env  The expression environment.
+ * @param state  The component's state table.
+ * @param ctx  The statement compiler's context.
+ * @param indent  The statements' indentation.
+ *
+ * @returns The C lines.
+ */
+export function compileStmts(
+  statements: t.Statement[],
+  env: Env,
+  state: StateTable,
+  ctx: StatementContext,
+  indent: string,
+): string[] {
+  return printStmts(lowerStmts(statements, env, state, ctx), indent);
 }
 
 /**
