@@ -544,30 +544,43 @@ ERNode* er_node_deref(ERNodeRef ref);
 ERNode* er_get_root_node(void);
 
 /**
- * @brief Collects a parent's child tags into an array in append order.
+ * @brief Cursor over a parent's children in PAINT order: ascending zIndex, append order within one zIndex.
  *
- * @param[in]  parent    Parent node whose children should be collected.
- * @param[out] tags      Output child tag buffer.
- * @param[in]  max_tags  Capacity of tags.
+ * This DEFINES the relationship between paint order and hit order: the compositor paints children in cursor
+ * order and hit-testing walks the same order keeping the LAST hit, so the topmost drawn node is the one a
+ * touch lands on. Both go through this one implementation because any divergence — stability, the
+ * er_get_node() NULL fallback, which children are skipped — silently sends touches to a node other than the
+ * one on top, which looks like a plausible UI rather than a crash.
  *
- * @return Number of child tags written.
+ * It walks the sibling list in place, so neither recursive walk keeps a per-level array of child tags on the
+ * stack. A walk ends at the first sibling tag that does not resolve.
  */
-int er_collect_children(const ERNode* parent, uint16_t* tags, int max_tags);
+typedef struct
+{
+    const ERNode* parent; /**< Node whose children are walked. */
+    ERNode* node;         /**< Current child; NULL once the walk is done. */
+    int16_t z;            /**< zIndex being walked. */
+    bool mixed_z;         /**< The children use more than one zIndex. */
+} ERChildCursor;
 
 /**
- * @brief Sorts child tags by zIndex, preserving append order among equal zIndex (a stable insertion sort).
+ * @brief Starts a paint-order walk over a parent's children.
  *
- * Paired with er_collect_children(), this pair DEFINES the relationship between paint order and hit
- * order: the compositor paints the sorted list front-to-back and hit-testing walks it back-to-front, so
- * the topmost drawn node is the one a touch lands on. Both callers share this one implementation
- * because any divergence — stability, the er_get_node() NULL fallback, which children are skipped —
- * silently sends touches to a node other than the one on top, which looks like a plausible UI rather
- * than a crash.
+ * @param[out] cur     Cursor to initialize.
+ * @param[in]  parent  Node whose children are walked.
  *
- * @param[in,out] tags   Child tag array to sort.
- * @param[in]     count  Number of tags in the array.
+ * @return The first child in paint order, or NULL when there is none.
  */
-void er_sort_children_by_z_index(uint16_t* tags, int count);
+ERNode* er_child_first(ERChildCursor* cur, const ERNode* parent);
+
+/**
+ * @brief Advances a paint-order walk.
+ *
+ * @param[in,out] cur  Cursor from er_child_first().
+ *
+ * @return The next child in paint order, or NULL when the walk is done.
+ */
+ERNode* er_child_next(ERChildCursor* cur);
 
 /**
  * @brief Marks a node and all ancestors dirty, recording a content change.

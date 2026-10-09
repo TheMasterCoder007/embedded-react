@@ -33,6 +33,12 @@
 /** @brief Per-row italic shear factor.  Each row shifts right by (g->height - 1 - row) * this value. */
 #define ITALIC_SLOPE 0.2f
 
+/** @brief Pixels per er_blit_copy() call in draw_glyph_aa(); sizes its row buffer on the stack. */
+#define GLYPH_ROW_CHUNK 64
+
+/** @brief Capacity of the buffer that span mode merges every span's text into. */
+#define SPAN_MERGED_MAX (ER_TEXT_MAX_SPANS * (ER_SPAN_TEXT_MAX + 1))
+
 /** @brief UTF-8 encoding of U+2026 HORIZONTAL ELLIPSIS '…'. */
 #define ELLIPSIS_UTF8 "\xE2\x80\xA6"
 
@@ -41,7 +47,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief A single rendered line produced by break_lines().
+ * @brief A single rendered line produced by next_line().
  */
 typedef struct
 {
@@ -49,6 +55,20 @@ typedef struct
     int byte_len;      /**< Number of bytes in this line (trailing whitespace excluded). */
     int px_width;      /**< Pixel width of this line (trailing whitespace excluded). */
 } LineSpan;
+
+/**
+ * @brief Line-breaking state for next_line(): the text still to break and the limits that apply.
+ */
+typedef struct
+{
+    const char* p;          /**< First byte not yet assigned to a line. */
+    const BitmapFont* font; /**< Font used to measure glyph advances. */
+    int max_w;              /**< Maximum pixel width per line; 0 = no horizontal limit. */
+    int letter_spacing;     /**< Extra pixels added to each glyph advance. */
+    int max_lines;          /**< Maximum lines to produce; 0 = unlimited. */
+    int count;              /**< Lines produced so far. */
+    bool truncated;         /**< Set when max_lines cut the text short. */
+} LineBreaker;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -219,6 +239,73 @@ static void draw_glyph(const GlyphInfo* g,
 }
 
 /**
+ * @brief Unpacks a run of grayscale glyph coverage and scales it to 0-255.
+ *
+ * 2-bit values scale by 85, 4-bit by 17, and 8-bit values are copied as they are.
+ *
+ * @param[in]  src_row  First byte of the glyph row in the packed bitmap.
+ * @param[in]  bpp      Bits per pixel of the font bitmap (2, 4, or 8).
+ * @param[in]  col      First column to unpack.
+ * @param[in]  n        Number of columns; all of [col, col + n) lie inside the glyph.
+ * @param[out] out      Receives n coverage values.
+ */
+static inline void unpack_cov(const uint8_t* src_row, uint8_t bpp, int col, int n, uint8_t* out)
+{
+    if (bpp == 8)
+    {
+        memcpy(out, src_row + col, (size_t)n);
+    }
+    else if (bpp == 4)
+    {
+        for (int k = 0; k < n; k++)
+        {
+            const int c = col + k;
+            const uint8_t nibble = (c & 1) ? src_row[c >> 1] & 0x0FU : src_row[c >> 1] >> 4;
+            out[k] = (uint8_t)(nibble * 17U);
+        }
+    }
+    else
+    {
+        for (int k = 0; k < n; k++)
+        {
+            const int c = col + k;
+            const uint8_t pair = (src_row[c >> 2] >> (6U - ((uint8_t)c & 3U) * 2U)) & 0x03U;
+            out[k] = (uint8_t)(pair * 85U);
+        }
+    }
+}
+
+/**
+ * @brief (v + 127) / 255 for v in [0, 255 * 255], without a divide: the Cortex-M0+ has no divide instruction.
+ *
+ * @param[in] v  Product of two 8-bit values.
+ *
+ * @return The quotient, in [0, 255].
+ */
+static inline uint32_t div255(uint32_t v)
+{
+    v += 128U;
+    return (v + (v >> 8)) >> 8;
+}
+
+/**
+ * @brief Premultiplied ARGB8888 for a straight-alpha color drawn at one coverage value.
+ *
+ * @param[in] a    Color alpha.
+ * @param[in] r    Color red.
+ * @param[in] g    Color green.
+ * @param[in] b    Color blue.
+ * @param[in] cov  Coverage in [0, 255].
+ *
+ * @return The premultiplied pixel.
+ */
+static inline uint32_t premul_cov(uint32_t a, uint32_t r, uint32_t g, uint32_t b, uint32_t cov)
+{
+    const uint32_t pa = div255(a * cov);
+    return (pa << 24) | (div255(r * pa) << 16) | (div255(g * pa) << 8) | div255(b * pa);
+}
+
+/**
  * @brief Draws a single anti-aliased glyph using grayscale coverage at any supported BPP (2, 4, or 8).
  *
  * Unpacks grayscale coverage values from the packed bitmap and scales them to 0-255:
@@ -265,15 +352,22 @@ static void draw_glyph_aa(const GlyphInfo* g,
     const int base_origin_x = cursor_x + g->x_offset;
     const int origin_y = cursor_y + g->y_offset;
 
-    const int row_stride = (bpp == 8) ? (int)g->width : (bpp == 4) ? ((int)g->width + 1) / 2 : ((int)g->width + 3) / 4;
+    const int width = (int)g->width;
+    const int row_stride = (bpp == 8) ? width : (bpp == 4) ? (width + 1) / 2 : (width + 3) / 4;
 
-    /* Scratch buffers: cov_buf holds unpacked source coverage; out_cov holds the
-     * (optionally blended) coverage that feeds the final premultiplied row; row_buf
-     * is the premultiplied ARGB output passed to er_blit_copy.  All sized for the
-     * maximum glyph width (256) plus one extra slot for the italic fractional tail. */
-    uint8_t cov_buf[256];
-    uint8_t out_cov_buf[257];
-    uint32_t row_buf[257];
+    /* Per-chunk scratch: italic coverage (cov[0] is the column before the chunk) and premultiplied ARGB. */
+    uint8_t cov[GLYPH_ROW_CHUNK + 1];
+    uint32_t row_buf[GLYPH_ROW_CHUNK];
+
+    /* 2- and 4-bit coverage has only 4 or 16 levels, so each level is premultiplied once per glyph. */
+    uint32_t level_px[16];
+    if (bpp != 8)
+    {
+        const int levels = (bpp == 4) ? 16 : 4;
+        const uint32_t scale = (bpp == 4) ? 17U : 85U;
+        for (int v = 0; v < levels; v++)
+            level_px[v] = premul_cov(src_a, src_r, src_g, src_b, (uint32_t)v * scale);
+    }
 
     for (int row = 0; row < (int)g->height; row++)
     {
@@ -288,29 +382,7 @@ static void draw_glyph_aa(const GlyphInfo* g,
         const float shift_frac = italic_shift_f - (float)shift_int;
         const int origin_x = base_origin_x + shift_int;
 
-        /* Step 1 — unpack source coverage for the entire glyph row. */
-        const uint8_t* src_row = bmp + (size_t)row * (size_t)row_stride;
-        for (int col = 0; col < (int)g->width; col++)
-        {
-            uint8_t cov;
-            if (bpp == 8)
-            {
-                cov = src_row[col];
-            }
-            else if (bpp == 4)
-            {
-                const uint8_t nibble = (col & 1) ? src_row[col >> 1] & 0x0FU : src_row[col >> 1] >> 4;
-                cov = nibble * 17U;
-            }
-            else
-            {
-                const uint8_t pair = (src_row[col >> 2] >> (6U - ((uint8_t)col & 3U) * 2U)) & 0x03U;
-                cov = pair * 85U;
-            }
-            cov_buf[col] = cov;
-        }
-
-        /* Step 2 — bilinear subpixel blend for italic (no-op when shift_frac ≈ 0).
+        /* Bilinear subpixel blend for italic (skipped when shift_frac ≈ 0).
          *
          * Destination column d receives:
          *   out_cov[d] = cov[d] * (1 - frac) + cov[d-1] * frac
@@ -318,42 +390,67 @@ static void draw_glyph_aa(const GlyphInfo* g,
          *
          * This distributes each source pixel between its two nearest destination
          * columns, producing anti-aliased shear edges instead of a staircase. */
-        const uint8_t* out_cov;
-        int out_width;
-        if (!italic || shift_frac < 0.005f)
-        {
-            out_cov = cov_buf;
-            out_width = (int)g->width;
-        }
-        else
-        {
-            out_width = (int)g->width + 1;
-            for (int d = 0; d < out_width; d++)
-            {
-                const float cv_prev = (d > 0) ? (float)cov_buf[d - 1] : 0.0f;
-                const float cv_curr = (d < (int)g->width) ? (float)cov_buf[d] : 0.0f;
-                out_cov_buf[d] = (uint8_t)(cv_curr * (1.0f - shift_frac) + cv_prev * shift_frac + 0.5f);
-            }
-            out_cov = out_cov_buf;
-        }
+        const bool blend = italic && shift_frac >= 0.005f;
+        const int out_width = blend ? width + 1 : width;
 
-        /* Step 3 — clip and build premultiplied output row, then blit. */
         const int col_start = (clip_x1 > origin_x) ? clip_x1 - origin_x : 0;
         const int col_end = (clip_x2 < origin_x + out_width) ? clip_x2 - origin_x : out_width;
         if (col_start >= col_end)
             continue;
 
-        for (int d = col_start; d < col_end; d++)
-        {
-            const uint8_t a = (uint8_t)(((uint32_t)src_a * out_cov[d] + 127U) / 255U);
-            const uint8_t pr = (uint8_t)(((uint32_t)src_r * a + 127U) / 255U);
-            const uint8_t pg = (uint8_t)(((uint32_t)src_g * a + 127U) / 255U);
-            const uint8_t pb = (uint8_t)(((uint32_t)src_b * a + 127U) / 255U);
-            row_buf[d - col_start] = ((uint32_t)a << 24) | ((uint32_t)pr << 16) | ((uint32_t)pg << 8) | (uint32_t)pb;
-        }
+        /* Coverage is unpacked only for the visible columns. cov[0] is the column before the chunk. */
+        const uint8_t* src_row = bmp + (size_t)row * (size_t)row_stride;
+        cov[0] = 0U;
+        if (blend && col_start > 0)
+            unpack_cov(src_row, bpp, col_start - 1, 1, cov);
 
-        er_blit_copy(
-            row_buf, (col_end - col_start) * (int)sizeof(uint32_t), origin_x + col_start, fy, col_end - col_start, 1);
+        for (int chunk = col_start; chunk < col_end; chunk += GLYPH_ROW_CHUNK)
+        {
+            const int n = (col_end - chunk < GLYPH_ROW_CHUNK) ? col_end - chunk : GLYPH_ROW_CHUNK;
+
+            if (blend)
+            {
+                /* Only the blend's tail column lies past the glyph, and it has no coverage of its own. */
+                const int n_src = (chunk + n > width) ? width - chunk : n;
+                unpack_cov(src_row, bpp, chunk, n_src, cov + 1);
+                for (int k = n_src; k < n; k++)
+                    cov[k + 1] = 0U;
+                for (int k = 0; k < n; k++)
+                {
+                    const float cv_prev = (float)cov[k];
+                    const float cv_curr = (float)cov[k + 1];
+                    row_buf[k] = premul_cov(src_a,
+                                            src_r,
+                                            src_g,
+                                            src_b,
+                                            (uint8_t)(cv_curr * (1.0f - shift_frac) + cv_prev * shift_frac + 0.5f));
+                }
+                cov[0] = cov[n];
+            }
+            else if (bpp == 8)
+            {
+                const uint8_t* src = src_row + chunk;
+                for (int k = 0; k < n; k++)
+                    row_buf[k] = premul_cov(src_a, src_r, src_g, src_b, src[k]);
+            }
+            else if (bpp == 4)
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    const int c = chunk + k;
+                    row_buf[k] = level_px[(c & 1) ? src_row[c >> 1] & 0x0FU : src_row[c >> 1] >> 4];
+                }
+            }
+            else
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    const int c = chunk + k;
+                    row_buf[k] = level_px[(src_row[c >> 2] >> (6U - ((uint8_t)c & 3U) * 2U)) & 0x03U];
+                }
+            }
+            er_blit_copy(row_buf, n * (int)sizeof(uint32_t), origin_x + chunk, fy, n, 1);
+        }
     }
 }
 
@@ -379,244 +476,200 @@ static void draw_cp(
 }
 
 /**
- * @brief Breaks a UTF-8 string into line spans that fit within max_w pixels.
+ * @brief Produces the next line of a UTF-8 string that fits within the breaker's max_w pixels.
  *
  * Wraps on word boundaries (spaces/tabs). Falls back to character-boundary wrapping
  * when a single word exceeds max_w. Explicit newlines always end a line. Leading
- * whitespace at the start of each wrapped line is consumed silently.
+ * whitespace at the start of each wrapped line is consumed silently. At most
+ * TEXT_MAX_LINES lines are produced.
  *
- * @param[in]  text           Null-terminated UTF-8 source string.
- * @param[in]  font           BitmapFont used to measure glyph advances.
- * @param[in]  max_w          Maximum pixel width per line; 0 = no horizontal limit.
- * @param[in]  letter_spacing Extra pixels added to each glyph advance.
- * @param[in]  max_lines      Maximum lines to produce; 0 = unlimited.
- * @param[out] out            Caller-provided array to receive the line spans.
- * @param[in]  cap            Capacity of out[].
- * @param[out] out_truncated  Set to true when text was cut short by max_lines.
+ * @param[in,out] lb   Breaker state; advanced past the returned line.
+ * @param[out]    out  Receives the line span.
  *
- * @return Number of spans written to out[].
+ * @return true when a line was produced; false once the text or the line budget is used up.
  */
-static int break_lines(const char* text,
-                       const BitmapFont* font,
-                       int max_w,
-                       int letter_spacing,
-                       int max_lines,
-                       LineSpan* out,
-                       int cap,
-                       bool* out_truncated)
+static bool next_line(LineBreaker* lb, LineSpan* out)
 {
-    int n = 0;
-    const char* p = text;
-    *out_truncated = false;
+    const BitmapFont* font = lb->font;
+    const int max_w = lb->max_w;
+    const int letter_spacing = lb->letter_spacing;
+    const char* p = lb->p;
 
-    while (*p && n < cap)
+    if (!*p || lb->count >= TEXT_MAX_LINES)
+        return false;
+
+    /* Check line cap before starting a new line. */
+    if (lb->max_lines > 0 && lb->count >= lb->max_lines)
     {
-        /* Check line cap before starting a new line. */
-        if (max_lines > 0 && n >= max_lines)
+        lb->truncated = true;
+        return false;
+    }
+
+    /* Skip leading horizontal whitespace for this wrapped line. */
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (!*p)
+    {
+        lb->p = p;
+        return false;
+    }
+
+    /* Bare newline → empty line. */
+    if (*p == '\n')
+    {
+        *out = (LineSpan){p, 0, 0};
+        lb->p = p + 1;
+        lb->count++;
+        return true;
+    }
+
+    const char* line_start = p;
+    const char* word_end = p;  /* end of last complete word (exclusive) */
+    const char* next_word = p; /* start of next word after whitespace */
+    int word_end_w = 0;
+    int line_w = 0;
+    bool saw_ws = false;       /* line has seen any whitespace (governs wrap break) */
+    bool ends_with_ws = false; /* most recent chars consumed were whitespace */
+    const char* ws_start = p;  /* position of the last run of trailing whitespace */
+    int ws_start_w = 0;        /* line width up to ws_start */
+
+    for (;;)
+    {
+        if (!*p)
         {
-            *out_truncated = (*p != '\0');
+            /* End of string: commit the full line, but trim any trailing whitespace
+             * so labels like "Hello   " render as "Hello" without phantom advance. */
+            if (ends_with_ws)
+                *out = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
+            else
+                *out = (LineSpan){line_start, (int)(p - line_start), line_w};
             break;
         }
 
-        /* Skip leading horizontal whitespace for this wrapped line. */
-        while (*p == ' ' || *p == '\t')
-            p++;
-        if (!*p)
-            break;
-
-        /* Bare newline → empty line. */
         if (*p == '\n')
         {
-            out[n++] = (LineSpan){p, 0, 0};
+            /* Explicit newline: same trim rule as end-of-string. */
+            if (ends_with_ws)
+                *out = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
+            else
+                *out = (LineSpan){line_start, (int)(p - line_start), line_w};
             p++;
+            break;
+        }
+
+        if (*p == ' ' || *p == '\t')
+        {
+            /* Record end of the current word before consuming whitespace. */
+            word_end = p;
+            word_end_w = line_w;
+            if (!ends_with_ws)
+            {
+                ws_start = p;
+                ws_start_w = line_w;
+            }
+            while (*p == ' ' || *p == '\t')
+            {
+                uint32_t cp = utf8_next(&p);
+                line_w += glyph_adv(font, cp, letter_spacing);
+            }
+            next_word = p;
+            saw_ws = true;
+            ends_with_ws = true;
             continue;
         }
 
-        const char* line_start = p;
-        const char* word_end = p;  /* end of last complete word (exclusive) */
-        const char* next_word = p; /* start of next word after whitespace */
-        int word_end_w = 0;
-        int line_w = 0;
-        bool saw_ws = false;       /* line has seen any whitespace (governs wrap break) */
-        bool ends_with_ws = false; /* most recent chars consumed were whitespace */
-        const char* ws_start = p;  /* position of the last run of trailing whitespace */
-        int ws_start_w = 0;        /* line width up to ws_start */
+        /* Non-whitespace: a word character. */
+        const char* cp_start = p;
+        uint32_t cp = utf8_next(&p);
+        const int adv = glyph_adv(font, cp, letter_spacing);
 
-        for (;;)
+        if (max_w > 0 && line_w + adv > max_w && cp_start > line_start)
         {
-            if (!*p)
+            if (saw_ws)
             {
-                /* End of string: commit the full line, but trim any trailing whitespace
-                 * so labels like "Hello   " render as "Hello" without phantom advance. */
-                if (ends_with_ws)
-                    out[n++] = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
-                else
-                    out[n++] = (LineSpan){line_start, (int)(p - line_start), line_w};
-                goto outer_break;
+                /* Break at the last word boundary. */
+                *out = (LineSpan){line_start, (int)(word_end - line_start), word_end_w};
+                p = next_word;
             }
-
-            if (*p == '\n')
+            else
             {
-                /* Explicit newline: same trim rule as end-of-string. */
-                if (ends_with_ws)
-                    out[n++] = (LineSpan){line_start, (int)(ws_start - line_start), ws_start_w};
-                else
-                    out[n++] = (LineSpan){line_start, (int)(p - line_start), line_w};
-                p++;
-                break; /* outer while picks up the next line */
+                /* No word boundary found: character-boundary break. */
+                *out = (LineSpan){line_start, (int)(cp_start - line_start), line_w};
+                p = cp_start;
             }
-
-            if (*p == ' ' || *p == '\t')
-            {
-                /* Record end of the current word before consuming whitespace. */
-                word_end = p;
-                word_end_w = line_w;
-                if (!ends_with_ws)
-                {
-                    ws_start = p;
-                    ws_start_w = line_w;
-                }
-                while (*p == ' ' || *p == '\t')
-                {
-                    uint32_t cp = utf8_next(&p);
-                    line_w += glyph_adv(font, cp, letter_spacing);
-                }
-                next_word = p;
-                saw_ws = true;
-                ends_with_ws = true;
-                continue;
-            }
-
-            /* Non-whitespace: a word character. */
-            const char* cp_start = p;
-            uint32_t cp = utf8_next(&p);
-            const int adv = glyph_adv(font, cp, letter_spacing);
-
-            if (max_w > 0 && line_w + adv > max_w && cp_start > line_start)
-            {
-                if (saw_ws)
-                {
-                    /* Break at the last word boundary. */
-                    out[n++] = (LineSpan){line_start, (int)(word_end - line_start), word_end_w};
-                    p = next_word;
-                }
-                else
-                {
-                    /* No word boundary found: character-boundary break. */
-                    out[n++] = (LineSpan){line_start, (int)(cp_start - line_start), line_w};
-                    p = cp_start;
-                }
-                break;
-            }
-
-            line_w += adv;
-            ends_with_ws = false;
+            break;
         }
+
+        line_w += adv;
+        ends_with_ws = false;
     }
 
-    return n;
-
-outer_break:
-    return n;
+    lb->p = p;
+    lb->count++;
+    return true;
 }
 
-/*----------------------------------------------------------------------------------------------------------------------
- - Functions: Public
- ---------------------------------------------------------------------------------------------------------------------*/
-
-void er_text_render(const ERTextRenderParams* params)
+/**
+ * @brief Breaks a resolved text run into lines and draws them.
+ *
+ * Lines are broken one ahead of the one being drawn, so only the last line's lookahead decides the
+ * ellipsis, and nothing below the clip is broken at all. Not inlined: both callers share one copy.
+ *
+ * @param[in] params    Render parameters (clip, color, alignment, decoration, spans).
+ * @param[in] font      Font resolved from params.
+ * @param[in] src       UTF-8 text to draw: params->text, or every span's text merged into one string.
+ * @param[in] span_end  Span mode: the byte offset in src where each span ends. NULL draws src as one run.
+ * @param[in] n_spans   Number of entries in span_end.
+ */
+static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
+                                     const BitmapFont* font,
+                                     const char* src,
+                                     const uint16_t* span_end,
+                                     uint8_t n_spans)
 {
-    if (!params || ((params->color >> 24) & 0xFFU) == 0U)
-        return;
-    if (params->clip.w <= 0 || params->clip.h <= 0)
-        return;
-
-    /* Span mode: params->text is ignored; spans[] provides the content. */
-    const bool span_mode = (params->span_count > 0 && params->spans != NULL);
-    if (!span_mode && !params->text)
-        return;
-
-    const uint8_t sz = er_text_clamp_font_size(params->font_size);
-
-    const BitmapFont* font = font_registry_get(params->font_family, sz);
-    if (!font)
-        return;
-
     const int lh = (params->line_height > 0) ? (int)params->line_height : (int)font->line_height;
     const int ls = (int)params->letter_spacing;
     const bool bold = (params->font_weight != 0U);
     const bool italic = (params->font_style != 0U);
 
-    /* ---- Span mode: merge all span texts into one buffer for line-breaking. ---- */
-#define SPAN_MERGED_MAX (ER_TEXT_MAX_SPANS * (ER_SPAN_TEXT_MAX + 1))
-    char merged[SPAN_MERGED_MAX + 1];
-    uint8_t span_map[SPAN_MERGED_MAX]; /* span_map[i] = span index of merged[i] */
-    const char* render_src;
-
-    if (span_mode)
-    {
-        size_t pos = 0;
-        for (uint8_t si = 0; si < params->span_count && pos < SPAN_MERGED_MAX; si++)
-        {
-            const char* s = params->spans[si].text;
-            while (*s && pos < SPAN_MERGED_MAX)
-            {
-                merged[pos] = *s++;
-                span_map[pos] = si;
-                pos++;
-            }
-        }
-        merged[pos] = '\0';
-        render_src = merged;
-    }
-    else
-    {
-        render_src = params->text;
-    }
-
-    if (!render_src || !render_src[0])
-        return;
-
-    /* ---- Line breaking (always uses parent ls for measurement). ---- */
-    LineSpan lines[TEXT_MAX_LINES];
-    bool truncated = false;
-    const int n_lines = break_lines(
-        render_src, font, params->clip.w, ls, (int)params->number_of_lines, lines, TEXT_MAX_LINES, &truncated);
-    if (n_lines == 0)
-        return;
-
-    /* ---- Pre-compute ellipsis glyph for TAIL mode. ---- */
-    const bool do_ellipsis = truncated && (params->ellipsize_mode != ER_TEXT_ELLIPSIZE_CLIP);
-    int ellipsis_px = 0;
-    uint32_t ellipsis_cp = 0;
-    const GlyphInfo* ellipsis_g = NULL;
-
-    if (do_ellipsis)
-    {
-        const char* ep = ELLIPSIS_UTF8;
-        ellipsis_cp = utf8_next(&ep);
-        ellipsis_g = font_glyph(font, ellipsis_cp);
-        ellipsis_px = (int)ellipsis_g->advance + ls + (bold ? 1 : 0);
-    }
+    /* Line breaking always uses the parent ls for measurement. */
+    LineBreaker lb = {src, font, params->clip.w, ls, (int)params->number_of_lines, 0, false};
+    LineSpan line;
+    LineSpan next;
+    bool have_next = next_line(&lb, &next);
 
     /* ---- Render each line. ---- */
-    for (int i = 0; i < n_lines; i++)
+    for (int i = 0; have_next; i++)
     {
+        line = next;
         const int cursor_y = params->clip.y + i * lh;
         if (cursor_y >= params->clip.y + params->clip.h)
             break;
 
-        const bool is_last = (i == n_lines - 1);
-        const bool apply_ellip = (do_ellipsis && is_last);
+        have_next = next_line(&lb, &next);
+        const bool is_last = !have_next;
+        const bool apply_ellip = is_last && lb.truncated && (params->ellipsize_mode != ER_TEXT_ELLIPSIZE_CLIP);
+
+        /* Ellipsis glyph for TAIL mode. */
+        int ellipsis_px = 0;
+        uint32_t ellipsis_cp = 0;
+        const GlyphInfo* ellipsis_g = NULL;
+        if (apply_ellip)
+        {
+            const char* ep = ELLIPSIS_UTF8;
+            ellipsis_cp = utf8_next(&ep);
+            ellipsis_g = font_glyph(font, ellipsis_cp);
+            ellipsis_px = (int)ellipsis_g->advance + ls + (bold ? 1 : 0);
+        }
 
         /* Determine the visible text range; shorten for ellipsis. */
-        const char* render_end = lines[i].start + lines[i].byte_len;
-        int render_w = lines[i].px_width;
+        const char* render_end = line.start + line.byte_len;
+        int render_w = line.px_width;
 
         if (apply_ellip)
         {
             const int avail = params->clip.w - ellipsis_px;
-            const char* p = lines[i].start;
+            const char* p = line.start;
             const char* cut = p;
             int w = 0;
             while (p < render_end && *p)
@@ -644,25 +697,27 @@ void er_text_render(const ERTextRenderParams* params)
         }
         else if (params->text_align == ER_TEXT_ALIGN_CENTER)
         {
-            const int off = (params->clip.w - lines[i].px_width) / 2;
+            const int off = (params->clip.w - line.px_width) / 2;
             cursor_x = params->clip.x + (off > 0 ? off : 0);
         }
         else /* ER_TEXT_ALIGN_RIGHT */
         {
-            const int off = params->clip.w - lines[i].px_width;
+            const int off = params->clip.w - line.px_width;
             cursor_x = params->clip.x + (off > 0 ? off : 0);
         }
 
-        if (span_mode)
+        if (span_end)
         {
             /* ---- Span-aware rendering: group consecutive chars of the same span. ---- */
-            const char* p = lines[i].start;
+            const char* p = line.start;
             int cx = cursor_x;
 
             while (p < render_end && *p)
             {
-                const size_t byte_off = (size_t)(p - render_src);
-                const uint8_t si = span_map[byte_off];
+                const size_t byte_off = (size_t)(p - src);
+                uint8_t si = 0;
+                while (si + 1U < n_spans && byte_off >= span_end[si])
+                    si++;
                 const ERTextSpan* sp = &params->spans[si];
 
                 /* Resolve per-span style; sentinels inherit from base params. */
@@ -677,8 +732,7 @@ void er_text_render(const ERTextRenderParams* params)
                 /* Render all characters of this span run within the line. */
                 while (p < render_end && *p)
                 {
-                    const size_t cur_off = (size_t)(p - render_src);
-                    if (span_map[cur_off] != si)
+                    if ((size_t)(p - src) >= span_end[si])
                         break;
                     uint32_t cp = utf8_next(&p);
                     draw_cp(font, cp, cx, cursor_y, &params->clip, seg_color, seg_italic);
@@ -686,7 +740,6 @@ void er_text_render(const ERTextRenderParams* params)
                         draw_cp(font, cp, cx + 1, cursor_y, &params->clip, seg_color, seg_italic);
                     cx += glyph_adv(font, cp, seg_ls) + (seg_bold ? 1 : 0);
                 }
-
                 /* Text decoration for this span segment. */
                 if (seg_deco != ER_TEXT_DECORATION_NONE)
                 {
@@ -715,9 +768,9 @@ void er_text_render(const ERTextRenderParams* params)
         }
         else
         {
-            /* ---- Single-run path (unchanged). ---- */
+            /* ---- Single-run path. ---- */
             {
-                const char* p = lines[i].start;
+                const char* p = line.start;
                 int cx = cursor_x;
                 while (p < render_end && *p)
                 {
@@ -739,7 +792,7 @@ void er_text_render(const ERTextRenderParams* params)
 
             if (params->text_decoration != ER_TEXT_DECORATION_NONE)
             {
-                int dec_w = apply_ellip ? (render_w + ellipsis_px) : lines[i].px_width;
+                int dec_w = apply_ellip ? (render_w + ellipsis_px) : line.px_width;
                 const int right_edge = params->clip.x + params->clip.w;
                 if (cursor_x + dec_w > right_edge)
                     dec_w = right_edge - cursor_x;
@@ -757,6 +810,62 @@ void er_text_render(const ERTextRenderParams* params)
             }
         }
     }
+}
+
+/**
+ * @brief Span mode: merges every span's text into one string and draws it as one run of lines.
+ *
+ * Kept out of er_text_render() so plain text does not carry the merge buffer on its stack.
+ *
+ * @param[in] params  Render parameters; spans[] provides the content (at most ER_TEXT_MAX_SPANS are drawn).
+ * @param[in] font    Font resolved from params.
+ */
+static ER_NOINLINE void render_span_text(const ERTextRenderParams* params, const BitmapFont* font)
+{
+    char merged[SPAN_MERGED_MAX + 1];
+    uint16_t span_end[ER_TEXT_MAX_SPANS];
+    const uint8_t n_spans = (params->span_count < ER_TEXT_MAX_SPANS) ? params->span_count : ER_TEXT_MAX_SPANS;
+
+    size_t pos = 0;
+    for (uint8_t si = 0; si < n_spans; si++)
+    {
+        const char* s = params->spans[si].text;
+        while (*s && pos < SPAN_MERGED_MAX)
+            merged[pos++] = *s++;
+        span_end[si] = (uint16_t)pos;
+    }
+    merged[pos] = '\0';
+
+    if (merged[0])
+        render_lines(params, font, merged, span_end, n_spans);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Public
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+void er_text_render(const ERTextRenderParams* params)
+{
+    if (!params || ((params->color >> 24) & 0xFFU) == 0U)
+        return;
+    if (params->clip.w <= 0 || params->clip.h <= 0)
+        return;
+
+    /* Span mode: params->text is ignored; spans[] provides the content. */
+    const bool span_mode = (params->span_count > 0 && params->spans != NULL);
+    if (!span_mode && !params->text)
+        return;
+
+    const uint8_t sz = er_text_clamp_font_size(params->font_size);
+
+    const BitmapFont* font = font_registry_get(params->font_family, sz);
+    if (!font)
+        return;
+
+    if (span_mode)
+        render_span_text(params, font);
+    else if (params->text[0])
+        render_lines(params, font, params->text, NULL, 0);
 }
 
 void er_text_measure(const char* text,
