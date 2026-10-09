@@ -21,9 +21,10 @@
 import {traverse} from '@babel/core';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
-import {floatLit, cstr} from './c-syntax.mts';
+import {floatLit} from './c-syntax.mts';
 import {panGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
+import {printText} from './c/text.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {
@@ -49,20 +50,16 @@ import type {
   LayoutField,
   WholeHelper,
 } from './ir/expressions.mts';
+import type {IrText, IrTextPart} from './ir/text.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** One piece of a printf format: literal text, or a spec with the C argument it formats. */
-type TextPart =
-  | {literal: string; spec?: undefined; code?: undefined}
-  | {literal?: undefined; spec: string; code: string};
-
-/** A JS expression split into printf parts, and whether JS would treat it as a string. */
+/** A JS expression split into text parts, and whether JS would treat it as a string. */
 interface TextParts {
   isString: boolean;
-  parts: TextPart[];
+  parts: IrTextPart[];
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -133,8 +130,9 @@ const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-// The modules that still build C from a lowered expression import asCond from here.
+// The modules that still build C from a lowered expression or text import asCond and formatArgs from here.
 export {asCond} from './c/expressions.mts';
+export {formatArgs} from './c/text.mts';
 
 /**
  * A 64-bit timestamp met a float, which would round it.
@@ -1336,26 +1334,7 @@ export function emitExpr(node: t.Node, env: Env): CExpr {
 }
 
 /**
- * An expression as one printf spec and its argument. `%lld` needs a long long, and int64_t is `long` on
- * 64-bit Linux. A float goes through app_ftoa, which prints Infinity, -Infinity, NaN, and 0 where %g prints
- * inf, -inf, nan and -0, and anything else as %g, into a buffer the call site lends it: one per float, so two
- * floats in one snprintf keep their own.
- *
- * @param expr  The lowered expression.
- *
- * @returns Its printf spec and argument.
- */
-const printfPart = (expr: CExpr): {spec: string; code: string} =>
-  expr.cType === 'string'
-    ? {spec: '%s', code: expr.code}
-    : expr.cType === 'float'
-      ? {spec: '%s', code: `app_ftoa((char[16]){0}, ${expr.code})`}
-      : expr.cType === 'i64'
-        ? {spec: '%lld', code: `(long long)(${expr.code})`}
-        : {spec: '%d', code: expr.code};
-
-/**
- * An aotError pinned to the expression that cannot be lowered to text (concatParts is not withLoc-wrapped).
+ * An aotError pinned to the expression that cannot be lowered to text (lowerTextParts is not withLoc-wrapped).
  *
  * @param node  The expression.
  * @param message  What is not supported.
@@ -1387,9 +1366,9 @@ export const jsxChildText = (value: unknown): string =>
     : String(value);
 
 /**
- * Splits a string-building `+` chain into printf parts, following JS's own left-to-right typing: a `+`
+ * Splits a string-building `+` chain into text parts, following JS's own left-to-right typing: a `+`
  * is a concatenation only once one of its sides is a string, so `n + 1 + 'ms'` still adds before it
- * appends. Parts are either a `literal` (folded into the format) or a `{spec, code}` pair (a runtime arg).
+ * appends. Each part is literal text, a runtime value, or a boolean printed as a word.
  *
  * @param node  The expression.
  * @param env  The expression environment.
@@ -1398,7 +1377,7 @@ export const jsxChildText = (value: unknown): string =>
  *
  * @returns The parts, and whether JS would treat the expression as a string.
  */
-function concatParts(
+function lowerTextParts(
   node: t.Node,
   env: Env,
   scope: Scope,
@@ -1406,7 +1385,10 @@ function concatParts(
 ): TextParts {
   // `undefined` is "" as a child but "undefined" in a `+`; handled here, not in the fold every prop reader shares.
   if (node.type === 'Identifier' && node.name === 'undefined') {
-    return {isString: false, parts: [{literal: isOperand ? 'undefined' : ''}]};
+    return {
+      isString: false,
+      parts: [{kind: 'literal', text: isOperand ? 'undefined' : ''}],
+    };
   }
 
   // A compile-time constant becomes literal text.
@@ -1415,7 +1397,10 @@ function concatParts(
     return {
       isString: typeof constValue === 'string',
       parts: [
-        {literal: isOperand ? String(constValue) : jsxChildText(constValue)},
+        {
+          kind: 'literal',
+          text: isOperand ? String(constValue) : jsxChildText(constValue),
+        },
       ],
     };
   } catch {
@@ -1424,18 +1409,18 @@ function concatParts(
 
   // A `+` with a string on either side is a concatenation: its parts are both sides' parts in order.
   if (node.type === 'BinaryExpression' && node.operator === '+') {
-    const leftParts = concatParts(node.left, env, scope, true);
-    const rightParts = concatParts(node.right, env, scope, true);
+    const leftParts = lowerTextParts(node.left, env, scope, true);
+    const rightParts = lowerTextParts(node.right, env, scope, true);
     if (leftParts.isString || rightParts.isString) {
       return {isString: true, parts: [...leftParts.parts, ...rightParts.parts]};
     }
   }
 
-  // A branch or operand that concatenates needs its own format; refuse before emitExpr's misleading error.
+  // A branch or operand that concatenates needs its own format; refuse before lowerExpr's misleading error.
   const concatenates = (subExpr: t.Node) =>
     subExpr.type === 'BinaryExpression' &&
     subExpr.operator === '+' &&
-    concatParts(subExpr, env, scope, true).isString;
+    lowerTextParts(subExpr, env, scope, true).isString;
   if (
     node.type === 'ConditionalExpression' &&
     (concatenates(node.test) ||
@@ -1464,10 +1449,10 @@ function concatParts(
   }
 
   // Anything else is one runtime value.
-  const cExpr = emitExprWide(node, env);
+  const value = lowerExprWide(node, env);
 
   // C collapses `&&`/`||` to 0/1 and a ternary to one slot, so text matches JS only when operands agree in kind.
-  if (node.type === 'LogicalExpression' && !cExpr.isBool) {
+  if (node.type === 'LogicalExpression' && !value.isBool) {
     throw textShapeError(
       node,
       `AOT: "${node.operator}" in text evaluates to one of its operands, not to true/false`,
@@ -1478,8 +1463,8 @@ function concatParts(
 
   if (
     node.type === 'ConditionalExpression' &&
-    Boolean(emitExprWide(node.consequent, env).isBool) !==
-      Boolean(emitExprWide(node.alternate, env).isBool)
+    Boolean(lowerExprWide(node.consequent, env).isBool) !==
+      Boolean(lowerExprWide(node.alternate, env).isBool)
   ) {
     throw textShapeError(
       node,
@@ -1490,25 +1475,38 @@ function concatParts(
   }
 
   // A boolean prints nothing as a child, "true"/"false" as an operand; isString stays false so `on + n` adds.
-  if (cExpr.isBool) {
+  if (value.isBool) {
     return isOperand
-      ? {
-          isString: false,
-          parts: [{spec: '%s', code: `((${cExpr.code}) ? "true" : "false")`}],
-        }
-      : {isString: false, parts: [{literal: ''}]};
+      ? {isString: false, parts: [{kind: 'booleanWord', value}]}
+      : {isString: false, parts: [{kind: 'literal', text: ''}]};
   }
 
   return {
-    isString: cExpr.cType === 'string',
-    parts: [printfPart(cExpr)],
+    isString: value.cType === 'string',
+    parts: [{kind: 'value', value}],
   };
 }
 
 /**
- * Lowers an expression to a printf format + args for a char-buffer destination (a <Text> body, a string
- * state slot, a <TextInput value>). A string-building `+` chain becomes one spec per dynamic part with
- * the literals folded into the format; anything else is a single spec over its own value.
+ * Lowers an expression to text for a char-buffer destination (a <Text> body, a string state slot, a
+ * <TextInput value>). A string-building `+` chain becomes its parts in order; anything else is one value.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ * @param scope  The constants a fold may read; by default the env's.
+ *
+ * @returns The text.
+ */
+export function lowerText(
+  node: t.Node,
+  env: Env,
+  scope: Scope = env.consts ?? {},
+): IrText {
+  return {parts: lowerTextParts(node, env, foldScope(env, scope)).parts};
+}
+
+/**
+ * lowerText, printed as one printf format and its arguments (one spec per runtime value, literals folded in).
  *
  * @param node  The expression.
  * @param env  The expression environment.
@@ -1521,30 +1519,5 @@ export function emitFormat(
   env: Env,
   scope: Scope = env.consts ?? {},
 ): FormatResult {
-  // Fold literal parts into the format (escaping `%`) and turn each runtime part into a spec and an argument.
-  const visibleScope = foldScope(env, scope);
-  let format = '';
-  const args = [];
-  for (const part of concatParts(node, env, visibleScope).parts) {
-    if (part.literal !== undefined) {
-      format += part.literal.replace(/%/g, '%%');
-    } else {
-      format += part.spec;
-      args.push(part.code);
-    }
-  }
-
-  return {format, args};
+  return printText(lowerText(node, env, scope));
 }
-
-/**
- * Renders an emitFormat() result as snprintf's trailing arguments (a constant string keeps its `%s` form).
- *
- * @param result  The format and its arguments.
- *
- * @returns The arguments after the buffer and its size, as C.
- */
-export const formatArgs = ({format, args}: FormatResult): string =>
-  args.length
-    ? `${cstr(format)}, ${args.join(', ')}`
-    : `"%s", ${cstr(format.replace(/%%/g, '%'))}`;

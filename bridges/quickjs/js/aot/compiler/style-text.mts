@@ -29,7 +29,8 @@ import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, foldScope, withUndefined} from './static-eval.mts';
 import {cstr} from './c-syntax.mts';
-import {asCond, emitExpr, jsxChildText, emitFormat} from './expressions.mts';
+import {asCond, emitExpr, jsxChildText, lowerText} from './expressions.mts';
+import {printText} from './c/text.mts';
 import {
   ANIM_STYLE_PROPS,
   ANIM_TRANSFORM_PROPS,
@@ -38,6 +39,7 @@ import {
 import type * as t from '@babel/types';
 import type {Interpolation} from './animations.mts';
 import type {AotError} from './diagnostics.mts';
+import type {IrTextPart} from './ir/text.mts';
 import type {
   DynAssign,
   Env,
@@ -564,7 +566,7 @@ export function collectStyleAssigns(
 }
 
 /**
- * Builds a Text node's content. Static interpolations fold into the literal; any that reference state
+ * Builds a Text node's content. Static interpolations fold into literal text; any that reference state
  * make it dynamic (a printf format + C arg expressions recomputed on update).
  *
  * @param children  The <Text>'s children.
@@ -578,24 +580,17 @@ export function buildText(
   scope: Scope,
   env: Env,
 ): TextContent {
-  let format = '';
-  const args = [];
-  let dynamic = false;
+  const parts: IrTextPart[] = [];
   for (const child of children) {
     if (child.type === 'JSXText') {
       const text = /\n/.test(child.value)
         ? child.value.replace(/\s+/g, ' ').trim()
         : child.value;
-      format += text.replace(/%/g, '%%');
+      parts.push({kind: 'literal', text});
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
-      // Constants fold into the literal; anything referencing state contributes a spec + arg.
-      const formatted = emitFormat(child.expression, env, scope);
-      format += formatted.format;
-      args.push(...formatted.args);
-      if (formatted.args.length) {
-        dynamic = true;
-      }
+      // Constants fold into literal text; anything referencing state is a runtime value.
+      parts.push(...lowerText(child.expression, env, scope).parts);
     } else if (child.type === 'JSXElement') {
       throw new Error(
         'AOT: nested <Text> / element children inside <Text> not yet supported (spans)',
@@ -603,7 +598,9 @@ export function buildText(
     }
   }
 
-  return {dynamic, format, args};
+  // Print the parts as one printf format; any runtime value makes the text dynamic.
+  const {format, args} = printText({parts});
+  return {dynamic: args.length > 0, format, args};
 }
 
 /**
