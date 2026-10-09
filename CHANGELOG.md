@@ -30,6 +30,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.
+  
+- A repaint that touches part of a scaled or tinted image (or of an RGB565 image drawn without a
+  `copy_rect_fmt` backend) converts only the repainted part instead of the whole image. A small repaint over
+  a 1880×880 bilinear-scaled image took about 20 ms on a desktop host, and now takes under 1 ms.
 
 ## [0.15.0] - 2026-09-27
 ### Changed

@@ -158,6 +158,44 @@ bilinear_sample(const ImageEntry* img, int src_x, int src_y, int src_w, int src_
 #endif /* ERUI_BILINEAR_SCALE */
 
 /**
+ * @brief Narrows the destination [0, w) x [0, h) placed at (x, y) to the part inside the active scissor.
+ *
+ * Every blit is clipped to the scissor anyway; producing only this part keeps a repaint that touches a
+ * corner of a large image from converting or re-scaling all of it.
+ *
+ * @param[in]  x   Destination left edge in framebuffer pixels.
+ * @param[in]  y   Destination top edge in framebuffer pixels.
+ * @param[in]  w   Destination width in pixels.
+ * @param[in]  h   Destination height in pixels.
+ * @param[out] x0  First visible column, relative to x.
+ * @param[out] y0  First visible row, relative to y.
+ * @param[out] x1  One past the last visible column, relative to x.
+ * @param[out] y1  One past the last visible row, relative to y.
+ *
+ * @return false when nothing of the destination is inside the scissor.
+ */
+static bool visible_part(int x, int y, int w, int h, int* x0, int* y0, int* x1, int* y1)
+{
+    *x0 = 0;
+    *y0 = 0;
+    *x1 = w;
+    *y1 = h;
+    int cx, cy, cw, ch;
+    if (er_get_clip_rect(&cx, &cy, &cw, &ch))
+    {
+        if (cx - x > *x0)
+            *x0 = cx - x;
+        if (cy - y > *y0)
+            *y0 = cy - y;
+        if (cx + cw - x < *x1)
+            *x1 = cx + cw - x;
+        if (cy + ch - y < *y1)
+            *y1 = cy + ch - y;
+    }
+    return *x0 < *x1 && *y0 < *y1;
+}
+
+/**
  * @brief Renders a source crop of an image to a destination rectangle.
  *
  * Uses bilinear sampling when ERUI_BILINEAR_SCALE is non-zero, otherwise nearest-neighbor.
@@ -168,6 +206,8 @@ bilinear_sample(const ImageEntry* img, int src_x, int src_y, int src_w, int src_
  * images) are emitted through er_blit_copy instead of er_blit_blend: backends replace the
  * destination pixels outright instead of read-modify-write compositing, which is the fast
  * path for full-screen backgrounds.
+ *
+ * The CPU paths produce only the rows and columns inside the active scissor (see visible_part()).
  *
  * @param[in] img         Source image entry (buffer, dimensions, format, opacity).
  * @param[in] src_x       Left edge of the source crop rectangle.
@@ -231,12 +271,15 @@ static void render_region(const ImageEntry* img,
          * row into the scratch buffer (internal RAM — reads from the 2 B/px source are the only
          * external-memory source traffic), then emit it. Chunked horizontally so widths beyond the
          * scratch capacity still render fully. */
-        for (int dy = 0; dy < dst_h; dy++)
+        int vx0, vy0, vx1, vy1;
+        if (!visible_part(dst_x, dst_y, dst_w, dst_h, &vx0, &vy0, &vx1, &vy1))
+            return;
+        for (int dy = vy0; dy < vy1; dy++)
         {
             const uint16_t* srow = rows565 + (size_t)dy * (size_t)img->w;
-            for (int cx = 0; cx < dst_w; cx += ERUI_MAX_IMG_ROW_PIXELS)
+            for (int cx = vx0; cx < vx1; cx += ERUI_MAX_IMG_ROW_PIXELS)
             {
-                const int cw = (dst_w - cx) < ERUI_MAX_IMG_ROW_PIXELS ? (dst_w - cx) : ERUI_MAX_IMG_ROW_PIXELS;
+                const int cw = (vx1 - cx) < ERUI_MAX_IMG_ROW_PIXELS ? (vx1 - cx) : ERUI_MAX_IMG_ROW_PIXELS;
                 for (int dx = 0; dx < cw; dx++)
                     irow()[dx] = rgb565_to_argb(srow[cx + dx]);
                 er_blit_copy(irow(), cw * (int)sizeof(uint32_t), dst_x + cx, dst_y + dy, cw, 1);
@@ -247,9 +290,13 @@ static void render_region(const ImageEntry* img,
 
     /* General path: scale and/or tint via a one-row scratch buffer. */
     const int capped_w = (dst_w <= ERUI_MAX_IMG_ROW_PIXELS) ? dst_w : ERUI_MAX_IMG_ROW_PIXELS;
-    for (int dy = 0; dy < dst_h; dy++)
+    int vx0, vy0, vx1, vy1;
+    if (!visible_part(dst_x, dst_y, capped_w, dst_h, &vx0, &vy0, &vx1, &vy1))
+        return;
+    const int vis_w = vx1 - vx0;
+    for (int dy = vy0; dy < vy1; dy++)
     {
-        for (int dx = 0; dx < capped_w; dx++)
+        for (int dx = vx0; dx < vx1; dx++)
         {
 #if ERUI_BILINEAR_SCALE
             /* Fractional source coords with half-pixel alignment for correct up-sampling. */
@@ -265,13 +312,13 @@ static void render_region(const ImageEntry* img,
                 p |= 0xFF000000u; /* squash bilinear float dust so the row stays exactly opaque */
             if (has_tint)
                 p = apply_tint(p, tr, tg, tb);
-            irow()[dx] = p;
+            irow()[dx - vx0] = p;
         }
         /* Tint preserves alpha, so an opaque image stays opaque through every branch above. */
         if (img->opaque)
-            er_blit_copy(irow(), capped_w * (int)sizeof(uint32_t), dst_x, dst_y + dy, capped_w, 1);
+            er_blit_copy(irow(), vis_w * (int)sizeof(uint32_t), dst_x + vx0, dst_y + dy, vis_w, 1);
         else
-            er_blit_blend(irow(), capped_w * (int)sizeof(uint32_t), 255, dst_x, dst_y + dy, capped_w, 1);
+            er_blit_blend(irow(), vis_w * (int)sizeof(uint32_t), 255, dst_x + vx0, dst_y + dy, vis_w, 1);
     }
 }
 
