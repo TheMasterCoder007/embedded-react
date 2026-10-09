@@ -160,8 +160,17 @@ target_link_libraries(embedded-react-watch
 
 # Core 0's stack is 8 KB: all of SCRATCH_Y here, plus SCRATCH_X, which main.c claims as its lower half
 # (core 1 never runs). A full repaint of the watch face measures ~7.5 KB deep. main.c also puts a 2 KB
-# MPU guard between the stack and the heap, so an overflow faults instead of corrupting the framebuffer.
-target_compile_definitions(embedded-react-watch PRIVATE PICO_STACK_SIZE=0x1000)
+# MPU guard between the stack and the heap, so an overflow faults instead of corrupting the framebuffer;
+# stack_guard.ld fails the link if .data/.bss ever grow into that guard.
+set(ER_STACK_GUARD_BYTES 2048)
+target_compile_definitions(embedded-react-watch PRIVATE
+    PICO_STACK_SIZE=0x1000
+    STACK_GUARD_BYTES=${ER_STACK_GUARD_BYTES}U
+)
+target_link_options(embedded-react-watch PRIVATE
+    "LINKER:--defsym=__stack_guard_bytes=${ER_STACK_GUARD_BYTES}"
+    "${CMAKE_CURRENT_LIST_DIR}/stack_guard.ld"
+)
 
 # Bring-up debug aids (see main.c): -DER_BOARD_DEBUG=1 waits for USB + heartbeat-logs; =2 also holds
 # a color-bar test pattern at boot.

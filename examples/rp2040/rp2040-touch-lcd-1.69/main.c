@@ -87,10 +87,12 @@ static uint32_t now_ms(void)
 static uint32_t __attribute__((section(".stack1"))) s_stack_low[4096 / sizeof(uint32_t)];
 extern uint32_t __StackTop[];
 
-/* The top 2 KB of main RAM, just below the stack, is a no-access guard. It is bigger than any engine
- * stack frame (the text rasterizer's is ~1.7 KB), so an overflow cannot step over it into the heap. */
-#define STACK_GUARD_BYTES 2048U
-#define STACK_GUARD_MPU_SIZE 10U /* MPU region size is 2^(SIZE+1) bytes */
+/* The top STACK_GUARD_BYTES of main RAM (2 KB, set in CMakeLists.txt), just below the stack, is a
+ * no-access guard. It is bigger than any engine stack frame (the text rasterizer's is ~1.7 KB), so an
+ * overflow cannot step over it into the heap. */
+_Static_assert(STACK_GUARD_BYTES >= 256U && (STACK_GUARD_BYTES & (STACK_GUARD_BYTES - 1U)) == 0U,
+               "the MPU guard must be a power of two of at least 256 bytes");
+#define STACK_GUARD_MPU_SIZE ((uint32_t)__builtin_ctz(STACK_GUARD_BYTES) - 1U) /* region is 2^(SIZE+1) bytes */
 #define MPU_RASR_XN_BITS (1U << 28)
 
 /** @brief Turns on the MPU guard below the stack; a stack overflow then faults instead of writing the heap. */
@@ -198,6 +200,9 @@ int main(void)
     Pedometer pedo;
     pedometer_reset(&pedo);
 
+    /* Arm the watchdog before the app runs: the first full repaint below is where the stack is deepest. */
+    watchdog_enable(ER_WATCHDOG_MS, true);
+
     /* Register baked <Image> assets BEFORE building the tree so Image nodes resolve their source by
        name (a no-op for the watch face — it imports no images). */
     er_register_assets();
@@ -214,7 +219,6 @@ int main(void)
 #if ER_BOARD_DEBUG < 2
     board_backlight(90); /* debug builds already lit it for the test pattern above */
 #endif
-    watchdog_enable(ER_WATCHDOG_MS, true);
 
     /* Frame loop. The press state machine turns CST816S polls into down/move/up for the engine. */
     uint32_t prev = now_ms();

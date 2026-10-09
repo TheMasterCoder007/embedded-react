@@ -98,13 +98,13 @@ The CYD logs free RAM at boot and again after start-up, the ESP32-S3 once after 
 
 ## Symptoms and causes
 
-| Symptom                                                            | Likely cause                                                                                                 |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                  |
-| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one          |
-| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_W/H` or `ERUI_XFORM_W/H`, or shrink the node |
-| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                            |
-| The RP2040 reboots and logs `rebooted by the watchdog`             | The stack overflowed into its guard: flatten deeply nested views, or check the `stack=` heartbeat            |
-| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                        |
-| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                    |
-| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                   |
+| Symptom                                                            | Likely cause                                                                                                               |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                                |
+| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one                        |
+| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_W/H` or `ERUI_XFORM_W/H`, or shrink the node               |
+| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                                          |
+| The RP2040 reboots and logs `rebooted by the watchdog`             | A frame or a driver hung, or the stack overflowed into its guard; a debug `stack=` heartbeat near 8192 points at the stack |
+| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                                      |
+| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                                  |
+| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                                 |
