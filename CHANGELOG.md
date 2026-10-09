@@ -24,6 +24,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   
 ### Fixed
 
+- The RP2040 watch example gives its stack an explicit 8 KB with a guard below it. A full repaint
+  needs about 7.5 KB, past the SDK's 2 KB default, and a deeper app now reboots the board instead of silently
+  overwriting the framebuffer.
+
 - A Flow B `Math.<name>` or `e.layout.<name>` that names a built-in object property (`Math.toString`,
   say) fails with an `AOT:` error. It used to compile to invalid C.
 

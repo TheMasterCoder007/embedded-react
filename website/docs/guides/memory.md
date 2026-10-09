@@ -80,29 +80,31 @@ are 22 KB, which sit in PSRAM at no measurable cost. Flow B has none of this.
 
 ## How the examples are sized
 
-|                    | ESP32-S3                     | ESP32 CYD                                             | RP2040                              |
-| ------------------ | ---------------------------- | ----------------------------------------------------- | ----------------------------------- |
-| RAM                | 512 KB internal + 8 MB PSRAM | ~223 KB free at boot, largest block ~110 KB; no PSRAM | 264 KB SRAM                         |
-| Flow               | A                            | B                                                     | B                                   |
-| Framebuffer        | 800×480 in PSRAM             | Two 40-row RGB565 bands, ~37 KB                       | 240×280 RGB565 in SRAM, 131 KB      |
-| JS heap            | In PSRAM                     | none                                                  | none                                |
-| Node pool          | default                      | lowered                                               | sized to the watch face             |
-| Image registry     | default                      | 16                                                    | 8                                   |
-| Damage rectangles  | 16                           | 4                                                     | 4                                   |
-| Shadows, gradients | shadows off                  | shadows off                                           | shadows, gradients and keyboard off |
-| Free after boot    | logged at boot               | ~181 KB internal                                      | fits with the framebuffer           |
+|                    | ESP32-S3                           | ESP32 CYD                                             | RP2040                              |
+| ------------------ | ---------------------------------- | ----------------------------------------------------- | ----------------------------------- |
+| RAM                | 512 KB internal + 8 MB PSRAM       | ~223 KB free at boot, largest block ~110 KB; no PSRAM | 264 KB SRAM                         |
+| Flow               | A                                  | B                                                     | B                                   |
+| Framebuffer        | 800×480 in PSRAM                   | Two 40-row RGB565 bands, ~37 KB                       | 240×280 RGB565 in SRAM, 131 KB      |
+| JS heap            | In PSRAM                           | none                                                  | none                                |
+| Node pool          | default                            | lowered                                               | sized to the watch face             |
+| Image registry     | default                            | 16                                                    | 8                                   |
+| Damage rectangles  | 16                                 | 4                                                     | 4                                   |
+| Stack              | 64 KB main task (36 KB with Wi-Fi) | 20 KB main task                                       | 8 KB, both scratch banks, guarded   |
+| Shadows, gradients | shadows off                        | shadows off                                           | shadows, gradients and keyboard off |
+| Free after boot    | logged at boot                     | ~181 KB internal                                      | fits with the framebuffer           |
 
 The CYD logs free RAM at boot and again after start-up, the ESP32-S3 once after boot and in every
 `alive:` line; watch the later number as you add features. The three `CMakeLists.txt` files are the worked examples of the flags above.
 
 ## Symptoms and causes
 
-| Symptom                                                            | Likely cause                                                                                                 |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                  |
-| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one          |
-| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_W/H` or `ERUI_XFORM_W/H`, or shrink the node |
-| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                            |
-| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                        |
-| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                    |
-| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                   |
+| Symptom                                                            | Likely cause                                                                                                               |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                                |
+| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one                        |
+| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_W/H` or `ERUI_XFORM_W/H`, or shrink the node               |
+| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                                          |
+| The RP2040 reboots and logs `rebooted by the watchdog`             | A frame or a driver hung, or the stack overflowed into its guard; a debug `stack=` heartbeat near 8192 points at the stack |
+| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                                      |
+| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                                  |
+| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                                 |
