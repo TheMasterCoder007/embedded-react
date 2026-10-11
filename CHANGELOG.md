@@ -43,7 +43,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   call it.
 
 - In Flow B, a `.start(onComplete)` waits out a delay that ends a `sequence`, or a delay that outlasts the timing
-  beside it, before calling its callback. It used to call it as soon as the last animation finished.
+  beside it, before calling its callback. It used to call it as soon as the last animation finished. Stopping
+  the animation during that wait calls the callback with `finished: false`, as React Native does.
 
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent

@@ -48,6 +48,7 @@ import {emitNode} from './nodes.mts';
 import {compileKeyboardConfig} from './keyboard.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
+import {printWaitDeclarations} from './c/animations.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
 import type {
@@ -356,6 +357,24 @@ export function compileSourceImpl(
       cFunction.body = dropUpdate(cFunction.body!);
     }
     out.mountEffects = dropUpdate(out.mountEffects);
+  }
+
+  // A wait slot that no start waits on has nothing for a stop to end, so the slot and its stop calls go.
+  const idleWaitStops = [...out.animWaits.values()]
+    .filter(record => !record.timerFn)
+    .map(record => `app_wait_stop(&${record.slot});`);
+  if (idleWaitStops.length) {
+    const dropIdleStops = (lines: string[]) =>
+      lines.filter(line => !idleWaitStops.includes(line.trim()));
+    for (const cFunction of [
+      ...out.handlers,
+      ...out.timerFns,
+      ...out.animCbs,
+      ...out.effectFns,
+    ]) {
+      cFunction.body = dropIdleStops(cFunction.body!);
+    }
+    out.mountEffects = dropIdleStops(out.mountEffects);
   }
 
   // app_update(): re-apply state-driven node props, rebuild state-driven Svgs, then run dep-driven effects.
@@ -929,9 +948,19 @@ static int16_t app_round_dim(double v)
   ].join('\n\n');
   // <limits.h> when a helper saturates at INT_MAX / INT_MIN.
   const usesLimits = /\bINT_M(?:AX|IN)\b/.test(clockBlock);
+  // Animation completion waits: their slots, and the helpers the generated code calls.
+  const animWaitBlock = printWaitDeclarations(
+    [...out.animWaits.values()]
+      .filter(record => record.timerFn)
+      .map(record => record.slot),
+    helperCallers,
+  );
+
   // Emit er_timer_clear only when called; a clearInterval in a dropped mount-effect cleanup leaves no caller.
   const timerClearBlock =
-    out.usesTimers && helperCallers.includes('er_timer_clear(')
+    out.usesTimers &&
+    (helperCallers.includes('er_timer_clear(') ||
+      animWaitBlock.includes('er_timer_clear('))
       ? `static void er_timer_clear(int id)
 {
     if (id < 0)
@@ -970,6 +999,7 @@ static int16_t app_round_dim(double v)
     handleDecls,
     timerTableBlock,
     timerClearBlock,
+    animWaitBlock,
     effectFwdDecls,
     updateBlock,
     timerFnFwdDecls,

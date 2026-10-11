@@ -32,8 +32,8 @@ import {APP_UPDATE_CALL, lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
 import {
   printChainFunctions,
-  printCompletionCall,
   printCompletionWait,
+  printWaitEnd,
 } from './c/animations.mts';
 import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
@@ -46,6 +46,7 @@ import type {
   IrCompletionWait,
   IrStartAnimations,
   IrStartChain,
+  IrWaitSlot,
 } from './ir/animations.mts';
 import type {
   AnimRecord,
@@ -860,7 +861,7 @@ function sequenceSteps(
  * @param ctx  The statement compiler's context.
  * @param completion  The completion callback to run when the chain ends, if any.
  * @param loop  How the chain repeats, or null for once.
- * @param trailingDelay  For a chain that runs once: the wait after its last step before it completes.
+ * @param trailing  For a chain that runs once: the composition's key and the wait after its last step.
  *
  * @returns The chain.
  */
@@ -870,7 +871,7 @@ function lowerChain(
   ctx: StatementContext,
   completion: IrCompletion | null,
   loop: LoopSpec | null = null,
-  trailingDelay = 0,
+  trailing: {key: string; delayMs: number} | null = null,
 ): IrStartChain {
   // GLOBAL: callback names are file-scope, so must be unique across handlers
   const id = ctx.out.seqN++;
@@ -898,11 +899,11 @@ function lowerChain(
       : null,
     completion,
     completionWait:
-      !loop && completion && trailingDelay > 0
+      !loop && completion && trailing && trailing.delayMs > 0
         ? completionWait(
             ctx,
-            completion,
-            trailingDelay,
+            trailing.key,
+            trailing.delayMs,
             `er_seqcb_${id}_${steps.length}`,
           )
         : null,
@@ -934,30 +935,130 @@ const emptyStart = (
   completionWait: null,
 });
 
+/** AST fields that say where a node is, not what it is. */
+const POSITION_KEYS = new Set([
+  'loc',
+  'start',
+  'end',
+  'range',
+  'extra',
+  'leadingComments',
+  'trailingComments',
+  'innerComments',
+]);
+
 /**
- * A one-shot timer function that runs a completion as finished, added to the output.
+ * What identifies a composition for its completion wait: its shape, within one component instance. A start and
+ * a stop of the same composition share a wait wherever they are written, as they share the values they drive.
+ *
+ * @param node  The composition, resolved.
+ * @param env  The expression environment.
+ *
+ * @returns The key.
+ */
+const compositionKey = (node: t.Node | null | undefined, env: Env): string =>
+  `${env.cbPrefix ?? ''}|${JSON.stringify(node, (key, value) =>
+    POSITION_KEYS.has(key) ? undefined : value,
+  )}`;
+
+/**
+ * A composition's wait slot, added to the output on first use. Its timer function comes with the first start
+ * that waits; a stop alone needs only the slot.
  *
  * @param ctx  The statement compiler's context.
- * @param completion  The completion.
+ * @param key  The composition's key.
+ * @param withTimer  Also add the timer function that ends the wait.
  *
- * @returns The timer function's name.
+ * @returns The slot's record.
  */
-function completionTimer(
+function waitRecord(
   ctx: StatementContext,
-  completion: IrCompletion,
-): string {
-  const name = `er_timer_fn_${ctx.out.timerFns.length}`;
-  ctx.out.usesTimers = true;
-  ctx.out.timerFns.push({name, body: [printCompletionCall(completion)]});
-  return name;
+  key: string,
+  withTimer: boolean,
+): {slot: string; timerFn: string | null} {
+  let record = ctx.out.animWaits.get(key);
+  if (!record) {
+    record = {slot: `s_animwait_${ctx.out.animWaits.size}`, timerFn: null};
+    ctx.out.animWaits.set(key, record);
+  }
+  if (withTimer && !record.timerFn) {
+    record.timerFn = `er_timer_fn_${ctx.out.timerFns.length}`;
+    ctx.out.usesTimers = true;
+    ctx.out.timerFns.push({
+      name: record.timerFn,
+      body: printWaitEnd(record.slot),
+    });
+  }
+
+  return record;
 }
 
 /**
- * The wait between a composition's last animation finishing and its completion running; its timer function is
- * added to the output.
+ * A composition's wait slot, ready for a start.
  *
  * @param ctx  The statement compiler's context.
- * @param completion  The completion.
+ * @param key  The composition's key.
+ *
+ * @returns The slot.
+ */
+function waitSlot(ctx: StatementContext, key: string): IrWaitSlot {
+  const record = waitRecord(ctx, key, true);
+  return {slot: record.slot, timerFn: record.timerFn!};
+}
+
+/**
+ * True when a composition has an Animated.delay anywhere, the only thing a completion can wait on.
+ *
+ * @param node  The composition.
+ * @param env  The expression environment.
+ *
+ * @returns Whether it does.
+ */
+function hasDelay(node: t.Node | null | undefined, env: Env): boolean {
+  node = resolveAnim(node, env);
+  if (!isAnimatedCall(node)) return false;
+
+  // Look through compositions; a timing, spring or decay waits on nothing beyond itself.
+  const kind = node.callee.property.name;
+  const args = node.arguments;
+  if (kind === 'delay') return true;
+  if (kind === 'loop') return hasDelay(args[0], env);
+  if (kind === 'sequence' || kind === 'parallel' || kind === 'stagger') {
+    const list = kind === 'stagger' ? args[1] : args[0];
+    return (
+      list?.type === 'ArrayExpression' &&
+      list.elements.some(child => child && hasDelay(child, env))
+    );
+  }
+
+  return false;
+}
+
+/**
+ * The wait slot `anim.stop()` ends, for a composition that has a delay to wait on.
+ *
+ * @param node  The composition being stopped.
+ * @param env  The expression environment.
+ * @param ctx  The statement compiler's context.
+ *
+ * @returns The slot, or null.
+ */
+export function stopWaitSlot(
+  node: t.Node | null | undefined,
+  env: Env,
+  ctx: StatementContext,
+): string | null {
+  const resolved = resolveAnim(node, env);
+  return hasDelay(resolved, env)
+    ? waitRecord(ctx, compositionKey(resolved, env), false).slot
+    : null;
+}
+
+/**
+ * The wait between a composition's last animation finishing and its completion running.
+ *
+ * @param ctx  The statement compiler's context.
+ * @param key  The composition's key.
  * @param delayMs  The wait.
  * @param callback  The name of the on_complete callback that starts it.
  *
@@ -965,14 +1066,10 @@ function completionTimer(
  */
 const completionWait = (
   ctx: StatementContext,
-  completion: IrCompletion,
+  key: string,
   delayMs: number,
   callback: string,
-): IrCompletionWait => ({
-  delayMs,
-  callback,
-  timerFn: completionTimer(ctx, completion),
-});
+): IrCompletionWait => ({delayMs, callback, wait: waitSlot(ctx, key)});
 
 /**
  * A start that drives no value. As in JS, its completion still runs as finished once the composition's delays
@@ -981,6 +1078,7 @@ const completionWait = (
  * @param ctx  The statement compiler's context.
  * @param completion  The completion callback, if any.
  * @param delayMs  How long the composition takes.
+ * @param key The composition's key.
  *
  * @returns The start.
  */
@@ -988,6 +1086,7 @@ function startNothing(
   ctx: StatementContext,
   completion: IrCompletion | null,
   delayMs: number,
+  key: string,
 ): IrStartAnimations | IrCompleteAfter {
   if (!completion) {
     return emptyStart(ctx, completion);
@@ -997,10 +1096,10 @@ function startNothing(
     kind: 'completeAfter',
     completion,
     delayMs,
-    timerFn: null,
+    wait: null,
   };
   if (delayMs > 0) {
-    start.timerFn = completionTimer(ctx, completion);
+    start.wait = waitSlot(ctx, key);
   }
 
   return start;
@@ -1016,6 +1115,7 @@ function startNothing(
  * @param env  The expression environment.
  * @param ctx  The statement compiler's context.
  * @param completion  The completion callback to run when the loop ends, if any.
+ * @param key  The loop's composition key.
  *
  * @returns The start, or null when the flat path (the engine's own cfg.loop) handles it.
  */
@@ -1024,6 +1124,7 @@ function lowerLoopStart(
   env: Env,
   ctx: StatementContext,
   completion: IrCompletion | null,
+  key: string,
 ): IrAnimationStart | null {
   // Fold the loop count at build time; absent or noninteger iterations mean repeat forever.
   const inner = resolveAnim(loopNode.arguments[0], env);
@@ -1068,7 +1169,7 @@ function lowerLoopStart(
 
   // A zero-iteration loop starts nothing but still reports successful completion.
   if (iterations === 0) {
-    return startNothing(ctx, completion, 0);
+    return startNothing(ctx, completion, 0, key);
   }
 
   // A loop of delays alone completes after its passes; an endless one never does.
@@ -1079,6 +1180,7 @@ function lowerLoopStart(
           ctx,
           completion,
           Math.min(iterations * trailingDelay, INT_MAX),
+          key,
         );
   }
 
@@ -1187,11 +1289,15 @@ export function lowerAnimateStart(
     : null;
   const receiver = resolveAnim((expr.callee as t.MemberExpression).object, env);
   const kind = isAnimatedCall(receiver) ? receiver.callee.property.name : null;
+  const key = compositionKey(receiver, env);
   if (kind === 'sequence') {
     const {steps, trailingDelay} = sequenceSteps(receiver as AnimatedCall, env);
     return steps.length
-      ? lowerChain(steps, env, ctx, completion, null, trailingDelay)
-      : startNothing(ctx, completion, trailingDelay);
+      ? lowerChain(steps, env, ctx, completion, null, {
+          key,
+          delayMs: trailingDelay,
+        })
+      : startNothing(ctx, completion, trailingDelay, key);
   }
   if (kind === 'loop') {
     const start = lowerLoopStart(
@@ -1199,6 +1305,7 @@ export function lowerAnimateStart(
       env,
       ctx,
       completion,
+      key,
     );
     if (start) return start;
   }
@@ -1206,7 +1313,7 @@ export function lowerAnimateStart(
   // The flat path has no "after all entries finish" join point, so completion callbacks are limited to one entry.
   const {entries, duration} = flattenAnim(receiver, env, 0, false);
   if (!entries.length) {
-    return startNothing(ctx, completion, duration ?? 0);
+    return startNothing(ctx, completion, duration ?? 0, key);
   }
   if (completion && entries.length > 1) {
     throw aotError(
@@ -1231,7 +1338,7 @@ export function lowerAnimateStart(
     if (duration > end) {
       start.completionWait = completionWait(
         ctx,
-        completion,
+        key,
         duration - end,
         `er_waitcb_${ctx.out.seqN++}`,
       );

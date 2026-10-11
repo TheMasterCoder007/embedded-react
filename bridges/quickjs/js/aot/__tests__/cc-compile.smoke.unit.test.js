@@ -121,7 +121,7 @@ describe('AOT generated C compiles', () => {
        }`,
       'svg',
     );
-    expect(r.c).toMatch(/static const float s_svg\d+_ops\[\]/); // baked tape (a fully static <Svg>)
+    expect(r.c).toMatch(/static const float s_svg\d+_ops\[]/); // baked tape (a fully static <Svg>)
     expect(r.c).toMatch(
       /er_node_set_vector_ops\(n\d+, s_svg\d+_ops, \d+, s_svg\d+_paints, \d+/,
     );
@@ -241,6 +241,35 @@ describe('AOT generated C compiles', () => {
          }`,
         'loops',
       );
+      // Completion waits: a sequence's trailing delay stopped by a cleanup, a delay alone, and a stop of a
+      // composition nothing waits on (its slot is dropped).
+      const waits = compileSource(
+        `import { useState, useEffect } from 'react';
+         import { View, Animated, useAnimatedValue } from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(0);
+           const a = useAnimatedValue(0);
+           useEffect(() => {
+             const pulse = Animated.sequence([Animated.timing(a, { toValue: 1 }), Animated.delay(300)]);
+             pulse.start(({ finished }) => setN(finished ? 1 : 2));
+             return () => pulse.stop();
+           }, [n]);
+           return (
+             <View
+               onPress={() => {
+                 Animated.delay(500).start(() => setN(3));
+                 Animated.parallel([Animated.timing(a, { toValue: 0 }), Animated.delay(900)]).stop();
+               }}
+               style={{ flex: 1, opacity: a, width: n }}
+             />
+           );
+         }`,
+        'waits',
+      );
+      expect(waits.c).toContain('app_wait_start(&s_animwait_');
+      expect(waits.c).toContain('app_wait_stop(&s_animwait_2);');
+      expect(waits.c).toContain('app_wait_end(&s_animwait_');
+      expect(waits.c).not.toContain('s_animwait_1');
       for (const [name, r] of [
         [
           'starter',
@@ -250,6 +279,7 @@ describe('AOT generated C compiles', () => {
           }),
         ],
         ['loops', loops],
+        ['waits', waits],
       ]) {
         const dir = mkdtempSync(join(tmpdir(), `er-aot-cc-${name}-`));
         try {
@@ -379,7 +409,7 @@ describe('AOT generated C compiles', () => {
          import { View, Text, Pressable } from 'embedded-react';
          export function App() {
            const [t, setT] = useState(0);
-           const [sec, setSec] = useState(0);
+           const setSec = useState(0);
            const start = useRef(0);
            useEffect(() => {
              start.current = performance.now();
@@ -442,7 +472,7 @@ describe('AOT generated C compiles', () => {
         `import { useState } from 'react';
          import { View, Text } from 'embedded-react';
          export function App() {
-           const [n, setN] = useState(3);
+           const n = useState(3);
            return (<View style={{ width: n * 0.8875, marginLeft: -n / 2 }}><Text>x</Text></View>);
          }`,
         'round',
@@ -875,11 +905,11 @@ describe('AOT generated C compiles', () => {
          import { View, Text, TextInput } from 'embedded-react';
          const PAGES = 4;
          export function App() {
-           const [page, setPage] = useState(0);
-           const [hit, setHit] = useState('none');
-           const [ratio, setRatio] = useState(0.5);
+           const page = useState(0);
+           const hit = useState('none');
+           const ratio = useState(0.5);
            const [label, setLabel] = useState('');
-           const [on, setOn] = useState(false);
+           const on = useState(false);
            return (
              <View style={{ flex: 1 }}>
                <Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>

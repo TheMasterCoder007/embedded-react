@@ -129,11 +129,13 @@ export interface IrStepRef {
   op: '++' | '--';
 }
 
-/** `anim.stop()`: each animated value it drives freezes where it is. */
+/** `anim.stop()`: each animated value it drives freezes where it is, and a pending completion wait ends. */
 export interface IrStopAnimations {
   kind: 'stopAnimations';
   /** The animated values' handles. */
   handles: string[];
+  /** The slot of the composition's completion wait, or null when it has no delay to wait on. */
+  waitSlot: string | null;
 }
 
 /** `if (test) { … } else { … }`. */

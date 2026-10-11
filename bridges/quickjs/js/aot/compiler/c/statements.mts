@@ -198,11 +198,17 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
       return [`${indent}${stmt.ref.cVar} ${stmt.op} ${printExpr(stmt.value)};`];
     case 'stepRef':
       return [`${indent}${stmt.ref.cVar}${stmt.op};`];
-    case 'stopAnimations':
-      return stmt.handles.map(
+    case 'stopAnimations': {
+      const lines = stmt.handles.map(
         handle =>
           `${indent}er_anim_value_set(${handle}, er_anim_value_get(${handle}));`,
       );
+      if (stmt.waitSlot) {
+        lines.push(`${indent}app_wait_stop(&${stmt.waitSlot});`);
+      }
+
+      return lines;
+    }
     case 'if': {
       // Each branch is a nested C block.
       const lines = [

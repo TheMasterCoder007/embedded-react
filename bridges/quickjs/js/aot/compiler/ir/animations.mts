@@ -75,6 +75,16 @@ export interface IrCompletion {
 }
 
 /**
+ * Where a composition keeps its pending completion wait, so `.stop()` can end it: one slot per composition,
+ * shared by every place that starts or stops it.
+ */
+export interface IrWaitSlot {
+  slot: string;
+  /** The timer function that ends the wait. */
+  timerFn: string;
+}
+
+/**
  * The wait a composition still needs after its last animation finishes (a trailing delay, or a longer delay
  * beside it), before the completion runs as finished. An interrupted animation ends it at once, as not finished.
  */
@@ -82,8 +92,7 @@ export interface IrCompletionWait {
   delayMs: number;
   /** The on_complete callback that starts the wait. */
   callback: string;
-  /** The timer function that runs the completion when the wait ends. */
-  timerFn: string;
+  wait: IrWaitSlot;
 }
 
 /**
@@ -133,8 +142,8 @@ export interface IrCompleteAfter {
   completion: IrCompletion;
   /** Milliseconds to wait; 0 completes at once. */
   delayMs: number;
-  /** The timer function that completes it after the wait, or null when it completes at once. */
-  timerFn: string | null;
+  /** Where the wait is kept, or null when it completes at once. */
+  wait: IrWaitSlot | null;
 }
 
 /** `<animation>.start()`. */

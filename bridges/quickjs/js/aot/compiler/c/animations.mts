@@ -26,6 +26,7 @@ import type {
   IrCompletion,
   IrCompletionWait,
   IrStartChain,
+  IrWaitSlot,
 } from '../ir/animations.mts';
 import type {CFunction} from '../out.mts';
 
@@ -131,6 +132,102 @@ export const printCompletionCall = (completion: IrCompletion): string =>
   `    ${completion.name}(true, NULL);`;
 
 /**
+ * Starts a composition's completion wait in its slot.
+ *
+ * @param wait  The slot.
+ * @param delayMs  The wait.
+ * @param completion  The completion it runs.
+ *
+ * @returns The C line.
+ */
+const printWaitStart = (
+  wait: IrWaitSlot,
+  delayMs: number,
+  completion: IrCompletion,
+): string =>
+  `    app_wait_start(&${wait.slot}, ${delayMs}, ${wait.timerFn}, ${completion.name});`;
+
+/**
+ * The body of a wait slot's timer function: the wait is over, so the completion runs as finished.
+ *
+ * @param slot  The slot.
+ *
+ * @returns The C lines.
+ */
+export const printWaitEnd = (slot: string): string[] => [
+  `    app_wait_end(&${slot});`,
+];
+
+/**
+ * The wait slots and the helpers that drive them, each helper only when the generated code calls it (an unused
+ * static function would warn).
+ *
+ * @param slots  The slots.
+ * @param callers  The generated code, to look for calls in.
+ *
+ * @returns The C block, or '' with no slots.
+ */
+export function printWaitDeclarations(
+  slots: string[],
+  callers: string,
+): string {
+  if (!slots.length) {
+    return '';
+  }
+
+  const usesStart = callers.includes('app_wait_start(');
+  const usesEnd = callers.includes('app_wait_end(');
+  const blocks = [
+    `/* A composition's wait between its last animation and its completion: the pending timer (or -1) and the
+   completion it runs. Stopping the composition ends the wait early, as not finished. */
+typedef struct
+{
+    int timer;
+    ERAnimCompleteFn done;
+} ErAnimWait;`,
+    slots.map(slot => `static ErAnimWait ${slot} = {-1, NULL};`).join('\n'),
+  ];
+  if (usesStart || callers.includes('app_wait_stop(')) {
+    blocks.push(`/* Ends a pending wait early: its completion runs as not finished. */
+static void app_wait_stop(ErAnimWait* wait)
+{
+    if (wait->timer < 0)
+    {
+        return;
+    }
+    er_timer_clear(wait->timer);
+    wait->timer = -1;
+    if (wait->done)
+    {
+        wait->done(false, NULL);
+    }
+}`);
+  }
+  if (usesStart) {
+    blocks.push(`/* Starts a wait. One still pending was replaced by this start, so it ends as not finished first. */
+static void app_wait_start(ErAnimWait* wait, int ms, void (*fn)(void), ERAnimCompleteFn done)
+{
+    app_wait_stop(wait);
+    wait->done = done;
+    wait->timer = er_timer_add(ms, false, fn);
+}`);
+  }
+  if (usesEnd) {
+    blocks.push(`/* The wait ran its course: its completion runs as finished. */
+static void app_wait_end(ErAnimWait* wait)
+{
+    wait->timer = -1;
+    if (wait->done)
+    {
+        wait->done(true, NULL);
+    }
+}`);
+  }
+
+  return blocks.join('\n\n');
+}
+
+/**
  * The name of a chain's callback that starts step `index` (step 0's starts a repeat).
  *
  * @param chain  The chain.
@@ -212,7 +309,7 @@ export const printCompletionWait = (
   name: wait.callback,
   body: [
     ...endIfInterrupted(completion),
-    `    er_timer_add(${wait.delayMs}, false, ${wait.timerFn});`,
+    printWaitStart(wait.wait, wait.delayMs, completion),
   ],
 });
 
@@ -310,8 +407,8 @@ export function printAnimationStart(start: IrAnimationStart): string[] {
       );
     }
     case 'completeAfter':
-      return start.timerFn
-        ? [`    er_timer_add(${start.delayMs}, false, ${start.timerFn});`]
+      return start.wait
+        ? [printWaitStart(start.wait, start.delayMs, start.completion)]
         : [printCompletionCall(start.completion)];
     case 'startChain': {
       // A loop first records the pass and where the value starts, then step 0 starts inline.

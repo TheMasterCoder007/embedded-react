@@ -240,7 +240,7 @@ describe('animation IR: completions', () => {
     expect(stmt).toMatchObject({
       kind: 'completeAfter',
       delayMs: 0,
-      timerFn: null,
+      wait: null,
     });
     expect(printStmts([stmt], '    ')).toEqual([
       '    er_donecb_0(true, NULL);',
@@ -275,14 +275,14 @@ describe('animation IR: completions', () => {
       expect(stmt).toMatchObject({
         kind: 'completeAfter',
         delayMs,
-        timerFn: 'er_timer_fn_0',
+        wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
       });
       expect(printStmts([stmt], '    ')).toEqual([
-        `    er_timer_add(${delayMs}, false, er_timer_fn_0);`,
+        `    app_wait_start(&s_animwait_0, ${delayMs}, er_timer_fn_0, er_donecb_0);`,
       ]);
       expect(ctx.out.usesTimers).toBe(true);
       expect(ctx.out.timerFns).toEqual([
-        {name: 'er_timer_fn_0', body: ['    er_donecb_0(true, NULL);']},
+        {name: 'er_timer_fn_0', body: ['    app_wait_end(&s_animwait_0);']},
       ]);
     }
   });
@@ -294,7 +294,7 @@ describe('animation IR: completions', () => {
     expect(stmt.completionWait).toEqual({
       delayMs: 100,
       callback: 'er_seqcb_1_1',
-      timerFn: 'er_timer_fn_0',
+      wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
     });
 
     // The last step hands over to the wait, which ends at once if the step was interrupted.
@@ -308,10 +308,10 @@ describe('animation IR: completions', () => {
       '        er_donecb_0(false, NULL);',
       '        return;',
       '    }',
-      '    er_timer_add(100, false, er_timer_fn_0);',
+      '    app_wait_start(&s_animwait_0, 100, er_timer_fn_0, er_donecb_0);',
     ]);
     expect(ctx.out.timerFns).toEqual([
-      {name: 'er_timer_fn_0', body: ['    er_donecb_0(true, NULL);']},
+      {name: 'er_timer_fn_0', body: ['    app_wait_end(&s_animwait_0);']},
     ]);
   });
 
@@ -322,7 +322,7 @@ describe('animation IR: completions', () => {
     expect(stmt.completionWait).toEqual({
       delayMs: 380,
       callback: 'er_waitcb_1',
-      timerFn: 'er_timer_fn_0',
+      wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
     });
     expect(printStmts([stmt], '    ').join('\n')).toContain(
       'cfg0.on_complete = er_waitcb_1;',
@@ -365,5 +365,41 @@ describe('animation IR: completions', () => {
     const {stmt} = lowerOne('Animated.sequence([]).start();');
     expect(stmt).toMatchObject({kind: 'startAnimations', animations: []});
     expect(printStmts([stmt], '    ')).toEqual([]);
+  });
+});
+
+describe('animation IR: stopping a wait', () => {
+  it('ends the wait a start of the same composition keeps, wherever the stop is written', () => {
+    const {stmts, ctx} = lowerBody(
+      'Animated.delay(500).start(() => setN(1)); Animated.timing(a, {toValue: 1}).stop(); Animated.delay(500).stop();',
+    );
+    expect(stmts[0].wait.slot).toBe('s_animwait_0');
+    expect(stmts[1]).toMatchObject({
+      kind: 'stopAnimations',
+      handles: ['s_av_a'],
+      waitSlot: null,
+    });
+    expect(stmts[2]).toMatchObject({
+      kind: 'stopAnimations',
+      handles: [],
+      waitSlot: 's_animwait_0',
+    });
+    expect(printStmts([stmts[2]], '    ')).toEqual([
+      '    app_wait_stop(&s_animwait_0);',
+    ]);
+    expect(ctx.out.animWaits.size).toBe(1);
+  });
+
+  it('gives a stop that comes first the slot a later start waits in', () => {
+    const {stmts, ctx} = lowerBody(
+      'const pulse = Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]); pulse.stop(); pulse.start(() => setN(1));',
+    );
+    const [stop, start] = stmts;
+    expect(stop.waitSlot).toBe('s_animwait_0');
+    expect(start.completionWait.wait.slot).toBe('s_animwait_0');
+    expect(ctx.out.animWaits.get([...ctx.out.animWaits.keys()][0])).toEqual({
+      slot: 's_animwait_0',
+      timerFn: 'er_timer_fn_0',
+    });
   });
 });
