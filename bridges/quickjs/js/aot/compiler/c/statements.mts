@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {cScalarType} from '../c-syntax.mts';
+import {printAnimationStart} from './animations.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {formatArgs, printText} from './text.mts';
 import type {IrExpr} from '../ir/expressions.mts';
@@ -225,10 +226,12 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
       return [`${indent}return;`];
     case 'armCleanup':
       return [`${indent}${stmt.flag} = 1;`];
+    case 'startAnimations':
+    case 'startChain':
+    case 'completeNow':
+      return printAnimationStart(stmt);
     case 'foreign':
-      return stmt.isIndented
-        ? stmt.lines
-        : stmt.lines.map(line => indent + line);
+      return stmt.lines.map(line => indent + line);
   }
 }
 

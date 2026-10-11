@@ -38,7 +38,7 @@ import {
   isAnimatedCall,
   resolveAnim,
   animValues,
-  compileAnimateStart,
+  lowerAnimateStart,
 } from './animations.mts';
 import {
   emitVectorPaint,
@@ -554,7 +554,7 @@ function lowerUpdateVector(
     );
   }
 
-  return {kind: 'foreign', lines, isIndented: false};
+  return {kind: 'foreign', lines};
 }
 
 /**
@@ -911,13 +911,7 @@ function lowerHandlerExprImpl(
     expr.callee.type === 'MemberExpression' &&
     (expr.callee.property as t.Identifier).name === 'start'
   ) {
-    return [
-      {
-        kind: 'foreign',
-        lines: compileAnimateStart(expr, env, state, ctx),
-        isIndented: true,
-      },
-    ];
+    return [lowerAnimateStart(expr, env, state, ctx)];
   }
 
   // What is left must be a plain call: to a helper or a state setter.

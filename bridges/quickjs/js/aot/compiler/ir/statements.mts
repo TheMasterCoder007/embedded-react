@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {ItemField, ListState, RefRecord, ScalarState} from '../types.mts';
+import type {IrAnimationStart} from './animations.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrText} from './text.mts';
 
@@ -154,14 +155,10 @@ export interface IrArmCleanup {
   flag: string;
 }
 
-/**
- * C from a module that does not lower to the IR yet: an `Animated` start (whose lines carry their own indent)
- * or an updateVector call (whose lines take the statement's indent).
- */
+/** C from a module that does not lower to the IR yet: an updateVector call, its lines taking the statement's indent. */
 export interface IrForeign {
   kind: 'foreign';
   lines: string[];
-  isIndented: boolean;
 }
 
 /** A lowered handler, effect or timer statement, before any backend prints it. */
@@ -182,4 +179,5 @@ export type IrStmt =
   | IrIf
   | IrReturn
   | IrArmCleanup
+  | IrAnimationStart
   | IrForeign;
