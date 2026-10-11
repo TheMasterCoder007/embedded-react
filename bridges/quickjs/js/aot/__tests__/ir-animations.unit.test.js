@@ -287,6 +287,63 @@ describe('animation IR: completions', () => {
     }
   });
 
+  it("waits out a sequence's trailing delay before completing", () => {
+    const {stmt, ctx} = lowerOne(
+      'Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(40), Animated.delay(60)]).start(() => setN(1));',
+    );
+    expect(stmt.completionWait).toEqual({
+      delayMs: 100,
+      callback: 'er_seqcb_1_1',
+      timerFn: 'er_timer_fn_0',
+    });
+
+    // The last step hands over to the wait, which ends at once if the step was interrupted.
+    expect(printStmts([stmt], '    ').join('\n')).toContain(
+      'cfg1_0.on_complete = er_seqcb_1_1;',
+    );
+    const wait = ctx.out.animCbs.find(fn => fn.name === 'er_seqcb_1_1');
+    expect(wait.body).toEqual([
+      '    if (!finished)',
+      '    {',
+      '        er_donecb_0(false, NULL);',
+      '        return;',
+      '    }',
+      '    er_timer_add(100, false, er_timer_fn_0);',
+    ]);
+    expect(ctx.out.timerFns).toEqual([
+      {name: 'er_timer_fn_0', body: ['    er_donecb_0(true, NULL);']},
+    ]);
+  });
+
+  it('completes a flat start when a delay beside its timing ends', () => {
+    const {stmt, ctx} = lowerOne(
+      'Animated.stagger(100, [Animated.delay(50), Animated.timing(b, {toValue: 1, duration: 100, delay: 20}), Animated.delay(400)]).start(() => setN(1));',
+    );
+    expect(stmt.completionWait).toEqual({
+      delayMs: 380,
+      callback: 'er_waitcb_1',
+      timerFn: 'er_timer_fn_0',
+    });
+    expect(printStmts([stmt], '    ').join('\n')).toContain(
+      'cfg0.on_complete = er_waitcb_1;',
+    );
+    expect(ctx.out.animCbs.map(fn => fn.name)).toEqual([
+      'er_donecb_0',
+      'er_waitcb_1',
+    ]);
+  });
+
+  it('adds no wait when the animation outlasts every delay, or nothing waits on it', () => {
+    for (const source of [
+      'Animated.parallel([Animated.timing(a, {toValue: 1, duration: 600}), Animated.delay(500)]).start(() => setN(1));',
+      'Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(100)]).start();',
+    ]) {
+      const {stmt, ctx} = lowerOne(source);
+      expect(stmt.completionWait).toBeNull();
+      expect(ctx.out.timerFns).toHaveLength(0);
+    }
+  });
+
   it('never completes an endless loop of delays, but still references its completion', () => {
     const {stmt} = lowerOne(
       'Animated.loop(Animated.sequence([Animated.delay(30)])).start(() => setN(1));',

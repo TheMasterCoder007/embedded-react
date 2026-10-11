@@ -42,6 +42,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `stagger`, or only delays) calls its callback once the delays have passed, as Flow A does. It used to never
   call it.
 
+- In Flow B, a `.start(onComplete)` waits out a delay that ends a `sequence`, or a delay that outlasts the timing
+  beside it, before calling its callback. It used to call it as soon as the last animation finished.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.

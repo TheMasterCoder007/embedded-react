@@ -30,7 +30,11 @@ import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn} from './collect.mts';
 import {APP_UPDATE_CALL, lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
-import {printChainFunctions, printCompletionCall} from './c/animations.mts';
+import {
+  printChainFunctions,
+  printCompletionCall,
+  printCompletionWait,
+} from './c/animations.mts';
 import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {
@@ -39,6 +43,7 @@ import type {
   IrAnimCurve,
   IrCompleteAfter,
   IrCompletion,
+  IrCompletionWait,
   IrStartAnimations,
   IrStartChain,
 } from './ir/animations.mts';
@@ -855,6 +860,7 @@ function sequenceSteps(
  * @param ctx  The statement compiler's context.
  * @param completion  The completion callback to run when the chain ends, if any.
  * @param loop  How the chain repeats, or null for once.
+ * @param trailingDelay  For a chain that runs once: the wait after its last step before it completes.
  *
  * @returns The chain.
  */
@@ -864,6 +870,7 @@ function lowerChain(
   ctx: StatementContext,
   completion: IrCompletion | null,
   loop: LoopSpec | null = null,
+  trailingDelay = 0,
 ): IrStartChain {
   // GLOBAL: callback names are file-scope, so must be unique across handlers
   const id = ctx.out.seqN++;
@@ -890,6 +897,15 @@ function lowerChain(
         }
       : null,
     completion,
+    completionWait:
+      !loop && completion && trailingDelay > 0
+        ? completionWait(
+            ctx,
+            completion,
+            trailingDelay,
+            `er_seqcb_${id}_${steps.length}`,
+          )
+        : null,
   };
 
   const {callbacks, decls} = printChainFunctions(chain);
@@ -915,6 +931,47 @@ const emptyStart = (
   animations: [],
   firstConfig: ctx.animIdx,
   completion,
+  completionWait: null,
+});
+
+/**
+ * A one-shot timer function that runs a completion as finished, added to the output.
+ *
+ * @param ctx  The statement compiler's context.
+ * @param completion  The completion.
+ *
+ * @returns The timer function's name.
+ */
+function completionTimer(
+  ctx: StatementContext,
+  completion: IrCompletion,
+): string {
+  const name = `er_timer_fn_${ctx.out.timerFns.length}`;
+  ctx.out.usesTimers = true;
+  ctx.out.timerFns.push({name, body: [printCompletionCall(completion)]});
+  return name;
+}
+
+/**
+ * The wait between a composition's last animation finishing and its completion running; its timer function is
+ * added to the output.
+ *
+ * @param ctx  The statement compiler's context.
+ * @param completion  The completion.
+ * @param delayMs  The wait.
+ * @param callback  The name of the on_complete callback that starts it.
+ *
+ * @returns The wait.
+ */
+const completionWait = (
+  ctx: StatementContext,
+  completion: IrCompletion,
+  delayMs: number,
+  callback: string,
+): IrCompletionWait => ({
+  delayMs,
+  callback,
+  timerFn: completionTimer(ctx, completion),
 });
 
 /**
@@ -943,12 +1000,7 @@ function startNothing(
     timerFn: null,
   };
   if (delayMs > 0) {
-    start.timerFn = `er_timer_fn_${ctx.out.timerFns.length}`;
-    ctx.out.usesTimers = true;
-    ctx.out.timerFns.push({
-      name: start.timerFn,
-      body: [printCompletionCall(completion)],
-    });
+    start.timerFn = completionTimer(ctx, completion);
   }
 
   return start;
@@ -1138,7 +1190,7 @@ export function lowerAnimateStart(
   if (kind === 'sequence') {
     const {steps, trailingDelay} = sequenceSteps(receiver as AnimatedCall, env);
     return steps.length
-      ? lowerChain(steps, env, ctx, completion)
+      ? lowerChain(steps, env, ctx, completion, null, trailingDelay)
       : startNothing(ctx, completion, trailingDelay);
   }
   if (kind === 'loop') {
@@ -1168,6 +1220,25 @@ export function lowerAnimateStart(
   for (const animEntry of entries) {
     start.animations.push(lowerAnimation(animEntry, env));
     ctx.animIdx++;
+  }
+
+  // A delay beside the one timing that outlasts it holds the completion back until the composition ends.
+  const [only] = entries;
+  if (completion && only?.kind === 'timing' && !only.loop && duration != null) {
+    const end =
+      only.delayMs +
+      Math.round(Number(evalStaticOr(only.get('duration'), env, 250)));
+    if (duration > end) {
+      start.completionWait = completionWait(
+        ctx,
+        completion,
+        duration - end,
+        `er_waitcb_${ctx.out.seqN++}`,
+      );
+      ctx.out.animCbs.push(
+        printCompletionWait(completion, start.completionWait),
+      );
+    }
   }
 
   return start;

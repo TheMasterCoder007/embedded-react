@@ -24,6 +24,7 @@ import type {
   IrAnimation,
   IrAnimationStart,
   IrCompletion,
+  IrCompletionWait,
   IrStartChain,
 } from '../ir/animations.mts';
 import type {CFunction} from '../out.mts';
@@ -160,9 +161,11 @@ function afterStep(chain: IrStartChain, index: number): string | null {
     return chainCallback(chain, index + 1);
   }
 
-  return chain.loop
-    ? chainCallback(chain, 0)
-    : (chain.completion?.name ?? null);
+  if (chain.loop) {
+    return chainCallback(chain, 0);
+  }
+
+  return chain.completionWait?.callback ?? chain.completion?.name ?? null;
 }
 
 /**
@@ -180,6 +183,40 @@ const callCompletion = (
   completion ? [`        ${completion.name}(${finished}, NULL);`] : [];
 
 /**
+ * Ends a chain or composition when the animation before was interrupted, calling the completion as not finished.
+ *
+ * @param completion  The completion, or null.
+ *
+ * @returns The C lines.
+ */
+const endIfInterrupted = (completion: IrCompletion | null): string[] => [
+  '    if (!finished)',
+  '    {',
+  ...callCompletion(completion, 'false'),
+  '        return;',
+  '    }',
+];
+
+/**
+ * The on_complete callback that starts a completion's wait once the last animation has finished.
+ *
+ * @param completion  The completion.
+ * @param wait  The wait.
+ *
+ * @returns The C function.
+ */
+export const printCompletionWait = (
+  completion: IrCompletion,
+  wait: IrCompletionWait,
+): CFunction => ({
+  name: wait.callback,
+  body: [
+    ...endIfInterrupted(completion),
+    `    er_timer_add(${wait.delayMs}, false, ${wait.timerFn});`,
+  ],
+});
+
+/**
  * A chain's file-scope callbacks and loop slots. Each callback first ends the chain if the step before it was
  * interrupted, as JS does.
  *
@@ -188,16 +225,13 @@ const callCompletion = (
  * @returns The callbacks and declarations.
  */
 export function printChainFunctions(chain: IrStartChain): ChainFunctions {
-  const interrupted = [
-    '    if (!finished)',
-    '    {',
-    ...callCompletion(chain.completion, 'false'),
-    '        return;',
-    '    }',
-  ];
+  const interrupted = endIfInterrupted(chain.completion);
 
-  // Steps 1..n start from the callback of the step before them.
+  // The wait after the last step comes first, then steps n..1, each started from the callback of the step before.
   const callbacks: CFunction[] = [];
+  if (chain.completion && chain.completionWait) {
+    callbacks.push(printCompletionWait(chain.completion, chain.completionWait));
+  }
   for (let index = chain.steps.length - 1; index >= 1; index--) {
     callbacks.push({
       name: chainCallback(chain, index),
@@ -263,13 +297,15 @@ export function printAnimationStart(start: IrAnimationStart): string[] {
         return start.completion ? [`    (void)${start.completion.name};`] : [];
       }
 
-      // The completion goes on the last animation, which is the only one when there is a completion.
+      // The completion (or its wait) goes on the last animation, the only one when there is a completion.
       const last = start.animations.length - 1;
+      const onComplete =
+        start.completionWait?.callback ?? start.completion?.name ?? null;
       return start.animations.flatMap((animation, index) =>
         printAnimation(
           animation,
           `cfg${start.firstConfig + index}`,
-          index === last ? (start.completion?.name ?? null) : null,
+          index === last ? onComplete : null,
         ),
       );
     }

@@ -75,6 +75,18 @@ export interface IrCompletion {
 }
 
 /**
+ * The wait a composition still needs after its last animation finishes (a trailing delay, or a longer delay
+ * beside it), before the completion runs as finished. An interrupted animation ends it at once, as not finished.
+ */
+export interface IrCompletionWait {
+  delayMs: number;
+  /** The on_complete callback that starts the wait. */
+  callback: string;
+  /** The timer function that runs the completion when the wait ends. */
+  timerFn: string;
+}
+
+/**
  * Animations started together, a composition (parallel / stagger / delay) already folded into their delays.
  * The completion runs when the last one ends; there is at most one when there is a completion.
  */
@@ -84,6 +96,7 @@ export interface IrStartAnimations {
   /** Numbers the first animation's config; the rest follow on. */
   firstConfig: number;
   completion: IrCompletion | null;
+  completionWait: IrCompletionWait | null;
 }
 
 /** How a chain repeats. */
@@ -107,6 +120,8 @@ export interface IrStartChain {
   steps: IrAnimation[];
   loop: IrChainLoop | null;
   completion: IrCompletion | null;
+  /** Only for a chain that does not loop. */
+  completionWait: IrCompletionWait | null;
 }
 
 /**
