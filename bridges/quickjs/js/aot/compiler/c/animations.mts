@@ -120,6 +120,16 @@ export function printAnimation(
 }
 
 /**
+ * Runs a completion as finished, outside the engine's own on_complete.
+ *
+ * @param completion  The completion.
+ *
+ * @returns The C line.
+ */
+export const printCompletionCall = (completion: IrCompletion): string =>
+  `    ${completion.name}(true, NULL);`;
+
+/**
  * The name of a chain's callback that starts step `index` (step 0's starts a repeat).
  *
  * @param chain  The chain.
@@ -248,6 +258,11 @@ export function printChainFunctions(chain: IrStartChain): ChainFunctions {
 export function printAnimationStart(start: IrAnimationStart): string[] {
   switch (start.kind) {
     case 'startAnimations': {
+      // A completion nothing can run (an endless loop of delays) is still referenced, so -Werror builds pass.
+      if (!start.animations.length) {
+        return start.completion ? [`    (void)${start.completion.name};`] : [];
+      }
+
       // The completion goes on the last animation, which is the only one when there is a completion.
       const last = start.animations.length - 1;
       return start.animations.flatMap((animation, index) =>
@@ -258,10 +273,10 @@ export function printAnimationStart(start: IrAnimationStart): string[] {
         ),
       );
     }
-    case 'completeNow':
-      return start.completion
-        ? [`    ${start.completion.name}(true, NULL);`]
-        : [];
+    case 'completeAfter':
+      return start.timerFn
+        ? [`    er_timer_add(${start.delayMs}, false, ${start.timerFn});`]
+        : [printCompletionCall(start.completion)];
     case 'startChain': {
       // A loop first records the pass and where the value starts, then step 0 starts inline.
       const lines: string[] = [];

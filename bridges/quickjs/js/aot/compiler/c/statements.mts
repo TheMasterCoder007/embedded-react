@@ -228,7 +228,7 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
       return [`${indent}${stmt.flag} = 1;`];
     case 'startAnimations':
     case 'startChain':
-    case 'completeNow':
+    case 'completeAfter':
       return printAnimationStart(stmt);
     case 'foreign':
       return stmt.lines.map(line => indent + line);

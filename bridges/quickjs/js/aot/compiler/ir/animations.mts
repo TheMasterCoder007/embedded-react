@@ -109,11 +109,21 @@ export interface IrStartChain {
   completion: IrCompletion | null;
 }
 
-/** A loop that runs zero times: it starts nothing and completes at once. */
-export interface IrCompleteNow {
-  kind: 'completeNow';
-  completion: IrCompletion | null;
+/**
+ * A start that drives no value but has a completion: an empty composition, delays alone, or a loop that runs
+ * zero times. It completes as finished once its delays have passed, at once when there are none.
+ */
+export interface IrCompleteAfter {
+  kind: 'completeAfter';
+  completion: IrCompletion;
+  /** Milliseconds to wait; 0 completes at once. */
+  delayMs: number;
+  /** The timer function that completes it after the wait, or null when it completes at once. */
+  timerFn: string | null;
 }
 
 /** `<animation>.start()`. */
-export type IrAnimationStart = IrStartAnimations | IrStartChain | IrCompleteNow;
+export type IrAnimationStart =
+  | IrStartAnimations
+  | IrStartChain
+  | IrCompleteAfter;

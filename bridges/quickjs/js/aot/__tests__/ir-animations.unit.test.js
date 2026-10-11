@@ -237,10 +237,62 @@ describe('animation IR: completions', () => {
     const {stmt} = lowerOne(
       'Animated.loop(Animated.timing(a, {toValue: 1}), {iterations: 0}).start(() => setN(2));',
     );
-    expect(stmt.kind).toBe('completeNow');
+    expect(stmt).toMatchObject({
+      kind: 'completeAfter',
+      delayMs: 0,
+      timerFn: null,
+    });
     expect(printStmts([stmt], '    ')).toEqual([
       '    er_donecb_0(true, NULL);',
     ]);
+  });
+
+  it('completes an empty composition at once, as JS does', () => {
+    for (const source of [
+      'Animated.sequence([]).start(() => setN(1));',
+      'Animated.parallel([]).start(() => setN(1));',
+      'Animated.stagger(50, []).start(() => setN(1));',
+    ]) {
+      const {stmt, ctx} = lowerOne(source);
+      expect(stmt).toMatchObject({kind: 'completeAfter', delayMs: 0});
+      expect(ctx.out.timerFns).toHaveLength(0);
+    }
+  });
+
+  it('completes delays alone after they pass, through a timer', () => {
+    const cases = [
+      ['Animated.delay(200)', 200],
+      ['Animated.sequence([Animated.delay(100), Animated.delay(50)])', 150],
+      ['Animated.parallel([Animated.delay(100), Animated.delay(300)])', 300],
+      ['Animated.stagger(40, [Animated.delay(10), Animated.delay(10)])', 50],
+      [
+        'Animated.loop(Animated.sequence([Animated.delay(30)]), {iterations: 3})',
+        90,
+      ],
+    ];
+    for (const [animation, delayMs] of cases) {
+      const {stmt, ctx} = lowerOne(`${animation}.start(() => setN(1));`);
+      expect(stmt).toMatchObject({
+        kind: 'completeAfter',
+        delayMs,
+        timerFn: 'er_timer_fn_0',
+      });
+      expect(printStmts([stmt], '    ')).toEqual([
+        `    er_timer_add(${delayMs}, false, er_timer_fn_0);`,
+      ]);
+      expect(ctx.out.usesTimers).toBe(true);
+      expect(ctx.out.timerFns).toEqual([
+        {name: 'er_timer_fn_0', body: ['    er_donecb_0(true, NULL);']},
+      ]);
+    }
+  });
+
+  it('never completes an endless loop of delays, but still references its completion', () => {
+    const {stmt} = lowerOne(
+      'Animated.loop(Animated.sequence([Animated.delay(30)])).start(() => setN(1));',
+    );
+    expect(stmt).toMatchObject({kind: 'startAnimations', animations: []});
+    expect(printStmts([stmt], '    ')).toEqual(['    (void)er_donecb_0;']);
   });
 
   it('numbers a chain after its completion, whose own starts come first', () => {

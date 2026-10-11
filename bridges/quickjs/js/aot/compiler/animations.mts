@@ -30,13 +30,14 @@ import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn} from './collect.mts';
 import {APP_UPDATE_CALL, lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
-import {printChainFunctions} from './c/animations.mts';
+import {printChainFunctions, printCompletionCall} from './c/animations.mts';
 import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {
   IrAnimation,
   IrAnimationStart,
   IrAnimCurve,
+  IrCompleteAfter,
   IrCompletion,
   IrStartAnimations,
   IrStartChain,
@@ -917,6 +918,43 @@ const emptyStart = (
 });
 
 /**
+ * A start that drives no value. As in JS, its completion still runs as finished once the composition's delays
+ * have passed; a wait goes through a one-shot timer of its own.
+ *
+ * @param ctx  The statement compiler's context.
+ * @param completion  The completion callback, if any.
+ * @param delayMs  How long the composition takes.
+ *
+ * @returns The start.
+ */
+function startNothing(
+  ctx: StatementContext,
+  completion: IrCompletion | null,
+  delayMs: number,
+): IrStartAnimations | IrCompleteAfter {
+  if (!completion) {
+    return emptyStart(ctx, completion);
+  }
+
+  const start: IrCompleteAfter = {
+    kind: 'completeAfter',
+    completion,
+    delayMs,
+    timerFn: null,
+  };
+  if (delayMs > 0) {
+    start.timerFn = `er_timer_fn_${ctx.out.timerFns.length}`;
+    ctx.out.usesTimers = true;
+    ctx.out.timerFns.push({
+      name: start.timerFn,
+      body: [printCompletionCall(completion)],
+    });
+  }
+
+  return start;
+}
+
+/**
  * Lowers `Animated.loop(animation, config?).start()`, or returns null for the flat path. An endless loop of
  * one timing is the engine's own cfg.loop; anything else (a sequence, a spring or decay, a counted loop) is a
  * chain whose last step starts the first again. As in JS, a looped single animation goes back to where it
@@ -976,14 +1014,20 @@ function lowerLoopStart(
     );
   }
 
-  // Nothing to start for an empty sequence.
-  if (!steps.length) {
-    return emptyStart(ctx, completion);
-  }
-
   // A zero-iteration loop starts nothing but still reports successful completion.
   if (iterations === 0) {
-    return {kind: 'completeNow', completion};
+    return startNothing(ctx, completion, 0);
+  }
+
+  // A loop of delays alone completes after its passes; an endless one never does.
+  if (!steps.length) {
+    return iterations < 0
+      ? emptyStart(ctx, completion)
+      : startNothing(
+          ctx,
+          completion,
+          Math.min(iterations * trailingDelay, INT_MAX),
+        );
   }
 
   // A timing with no duration and no delay completes inside er_anim_value_animate, so a loop made only of
@@ -1092,10 +1136,10 @@ export function lowerAnimateStart(
   const receiver = resolveAnim((expr.callee as t.MemberExpression).object, env);
   const kind = isAnimatedCall(receiver) ? receiver.callee.property.name : null;
   if (kind === 'sequence') {
-    const {steps} = sequenceSteps(receiver as AnimatedCall, env);
+    const {steps, trailingDelay} = sequenceSteps(receiver as AnimatedCall, env);
     return steps.length
       ? lowerChain(steps, env, ctx, completion)
-      : emptyStart(ctx, completion);
+      : startNothing(ctx, completion, trailingDelay);
   }
   if (kind === 'loop') {
     const start = lowerLoopStart(
@@ -1108,7 +1152,10 @@ export function lowerAnimateStart(
   }
 
   // The flat path has no "after all entries finish" join point, so completion callbacks are limited to one entry.
-  const {entries} = flattenAnim(receiver, env, 0, false);
+  const {entries, duration} = flattenAnim(receiver, env, 0, false);
+  if (!entries.length) {
+    return startNothing(ctx, completion, duration ?? 0);
+  }
   if (completion && entries.length > 1) {
     throw aotError(
       'AOT: a .start(onComplete) callback on a parallel/stagger animation is not yet supported',
