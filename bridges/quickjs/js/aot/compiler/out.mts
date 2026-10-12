@@ -114,11 +114,8 @@ export class Out {
   mountEffects: string[] = [];
   /** on_complete callbacks that chain an animation sequence or loop. */
   readonly animCbs: CFunction[] = [];
-  /** Each composition's completion-wait slot, by the composition's shape; the timer function comes with the first start. */
-  readonly animWaits = new Map<
-    string,
-    {slot: string; timerFn: string | null}
-  >();
+  /** The owner number of each composition that completion waits belong to, by composition; `isStarted` once a start waits. */
+  readonly animWaits = new Map<string, {owner: number; isStarted: boolean}>();
   /** Numbers the next animation sequence. */
   seqN = 0;
   /** The on-screen keyboard's static tables and the er_app_build() line that installs them. */

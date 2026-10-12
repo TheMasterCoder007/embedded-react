@@ -39,7 +39,7 @@ import {
   resolveAnim,
   animValues,
   lowerAnimateStart,
-  stopWaitSlot,
+  stopWaitOwner,
 } from './animations.mts';
 import {
   emitVectorPaint,
@@ -902,7 +902,7 @@ function lowerHandlerExprImpl(
       {
         kind: 'stopAnimations',
         handles: [...animValues(expr.callee.object, env)],
-        waitSlot: stopWaitSlot(expr.callee.object, env, ctx),
+        waitOwner: stopWaitOwner(expr.callee.object, env, ctx),
       },
     ];
   }

@@ -30,11 +30,7 @@ import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn} from './collect.mts';
 import {APP_UPDATE_CALL, lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
-import {
-  printChainFunctions,
-  printCompletionWait,
-  printWaitEnd,
-} from './c/animations.mts';
+import {printChainFunctions, printCompletionWait} from './c/animations.mts';
 import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {
@@ -46,7 +42,6 @@ import type {
   IrCompletionWait,
   IrStartAnimations,
   IrStartChain,
-  IrWaitSlot,
 } from './ir/animations.mts';
 import type {
   AnimRecord,
@@ -940,9 +935,10 @@ const compositionIds = new WeakMap<t.Node, number>();
 let nextCompositionId = 0;
 
 /**
- * What identifies a composition for its completion wait: where it is written, within one component instance.
- * Two compositions written apart keep separate waits, as two JS animation objects do; a start and stop through
- * the same local (`const pulse = …; pulse.start(); … pulse.stop()`) reach the same node and share one.
+ * What identifies a composition as the owner of its completion waits: where it is written, within one component
+ * instance. Each run still waits on its own; the owner is what a stop names, so it ends the runs of the
+ * composition it stops and no other. A start and stop through the same local (`const pulse = …; pulse.start();
+ * … pulse.stop()`) reach the same node.
  *
  * @param node  The composition, resolved.
  * @param env  The expression environment.
@@ -960,48 +956,29 @@ function compositionKey(node: t.Node | null | undefined, env: Env): string {
 }
 
 /**
- * A composition's wait slot, added to the output on first use. Its timer function comes with the first start
- * that waits; a stop alone needs only the slot.
+ * The owner number completion waits of a composition carry, so a stop can end them; numbered on first use.
  *
  * @param ctx  The statement compiler's context.
  * @param key  The composition's key.
- * @param withTimer  Also add the timer function that ends the wait.
+ * @param isStart  A start is asking, so the waits are real (a stop alone leaves nothing to end).
  *
- * @returns The slot's record.
+ * @returns The owner.
  */
-function waitRecord(
+function waitOwner(
   ctx: StatementContext,
   key: string,
-  withTimer: boolean,
-): {slot: string; timerFn: string | null} {
+  isStart: boolean,
+): number {
   let record = ctx.out.animWaits.get(key);
   if (!record) {
-    record = {slot: `s_animwait_${ctx.out.animWaits.size}`, timerFn: null};
+    record = {owner: ctx.out.animWaits.size, isStarted: false};
     ctx.out.animWaits.set(key, record);
   }
-  if (withTimer && !record.timerFn) {
-    record.timerFn = `er_timer_fn_${ctx.out.timerFns.length}`;
-    ctx.out.usesTimers = true;
-    ctx.out.timerFns.push({
-      name: record.timerFn,
-      body: printWaitEnd(record.slot),
-    });
+  if (isStart) {
+    record.isStarted = true;
   }
 
-  return record;
-}
-
-/**
- * A composition's wait slot, ready for a start.
- *
- * @param ctx  The statement compiler's context.
- * @param key  The composition's key.
- *
- * @returns The slot.
- */
-function waitSlot(ctx: StatementContext, key: string): IrWaitSlot {
-  const record = waitRecord(ctx, key, true);
-  return {slot: record.slot, timerFn: record.timerFn!};
+  return record.owner;
 }
 
 /**
@@ -1033,22 +1010,22 @@ function hasDelay(node: t.Node | null | undefined, env: Env): boolean {
 }
 
 /**
- * The wait slot `anim.stop()` ends, for a composition that has a delay to wait on.
+ * The composition whose completion waits `anim.stop()` ends, when it has a delay to wait on.
  *
  * @param node  The composition being stopped.
  * @param env  The expression environment.
  * @param ctx  The statement compiler's context.
  *
- * @returns The slot, or null.
+ * @returns The owner, or null.
  */
-export function stopWaitSlot(
+export function stopWaitOwner(
   node: t.Node | null | undefined,
   env: Env,
   ctx: StatementContext,
-): string | null {
+): number | null {
   const resolved = resolveAnim(node, env);
   return hasDelay(resolved, env)
-    ? waitRecord(ctx, compositionKey(resolved, env), false).slot
+    ? waitOwner(ctx, compositionKey(resolved, env), false)
     : null;
 }
 
@@ -1067,11 +1044,11 @@ const completionWait = (
   key: string,
   delayMs: number,
   callback: string,
-): IrCompletionWait => ({delayMs, callback, wait: waitSlot(ctx, key)});
+): IrCompletionWait => ({delayMs, callback, owner: waitOwner(ctx, key, true)});
 
 /**
  * A start that drives no value. As in JS, its completion still runs as finished once the composition's delays
- * have passed; a wait goes through a one-shot timer of its own.
+ * have passed, counted down in a completion wait of its own.
  *
  * @param ctx  The statement compiler's context.
  * @param completion  The completion callback, if any.
@@ -1094,10 +1071,10 @@ function startNothing(
     kind: 'completeAfter',
     completion,
     delayMs,
-    wait: null,
+    owner: null,
   };
   if (delayMs > 0) {
-    start.wait = waitSlot(ctx, key);
+    start.owner = waitOwner(ctx, key, true);
   }
 
   return start;

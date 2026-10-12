@@ -240,7 +240,7 @@ describe('animation IR: completions', () => {
     expect(stmt).toMatchObject({
       kind: 'completeAfter',
       delayMs: 0,
-      wait: null,
+      owner: null,
     });
     expect(printStmts([stmt], '    ')).toEqual([
       '    er_donecb_0(true, NULL);',
@@ -275,15 +275,12 @@ describe('animation IR: completions', () => {
       expect(stmt).toMatchObject({
         kind: 'completeAfter',
         delayMs,
-        wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
+        owner: 0,
       });
       expect(printStmts([stmt], '    ')).toEqual([
-        `    app_wait_start(&s_animwait_0, ${delayMs}, er_timer_fn_0, er_donecb_0);`,
+        `    app_wait_start(0, ${delayMs}, er_donecb_0);`,
       ]);
-      expect(ctx.out.usesTimers).toBe(true);
-      expect(ctx.out.timerFns).toEqual([
-        {name: 'er_timer_fn_0', body: ['    app_wait_end(&s_animwait_0);']},
-      ]);
+      expect(ctx.out.timerFns).toHaveLength(0);
     }
   });
 
@@ -294,7 +291,7 @@ describe('animation IR: completions', () => {
     expect(stmt.completionWait).toEqual({
       delayMs: 100,
       callback: 'er_seqcb_1_1',
-      wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
+      owner: 0,
     });
 
     // The last step hands over to the wait, which ends at once if the step was interrupted.
@@ -308,10 +305,7 @@ describe('animation IR: completions', () => {
       '        er_donecb_0(false, NULL);',
       '        return;',
       '    }',
-      '    app_wait_start(&s_animwait_0, 100, er_timer_fn_0, er_donecb_0);',
-    ]);
-    expect(ctx.out.timerFns).toEqual([
-      {name: 'er_timer_fn_0', body: ['    app_wait_end(&s_animwait_0);']},
+      '    app_wait_start(0, 100, er_donecb_0);',
     ]);
   });
 
@@ -322,7 +316,7 @@ describe('animation IR: completions', () => {
     expect(stmt.completionWait).toEqual({
       delayMs: 380,
       callback: 'er_waitcb_1',
-      wait: {slot: 's_animwait_0', timerFn: 'er_timer_fn_0'},
+      owner: 0,
     });
     expect(printStmts([stmt], '    ').join('\n')).toContain(
       'cfg0.on_complete = er_waitcb_1;',
@@ -369,36 +363,47 @@ describe('animation IR: completions', () => {
 });
 
 describe('animation IR: stopping a wait', () => {
-  it('keeps a separate wait for each composition written apart, even when they are alike', () => {
+  it('gives each composition written apart its own owner, even when they are alike', () => {
     const {stmts, ctx} = lowerBody(
       'Animated.delay(500).start(() => setN(1)); Animated.delay(500).start(() => setN(2)); Animated.timing(a, {toValue: 1}).stop(); Animated.delay(500).stop();',
     );
-    expect(stmts[0].wait.slot).toBe('s_animwait_0');
-    expect(stmts[1].wait.slot).toBe('s_animwait_1');
+    expect(stmts[0].owner).toBe(0);
+    expect(stmts[1].owner).toBe(1);
     expect(stmts[2]).toMatchObject({
       kind: 'stopAnimations',
       handles: ['s_av_a'],
-      waitSlot: null,
+      waitOwner: null,
     });
 
-    // A stop of a third delay has a slot of its own, which nothing starts (assembly drops it).
-    expect(stmts[3]).toMatchObject({handles: [], waitSlot: 's_animwait_2'});
-    expect(ctx.out.animWaits.size).toBe(3);
-    expect(
-      [...ctx.out.animWaits.values()].map(record => record.timerFn),
-    ).toEqual(['er_timer_fn_0', 'er_timer_fn_1', null]);
+    // A stop of a third delay names an owner of its own, which nothing starts (assembly drops the stop).
+    expect(stmts[3]).toMatchObject({handles: [], waitOwner: 2});
+    expect([...ctx.out.animWaits.values()]).toEqual([
+      {owner: 0, isStarted: true},
+      {owner: 1, isStarted: true},
+      {owner: 2, isStarted: false},
+    ]);
   });
 
-  it('gives a stop that comes first the slot a later start waits in', () => {
+  it('detaches the waits before freezing values, and reports them after', () => {
+    const {stmts} = lowerBody(
+      'const pulse = Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]); pulse.start(() => setN(1)); pulse.stop();',
+    );
+    expect(printStmts([stmts[1]], '    ')).toEqual([
+      '    app_wait_detach(0);',
+      '    er_anim_value_set(s_av_a, er_anim_value_get(s_av_a));',
+      '    app_wait_report(0);',
+    ]);
+  });
+
+  it('gives a stop that comes first the owner a later start waits under', () => {
     const {stmts, ctx} = lowerBody(
       'const pulse = Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]); pulse.stop(); pulse.start(() => setN(1));',
     );
     const [stop, start] = stmts;
-    expect(stop.waitSlot).toBe('s_animwait_0');
-    expect(start.completionWait.wait.slot).toBe('s_animwait_0');
-    expect(ctx.out.animWaits.get([...ctx.out.animWaits.keys()][0])).toEqual({
-      slot: 's_animwait_0',
-      timerFn: 'er_timer_fn_0',
-    });
+    expect(stop.waitOwner).toBe(0);
+    expect(start.completionWait.owner).toBe(0);
+    expect([...ctx.out.animWaits.values()]).toEqual([
+      {owner: 0, isStarted: true},
+    ]);
   });
 });

@@ -359,10 +359,16 @@ export function compileSourceImpl(
     out.mountEffects = dropUpdate(out.mountEffects);
   }
 
-  // A wait slot that no start waits on has nothing for a stop to end, so the slot and its stop calls go.
+  // A composition that no start waits on has no waits for a stop to end, so its stop calls go.
   const idleWaitStops = [...out.animWaits.values()]
-    .filter(record => !record.timerFn)
-    .map(record => `app_wait_stop(&${record.slot});`);
+    .filter(record => !record.isStarted)
+    .flatMap(record => [
+      `app_wait_detach(${record.owner});`,
+      `app_wait_report(${record.owner});`,
+    ]);
+  const usesWaits = [...out.animWaits.values()].some(
+    record => record.isStarted,
+  );
   if (idleWaitStops.length) {
     const dropIdleStops = (lines: string[]) =>
       lines.filter(line => !idleWaitStops.includes(line.trim()));
@@ -538,10 +544,12 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
     : '';
 
   // er_app_tick(): fire due timers; without timers it only applies a clock change, so a host can always call it.
+  // Completion waits count down on the app loop too.
+  const waitTick = usesWaits ? '    app_wait_tick(dt_ms);\n' : '';
   const appTickFn = out.usesTimers
     ? `void er_app_tick(int dt_ms)
 {
-${wallClockRefresh}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
+${wallClockRefresh}${waitTick}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
     {
         if (!s_timers[i].active)
         {
@@ -570,7 +578,7 @@ ${wallClockRefresh}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
         }
     }
 }`
-    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n${wallClockRefresh}}`;
+    : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n${wallClockRefresh}${waitTick}}`;
 
   // useEffect(fn, []) bodies, run once at the end of er_app_build().
   const mountEffectsBlock = out.mountEffects.length
@@ -948,19 +956,12 @@ static int16_t app_round_dim(double v)
   ].join('\n\n');
   // <limits.h> when a helper saturates at INT_MAX / INT_MIN.
   const usesLimits = /\bINT_M(?:AX|IN)\b/.test(clockBlock);
-  // Animation completion waits: their slots, and the helpers the generated code calls.
-  const animWaitBlock = printWaitDeclarations(
-    [...out.animWaits.values()]
-      .filter(record => record.timerFn)
-      .map(record => record.slot),
-    helperCallers,
-  );
+  // Animation completion waits: their table, and the helpers the generated code calls.
+  const animWaitBlock = usesWaits ? printWaitDeclarations(helperCallers) : '';
 
   // Emit er_timer_clear only when called; a clearInterval in a dropped mount-effect cleanup leaves no caller.
   const timerClearBlock =
-    out.usesTimers &&
-    (helperCallers.includes('er_timer_clear(') ||
-      animWaitBlock.includes('er_timer_clear('))
+    out.usesTimers && helperCallers.includes('er_timer_clear(')
       ? `static void er_timer_clear(int id)
 {
     if (id < 0)

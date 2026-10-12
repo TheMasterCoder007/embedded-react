@@ -26,7 +26,6 @@ import type {
   IrCompletion,
   IrCompletionWait,
   IrStartChain,
-  IrWaitSlot,
 } from '../ir/animations.mts';
 import type {CFunction} from '../out.mts';
 
@@ -132,94 +131,119 @@ export const printCompletionCall = (completion: IrCompletion): string =>
   `    ${completion.name}(true, NULL);`;
 
 /**
- * Starts a composition's completion wait in its slot.
+ * Starts a completion wait for one run of a composition.
  *
- * @param wait  The slot.
+ * @param owner  The composition.
  * @param delayMs  The wait.
  * @param completion  The completion it runs.
  *
  * @returns The C line.
  */
 const printWaitStart = (
-  wait: IrWaitSlot,
+  owner: number,
   delayMs: number,
   completion: IrCompletion,
-): string =>
-  `    app_wait_start(&${wait.slot}, ${delayMs}, ${wait.timerFn}, ${completion.name});`;
+): string => `    app_wait_start(${owner}, ${delayMs}, ${completion.name});`;
 
 /**
- * The body of a wait slot's timer function: the wait is over, so the completion runs as finished.
+ * The completion-wait table and the helpers that drive it, each helper only when the generated code calls it
+ * (an unused static function would warn). Every run of a composition has a wait of its own, so starting one never
+ * ends another; a stop ends every run of its composition.
  *
- * @param slot  The slot.
- *
- * @returns The C lines.
- */
-export const printWaitEnd = (slot: string): string[] => [
-  `    app_wait_end(&${slot});`,
-];
-
-/**
- * The wait slots and the helpers that drive them, each helper only when the generated code calls it (an unused
- * static function would warn).
- *
- * @param slots  The slots.
  * @param callers  The generated code, to look for calls in.
  *
- * @returns The C block, or '' with no slots.
+ * @returns The C block.
  */
-export function printWaitDeclarations(
-  slots: string[],
-  callers: string,
-): string {
-  if (!slots.length) {
-    return '';
-  }
-
-  const usesStart = callers.includes('app_wait_start(');
-  const usesEnd = callers.includes('app_wait_end(');
+export function printWaitDeclarations(callers: string): string {
   const blocks = [
-    `/* A composition's wait between its last animation and its completion: the pending timer (or -1) and the
-   completion it runs. Stopping the composition ends the wait early, as not finished. */
+    `#ifndef ER_AOT_MAX_WAITS
+#define ER_AOT_MAX_WAITS 8
+#endif
+
+/* The wait between a run's last animation and its completion: the composition it belongs to (which a stop
+   names), the time left and the completion it runs. */
 typedef struct
 {
-    int timer;
+    int remaining_ms;
+    int owner;
     ERAnimCompleteFn done;
-} ErAnimWait;`,
-    slots.map(slot => `static ErAnimWait ${slot} = {-1, NULL};`).join('\n'),
+    uint8_t state;
+} ErAnimWait;
+enum
+{
+    APP_WAIT_FREE,
+    APP_WAIT_PENDING,
+    APP_WAIT_DUE,
+    APP_WAIT_STOPPING
+};
+static ErAnimWait s_waits[ER_AOT_MAX_WAITS];
+
+/* Starts a wait for one run; runs never share one. */
+static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
+{
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
+    {
+        if (s_waits[i].state == APP_WAIT_FREE)
+        {
+            s_waits[i].remaining_ms = ms;
+            s_waits[i].owner = owner;
+            s_waits[i].done = done;
+            s_waits[i].state = APP_WAIT_PENDING;
+            return;
+        }
+    }
+    /* table full (raise ER_AOT_MAX_WAITS): this run never completes */
+}
+
+/* Counts down every wait, then completes the ones that ran out. A wait a completion starts here waits its
+   full time. */
+static void app_wait_tick(int dt_ms)
+{
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
+    {
+        if (s_waits[i].state == APP_WAIT_PENDING)
+        {
+            s_waits[i].remaining_ms -= dt_ms;
+            if (s_waits[i].remaining_ms <= 0)
+            {
+                s_waits[i].state = APP_WAIT_DUE;
+            }
+        }
+    }
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
+    {
+        if (s_waits[i].state == APP_WAIT_DUE)
+        {
+            s_waits[i].state = APP_WAIT_FREE;
+            s_waits[i].done(true, NULL);
+        }
+    }
+}`,
   ];
-  if (usesStart || callers.includes('app_wait_stop(')) {
-    blocks.push(`/* Ends a pending wait early: its completion runs as not finished. */
-static void app_wait_stop(ErAnimWait* wait)
+  if (callers.includes('app_wait_detach(')) {
+    blocks.push(`/* A stop's two halves: detach the composition's waits, then report them as not finished. Anything a
+   completion in between starts is a new run, which the stop leaves alone. */
+static void app_wait_detach(int owner)
 {
-    if (wait->timer < 0)
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
     {
-        return;
+        if (s_waits[i].owner == owner &&
+            (s_waits[i].state == APP_WAIT_PENDING || s_waits[i].state == APP_WAIT_DUE))
+        {
+            s_waits[i].state = APP_WAIT_STOPPING;
+        }
     }
-    er_timer_clear(wait->timer);
-    wait->timer = -1;
-    if (wait->done)
-    {
-        wait->done(false, NULL);
-    }
-}`);
-  }
-  if (usesStart) {
-    blocks.push(`/* Starts a wait. One still pending was replaced by this start, so it ends as not finished first. */
-static void app_wait_start(ErAnimWait* wait, int ms, void (*fn)(void), ERAnimCompleteFn done)
+}
+
+static void app_wait_report(int owner)
 {
-    app_wait_stop(wait);
-    wait->done = done;
-    wait->timer = er_timer_add(ms, false, fn);
-}`);
-  }
-  if (usesEnd) {
-    blocks.push(`/* The wait ran its course: its completion runs as finished. */
-static void app_wait_end(ErAnimWait* wait)
-{
-    wait->timer = -1;
-    if (wait->done)
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
     {
-        wait->done(true, NULL);
+        if (s_waits[i].owner == owner && s_waits[i].state == APP_WAIT_STOPPING)
+        {
+            s_waits[i].state = APP_WAIT_FREE;
+            s_waits[i].done(false, NULL);
+        }
     }
 }`);
   }
@@ -309,7 +333,7 @@ export const printCompletionWait = (
   name: wait.callback,
   body: [
     ...endIfInterrupted(completion),
-    printWaitStart(wait.wait, wait.delayMs, completion),
+    printWaitStart(wait.owner, wait.delayMs, completion),
   ],
 });
 
@@ -407,8 +431,8 @@ export function printAnimationStart(start: IrAnimationStart): string[] {
       );
     }
     case 'completeAfter':
-      return start.wait
-        ? [printWaitStart(start.wait, start.delayMs, start.completion)]
+      return start.owner !== null
+        ? [printWaitStart(start.owner, start.delayMs, start.completion)]
         : [printCompletionCall(start.completion)];
     case 'startChain': {
       // A loop first records the pass and where the value starts, then step 0 starts inline.

@@ -134,8 +134,8 @@ export interface IrStopAnimations {
   kind: 'stopAnimations';
   /** The animated values' handles. */
   handles: string[];
-  /** The slot of the composition's completion wait, or null when it has no delay to wait on. */
-  waitSlot: string | null;
+  /** The composition whose pending completion waits end, or null when it has no delay to wait on. */
+  waitOwner: number | null;
 }
 
 /** `if (test) { … } else { … }`. */

@@ -203,11 +203,16 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
         handle =>
           `${indent}er_anim_value_set(${handle}, er_anim_value_get(${handle}));`,
       );
-      if (stmt.waitSlot) {
-        lines.push(`${indent}app_wait_stop(&${stmt.waitSlot});`);
+      if (stmt.waitOwner === null) {
+        return lines;
       }
 
-      return lines;
+      // Waits are detached before a frozen value's completion can start a new run, and reported after it.
+      return [
+        `${indent}app_wait_detach(${stmt.waitOwner});`,
+        ...lines,
+        `${indent}app_wait_report(${stmt.waitOwner});`,
+      ];
     }
     case 'if': {
       // Each branch is a nested C block.
