@@ -25,6 +25,7 @@ import {formatArgs, printText} from './text.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 import type {
   IrAppendItem,
+  IrCallback,
   IrSetStateText,
   IrStmt,
   IrTimer,
@@ -36,6 +37,9 @@ import type {
 
 /** One level of indentation. */
 const INDENT = '    ';
+
+/** The line that re-applies state-dependent props after a body set state. */
+export const APP_UPDATE_CALL = '    app_update();';
 
 /** The indent list operations print at, whatever block they sit in. */
 const LIST_INDENT = INDENT;
@@ -256,4 +260,20 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
  */
 export function printStmts(stmts: IrStmt[], indent: string): string[] {
   return stmts.flatMap(stmt => printStmt(stmt, indent));
+}
+
+/**
+ * A callback's function body: its statements, then app_update() when it set state.
+ *
+ * @param callback  The callback.
+ *
+ * @returns The C lines.
+ */
+export function printCallback(callback: IrCallback): string[] {
+  const lines = printStmts(callback.body, INDENT);
+  if (callback.updatesState) {
+    lines.push(APP_UPDATE_CALL);
+  }
+
+  return lines;
 }

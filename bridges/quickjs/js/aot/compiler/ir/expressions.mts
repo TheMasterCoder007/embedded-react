@@ -74,6 +74,19 @@ export type EventField = 'x' | 'y' | 'dx' | 'dy' | 'vx' | 'vy';
 /** A field of the onLayout rect. */
 export type LayoutField = 'x' | 'y' | 'width' | 'height';
 
+/** A field of a PanResponder callback's gestureState. */
+export type GestureField =
+  | 'dx'
+  | 'dy'
+  | 'moveX'
+  | 'moveY'
+  | 'x0'
+  | 'y0'
+  | 'vx'
+  | 'vy'
+  | 'numberActiveTouches'
+  | 'stateID';
+
 /** A number known at compile time. */
 export interface IrNumber extends IrTyped {
   kind: 'number';
@@ -146,10 +159,17 @@ export interface IrPi extends IrTyped {
   kind: 'pi';
 }
 
-/** C produced by a module that does not lower to the IR yet (a PanResponder gesture field). */
-export interface IrForeign extends IrTyped {
-  kind: 'foreign';
-  code: string;
+/**
+ * A field of a PanResponder callback's gestureState. Travel is measured from the grant, which the responder's
+ * own state records; the point and velocity are the engine's event payload.
+ */
+export interface IrGesture extends IrTyped {
+  kind: 'gesture';
+  field: GestureField;
+  /** The prefix of the responder's gesture state (`<prefix>_base_dx` …). */
+  statePrefix: string;
+  /** The responder's gesture id. */
+  stateID: number;
 }
 
 /** A 64-bit constant converted to float beside a float, as JS converts any number. */
@@ -274,7 +294,7 @@ export type IrExpr =
   | IrLayout
   | IrClock
   | IrPi
-  | IrForeign
+  | IrGesture
   | IrToFloat
   | IrUnary
   | IrHelper

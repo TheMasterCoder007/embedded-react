@@ -22,7 +22,7 @@ import {traverse} from '@babel/core';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {floatLit} from './c-syntax.mts';
-import {panGestureField} from './pan-responder.mts';
+import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
 import type * as t from '@babel/types';
@@ -1112,7 +1112,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
 
       // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
       if (object.type === 'Identifier' && env.gesture === object.name && prop) {
-        return {kind: 'foreign', ...panGestureField(prop, env.pan)};
+        return lowerGestureField(prop, env.pan);
       }
 
       // `<event>.layout.x / .y / .width / .height` — the onLayout rect.

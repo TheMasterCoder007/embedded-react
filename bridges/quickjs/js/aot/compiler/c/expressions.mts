@@ -23,6 +23,7 @@ import type {CExpr} from '../types.mts';
 import type {
   FloatMath,
   IrExpr,
+  IrGesture,
   IrNumber,
   LayoutField,
 } from '../ir/expressions.mts';
@@ -73,6 +74,36 @@ const INT_MIN = -(2 ** 31);
  */
 export const asCond = (expr: CExpr): string =>
   expr.cType === 'string' ? `(${expr.code}[0] != '\\0')` : expr.code;
+
+/**
+ * A gestureState field. Travel is rebased onto the grant (RN's anchor); the point and the velocity come straight
+ * off the engine payload; the finger count is the engine's own, which is why er_touch_active_count() exists.
+ *
+ * @param expr  The field.
+ *
+ * @returns The C expression.
+ */
+function printGestureField(expr: IrGesture): string {
+  switch (expr.field) {
+    case 'dx':
+    case 'dy':
+      return `(data->${expr.field} - ${expr.statePrefix}_base_${expr.field})`;
+    case 'moveX':
+      return 'data->x';
+    case 'moveY':
+      return 'data->y';
+    case 'x0':
+    case 'y0':
+      return `${expr.statePrefix}_${expr.field}`;
+    case 'vx':
+    case 'vy':
+      return `data->${expr.field}`;
+    case 'numberActiveTouches':
+      return 'er_touch_active_count()';
+    case 'stateID':
+      return String(expr.stateID);
+  }
+}
 
 /**
  * A compile-time number as a C constant.
@@ -137,8 +168,8 @@ export function printExpr(expr: IrExpr): string {
       return expr.clock === 'Date' ? 'app_date_now()' : 'app_perf_now()';
     case 'pi':
       return '(float)M_PI';
-    case 'foreign':
-      return expr.code;
+    case 'gesture':
+      return printGestureField(expr);
     case 'toFloat':
       return `((float)${printExpr(expr.operand)})`;
     case 'unary': {

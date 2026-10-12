@@ -163,6 +163,13 @@ export interface IrForeign {
   lines: string[];
 }
 
+/** A callback lowered to statements: an event handler, a timer, or a PanResponder callback. */
+export interface IrCallback {
+  body: IrStmt[];
+  /** A statement in the body set state, so it ends by re-applying state. */
+  updatesState: boolean;
+}
+
 /** A lowered handler, effect or timer statement, before any backend prints it. */
 export type IrStmt =
   | IrDeclareLocal

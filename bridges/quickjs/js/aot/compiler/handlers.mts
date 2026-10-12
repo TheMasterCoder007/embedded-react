@@ -52,11 +52,16 @@ import {
   rectEntriesC,
   lineEntriesC,
 } from './svg.mts';
-import {printStmts} from './c/statements.mts';
+import {APP_UPDATE_CALL, printCallback, printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr, IrTyped} from './ir/expressions.mts';
-import type {IrItemValue, IrStmt, IrTimer} from './ir/statements.mts';
+import type {
+  IrCallback,
+  IrItemValue,
+  IrStmt,
+  IrTimer,
+} from './ir/statements.mts';
 import type {VectorGeometry} from './svg.mts';
 import type {
   CExpr,
@@ -82,7 +87,7 @@ import type {
  * The call to a body that set state ends with, to re-apply what reads it. Whether anything reads state is known
  * only once the whole app is emitted, so the call is dropped then if nothing does.
  */
-export const APP_UPDATE_CALL = '    app_update();';
+export {APP_UPDATE_CALL};
 
 /** The constant 0, which a remainder by 0 or ±1 stores. */
 const ZERO: IrExpr = {kind: 'number', value: 0, cType: 'int'};
@@ -1414,8 +1419,8 @@ export function compileEffect(
 }
 
 /**
- * Compiles an event handler to the lines of its C function. Its first parameter is the event, whose touch
- * fields read EREventData; a PanResponder callback's second is RN's gestureState (see panGestureField).
+ * Lowers an event handler to a callback. Its first parameter is the event, whose touch fields read
+ * EREventData; a PanResponder callback's second is RN's gestureState (see lowerGestureField).
  *
  * @param fnNode  The handler.
  * @param env  The expression environment.
@@ -1423,15 +1428,15 @@ export function compileEffect(
  * @param out  Everything emitted so far.
  * @param pan  The PanResponder the handler belongs to, if any.
  *
- * @returns The function body's C lines, ending with app_update() when it set state.
+ * @returns The callback.
  */
-export function compileHandler(
+export function lowerHandler(
   fnNode: PanCallback,
   env: Env,
   state: StateTable,
   out: Out,
   pan: PanResponderRecord | null = null,
-): string[] {
+): IrCallback {
   // An expression body is a single statement.
   const body = fnNode.body;
   const statements: t.Statement[] =
@@ -1455,15 +1460,30 @@ export function compileHandler(
     handlerEnv = {...handlerEnv, gesture: gestureParam, pan};
   }
 
-  // Compile the body, then re-apply state-dependent props once if it set state.
+  // The body re-applies state-dependent props once at its end if it set state.
   const ctx: StatementContext = {stateChanged: false, animIdx: 0, out};
-  const lines = compileStmts(statements, handlerEnv, state, ctx, '    ');
-  if (ctx.stateChanged) {
-    lines.push(APP_UPDATE_CALL);
-  }
-
-  return lines;
+  return {
+    body: lowerStmts(statements, handlerEnv, state, ctx),
+    updatesState: ctx.stateChanged,
+  };
 }
+
+/**
+ * Compiles an event handler to the lines of its C function (see lowerHandler).
+ *
+ * @param fnNode  The handler.
+ * @param env  The expression environment.
+ * @param state  The component's state table.
+ * @param out  Everything emitted so far.
+ *
+ * @returns The function body's C lines, ending with app_update() when it set state.
+ */
+export const compileHandler = (
+  fnNode: PanCallback,
+  env: Env,
+  state: StateTable,
+  out: Out,
+): string[] => printCallback(lowerHandler(fnNode, env, state, out));
 
 /**
  * Compiles a value-callback (e.g., Switch onValueChange) — binds its first param to `valueCode`, not an event.

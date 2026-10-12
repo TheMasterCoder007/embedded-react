@@ -19,13 +19,23 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
-import {emitExpr} from './expressions.mts';
+import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
-import {compileHandler} from './handlers.mts';
+import {lowerHandler} from './handlers.mts';
+import {
+  printPanDecls,
+  printPanEvent,
+  printPanQuery,
+} from './c/pan-responder.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
+import type {GestureField, IrExpr, IrGesture} from './ir/expressions.mts';
 import type {
-  CExpr,
+  IrPanEvent,
+  IrPanResponder,
+  IrPanRole,
+} from './ir/pan-responder.mts';
+import type {
   Env,
   PanCallback,
   PanResponderRecord,
@@ -45,15 +55,6 @@ const PAN_QUERIES: Record<string, string> = {
   onPanResponderTerminationRequest: 'ER_QUERY_TERMINATION_REQUEST',
 };
 
-/** Query constant → the suffix of the C function emitted for it. */
-const PAN_QUERY_SUFFIX: Record<string, string> = {
-  ER_QUERY_START_SHOULD_SET: 'start_should_set',
-  ER_QUERY_START_SHOULD_SET_CAPTURE: 'start_should_set_capture',
-  ER_QUERY_MOVE_SHOULD_SET: 'move_should_set',
-  ER_QUERY_MOVE_SHOULD_SET_CAPTURE: 'move_should_set_capture',
-  ER_QUERY_TERMINATION_REQUEST: 'termination_request',
-};
-
 /** RN PanResponder config key → the engine responder EVENT it lowers to. */
 const PAN_EVENTS: Record<string, string> = {
   onPanResponderGrant: 'ER_EVENT_RESPONDER_GRANT',
@@ -62,6 +63,20 @@ const PAN_EVENTS: Record<string, string> = {
   onPanResponderTerminate: 'ER_EVENT_RESPONDER_TERMINATE',
   onPanResponderReject: 'ER_EVENT_RESPONDER_REJECT',
 };
+
+/** The fields a gestureState carries. */
+const GESTURE_FIELDS = new Set([
+  'dx',
+  'dy',
+  'moveX',
+  'moveY',
+  'x0',
+  'y0',
+  'vx',
+  'vy',
+  'numberActiveTouches',
+  'stateID',
+]);
 
 /** Config keys the Flow A module acts on that have no Flow B lowering — rejected by name, not ignored. */
 const PAN_FLOW_A_ONLY: Record<string, string> = {
@@ -93,39 +108,25 @@ export const isPanCreate = (
   (node.callee.property as t.Identifier).name === 'create';
 
 /**
- * One `gestureState` field → the C expression that reads it. Travel is rebased onto the grant (RN's
- * anchor); the point and the velocity come straight off the engine payload; the finger count is the
- * engine's own, which is why er_touch_active_count() exists.
+ * Lowers one `gestureState` field of a responder's callback.
  *
  * @param field  The field's name.
  * @param pan  The responder whose callback reads it.
  *
- * @returns The C expression.
+ * @returns The field.
  */
-export function panGestureField(
+export function lowerGestureField(
   field: string,
   pan: PanResponderRecord | null | undefined,
-): CExpr {
-  switch (field) {
-    case 'dx':
-      return {code: `(data->dx - ${pan!.cPrefix}_base_dx)`, cType: 'int'};
-    case 'dy':
-      return {code: `(data->dy - ${pan!.cPrefix}_base_dy)`, cType: 'int'};
-    case 'moveX':
-      return {code: 'data->x', cType: 'int'};
-    case 'moveY':
-      return {code: 'data->y', cType: 'int'};
-    case 'x0':
-      return {code: `${pan!.cPrefix}_x0`, cType: 'int'};
-    case 'y0':
-      return {code: `${pan!.cPrefix}_y0`, cType: 'int'};
-    case 'vx':
-    case 'vy':
-      return {code: `data->${field}`, cType: 'float'};
-    case 'numberActiveTouches':
-      return {code: 'er_touch_active_count()', cType: 'int'};
-    case 'stateID':
-      return {code: String(pan!.stateID), cType: 'int'};
+): IrGesture {
+  if (GESTURE_FIELDS.has(field)) {
+    return {
+      kind: 'gesture',
+      field: field as GestureField,
+      statePrefix: pan!.cPrefix,
+      stateID: pan!.stateID,
+      cType: field === 'vx' || field === 'vy' ? 'float' : 'int',
+    };
   }
 
   throw aotError(
@@ -292,20 +293,20 @@ export function collectPanResponders(
 }
 
 /**
- * Lowers a should-set predicate to a single C boolean expression: the engine calls these synchronously
- * inside hit-testing, before anyone owns the gesture, so they may only READ.
+ * Lowers a should-set predicate to a single condition: the engine calls these synchronously inside
+ * hit-testing, before anyone owns the gesture, so they may only READ.
  *
  * @param fnNode  The predicate.
  * @param env  The expression environment.
  * @param pan  The responder it belongs to.
  *
- * @returns The C condition.
+ * @returns The condition.
  */
-function compilePanQuery(
+function lowerPanQuery(
   fnNode: PanCallback,
   env: Env,
   pan: PanResponderRecord,
-): string {
+): IrExpr {
   // The predicate reads the event and gestureState through its own parameter names.
   const eventParam =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
@@ -337,22 +338,72 @@ function compilePanQuery(
     );
   }
 
-  return `(${emitExpr(expr, queryEnv).code}) != 0`;
+  return lowerExpr(expr, queryEnv);
 }
 
 /**
- * Emits one PanResponder's gesture state + C callbacks (once, however many nodes spread it), then wires
- * them onto a node. The responder is lowered onto the engine's responder system, not transpiled: the engine
- * already runs RN's state machine in C. Capture/bubble negotiation (er_responder_query_set) picks an owner,
- * then GRANT / MOVE / RELEASE / TERMINATE fire on the owner alone, carrying cumulative travel and velocity.
- * So the should-set predicates become QUERIES and the callbacks become responder EVENT handlers: no gesture
- * math is duplicated into the generated C, and a granted pan owns the gesture, so a ScrollView ancestor
- * cannot auto-scroll out from under it.
+ * Lowers a PanResponder onto the engine's responder system, not a transpiled copy of it: the engine already runs
+ * RN's state machine in C. Capture/bubble negotiation (er_responder_query_set) picks an owner, then GRANT / MOVE /
+ * RELEASE / TERMINATE fire on the owner alone, carrying cumulative travel and velocity. So the should-set
+ * predicates become QUERIES and the callbacks become responder EVENT handlers: no gesture math is duplicated into
+ * the generated C, and a granted pan owns the gesture, so a ScrollView ancestor cannot auto-scroll out from under
+ * it.
  *
- * The one thing with no engine counterpart is RN's anchor: `g.dx` is measured from the grant, while the
- * engine's `data->dx` runs from touch-down, so a claim that needed 10 px of slop would otherwise open with a
- * 10 px jump. That anchor, plus `x0`/`y0`, is a handful of file-scope ints per responder, kept by the
- * grant/release/terminate handlers. Those are ALWAYS emitted, even with no user callback.
+ * The one thing with no engine counterpart is RN's anchor: `g.dx` is measured from the grant, while the engine's
+ * `data->dx` runs from touch-down, so a claim that needed 10 px of slop would otherwise open with a 10 px jump.
+ * That anchor, plus `x0`/`y0`, is a handful of file-scope ints per responder, kept by the grant, release and
+ * terminate handlers. Those three are ALWAYS lowered, even with no app callback; move and reject only with one.
+ *
+ * @param pan  The responder; its gesture id must be assigned.
+ * @param env  The expression environment.
+ * @param state  The component's state table.
+ * @param out  Everything emitted so far.
+ *
+ * @returns The responder.
+ */
+export function lowerPanResponder(
+  pan: PanResponderRecord,
+  env: Env,
+  state: StateTable,
+  out: Out,
+): IrPanResponder {
+  const panEnv: Env = {...env, pan};
+  const event = (name: string, role: IrPanRole): IrPanEvent => ({
+    event: name,
+    role,
+    callback: pan.events.has(name)
+      ? lowerHandler(pan.events.get(name)!, panEnv, state, out, pan)
+      : null,
+  });
+
+  const events = [
+    event('ER_EVENT_RESPONDER_GRANT', 'grant'),
+    event('ER_EVENT_RESPONDER_RELEASE', 'release'),
+    event('ER_EVENT_RESPONDER_TERMINATE', 'terminate'),
+  ];
+  if (pan.events.has('ER_EVENT_RESPONDER_MOVE')) {
+    events.push(event('ER_EVENT_RESPONDER_MOVE', 'move'));
+  }
+  if (pan.events.has('ER_EVENT_RESPONDER_REJECT')) {
+    events.push(event('ER_EVENT_RESPONDER_REJECT', 'reject'));
+  }
+
+  return {
+    name: pan.name,
+    statePrefix: pan.cPrefix,
+    fnPrefix: pan.fnPrefix,
+    stateID: pan.stateID,
+    events,
+    queries: [...pan.queries].map(([query, predicate]) => ({
+      query,
+      test: lowerPanQuery(predicate, panEnv, pan),
+    })),
+  };
+}
+
+/**
+ * Emits one PanResponder's gesture state and C functions (once, however many nodes spread it; see
+ * lowerPanResponder), then wires them onto a node.
  *
  * @param pan  The responder.
  * @param nodeId  The node's variable.
@@ -370,93 +421,20 @@ export function emitPanResponder(
   // Emit the responder's state and C functions the first time a node spreads it.
   if (!pan.emitted) {
     pan.stateID = ++out.panN;
-    const cPrefix = pan.cPrefix;
-    const panEnv: Env = {...env, pan};
-
-    // userBody compiles an event's app callback; grantedGuard returns unless this responder owns the gesture.
-    const userBody = (event: string): string[] =>
-      pan.events.has(event)
-        ? compileHandler(pan.events.get(event)!, panEnv, state, out, pan)
-        : [];
-    const grantedGuard = [
-      '    if (!' + cPrefix + '_granted)',
-      '    {',
-      '        return;',
-      '    }',
-    ];
-
-    // The gesture state: whether the gesture is granted, the anchor, and RN's x0/y0.
-    out.panDecls.push(
-      `/* PanResponder "${pan.name}" (gesture ${pan.stateID}) — RN's gestureState. The grant anchors the`,
-      `   travel so g.dx opens at 0 however much slop the claim cost; data->dx runs from touch-down. */`,
-      `static int ${cPrefix}_granted = 0;`,
-      `static int ${cPrefix}_base_dx = 0;`,
-      `static int ${cPrefix}_base_dy = 0;`,
-      `static int ${cPrefix}_x0 = 0;`,
-      `static int ${cPrefix}_y0 = 0;`,
-    );
+    const lowered = lowerPanResponder(pan, env, state, out);
+    out.panDecls.push(...printPanDecls(lowered));
 
     // Every emitted handler and query is recorded, so each node that spreads the responder is wired to it.
     pan.emitted = {events: [], queries: []};
-    const addEventHandler = (event: string, suffix: string, body: string[]) => {
-      const handlerName = `${pan.fnPrefix}_${suffix}`;
-      out.handlers.push({name: handlerName, body});
-      pan.emitted!.events.push([event, handlerName]);
-    };
-
-    // Grant anchors the gesture where the claim happened, then runs the app's callback.
-    addEventHandler('ER_EVENT_RESPONDER_GRANT', 'grant', [
-      `    if (${cPrefix}_granted)`,
-      '    {',
-      '        return; /* a second finger re-granted this node: one gesture, not two */',
-      '    }',
-      `    ${cPrefix}_granted = 1;`,
-      `    ${cPrefix}_base_dx = data->dx;`,
-      `    ${cPrefix}_base_dy = data->dy;`,
-      `    ${cPrefix}_x0 = data->x;`,
-      `    ${cPrefix}_y0 = data->y;`,
-      ...userBody('ER_EVENT_RESPONDER_GRANT'),
-    ]);
-
-    // Release and terminate end the gesture: run the callback while g.dx's anchor is still valid, then clear it.
-    for (const [event, suffix] of [
-      ['ER_EVENT_RESPONDER_RELEASE', 'release'],
-      ['ER_EVENT_RESPONDER_TERMINATE', 'terminate'],
-    ]) {
-      addEventHandler(event, suffix, [
-        ...grantedGuard,
-        ...userBody(event),
-        `    ${cPrefix}_granted = 0;`,
-        `    ${cPrefix}_base_dx = 0;`,
-        `    ${cPrefix}_base_dy = 0;`,
-      ]);
+    for (const panEvent of lowered.events) {
+      const handler = printPanEvent(lowered, panEvent);
+      out.handlers.push(handler);
+      pan.emitted.events.push([panEvent.event, handler.name]);
     }
-
-    // Move is emitted only for an app callback and runs it only while this responder owns the gesture.
-    if (pan.events.has('ER_EVENT_RESPONDER_MOVE')) {
-      addEventHandler('ER_EVENT_RESPONDER_MOVE', 'move', [
-        ...grantedGuard,
-        ...userBody('ER_EVENT_RESPONDER_MOVE'),
-      ]);
-    }
-
-    // Reject fires on a node that ASKED for the gesture and was refused — it never owned it, so no guard.
-    if (pan.events.has('ER_EVENT_RESPONDER_REJECT')) {
-      addEventHandler(
-        'ER_EVENT_RESPONDER_REJECT',
-        'reject',
-        userBody('ER_EVENT_RESPONDER_REJECT'),
-      );
-    }
-
-    // Each should-set predicate becomes a C query function.
-    for (const [query, predicate] of pan.queries) {
-      const queryName = `${pan.fnPrefix}_${PAN_QUERY_SUFFIX[query]}`;
-      out.queries.push({
-        name: queryName,
-        expr: compilePanQuery(predicate, panEnv, pan),
-      });
-      pan.emitted.queries.push([query, queryName]);
+    for (const panQuery of lowered.queries) {
+      const query = printPanQuery(lowered, panQuery);
+      out.queries.push(query);
+      pan.emitted.queries.push([panQuery.query, query.name]);
     }
   }
 
