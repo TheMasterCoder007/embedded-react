@@ -192,7 +192,16 @@ static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
             return;
         }
     }
-    /* table full (raise ER_AOT_MAX_WAITS): this run never completes */
+
+    /* The table is full (raise ER_AOT_MAX_WAITS): the run cannot wait, so it ends now, as not finished. A run
+       that completion starts while the table is still full is dropped instead of recursing. */
+    static bool s_reporting_full;
+    if (!s_reporting_full)
+    {
+        s_reporting_full = true;
+        done(false, NULL);
+        s_reporting_full = false;
+    }
 }
 
 /* Counts down every wait, then completes the ones that ran out. A wait a completion starts here waits its
@@ -378,10 +387,21 @@ export function printChainFunctions(chain: IrStartChain): ChainFunctions {
   if (loop.iterations >= 0) {
     const counter = passCounter(chain);
     decls.push(`static int ${counter};`);
+    const finish =
+      loop.finalWait && chain.completion
+        ? [
+            '    ' +
+              printWaitStart(
+                loop.finalWait.owner,
+                loop.finalWait.delayMs,
+                chain.completion,
+              ),
+          ]
+        : callCompletion(chain.completion, 'true');
     repeat.push(
       `    if (${counter} >= ${loop.iterations})`,
       '    {',
-      ...callCompletion(chain.completion, 'true'),
+      ...finish,
       '        return;',
       '    }',
       `    ${counter}++;`,

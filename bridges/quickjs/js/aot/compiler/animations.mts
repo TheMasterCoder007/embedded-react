@@ -97,8 +97,10 @@ interface LoopSpec {
   iterations: number;
   /** The value to put back where it started before each repeat, or null. */
   resetTo: string | null;
-  /** Milliseconds before each repeat. */
+  /** Milliseconds before each repeat, and after the last pass before the loop completes. */
   trailingDelay: number;
+  /** The loop's composition key, which the wait after its last pass belongs to. */
+  key: string;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -890,6 +892,13 @@ function lowerChain(
             {...steps[0], delayMs: steps[0].delayMs + loop.trailingDelay},
             env,
           ),
+          finalWait:
+            loop.iterations >= 0 && completion && loop.trailingDelay > 0
+              ? {
+                  delayMs: loop.trailingDelay,
+                  owner: waitOwner(ctx, loop.key, true),
+                }
+              : null,
         }
       : null,
     completion,
@@ -1176,6 +1185,7 @@ function lowerLoopStart(
     iterations,
     resetTo,
     trailingDelay,
+    key,
   });
 }
 

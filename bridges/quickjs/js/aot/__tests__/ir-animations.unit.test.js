@@ -201,6 +201,19 @@ describe('animation IR: chains', () => {
     );
   });
 
+  it("waits out a counted loop's trailing delay after its last pass too", () => {
+    const {stmt, ctx} = lowerOne(
+      'Animated.loop(Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]), {iterations: 1}).start(() => setN(1));',
+    );
+    expect(stmt.loop.finalWait).toEqual({delayMs: 300, owner: 0});
+    const repeat = ctx.out.animCbs.find(fn => fn.name === 'er_seqcb_1_0');
+    expect(repeat.body).toContain('    if (s_loop1_n >= 1)');
+    expect(repeat.body).toContain(
+      '        app_wait_start(0, 300, er_donecb_0);',
+    );
+    expect(repeat.body).not.toContain('        er_donecb_0(true, NULL);');
+  });
+
   it("adds a looped sequence's trailing delay to the restart only", () => {
     const {stmt} = lowerOne(
       'Animated.loop(Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.timing(a, {toValue: 0}), Animated.delay(200)])).start();',

@@ -367,6 +367,15 @@ int main(void)
     app_wait_start(1, 100, done_b);
     app_wait_report(1);
     app_wait_tick(200);
+    strcat(s_log, "|");
+
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
+    {
+        app_wait_start(3, 100, done_b);
+    }
+    app_wait_start(3, 100, done_a);
+    strcat(s_log, "/");
+    app_wait_tick(200);
     puts(s_log);
     return 0;
 }
@@ -384,8 +393,10 @@ int main(void)
         expect(build.status).toBe(0);
         const run = spawnSync(exe, [], {encoding: 'utf8'});
         // Both taps complete; the stop ends owner 0 only; a run started by the stop's completion, or between
-        // detach and report, survives.
-        expect(run.stdout.trim()).toBe('A+A+|A-B+|R-B+|A-B+');
+        // detach and report, survives; a run that finds the table full ends at once, as not finished.
+        expect(run.stdout.trim()).toBe(
+          'A+A+|A-B+|R-B+|A-B+|A-/' + 'B+'.repeat(8),
+        );
       } finally {
         rmSync(dir, {recursive: true, force: true});
       }

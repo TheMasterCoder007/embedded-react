@@ -107,6 +107,8 @@ export interface IrChainLoop {
   resetHandle: string | null;
   /** The first step as each repeat starts it: its delay includes the wait after the last step. */
   restart: IrAnimation;
+  /** A counted loop's last pass ends with that wait too, before the completion runs; null when there is none. */
+  finalWait: {delayMs: number; owner: number} | null;
 }
 
 /**
