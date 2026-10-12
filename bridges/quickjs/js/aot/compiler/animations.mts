@@ -935,31 +935,29 @@ const emptyStart = (
   completionWait: null,
 });
 
-/** AST fields that say where a node is, not what it is. */
-const POSITION_KEYS = new Set([
-  'loc',
-  'start',
-  'end',
-  'range',
-  'extra',
-  'leadingComments',
-  'trailingComments',
-  'innerComments',
-]);
+/** Numbers each composition node once, so a key names the place it is written. */
+const compositionIds = new WeakMap<t.Node, number>();
+let nextCompositionId = 0;
 
 /**
- * What identifies a composition for its completion wait: its shape, within one component instance. A start and
- * a stop of the same composition share a wait wherever they are written, as they share the values they drive.
+ * What identifies a composition for its completion wait: where it is written, within one component instance.
+ * Two compositions written apart keep separate waits, as two JS animation objects do; a start and stop through
+ * the same local (`const pulse = …; pulse.start(); … pulse.stop()`) reach the same node and share one.
  *
  * @param node  The composition, resolved.
  * @param env  The expression environment.
  *
  * @returns The key.
  */
-const compositionKey = (node: t.Node | null | undefined, env: Env): string =>
-  `${env.cbPrefix ?? ''}|${JSON.stringify(node, (key, value) =>
-    POSITION_KEYS.has(key) ? undefined : value,
-  )}`;
+function compositionKey(node: t.Node | null | undefined, env: Env): string {
+  let id = node ? compositionIds.get(node) : -1;
+  if (id === undefined) {
+    id = nextCompositionId++;
+    compositionIds.set(node!, id);
+  }
+
+  return `${env.cbPrefix ?? ''}|${id}`;
+}
 
 /**
  * A composition's wait slot, added to the output on first use. Its timer function comes with the first start

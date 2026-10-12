@@ -121,7 +121,7 @@ describe('AOT generated C compiles', () => {
        }`,
       'svg',
     );
-    expect(r.c).toMatch(/static const float s_svg\d+_ops\[]/); // baked tape (a fully static <Svg>)
+    expect(r.c).toMatch(/static const float s_svg\d+_ops\[\]/); // baked tape (a fully static <Svg>)
     expect(r.c).toMatch(
       /er_node_set_vector_ops\(n\d+, s_svg\d+_ops, \d+, s_svg\d+_paints, \d+/,
     );
@@ -409,7 +409,7 @@ describe('AOT generated C compiles', () => {
          import { View, Text, Pressable } from 'embedded-react';
          export function App() {
            const [t, setT] = useState(0);
-           const setSec = useState(0);
+           const [sec, setSec] = useState(0);
            const start = useRef(0);
            useEffect(() => {
              start.current = performance.now();
@@ -472,7 +472,7 @@ describe('AOT generated C compiles', () => {
         `import { useState } from 'react';
          import { View, Text } from 'embedded-react';
          export function App() {
-           const n = useState(3);
+           const [n, setN] = useState(3);
            return (<View style={{ width: n * 0.8875, marginLeft: -n / 2 }}><Text>x</Text></View>);
          }`,
         'round',
@@ -905,11 +905,11 @@ describe('AOT generated C compiles', () => {
          import { View, Text, TextInput } from 'embedded-react';
          const PAGES = 4;
          export function App() {
-           const page = useState(0);
-           const hit = useState('none');
-           const ratio = useState(0.5);
+           const [page, setPage] = useState(0);
+           const [hit, setHit] = useState('none');
+           const [ratio, setRatio] = useState(0.5);
            const [label, setLabel] = useState('');
-           const on = useState(false);
+           const [on, setOn] = useState(false);
            return (
              <View style={{ flex: 1 }}>
                <Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>

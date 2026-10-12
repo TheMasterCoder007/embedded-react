@@ -369,25 +369,24 @@ describe('animation IR: completions', () => {
 });
 
 describe('animation IR: stopping a wait', () => {
-  it('ends the wait a start of the same composition keeps, wherever the stop is written', () => {
+  it('keeps a separate wait for each composition written apart, even when they are alike', () => {
     const {stmts, ctx} = lowerBody(
-      'Animated.delay(500).start(() => setN(1)); Animated.timing(a, {toValue: 1}).stop(); Animated.delay(500).stop();',
+      'Animated.delay(500).start(() => setN(1)); Animated.delay(500).start(() => setN(2)); Animated.timing(a, {toValue: 1}).stop(); Animated.delay(500).stop();',
     );
     expect(stmts[0].wait.slot).toBe('s_animwait_0');
-    expect(stmts[1]).toMatchObject({
+    expect(stmts[1].wait.slot).toBe('s_animwait_1');
+    expect(stmts[2]).toMatchObject({
       kind: 'stopAnimations',
       handles: ['s_av_a'],
       waitSlot: null,
     });
-    expect(stmts[2]).toMatchObject({
-      kind: 'stopAnimations',
-      handles: [],
-      waitSlot: 's_animwait_0',
-    });
-    expect(printStmts([stmts[2]], '    ')).toEqual([
-      '    app_wait_stop(&s_animwait_0);',
-    ]);
-    expect(ctx.out.animWaits.size).toBe(1);
+
+    // A stop of a third delay has a slot of its own, which nothing starts (assembly drops it).
+    expect(stmts[3]).toMatchObject({handles: [], waitSlot: 's_animwait_2'});
+    expect(ctx.out.animWaits.size).toBe(3);
+    expect(
+      [...ctx.out.animWaits.values()].map(record => record.timerFn),
+    ).toEqual(['er_timer_fn_0', 'er_timer_fn_1', null]);
   });
 
   it('gives a stop that comes first the slot a later start waits in', () => {
