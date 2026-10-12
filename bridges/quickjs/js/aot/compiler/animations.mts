@@ -1307,6 +1307,23 @@ export function lowerAnimateStart(
     );
   }
 
+  // A spring or decay has no fixed end, so a delay beside it that runs past its start cannot be waited out yet.
+  const [only] = entries;
+  if (
+    completion &&
+    only &&
+    only.kind !== 'timing' &&
+    !only.loop &&
+    duration != null &&
+    duration > only.delayMs
+  ) {
+    throw aotError(
+      `AOT: a .start(onComplete) callback on an Animated.${only.kind} beside a longer Animated.delay is not yet supported`,
+      `a ${only.kind} has no fixed length, so the callback cannot wait for whichever ends last. Run them in an ` +
+        'Animated.sequence([...]) instead, or drop the delay.',
+    );
+  }
+
   // Each entry starts on its own, numbered after the configs already in this body.
   const start = emptyStart(ctx, completion);
   for (const animEntry of entries) {
@@ -1315,7 +1332,6 @@ export function lowerAnimateStart(
   }
 
   // A delay beside the one timing that outlasts it holds the completion back until the composition ends.
-  const [only] = entries;
   if (completion && only?.kind === 'timing' && !only.loop && duration != null) {
     const end =
       only.delayMs +

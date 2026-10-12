@@ -340,6 +340,25 @@ describe('animation IR: completions', () => {
     ]);
   });
 
+  it('rejects a callback on a spring or decay beside a delay that runs past its start', () => {
+    for (const source of [
+      'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]).start(() => setN(1));',
+      'Animated.stagger(100, [Animated.decay(c, {velocity: 1}), Animated.delay(50), Animated.delay(60)]).start(() => setN(1));',
+    ]) {
+      expect(() => lowerBody(source)).toThrow(
+        /beside a longer Animated\.delay is not yet supported/,
+      );
+    }
+
+    // A delay that is over before the spring starts leaves nothing to wait for, and no callback is fine too.
+    for (const source of [
+      'Animated.stagger(100, [Animated.delay(50), Animated.spring(a, {toValue: 1})]).start(() => setN(1));',
+      'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]).start();',
+    ]) {
+      expect(lowerOne(source).stmt.completionWait).toBeNull();
+    }
+  });
+
   it('adds no wait when the animation outlasts every delay, or nothing waits on it', () => {
     for (const source of [
       'Animated.parallel([Animated.timing(a, {toValue: 1, duration: 600}), Animated.delay(500)]).start(() => setN(1));',
