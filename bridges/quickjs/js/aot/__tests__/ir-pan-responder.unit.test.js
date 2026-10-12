@@ -23,6 +23,7 @@ import {
 } from '../compiler/pan-responder.mts';
 import {printExpr} from '../compiler/c/expressions.mts';
 import {printPanEvent, printPanQuery} from '../compiler/c/pan-responder.mts';
+import {printPanWiring} from '../compiler/c/nodes.mts';
 import {Out} from '../compiler/out.mts';
 
 // A PanResponder lowers to the IR first: gesture fields, event handlers with their roles, and should-set queries.
@@ -180,13 +181,13 @@ describe('PanResponder IR: events and queries', () => {
 });
 
 describe('PanResponder IR: emitting', () => {
-  it('emits the functions once however many nodes spread the responder, and wires each node', () => {
+  it('emits the functions once however many nodes spread the responder, and wires a node to them', () => {
     const pan = responder(
       '{onStartShouldSetPanResponder: () => true, onPanResponderMove: () => setN(1)}',
     );
     const out = new Out(new Map(), null);
-    emitPanResponder(pan, 'n1', out, env, state);
-    emitPanResponder(pan, 'n2', out, env, state);
+    emitPanResponder(pan, out, env, state);
+    emitPanResponder(pan, out, env, state);
     expect(out.handlers.map(handler => handler.name)).toEqual([
       'er_pan_pan_grant',
       'er_pan_pan_release',
@@ -197,7 +198,7 @@ describe('PanResponder IR: emitting', () => {
       'er_pan_pan_start_should_set',
     ]);
     expect(out.panDecls).toContain('static int s_pan_pan_granted = 0;');
-    expect(out.build.filter(line => line.includes('(n2,'))).toEqual([
+    expect(printPanWiring(pan, 'n2')).toEqual([
       '    er_event_set(n2, ER_EVENT_RESPONDER_GRANT, er_pan_pan_grant, NULL);',
       '    er_event_set(n2, ER_EVENT_RESPONDER_RELEASE, er_pan_pan_release, NULL);',
       '    er_event_set(n2, ER_EVENT_RESPONDER_TERMINATE, er_pan_pan_terminate, NULL);',

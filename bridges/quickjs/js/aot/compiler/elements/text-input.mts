@@ -25,11 +25,11 @@ import {cstr} from '../c-syntax.mts';
 import {emitExpr, emitFormat} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, collectStyleAssigns} from '../style-text.mts';
+import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
 import {emitRefBind} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
-import type {TextContent} from '../style-text.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -112,7 +112,9 @@ export function emitTextInput(
       } catch {
         dynAssigns.push({
           field,
-          code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          value: foreignProp(
+            `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          ),
         });
       }
     } else if (
@@ -140,7 +142,7 @@ export function emitTextInput(
 
   // value → the input's text buffer (er_node_set_props → er_text_input_set_text): static literal, or a
   // state-driven value re-synced each app_update.
-  let text: TextContent | null = null;
+  let text: {dynamic: boolean; format: string; args: string[]} | null = null;
   if (valueNode) {
     const formatResult = emitFormat(valueNode, env, scope);
     text = {

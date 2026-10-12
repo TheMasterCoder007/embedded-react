@@ -24,6 +24,7 @@ import {evalStatic} from '../static-eval.mts';
 import {asCond, emitExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
+import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
 import {emitRefBind} from '../nodes.mts';
 import type * as t from '@babel/types';
@@ -134,7 +135,9 @@ export function emitSwitch(
     } catch {
       dynAssigns.push({
         field: 'switch_value',
-        code: `(uint8_t)((${asCond(emitExpr(valueNode, env))}) ? 1 : 0)`,
+        value: foreignProp(
+          `(uint8_t)((${asCond(emitExpr(valueNode, env))}) ? 1 : 0)`,
+        ),
       });
     }
   }

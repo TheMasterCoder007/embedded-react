@@ -28,6 +28,7 @@ import {
   styleWrites,
   collectStyleAssigns,
 } from '../style-text.mts';
+import {foreignProp} from '../ir/nodes.mts';
 import {emitRefBind} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
@@ -107,7 +108,7 @@ export function emitActivityIndicator(
       } catch {
         dynAssigns.push({
           field: 'indicator_color',
-          code: emitColorExpr(node, env),
+          value: foreignProp(emitColorExpr(node, env)),
         });
       }
     } else if (name === 'size') {
@@ -127,7 +128,9 @@ export function emitActivityIndicator(
       } catch {
         dynAssigns.push({
           field: 'animating',
-          code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          value: foreignProp(
+            `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          ),
         });
       }
     } else {

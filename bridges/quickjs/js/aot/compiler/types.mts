@@ -20,6 +20,7 @@
 
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
+import type {IrPropValue, IrShow} from './ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -141,11 +142,11 @@ export interface Caps {
 }
 
 /**
- * How the element being emitted is placed. `displayCode` is a C condition: the element exists either way,
- * and app_update() shows it only while the condition holds (a state-driven `cond && <El/>`).
+ * How the element being emitted is placed. `show` is set under a state-driven conditional: the element exists
+ * either way, and app_update() shows it only while the condition holds.
  */
 export interface EmitOptions {
-  displayCode?: string;
+  show?: IrShow;
 }
 
 /** An ERProps field set from a compile-time constant. */
@@ -154,10 +155,10 @@ export interface StaticAssign {
   expr: string;
 }
 
-/** An ERProps field set from a runtime expression, re-applied in app_update(). */
+/** An ERProps field set from a runtime value, re-applied in app_update(). */
 export interface DynAssign {
   field: string;
-  code: string;
+  value: IrPropValue;
 }
 
 /** An expression lowered to one printf format and its arguments; `format` has `%` escaped as `%%`. */

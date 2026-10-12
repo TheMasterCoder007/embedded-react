@@ -1131,7 +1131,7 @@ export function emitSvg(
   state: StateTable,
   opts: EmitOptions,
 ): string {
-  if (opts.displayCode) {
+  if (opts.show) {
     throw new Error(
       'AOT: an <Svg> inside a dynamic conditional is not yet supported',
     );

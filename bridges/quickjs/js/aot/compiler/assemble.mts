@@ -49,6 +49,7 @@ import {compileKeyboardConfig} from './keyboard.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
 import {printWaitDeclarations} from './c/animations.mts';
+import {printPropValue} from './c/nodes.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
 import type {
@@ -396,7 +397,7 @@ export function compileSourceImpl(
         lines.push(`    p.${assign.field} = ${assign.expr};`);
       }
       for (const assign of update.dynAssigns) {
-        lines.push(`    p.${assign.field} = ${assign.code};`);
+        lines.push(`    p.${assign.field} = ${printPropValue(assign.value)};`);
       }
       if (update.placeholder != null) {
         lines.push(

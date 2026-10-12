@@ -23,6 +23,7 @@ import {aotError} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {emitExpr} from '../expressions.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
+import {foreignProp} from '../ir/nodes.mts';
 import {emitChildren} from '../control-flow.mts';
 import {emitRefBind} from '../nodes.mts';
 import type * as t from '@babel/types';
@@ -140,7 +141,9 @@ export function emitModal(
   } catch {
     dynAssigns.push({
       field: 'modal_visible',
-      code: `(uint8_t)((${emitExpr(visibleNode, env).code}) ? 1 : 0)`,
+      value: foreignProp(
+        `(uint8_t)((${emitExpr(visibleNode, env).code}) ? 1 : 0)`,
+      ),
     });
   }
 

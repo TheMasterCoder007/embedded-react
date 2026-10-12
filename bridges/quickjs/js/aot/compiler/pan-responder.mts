@@ -402,23 +402,20 @@ export function lowerPanResponder(
 }
 
 /**
- * Emits one PanResponder's gesture state and C functions (once, however many nodes spread it; see
- * lowerPanResponder), then wires them onto a node.
+ * Emits one PanResponder's gesture state and C functions, once however many nodes spread it (see
+ * lowerPanResponder). Each node that spreads it wires them in its own build lines.
  *
  * @param pan  The responder.
- * @param nodeId  The node's variable.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  * @param state  The component's state table.
  */
 export function emitPanResponder(
   pan: PanResponderRecord,
-  nodeId: string,
   out: Out,
   env: Env,
   state: StateTable,
 ): void {
-  // Emit the responder's state and C functions the first time a node spreads it.
   if (!pan.emitted) {
     pan.stateID = ++out.panN;
     const lowered = lowerPanResponder(pan, env, state, out);
@@ -436,19 +433,6 @@ export function emitPanResponder(
       out.queries.push(query);
       pan.emitted.queries.push([panQuery.query, query.name]);
     }
-  }
-
-  // Wire the responder's handlers and queries onto this node.
-  for (const [event, handlerName] of pan.emitted.events) {
-    out.build.push(
-      `    er_event_set(${nodeId}, ${event}, ${handlerName}, NULL);`,
-    );
-  }
-
-  for (const [query, queryName] of pan.emitted.queries) {
-    out.build.push(
-      `    er_responder_query_set(${nodeId}, ${query}, ${queryName}, NULL);`,
-    );
   }
 }
 

@@ -31,6 +31,7 @@ import {
   styleWrites,
   collectStyleAssigns,
 } from '../style-text.mts';
+import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
 import {emitChildren} from '../control-flow.mts';
 import {emitRefBind} from '../nodes.mts';
@@ -180,9 +181,9 @@ export function emitDial(
       const cExpr = emitExpr(node, env);
       dynAssigns.push({
         field,
-        code: isFloat
-          ? `(float)(${cExpr.code})`
-          : `app_round_dim(${cExpr.code})`,
+        value: foreignProp(
+          isFloat ? `(float)(${cExpr.code})` : `app_round_dim(${cExpr.code})`,
+        ),
       });
     }
   };
@@ -196,7 +197,7 @@ export function emitDial(
       }
       return;
     } catch {
-      dynAssigns.push({field, code: emitColorExpr(node, env)});
+      dynAssigns.push({field, value: foreignProp(emitColorExpr(node, env))});
     }
   };
 
@@ -252,7 +253,7 @@ export function emitDial(
       } else {
         dynAssigns.push({
           field,
-          code: `(uint8_t)(${emitEnumExpr(node, table, env)})`,
+          value: foreignProp(`(uint8_t)(${emitEnumExpr(node, table, env)})`),
         });
       }
     } else if (name === 'adjustable' || name === 'range') {
@@ -262,7 +263,9 @@ export function emitDial(
       } catch {
         dynAssigns.push({
           field,
-          code: `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          value: foreignProp(
+            `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
+          ),
         });
       }
     } else if (name === 'knobImage') {
@@ -325,7 +328,7 @@ export function emitDial(
       if (gradCond) {
         dynAssigns.push({
           field: 'gradient_stop_count',
-          code: `(uint8_t)((${gradCond}) ? ${stops.length} : 0)`,
+          value: foreignProp(`(uint8_t)((${gradCond}) ? ${stops.length} : 0)`),
         });
       } else {
         staticAssigns.push({

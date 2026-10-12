@@ -20,7 +20,7 @@
 
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {asCond, emitExprWide, emitExpr} from './expressions.mts';
+import {emitExprWide, lowerExpr} from './expressions.mts';
 import {
   isFn,
   declaredNames,
@@ -460,7 +460,7 @@ export function emitComponent(
 }
 
 /**
- * Emits an element / component child and appends it to the parent. opts.displayCode toggles its show.
+ * Emits an element / component child and appends it to the parent. opts.show toggles its display.
  *
  * @param node  The child; anything but a JSX element is refused.
  * @param parentVar  The parent node's variable.
@@ -665,9 +665,7 @@ function emitDynamicMap(
       out,
       rowEnv(env, [itemName, indexName], rowScope, rowLocals),
       state,
-      {
-        displayCode: `(${rowIndex} < ${listState.countMember})`,
-      },
+      {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
     );
   }
 }
@@ -723,9 +721,9 @@ export function emitChildren(
             emitElementInto(expr.right, parentVar, scope, out, env, state);
           }
         } catch {
-          const condCode = asCond(emitExpr(expr.left, env));
+          const test = lowerExpr(expr.left, env);
           emitElementInto(expr.right, parentVar, scope, out, env, state, {
-            displayCode: condCode,
+            show: {kind: 'condition', test, negate: false},
           });
         }
       } else if (
@@ -746,7 +744,7 @@ export function emitChildren(
             state,
           );
         } catch {
-          const condCode = asCond(emitExpr(expr.test, env));
+          const test = lowerExpr(expr.test, env);
 
           if (expr.consequent.type === 'JSXElement') {
             emitElementInto(
@@ -756,13 +754,13 @@ export function emitChildren(
               out,
               env,
               state,
-              {displayCode: condCode},
+              {show: {kind: 'condition', test, negate: false}},
             );
           }
 
           if (expr.alternate.type === 'JSXElement') {
             emitElementInto(expr.alternate, parentVar, scope, out, env, state, {
-              displayCode: `!(${condCode})`,
+              show: {kind: 'condition', test, negate: true},
             });
           }
         }

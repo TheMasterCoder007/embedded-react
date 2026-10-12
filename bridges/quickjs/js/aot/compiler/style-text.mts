@@ -29,8 +29,8 @@ import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, foldScope, withUndefined} from './static-eval.mts';
 import {cstr} from './c-syntax.mts';
-import {asCond, emitExpr, jsxChildText, lowerText} from './expressions.mts';
-import {printText} from './c/text.mts';
+import {jsxChildText, lowerExpr, lowerText} from './expressions.mts';
+import {printPropValue} from './c/nodes.mts';
 import {
   ANIM_STYLE_PROPS,
   ANIM_TRANSFORM_PROPS,
@@ -39,14 +39,9 @@ import {
 import type * as t from '@babel/types';
 import type {Interpolation} from './animations.mts';
 import type {AotError} from './diagnostics.mts';
-import type {IrTextPart} from './ir/text.mts';
-import type {
-  DynAssign,
-  Env,
-  FormatResult,
-  Scope,
-  StaticAssign,
-} from './types.mts';
+import type {IrPropValue} from './ir/nodes.mts';
+import type {IrText, IrTextPart} from './ir/text.mts';
+import type {DynAssign, Env, Scope, StaticAssign} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -66,11 +61,6 @@ export interface StyleAssigns {
   staticAssigns: StaticAssign[];
   dynAssigns: DynAssign[];
   binds: AnimBind[];
-}
-
-/** A <Text> body as one printf format and its arguments; `dynamic` when any argument reads state. */
-export interface TextContent extends FormatResult {
-  dynamic: boolean;
 }
 
 /** One inline segment of a multi-span <Text>: C expressions for each ERTextSpan field. */
@@ -142,25 +132,33 @@ export function argbLiteral(value: unknown): string {
 }
 
 /**
- * Lowers a dynamic (state-referencing) color expression to a C ARGB expression.
+ * Lowers a dynamic (state-referencing) color expression to an ARGB value: a color, or a ternary of them.
  *
  * @param node  The color expression.
  * @param env  The expression environment.
  *
- * @returns C for the ARGB value.
+ * @returns The value.
  */
-export function emitColorExpr(node: t.Node, env: Env): string {
-  if (node.type === 'StringLiteral') return colorLiteral(node.value);
+export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
+  if (node.type === 'StringLiteral') {
+    return {kind: 'constant', code: colorLiteral(node.value)};
+  }
 
   if (node.type === 'ConditionalExpression') {
-    const condition = asCond(emitExpr(node.test, env));
-    return `((${condition}) ? ${emitColorExpr(node.consequent, env)} : ${emitColorExpr(node.alternate, env)})`;
+    return {
+      kind: 'select',
+      test: lowerExpr(node.test, env),
+      whenTrue: lowerColorValue(node.consequent, env),
+      whenFalse: lowerColorValue(node.alternate, env),
+    };
   }
 
   // A statically resolvable color (a const string, or a theme token like `theme.card`) folds to a literal.
   try {
     const color = evalStatic(node, foldScope(env, env.consts ?? {}));
-    if (typeof color === 'string') return colorLiteral(color);
+    if (typeof color === 'string') {
+      return {kind: 'constant', code: colorLiteral(color)};
+    }
   } catch {
     /* not static — fall through to the error below */
   }
@@ -171,20 +169,31 @@ export function emitColorExpr(node: t.Node, env: Env): string {
 }
 
 /**
+ * A dynamic color expression as C for its ARGB value (see lowerColorValue).
+ *
+ * @param node  The color expression.
+ * @param env  The expression environment.
+ *
+ * @returns The C.
+ */
+export const emitColorExpr = (node: t.Node, env: Env): string =>
+  printPropValue(lowerColorValue(node, env));
+
+/**
  * Lowers a dynamic enum-style expression (e.g. `flexDirection: row ? 'row' : 'column'`) to its ER_* constant
- * (or a C ternary of them), looking values up in the style key's enum `table`.
+ * (or a ternary of them), looking values up in the style key's enum `table`.
  *
  * @param node  The enum expression.
  * @param table  The RN value → ER_* constant table.
  * @param env  The expression environment.
  *
- * @returns C for the enum value.
+ * @returns The value.
  */
-export function emitEnumExpr(
+export function lowerEnumValue(
   node: t.Node,
   table: Record<string, string>,
   env: Env,
-): string {
+): IrPropValue {
   if (node.type === 'StringLiteral') {
     const enumConstant = table[node.value];
     if (!enumConstant) {
@@ -194,20 +203,21 @@ export function emitEnumExpr(
       );
     }
 
-    return enumConstant;
+    return {kind: 'constant', code: enumConstant};
   }
   if (node.type === 'ConditionalExpression') {
-    const condition = asCond(emitExpr(node.test, env));
-    return (
-      `((${condition}) ? ${emitEnumExpr(node.consequent, table, env)} : ` +
-      `${emitEnumExpr(node.alternate, table, env)})`
-    );
+    return {
+      kind: 'select',
+      test: lowerExpr(node.test, env),
+      whenTrue: lowerEnumValue(node.consequent, table, env),
+      whenFalse: lowerEnumValue(node.alternate, table, env),
+    };
   }
   // A statically resolvable enum (a const string) folds to its constant.
   try {
     const enumValue = evalStatic(node, foldScope(env, env.consts ?? {}));
     if (typeof enumValue === 'string' && table[enumValue]) {
-      return table[enumValue];
+      return {kind: 'constant', code: table[enumValue]};
     }
   } catch {
     /* not static — fall through */
@@ -218,6 +228,21 @@ export function emitEnumExpr(
     "e.g. flexDirection: wide ? 'row' : 'column'",
   );
 }
+
+/**
+ * A dynamic enum-style expression as C for its ER_* value (see lowerEnumValue).
+ *
+ * @param node  The enum expression.
+ * @param table  The RN value → ER_* constant table.
+ * @param env  The expression environment.
+ *
+ * @returns The C.
+ */
+export const emitEnumExpr = (
+  node: t.Node,
+  table: Record<string, string>,
+  env: Env,
+): string => printPropValue(lowerEnumValue(node, table, env));
 
 /**
  * The diagnostic for a style key the AOT has no lowering for, static or dynamic.
@@ -262,7 +287,7 @@ function lowerStyleChecked(key: string, value: unknown): StaticAssign[] {
 }
 
 /**
- * Lowers one dynamic inline-style value to ERProps field assignment(s) (C expressions).
+ * Lowers one dynamic inline-style value to ERProps field assignment(s).
  *
  * @param key  The style key.
  * @param valueNode  Its state-driven value.
@@ -295,20 +320,22 @@ function lowerDynamicStyleValue(
 
   // Colors and enums lower to a constant or a C ternary of constants.
   if (dynamicField.kind === 'color') {
-    return [{field: dynamicField.field, code: emitColorExpr(valueNode, env)}];
+    return [
+      {field: dynamicField.field, value: lowerColorValue(valueNode, env)},
+    ];
   }
 
   if (dynamicField.kind === 'enum') {
     return [
       {
         field: dynamicField.field,
-        code: emitEnumExpr(valueNode, dynamicField.table, env),
+        value: lowerEnumValue(valueNode, dynamicField.table, env),
       },
     ];
   }
 
   // Opacity and every size are numbers; C would take a char[] here as its address or refuse it.
-  const valueExpr = emitExpr(valueNode, env);
+  const valueExpr = lowerExpr(valueNode, env);
   if (valueExpr.cType === 'string') {
     const error = aotError(
       `AOT: style "${key}" needs a number, but the value is a string`,
@@ -322,13 +349,13 @@ function lowerDynamicStyleValue(
   }
   if (dynamicField.kind === 'opacity') {
     return [
-      {field: dynamicField.field, code: `app_opacity(${valueExpr.code})`},
+      {field: dynamicField.field, value: {kind: 'opacity', value: valueExpr}},
     ];
   }
 
   return [
-    {field: dynamicField.field, code: `app_round_dim(${valueExpr.code})`},
-  ]; /* num */
+    {field: dynamicField.field, value: {kind: 'dimension', value: valueExpr}},
+  ];
 }
 
 /**
@@ -370,7 +397,8 @@ export function collectStyleAssigns(
   scope: Scope,
   env: Env,
 ): StyleAssigns {
-  const fields = new Map<string, {dynamic: boolean; code: string}>(); // ERProps field → its last write
+  // ERProps field → its last write: a constant's C, or a state-driven value.
+  const fields = new Map<string, {code: string} | {value: IrPropValue}>();
   const binds: AnimBind[] = []; // animated values bound to node properties (native driver)
 
   // The C handle of an animated value used directly as a style value, or null.
@@ -507,11 +535,11 @@ export function collectStyleAssigns(
 
         if (staticValue) {
           for (const assign of lowerStyleChecked(key, staticValue.v)) {
-            fields.set(assign.field, {dynamic: false, code: assign.expr});
+            fields.set(assign.field, {code: assign.expr});
           }
         } else {
           for (const assign of lowerDynamicStyleValue(key, prop.value, env)) {
-            fields.set(assign.field, {dynamic: true, code: assign.code});
+            fields.set(assign.field, {value: assign.value});
           }
         }
       }
@@ -529,7 +557,7 @@ export function collectStyleAssigns(
       if (styleValue === undefined || styleValue === null) continue;
 
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
-        fields.set(assign.field, {dynamic: false, code: assign.expr});
+        fields.set(assign.field, {code: assign.expr});
       }
     }
   };
@@ -550,36 +578,31 @@ export function collectStyleAssigns(
   const staticAssigns: StaticAssign[] = [];
   const dynAssigns: DynAssign[] = [];
   for (const [field, fieldWrite] of fields) {
-    (
-      (fieldWrite.dynamic ? dynAssigns : staticAssigns) as (
-        | StaticAssign
-        | DynAssign
-      )[]
-    ).push(
-      fieldWrite.dynamic
-        ? {field, code: fieldWrite.code}
-        : {field, expr: fieldWrite.code},
-    );
+    if ('value' in fieldWrite) {
+      dynAssigns.push({field, value: fieldWrite.value});
+    } else {
+      staticAssigns.push({field, expr: fieldWrite.code});
+    }
   }
 
   return {staticAssigns, dynAssigns, binds};
 }
 
 /**
- * Builds a Text node's content. Static interpolations fold into literal text; any that reference state
- * make it dynamic (a printf format + C arg expressions recomputed on update).
+ * Lowers a Text node's body. Static interpolations fold into literal text; any that reference state are values
+ * set again on every update.
  *
  * @param children  The <Text>'s children.
  * @param scope  Compile-time constants in reach.
  * @param env  The expression environment.
  *
- * @returns The content as a printf format and its arguments.
+ * @returns The body.
  */
-export function buildText(
+export function lowerNodeText(
   children: t.JSXElement['children'],
   scope: Scope,
   env: Env,
-): TextContent {
+): IrText {
   const parts: IrTextPart[] = [];
   for (const child of children) {
     if (child.type === 'JSXText') {
@@ -598,9 +621,7 @@ export function buildText(
     }
   }
 
-  // Print the parts as one printf format; any runtime value makes the text dynamic.
-  const {format, args} = printText({parts});
-  return {dynamic: args.length > 0, format, args};
+  return {parts};
 }
 
 /**
