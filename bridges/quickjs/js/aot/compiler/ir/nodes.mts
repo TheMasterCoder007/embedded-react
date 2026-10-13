@@ -19,8 +19,9 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {AnimBind, TextSpan} from '../style-text.mts';
-import type {ListState, PanResponderRecord, StaticAssign} from '../types.mts';
+import type {ListState, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
+import type {IrPanResponder} from './pan-responder.mts';
 import type {IrText} from './text.mts';
 import type {IrStateDrivenVector, IrVectorTables} from './vectors.mts';
 
@@ -87,8 +88,8 @@ export type IrWire =
   | {kind: 'ref'; slot: string}
   /** An engine event (an ER_EVENT_* name) and the C handler lowering already added to the output. */
   | {kind: 'event'; event: string; handler: string}
-  /** A PanResponder spread onto the node; its functions are already in the output. */
-  | {kind: 'responder'; pan: PanResponderRecord}
+  /** A PanResponder spread onto the node. */
+  | {kind: 'responder'; pan: IrPanResponder}
   /** An <Svg>'s drawing, baked into const tables. */
   | {kind: 'vectorTables'; tables: IrVectorTables}
   /** An <Svg>'s drawing that state drives: built once at boot and kept as a handle for app_update. */

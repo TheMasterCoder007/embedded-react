@@ -22,7 +22,11 @@ import {
   lowerPanResponder,
 } from '../compiler/pan-responder.mts';
 import {printExpr} from '../compiler/c/expressions.mts';
-import {printPanEvent, printPanQuery} from '../compiler/c/pan-responder.mts';
+import {
+  printPanDecls,
+  printPanEvent,
+  printPanQuery,
+} from '../compiler/c/pan-responder.mts';
 import {printPanWiring} from '../compiler/c/nodes.mts';
 import {Out} from '../compiler/out.mts';
 
@@ -181,24 +185,27 @@ describe('PanResponder IR: events and queries', () => {
 });
 
 describe('PanResponder IR: emitting', () => {
-  it('emits the functions once however many nodes spread the responder, and wires a node to them', () => {
+  it('lowers the responder once however many nodes spread it, and wires a node to its functions', () => {
     const pan = responder(
       '{onStartShouldSetPanResponder: () => true, onPanResponderMove: () => setN(1)}',
     );
     const out = new Out(new Map(), null);
-    emitPanResponder(pan, out, env, state);
-    emitPanResponder(pan, out, env, state);
+    const lowered = emitPanResponder(pan, out, env, state);
+    expect(emitPanResponder(pan, out, env, state)).toBe(lowered);
+    expect(out.panResponders).toEqual([lowered]);
     expect(out.handlers.map(handler => handler.name)).toEqual([
       'er_pan_pan_grant',
       'er_pan_pan_release',
       'er_pan_pan_terminate',
       'er_pan_pan_move',
     ]);
-    expect(out.queries.map(query => query.name)).toEqual([
-      'er_pan_pan_start_should_set',
-    ]);
-    expect(out.panDecls).toContain('static int s_pan_pan_granted = 0;');
-    expect(printPanWiring(pan, 'n2')).toEqual([
+    expect(
+      lowered.queries.map(query => printPanQuery(lowered, query).name),
+    ).toEqual(['er_pan_pan_start_should_set']);
+    expect(printPanDecls(lowered)).toContain(
+      'static int s_pan_pan_granted = 0;',
+    );
+    expect(printPanWiring(lowered, 'n2')).toEqual([
       '    er_event_set(n2, ER_EVENT_RESPONDER_GRANT, er_pan_pan_grant, NULL);',
       '    er_event_set(n2, ER_EVENT_RESPONDER_RELEASE, er_pan_pan_release, NULL);',
       '    er_event_set(n2, ER_EVENT_RESPONDER_TERMINATE, er_pan_pan_terminate, NULL);',

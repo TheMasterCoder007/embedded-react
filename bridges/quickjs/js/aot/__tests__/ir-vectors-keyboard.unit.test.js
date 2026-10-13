@@ -24,6 +24,7 @@ import {printStmts} from '../compiler/c/statements.mts';
 import {
   printStateDrivenVector,
   printTapeValue,
+  printVectorBlocks,
   printVectorTables,
 } from '../compiler/c/vectors.mts';
 import {Out} from '../compiler/out.mts';
@@ -167,7 +168,11 @@ describe('vector IR: baked drawings', () => {
     expect(wire.tables.paints).toEqual([
       expect.objectContaining({fill: 0xffff0000, fillGradient: 0}),
     ]);
-    expect(out.vectorData).toEqual(printVectorTables(wire.tables));
+    expect(out.vectors).toEqual([{kind: 'tables', tables: wire.tables}]);
+    expect(printVectorBlocks(out.vectors)).toEqual({
+      data: printVectorTables(wire.tables).join('\n\n'),
+      builders: '',
+    });
     expect(out.build.at(-1)).toBe(
       `    er_node_set_vector_ops(n0, s_svg0_ops, ${wire.tables.ops.length}, s_svg0_paints, 1, NULL, 0);`,
     );
@@ -175,7 +180,7 @@ describe('vector IR: baked drawings', () => {
 
   it('leaves an empty drawing without tables', () => {
     const {element, out} = emit('<Svg width={10} height={10} />');
-    expect(out.vectorData).toEqual([]);
+    expect(printVectorBlocks(out.vectors)).toEqual({data: '', builders: ''});
     expect(
       out.build.some(line => line.includes('er_node_set_vector_ops')),
     ).toBe(false);
@@ -246,7 +251,8 @@ describe('vector IR: state-driven drawings', () => {
     expect(printTapeValue(vector.tape[9])).toBe(
       '(((float)(s_state.n) + 50.0f - rx_s0) + (rx_s0 * 0.5522847498307936f))',
     );
-    expect(out.vectorBuilders[0]).toContain(
+    expect(out.vectors).toEqual([{kind: 'drawing', vector}]);
+    expect(printVectorBlocks(out.vectors).builders).toContain(
       '    const float rx_s0 = fminf(fmaxf(',
     );
     expect(out.svgUpdates).toEqual([
@@ -373,8 +379,9 @@ describe('vector IR: updateVector', () => {
     ]);
 
     // The tables are file-scope; the statement prints at its own indent and hands the tape to the node.
-    expect(ctx.out.vectorData[0]).toBe(
-      `static float s_uv0_ops[${update.tape.length}];`,
+    expect(ctx.out.vectors).toEqual([{kind: 'updateVector', update}]);
+    expect(printVectorBlocks(ctx.out.vectors).data).toMatch(
+      new RegExp(`^static float s_uv0_ops\\[${update.tape.length}\\];`),
     );
     const lines = printStmts(stmts, '        ');
     expect(lines[0]).toMatch(/^ {8}const float rx_uv0_0 = fminf\(/);

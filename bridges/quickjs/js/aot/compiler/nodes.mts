@@ -651,10 +651,12 @@ function emitNodeImpl(
     }
   }
 
-  // A PanResponder's functions are emitted on the first node that spreads it.
+  // A PanResponder is lowered on the first node that spreads it.
   for (const panResponder of panSpreads) {
-    emitPanResponder(panResponder, out, env, state);
-    wiring.push({kind: 'responder', pan: panResponder});
+    wiring.push({
+      kind: 'responder',
+      pan: emitPanResponder(panResponder, out, env, state),
+    });
   }
 
   // The node is emitted before its children, whose lines follow its own.

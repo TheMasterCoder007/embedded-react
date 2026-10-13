@@ -20,12 +20,13 @@
 
 import {cstr, floatLit} from '../c-syntax.mts';
 import {printCondition, printExpr} from './expressions.mts';
+import {panEventName, panQueryName} from './pan-responder.mts';
 import {printText} from './text.mts';
 import {printStateDrivenVectorWiring, printVectorOps} from './vectors.mts';
 import type {IrElement, IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
+import type {IrPanResponder} from '../ir/pan-responder.mts';
 import type {AnimBind} from '../style-text.mts';
 import type {NodeUpdate} from '../out.mts';
-import type {PanResponderRecord} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -138,25 +139,22 @@ function printBind(node: IrNode, bind: AnimBind, index: number): string[] {
 }
 
 /**
- * Wires a PanResponder's already-emitted handlers and queries onto a node.
+ * Wires a PanResponder's handlers and queries onto a node.
  *
  * @param pan  The responder.
  * @param nodeId  The node's variable.
  *
  * @returns The C lines.
  */
-export function printPanWiring(
-  pan: PanResponderRecord,
-  nodeId: string,
-): string[] {
+export function printPanWiring(pan: IrPanResponder, nodeId: string): string[] {
   return [
-    ...pan.emitted!.events.map(
-      ([event, handler]) =>
-        `    er_event_set(${nodeId}, ${event}, ${handler}, NULL);`,
+    ...pan.events.map(
+      event =>
+        `    er_event_set(${nodeId}, ${event.event}, ${panEventName(pan, event)}, NULL);`,
     ),
-    ...pan.emitted!.queries.map(
-      ([query, fn]) =>
-        `    er_responder_query_set(${nodeId}, ${query}, ${fn}, NULL);`,
+    ...pan.queries.map(
+      query =>
+        `    er_responder_query_set(${nodeId}, ${query.query}, ${panQueryName(pan, query)}, NULL);`,
     ),
   ];
 }

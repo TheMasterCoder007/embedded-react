@@ -1,0 +1,207 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Imports
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+import {evalStatic, withUndefined} from './static-eval.mts';
+import {findShadowedClockCalls, emitExprWide} from './expressions.mts';
+import {
+  findComponent,
+  declaredNames,
+  moduleScope,
+  collectState,
+  findReturnJSX,
+  collectComponents,
+  collectHelpers,
+  collectImageImports,
+  collectSvgImports,
+  collectCallbacks,
+  collectMemos,
+  collectEffects,
+} from './collect.mts';
+import {collectAnims, collectRefs} from './animations.mts';
+import {compileEffect} from './handlers.mts';
+import {collectPanResponders} from './pan-responder.mts';
+import {emitNode} from './nodes.mts';
+import {lowerKeyboardConfig} from './keyboard.mts';
+import {normalizeUndefined, parseApp} from './parse.mts';
+import {Out} from './out.mts';
+import type {BlockStatement} from '@babel/types';
+import type {ResolvedOptions} from './options.mts';
+import type {IrApp} from './ir/app.mts';
+import type {Env, Scope} from './types.mts';
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Implementation
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Lowers a Flow B app's JSX (or TSX) source: runs the compiler passes over the parsed app, from its module
+ * scope and hooks through the element tree to its effects. Pure (no I/O); writeApp (assemble.mts) writes the
+ * result as C.
+ *
+ * @param src  The App.jsx/App.tsx source text.
+ * @param opts  compileSource's options, resolved (see resolveOptions).
+ * @param wide  State/ref slots to declare 64-bit (see compileWidened).
+ * @param found  Collects the int slots a 64-bit timestamp was stored in.
+ *
+ * @returns The lowered app.
+ */
+export function lowerApp(
+  src: string,
+  opts: ResolvedOptions,
+  wide: Set<string>,
+  found: Set<string>,
+): IrApp {
+  // Parse the app and prepare the AST for the passes below.
+  const ast = parseApp(src, opts);
+  normalizeUndefined(ast);
+  const shadowedClock = findShadowedClockCalls(ast);
+
+  // Seed the module scope with image imports (each is its baked-name string) so consts that use them can fold.
+  const {screen} = opts;
+  const imageImports = collectImageImports(ast.program);
+  const svgImports = collectSvgImports(ast.program);
+  const imageSeed = Object.fromEntries(
+    [...imageImports].map(([local, imageImport]) => [local, imageImport.name]),
+  );
+  const scope: Scope = moduleScope(ast.program, screen, imageSeed);
+  // Snapshot module bindings before App's consts fold in: child components close over these, not App's shadows.
+  const moduleConsts: Scope = {...scope};
+  const component = findComponent(ast.program);
+  // Hide redeclared module names, then fold the body's static consts so responsive `if`s resolve at compile time.
+  for (const name of declaredNames((component.body as BlockStatement).body)) {
+    delete scope[name];
+  }
+
+  for (const statement of (component.body as BlockStatement).body) {
+    if (
+      statement.type !== 'VariableDeclaration' ||
+      statement.kind !== 'const'
+    ) {
+      continue;
+    }
+
+    for (const decl of statement.declarations) {
+      if (decl.id.type !== 'Identifier' || !decl.init) continue;
+      try {
+        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
+      } catch {
+        // A dynamic const must hide a same-named module const, or the JSX quietly renders the module value.
+        delete scope[decl.id.name];
+      }
+    }
+  }
+
+  // Collect the component's state; a state name hides any module const of the same name from the folds.
+  const state = collectState(
+    component.body as BlockStatement,
+    scope,
+    opts.caps,
+    '',
+    wide,
+  );
+  for (const name of state.byName.keys()) {
+    delete scope[name];
+  }
+
+  // Collect the component's other hooks, plus the file's helpers and child components.
+  const rootJSX = findReturnJSX(component.body as BlockStatement, scope);
+  const anims = collectAnims(component.body, scope);
+  const refs = collectRefs(component.body, scope, '', wide);
+  for (const name of [...anims.keys(), ...refs.keys()]) {
+    delete scope[name];
+  }
+
+  const pans = collectPanResponders(component.body);
+  const callbacks = collectCallbacks(component.body);
+  const memos = collectMemos(component.body);
+  const helpers = collectHelpers(component.body, ast.program);
+  const components = collectComponents(ast.program);
+  const imageNames = new Map(
+    [...imageImports].map(([, imageImport]) => [
+      imageImport.name,
+      imageImport.importPath,
+    ]),
+  ); // asset name → path
+
+  // The expression environment every emitter compiles against.
+  const env: Env = {
+    state: state.byName,
+    locals: new Map(),
+    consts: scope,
+    moduleConsts, // what an inlined child component sees (see emitComponent)
+    animations: anims,
+    refs,
+    pans,
+    callbacks,
+    helpers,
+    imageNames,
+    svgImports,
+    svgArtifacts: opts.svgArtifacts || {},
+    caps: opts.caps,
+    wide,
+    found,
+    shadowedClock,
+  };
+
+  // Before emit, fold each memo or inline its C expression at each use (no cache needed: dep tracking re-applies).
+  for (const [name, expr] of memos) {
+    try {
+      scope[name] = evalStatic(expr, scope);
+    } catch {
+      const cExpr = emitExprWide(expr, env);
+      env.locals.set(name, {
+        code: `(${cExpr.code})`,
+        cType: cExpr.cType,
+        isBool: cExpr.isBool,
+      });
+      delete scope[name]; // a runtime binding beats a module const of its name in every fold
+    }
+  }
+
+  // Emit the scene graph from the root JSX; `out` collects every generated fragment.
+  const out = new Out(components, ast.program);
+  const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
+  const rootNodeId = emitNode(rootJSX, scope, out, env, state).id;
+
+  // Emit registered only the images it reached; a dynamic source can't be enumerated, so bake every import.
+  if (out.bakeAllImages) {
+    for (const [, imageImport] of imageImports) {
+      out.images.set(imageImport.name, imageImport.importPath);
+    }
+  }
+
+  // Compile effects (mount-once or dep-driven) after emit, so out.timerFns/usesTimers include handler timers too.
+  for (const effect of collectEffects(component.body)) {
+    compileEffect(effect, env, state, out);
+  }
+
+  return {
+    state: [...state.byName.values(), ...out.childStateRecords],
+    refs: [...refs.values(), ...out.childRefs],
+    animations: [...anims.values(), ...out.childAnimations],
+    keyboard,
+    rootNodeId,
+    images: [...out.images.entries()].map(([name, importPath]) => ({
+      name,
+      importPath,
+    })),
+    out,
+  };
+}

@@ -21,6 +21,7 @@
 import type {VectorGradient} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrPropValue} from './nodes.mts';
+import type {IrUpdateVector} from './statements.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -133,3 +134,12 @@ export interface IrStateDrivenVector {
   paints: IrDrawingPaint[];
   gradients: IrDrawingGradient[];
 }
+
+/**
+ * A drawing's file-scope tables, in the order the app declares them: baked tables, a state-driven drawing
+ * (whose builder is declared with them), or an updateVector call's tape and paints.
+ */
+export type IrVectorData =
+  | {kind: 'tables'; tables: IrVectorTables}
+  | {kind: 'drawing'; vector: IrStateDrivenVector}
+  | {kind: 'updateVector'; update: IrUpdateVector};

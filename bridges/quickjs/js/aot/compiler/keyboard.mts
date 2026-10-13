@@ -21,9 +21,7 @@
 import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
-import {printKeyboard} from './c/keyboard.mts';
 import type * as t from '@babel/types';
-import type {Out} from './out.mts';
 import type {IrKeyboard, IrKeyboardKey} from './ir/keyboard.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -185,20 +183,4 @@ export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
     keyActiveColor: kbdColor(config.keyActiveColor),
     labelColor: kbdColor(config.labelColor),
   };
-}
-
-/**
- * Compiles a module-level `setKeyboardConfig({...})` (see lowerKeyboardConfig) to static C tables
- * (ERKeyboardKey / Row / Layer and an ERKeyboardConfig) plus an er_keyboard_set_config() call in er_app_build.
- *
- * @param program  The parsed module.
- * @param out  Everything emitted so far; the tables and the setup call are added to it.
- */
-export function compileKeyboardConfig(program: t.Program, out: Out): void {
-  const keyboard = lowerKeyboardConfig(program);
-  if (!keyboard) return;
-
-  const {data, setup} = printKeyboard(keyboard);
-  out.kbdData = data;
-  out.kbdSetup = setup;
 }

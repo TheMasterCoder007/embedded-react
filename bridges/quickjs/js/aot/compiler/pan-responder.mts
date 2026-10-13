@@ -22,11 +22,7 @@ import {aotError} from './diagnostics.mts';
 import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
 import {lowerHandler} from './handlers.mts';
-import {
-  printPanDecls,
-  printPanEvent,
-  printPanQuery,
-} from './c/pan-responder.mts';
+import {printPanEvent} from './c/pan-responder.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {GestureField, IrExpr, IrGesture} from './ir/expressions.mts';
@@ -219,7 +215,7 @@ function buildPanDescriptor(
     stateID: 0, // assigned when the responder is first wired to a node
     queries,
     events,
-    emitted: null,
+    lowered: null,
   };
 }
 
@@ -402,38 +398,32 @@ export function lowerPanResponder(
 }
 
 /**
- * Emits one PanResponder's gesture state and C functions, once however many nodes spread it (see
- * lowerPanResponder). Each node that spreads it wires them in its own build lines.
+ * Lowers one PanResponder once, however many nodes spread it (see lowerPanResponder), and adds its event
+ * handlers to the output. Each node that spreads it wires them in its own build lines.
  *
  * @param pan  The responder.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  * @param state  The component's state table.
+ *
+ * @returns The lowered responder.
  */
 export function emitPanResponder(
   pan: PanResponderRecord,
   out: Out,
   env: Env,
   state: StateTable,
-): void {
-  if (!pan.emitted) {
+): IrPanResponder {
+  if (!pan.lowered) {
     pan.stateID = ++out.panN;
-    const lowered = lowerPanResponder(pan, env, state, out);
-    out.panDecls.push(...printPanDecls(lowered));
-
-    // Every emitted handler and query is recorded, so each node that spreads the responder is wired to it.
-    pan.emitted = {events: [], queries: []};
-    for (const panEvent of lowered.events) {
-      const handler = printPanEvent(lowered, panEvent);
-      out.handlers.push(handler);
-      pan.emitted.events.push([panEvent.event, handler.name]);
-    }
-    for (const panQuery of lowered.queries) {
-      const query = printPanQuery(lowered, panQuery);
-      out.queries.push(query);
-      pan.emitted.queries.push([panQuery.query, query.name]);
+    pan.lowered = lowerPanResponder(pan, env, state, out);
+    out.panResponders.push(pan.lowered);
+    for (const panEvent of pan.lowered.events) {
+      out.handlers.push(printPanEvent(pan.lowered, panEvent));
     }
   }
+
+  return pan.lowered;
 }
 
 /**

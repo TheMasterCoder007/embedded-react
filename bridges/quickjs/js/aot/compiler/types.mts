@@ -21,6 +21,7 @@
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrPropValue, IrShow} from './ir/nodes.mts';
+import type {IrPanResponder} from './ir/pan-responder.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -233,8 +234,8 @@ export interface PanResponderRecord {
   queries: Map<string, PanCallback>;
   /** Callbacks, by engine event. */
   events: Map<string, PanCallback>;
-  /** The C functions already generated for it, so a second node reuses them: [query or event, function]. */
-  emitted: {events: [string, string][]; queries: [string, string][]} | null;
+  /** The responder once lowered, so a second node that spreads it reuses it. */
+  lowered: IrPanResponder | null;
   /** It was created in a useRef, so the JSX spreads `<name>.current.panHandlers`. */
   viaRefCurrent?: boolean;
 }

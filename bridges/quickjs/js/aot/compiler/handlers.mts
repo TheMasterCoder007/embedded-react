@@ -50,9 +50,9 @@ import {
   rectTape,
   lineTape,
   checkedTapeNumber,
+  checkVectorPaints,
   vectorPaintOf,
 } from './svg.mts';
-import {printUpdateVectorData} from './c/vectors.mts';
 import {APP_UPDATE_CALL, printCallback, printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
@@ -562,8 +562,9 @@ function lowerUpdateVector(
   }
 
   // Declare the op-tape and its paint table at file scope.
+  checkVectorPaints(update.paints);
   out.needsMath = true;
-  out.vectorData.push(...printUpdateVectorData(update));
+  out.vectors.push({kind: 'updateVector', update});
 
   // Hint the dirty sub-rect when the call gives one.
   if (dirtyArg) {

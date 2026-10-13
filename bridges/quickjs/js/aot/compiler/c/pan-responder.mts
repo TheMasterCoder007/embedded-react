@@ -20,12 +20,22 @@
 
 import {printExpr} from './expressions.mts';
 import {printCallback} from './statements.mts';
-import type {CFunction, ResponderQuery} from '../out.mts';
+import type {CFunction} from '../out.mts';
 import type {
   IrPanEvent,
   IrPanQuery,
   IrPanResponder,
 } from '../ir/pan-responder.mts';
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Interfaces
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** A should-set predicate as a C function that returns its value. */
+export interface ResponderQuery {
+  name: string;
+  expr: string;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -43,6 +53,28 @@ const QUERY_SUFFIX: Record<string, string> = {
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * The C function that handles one of a responder's events.
+ *
+ * @param pan  The responder.
+ * @param event  The event.
+ *
+ * @returns The function's name.
+ */
+export const panEventName = (pan: IrPanResponder, event: IrPanEvent): string =>
+  `${pan.fnPrefix}_${event.role}`;
+
+/**
+ * The C function that answers one of a responder's should-set queries.
+ *
+ * @param pan  The responder.
+ * @param query  The query.
+ *
+ * @returns The function's name.
+ */
+export const panQueryName = (pan: IrPanResponder, query: IrPanQuery): string =>
+  `${pan.fnPrefix}_${QUERY_SUFFIX[query.query]}`;
 
 /**
  * A responder's file-scope gesture state: whether the gesture is granted, the anchor, and RN's x0/y0.
@@ -120,7 +152,7 @@ export function printPanEvent(
       break;
   }
 
-  return {name: `${pan.fnPrefix}_${event.role}`, body};
+  return {name: panEventName(pan, event), body};
 }
 
 /**
@@ -135,6 +167,6 @@ export const printPanQuery = (
   pan: IrPanResponder,
   query: IrPanQuery,
 ): ResponderQuery => ({
-  name: `${pan.fnPrefix}_${QUERY_SUFFIX[query.query]}`,
+  name: panQueryName(pan, query),
   expr: `(${printExpr(query.test)}) != 0`,
 });

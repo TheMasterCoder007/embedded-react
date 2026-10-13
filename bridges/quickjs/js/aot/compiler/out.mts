@@ -19,6 +19,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {Program} from '@babel/types';
+import type {IrPanResponder} from './ir/pan-responder.mts';
+import type {IrVectorData} from './ir/vectors.mts';
 import type {
   AnimRecord,
   DynAssign,
@@ -69,20 +71,14 @@ export interface SvgUpdate {
   nodeVar: string;
 }
 
-/** A PanResponder should-set predicate, compiled to a C function that returns its value. */
-export interface ResponderQuery {
-  name: string;
-  expr: string;
-}
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Everything the passes emit for one app. Each pass appends to it as the JSX tree is walked; compileSourceImpl
- * then lays the pieces out as app.gen.c: file-scope declarations, the builders, er_app_build, app_update, and
- * the event handlers.
+ * Everything the passes emit for one app. Each pass appends to it as the JSX tree is walked; writeApp then
+ * lays the pieces out as app.gen.c: file-scope declarations, the builders, er_app_build, app_update, and the
+ * event handlers.
  *
  * @class Out
  */
@@ -99,10 +95,8 @@ export class Out {
   readonly handles: string[] = [];
   /** A useCallback's C handler, by component prefix and name, so each is emitted once. */
   readonly cbEmitted = new Map<string, string>();
-  /** File-scope vector op-tapes and paint tables. */
-  readonly vectorData: string[] = [];
-  /** build_svg<id>() functions that recompute a state-driven <Svg>. */
-  readonly vectorBuilders: string[] = [];
+  /** File-scope vector op-tapes and paint tables, and the builders of state-driven drawings. */
+  readonly vectors: IrVectorData[] = [];
   readonly svgUpdates: SvgUpdate[] = [];
   /** Numbers the next <Svg> (its tapes are `s_svg<id>_…`). */
   svgN = 0;
@@ -118,9 +112,6 @@ export class Out {
   readonly animWaits = new Map<string, {owner: number; isStarted: boolean}>();
   /** Numbers the next animation sequence. */
   seqN = 0;
-  /** The on-screen keyboard's static tables and the er_app_build() line that installs them. */
-  kbdData = '';
-  kbdSetup = '';
   /** Image assets the app reaches: asset name → source-relative import path. */
   readonly images = new Map<string, string>();
   /** A dynamic image source was reached, so every imported image has to be baked. */
@@ -140,9 +131,8 @@ export class Out {
   readonly depEffects: string[] = [];
   /** Numbers the next PanResponder. */
   panN = 0;
-  /** File-scope state for each PanResponder's gesture. */
-  readonly panDecls: string[] = [];
-  readonly queries: ResponderQuery[] = [];
+  /** Every PanResponder a node spreads, lowered once each. */
+  readonly panResponders: IrPanResponder[] = [];
   /** The module's function components, by name, for inlining. */
   readonly components: Map<string, FunctionNode>;
   /** The parsed module, for the passes that scan it again. */

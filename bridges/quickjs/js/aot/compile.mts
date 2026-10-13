@@ -38,8 +38,8 @@
  * This file is the entry: compileSource(src) compiles a source string (pure, so it can be unit-tested on
  * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.gen.{c,h}. The
  * compiler itself lives in compiler/, one module per stage. The pipeline: parse the App.jsx → collect
- * the module's component, state, hooks & refs → emit each piece to C (expressions, styles/text,
- * handlers, nodes) → assemble app.gen.c.
+ * the module's component, state, hooks & refs → lower each piece (expressions, styles/text, handlers,
+ * nodes) → write the lowered app as app.gen.c.
  *
  *   compiler/options.mts         resolveOptions — screen size + buffer caps, from opts, then ER_AOT_*
  *   compiler/types.mts           the types the stages share (Env, StatementContext, state/ref records)
@@ -48,7 +48,7 @@
  *   compiler/static-eval.mts     evalStatic — fold the compile-time-constant subset (styles, initials)
  *   compiler/c-syntax.mts        cstr / floatLit / i64Lit — JS values spelled as C
  *   compiler/expressions.mts     lowerExprWide — lower a JS expression (state/props/refs) to the IR
- *   compiler/ir/*.mts            the IR the stages lower to (so far: expressions, text and handler statements)
+ *   compiler/ir/*.mts            the IR the stages lower to (ir/app.mts: the whole lowered app)
  *   compiler/c/*.mts             the C backend: prints the IR as C (emitExpr returns it as a CExpr)
  *   compiler/parse.mts           parseApp — JSX/TSX source → AST (types stripped, `undefined` normalized)
  *   compiler/collect.mts         moduleScope + collect{State, Components, Callbacks, Memos, Effects}
@@ -60,8 +60,9 @@
  *   compiler/svg.mts             <Svg> subtree → flattenSvg ops/paints → er_node_set_vector_ops
  *   compiler/nodes.mts           emitNode — the element dispatcher + the generic host node
  *   compiler/elements/*.mts      typed components: Dial / Switch / TextInput / Modal / FlatList / …
- *   compiler/keyboard.mts        setKeyboardConfig({...}) → static ERKeyboardConfig tables
- *   compiler/assemble.mts        compileSourceImpl — stitch the above into app.gen.{c,h}
+ *   compiler/keyboard.mts        setKeyboardConfig({...}) → the keyboard config
+ *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
+ *   compiler/assemble.mts        writeApp — write the lowered app as app.gen.{c,h}
  *
  * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs
  * compiles it to JavaScript for the npm package.

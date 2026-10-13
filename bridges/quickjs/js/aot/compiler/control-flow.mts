@@ -360,7 +360,7 @@ export function emitComponent(
   // Each inlined instance namespaces its own hooks under a unique `c<N>_` prefix so instances stay independent.
   const prefix = `c${out.instN++}_`;
 
-  // Fold the child body's static consts as compileSourceImpl does for App; they shadow same-named module consts.
+  // Fold the child body's static consts as lowerApp does for App; they shadow same-named module consts.
   if (fn.body.type === 'BlockStatement') {
     // As in App: the body's own names, hook bindings included, shadow module ones before anything folds.
     for (const name of declaredNames(fn.body.body)) {
@@ -408,7 +408,7 @@ export function emitComponent(
     }
   }
 
-  // The child's own refs and animated values are runtime bindings too (see compileSourceImpl).
+  // The child's own refs and animated values are runtime bindings too (see lowerApp).
   for (const name of [...childAnims.keys(), ...childRefs.keys()]) {
     delete childScope[name];
   }
