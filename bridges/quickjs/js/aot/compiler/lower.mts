@@ -35,7 +35,7 @@ import {
   collectEffects,
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
-import {compileEffect} from './handlers.mts';
+import {lowerEffect} from './handlers.mts';
 import {collectPanResponders} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
@@ -44,11 +44,78 @@ import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
 import type {IrApp} from './ir/app.mts';
+import type {IrCallback, IrStmt} from './ir/statements.mts';
 import type {Env, Scope} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Settles what only the whole app decides. With nothing for app_update() to re-apply there is no app_update(),
+ * so no body ends by calling it. A composition that no start waits on has no waits for a stop to end.
+ *
+ * @param out  The lowered app's functions.
+ * @param hasUpdate  The app has an app_update().
+ */
+function settleFunctions(out: Out, hasUpdate: boolean): void {
+  const idleOwners = new Set(
+    [...out.animWaits.values()]
+      .filter(record => !record.isStarted)
+      .map(record => record.owner),
+  );
+  const settleStmts = (stmts: IrStmt[]): void => {
+    for (const stmt of stmts) {
+      if (stmt.kind === 'stopAnimations') {
+        if (stmt.waitOwner !== null && idleOwners.has(stmt.waitOwner)) {
+          stmt.waitOwner = null;
+        }
+      } else if (stmt.kind === 'if') {
+        settleStmts(stmt.consequent);
+        settleStmts(stmt.alternate ?? []);
+      }
+    }
+  };
+  const settle = (callback: IrCallback | null): void => {
+    if (!callback) return;
+    if (!hasUpdate) {
+      callback.updatesState = false;
+    }
+    settleStmts(callback.body);
+  };
+
+  for (const handler of out.handlers) {
+    if (handler.kind === 'callback') {
+      settle(handler.callback);
+    } else if (handler.kind === 'panEvent') {
+      settle(handler.event.callback);
+    }
+  }
+  for (const timer of out.timerFns) {
+    settle(timer.callback);
+  }
+  for (const animationCallback of out.animCbs) {
+    if (animationCallback.kind === 'completion') {
+      settle(animationCallback.completion);
+    }
+  }
+  for (const effectFunction of out.effectFns) {
+    if (effectFunction.kind === 'mount') {
+      settleStmts(effectFunction.body);
+    } else if (effectFunction.kind === 'cleanup') {
+      settleStmts(effectFunction.effect.cleanup!);
+    } else {
+      settleStmts(effectFunction.effect.body);
+    }
+  }
+  for (const mountEffect of out.mountEffects) {
+    if (mountEffect.kind === 'inline') {
+      settle(mountEffect.callback);
+    } else if (mountEffect.kind === 'call' && !hasUpdate) {
+      mountEffect.updatesState = false;
+    }
+  }
+}
 
 /**
  * Lowers a Flow B app's JSX (or TSX) source: runs the compiler passes over the parsed app, from its module
@@ -187,10 +254,17 @@ export function lowerApp(
     }
   }
 
-  // Compile effects (mount-once or dep-driven) after emit, so out.timerFns/usesTimers include handler timers too.
+  // Lower effects (mount-once or dep-driven) after emit, so out.timerFns/usesTimers include handler timers too.
   for (const effect of collectEffects(component.body)) {
-    compileEffect(effect, env, state, out);
+    lowerEffect(effect, env, state, out);
   }
+
+  // app_update() exists only when something has to be re-applied after a state change.
+  const hasUpdate =
+    out.updates.length > 0 ||
+    out.svgUpdates.length > 0 ||
+    out.depEffects.length > 0;
+  settleFunctions(out, hasUpdate);
 
   return {
     state: [...state.byName.values(), ...out.childStateRecords],
@@ -198,6 +272,7 @@ export function lowerApp(
     animations: [...anims.values(), ...out.childAnimations],
     keyboard,
     rootNodeId,
+    hasUpdate,
     images: [...out.images.entries()].map(([name, importPath]) => ({
       name,
       importPath,

@@ -34,7 +34,7 @@ import {
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
 import {attrExpr} from './style-text.mts';
-import {compileEffect} from './handlers.mts';
+import {lowerEffect} from './handlers.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import {printAppend} from './c/nodes.mts';
@@ -447,7 +447,7 @@ export function emitComponent(
   }
 
   for (const effect of collectEffects(fn.body)) {
-    compileEffect(effect, childEnv, childState, out);
+    lowerEffect(effect, childEnv, childState, out);
   }
 
   // Emit the JSX the component returns, in the child's own scope.

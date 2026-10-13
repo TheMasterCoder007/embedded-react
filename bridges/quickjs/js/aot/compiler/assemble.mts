@@ -22,9 +22,17 @@ import {readFileSync} from 'node:fs';
 import {aotError} from './diagnostics.mts';
 import {cScalarType, stripCLiterals, floatLit, cstr} from './c-syntax.mts';
 import {CHECKED_OP} from './expressions.mts';
-import {APP_UPDATE_CALL} from './handlers.mts';
 import {lowerApp} from './lower.mts';
 import {printWaitDeclarations} from './c/animations.mts';
+import {
+  printAnimationCallback,
+  printDepEffectCheck,
+  printEffectFunction,
+  printHandler,
+  printMountEffect,
+  printStaticDecl,
+  printTimerFunction,
+} from './c/functions.mts';
 import {printKeyboard} from './c/keyboard.mts';
 import {printPropValue} from './c/nodes.mts';
 import {printPanDecls, printPanQuery} from './c/pan-responder.mts';
@@ -211,49 +219,16 @@ export function writeApp(
     )
     .join('\n');
 
-  // app_update() exists only when something has to be re-applied after a state change.
-  const hasUpdate =
-    out.updates.length > 0 ||
-    out.svgUpdates.length > 0 ||
-    out.depEffects.length > 0;
-  // With nothing to re-apply, there is no app_update, so the calls queued by setters go too.
-  if (!hasUpdate) {
-    const dropUpdate = (lines: string[]) =>
-      lines.filter(line => line !== APP_UPDATE_CALL);
-    for (const cFunction of [
-      ...out.handlers,
-      ...out.timerFns,
-      ...out.animCbs,
-      ...out.effectFns,
-    ]) {
-      cFunction.body = dropUpdate(cFunction.body!);
-    }
-    out.mountEffects = dropUpdate(out.mountEffects);
-  }
-
-  // A composition that no start waits on has no waits for a stop to end, so its stop calls go.
-  const idleWaitStops = [...out.animWaits.values()]
-    .filter(record => !record.isStarted)
-    .flatMap(record => [
-      `app_wait_detach(${record.owner});`,
-      `app_wait_report(${record.owner});`,
-    ]);
+  // The app's functions, and what er_app_build() runs last, as C.
+  const {hasUpdate} = app;
   const usesWaits = [...out.animWaits.values()].some(
     record => record.isStarted,
   );
-  if (idleWaitStops.length) {
-    const dropIdleStops = (lines: string[]) =>
-      lines.filter(line => !idleWaitStops.includes(line.trim()));
-    for (const cFunction of [
-      ...out.handlers,
-      ...out.timerFns,
-      ...out.animCbs,
-      ...out.effectFns,
-    ]) {
-      cFunction.body = dropIdleStops(cFunction.body!);
-    }
-    out.mountEffects = dropIdleStops(out.mountEffects);
-  }
+  const handlers = out.handlers.map(printHandler);
+  const timerFns = out.timerFns.map(printTimerFunction);
+  const animCbs = out.animCbs.flatMap(printAnimationCallback);
+  const effectFns = out.effectFns.map(printEffectFunction);
+  const mountEffects = out.mountEffects.flatMap(printMountEffect).join('\n');
 
   // app_update(): re-apply state-driven node props, rebuild state-driven Svgs, then run dep-driven effects.
   const updateBlock = (() => {
@@ -304,8 +279,8 @@ export function writeApp(
       );
     }
     // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
-    for (const block of out.depEffects) {
-      lines.push(block);
+    for (const effect of out.depEffects) {
+      lines.push(printDepEffectCheck(effect));
     }
     lines.push('}');
     return lines.join('\n');
@@ -324,7 +299,7 @@ export function writeApp(
     .join('\n\n');
 
   // Event handlers, each with the engine's event callback signature.
-  const handlerDefs = out.handlers
+  const handlerDefs = handlers
     .map(
       handler =>
         `static void ${handler.name}(ERNode* node, const EREventData* data, void* ` +
@@ -334,11 +309,13 @@ export function writeApp(
     .join('\n\n');
 
   // Dep-driven effects: a previous-value static per dep, the bodies, and forward decls (app_update comes first).
-  const effectDeclsBlock = out.effectDecls.join('\n');
-  const effectFwdDecls = out.effectFns
+  const effectDeclsBlock = out.effectDecls
+    .flatMap(decl => printStaticDecl(decl, opts.caps.listStrCap))
+    .join('\n');
+  const effectFwdDecls = effectFns
     .map(effectFn => `static void ${effectFn.name}(void);`)
     .join('\n');
-  const effectFnDefs = out.effectFns
+  const effectFnDefs = effectFns
     .map(
       effectFn =>
         `static void ${effectFn.name}(void)\n{\n${effectFn.body.join('\n')}\n}`,
@@ -385,25 +362,25 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
 }`
     : '';
 
-  const timerFnDefs = out.timerFns
+  const timerFnDefs = timerFns
     .map(
       timerFn =>
-        `static void ${timerFn.name}(void)\n{\n${timerFn.body!.join('\n')}\n}`,
+        `static void ${timerFn.name}(void)\n{\n${timerFn.body.join('\n')}\n}`,
     )
     .join('\n\n');
 
   // Forward-declare every timer fn: the handlers and effect fns that register one are defined before it.
-  const timerFnFwdDecls = out.timerFns
+  const timerFnFwdDecls = timerFns
     .map(timerFn => `static void ${timerFn.name}(void);`)
     .join('\n');
 
   // Animated.sequence on_complete callbacks each start the next step, so they are forward-declared.
-  const animCbDecls = out.animCbs
+  const animCbDecls = animCbs
     .map(
       animCb => `static void ${animCb.name}(bool finished, void* user_data);`,
     )
     .join('\n');
-  const animCbDefs = out.animCbs
+  const animCbDefs = animCbs
     .map(
       animCb =>
         `static void ${animCb.name}(bool finished, void* user_data)\n{\n    (void)finished;\n ` +
@@ -454,9 +431,9 @@ ${wallClockRefresh}${waitTick}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
     : `void er_app_tick(int dt_ms)\n{\n    (void)dt_ms;\n${wallClockRefresh}${waitTick}}`;
 
   // useEffect(fn, []) bodies, run once at the end of er_app_build().
-  const mountEffectsBlock = out.mountEffects.length
+  const mountEffectsBlock = mountEffects
     ? '\n    /* useEffect(fn, []) — run once on mount. */\n' +
-      out.mountEffects.join('\n') +
+      mountEffects +
       '\n'
     : '';
 
@@ -469,7 +446,7 @@ ${wallClockRefresh}${waitTick}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
       effectFnDefs,
       animCbDefs,
       timerFnDefs,
-      out.mountEffects.join('\n'),
+      mountEffects,
       out.build.join('\n'),
     ].join('\n'),
   );
@@ -514,7 +491,7 @@ static int16_t app_round_dim(double v)
         queryDefs,
         animCbDefs,
         timerFnDefs,
-        out.mountEffects.join('\n'),
+        mountEffects,
         out.build.join('\n'),
       ].join('\n'),
     );
@@ -809,7 +786,7 @@ static int16_t app_round_dim(double v)
       effectFnDefs,
       animCbDefs,
       timerFnDefs,
-      out.mountEffects.join('\n'),
+      mountEffects,
       out.build.join('\n'),
     ].join('\n'),
   );
@@ -1000,7 +977,7 @@ ${hostSetterProtos ? '\n' + hostSetterProtos + '\n' : ''}
     h: header,
     nodes: out.nodeCount,
     state: stateRecords.length,
-    handlers: out.handlers.length,
+    handlers: handlers.length,
     updates: out.updates.length,
     images: app.images,
   };

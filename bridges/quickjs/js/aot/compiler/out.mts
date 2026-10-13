@@ -19,6 +19,15 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {Program} from '@babel/types';
+import type {
+  IrAnimationCallback,
+  IrDepEffect,
+  IrEffectFunction,
+  IrHandler,
+  IrMountEffect,
+  IrStaticDecl,
+  IrTimerFunction,
+} from './ir/functions.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrVectorData} from './ir/vectors.mts';
 import type {
@@ -39,12 +48,6 @@ import type {
 export interface CFunction {
   name: string;
   body: string[];
-}
-
-/** A timer callback. Its slot is reserved before the body compiles (the body may add timers of its own). */
-export interface TimerFunction {
-  name: string;
-  body: string[] | null;
 }
 
 /** A node whose props depend on state: app_update() rebuilds its ERProps and re-applies them. */
@@ -88,7 +91,7 @@ export class Out {
   /** Statements of er_app_build(), in order. */
   build: string[] = [];
   /** Event handlers, one C function each. */
-  readonly handlers: CFunction[] = [];
+  readonly handlers: IrHandler[] = [];
   /** Nodes whose props app_update() re-applies. */
   readonly updates: NodeUpdate[] = [];
   /** Nodes that need a file-scope handle (`static ERNode* s_<v>`), for app_update or an imperative call. */
@@ -102,12 +105,12 @@ export class Out {
   svgN = 0;
   /** Whether the generated C calls into <math.h>. */
   needsMath = false;
-  readonly timerFns: TimerFunction[] = [];
+  readonly timerFns: IrTimerFunction[] = [];
   usesTimers = false;
-  /** Mount-once effect bodies, inlined at the end of er_app_build(). */
-  mountEffects: string[] = [];
-  /** on_complete callbacks that chain an animation sequence or loop. */
-  readonly animCbs: CFunction[] = [];
+  /** What er_app_build() runs last: mount-once effects, and the first run of each dep-driven one. */
+  readonly mountEffects: IrMountEffect[] = [];
+  /** Animations' on_complete callbacks: completions, completion waits, and chains. */
+  readonly animCbs: IrAnimationCallback[] = [];
   /** The owner number of each composition that completion waits belong to, by composition; `isStarted` once a start waits. */
   readonly animWaits = new Map<string, {owner: number; isStarted: boolean}>();
   /** Numbers the next animation sequence. */
@@ -124,11 +127,11 @@ export class Out {
   readonly childAnimations: AnimRecord[] = [];
   /** Numbers the next effect. */
   effN = 0;
-  readonly effectFns: CFunction[] = [];
-  /** File-scope declarations the effects and animation loops need. */
-  readonly effectDecls: string[] = [];
-  /** app_update() blocks that re-run a dep-driven effect when one of its deps changed. */
-  readonly depEffects: string[] = [];
+  readonly effectFns: IrEffectFunction[] = [];
+  /** File-scope variables the effects and animation loops need. */
+  readonly effectDecls: IrStaticDecl[] = [];
+  /** Dep-driven effects, which app_update() re-runs when one of their deps changed. */
+  readonly depEffects: IrDepEffect[] = [];
   /** Numbers the next PanResponder. */
   panN = 0;
   /** Every PanResponder a node spreads, lowered once each. */

@@ -22,7 +22,6 @@ import {aotError} from './diagnostics.mts';
 import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
 import {lowerHandler} from './handlers.mts';
-import {printPanEvent} from './c/pan-responder.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {GestureField, IrExpr, IrGesture} from './ir/expressions.mts';
@@ -419,7 +418,7 @@ export function emitPanResponder(
     pan.lowered = lowerPanResponder(pan, env, state, out);
     out.panResponders.push(pan.lowered);
     for (const panEvent of pan.lowered.events) {
-      out.handlers.push(printPanEvent(pan.lowered, panEvent));
+      out.handlers.push({kind: 'panEvent', pan: pan.lowered, event: panEvent});
     }
   }
 

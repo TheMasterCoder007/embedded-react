@@ -22,6 +22,7 @@ import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrPropValue, IrShow} from './ir/nodes.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
+import type {IrStaticDecl} from './ir/functions.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -331,7 +332,7 @@ export interface StatementContext {
   depDriven?: boolean;
   /** The body's locals become file-scope slots named `<prefix><name>`, declared into `decls`: its cleanup
    *  closure outlives the call. */
-  hoist?: {prefix: string; decls: string[]};
+  hoist?: {prefix: string; decls: IrStaticDecl[]};
   /** Compiles a dep-driven effect's `return () => …` into its companion cleanup function; `armed` is the flag
    *  that says the last run reached it. */
   cleanup?: {armed: string; emit: (fn: FunctionNode, env: Env) => void};

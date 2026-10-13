@@ -24,7 +24,7 @@ import {evalStatic} from '../static-eval.mts';
 import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, collectStyleAssigns} from '../style-text.mts';
-import {compileValueHandler} from '../handlers.mts';
+import {lowerValueHandler} from '../handlers.mts';
 import {emitIrNode, lowerRefBinds} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
@@ -168,8 +168,9 @@ export function emitTextInput(
     }
     const handlerName = `er_handler_${out.handlers.length}`;
     out.handlers.push({
+      kind: 'callback',
       name: handlerName,
-      body: compileValueHandler(
+      callback: lowerValueHandler(
         onChangeFn,
         'data->changed_text',
         env,

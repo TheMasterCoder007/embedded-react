@@ -28,10 +28,8 @@ import {
 import {i64Lit, floatLit} from './c-syntax.mts';
 import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn} from './collect.mts';
-import {APP_UPDATE_CALL, lowerStmts} from './handlers.mts';
+import {lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
-import {printChainFunctions, printCompletionWait} from './c/animations.mts';
-import {printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {
   IrAnimation,
@@ -913,9 +911,8 @@ function lowerChain(
         : null,
   };
 
-  const {callbacks, decls} = printChainFunctions(chain);
-  ctx.out.animCbs.push(...callbacks);
-  ctx.out.effectDecls.push(...decls);
+  ctx.out.animCbs.push({kind: 'chain', chain});
+  ctx.out.effectDecls.push({kind: 'chain', chain});
 
   return chain;
 }
@@ -1239,12 +1236,7 @@ function lowerCompletion(
   };
   const body = lowerStmts(list, {...env, locals}, state, cctx);
   const completion = {name, body, updatesState: cctx.stateChanged};
-
-  const lines = printStmts(body, '    ');
-  if (completion.updatesState) {
-    lines.push(APP_UPDATE_CALL);
-  }
-  ctx.out.animCbs.push({name, body: lines});
+  ctx.out.animCbs.push({kind: 'completion', completion});
 
   return completion;
 }
@@ -1343,9 +1335,11 @@ export function lowerAnimateStart(
         duration - end,
         `er_waitcb_${ctx.out.seqN++}`,
       );
-      ctx.out.animCbs.push(
-        printCompletionWait(completion, start.completionWait),
-      );
+      ctx.out.animCbs.push({
+        kind: 'completionWait',
+        completion,
+        wait: start.completionWait,
+      });
     }
   }
 

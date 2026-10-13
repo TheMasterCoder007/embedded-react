@@ -18,6 +18,10 @@ import {describe, it, expect} from 'vitest';
 import {parse} from '@babel/parser';
 import {lowerStmts} from '../compiler/handlers.mts';
 import {printStmts} from '../compiler/c/statements.mts';
+import {
+  printAnimationCallback,
+  printStaticDecl,
+} from '../compiler/c/functions.mts';
 import {Out} from '../compiler/out.mts';
 
 // `.start()` lowers to an animation IR; these check its shape, the chain callbacks it adds, and the C it prints.
@@ -35,6 +39,9 @@ const state = {
   byName: new Map([['n', nState]]),
   bySetter: new Map([['setN', nState]]),
 };
+
+/** The on_complete callbacks a body added, as C functions. */
+const callbacksOf = ctx => ctx.out.animCbs.flatMap(printAnimationCallback);
 
 /** Lowers a handler body that can drive the animated values a, b and c. */
 function lowerBody(source) {
@@ -169,8 +176,9 @@ describe('animation IR: chains', () => {
     expect(printStmts([stmt], '    ').join('\n')).toContain(
       'cfg0_0.on_complete = er_seqcb_0_1;',
     );
-    expect(ctx.out.animCbs.map(fn => fn.name)).toEqual(['er_seqcb_0_1']);
-    expect(ctx.out.animCbs[0].body.slice(0, 2)).toEqual([
+    expect(ctx.out.animCbs).toEqual([{kind: 'chain', chain: stmt}]);
+    expect(callbacksOf(ctx).map(fn => fn.name)).toEqual(['er_seqcb_0_1']);
+    expect(callbacksOf(ctx)[0].body.slice(0, 2)).toEqual([
       '    if (!finished)',
       '    {',
     ]);
@@ -186,7 +194,8 @@ describe('animation IR: chains', () => {
       resetHandle: 's_av_b',
       restart: {handle: 's_av_b', delayMs: 0},
     });
-    expect(ctx.out.effectDecls).toEqual([
+    expect(ctx.out.effectDecls).toEqual([{kind: 'chain', chain: stmt}]);
+    expect(printStaticDecl(ctx.out.effectDecls[0], 48)).toEqual([
       'static int s_loop0_n;',
       'static float s_loop0_from;',
     ]);
@@ -194,7 +203,7 @@ describe('animation IR: chains', () => {
       '    s_loop0_n = 1;',
       '    s_loop0_from = er_anim_value_get(s_av_b);',
     ]);
-    const repeat = ctx.out.animCbs.find(fn => fn.name === 'er_seqcb_0_0');
+    const repeat = callbacksOf(ctx).find(fn => fn.name === 'er_seqcb_0_0');
     expect(repeat.body).toContain('    if (s_loop0_n >= 3)');
     expect(repeat.body).toContain(
       '    er_anim_value_set(s_av_b, s_loop0_from);',
@@ -206,7 +215,7 @@ describe('animation IR: chains', () => {
       'Animated.loop(Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]), {iterations: 1}).start(() => setN(1));',
     );
     expect(stmt.loop.finalWait).toEqual({delayMs: 300, owner: 0});
-    const repeat = ctx.out.animCbs.find(fn => fn.name === 'er_seqcb_1_0');
+    const repeat = callbacksOf(ctx).find(fn => fn.name === 'er_seqcb_1_0');
     expect(repeat.body).toContain('    if (s_loop1_n >= 1)');
     expect(repeat.body).toContain(
       '        app_wait_start(0, 300, er_donecb_0);',
@@ -243,7 +252,10 @@ describe('animation IR: completions', () => {
       'cfg0.on_complete = er_donecb_0;',
     );
     expect(ctx.stateChanged).toBe(false);
-    expect(ctx.out.animCbs[0].body.at(-1)).toBe('    app_update();');
+    expect(ctx.out.animCbs).toEqual([
+      {kind: 'completion', completion: stmt.completion},
+    ]);
+    expect(callbacksOf(ctx)[0].body.at(-1)).toBe('    app_update();');
   });
 
   it('completes a zero-iteration loop at once', () => {
@@ -311,7 +323,7 @@ describe('animation IR: completions', () => {
     expect(printStmts([stmt], '    ').join('\n')).toContain(
       'cfg1_0.on_complete = er_seqcb_1_1;',
     );
-    const wait = ctx.out.animCbs.find(fn => fn.name === 'er_seqcb_1_1');
+    const wait = callbacksOf(ctx).find(fn => fn.name === 'er_seqcb_1_1');
     expect(wait.body).toEqual([
       '    if (!finished)',
       '    {',
@@ -334,7 +346,11 @@ describe('animation IR: completions', () => {
     expect(printStmts([stmt], '    ').join('\n')).toContain(
       'cfg0.on_complete = er_waitcb_1;',
     );
-    expect(ctx.out.animCbs.map(fn => fn.name)).toEqual([
+    expect(ctx.out.animCbs.map(callback => callback.kind)).toEqual([
+      'completion',
+      'completionWait',
+    ]);
+    expect(callbacksOf(ctx).map(fn => fn.name)).toEqual([
       'er_donecb_0',
       'er_waitcb_1',
     ]);

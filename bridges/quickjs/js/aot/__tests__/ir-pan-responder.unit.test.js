@@ -28,6 +28,7 @@ import {
   printPanQuery,
 } from '../compiler/c/pan-responder.mts';
 import {printPanWiring} from '../compiler/c/nodes.mts';
+import {printHandler} from '../compiler/c/functions.mts';
 import {Out} from '../compiler/out.mts';
 
 // A PanResponder lowers to the IR first: gesture fields, event handlers with their roles, and should-set queries.
@@ -193,12 +194,17 @@ describe('PanResponder IR: emitting', () => {
     const lowered = emitPanResponder(pan, out, env, state);
     expect(emitPanResponder(pan, out, env, state)).toBe(lowered);
     expect(out.panResponders).toEqual([lowered]);
-    expect(out.handlers.map(handler => handler.name)).toEqual([
-      'er_pan_pan_grant',
-      'er_pan_pan_release',
-      'er_pan_pan_terminate',
-      'er_pan_pan_move',
-    ]);
+    expect(out.handlers).toEqual(
+      lowered.events.map(event => ({kind: 'panEvent', pan: lowered, event})),
+    );
+    expect(out.handlers.map(printHandler).map(handler => handler.name)).toEqual(
+      [
+        'er_pan_pan_grant',
+        'er_pan_pan_release',
+        'er_pan_pan_terminate',
+        'er_pan_pan_move',
+      ],
+    );
     expect(
       lowered.queries.map(query => printPanQuery(lowered, query).name),
     ).toEqual(['er_pan_pan_start_should_set']);

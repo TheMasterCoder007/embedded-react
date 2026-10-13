@@ -21,14 +21,12 @@
 import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.js';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
-import {cScalarType, floatLit} from './c-syntax.mts';
 import {
   mix64Error,
   staticInt,
   isTime64,
   constDivisor,
   emitExprWide,
-  emitExpr,
   lowerExpr,
   lowerExprWide,
   lowerText,
@@ -53,10 +51,12 @@ import {
   checkVectorPaints,
   vectorPaintOf,
 } from './svg.mts';
-import {APP_UPDATE_CALL, printCallback, printStmts} from './c/statements.mts';
+import {armedFlag} from './c/functions.mts';
+import {toCExpr} from './c/expressions.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr, IrTyped} from './ir/expressions.mts';
+import type {IrDepEffect} from './ir/functions.mts';
 import type {
   IrCallback,
   IrItemValue,
@@ -66,7 +66,6 @@ import type {
 } from './ir/statements.mts';
 import type {IrGeometry, IrTapeValue, IrVectorPaint} from './ir/vectors.mts';
 import type {
-  CExpr,
   CType,
   EffectRecord,
   Env,
@@ -84,12 +83,6 @@ import type {
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/**
- * The call to a body that set state ends with, to re-apply what reads it. Whether anything reads state is known
- * only once the whole app is emitted, so the call is dropped then if nothing does.
- */
-export {APP_UPDATE_CALL};
 
 /** The constant 0, which a remainder by 0 or ±1 stores. */
 const ZERO: IrExpr = {kind: 'number', value: 0, cType: 'int'};
@@ -616,8 +609,8 @@ function lowerTimer(
   const slot = ctx.out.timerFns.length;
   const timerFnName = `er_timer_fn_${slot}`;
   ctx.out.usesTimers = true;
-  ctx.out.timerFns.push({name: timerFnName, body: null});
-  ctx.out.timerFns[slot].body = compileHandler(cb, env, state, ctx.out);
+  ctx.out.timerFns.push({name: timerFnName, callback: null});
+  ctx.out.timerFns[slot].callback = lowerHandler(cb, env, state, ctx.out);
   return {delay, isRepeating, fn: timerFnName};
 }
 
@@ -1082,7 +1075,7 @@ export function lowerStmts(
         ) {
           // The id is only needed for a later clear*(); a mount effect drops its cleanup, so mark it used.
           if (isHoisted) {
-            ctx.hoist!.decls.push(`static int ${cName};`);
+            ctx.hoist!.decls.push({kind: 'local', name: cName, cType: 'int'});
           }
           lowered.push({
             kind: 'startTimer',
@@ -1105,9 +1098,11 @@ export function lowerStmts(
         if (initExpr.cType === 'string') {
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
-            ctx.hoist!.decls.push(
-              `static char ${cName}[${env.caps.listStrCap}];`,
-            );
+            ctx.hoist!.decls.push({
+              kind: 'local',
+              name: cName,
+              cType: 'string',
+            });
           }
         } else {
           if (
@@ -1122,9 +1117,11 @@ export function lowerStmts(
           }
 
           if (isHoisted) {
-            ctx.hoist!.decls.push(
-              `static ${cScalarType(initExpr.cType)} ${cName};`,
-            );
+            ctx.hoist!.decls.push({
+              kind: 'local',
+              name: cName,
+              cType: initExpr.cType,
+            });
           }
         }
 
@@ -1228,28 +1225,7 @@ export function lowerStmts(
 }
 
 /**
- * Lowers handler statements and prints them as C lines (see lowerStmts).
- *
- * @param statements  The statements.
- * @param env  The expression environment.
- * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
- * @param indent  The statements' indentation.
- *
- * @returns The C lines.
- */
-export function compileStmts(
-  statements: t.Statement[],
-  env: Env,
-  state: StateTable,
-  ctx: StatementContext,
-  indent: string,
-): string[] {
-  return printStmts(lowerStmts(statements, env, state, ctx), indent);
-}
-
-/**
- * Compiles a useEffect (App or child) into C. Two shapes:
+ * Lowers a useEffect (App or child). Two shapes:
  *  - `useEffect(fn, [])` — MOUNT-ONCE: body runs after the initial app_update (in er_app_build).
  *  - `useEffect(fn, [dep…])` — DEP-DRIVEN: body becomes a file-scope `er_effect_N()`; runs once at mount,
  *    then again from app_update whenever a SCALAR dep changes (compared against a stored prev). The body is
@@ -1260,9 +1236,9 @@ export function compileStmts(
  * @param effect  The effect.
  * @param env  The expression environment.
  * @param state  The component's state table.
- * @param out  Everything emitted so far; the effect's C is added to it.
+ * @param out  Everything emitted so far; the effect is added to it.
  */
-export function compileEffect(
+export function lowerEffect(
   effect: EffectRecord,
   env: Env,
   state: StateTable,
@@ -1288,23 +1264,24 @@ export function compileEffect(
       allowReturn: true,
       bodyList: statements,
     };
-    const lines = compileStmts(statements, env, state, ctx, '    ');
+    const lowered = lowerStmts(statements, env, state, ctx);
     if (!ctx.usedReturn) {
-      if (ctx.stateChanged) {
-        lines.push(APP_UPDATE_CALL);
-      }
-      out.mountEffects.push(...lines);
+      out.mountEffects.push({
+        kind: 'inline',
+        callback: {body: lowered, updatesState: ctx.stateChanged},
+      });
 
       return;
     }
 
     // With an early `return` the body gets its own function, so it cannot skip later mount effects.
-    const effectName = `er_effect_${out.effN++}`;
-    out.effectFns.push({name: effectName, body: lines});
-    out.mountEffects.push(`    ${effectName}();`);
-    if (ctx.stateChanged) {
-      out.mountEffects.push(APP_UPDATE_CALL);
-    }
+    const name = `er_effect_${out.effN++}`;
+    out.effectFns.push({kind: 'mount', name, body: lowered});
+    out.mountEffects.push({
+      kind: 'call',
+      name,
+      updatesState: ctx.stateChanged,
+    });
 
     return;
   }
@@ -1317,14 +1294,13 @@ export function compileEffect(
     );
   }
   const effectId = out.effN++;
-  const effectName = `er_effect_${effectId}`;
   const deps = (effect.deps as t.ArrayExpression).elements.map(depNode => {
     if (!depNode) {
       throw aotError('AOT: a useEffect dependency must be an expression');
     }
 
-    const depExpr = emitExprWide(depNode, env);
-    if (!['int', 'float', 'i64', 'string'].includes(depExpr.cType)) {
+    const depExpr = lowerExprWide(depNode, env);
+    if (!['int', 'float', 'i64', 'string'].includes(toCExpr(depExpr).cType)) {
       throw aotError(
         'AOT: useEffect dependencies must be scalar (number / bool / string)',
         'depend on scalar state values; object/array dependencies are not yet supported.',
@@ -1338,7 +1314,13 @@ export function compileEffect(
   const lastStatement = statements[statements.length - 1];
   const hasCleanup =
     lastStatement?.type === 'ReturnStatement' && isFn(lastStatement.argument);
-  const armedFlag = `s_eff${effectId}_armed`;
+  const depEffect: IrDepEffect = {
+    id: effectId,
+    deps,
+    body: [],
+    hasCleanup,
+    cleanup: null,
+  };
   const ctx: StatementContext = {
     stateChanged: false,
     animIdx: 0,
@@ -1348,11 +1330,11 @@ export function compileEffect(
     depDriven: true,
   };
 
-  // With a cleanup, hoist the body's locals and compile the tail `return () => …` into `<effect>_cleanup()`.
+  // With a cleanup, hoist the body's locals and lower the tail `return () => …` into `<effect>_cleanup()`.
   if (hasCleanup) {
     ctx.hoist = {prefix: `s_eff${effectId}_l_`, decls: out.effectDecls};
     ctx.cleanup = {
-      armed: armedFlag,
+      armed: armedFlag(effectId),
       emit: (cleanupFn, cleanupEnv) => {
         const cleanupBody = cleanupFn.body;
         const cleanupStatements: t.Statement[] =
@@ -1364,77 +1346,27 @@ export function compileEffect(
           animIdx: 0,
           out,
         };
-        out.effectFns.push({
-          name: `${effectName}_cleanup`,
-          body: compileStmts(
-            cleanupStatements,
-            cleanupEnv,
-            state,
-            cleanupCtx,
-            '    ',
-          ),
-        });
+        depEffect.cleanup = lowerStmts(
+          cleanupStatements,
+          cleanupEnv,
+          state,
+          cleanupCtx,
+        );
+        out.effectFns.push({kind: 'cleanup', effect: depEffect});
       },
     };
 
-    out.effectDecls.push(`static int ${armedFlag};`);
+    out.effectDecls.push({kind: 'armed', effect: depEffect});
   }
 
   // The effect function runs the last run's cleanup first, if that run armed it, then the body.
-  const bodyLines = compileStmts(statements, env, state, ctx, '    ');
-  out.effectFns.push({
-    name: effectName,
-    body: hasCleanup
-      ? [
-          `    if (${armedFlag})`,
-          '    {',
-          `        ${armedFlag} = 0;`,
-          `        ${effectName}_cleanup();`,
-          '    }',
-          ...bodyLines,
-        ]
-      : bodyLines,
-  });
+  depEffect.body = lowerStmts(statements, env, state, ctx);
+  out.effectFns.push({kind: 'effect', effect: depEffect});
 
-  // A static "previous value" per dep; snapshot at mount, then app_update detects changes against it.
-  deps.forEach((dep, depIndex) =>
-    out.effectDecls.push(
-      dep.cType === 'string'
-        ? `static char s_eff${effectId}_d${depIndex}[${env.caps.listStrCap}];`
-        : `static ${cScalarType(dep.cType)} s_eff${effectId}_d${depIndex};`,
-    ),
-  );
-  const snapshotDep = (depIndex: number, dep: CExpr) =>
-    dep.cType === 'string'
-      ? `snprintf(s_eff${effectId}_d${depIndex}, sizeof(s_eff${effectId}_d${depIndex}), "%s", ${dep.code})`
-      : `s_eff${effectId}_d${depIndex} = ${dep.code}`;
-
-  // At mount, run the effect once and snapshot each dep.
-  out.mountEffects.push(
-    `    ${effectName}();`,
-    ...deps.map((dep, depIndex) => `    ${snapshotDep(depIndex, dep)};`),
-  );
-
-  // In app_update, re-snapshot each dep that changed and re-run the effect once if any did.
-  const changeCheck = ['    {', '        int er_changed = 0;'];
-  deps.forEach((dep, depIndex) => {
-    if (dep.cType === 'string') {
-      changeCheck.push(
-        `        if (strcmp(s_eff${effectId}_d${depIndex}, ${dep.code}) != 0) { ` +
-          `${snapshotDep(depIndex, dep)}; er_changed = 1; }`,
-      );
-    } else {
-      const cType = cScalarType(dep.cType);
-      changeCheck.push(
-        `        ${cType} er_d${depIndex} = ${dep.code}; if (er_d${depIndex} != ` +
-          `s_eff${effectId}_d${depIndex}) { s_eff${effectId}_d${depIndex} = er_d${depIndex}; ` +
-          `er_changed = 1; }`,
-      );
-    }
-  });
-
-  changeCheck.push(`        if (er_changed) ${effectName}();`, '    }');
-  out.depEffects.push(changeCheck.join('\n'));
+  // A copy of each dep, taken at mount; app_update() re-runs the effect when one no longer matches its copy.
+  out.effectDecls.push({kind: 'deps', effect: depEffect});
+  out.mountEffects.push({kind: 'depEffect', effect: depEffect});
+  out.depEffects.push(depEffect);
 }
 
 /**
@@ -1488,24 +1420,7 @@ export function lowerHandler(
 }
 
 /**
- * Compiles an event handler to the lines of its C function (see lowerHandler).
- *
- * @param fnNode  The handler.
- * @param env  The expression environment.
- * @param state  The component's state table.
- * @param out  Everything emitted so far.
- *
- * @returns The function body's C lines, ending with app_update() when it set state.
- */
-export const compileHandler = (
-  fnNode: PanCallback,
-  env: Env,
-  state: StateTable,
-  out: Out,
-): string[] => printCallback(lowerHandler(fnNode, env, state, out));
-
-/**
- * Compiles a value-callback (e.g., Switch onValueChange) — binds its first param to `valueCode`, not an event.
+ * Lowers a value-callback (e.g., Switch onValueChange) — binds its first param to `valueCode`, not an event.
  *
  * @param fnNode  The callback.
  * @param valueCode  C for the value its first parameter receives.
@@ -1516,9 +1431,9 @@ export const compileHandler = (
  * @param secondValueCode  C for a second parameter's value (a range <Dial>'s low end), if any.
  * @param isBool  The value is a boolean, so text prints it as true/false.
  *
- * @returns The function body's C lines, ending with app_update() when it set state.
+ * @returns The callback.
  */
-export function compileValueHandler(
+export function lowerValueHandler(
   fnNode: FunctionNode,
   valueCode: string,
   env: Env,
@@ -1527,7 +1442,7 @@ export function compileValueHandler(
   cType: CType = 'int',
   secondValueCode: string | null = null,
   isBool = false,
-): string[] {
+): IrCallback {
   // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
   const valueParam =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
@@ -1543,17 +1458,15 @@ export function compileValueHandler(
     locals.set(secondParam, {code: secondValueCode, cType});
   }
 
-  // Compile the body (an expression body is a single statement), then re-apply state once if it set any.
+  // Lower the body (an expression body is a single statement); it re-applies state once if it set any.
   const ctx: StatementContext = {stateChanged: false, animIdx: 0, out};
   const body = fnNode.body;
   const statements: t.Statement[] =
     body.type === 'BlockStatement'
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
-  const lines = compileStmts(statements, {...env, locals}, state, ctx, '    ');
-  if (ctx.stateChanged) {
-    lines.push(APP_UPDATE_CALL);
-  }
-
-  return lines;
+  return {
+    body: lowerStmts(statements, {...env, locals}, state, ctx),
+    updatesState: ctx.stateChanged,
+  };
 }

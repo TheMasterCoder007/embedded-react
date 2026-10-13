@@ -54,7 +54,7 @@
  *   compiler/collect.mts         moduleScope + collect{State, Components, Callbacks, Memos, Effects}
  *   compiler/animations.mts      collect{Anims,Refs}, Easing, interpolate, Animated.start() chains
  *   compiler/style-text.mts      attrExpr, collectStyleAssigns, buildText / text spans
- *   compiler/handlers.mts        on* arrow → C statements (setters, refs, timers, effects, updateVector)
+ *   compiler/handlers.mts        on* arrow → statements (setters, refs, timers, effects, updateVector)
  *   compiler/pan-responder.mts   PanResponder.create → engine responder queries + events
  *   compiler/control-flow.mts    components / conditionals / .map — all UNROLL at compile time
  *   compiler/svg.mts             <Svg> subtree → flattenSvg ops/paints → er_node_set_vector_ops

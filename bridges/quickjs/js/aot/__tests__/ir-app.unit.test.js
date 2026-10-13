@@ -18,6 +18,12 @@ import {describe, it, expect} from 'vitest';
 import {lowerApp} from '../compiler/lower.mts';
 import {writeApp} from '../compiler/assemble.mts';
 import {resolveOptions} from '../compiler/options.mts';
+import {
+  printEffectFunction,
+  printHandler,
+  printMountEffect,
+  printStaticDecl,
+} from '../compiler/c/functions.mts';
 import {printKeyboard} from '../compiler/c/keyboard.mts';
 import {printPanDecls} from '../compiler/c/pan-responder.mts';
 import {printVectorBlocks} from '../compiler/c/vectors.mts';
@@ -93,5 +99,117 @@ describe('the lowered app', () => {
     expect(c).toContain(
       'static bool er_pan_pan_start_should_set(ERNode* node, const EREventData* data, void* user_data)',
     );
+  });
+});
+
+describe('the lowered app: functions', () => {
+  /** An app module around a component body and the JSX it returns. */
+  const app = (body, jsx) =>
+    "import React, {useState, useEffect} from 'react';\n" +
+    "import {View, Text, TouchableOpacity, Animated, useAnimatedValue} from 'embedded-react';\n" +
+    `export function App() {\n${body}\n  return ${jsx};\n}`;
+
+  it('wraps a press handler in its fade, and gives the unhandled end a fade of its own', () => {
+    const {out} = lower(
+      app(
+        '  const [n, setN] = useState(0);',
+        '<TouchableOpacity onPress={() => setN(1)} onPressIn={() => setN(2)}><Text>{n}</Text></TouchableOpacity>',
+      ),
+    );
+    expect(out.handlers.map(handler => handler.kind)).toEqual([
+      'callback',
+      'callback',
+      'pressFade',
+      'pressFade',
+    ]);
+    expect(out.handlers[2]).toMatchObject({
+      name: 'er_handler_2',
+      fade: {value: 's_av_press_n0', opacity: 0.2, durationMs: 0},
+      then: 'er_handler_1',
+    });
+    expect(out.handlers[3]).toMatchObject({
+      fade: {opacity: 1, durationMs: 250},
+      then: null,
+    });
+    expect(printHandler(out.handlers[2]).body.at(-1)).toBe(
+      '    er_handler_1(node, data, user_data);',
+    );
+  });
+
+  it('lowers a dep-driven effect with a cleanup to its functions, statics and mount run', () => {
+    const {out} = lower(
+      app(
+        '  const [n, setN] = useState(0);\n' +
+          '  useEffect(() => { const id = setInterval(() => setN(k => k + 1), 100); return () => clearInterval(id); }, [n]);',
+        '<Text>{n}</Text>',
+      ),
+    );
+    const [effect] = out.depEffects;
+    expect(effect).toMatchObject({id: 0, hasCleanup: true});
+    expect(effect.deps).toHaveLength(1);
+    expect(out.effectFns).toEqual([
+      {kind: 'cleanup', effect},
+      {kind: 'effect', effect},
+    ]);
+    expect(out.effectDecls).toEqual([
+      {kind: 'armed', effect},
+      {kind: 'local', name: 's_eff0_l_id', cType: 'int'},
+      {kind: 'deps', effect},
+    ]);
+    expect(out.effectDecls.flatMap(decl => printStaticDecl(decl, 48))).toEqual([
+      'static int s_eff0_armed;',
+      'static int s_eff0_l_id;',
+      'static int s_eff0_d0;',
+    ]);
+    expect(out.mountEffects).toEqual([{kind: 'depEffect', effect}]);
+    expect(printMountEffect(out.mountEffects[0])).toEqual([
+      '    er_effect_0();',
+      '    s_eff0_d0 = s_state.n;',
+    ]);
+    expect(printEffectFunction(out.effectFns[1]).body.slice(0, 2)).toEqual([
+      '    if (s_eff0_armed)',
+      '    {',
+    ]);
+  });
+
+  it('runs a mount effect inline, or calls it when it returns early', () => {
+    const {out} = lower(
+      app(
+        '  const [n, setN] = useState(0);\n' +
+          '  useEffect(() => { setN(1); }, []);\n' +
+          '  useEffect(() => { if (n > 1) return; setN(2); }, []);',
+        '<Text>{n}</Text>',
+      ),
+    );
+    expect(out.mountEffects).toMatchObject([
+      {kind: 'inline', callback: {updatesState: true}},
+      {kind: 'call', name: 'er_effect_0', updatesState: true},
+    ]);
+    expect(out.effectFns).toMatchObject([{kind: 'mount', name: 'er_effect_0'}]);
+  });
+
+  it('drops app_update() calls when the app has nothing to re-apply', () => {
+    const lowered = lower(
+      app(
+        '  const [n, setN] = useState(0);\n  useEffect(() => { setN(1); }, []);',
+        '<View onTouchStart={() => setN(2)} />',
+      ),
+    );
+    expect(lowered.hasUpdate).toBe(false);
+    expect(lowered.out.handlers[0].callback.updatesState).toBe(false);
+    expect(lowered.out.mountEffects[0].callback.updatesState).toBe(false);
+    expect(writeApp(lowered, 'probe', opts).c).not.toContain('app_update');
+  });
+
+  it('drops the wait bookkeeping from a stop no start waits on', () => {
+    const {out} = lower(
+      app(
+        '  const a = useAnimatedValue(0);',
+        '<View onTouchStart={() => Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(50)]).stop()} />',
+      ),
+    );
+    expect(out.handlers[0].callback.body).toMatchObject([
+      {kind: 'stopAnimations', handles: ['s_av_a'], waitOwner: null},
+    ]);
   });
 });

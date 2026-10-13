@@ -43,6 +43,8 @@ export interface IrApp {
   keyboard: IrKeyboard | null;
   /** The root element's node, which er_app_build() appends to the screen-sized root. */
   rootNodeId: string;
+  /** Something has to be re-applied after a state change, so the app has an app_update(). */
+  hasUpdate: boolean;
   /** The image imports the app reaches, which the CLI bakes. */
   images: AssetImport[];
   /** Everything else the tree and its effects emitted. */

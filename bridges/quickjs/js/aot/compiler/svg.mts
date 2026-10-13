@@ -50,13 +50,7 @@ import type {
   IrVectorPaint,
   IrVectorTables,
 } from './ir/vectors.mts';
-import type {
-  EmitOptions,
-  Env,
-  Scope,
-  StateTable,
-  VectorGradient,
-} from './types.mts';
+import type {EmitOptions, Env, Scope, StateTable} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
