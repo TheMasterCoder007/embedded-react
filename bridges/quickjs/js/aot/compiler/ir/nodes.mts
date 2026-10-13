@@ -53,24 +53,46 @@ export type IrPropValue =
   | {kind: 'visible'; value: IrExpr}
   /** The display toggle of a node built under a state-driven conditional. */
   | {kind: 'shown'; show: IrShow}
-  /** C from an element that does not lower to the IR yet. */
-  | {kind: 'foreign'; code: string};
-
-/** An image to show: a name known at build time, or C from the image element that names one from state. */
-export type IrImageName =
-  | {kind: 'static'; name: string}
-  | {kind: 'foreign'; code: string};
-
-/** An engine event wired to a C handler that lowering already added to the output. */
-export interface IrNodeEvent {
-  /** The engine event, an ER_EVENT_* name. */
-  event: string;
-  handler: string;
-}
+  /**
+   * A byte that is `whenTrue` while the test holds, else 0: a 0/1 flag, or a gradient's stop count. `truthiness`
+   * is how C reads the test: as a JS condition (a string is truthy when non-empty), or as the value itself.
+   */
+  | {
+      kind: 'flag';
+      test: IrExpr;
+      truthiness: 'condition' | 'value';
+      negate: boolean;
+      whenTrue: number;
+    }
+  /** A value narrowed to a byte (an enum field stored as uint8_t). */
+  | {kind: 'byte'; value: IrPropValue}
+  /** A number stored in a float field. */
+  | {kind: 'float'; value: IrExpr};
 
 /**
- * A host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView) as an engine node. A node with any
- * state-driven content keeps a file-scope handle, and app_update sets all of its props again.
+ * An image to show: a name known at build time, or a string read from state or a list item. A node state drives
+ * sets its props again on every update; `resetOnUpdate` is false where that loses a constant name (a host
+ * <Image>, a known bug).
+ */
+export type IrImageName =
+  | {kind: 'static'; name: string; resetOnUpdate: boolean}
+  | {kind: 'value'; value: IrExpr};
+
+/** Something wired onto a node once it exists, in the order the element wires it. */
+export type IrWire =
+  /** An animated value the native driver moves; `index` numbers its interpolation table. */
+  | {kind: 'bind'; bind: AnimBind; index: number}
+  /** A node ref that holds the node's handle. */
+  | {kind: 'ref'; slot: string}
+  /** An engine event (an ER_EVENT_* name) and the C handler lowering already added to the output. */
+  | {kind: 'event'; event: string; handler: string}
+  /** A PanResponder spread onto the node; its functions are already in the output. */
+  | {kind: 'responder'; pan: PanResponderRecord};
+
+/**
+ * An element as an engine node: a host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView) or a
+ * typed one (Switch, Dial, TextInput, ActivityIndicator, Modal). A node with any state-driven content keeps a
+ * file-scope handle, and app_update sets all of its props again.
  */
 export interface IrNode {
   /** The node's variable (`n<id>`); its handle is `s_n<id>`. */
@@ -81,32 +103,12 @@ export interface IrNode {
   constantProps: StaticAssign[];
   /** Props state drives, set again on every app_update after the constant ones. */
   stateProps: {field: string; value: IrPropValue}[];
-  /** A <Text>'s body. */
+  /** A <TextInput>'s placeholder. */
+  placeholder: string | null;
+  /** A <Text>'s body, or a <TextInput>'s value. */
   text: IrText | null;
   image: IrImageName | null;
   /** A <Text> with nested <Text> children draws these inline spans instead of a body. */
   spans: TextSpan[] | null;
-  /** Animated values the native driver moves, the press feedback's last. */
-  binds: AnimBind[];
-  /** Node refs that hold the node's handle. */
-  refs: string[];
-  events: IrNodeEvent[];
-  /** PanResponders spread onto the node; their functions are already in the output. */
-  responders: PanResponderRecord[];
+  wiring: IrWire[];
 }
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Implementation
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/**
- * A prop value an element that does not lower to the IR yet has already written as C.
- *
- * @param code  The C.
- *
- * @returns The value.
- */
-export const foreignProp = (code: string): IrPropValue => ({
-  kind: 'foreign',
-  code,
-});

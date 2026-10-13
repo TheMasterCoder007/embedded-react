@@ -20,11 +20,12 @@
 
 import {aotError} from '../diagnostics.mts';
 import {evalStatic, evalStaticOr} from '../static-eval.mts';
-import {emitExpr} from '../expressions.mts';
+import {lowerExpr} from '../expressions.mts';
 import {attrExpr, argbLiteral} from '../style-text.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env} from '../types.mts';
+import type {IrExpr} from '../ir/expressions.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -34,8 +35,8 @@ import type {Env} from '../types.mts';
 interface ImageAttrs {
   /** The baked asset's name, when the source folds. */
   imageName: string | null;
-  /** C for the asset's name when the source is state-driven. */
-  imageNameDyn: string | null;
+  /** The asset's name when the source is state-driven. */
+  imageNameDyn: IrExpr | null;
   /** The ER_RESIZE_* constant. */
   resizeMode: string | null;
   /** The tint's ARGB literal. */
@@ -130,7 +131,7 @@ export function resolveImageAttrs(
       ? attrExpr(srcAttr)
       : null;
   let imageName: string | null = null; // static asset name (a literal), OR …
-  let imageNameDyn: string | null = null; // … a runtime C string expr (a list-item field / state) set in app_update.
+  let imageNameDyn: IrExpr | null = null; // … a runtime string (a list-item field / state) set in app_update.
 
   // Resolve static sources immediately and mark imported assets for baking.
   if (srcExpr) {
@@ -146,8 +147,8 @@ export function resolveImageAttrs(
       // so the candidate assets must be baked. They can't be enumerated, so bake them ALL (out.bakeAllImages).
       // Only triggered when a dynamic source is actually REACHED.
       out.bakeAllImages = true;
-      const cExpr = emitExpr(srcExpr, env);
-      if (cExpr.cType !== 'string') {
+      const nameExpr = lowerExpr(srcExpr, env);
+      if (nameExpr.cType !== 'string') {
         const err = aotError(
           'AOT: an <Image source> must resolve to an asset NAME (a string)',
           "use an imported image (`import logo from './logo.png'` → source={logo}), " +
@@ -163,7 +164,7 @@ export function resolveImageAttrs(
         }
       }
 
-      imageNameDyn = cExpr.code;
+      imageNameDyn = nameExpr;
     }
   }
 

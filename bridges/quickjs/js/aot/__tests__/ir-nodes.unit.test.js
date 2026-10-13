@@ -35,11 +35,11 @@ const scalar = (name, cType, isBool = false) => ({
 const slots = [scalar('n', 'int'), scalar('on', 'int', true)];
 const state = {
   byName: new Map(slots.map(slot => [slot.name, slot])),
-  bySetter: new Map(),
+  bySetter: new Map([['setN', slots[0]]]),
 };
 
 /** Emits one JSX element over the state above, returning what it added to the output. */
-function emit(jsx) {
+function emit(jsx, refs = new Map()) {
   const expr = parse(`(${jsx})`, {
     sourceType: 'module',
     plugins: ['jsx'],
@@ -48,7 +48,7 @@ function emit(jsx) {
     state: state.byName,
     locals: new Map(),
     consts: {},
-    refs: new Map(),
+    refs,
     animations: new Map(),
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
@@ -136,13 +136,19 @@ describe('node IR: printing', () => {
       type: 'ER_NODE_PRESSABLE',
       constantProps: [{field: 'width', expr: '40'}],
       stateProps: [{field: 'opacity', value: {kind: 'constant', code: '255'}}],
+      placeholder: null,
       text: null,
       image: null,
       spans: null,
-      binds: [{cVar: 's_av_a', prop: 'ER_PROP_OPACITY'}],
-      refs: ['s_ref_box'],
-      events: [{event: 'ER_EVENT_PRESS', handler: 'er_handler_0'}],
-      responders: [],
+      wiring: [
+        {
+          kind: 'bind',
+          bind: {cVar: 's_av_a', prop: 'ER_PROP_OPACITY'},
+          index: 0,
+        },
+        {kind: 'ref', slot: 's_ref_box'},
+        {kind: 'event', event: 'ER_EVENT_PRESS', handler: 'er_handler_0'},
+      ],
     });
     expect(printed.build).toEqual([
       '    n3 = er_node_create(ER_NODE_PRESSABLE);',
@@ -156,5 +162,63 @@ describe('node IR: printing', () => {
       styleAssigns: [{field: 'width', expr: '40'}],
       imageName: null,
     });
+  });
+});
+
+describe('node IR: typed elements', () => {
+  it('lowers element values to typed flags, bytes and floats', () => {
+    const {nodeId: switchId, out: switchOut} = emit(
+      '<Switch value={on} onValueChange={v => setN(1)} />',
+    );
+    const switchValue = stateProp(switchOut, switchId, 'switch_value').value;
+    expect(switchValue).toMatchObject({
+      kind: 'flag',
+      truthiness: 'condition',
+      negate: false,
+      whenTrue: 1,
+    });
+    expect(printPropValue(switchValue)).toBe('(uint8_t)((s_state.on) ? 1 : 0)');
+
+    const {nodeId, out} = emit(
+      `<Dial min={n} cap={on ? 'round' : 'butt'} indicatorGradient={on ? null : {stops: [{color: '#00f'}, {color: '#f00'}]}} />`,
+    );
+    expect(stateProp(out, nodeId, 'arc_min').value.kind).toBe('float');
+    expect(stateProp(out, nodeId, 'arc_cap').value).toMatchObject({
+      kind: 'byte',
+      value: {kind: 'select'},
+    });
+    const stops = stateProp(out, nodeId, 'gradient_stop_count').value;
+    expect(stops).toMatchObject({
+      kind: 'flag',
+      truthiness: 'value',
+      negate: true,
+      whenTrue: 2,
+    });
+    expect(printPropValue(stops)).toBe('(uint8_t)((!(s_state.on)) ? 2 : 0)');
+  });
+
+  it("re-sets a Dial's knob image on every update", () => {
+    const {nodeId, out} = emit('<Dial knobImage="knob" min={n} />');
+    expect(out.updates.find(u => u.nodeId === nodeId).imageName).toBe('"knob"');
+  });
+
+  it("prints a TextInput's placeholder before its text, and wires its event before its ref", () => {
+    const refs = new Map([
+      ['box', {kind: 'node', cVar: 's_ref_box', used: false}],
+    ]);
+    const {out} = emit(
+      '<TextInput ref={box} value="hi" placeholder="name" onChangeText={t => setN(2)} />',
+      refs,
+    );
+    expect(out.build).toEqual([
+      '    n0 = er_node_create(ER_NODE_TEXT_INPUT);',
+      '    er_props_default(&p);',
+      '    snprintf(p.placeholder, sizeof(p.placeholder), "%s", "name");',
+      '    snprintf(p.text, sizeof(p.text), "%s", "hi");',
+      '    er_node_set_props(n0, &p);',
+      '    er_event_set(n0, ER_EVENT_CHANGE_TEXT, er_handler_0, NULL);',
+      '    s_ref_box = n0;',
+    ]);
+    expect(refs.get('box').used).toBe(true);
   });
 });

@@ -21,24 +21,25 @@
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
-import {floatLit, cstr} from '../c-syntax.mts';
-import {emitExpr} from '../expressions.mts';
+import {floatLit} from '../c-syntax.mts';
+import {lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {
   attrExpr,
-  emitColorExpr,
-  emitEnumExpr,
+  lowerColorValue,
+  lowerEnumValue,
   styleWrites,
   collectStyleAssigns,
 } from '../style-text.mts';
-import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
 import {emitChildren} from '../control-flow.mts';
-import {emitRefBind} from '../nodes.mts';
+import {emitIrNode, lowerRefBinds} from '../nodes.mts';
 import {imageNameFromSource} from './image.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
+import type {IrExpr} from '../ir/expressions.mts';
+import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -178,12 +179,10 @@ export function emitDial(
         return;
       }
     } catch {
-      const cExpr = emitExpr(node, env);
+      const value = lowerExpr(node, env);
       dynAssigns.push({
         field,
-        value: foreignProp(
-          isFloat ? `(float)(${cExpr.code})` : `app_round_dim(${cExpr.code})`,
-        ),
+        value: isFloat ? {kind: 'float', value} : {kind: 'dimension', value},
       });
     }
   };
@@ -197,7 +196,7 @@ export function emitDial(
       }
       return;
     } catch {
-      dynAssigns.push({field, value: foreignProp(emitColorExpr(node, env))});
+      dynAssigns.push({field, value: lowerColorValue(node, env)});
     }
   };
 
@@ -253,7 +252,7 @@ export function emitDial(
       } else {
         dynAssigns.push({
           field,
-          value: foreignProp(`(uint8_t)(${emitEnumExpr(node, table, env)})`),
+          value: {kind: 'byte', value: lowerEnumValue(node, table, env)},
         });
       }
     } else if (name === 'adjustable' || name === 'range') {
@@ -263,9 +262,13 @@ export function emitDial(
       } catch {
         dynAssigns.push({
           field,
-          value: foreignProp(
-            `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
-          ),
+          value: {
+            kind: 'flag',
+            test: lowerExpr(node, env),
+            truthiness: 'value',
+            negate: false,
+            whenTrue: 1,
+          },
         });
       }
     } else if (name === 'knobImage') {
@@ -283,17 +286,17 @@ export function emitDial(
     } else if (name === 'indicatorGradient') {
       // Allow indicatorGradient to be statically defined but conditionally enabled with a ternary against null/undefined.
       let gradNode: t.Node = node;
-      let gradCond = null;
+      let gradCond: {test: IrExpr; negate: boolean} | null = null;
       if (node?.type === 'ConditionalExpression') {
         const nullish = (n: t.Node | null | undefined) =>
           n?.type === 'NullLiteral' ||
           (n?.type === 'Identifier' && n.name === 'undefined');
         if (nullish(node.alternate)) {
           gradNode = node.consequent;
-          gradCond = emitExpr(node.test, env).code;
+          gradCond = {test: lowerExpr(node.test, env), negate: false};
         } else if (nullish(node.consequent)) {
           gradNode = node.alternate;
-          gradCond = `!(${emitExpr(node.test, env).code})`;
+          gradCond = {test: lowerExpr(node.test, env), negate: true};
         }
       }
 
@@ -328,7 +331,13 @@ export function emitDial(
       if (gradCond) {
         dynAssigns.push({
           field: 'gradient_stop_count',
-          value: foreignProp(`(uint8_t)((${gradCond}) ? ${stops.length} : 0)`),
+          value: {
+            kind: 'flag',
+            test: gradCond.test,
+            truthiness: 'value',
+            negate: gradCond.negate,
+            whenTrue: stops.length,
+          },
         });
       } else {
         staticAssigns.push({
@@ -360,58 +369,21 @@ export function emitDial(
     }
   }
 
-  // Create the arc node and either apply static props once or register it for state-driven updates.
-  const isDynamic = dynAssigns.length > 0;
-  out.build.push(`    ${nodeID} = er_node_create(ER_NODE_ARC);`);
-  if (isDynamic) {
-    out.build.push(`    s_${nodeID} = ${nodeID};`);
-    out.handles.push(nodeID);
-    out.updates.push({
-      nodeId: nodeID,
-      styleAssigns: staticAssigns,
-      text: null,
-      dynAssigns,
-      imageName: knobImage != null ? cstr(knobImage) : null,
-    });
-  } else {
-    out.build.push(`    er_props_default(&p);`);
-    for (const assign of staticAssigns) {
-      out.build.push(`    p.${assign.field} = ${assign.expr};`);
-    }
-    if (knobImage != null) {
-      out.build.push(
-        `    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(knobImage)});`,
-      );
-    }
-    out.build.push(`    er_node_set_props(${nodeID}, &p);`);
-  }
-
   // Animated bindings: style props plus an animated `value` (ER_PROP_ARC_VALUE).
-  binds.forEach((bind, index) => {
-    if (bind.interp) {
-      const interp = bind.interp;
-      const interpName = `interp_${nodeID}_${index}`;
-      const input = interp.input.map(floatLit).join(', ');
-      const output = interp.output.map(floatLit).join(', ');
-
-      out.build.push(
-        `    {`,
-        `        static const ERInterpolation ${interpName} = {`,
-        `            { ${input} },`,
-        `            { ${output} },`,
-        `            ${interp.input.length},`,
-        `            ${interp.exLeft},`,
-        `            ${interp.exRight}`,
-        `        };`,
-        `        er_anim_value_bind_interpolated(${bind.cVar}, ${nodeID}, ${bind.prop}, &${interpName});`,
-        `    }`,
-      );
-    } else {
-      out.build.push(
-        `    er_anim_value_bind(${bind.cVar}, ${nodeID}, ${bind.prop});`,
-      );
-    }
-  });
+  const node: IrNode = {
+    id: nodeID,
+    type: 'ER_NODE_ARC',
+    constantProps: staticAssigns,
+    stateProps: dynAssigns,
+    placeholder: null,
+    text: null,
+    image:
+      knobImage != null
+        ? {kind: 'static', name: knobImage, resetOnUpdate: true}
+        : null,
+    spans: null,
+    wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),
+  };
 
   // Compile <Dial onChange> into an ER_EVENT_VALUE_CHANGE handler.
   if (onChangeFn) {
@@ -445,12 +417,18 @@ export function emitDial(
         'data->value_start',
       ),
     });
-    out.build.push(
-      `    er_event_set(${nodeID}, ER_EVENT_VALUE_CHANGE, ${handlerName}, NULL);`,
-    );
+    node.wiring.push({
+      kind: 'event',
+      event: 'ER_EVENT_VALUE_CHANGE',
+      handler: handlerName,
+    });
   }
 
-  emitRefBind(nodeID, element.openingElement, out, env);
+  for (const slot of lowerRefBinds(element.openingElement, env)) {
+    node.wiring.push({kind: 'ref', slot});
+  }
+
+  emitIrNode(node, out);
   emitChildren(element.children, nodeID, scope, out, env, state);
   return nodeID;
 }

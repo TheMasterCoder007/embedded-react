@@ -22,6 +22,7 @@ import {cstr, floatLit} from '../c-syntax.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {printText} from './text.mts';
 import type {IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
+import type {AnimBind} from '../style-text.mts';
 import type {NodeUpdate} from '../out.mts';
 import type {PanResponderRecord} from '../types.mts';
 
@@ -65,7 +66,6 @@ export function printShow(show: IrShow): string {
 export function printPropValue(value: IrPropValue): string {
   switch (value.kind) {
     case 'constant':
-    case 'foreign':
       return value.code;
     case 'select':
       return (
@@ -80,7 +80,60 @@ export function printPropValue(value: IrPropValue): string {
       return `((${printExpr(value.value)}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`;
     case 'shown':
       return `((${printShow(value.show)}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`;
+    case 'flag': {
+      const test =
+        value.truthiness === 'condition'
+          ? printCondition(value.test)
+          : printExpr(value.test);
+      return `(uint8_t)((${value.negate ? `!(${test})` : test}) ? ${value.whenTrue} : 0)`;
+    }
+    case 'byte':
+      return `(uint8_t)(${printPropValue(value.value)})`;
+    case 'float':
+      return `(float)(${printExpr(value.value)})`;
   }
+}
+
+/**
+ * An animated value's bind onto a node; an interpolated one first declares its table. The Dial lays its table
+ * out one field per line.
+ *
+ * @param node  The node.
+ * @param bind  The bind.
+ * @param index  Numbers the table within the node.
+ *
+ * @returns The C lines.
+ */
+function printBind(node: IrNode, bind: AnimBind, index: number): string[] {
+  if (!bind.interp) {
+    return [`    er_anim_value_bind(${bind.cVar}, ${node.id}, ${bind.prop});`];
+  }
+
+  const interp = bind.interp;
+  const name = `interp_${node.id}_${index}`;
+  const input = interp.input.map(floatLit).join(', ');
+  const output = interp.output.map(floatLit).join(', ');
+  const table =
+    node.type === 'ER_NODE_ARC'
+      ? [
+          `        static const ERInterpolation ${name} = {`,
+          `            { ${input} },`,
+          `            { ${output} },`,
+          `            ${interp.input.length},`,
+          `            ${interp.exLeft},`,
+          `            ${interp.exRight}`,
+          `        };`,
+        ]
+      : [
+          `        static const ERInterpolation ${name} = { { ${input} }, { ${output} }, ` +
+            `${interp.input.length}, ${interp.exLeft}, ${interp.exRight} };`,
+        ];
+  return [
+    `    {`,
+    ...table,
+    `        er_anim_value_bind_interpolated(${bind.cVar}, ${node.id}, ${bind.prop}, &${name});`,
+    `    }`,
+  ];
 }
 
 /**
@@ -108,8 +161,8 @@ export function printPanWiring(
 }
 
 /**
- * A host node as C. A node with no state-driven content sets its props once; otherwise it keeps a handle and
- * app_update() sets them all again. Spans, animated binds, refs, events and PanResponders are wired once.
+ * A node as C. A node with no state-driven content sets its props once; otherwise it keeps a handle and
+ * app_update() sets them all again. Spans and the node's wiring are set up once.
  *
  * @param node  The node.
  *
@@ -118,11 +171,16 @@ export function printPanWiring(
 export function printNode(node: IrNode): PrintedNode {
   const {id} = node;
   const text = node.text ? printText(node.text) : null;
-  const imageCode = node.image?.kind === 'foreign' ? node.image.code : null;
+  const imageName =
+    node.image?.kind === 'value'
+      ? printExpr(node.image.value)
+      : node.image?.resetOnUpdate
+        ? cstr(node.image.name)
+        : null;
   const isDynamic =
     (text?.args.length ?? 0) > 0 ||
     node.stateProps.length > 0 ||
-    imageCode !== null;
+    node.image?.kind === 'value';
 
   const build = [`    ${id} = er_node_create(${node.type});`];
   let update: NodeUpdate | null = null;
@@ -133,12 +191,19 @@ export function printNode(node: IrNode): PrintedNode {
       styleAssigns: node.constantProps,
       text,
       dynAssigns: node.stateProps,
-      imageName: imageCode,
+      imageName,
+      placeholder: node.placeholder,
     };
   } else {
     build.push(`    er_props_default(&p);`);
     for (const prop of node.constantProps) {
       build.push(`    p.${prop.field} = ${prop.expr};`);
+    }
+
+    if (node.placeholder != null) {
+      build.push(
+        `    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(node.placeholder)});`,
+      );
     }
 
     if (text) {
@@ -172,35 +237,24 @@ export function printNode(node: IrNode): PrintedNode {
     );
   }
 
-  // Animated values move their props on the native driver; `interp` remaps the value first.
-  node.binds.forEach((bind, bindIndex) => {
-    if (bind.interp) {
-      const interp = bind.interp;
-      build.push(
-        `    {`,
-        `        static const ERInterpolation interp_${id}_${bindIndex} = { { ` +
-          `${interp.input.map(floatLit).join(', ')} }, { ` +
-          `${interp.output.map(floatLit).join(', ')} }, ${interp.input.length}, ` +
-          `${interp.exLeft}, ${interp.exRight} };`,
-        `        er_anim_value_bind_interpolated(${bind.cVar}, ${id}, ${bind.prop}, ` +
-          `&interp_${id}_${bindIndex});`,
-        `    }`,
-      );
-    } else {
-      build.push(`    er_anim_value_bind(${bind.cVar}, ${id}, ${bind.prop});`);
+  // Binds, refs, events and PanResponders, in the order the element wires them.
+  for (const wire of node.wiring) {
+    switch (wire.kind) {
+      case 'bind':
+        build.push(...printBind(node, wire.bind, wire.index));
+        break;
+      case 'ref':
+        build.push(`    ${wire.slot} = ${id};`);
+        break;
+      case 'event':
+        build.push(
+          `    er_event_set(${id}, ${wire.event}, ${wire.handler}, NULL);`,
+        );
+        break;
+      case 'responder':
+        build.push(...printPanWiring(wire.pan, id));
+        break;
     }
-  });
-
-  for (const ref of node.refs) {
-    build.push(`    ${ref} = ${id};`);
-  }
-  for (const event of node.events) {
-    build.push(
-      `    er_event_set(${id}, ${event.event}, ${event.handler}, NULL);`,
-    );
-  }
-  for (const pan of node.responders) {
-    build.push(...printPanWiring(pan, id));
   }
 
   return {build, update};

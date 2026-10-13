@@ -47,7 +47,7 @@ import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {AnimBind} from './style-text.mts';
-import type {IrNode} from './ir/nodes.mts';
+import type {IrNode, IrWire} from './ir/nodes.mts';
 import type {
   DynAssign,
   EmitOptions,
@@ -119,7 +119,7 @@ function resolveTag(openingElement: t.JSXOpeningElement): string {
  *
  * @returns The refs' C slots.
  */
-function lowerRefBinds(
+export function lowerRefBinds(
   openingElement: t.JSXOpeningElement,
   env: Env,
 ): string[] {
@@ -544,23 +544,34 @@ function emitNodeImpl(
         )
       : null;
 
+  // A host node wires its binds (the press feedback's last), then its refs, events and PanResponders.
+  const wiring: IrWire[] = binds.map((bind, index) => ({
+    kind: 'bind',
+    bind,
+    index,
+  }));
+  if (press) {
+    wiring.push({kind: 'bind', bind: press.bind, index: binds.length});
+  }
+  for (const slot of lowerRefBinds(element.openingElement, env)) {
+    wiring.push({kind: 'ref', slot});
+  }
+
   const node: IrNode = {
     id: nodeId,
     type: nodeType,
     constantProps: staticAssigns,
     stateProps: dynAssigns,
+    placeholder: null,
     text,
     image:
       image?.imageNameDyn != null
-        ? {kind: 'foreign', code: image.imageNameDyn}
+        ? {kind: 'value', value: image.imageNameDyn}
         : image?.imageName != null
-          ? {kind: 'static', name: image.imageName}
+          ? {kind: 'static', name: image.imageName, resetOnUpdate: false}
           : null,
     spans,
-    binds: press ? [...binds, press.bind] : binds,
-    refs: lowerRefBinds(element.openingElement, env),
-    events: [],
-    responders: panSpreads,
+    wiring,
   };
 
   // Compile each event prop into a handler; a disabled <TouchableOpacity> drops its press events.
@@ -631,7 +642,7 @@ function emitNodeImpl(
       fadesWired.add((attr.name as t.JSXIdentifier).name);
     }
 
-    node.events.push({event: eventType, handler: handlerName});
+    wiring.push({kind: 'event', event: eventType, handler: handlerName});
   }
 
   // Whichever end of the press the app did not handle itself is the fade on its own.
@@ -640,7 +651,8 @@ function emitNodeImpl(
       if (fadesWired.has(eventName)) continue;
       const fadeHandlerName = `er_handler_${out.handlers.length}`;
       out.handlers.push({name: fadeHandlerName, body: press.fades[eventName]});
-      node.events.push({
+      wiring.push({
+        kind: 'event',
         event: EVENT_TYPES[eventName],
         handler: fadeHandlerName,
       });
@@ -650,15 +662,11 @@ function emitNodeImpl(
   // A PanResponder's functions are emitted on the first node that spreads it.
   for (const panResponder of panSpreads) {
     emitPanResponder(panResponder, out, env, state);
+    wiring.push({kind: 'responder', pan: panResponder});
   }
 
-  // The node is printed before its children, whose lines follow its own.
-  const printed = printNode(node);
-  out.build.push(...printed.build);
-  if (printed.update) {
-    out.handles.push(nodeId);
-    out.updates.push(printed.update);
-  }
+  // The node is emitted before its children, whose lines follow its own.
+  emitIrNode(node, out);
 
   // A <Text>'s children are its text, already consumed above.
   if (tag !== 'Text') {
@@ -714,6 +722,21 @@ function omitUndefinedAttrs(
         ...element,
         openingElement: {...element.openingElement, attributes: keptAttrs},
       };
+}
+
+/**
+ * Emits a lowered node: its build lines, and its handle and app_update() entry when state drives it.
+ *
+ * @param node  The node.
+ * @param out  Everything emitted so far.
+ */
+export function emitIrNode(node: IrNode, out: Out): void {
+  const printed = printNode(node);
+  out.build.push(...printed.build);
+  if (printed.update) {
+    out.handles.push(node.id);
+    out.updates.push(printed.update);
+  }
 }
 
 /** Lowers one JSX element to its engine node; an AOT error it throws is pinned to the element. */

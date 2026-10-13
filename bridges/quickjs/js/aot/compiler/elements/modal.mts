@@ -21,14 +21,14 @@
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
-import {emitExpr} from '../expressions.mts';
+import {lowerExpr} from '../expressions.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
-import {foreignProp} from '../ir/nodes.mts';
 import {emitChildren} from '../control-flow.mts';
-import {emitRefBind} from '../nodes.mts';
+import {emitIrNode, lowerRefBinds} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
+import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -141,33 +141,31 @@ export function emitModal(
   } catch {
     dynAssigns.push({
       field: 'modal_visible',
-      value: foreignProp(
-        `(uint8_t)((${emitExpr(visibleNode, env).code}) ? 1 : 0)`,
-      ),
+      value: {
+        kind: 'flag',
+        test: lowerExpr(visibleNode, env),
+        truthiness: 'value',
+        negate: false,
+        whenTrue: 1,
+      },
     });
   }
 
-  // Create the modal node and either apply fixed props once or register it for app_update().
-  const isDynamic = dynAssigns.length > 0;
-  out.build.push(`    ${nodeId} = er_node_create(ER_NODE_MODAL);`);
-  if (isDynamic) {
-    out.build.push(`    s_${nodeId} = ${nodeId};`);
-    out.handles.push(nodeId);
-    out.updates.push({
-      nodeId: nodeId,
-      styleAssigns: staticAssigns,
-      text: null,
-      dynAssigns,
-    });
-  } else {
-    out.build.push(`    er_props_default(&p);`);
-    for (const a of staticAssigns) {
-      out.build.push(`    p.${a.field} = ${a.expr};`);
-    }
-    out.build.push(`    er_node_set_props(${nodeId}, &p);`);
-  }
-
-  emitRefBind(nodeId, element.openingElement, out, env);
+  const node: IrNode = {
+    id: nodeId,
+    type: 'ER_NODE_MODAL',
+    constantProps: staticAssigns,
+    stateProps: dynAssigns,
+    placeholder: null,
+    text: null,
+    image: null,
+    spans: null,
+    wiring: lowerRefBinds(element.openingElement, env).map(slot => ({
+      kind: 'ref',
+      slot,
+    })),
+  };
+  emitIrNode(node, out);
   emitChildren(element.children, nodeId, scope, out, env, state); // the modal's content (shown/hidden with the modal)
 
   return nodeId;

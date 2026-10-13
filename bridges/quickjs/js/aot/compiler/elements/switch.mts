@@ -21,15 +21,15 @@
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
-import {asCond, emitExpr} from '../expressions.mts';
+import {asCond, emitExpr, lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
-import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
-import {emitRefBind} from '../nodes.mts';
+import {emitIrNode, lowerRefBinds} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
+import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -135,32 +135,28 @@ export function emitSwitch(
     } catch {
       dynAssigns.push({
         field: 'switch_value',
-        value: foreignProp(
-          `(uint8_t)((${asCond(emitExpr(valueNode, env))}) ? 1 : 0)`,
-        ),
+        value: {
+          kind: 'flag',
+          test: lowerExpr(valueNode, env),
+          truthiness: 'condition',
+          negate: false,
+          whenTrue: 1,
+        },
       });
     }
   }
 
-  // Create the switch node and either apply fixed props once or register it for app_update().
-  const isDynamic = dynAssigns.length > 0;
-  out.build.push(`    ${nodeId} = er_node_create(ER_NODE_SWITCH);`);
-  if (isDynamic) {
-    out.build.push(`    s_${nodeId} = ${nodeId};`);
-    out.handles.push(nodeId);
-    out.updates.push({
-      nodeId: nodeId,
-      styleAssigns: staticAssigns,
-      text: null,
-      dynAssigns,
-    });
-  } else {
-    out.build.push(`    er_props_default(&p);`);
-    for (const a of staticAssigns) {
-      out.build.push(`    p.${a.field} = ${a.expr};`);
-    }
-    out.build.push(`    er_node_set_props(${nodeId}, &p);`);
-  }
+  const node: IrNode = {
+    id: nodeId,
+    type: 'ER_NODE_SWITCH',
+    constantProps: staticAssigns,
+    stateProps: dynAssigns,
+    placeholder: null,
+    text: null,
+    image: null,
+    spans: null,
+    wiring: [],
+  };
 
   // Compile onValueChange into a press handler that receives the toggled switch value.
   if (onChangeFn) {
@@ -194,12 +190,18 @@ export function emitSwitch(
         true,
       ),
     });
-    out.build.push(
-      `    er_event_set(${nodeId}, ER_EVENT_PRESS, ${handlerName}, NULL);`,
-    );
+    node.wiring.push({
+      kind: 'event',
+      event: 'ER_EVENT_PRESS',
+      handler: handlerName,
+    });
   }
 
-  emitRefBind(nodeId, element.openingElement, out, env);
+  for (const slot of lowerRefBinds(element.openingElement, env)) {
+    node.wiring.push({kind: 'ref', slot});
+  }
+
+  emitIrNode(node, out);
 
   return nodeId;
 }

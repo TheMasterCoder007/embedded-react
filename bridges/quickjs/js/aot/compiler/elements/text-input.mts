@@ -21,16 +21,15 @@
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
-import {cstr} from '../c-syntax.mts';
-import {emitExpr, emitFormat} from '../expressions.mts';
+import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, collectStyleAssigns} from '../style-text.mts';
-import {foreignProp} from '../ir/nodes.mts';
 import {compileValueHandler} from '../handlers.mts';
-import {emitRefBind} from '../nodes.mts';
+import {emitIrNode, lowerRefBinds} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
+import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -112,9 +111,13 @@ export function emitTextInput(
       } catch {
         dynAssigns.push({
           field,
-          value: foreignProp(
-            `(uint8_t)((${emitExpr(node, env).code}) ? 1 : 0)`,
-          ),
+          value: {
+            kind: 'flag',
+            test: lowerExpr(node, env),
+            truthiness: 'value',
+            negate: false,
+            whenTrue: 1,
+          },
         });
       }
     } else if (
@@ -142,46 +145,17 @@ export function emitTextInput(
 
   // value → the input's text buffer (er_node_set_props → er_text_input_set_text): static literal, or a
   // state-driven value re-synced each app_update.
-  let text: {dynamic: boolean; format: string; args: string[]} | null = null;
-  if (valueNode) {
-    const formatResult = emitFormat(valueNode, env, scope);
-    text = {
-      dynamic: formatResult.args.length > 0,
-      format: formatResult.format,
-      args: formatResult.args,
-    };
-  }
-
-  // Create the text input node and either apply fixed props/text once or register it for app_update().
-  const isDynamic = dynAssigns.length > 0 || (text && text.dynamic);
-  out.build.push(`    ${nodeId} = er_node_create(ER_NODE_TEXT_INPUT);`);
-  if (isDynamic) {
-    out.build.push(`    s_${nodeId} = ${nodeId};`);
-    out.handles.push(nodeId);
-    out.updates.push({
-      nodeId: nodeId,
-      styleAssigns: staticAssigns,
-      text,
-      dynAssigns,
-      placeholder,
-    });
-  } else {
-    out.build.push(`    er_props_default(&p);`);
-    for (const assign of staticAssigns) {
-      out.build.push(`    p.${assign.field} = ${assign.expr};`);
-    }
-    if (placeholder != null) {
-      out.build.push(
-        `    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(placeholder)});`,
-      );
-    }
-    if (text) {
-      out.build.push(
-        `    snprintf(p.text, sizeof(p.text), "%s", ${cstr(text.format.replace(/%%/g, '%'))});`,
-      );
-    }
-    out.build.push(`    er_node_set_props(${nodeId}, &p);`);
-  }
+  const node: IrNode = {
+    id: nodeId,
+    type: 'ER_NODE_TEXT_INPUT',
+    constantProps: staticAssigns,
+    stateProps: dynAssigns,
+    placeholder,
+    text: valueNode ? lowerText(valueNode, env, scope) : null,
+    image: null,
+    spans: null,
+    wiring: [],
+  };
 
   // Compile onChangeText into an ER_EVENT_CHANGE_TEXT handler that receives the edited text.
   if (onChangeFn) {
@@ -203,12 +177,18 @@ export function emitTextInput(
         'string',
       ),
     });
-    out.build.push(
-      `    er_event_set(${nodeId}, ER_EVENT_CHANGE_TEXT, ${handlerName}, NULL);`,
-    );
+    node.wiring.push({
+      kind: 'event',
+      event: 'ER_EVENT_CHANGE_TEXT',
+      handler: handlerName,
+    });
   }
 
-  emitRefBind(nodeId, element.openingElement, out, env);
+  for (const slot of lowerRefBinds(element.openingElement, env)) {
+    node.wiring.push({kind: 'ref', slot});
+  }
+
+  emitIrNode(node, out);
 
   return nodeId;
 }
