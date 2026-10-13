@@ -18,10 +18,10 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {checkNumber} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStaticOrThrow, evalStatic, foldScope} from './static-eval.mts';
-import {floatLit} from './c-syntax.mts';
 import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
 import {
@@ -298,7 +298,7 @@ function touchablePressFades(
 
   // Bind a fresh animated value, starting at rest, to the node's opacity.
   const cVar = `s_av_press_${nodeId}`;
-  floatLit(restingOpacity); // a value C cannot write fails here, at the element
+  checkNumber(restingOpacity);
   out.childAnimations.push({cVar, initial: restingOpacity});
 
   // Each fade is one timing animation of that value.
@@ -735,7 +735,7 @@ export function checkInterpolations(node: IrNode): void {
       ...wire.bind.interp.input,
       ...wire.bind.interp.output,
     ]) {
-      floatLit(point);
+      checkNumber(point);
     }
   }
 }

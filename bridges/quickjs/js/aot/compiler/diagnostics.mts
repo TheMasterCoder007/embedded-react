@@ -42,8 +42,30 @@ export interface AotError extends Error {
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The location of each node a located emitter is lowering, innermost last; undefined for a node without one. */
+const loweringAt: (SourcePosition | undefined)[] = [];
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Where an AOT error thrown now would be reported: the innermost node being lowered that has a location.
+ *
+ * @returns The location, or undefined outside every located emitter.
+ */
+export function currentLoc(): SourcePosition | undefined {
+  for (let index = loweringAt.length - 1; index >= 0; index--) {
+    if (loweringAt[index]) {
+      return loweringAt[index];
+    }
+  }
+
+  return undefined;
+}
 
 /**
  * Builds an AOT error carrying an optional `hint` (a "rewrite it like this" suggestion shown to the user).
@@ -67,7 +89,8 @@ export function aotError(message: string, hint?: string): AotError {
 /**
  * Wraps an emit function so a thrown AOT error (without a location yet) is tagged with the current node's
  * loc. Wrapped emitters nest, so the deepest node that failed is the one reported. The expression, node, and
- * handler emitters are all wrapped, and compileSource formats the result with formatAotError.
+ * handler emitters are all wrapped, and compileSource formats the result with formatAotError. While it runs,
+ * currentLoc() reports the same location, for a check recorded now and run later.
  *
  * @param fn  The emit function; its first parameter is the node it lowers.
  *
@@ -81,6 +104,7 @@ export function withLoc<
   fn: (node: NodeArg, ...rest: RestArgs) => Result,
 ): (node: NodeArg, ...rest: RestArgs) => Result {
   return function (node, ...rest) {
+    loweringAt.push(node?.loc?.start);
     try {
       return fn(node, ...rest);
     } catch (error) {
@@ -96,6 +120,8 @@ export function withLoc<
       }
 
       throw error;
+    } finally {
+      loweringAt.pop();
     }
   };
 }

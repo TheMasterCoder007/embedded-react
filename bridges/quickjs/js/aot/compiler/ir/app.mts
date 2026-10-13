@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import type {IrCheck} from '../check.mts';
 import type {Out} from '../out.mts';
 import type {
   AnimRecord,
@@ -48,6 +49,8 @@ export interface IrApp {
   hasUpdate: boolean;
   /** The image imports the app reaches, which the CLI bakes. */
   images: AssetImport[];
+  /** The values lowering recorded for the check pass, in order. */
+  checks: IrCheck[];
   /** Everything else the tree and its effects emitted. */
   out: Out;
 }

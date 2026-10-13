@@ -18,8 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
 import {aotError} from './diagnostics.mts';
-import {floatLit} from './c-syntax.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {findShadowedClockCalls, emitExprWide} from './expressions.mts';
 import {
@@ -135,7 +135,7 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
         if (field.kind === 'string' || value == null) continue;
         const number = Number(value);
         if (field.kind === 'float' || !Number.isFinite(number)) {
-          floatLit(number);
+          checkNumber(number);
         }
       }
     }
@@ -155,9 +155,8 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
 }
 
 /**
- * Lowers a Flow B app's JSX (or TSX) source: runs the compiler passes over the parsed app, from its module
- * scope and hooks through the element tree to its effects. Pure (no I/O); writeApp (assemble.mts) writes the
- * result as C.
+ * Lowers a Flow B app's JSX (or TSX) source, then runs the check pass over what lowering recorded. Pure (no
+ * I/O); writeApp (assemble.mts) writes the result as C.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param opts  compileSource's options, resolved (see resolveOptions).
@@ -172,6 +171,31 @@ export function lowerApp(
   wide: Set<string>,
   found: Set<string>,
 ): IrApp {
+  const {result, checks} = lowerWithChecks(() =>
+    lowerProgram(src, opts, wide, found),
+  );
+  const app = {...result, checks};
+  runChecks(app.checks);
+  return app;
+}
+
+/**
+ * Runs the compiler passes over the parsed app, from its module scope and hooks through the element tree to its
+ * effects, recording the values the check pass checks.
+ *
+ * @param src  The App.jsx/App.tsx source text.
+ * @param opts  compileSource's options, resolved (see resolveOptions).
+ * @param wide  State/ref slots to declare 64-bit (see compileWidened).
+ * @param found  Collects the int slots a 64-bit timestamp was stored in.
+ *
+ * @returns The lowered app, without its checks.
+ */
+function lowerProgram(
+  src: string,
+  opts: ResolvedOptions,
+  wide: Set<string>,
+  found: Set<string>,
+): Omit<IrApp, 'checks'> {
   // Parse the app and prepare the AST for the passes below.
   const ast = parseApp(src, opts);
   normalizeUndefined(ast);

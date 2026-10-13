@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {attemptLowering} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {emitExprWide, lowerExpr} from './expressions.mts';
@@ -725,8 +726,13 @@ export function emitChildren(
         let condValue;
         try {
           condValue = evalStatic(expr.left, scope);
+          // A failure anywhere in X falls back to the dynamic form, so X's checks run now.
           if (condValue) {
-            element(emitElementInto(expr.right, scope, out, env, state));
+            element(
+              attemptLowering(() =>
+                emitElementInto(expr.right, scope, out, env, state),
+              ),
+            );
           }
         } catch {
           const test = lowerExpr(expr.left, env);
@@ -745,16 +751,19 @@ export function emitChildren(
           expr.alternate.type === 'JSXElement')
       ) {
         // `{cond ? <A/> : <B/>}`. Static cond picks a branch; dynamic cond builds both and toggles each.
-        let testValue;
+        let testValue: unknown;
         try {
           testValue = evalStatic(expr.test, scope);
+          // A failure anywhere in the branch falls back to the dynamic form, so its checks run now.
           element(
-            emitElementInto(
-              testValue ? expr.consequent : expr.alternate,
-              scope,
-              out,
-              env,
-              state,
+            attemptLowering(() =>
+              emitElementInto(
+                testValue ? expr.consequent : expr.alternate,
+                scope,
+                out,
+                env,
+                state,
+              ),
             ),
           );
         } catch {

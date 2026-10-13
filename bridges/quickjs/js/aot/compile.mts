@@ -62,6 +62,7 @@
  *   compiler/elements/*.mts      typed components: Dial / Switch / TextInput / Modal / FlatList / …
  *   compiler/keyboard.mts        setKeyboardConfig({...}) → the keyboard config
  *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
+ *   compiler/check.mts           the check pass — the values lowering recorded, checked in order
  *   compiler/assemble.mts        writeApp — write the lowered app as app.gen.{c,h}
  *
  * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs

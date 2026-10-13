@@ -18,10 +18,10 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
-import {floatLit} from './c-syntax.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
@@ -225,14 +225,14 @@ export function staticInt(node: t.Node, env: Env): number | null {
  * @returns Its constant.
  */
 function numConst(value: number): IrNumber {
-  // A float has no NaN or Infinity literal (a folded `0 / 0`, say); floatLit refuses them here, at the expression.
+  // A float holds no NaN or Infinity (a folded `0 / 0`, say); the check pass reports them at the expression.
   if (!Number.isInteger(value)) {
-    floatLit(value);
+    checkNumber(value);
     return {kind: 'number', value, cType: 'float'};
   }
 
   if (value < -(2 ** 63) || value >= 2 ** 63) {
-    floatLit(value);
+    checkNumber(value);
     return {kind: 'number', value, cType: 'float'};
   }
 
@@ -1030,7 +1030,10 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       // Static fold: member access that resolves to a compile-time constant (e.g., a .map item's `.key`).
       try {
         const constValue = evalStatic(node, foldScope(env, env.consts ?? {}));
-        if (typeof constValue === 'number') return numConst(constValue);
+        // A number with no float form falls through too, so its check runs now, not in the check pass.
+        if (typeof constValue === 'number') {
+          return attemptLowering(() => numConst(constValue));
+        }
 
         if (typeof constValue === 'string') {
           return stringConst(constValue);

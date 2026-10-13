@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {checkNumber} from './check.mts';
 import {parse} from '@babel/parser';
 import {readFileSync, existsSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -389,7 +390,11 @@ export function collectState(
         // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
         const initial =
           cType === 'string' ? String(initValue) : Number(initValue);
-        cConstant(initial, cType); // a value C cannot write fails here, at the hook
+        if (cType === 'float') {
+          checkNumber(initial);
+        } else if (cType === 'i64') {
+          cConstant(initial, cType); // BigInt refuses a value that is not a whole number
+        }
         record = {
           name,
           cField,

@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {checkNumber, numberProblem} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
 import {
   flattenSvg,
@@ -30,7 +31,6 @@ import {
 } from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {floatLit} from './c-syntax.mts';
 import {lowerExpr} from './expressions.mts';
 import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
 import {lowerRefBinds} from './nodes.mts';
@@ -226,8 +226,8 @@ export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
  */
 export function checkVectorPaints(paints: IrVectorPaint[]): void {
   for (const paint of paints) {
-    floatLit(paint.strokeWidth);
-    floatLit(paint.miter);
+    checkNumber(paint.strokeWidth);
+    checkNumber(paint.miter);
   }
 }
 
@@ -240,16 +240,16 @@ export function checkVectorPaints(paints: IrVectorPaint[]): void {
 function checkVectorTables(tables: IrVectorTables): void {
   if (!tables.ops.length) return;
   for (const op of tables.ops) {
-    floatLit(op);
+    checkNumber(op);
   }
   checkVectorPaints(tables.paints);
   for (const gradient of tables.gradients) {
     for (const stop of (gradient.stops || []).slice(0, MAX_GRADIENT_STOPS)) {
-      floatLit(stop.offset);
+      checkNumber(stop.offset);
     }
     const {ax, ay, bx, by, r} = gradient;
     for (const field of [ax, ay, bx, by, r]) {
-      floatLit(field || 0);
+      checkNumber(field || 0);
     }
   }
 }
@@ -397,7 +397,7 @@ function lowerGradient(
     ] = property.value;
   }
 
-  // A numeric field: a number when it folds to one C can write, otherwise the state-driven value.
+  // A numeric field: a number when it folds to one a float holds, otherwise the state-driven value.
   const floatField = (
     valueNode: t.Node | undefined,
     fallback: number,
@@ -405,11 +405,13 @@ function lowerGradient(
     if (valueNode == null) return tapeNumber(fallback);
     try {
       const value = evalStatic(valueNode, scope);
-      floatLit(value);
-      return tapeNumber(Number(value));
+      if (!numberProblem(value)) {
+        return tapeNumber(Number(value));
+      }
     } catch {
-      return {kind: 'float', value: lowerExpr(valueNode, env)};
+      // Not static: the state-driven value below.
     }
+    return {kind: 'float', value: lowerExpr(valueNode, env)};
   };
 
   // The type and the stop count decide the table's shape, so both must be static.
@@ -585,7 +587,7 @@ function lowerShapePaint(attrs: SvgAttrs, env: Env, scope: Scope): ShapePaint {
   const fill = color(attrs.fill, 'black');
   const stroke = color(attrs.stroke, 'none');
   const miter = svgNum(attrs.strokeMiterlimit, 4);
-  floatLit(miter);
+  checkNumber(miter);
   const paint = {
     fill,
     stroke,
@@ -627,7 +629,7 @@ const TAPE_ZERO = tapeNumber(0);
  * @returns The slot.
  */
 export const checkedTapeNumber = (value: number): IrTapeValue => {
-  floatLit(value);
+  checkNumber(value);
   return tapeNumber(value);
 };
 

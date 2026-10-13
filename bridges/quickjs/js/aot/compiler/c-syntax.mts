@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {aotError} from './diagnostics.mts';
+import {numberProblem} from './check.mts';
 import type {CType} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -105,26 +105,16 @@ export const cTypeOfValue = (value: unknown): 'string' | 'float' | 'int' =>
  * @returns Its C float literal.
  */
 export function floatLit(rawValue: unknown): string {
-  // Non-finite values have no C form; every literal funnels here, so they fail now, not in the host compiler.
+  // The check pass refuses what a float cannot hold; a value that reaches here unchecked fails the same way.
+  const problem = numberProblem(rawValue);
+  if (problem) {
+    throw problem;
+  }
+
+  // Write float underflow as 0, since C compilers warn about it.
   const value = Number(rawValue);
-  if (!Number.isFinite(value)) {
-    throw aotError(
-      `AOT: a numeric constant folded to ` +
-        `${rawValue === undefined ? 'undefined' : String(rawValue)}, which has no C form`,
-      'the value must be a finite number.',
-    );
-  }
-
-  // Refuse values past the float range and write float underflow as 0, since C compilers warn about both.
-  const float32 = Math.fround(value);
-  if (!Number.isFinite(float32)) {
-    throw aotError(
-      `AOT: the numeric constant ${value} is past the float range`,
-      'a float holds up to about 3.4e38.',
-    );
-  }
-
-  if (float32 === 0 && value !== 0) return value < 0 ? '-0.0f' : '0.0f';
+  if (Math.fround(value) === 0 && value !== 0)
+    return value < 0 ? '-0.0f' : '0.0f';
 
   // An exponent (`1e+21`) already makes a float literal; `.0` after one would not be C.
   const spelling = String(value);
