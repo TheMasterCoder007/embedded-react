@@ -20,6 +20,7 @@
 
 import {cScalarType} from '../c-syntax.mts';
 import {printAnimationStart} from './animations.mts';
+import {printUpdateVector} from './vectors.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {formatArgs, printText} from './text.mts';
 import type {IrExpr} from '../ir/expressions.mts';
@@ -245,8 +246,8 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
     case 'startChain':
     case 'completeAfter':
       return printAnimationStart(stmt);
-    case 'foreign':
-      return stmt.lines.map(line => indent + line);
+    case 'updateVector':
+      return printUpdateVector(stmt).map(line => indent + line);
   }
 }
 

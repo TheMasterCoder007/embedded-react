@@ -77,9 +77,7 @@ export type IrTapeValue =
   /** A whole turn, in radians. */
   | {kind: 'fullTurn'}
   /** A corner radius clamped to half the side it rounds. */
-  | {kind: 'clampRadius'; radius: IrTapeValue; side: IrTapeValue}
-  /** C from the imperative updateVector path, which does not lower to the IR yet. */
-  | {kind: 'foreign'; code: string};
+  | {kind: 'clampRadius'; radius: IrTapeValue; side: IrTapeValue};
 
 /** A shape's tape slots, and the locals declared ahead of them (a rounded rect's radii). */
 export interface IrGeometry {

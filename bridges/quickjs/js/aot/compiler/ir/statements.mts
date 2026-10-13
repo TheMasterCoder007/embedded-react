@@ -22,6 +22,7 @@ import type {ItemField, ListState, RefRecord, ScalarState} from '../types.mts';
 import type {IrAnimationStart} from './animations.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrText} from './text.mts';
+import type {IrTapeValue, IrVectorPaint} from './vectors.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -157,10 +158,22 @@ export interface IrArmCleanup {
   flag: string;
 }
 
-/** C from a module that does not lower to the IR yet: an updateVector call, its lines taking the statement's indent. */
-export interface IrForeign {
-  kind: 'foreign';
-  lines: string[];
+/**
+ * `updateVector(ref, shapes, dirtyRect?)`: rewrites a vector node's op-tape in place and hands it over, the
+ * imperative fast path (a drag) that bypasses app_update. Its tape and paint tables are declared at file scope.
+ */
+export interface IrUpdateVector {
+  kind: 'updateVector';
+  /** Numbers the call's tables (`s_uv<id>_…`) and its locals. */
+  id: number;
+  /** The node ref's C slot. */
+  node: string;
+  locals: {name: string; value: IrTapeValue}[];
+  tape: IrTapeValue[];
+  /** One static paint per shape. */
+  paints: IrVectorPaint[];
+  /** The sub-rect that changed, x, y, width, height, or null to repaint the whole node. */
+  dirty: IrExpr[] | null;
 }
 
 /** A callback lowered to statements: an event handler, a timer, or a PanResponder callback. */
@@ -189,4 +202,4 @@ export type IrStmt =
   | IrReturn
   | IrArmCleanup
   | IrAnimationStart
-  | IrForeign;
+  | IrUpdateVector;

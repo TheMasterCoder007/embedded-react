@@ -31,6 +31,7 @@ import type {
   IrVectorPaint,
   IrVectorTables,
 } from '../ir/vectors.mts';
+import type {IrUpdateVector} from '../ir/statements.mts';
 import type {VectorGradient} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -152,8 +153,6 @@ export function printTapeValue(value: IrTapeValue): string {
       return `(float)(${printExpr(value.value)})`;
     case 'local':
       return value.name;
-    case 'foreign':
-      return value.code;
     case 'chain':
       return `(${[
         printTapeValue(value.first),
@@ -389,4 +388,50 @@ export function printStateDrivenVectorWiring(
       `${gradients.length ? `s_svg${id}_grads` : 'NULL'}, ${gradients.length});`,
     `    s_${nodeId} = ${nodeId};`,
   ];
+}
+
+/**
+ * An updateVector call's file-scope tables: its mutable op-tape and its const paints.
+ *
+ * @param update  The call.
+ *
+ * @returns The C declarations.
+ */
+export const printUpdateVectorData = (update: IrUpdateVector): string[] => [
+  `static float s_uv${update.id}_ops[${update.tape.length}];`,
+  `static const ERVectorPaint s_uv${update.id}_paints[] = ` +
+    `{\n${update.paints.map(paint => '    ' + printVectorPaint(paint)).join(',\n')}\n};`,
+];
+
+/**
+ * An updateVector call as statements: its locals, every tape slot, the hand-over to the node, and the dirty
+ * hint. A float edge may be NaN, so it goes through app_vector_dirty, which drops such a hint (a zero-width
+ * hint would paint nothing).
+ *
+ * @param update  The call.
+ *
+ * @returns The C lines, without their indent.
+ */
+export function printUpdateVector(update: IrUpdateVector): string[] {
+  const {id, node, tape} = update;
+  const lines = [
+    ...update.locals.map(
+      local => `const float ${local.name} = ${printTapeValue(local.value)};`,
+    ),
+    ...tape.map(
+      (value, slot) => `s_uv${id}_ops[${slot}] = ${printTapeValue(value)};`,
+    ),
+    `er_node_set_vector_ops(${node}, s_uv${id}_ops, ${tape.length}, ` +
+      `s_uv${id}_paints, ${update.paints.length}, NULL, 0);`,
+  ];
+  if (update.dirty) {
+    const dirtyFn = update.dirty.some(edge => edge.cType === 'float')
+      ? 'app_vector_dirty'
+      : 'er_node_set_vector_dirty_rect';
+    lines.push(
+      `${dirtyFn}(${node}, ${update.dirty.map(printExpr).join(', ')});`,
+    );
+  }
+
+  return lines;
 }

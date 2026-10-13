@@ -37,7 +37,6 @@ import {emitIrNode, lowerRefBinds} from './nodes.mts';
 import {
   printStateDrivenVector,
   printTapeValue,
-  printVectorPaint,
   printVectorTables,
 } from './c/vectors.mts';
 import type * as t from '@babel/types';
@@ -89,12 +88,6 @@ interface GradientAttr {
  * attribute), a DynamicAttr, or a GradientAttr.
  */
 type SvgAttrs = Record<string, unknown>;
-
-/** A shape's op-tape entries, and the C locals the caller declares ahead of them (a rounded rect's radii). */
-export interface VectorGeometry {
-  entries: string[];
-  locals: string[];
-}
 
 /** A gradient a shape uses, and the condition it is used under (`cond ? {…} : null`), if any. */
 interface ShapeGradient {
@@ -235,16 +228,6 @@ export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
   fillGradient: (record[7] || 0) | 0,
   strokeGradient: (record[8] || 0) | 0,
 });
-
-/**
- * One flattenSvg paint record as an ERVectorPaint initializer (see vectorPaintOf).
- *
- * @param record  The paint record.
- *
- * @returns The C initializer.
- */
-export const emitVectorPaint = (record: number[]): string =>
-  printVectorPaint(vectorPaintOf(record));
 
 /**
  * A drawing's flat paint records as paints, one per shape.
@@ -618,7 +601,7 @@ const TAPE_ZERO = tapeNumber(0);
  *
  * @returns The slot.
  */
-const checkedTapeNumber = (value: number): IrTapeValue => {
+export const checkedTapeNumber = (value: number): IrTapeValue => {
   floatLit(value);
   return tapeNumber(value);
 };
@@ -672,7 +655,7 @@ const tapeLiteral = (value: IrTapeValue | null): number | null =>
  *
  * @returns The slots.
  */
-const arcTape = (
+export const arcTape = (
   cx: IrTapeValue,
   cy: IrTapeValue,
   radius: IrTapeValue,
@@ -697,7 +680,7 @@ const arcTape = (
  *
  * @returns The slots.
  */
-const circleTape = (
+export const circleTape = (
   cx: IrTapeValue,
   cy: IrTapeValue,
   radius: IrTapeValue,
@@ -731,19 +714,6 @@ const cLiteralValue = (floatExpr: unknown): number | null => {
     ? parseFloat(trimmed)
     : null;
 };
-
-/**
- * Normalizes a shape's geometry result. Most shapes are just an op-tape; a rounded <Rect> also returns
- * the `const float` locals the caller must declare ahead of that tape, in the same C block.
- *
- * @param geometry  An op-tape, or a geometry.
- *
- * @returns The geometry.
- */
-export const geometryOf = (
-  geometry: string[] | VectorGeometry,
-): VectorGeometry =>
-  Array.isArray(geometry) ? {entries: geometry, locals: []} : geometry;
 
 /**
  * A corner radius clamped to half its side, mirroring svg-ops rectRadii. Folded to a number when both the
@@ -812,7 +782,7 @@ const sharpRectTape = (
  *
  * @returns The slots, and the locals to declare ahead of them.
  */
-const rectTape = (
+export const rectTape = (
   x: IrTapeValue,
   y: IrTapeValue,
   width: IrTapeValue,
@@ -924,7 +894,7 @@ const rectTape = (
  *
  * @returns The slots.
  */
-const lineTape = (
+export const lineTape = (
   x1: IrTapeValue,
   y1: IrTapeValue,
   x2: IrTapeValue,
@@ -937,84 +907,6 @@ const lineTape = (
   x2,
   y2,
 ];
-
-// The C-text geometry the imperative updateVector path still takes, over the same tape builders.
-
-/**
- * C an updateVector call has already written, as a tape slot.
- *
- * @param code  The C float.
- *
- * @returns The slot.
- */
-const foreignTape = (code: string): IrTapeValue => ({kind: 'foreign', code});
-
-/** An arc's op-tape entries as C (see arcTape). */
-export const arcEntriesC = (
-  cx: string,
-  cy: string,
-  radius: string,
-  startDeg: string,
-  endDeg: string,
-): string[] =>
-  arcTape(
-    foreignTape(cx),
-    foreignTape(cy),
-    foreignTape(radius),
-    foreignTape(startDeg),
-    foreignTape(endDeg),
-  ).map(printTapeValue);
-
-/** A circle's op-tape entries as C (see circleTape). */
-export const circleEntriesC = (
-  cx: string,
-  cy: string,
-  radius: string,
-): string[] =>
-  circleTape(foreignTape(cx), foreignTape(cy), foreignTape(radius)).map(
-    printTapeValue,
-  );
-
-/** A rectangle's op-tape entries and locals as C (see rectTape). */
-export const rectEntriesC = (
-  x: string,
-  y: string,
-  width: string,
-  height: string,
-  rx: string | null = null,
-  ry: string | null = null,
-  tag = '',
-): VectorGeometry => {
-  const geometry = rectTape(
-    foreignTape(x),
-    foreignTape(y),
-    foreignTape(width),
-    foreignTape(height),
-    rx == null ? null : foreignTape(rx),
-    ry == null ? null : foreignTape(ry),
-    tag,
-  );
-  return {
-    entries: geometry.entries.map(printTapeValue),
-    locals: geometry.locals.map(
-      local => `const float ${local.name} = ${printTapeValue(local.value)};`,
-    ),
-  };
-};
-
-/** A line's op-tape entries as C (see lineTape). */
-export const lineEntriesC = (
-  x1: string,
-  y1: string,
-  x2: string,
-  y2: string,
-): string[] =>
-  lineTape(
-    foreignTape(x1),
-    foreignTape(y1),
-    foreignTape(x2),
-    foreignTape(y2),
-  ).map(printTapeValue);
 
 /**
  * An SVG coordinate attribute as a tape slot: a number when static, the state-driven value read as a float.

@@ -19,6 +19,8 @@ import {parse} from '@babel/parser';
 import {lowerKeyboardConfig} from '../compiler/keyboard.mts';
 import {printKeyboard} from '../compiler/c/keyboard.mts';
 import {emitNode} from '../compiler/nodes.mts';
+import {lowerStmts} from '../compiler/handlers.mts';
+import {printStmts} from '../compiler/c/statements.mts';
 import {
   printStateDrivenVector,
   printTapeValue,
@@ -312,5 +314,81 @@ describe('vector IR: state-driven drawings', () => {
       '    s_svg0_paints[0].stroke_grad = ((!(s_state.on)) ? 2 : 0);',
     );
     expect(builder).toContain('    s_svg0_grads[0].bx = (float)(s_state.n);');
+  });
+});
+
+describe('vector IR: updateVector', () => {
+  /** Lowers a handler body that can update the node ref `art`, inside a touch handler's event `e`. */
+  function lowerHandler(source) {
+    const statements = parse(source, {sourceType: 'module'}).program.body;
+    const env = {
+      state: stateMap,
+      locals: new Map(),
+      consts: {},
+      refs: new Map([['art', {kind: 'node', cVar: 's_ref_art', used: false}]]),
+      event: 'e',
+      math64: false,
+      caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
+      found: new Set(),
+    };
+    const ctx = {
+      stateChanged: false,
+      animIdx: 0,
+      out: new Out(new Map(), null),
+    };
+    return {
+      stmts: lowerStmts(
+        statements,
+        env,
+        {byName: stateMap, bySetter: new Map()},
+        ctx,
+      ),
+      ctx,
+    };
+  }
+
+  it('lowers the shapes to tape slots on the same geometry as the JSX path', () => {
+    const {stmts, ctx} = lowerHandler(
+      "updateVector(art, [{rect: [e.x, 0, 30, 20, n, 4], fill: '#f00'}], [0, 0, 40, n]);",
+    );
+    const [update] = stmts;
+    expect(update).toMatchObject({
+      kind: 'updateVector',
+      id: 0,
+      node: 's_ref_art',
+      locals: [{name: 'rx_uv0_0', value: {kind: 'clampRadius'}}],
+      paints: [expect.objectContaining({fill: 0xffff0000})],
+    });
+    expect(update.tape.slice(0, 4)).toEqual([
+      {kind: 'op', op: 'ER_VOP_SHAPE'},
+      {kind: 'number', value: 0},
+      {kind: 'op', op: 'ER_VOP_MOVE'},
+      expect.objectContaining({kind: 'chain'}),
+    ]);
+    expect(update.dirty.map(edge => edge.kind)).toEqual([
+      'number',
+      'number',
+      'number',
+      'state',
+    ]);
+
+    // The tables are file-scope; the statement prints at its own indent and hands the tape to the node.
+    expect(ctx.out.vectorData[0]).toBe(
+      `static float s_uv0_ops[${update.tape.length}];`,
+    );
+    const lines = printStmts(stmts, '        ');
+    expect(lines[0]).toMatch(/^ {8}const float rx_uv0_0 = fminf\(/);
+    expect(lines.at(-1)).toBe(
+      '        er_node_set_vector_dirty_rect(s_ref_art, 0, 0, 40, s_state.n);',
+    );
+  });
+
+  it('rejects a shape array too short for its shape', () => {
+    expect(() => lowerHandler('updateVector(art, [{arc: [1, 2]}]);')).toThrow(
+      'AOT: updateVector "arc" needs 5 numbers (got 2)',
+    );
+    expect(() =>
+      lowerHandler('updateVector(art, [{rect: [1, 2, 3]}]);'),
+    ).toThrow('AOT: updateVector "rect" needs 4 numbers (got 3)');
   });
 });

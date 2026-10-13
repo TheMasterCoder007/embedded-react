@@ -42,16 +42,17 @@ import {
   stopWaitOwner,
 } from './animations.mts';
 import {
-  emitVectorPaint,
   svgNum,
   CAP_MAP,
   JOIN_MAP,
-  arcEntriesC,
-  circleEntriesC,
-  geometryOf,
-  rectEntriesC,
-  lineEntriesC,
+  arcTape,
+  circleTape,
+  rectTape,
+  lineTape,
+  checkedTapeNumber,
+  vectorPaintOf,
 } from './svg.mts';
+import {printUpdateVectorData} from './c/vectors.mts';
 import {APP_UPDATE_CALL, printCallback, printStmts} from './c/statements.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
@@ -61,8 +62,9 @@ import type {
   IrItemValue,
   IrStmt,
   IrTimer,
+  IrUpdateVector,
 } from './ir/statements.mts';
-import type {VectorGeometry} from './svg.mts';
+import type {IrGeometry, IrTapeValue, IrVectorPaint} from './ir/vectors.mts';
 import type {
   CExpr,
   CType,
@@ -373,23 +375,22 @@ function refTarget(
 }
 
 /**
- * An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[x, y,w,h,rx?,ry?]|line:[…]|path:'…', fill, … }`
- * → { entries (op-tape C exprs), locals (C declarations to emit ahead of them), paint (static 7-num
- * record) }. Geometry coords may reference state/refs/event fields (emitExpr); paint must be static.
- * Shares the ...EntriesC geometry with the JSX path. `tag` names any locals and must be unique in the
- * handler block the caller writes them into.
+ * An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[x, y, w, h, rx?, ry?]|line:[…]|path:'…', fill, … }`:
+ * its tape slots, the locals they need, and its static paint. Geometry coords may reference state, refs or event
+ * fields; the paint must be static. The geometry is the same as the JSX path's. `tag` names any locals and must
+ * be unique in the handler block they are written into.
  *
  * @param shapeNode  The shape's object literal.
  * @param env  The expression environment.
- * @param tag  Names the shape's C locals.
+ * @param tag  Names the shape's locals.
  *
- * @returns The shape's op-tape entries, the locals they need, and its paint record.
+ * @returns The shape's tape slots, the locals they need, and its paint.
  */
 function imperativeShape(
   shapeNode: t.Node | null | undefined,
   env: Env,
   tag: string,
-): VectorGeometry & {paint: number[]} {
+): IrGeometry & {paint: IrVectorPaint} {
   // Index the shape's properties by name.
   if (shapeNode?.type !== 'ObjectExpression') {
     throw new Error('AOT: each updateVector shape must be an object literal');
@@ -408,42 +409,54 @@ function imperativeShape(
   }
 
   // Lower whichever geometry key is present; array numbers may be runtime values, a path string must be static.
-  const geometryArgs = (key: string, count: number): string[] => {
+  const geometryArgs = (
+    key: string,
+    count: number,
+    required = count,
+  ): IrTapeValue[] => {
     if (props[key].type !== 'ArrayExpression') {
       throw new Error(`AOT: updateVector "${key}" must be an array literal`);
     }
 
-    return (props[key] as t.ArrayExpression).elements
-      .slice(0, count)
-      .map(valueNode => `(float)(${emitExpr(valueNode!, env).code})`);
+    const elements = (props[key] as t.ArrayExpression).elements;
+    if (elements.length < required) {
+      throw aotError(
+        `AOT: updateVector "${key}" needs ${required} numbers (got ${elements.length})`,
+        key === 'rect'
+          ? 'rect: [x, y, width, height] or [x, y, width, height, rx, ry].'
+          : `${key}: [${{arc: 'cx, cy, r, startAngle, endAngle', circle: 'cx, cy, r', line: 'x1, y1, x2, y2'}[key]}].`,
+      );
+    }
+
+    return elements.slice(0, count).map(valueNode => ({
+      kind: 'float',
+      value: lowerExpr(valueNode!, env),
+    }));
   };
-  let geometry: VectorGeometry;
+  let geometry: IrGeometry;
   if (props.arc) {
-    geometry = geometryOf(
-      arcEntriesC(
-        ...(geometryArgs('arc', 5) as [string, string, string, string, string]),
-      ),
-    );
+    const [cx, cy, radius, startDeg, endDeg] = geometryArgs('arc', 5);
+    geometry = {entries: arcTape(cx, cy, radius, startDeg, endDeg), locals: []};
   } else if (props.circle) {
-    geometry = geometryOf(
-      circleEntriesC(
-        ...(geometryArgs('circle', 3) as [string, string, string]),
-      ),
-    );
+    const [cx, cy, radius] = geometryArgs('circle', 3);
+    geometry = {entries: circleTape(cx, cy, radius), locals: []};
   } else if (props.rect) {
-    // Destructure rather than spread so a 4-element literal cannot slide `tag` into the optional rx slot.
-    const [x, y, width, height, rx = null, ry = null] = geometryArgs('rect', 6);
-    geometry = geometryOf(rectEntriesC(x, y, width, height, rx, ry, tag));
+    const [x, y, width, height, rx = null, ry = null] = geometryArgs(
+      'rect',
+      6,
+      4,
+    );
+    geometry = rectTape(x, y, width, height, rx, ry, tag);
   } else if (props.line) {
-    geometry = geometryOf(
-      lineEntriesC(
-        ...(geometryArgs('line', 4) as [string, string, string, string]),
-      ),
-    );
+    const [x1, y1, x2, y2] = geometryArgs('line', 4);
+    geometry = {entries: lineTape(x1, y1, x2, y2), locals: []};
   } else if (props.path) {
-    geometry = geometryOf(
-      parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(floatLit),
-    );
+    geometry = {
+      entries: parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(
+        (value: number) => checkedTapeNumber(value),
+      ),
+      locals: [],
+    };
   } else {
     throw new Error(
       'AOT: an updateVector shape needs one of arc / circle / rect / line / path',
@@ -459,7 +472,7 @@ function imperativeShape(
       throw new Error(`AOT: updateVector paint "${key}" must be static`);
     }
   };
-  const paint = [
+  const paint = vectorPaintOf([
     parseColor(paintValue('fill', 'none')),
     parseColor(paintValue('stroke', 'none')),
     svgNum(paintValue('strokeWidth', 1), 1),
@@ -467,15 +480,15 @@ function imperativeShape(
     CAP_MAP[paintValue('cap', 'butt') as string] ?? 0,
     JOIN_MAP[paintValue('join', 'miter') as string] ?? 0,
     paintValue('fillRule', 'nonzero') === 'evenodd' ? 1 : 0,
-  ];
+  ]);
 
   return {...geometry, paint};
 }
 
 /**
- * Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)` to: fill a mutable op-tape, push it to the node, and
- * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update. The shapes'
- * geometry is still C from the SVG emitter, so the statement carries C lines.
+ * Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)`: fill a mutable op-tape, push it to the node, and
+ * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update. The call's
+ * tables are declared at file scope here.
  *
  * @param expr  The updateVector call.
  * @param env  The expression environment.
@@ -487,7 +500,7 @@ function lowerUpdateVector(
   expr: t.CallExpression,
   env: Env,
   ctx: StatementContext,
-): IrStmt {
+): IrUpdateVector {
   // The first argument must be a node ref, and the second an array literal of shapes.
   const out = ctx.out;
   const [refArg, shapesArg, dirtyArg] = expr.arguments;
@@ -507,38 +520,33 @@ function lowerUpdateVector(
 
   // Claim the id first so two updateVector calls in one handler get distinct locals, then lower each shape.
   const vectorId = out.svgN++;
-  const entries: string[] = [];
-  const decls: string[] = [];
-  const paints: number[][] = [];
+  const update: IrUpdateVector = {
+    kind: 'updateVector',
+    id: vectorId,
+    node: ref.cVar,
+    locals: [],
+    tape: [],
+    paints: [],
+    dirty: null,
+  };
   for (const shapeNode of shapesArg.elements) {
-    const {
-      entries: shapeEntries,
-      locals,
-      paint,
-    } = imperativeShape(shapeNode, env, `uv${vectorId}_${paints.length}`);
-    decls.push(...locals);
-    entries.push('ER_VOP_SHAPE', floatLit(paints.length), ...shapeEntries);
-    paints.push(paint);
+    const shape = imperativeShape(
+      shapeNode,
+      env,
+      `uv${vectorId}_${update.paints.length}`,
+    );
+    update.locals.push(...shape.locals);
+    update.tape.push(
+      {kind: 'op', op: 'ER_VOP_SHAPE'},
+      checkedTapeNumber(update.paints.length),
+      ...shape.entries,
+    );
+    update.paints.push(shape.paint);
   }
 
-  // Declare the op-tape and its paint table at file scope, then fill the tape and hand it to the node.
-  const opCount = entries.length;
+  // Declare the op-tape and its paint table at file scope.
   out.needsMath = true;
-  out.vectorData.push(`static float s_uv${vectorId}_ops[${opCount}];`);
-  out.vectorData.push(
-    `static const ERVectorPaint s_uv${vectorId}_paints[] = ` +
-      `{\n${paints.map(paint => '    ' + emitVectorPaint(paint)).join(',\n')}\n};`,
-  );
-  const lines = [
-    ...decls,
-    ...entries.map(
-      (entry, entryIndex) => `s_uv${vectorId}_ops[${entryIndex}] = ${entry};`,
-    ),
-  ];
-  lines.push(
-    `er_node_set_vector_ops(${ref.cVar}, s_uv${vectorId}_ops, ${opCount}, ` +
-      `s_uv${vectorId}_paints, ${paints.length}, NULL, 0);`,
-  );
+  out.vectorData.push(...printUpdateVectorData(update));
 
   // Hint the dirty sub-rect when the call gives one.
   if (dirtyArg) {
@@ -548,19 +556,12 @@ function lowerUpdateVector(
       );
     }
 
-    const dirtyRect = dirtyArg.elements
+    update.dirty = dirtyArg.elements
       .slice(0, 4)
-      .map(edgeNode => emitExpr(edgeNode!, env));
-    // A float edge may be NaN; app_vector_dirty then drops the hint, since a zero-width hint would paint nothing.
-    const dirtyFn = dirtyRect.some(edge => edge.cType === 'float')
-      ? 'app_vector_dirty'
-      : 'er_node_set_vector_dirty_rect';
-    lines.push(
-      `${dirtyFn}(${ref.cVar}, ${dirtyRect.map(edge => edge.code).join(', ')});`,
-    );
+      .map(edgeNode => lowerExpr(edgeNode!, env));
   }
 
-  return {kind: 'foreign', lines};
+  return update;
 }
 
 /**
