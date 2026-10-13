@@ -121,8 +121,8 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
 }
 
 /**
- * Refuses state C cannot hold: a float list field that has no C form, and a host value that would take the
- * name of the setter every app exports for the wall clock.
+ * Refuses state C cannot hold: a number in a list item that has no C form, and a host value that would take
+ * the name of the setter every app exports for the wall clock. A field an item leaves out starts at 0.
  *
  * @param stateRecords  The app's state, then each inlined instance's.
  */
@@ -131,8 +131,11 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
     if (record.kind !== 'list') continue;
     for (const item of record.items) {
       for (const field of record.struct.fields) {
-        if (field.kind === 'float') {
-          floatLit(Number(item[field.key]) || 0);
+        const value = item[field.key];
+        if (field.kind === 'string' || value == null) continue;
+        const number = Number(value);
+        if (field.kind === 'float' || !Number.isFinite(number)) {
+          floatLit(number);
         }
       }
     }

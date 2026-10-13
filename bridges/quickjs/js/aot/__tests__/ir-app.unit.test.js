@@ -273,14 +273,27 @@ describe('the lowered app: er_app_build and app_update', () => {
   });
 
   it('refuses state C cannot hold while lowering', () => {
-    expect(() =>
-      lower(
-        app(
-          '  const [items, setItems] = useState([{v: 1.5}, {v: 1 / 0}]);',
-          '<View>{items.map(item => <Text>{item.v}</Text>)}</View>',
-        ),
-      ),
-    ).toThrow(/folded to Infinity/);
+    /** An app holding one list state with these items. */
+    const listApp = items =>
+      app(
+        `  const [items, setItems] = useState(${items});`,
+        '<View>{items.map(item => <Text>{item.v}</Text>)}</View>',
+      );
+    expect(() => lower(listApp('[{v: 1.5}, {v: 1 / 0}]'))).toThrow(
+      /folded to Infinity/,
+    );
+    expect(() => lower(listApp('[{v: 1.5}, {v: 0 / 0}]'))).toThrow(
+      /folded to NaN/,
+    );
+    expect(() => lower(listApp("[{v: 1}, {v: 'many'}]"))).toThrow(
+      /folded to NaN/,
+    );
+    expect(() => lower(listApp('[{v: 1}, {v: -1 / 0}]'))).toThrow(
+      /folded to -Infinity/,
+    );
+    expect(
+      writeApp(lower(listApp('[{v: 1.5}, {}]')), 'probe', opts).c,
+    ).toContain('{\n    { 1.5f },\n    { 0.0f }\n};');
     expect(() =>
       lower(
         app(

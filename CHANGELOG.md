@@ -50,6 +50,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A Flow B `updateVector` shape with too few numbers (`arc: [10, 20]`) or an empty slot (`[1, , 3, 4, 5]`) fails
   with an `AOT:` error. It used to write `undefined` into the generated C, or crash the compiler.
 
+- A Flow B list state item holding `NaN` or `Infinity` (`useState([{v: 0 / 0}])`) fails with an `AOT:` error.
+  It used to start at 0, or write `Infinity` into the generated C. A field an item leaves out still starts at 0.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.
