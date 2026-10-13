@@ -19,8 +19,13 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {readFileSync} from 'node:fs';
-import {aotError} from './diagnostics.mts';
-import {cScalarType, stripCLiterals, floatLit, cstr} from './c-syntax.mts';
+import {
+  cConstant,
+  cScalarType,
+  stripCLiterals,
+  floatLit,
+  cstr,
+} from './c-syntax.mts';
 import {CHECKED_OP} from './expressions.mts';
 import {lowerApp} from './lower.mts';
 import {printWaitDeclarations} from './c/animations.mts';
@@ -34,9 +39,10 @@ import {
   printTimerFunction,
 } from './c/functions.mts';
 import {printKeyboard} from './c/keyboard.mts';
-import {printPropValue} from './c/nodes.mts';
+import {printElementTree, printNode, printNodeUpdate} from './c/nodes.mts';
 import {printPanDecls, printPanQuery} from './c/pan-responder.mts';
-import {printVectorBlocks} from './c/vectors.mts';
+import {printVectorBlocks, printVectorRebuild} from './c/vectors.mts';
+import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
 import type {ResolvedOptions} from './options.mts';
 import type {IrApp} from './ir/app.mts';
 import type {
@@ -181,13 +187,22 @@ export function writeApp(
   const scalarBlock = scalarRecords.length
     ? `typedef struct\n{\n${scalarRecords.map(scalarFieldDecl).join('\n')}\n} ` +
       `ErAppState;\n\nstatic ErAppState s_state = ` +
-      `{${scalarRecords.map(scalarRecord => ` .${scalarRecord.cField} = ${scalarRecord.initCode}`).join(',')} ` +
+      `{${scalarRecords.map(scalarRecord => ` .${scalarRecord.cField} = ${cConstant(scalarRecord.initial, scalarRecord.cType)}`).join(',')} ` +
       `};\n`
     : '';
   const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
 
-  // A file-scope handle for each node app_update() re-applies.
-  const handleDecls = out.handles
+  // The nodes er_app_build() creates, each before its children, and what app_update() re-applies to them.
+  const nodes = nodesOf(app.root);
+  const buildLines = printElementTree(app.root).join('\n');
+  const updates = nodes.flatMap(node => printNode(node).update ?? []);
+
+  // A file-scope handle for each node app_update() re-applies, and one for each drawing it rebuilds.
+  const handleDecls = nodes
+    .flatMap(node => [
+      ...(isStateDriven(node) ? [node.id] : []),
+      ...(stateDrivenVectorOf(node) ? [node.id] : []),
+    ])
     .map(nodeId => `static ERNode* s_${nodeId};`)
     .join('\n');
 
@@ -198,7 +213,7 @@ export function writeApp(
       refRecord =>
         `static ` +
         `${refRecord.kind === 'value' ? cScalarType(refRecord.cType) : refRecord.cType} ` +
-        `${refRecord.cVar} = ${refRecord.initCode};`,
+        `${refRecord.cVar} = ${refRecord.kind === 'value' ? cConstant(refRecord.initial, refRecord.cType) : 'NULL'};`,
     )
     .join('\n');
 
@@ -215,7 +230,7 @@ export function writeApp(
   const animCreate = animList
     .map(
       animValue =>
-        `    ${animValue.cVar} = er_anim_value_create(${animValue.initCode});`,
+        `    ${animValue.cVar} = er_anim_value_create(${floatLit(animValue.initial)});`,
     )
     .join('\n');
 
@@ -234,49 +249,18 @@ export function writeApp(
   const updateBlock = (() => {
     if (!hasUpdate) return '';
     const lines = ['static void app_update(void)', '{'];
-    if (out.updates.length) {
+    if (updates.length) {
       lines.push('    ERProps p;');
     }
-    for (const update of out.updates) {
-      lines.push(`    er_props_default(&p);`);
-      for (const assign of update.styleAssigns) {
-        lines.push(`    p.${assign.field} = ${assign.expr};`);
-      }
-      for (const assign of update.dynAssigns) {
-        lines.push(`    p.${assign.field} = ${printPropValue(assign.value)};`);
-      }
-      if (update.placeholder != null) {
-        lines.push(
-          `    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(update.placeholder)});`,
-        );
-      }
-      if (update.imageName != null) {
-        lines.push(
-          `    snprintf(p.image_name, sizeof(p.image_name), "%s", ${update.imageName});`,
-        );
-      }
-      if (update.text) {
-        if (update.text.args.length) {
-          lines.push(
-            `    snprintf(p.text, sizeof(p.text), ${cstr(update.text.format)}, ${update.text.args.join(', ')});`,
-          );
-        } else {
-          lines.push(
-            `    snprintf(p.text, sizeof(p.text), "%s", ${cstr(update.text.format.replace(/%%/g, '%'))});`,
-          );
-        }
-      }
-      lines.push(`    er_node_set_props(s_${update.nodeId}, &p);`);
+    for (const update of updates) {
+      lines.push(...printNodeUpdate(update));
     }
     // State-driven Svgs: recompute the op-tape from state and re-upload.
-    for (const svgUpdate of out.svgUpdates) {
-      lines.push(`    build_svg${svgUpdate.id}();`);
-      lines.push(
-        `    er_node_set_vector_ops(${svgUpdate.nodeVar}, s_svg${svgUpdate.id}_ops, ` +
-          `${svgUpdate.len}, s_svg${svgUpdate.id}_paints, ${svgUpdate.nPaints}, ` +
-          `${svgUpdate.nGrads ? `s_svg${svgUpdate.id}_grads` : 'NULL'}, ` +
-          `${svgUpdate.nGrads || 0});`,
-      );
+    for (const node of nodes) {
+      const vector = stateDrivenVectorOf(node);
+      if (vector) {
+        lines.push(...printVectorRebuild(node.id, vector));
+      }
     }
     // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
     for (const effect of out.depEffects) {
@@ -447,7 +431,7 @@ ${wallClockRefresh}${waitTick}    for (int i = 0; i < ER_AOT_MAX_TIMERS; i++)
       animCbDefs,
       timerFnDefs,
       mountEffects,
-      out.build.join('\n'),
+      buildLines,
     ].join('\n'),
   );
   const dimRoundBlock = usesDimRound
@@ -492,18 +476,12 @@ static int16_t app_round_dim(double v)
         animCbDefs,
         timerFnDefs,
         mountEffects,
-        out.build.join('\n'),
+        buildLines,
       ].join('\n'),
     );
 
   // Each useHostValue gets a public setter that writes its field and refreshes via app_update(), like a JS setter.
   const hostRecords = scalarRecords.filter(scalarRecord => scalarRecord.host);
-  if (hostRecords.some(hostRecord => hostRecord.name === 'wall_clock')) {
-    throw aotError(
-      'AOT: useHostValue("wall_clock") would collide with er_app_set_wall_clock()',
-      'rename the host value — every app exports er_app_set_wall_clock() for Date.now().',
-    );
-  }
   const hostSettersBlock = hostRecords
     .map(
       hostRecord =>
@@ -787,7 +765,7 @@ static int16_t app_round_dim(double v)
       animCbDefs,
       timerFnDefs,
       mountEffects,
-      out.build.join('\n'),
+      buildLines,
     ].join('\n'),
   );
 
@@ -921,8 +899,8 @@ void er_app_build(int screen_w, int screen_h)
     p.height = (int16_t)screen_h;
     er_node_set_props(root, &p);
 ${animCreate ? '\n' + animCreate + '\n' : ''}
-${out.build.join('\n')}
-    er_tree_append_child(root, ${app.rootNodeId});
+${buildLines}
+    er_tree_append_child(root, ${app.root.id});
     er_tree_set_root(root);
 ${keyboardSetup}${initialUpdate}${mountEffectsBlock}}
 `;
@@ -978,7 +956,7 @@ ${hostSetterProtos ? '\n' + hostSetterProtos + '\n' : ''}
     nodes: out.nodeCount,
     state: stateRecords.length,
     handlers: handlers.length,
-    updates: out.updates.length,
+    updates: updates.length,
     images: app.images,
   };
 }

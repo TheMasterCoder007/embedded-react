@@ -20,7 +20,7 @@
 
 import {printExpr} from './expressions.mts';
 import {printCallback} from './statements.mts';
-import type {CFunction} from '../out.mts';
+import type {CFunction} from './statements.mts';
 import type {
   IrPanEvent,
   IrPanQuery,

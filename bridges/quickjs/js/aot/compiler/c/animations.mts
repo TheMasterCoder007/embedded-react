@@ -27,7 +27,7 @@ import type {
   IrCompletionWait,
   IrStartChain,
 } from '../ir/animations.mts';
-import type {CFunction} from '../out.mts';
+import type {CFunction} from './statements.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces

@@ -86,7 +86,7 @@ export type IrWire =
   | {kind: 'bind'; bind: AnimBind; index: number}
   /** A node ref that holds the node's handle. */
   | {kind: 'ref'; slot: string}
-  /** An engine event (an ER_EVENT_* name) and the C handler lowering already added to the output. */
+  /** An engine event (an ER_EVENT_* name) and the handler, from the app's handlers, that it runs. */
   | {kind: 'event'; event: string; handler: string}
   /** A PanResponder spread onto the node. */
   | {kind: 'responder'; pan: IrPanResponder}
@@ -149,3 +149,67 @@ export type IrChild =
     }
   /** `items.map(…)` over list state: a fixed pool of rows, row i shown while the list holds more than i items. */
   | {kind: 'pool'; list: ListState; rows: IrElement[]};
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Implementation
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Whether state drives any of a node's props, text or image, so it keeps a handle and app_update() sets its
+ * props again.
+ *
+ * @param node  The node.
+ *
+ * @returns True when state drives it.
+ */
+export const isStateDriven = (node: IrNode): boolean =>
+  (node.text?.parts.some(part => part.kind !== 'literal') ?? false) ||
+  node.stateProps.length > 0 ||
+  node.image?.kind === 'value';
+
+/**
+ * The drawing state drives on a node, if it has one.
+ *
+ * @param node  The node.
+ *
+ * @returns The drawing, or null.
+ */
+export function stateDrivenVectorOf(node: IrNode): IrStateDrivenVector | null {
+  for (const wire of node.wiring) {
+    if (wire.kind === 'stateDrivenVector') {
+      return wire.vector;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Every node under an element, each before its children, in the order er_app_build() creates them.
+ *
+ * @param element  The element.
+ *
+ * @returns The nodes.
+ */
+export function nodesOf(element: IrElement): IrNode[] {
+  if (element.kind === 'component') {
+    return nodesOf(element.root);
+  }
+
+  const nodes = [element.node];
+  for (const child of element.node.children) {
+    if (child.kind === 'element') {
+      nodes.push(...nodesOf(child.element));
+    } else if (child.kind === 'conditional') {
+      for (const branch of [child.whenTrue, child.whenFalse]) {
+        if (branch) {
+          nodes.push(...nodesOf(branch));
+        }
+      }
+    } else {
+      nodes.push(...child.rows.flatMap(nodesOf));
+    }
+  }
+
+  return nodes;
+}

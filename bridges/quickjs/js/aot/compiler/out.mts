@@ -32,75 +32,31 @@ import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrVectorData} from './ir/vectors.mts';
 import type {
   AnimRecord,
-  DynAssign,
-  FormatResult,
   FunctionNode,
   RefRecord,
   StateRecord,
-  StaticAssign,
 } from './types.mts';
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Interfaces
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/** A generated C function: `static void <name>(void)` with `body` as its lines. */
-export interface CFunction {
-  name: string;
-  body: string[];
-}
-
-/** A node whose props depend on state: app_update() rebuilds its ERProps and re-applies them. */
-export interface NodeUpdate {
-  /** The node's variable (`n<id>`); its handle is the file-scope `s_n<id>`. */
-  nodeId: string;
-  styleAssigns: StaticAssign[];
-  dynAssigns: DynAssign[];
-  /** A dynamic text body, as one printf format and its arguments. */
-  text: FormatResult | null;
-  /** A C expression naming the image to show when the source is dynamic. */
-  imageName?: string | null;
-  /** A static TextInput placeholder. */
-  placeholder?: string | null;
-}
-
-/** A state-driven <Svg>: app_update() rebuilds its op-tape with build_svg<id>() and uploads it again. */
-export interface SvgUpdate {
-  id: number;
-  len: number;
-  nPaints: number;
-  nGrads: number;
-  /** The node's file-scope handle. */
-  nodeVar: string;
-}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Everything the passes emit for one app. Each pass appends to it as the JSX tree is walked; writeApp then
- * lays the pieces out as app.gen.c: file-scope declarations, the builders, er_app_build, app_update, and the
- * event handlers.
+ * Everything the passes lower for one app besides its element tree: the functions, drawings, responders and
+ * effects, and the counters that name them. Each pass appends to it as the JSX tree is walked; writeApp then
+ * writes it out as app.gen.c.
  *
  * @class Out
  */
 export class Out {
   /** Engine nodes created so far */
   private nodes = 0;
-  /** Statements of er_app_build(), in order. */
-  build: string[] = [];
-  /** Event handlers, one C function each. */
+  /** Event handlers, one function each. */
   readonly handlers: IrHandler[] = [];
-  /** Nodes whose props app_update() re-applies. */
-  readonly updates: NodeUpdate[] = [];
-  /** Nodes that need a file-scope handle (`static ERNode* s_<v>`), for app_update or an imperative call. */
-  readonly handles: string[] = [];
   /** A useCallback's C handler, by component prefix and name, so each is emitted once. */
   readonly cbEmitted = new Map<string, string>();
   /** File-scope vector op-tapes and paint tables, and the builders of state-driven drawings. */
   readonly vectors: IrVectorData[] = [];
-  readonly svgUpdates: SvgUpdate[] = [];
   /** Numbers the next <Svg> (its tapes are `s_svg<id>_…`). */
   svgN = 0;
   /** Whether the generated C calls into <math.h>. */

@@ -42,6 +42,21 @@ export function i64Lit(value: number): string {
 }
 
 /**
+ * A constant as a slot of `cType` holds it: a string literal, a float, a 64-bit or an int literal.
+ *
+ * @param value  The constant.
+ * @param cType  The slot's kind.
+ *
+ * @returns The C literal.
+ */
+export function cConstant(value: number | string, cType: CType): string {
+  if (cType === 'string') return cstr(String(value));
+  if (cType === 'float') return floatLit(value);
+  if (cType === 'i64') return i64Lit(Number(value));
+  return String(Number(value));
+}
+
+/**
  * The C type a numeric state, ref, or local slot of `cType` is declared with.
  *
  * @param cType  The slot's kind; a string slot has no scalar type.

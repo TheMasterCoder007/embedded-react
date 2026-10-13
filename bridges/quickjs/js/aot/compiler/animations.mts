@@ -25,7 +25,7 @@ import {
   foldScope,
   evalStaticOr,
 } from './static-eval.mts';
-import {i64Lit, floatLit} from './c-syntax.mts';
+import {cConstant, floatLit} from './c-syntax.mts';
 import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn} from './collect.mts';
 import {lowerStmts} from './handlers.mts';
@@ -139,7 +139,7 @@ const ANIM_KINDS = new Set([
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Collects `const x = useAnimatedValue(initial)` → Map (name → {cVar, initCode}). `prefix` namespaces the
+ * Collects `const x = useAnimatedValue(initial)` → Map (name → {cVar, initial}). `prefix` namespaces the
  * C var (`s_av_<prefix><name>`) so each inlined child instance gets its own engine value handle.
  *
  * @param fnBody  The component's body.
@@ -192,9 +192,10 @@ export function collectAnims(
           }
           throw e;
         }
+        floatLit(initVal); // a value C cannot write fails here, at the hook
         anims.set(decl.id.name, {
           cVar: `s_av_${prefix}${decl.id.name}`,
-          initCode: floatLit(initVal),
+          initial: initVal,
         });
       }
     }
@@ -204,7 +205,7 @@ export function collectAnims(
 }
 
 /**
- * Collects `const r = useRef(initial)` refs → Map (name → {cVar, cType, initCode, kind}). Two kinds:
+ * Collects `const r = useRef(initial)` refs → Map (name → {cVar, cType, initial, kind}). Two kinds:
  *  - VALUE ref (numeric initial): a mutable C slot (escape-hatch state that does NOT re-render;
  *    `.current` reads/writes).
  *  - NODE ref (`useRef()` / `useRef(null)`): holds an `ERNode*`, captured by `ref={r}` on an element and
@@ -252,7 +253,6 @@ export function collectRefs(
           refs.set(decl.id.name, {
             cVar,
             cType: 'ERNode*',
-            initCode: 'NULL',
             kind: 'node',
             used: false,
           });
@@ -283,15 +283,11 @@ export function collectRefs(
           : wide.has(cVar)
             ? 'i64'
             : 'int';
+        cConstant(value, cType); // a value C cannot write fails here, at the hook
         refs.set(decl.id.name, {
           cVar,
           cType,
-          initCode:
-            cType === 'float'
-              ? floatLit(value)
-              : cType === 'i64'
-                ? i64Lit(value)
-                : String(value),
+          initial: value,
           kind: 'value',
           used: false,
         });

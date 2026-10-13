@@ -25,6 +25,8 @@ import {
   printStaticDecl,
 } from '../compiler/c/functions.mts';
 import {printKeyboard} from '../compiler/c/keyboard.mts';
+import {printElementTree} from '../compiler/c/nodes.mts';
+import {nodesOf} from '../compiler/ir/nodes.mts';
 import {printPanDecls} from '../compiler/c/pan-responder.mts';
 import {printVectorBlocks} from '../compiler/c/vectors.mts';
 
@@ -60,7 +62,7 @@ describe('the lowered app', () => {
       "import {View} from 'embedded-react';\nexport function App() { return <View />; }",
     );
     expect(app.keyboard).toBeNull();
-    expect(app.rootNodeId).toBe('n0');
+    expect(app.root.id).toBe('n0');
     expect(writeApp(app, 'probe', opts).c).not.toContain('kbd_cfg');
   });
 
@@ -211,5 +213,81 @@ describe('the lowered app: functions', () => {
     expect(out.handlers[0].callback.body).toMatchObject([
       {kind: 'stopAnimations', handles: ['s_av_a'], waitOwner: null},
     ]);
+  });
+});
+
+describe('the lowered app: er_app_build and app_update', () => {
+  /** An app module whose component declares `body` and returns `jsx`. */
+  const app = (body, jsx) =>
+    "import React, {useState, useRef} from 'react';\n" +
+    "import {View, Text, Svg, Circle, useAnimatedValue, useHostValue} from 'embedded-react';\n" +
+    `export function App() {\n${body}\n  return ${jsx};\n}`;
+
+  it('builds the tree in er_app_build, and re-applies its state-driven nodes and drawings in app_update', () => {
+    const lowered = lower(
+      app(
+        '  const [n, setN] = useState(0);',
+        '<View><Text>{n}</Text><Text>still</Text><Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fill="#0f0" /></Svg></View>',
+      ),
+    );
+    expect(nodesOf(lowered.root).map(node => node.id)).toEqual([
+      'n0',
+      'n1',
+      'n2',
+      'n3',
+    ]);
+    expect(lowered.hasUpdate).toBe(true);
+
+    const {c, updates} = writeApp(lowered, 'probe', opts);
+    expect(c).toContain(printElementTree(lowered.root).join('\n'));
+    expect(c).toContain('    er_tree_append_child(root, n0);');
+    expect(updates).toBe(1);
+    expect(c).toContain('static ERNode* s_n1;\nstatic ERNode* s_n3;');
+    expect(c).toContain('    er_node_set_props(s_n1, &p);\n    build_svg0();');
+  });
+
+  it('has no app_update() when nothing state drives is on screen', () => {
+    const lowered = lower(
+      app('  const [n, setN] = useState(0);', '<Text>{"fixed"}</Text>'),
+    );
+    expect(lowered.hasUpdate).toBe(false);
+    expect(writeApp(lowered, 'probe', opts).c).not.toContain('app_update');
+  });
+
+  it('keeps initial values as values, which the writer spells as C', () => {
+    const lowered = lower(
+      app(
+        "  const [n, setN] = useState(3);\n  const [label] = useState('hi');\n  const [f] = useState(1.5);\n" +
+          '  const r = useRef(2);\n  const a = useAnimatedValue(0.5);',
+        '<Text onTouchStart={() => { r.current = 4; }} style={{opacity: a}}>{label + n + f}</Text>',
+      ),
+    );
+    expect(lowered.state.map(record => record.initial)).toEqual([3, 'hi', 1.5]);
+    expect(lowered.refs).toMatchObject([{cVar: 's_ref_r', initial: 2}]);
+    expect(lowered.animations).toMatchObject([{cVar: 's_av_a', initial: 0.5}]);
+
+    const {c} = writeApp(lowered, 'probe', opts);
+    expect(c).toContain('{ .n = 3, .label = "hi", .f = 1.5f };');
+    expect(c).toContain('static int s_ref_r = 2;');
+    expect(c).toContain('    s_av_a = er_anim_value_create(0.5f);');
+  });
+
+  it('refuses state C cannot hold while lowering', () => {
+    expect(() =>
+      lower(
+        app(
+          '  const [items, setItems] = useState([{v: 1.5}, {v: 1 / 0}]);',
+          '<View>{items.map(item => <Text>{item.v}</Text>)}</View>',
+        ),
+      ),
+    ).toThrow(/folded to Infinity/);
+    expect(() =>
+      lower(
+        app(
+          '  const wall_clock = useHostValue(0);',
+          '<Text>{wall_clock}</Text>',
+        ),
+      ),
+    ).toThrow(/would collide with er_app_set_wall_clock/);
   });
 });

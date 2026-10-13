@@ -33,7 +33,7 @@ import {
 } from '../style-text.mts';
 import {lowerValueHandler} from '../handlers.mts';
 import {emitChildren} from '../control-flow.mts';
-import {emitIrNode, lowerRefBinds} from '../nodes.mts';
+import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
 import {imageNameFromSource} from './image.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
@@ -430,14 +430,7 @@ export function emitDial(
     node.wiring.push({kind: 'ref', slot});
   }
 
-  emitIrNode(node, out);
-  node.children = emitChildren(
-    element.children,
-    nodeID,
-    scope,
-    out,
-    env,
-    state,
-  );
+  checkInterpolations(node);
+  node.children = emitChildren(element.children, scope, out, env, state);
   return node;
 }

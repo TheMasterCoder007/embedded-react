@@ -23,7 +23,7 @@ import {printChainFunctions, printCompletionWait} from './animations.mts';
 import {toCExpr} from './expressions.mts';
 import {printPanEvent} from './pan-responder.mts';
 import {APP_UPDATE_CALL, printCallback, printStmts} from './statements.mts';
-import type {CFunction} from '../out.mts';
+import type {CFunction} from './statements.mts';
 import type {
   IrAnimationCallback,
   IrDepEffect,

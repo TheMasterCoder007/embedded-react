@@ -43,7 +43,7 @@
  *
  *   compiler/options.mts         resolveOptions — screen size + buffer caps, from opts, then ER_AOT_*
  *   compiler/types.mts           the types the stages share (Env, StatementContext, state/ref records)
- *   compiler/out.mts             Out — everything a compile has emitted so far
+ *   compiler/out.mts             Out — the handlers, effects and drawings lowering collects
  *   compiler/diagnostics.mts     aotError / withLoc / formatAotError — locate + hint unsupported syntax
  *   compiler/static-eval.mts     evalStatic — fold the compile-time-constant subset (styles, initials)
  *   compiler/c-syntax.mts        cstr / floatLit / i64Lit — JS values spelled as C

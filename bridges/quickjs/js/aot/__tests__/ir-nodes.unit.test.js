@@ -17,7 +17,12 @@
 import {describe, it, expect} from 'vitest';
 import {parse} from '@babel/parser';
 import {emitNode} from '../compiler/nodes.mts';
-import {printNode, printPropValue} from '../compiler/c/nodes.mts';
+import {
+  printElementTree,
+  printNode,
+  printPropValue,
+} from '../compiler/c/nodes.mts';
+import {nodesOf} from '../compiler/ir/nodes.mts';
 import {Out} from '../compiler/out.mts';
 
 // Host elements lower to IR nodes whose state-driven props are typed values; these check both and their C.
@@ -48,7 +53,7 @@ const state = {
   bySetter: new Map([['setN', slots[0]]]),
 };
 
-/** Emits one JSX element over the state above, returning what it lowered to and what it added to the output. */
+/** Emits one JSX element over the state above: what it lowered to, its build lines and its app_update() entries. */
 function emit(jsx, refs = new Map(), components = new Map(), program = null) {
   const expr = parse(`(${jsx})`, {
     sourceType: 'module',
@@ -66,21 +71,27 @@ function emit(jsx, refs = new Map(), components = new Map(), program = null) {
   };
   const out = new Out(components, program);
   const element = emitNode(expr, {}, out, env, state);
-  return {nodeId: element.id, element, out};
+  return {
+    nodeId: element.id,
+    element,
+    out,
+    build: printElementTree(element),
+    updates: nodesOf(element).flatMap(node => printNode(node).update ?? []),
+  };
 }
 
 /** A state-driven prop of the update entry for `nodeId`, by field. */
-const stateProp = (out, nodeId, field) =>
-  out.updates
+const stateProp = (updates, nodeId, field) =>
+  updates
     .find(update => update.nodeId === nodeId)
     .dynAssigns.find(assign => assign.field === field);
 
 describe('node IR: state-driven style values', () => {
   it('lowers each kind of style value to a typed value', () => {
-    const {nodeId, out} = emit(
+    const {nodeId, updates} = emit(
       `<View style={{backgroundColor: on ? '#ff0000' : '#00ff00', width: n * 2, opacity: n / 10, flexDirection: on ? 'row' : 'column'}} />`,
     );
-    const color = stateProp(out, nodeId, 'background_color').value;
+    const color = stateProp(updates, nodeId, 'background_color').value;
     expect(color).toMatchObject({
       kind: 'select',
       test: {kind: 'state'},
@@ -90,16 +101,16 @@ describe('node IR: state-driven style values', () => {
     expect(printPropValue(color)).toBe(
       '((s_state.on) ? 0xFFFF0000u : 0xFF00FF00u)',
     );
-    expect(stateProp(out, nodeId, 'width').value.kind).toBe('dimension');
-    expect(stateProp(out, nodeId, 'opacity').value.kind).toBe('opacity');
-    expect(printPropValue(stateProp(out, nodeId, 'flex_direction').value)).toBe(
-      '((s_state.on) ? ER_FLEX_ROW : ER_FLEX_COL)',
-    );
+    expect(stateProp(updates, nodeId, 'width').value.kind).toBe('dimension');
+    expect(stateProp(updates, nodeId, 'opacity').value.kind).toBe('opacity');
+    expect(
+      printPropValue(stateProp(updates, nodeId, 'flex_direction').value),
+    ).toBe('((s_state.on) ? ER_FLEX_ROW : ER_FLEX_COL)');
   });
 
   it('lowers a state-driven `visible` to a visible value', () => {
-    const {nodeId, out} = emit('<View visible={n > 2} />');
-    const display = stateProp(out, nodeId, 'display').value;
+    const {nodeId, updates} = emit('<View visible={n > 2} />');
+    const display = stateProp(updates, nodeId, 'display').value;
     expect(display).toMatchObject({kind: 'visible', value: {kind: 'compare'}});
     expect(printPropValue(display)).toBe(
       '(((s_state.n > 2)) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)',
@@ -107,9 +118,9 @@ describe('node IR: state-driven style values', () => {
   });
 
   it('sets a node with no state-driven content once, at build time', () => {
-    const {out} = emit('<View style={{width: 10}} />');
-    expect(out.updates).toEqual([]);
-    expect(out.build).toEqual([
+    const {build, updates} = emit('<View style={{width: 10}} />');
+    expect(updates).toEqual([]);
+    expect(build).toEqual([
       '    n0 = er_node_create(ER_NODE_VIEW);',
       '    er_props_default(&p);',
       '    p.width = 10;',
@@ -120,10 +131,10 @@ describe('node IR: state-driven style values', () => {
 
 describe('node IR: conditional children', () => {
   it('shows a state-driven ternary branch by its test, and the else branch by its negation', () => {
-    const {out} = emit(
+    const {updates} = emit(
       '<View>{on ? <View style={{width: 1}} /> : <View style={{width: 2}} />}</View>',
     );
-    const [whenTrue, whenFalse] = out.updates.map(
+    const [whenTrue, whenFalse] = updates.map(
       update =>
         update.dynAssigns.find(assign => assign.field === 'display').value,
     );
@@ -177,10 +188,14 @@ describe('node IR: printing', () => {
 
 describe('node IR: typed elements', () => {
   it('lowers element values to typed flags, bytes and floats', () => {
-    const {nodeId: switchId, out: switchOut} = emit(
+    const {nodeId: switchId, updates: switchUpdates} = emit(
       '<Switch value={on} onValueChange={v => setN(1)} />',
     );
-    const switchValue = stateProp(switchOut, switchId, 'switch_value').value;
+    const switchValue = stateProp(
+      switchUpdates,
+      switchId,
+      'switch_value',
+    ).value;
     expect(switchValue).toMatchObject({
       kind: 'flag',
       truthiness: 'condition',
@@ -189,15 +204,15 @@ describe('node IR: typed elements', () => {
     });
     expect(printPropValue(switchValue)).toBe('(uint8_t)((s_state.on) ? 1 : 0)');
 
-    const {nodeId, out} = emit(
+    const {nodeId, updates} = emit(
       `<Dial min={n} cap={on ? 'round' : 'butt'} indicatorGradient={on ? null : {stops: [{color: '#00f'}, {color: '#f00'}]}} />`,
     );
-    expect(stateProp(out, nodeId, 'arc_min').value.kind).toBe('float');
-    expect(stateProp(out, nodeId, 'arc_cap').value).toMatchObject({
+    expect(stateProp(updates, nodeId, 'arc_min').value.kind).toBe('float');
+    expect(stateProp(updates, nodeId, 'arc_cap').value).toMatchObject({
       kind: 'byte',
       value: {kind: 'select'},
     });
-    const stops = stateProp(out, nodeId, 'gradient_stop_count').value;
+    const stops = stateProp(updates, nodeId, 'gradient_stop_count').value;
     expect(stops).toMatchObject({
       kind: 'flag',
       truthiness: 'value',
@@ -208,19 +223,19 @@ describe('node IR: typed elements', () => {
   });
 
   it("re-sets a Dial's knob image on every update", () => {
-    const {nodeId, out} = emit('<Dial knobImage="knob" min={n} />');
-    expect(out.updates.find(u => u.nodeId === nodeId).imageName).toBe('"knob"');
+    const {nodeId, updates} = emit('<Dial knobImage="knob" min={n} />');
+    expect(updates.find(u => u.nodeId === nodeId).imageName).toBe('"knob"');
   });
 
   it("prints a TextInput's placeholder before its text, and wires its event before its ref", () => {
     const refs = new Map([
       ['box', {kind: 'node', cVar: 's_ref_box', used: false}],
     ]);
-    const {out} = emit(
+    const {build} = emit(
       '<TextInput ref={box} value="hi" placeholder="name" onChangeText={t => setN(2)} />',
       refs,
     );
-    expect(out.build).toEqual([
+    expect(build).toEqual([
       '    n0 = er_node_create(ER_NODE_TEXT_INPUT);',
       '    er_props_default(&p);',
       '    snprintf(p.placeholder, sizeof(p.placeholder), "%s", "name");',
@@ -260,13 +275,13 @@ describe('node IR: children and control flow', () => {
   });
 
   it('folds conditions known at build time to plain elements', () => {
-    const {element, out} = emit(
+    const {element, build} = emit(
       '<View>{false && <Text>a</Text>}{true ? <View /> : <Text>b</Text>}</View>',
     );
     expect(element.node.children).toEqual([
       {kind: 'element', element: expect.objectContaining({id: 'n1'})},
     ]);
-    expect(out.build).toContain('    er_tree_append_child(n0, n1);');
+    expect(build).toContain('    er_tree_append_child(n0, n1);');
   });
 
   it('builds a .map over list state as a pool of rows', () => {

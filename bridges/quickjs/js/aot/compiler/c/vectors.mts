@@ -465,3 +465,26 @@ export function printVectorBlocks(vectors: IrVectorData[]): {
 
   return {data: data.join('\n\n'), builders: builders.join('\n\n')};
 }
+
+/**
+ * A state-driven drawing's app_update() entry: its tape rebuilt from state, then handed to its node again.
+ *
+ * @param nodeId  The node's variable; its handle is `s_<nodeId>`.
+ * @param vector  The drawing.
+ *
+ * @returns The C lines.
+ */
+export function printVectorRebuild(
+  nodeId: string,
+  vector: IrStateDrivenVector,
+): string[] {
+  const {id} = vector;
+  const gradientCount = vector.gradients.length;
+  return [
+    `    build_svg${id}();`,
+    `    er_node_set_vector_ops(s_${nodeId}, s_svg${id}_ops, ` +
+      `${vector.tape.length}, s_svg${id}_paints, ${vector.paints.length}, ` +
+      `${gradientCount ? `s_svg${id}_grads` : 'NULL'}, ` +
+      `${gradientCount});`,
+  ];
+}

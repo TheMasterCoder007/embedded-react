@@ -37,7 +37,6 @@ import {attrExpr} from './style-text.mts';
 import {lowerEffect} from './handlers.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
-import {printAppend} from './c/nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrChild, IrElement} from './ir/nodes.mts';
@@ -463,10 +462,9 @@ export function emitComponent(
 }
 
 /**
- * Emits an element / component child and appends it to the parent. opts.show toggles its display.
+ * Emits an element / component child. opts.show toggles its display.
  *
  * @param node  The child; anything but a JSX element is refused.
- * @param parentVar  The parent node's variable.
  * @param scope  Compile-time constants in reach.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
@@ -477,7 +475,6 @@ export function emitComponent(
  */
 function emitElementInto(
   node: t.Node,
-  parentVar: string,
   scope: Scope,
   out: Out,
   env: Env,
@@ -488,16 +485,13 @@ function emitElementInto(
     throw new Error(`AOT: expected a JSX element here, got ${node.type}`);
   }
 
-  const child = emitNode(node, scope, out, env, state, opts);
-  out.build.push(printAppend(parentVar, child));
-  return child;
+  return emitNode(node, scope, out, env, state, opts);
 }
 
 /**
  * Unrolls `arr.map((item, i) => <JSX/>)` over a COMPILE-TIME-CONSTANT array.
  *
  * @param call  The `.map(…)` call.
- * @param parentVar  The parent node's variable.
  * @param scope  Compile-time constants in reach.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
@@ -507,7 +501,6 @@ function emitElementInto(
  */
 function emitMap(
   call: t.CallExpression,
-  parentVar: string,
   scope: Scope,
   out: Out,
   env: Env,
@@ -547,7 +540,6 @@ function emitMap(
     }
     return emitElementInto(
       rowJSX,
-      parentVar,
       rowScope,
       out,
       rowEnv(env, [itemName, indexName], rowScope),
@@ -617,7 +609,6 @@ function rowEnv(
  *
  * @param call  The `.map(…)` call.
  * @param listState  The list state it maps over.
- * @param parentVar  The parent node's variable.
  * @param scope  Compile-time constants in reach.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
@@ -628,7 +619,6 @@ function rowEnv(
 function emitDynamicMap(
   call: t.CallExpression,
   listState: ListState,
-  parentVar: string,
   scope: Scope,
   out: Out,
   env: Env,
@@ -672,7 +662,6 @@ function emitDynamicMap(
     rows.push(
       emitElementInto(
         rowJSX,
-        parentVar,
         rowScope,
         out,
         rowEnv(env, [itemName, indexName], rowScope, rowLocals),
@@ -692,7 +681,6 @@ function emitDynamicMap(
  * count at runtime is refused with an "AOT: …" error.
  *
  * @param children  The container's children.
- * @param parentVar  The container node's variable.
  * @param scope  Compile-time constants in reach.
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
@@ -702,7 +690,6 @@ function emitDynamicMap(
  */
 export function emitChildren(
   children: t.JSXElement['children'],
-  parentVar: string,
   scope: Scope,
   out: Out,
   env: Env,
@@ -714,7 +701,7 @@ export function emitChildren(
   for (const child of children) {
     // An element child is emitted as it is; an {expression} child is lowered by its shape below.
     if (child.type === 'JSXElement') {
-      element(emitElementInto(child, parentVar, scope, out, env, state));
+      element(emitElementInto(child, scope, out, env, state));
     } else if (child.type === 'JSXExpressionContainer') {
       const expr = child.expression;
       if (expr.type === 'JSXEmptyExpression') continue;
@@ -724,7 +711,6 @@ export function emitChildren(
         lowered.push(
           ...emitChildren(
             env.children!.nodes,
-            parentVar,
             env.children!.scope,
             out,
             env.children!.env,
@@ -740,24 +726,16 @@ export function emitChildren(
         try {
           condValue = evalStatic(expr.left, scope);
           if (condValue) {
-            element(
-              emitElementInto(expr.right, parentVar, scope, out, env, state),
-            );
+            element(emitElementInto(expr.right, scope, out, env, state));
           }
         } catch {
           const test = lowerExpr(expr.left, env);
           lowered.push({
             kind: 'conditional',
             test,
-            whenTrue: emitElementInto(
-              expr.right,
-              parentVar,
-              scope,
-              out,
-              env,
-              state,
-              {show: {kind: 'condition', test, negate: false}},
-            ),
+            whenTrue: emitElementInto(expr.right, scope, out, env, state, {
+              show: {kind: 'condition', test, negate: false},
+            }),
             whenFalse: null,
           });
         }
@@ -773,7 +751,6 @@ export function emitChildren(
           element(
             emitElementInto(
               testValue ? expr.consequent : expr.alternate,
-              parentVar,
               scope,
               out,
               env,
@@ -784,27 +761,15 @@ export function emitChildren(
           const test = lowerExpr(expr.test, env);
           const whenTrue =
             expr.consequent.type === 'JSXElement'
-              ? emitElementInto(
-                  expr.consequent,
-                  parentVar,
-                  scope,
-                  out,
-                  env,
-                  state,
-                  {show: {kind: 'condition', test, negate: false}},
-                )
+              ? emitElementInto(expr.consequent, scope, out, env, state, {
+                  show: {kind: 'condition', test, negate: false},
+                })
               : null;
           const whenFalse =
             expr.alternate.type === 'JSXElement'
-              ? emitElementInto(
-                  expr.alternate,
-                  parentVar,
-                  scope,
-                  out,
-                  env,
-                  state,
-                  {show: {kind: 'condition', test, negate: true}},
-                )
+              ? emitElementInto(expr.alternate, scope, out, env, state, {
+                  show: {kind: 'condition', test, negate: true},
+                })
               : null;
           lowered.push({kind: 'conditional', test, whenTrue, whenFalse});
         }
@@ -821,18 +786,10 @@ export function emitChildren(
             : null;
         if (stateRecord?.kind === 'list') {
           lowered.push(
-            emitDynamicMap(
-              expr,
-              stateRecord,
-              parentVar,
-              scope,
-              out,
-              env,
-              state,
-            ),
+            emitDynamicMap(expr, stateRecord, scope, out, env, state),
           );
         } else {
-          emitMap(expr, parentVar, scope, out, env, state).forEach(element);
+          emitMap(expr, scope, out, env, state).forEach(element);
         }
       } else {
         // A constant that renders nothing (false/null/'') is fine; anything else is unsupported.

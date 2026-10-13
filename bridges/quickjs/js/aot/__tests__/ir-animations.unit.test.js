@@ -47,10 +47,7 @@ const callbacksOf = ctx => ctx.out.animCbs.flatMap(printAnimationCallback);
 function lowerBody(source) {
   const statements = parse(source, {sourceType: 'module'}).program.body;
   const animations = new Map(
-    ['a', 'b', 'c'].map(name => [
-      name,
-      {cVar: `s_av_${name}`, initCode: '0.0f'},
-    ]),
+    ['a', 'b', 'c'].map(name => [name, {cVar: `s_av_${name}`, initial: 0}]),
   );
   const env = {
     state: state.byName,

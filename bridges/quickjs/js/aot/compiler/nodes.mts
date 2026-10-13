@@ -42,7 +42,6 @@ import {emitActivityIndicator} from './elements/activity-indicator.mts';
 import {emitModal} from './elements/modal.mts';
 import {emitFlatList} from './elements/flat-list.mts';
 import {resolveImageAttrs} from './elements/image.mts';
-import {printNode} from './c/nodes.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
@@ -299,7 +298,8 @@ function touchablePressFades(
 
   // Bind a fresh animated value, starting at rest, to the node's opacity.
   const cVar = `s_av_press_${nodeId}`;
-  out.childAnimations.push({cVar, initCode: floatLit(restingOpacity)});
+  floatLit(restingOpacity); // a value C cannot write fails here, at the element
+  out.childAnimations.push({cVar, initial: restingOpacity});
 
   // Each fade is one timing animation of that value.
   return {
@@ -664,19 +664,11 @@ function emitNodeImpl(
     });
   }
 
-  // The node is emitted before its children, whose lines follow its own.
-  emitIrNode(node, out);
+  checkInterpolations(node);
 
   // A <Text>'s children are its text, already consumed above.
   if (tag !== 'Text') {
-    node.children = emitChildren(
-      element.children,
-      nodeId,
-      scope,
-      out,
-      env,
-      state,
-    );
+    node.children = emitChildren(element.children, scope, out, env, state);
   }
 
   return {kind: 'node', id: nodeId, node};
@@ -731,17 +723,20 @@ function omitUndefinedAttrs(
 }
 
 /**
- * Emits a lowered node: its build lines, and its handle and app_update() entry when state drives it.
+ * Refuses an interpolation table holding a number C cannot write, at the element that binds it rather than when
+ * its build lines are written.
  *
  * @param node  The node.
- * @param out  Everything emitted so far.
  */
-export function emitIrNode(node: IrNode, out: Out): void {
-  const printed = printNode(node);
-  out.build.push(...printed.build);
-  if (printed.update) {
-    out.handles.push(node.id);
-    out.updates.push(printed.update);
+export function checkInterpolations(node: IrNode): void {
+  for (const wire of node.wiring) {
+    if (wire.kind !== 'bind' || !wire.bind.interp) continue;
+    for (const point of [
+      ...wire.bind.interp.input,
+      ...wire.bind.interp.output,
+    ]) {
+      floatLit(point);
+    }
   }
 }
 

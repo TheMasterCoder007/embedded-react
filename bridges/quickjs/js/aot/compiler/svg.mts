@@ -33,7 +33,7 @@ import {evalStatic, withUndefined} from './static-eval.mts';
 import {floatLit} from './c-syntax.mts';
 import {lowerExpr} from './expressions.mts';
 import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
-import {emitIrNode, lowerRefBinds} from './nodes.mts';
+import {lowerRefBinds} from './nodes.mts';
 import {MAX_GRADIENT_STOPS, printTapeValue} from './c/vectors.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
@@ -1204,7 +1204,6 @@ function emitSvgStatic(
     env,
   );
   node.wiring.push({kind: 'vectorTables', tables});
-  emitIrNode(node, out);
   return node;
 }
 
@@ -1299,7 +1298,6 @@ function emitSvgSource(
       env,
     );
     node.image = {kind: 'static', name: artifact.name, resetOnUpdate: false};
-    emitIrNode(node, out);
     return node;
   }
 
@@ -1326,7 +1324,6 @@ function emitSvgSource(
     env,
   );
   node.wiring.push({kind: 'vectorTables', tables});
-  emitIrNode(node, out);
   return node;
 }
 
@@ -1423,15 +1420,6 @@ function emitSvgDynamic(
     env,
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
-  emitIrNode(node, out);
-  out.handles.push(nodeId);
-  out.svgUpdates.push({
-    id: svgId,
-    len: tape.length,
-    nPaints: vector.paints.length,
-    nGrads: gradients.length,
-    nodeVar: `s_${nodeId}`,
-  });
 
   return node;
 }

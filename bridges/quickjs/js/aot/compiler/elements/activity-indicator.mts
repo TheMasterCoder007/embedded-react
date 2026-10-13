@@ -28,7 +28,7 @@ import {
   styleWrites,
   collectStyleAssigns,
 } from '../style-text.mts';
-import {emitIrNode, lowerRefBinds} from '../nodes.mts';
+import {lowerRefBinds} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope} from '../types.mts';
@@ -168,7 +168,6 @@ export function emitActivityIndicator(
       slot,
     })),
   };
-  emitIrNode(node, out);
 
   return node;
 }

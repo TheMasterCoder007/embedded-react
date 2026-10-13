@@ -26,6 +26,7 @@ import type {
   StateRecord,
 } from '../types.mts';
 import type {IrKeyboard} from './keyboard.mts';
+import type {IrElement} from './nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -41,8 +42,8 @@ export interface IrApp {
   animations: AnimRecord[];
   /** The on-screen keyboard's config, or null to keep the engine's own. */
   keyboard: IrKeyboard | null;
-  /** The root element's node, which er_app_build() appends to the screen-sized root. */
-  rootNodeId: string;
+  /** The root element, which er_app_build() appends to the screen-sized root. */
+  root: IrElement;
   /** Something has to be re-applied after a state change, so the app has an app_update(). */
   hasUpdate: boolean;
   /** The image imports the app reaches, which the CLI bakes. */

@@ -23,7 +23,7 @@ import {readFileSync, existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {aotError} from './diagnostics.mts';
 import {evalStaticOrThrow, evalStatic, withUndefined} from './static-eval.mts';
-import {i64Lit, cTypeOfValue, floatLit, cstr} from './c-syntax.mts';
+import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Screen} from './options.mts';
@@ -387,14 +387,9 @@ export function collectState(
         }
 
         // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
-        const initCode =
-          cType === 'string'
-            ? cstr(String(initValue))
-            : cType === 'float'
-              ? floatLit(initValue)
-              : cType === 'i64'
-                ? i64Lit(Number(initValue))
-                : String(Number(initValue));
+        const initial =
+          cType === 'string' ? String(initValue) : Number(initValue);
+        cConstant(initial, cType); // a value C cannot write fails here, at the hook
         record = {
           name,
           cField,
@@ -403,7 +398,7 @@ export function collectState(
           cType,
           isBool,
           cMember: `s_state.${cField}`,
-          initCode,
+          initial,
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
         };
       }

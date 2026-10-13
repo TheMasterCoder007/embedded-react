@@ -18,6 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {aotError} from './diagnostics.mts';
+import {floatLit} from './c-syntax.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {findShadowedClockCalls, emitExprWide} from './expressions.mts';
 import {
@@ -43,9 +45,10 @@ import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
+import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
-import type {Env, Scope} from './types.mts';
+import type {Env, Scope, StateRecord} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -114,6 +117,37 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
     } else if (mountEffect.kind === 'call' && !hasUpdate) {
       mountEffect.updatesState = false;
     }
+  }
+}
+
+/**
+ * Refuses state C cannot hold: a float list field that has no C form, and a host value that would take the
+ * name of the setter every app exports for the wall clock.
+ *
+ * @param stateRecords  The app's state, then each inlined instance's.
+ */
+function checkStateRecords(stateRecords: StateRecord[]): void {
+  for (const record of stateRecords) {
+    if (record.kind !== 'list') continue;
+    for (const item of record.items) {
+      for (const field of record.struct.fields) {
+        if (field.kind === 'float') {
+          floatLit(Number(item[field.key]) || 0);
+        }
+      }
+    }
+  }
+
+  if (
+    stateRecords.some(
+      record =>
+        record.kind === 'scalar' && record.host && record.name === 'wall_clock',
+    )
+  ) {
+    throw aotError(
+      'AOT: useHostValue("wall_clock") would collide with er_app_set_wall_clock()',
+      'rename the host value — every app exports er_app_set_wall_clock() for Date.now().',
+    );
   }
 }
 
@@ -245,7 +279,7 @@ export function lowerApp(
   // Emit the scene graph from the root JSX; `out` collects every generated fragment.
   const out = new Out(components, ast.program);
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
-  const rootNodeId = emitNode(rootJSX, scope, out, env, state).id;
+  const root = emitNode(rootJSX, scope, out, env, state);
 
   // Emit registered only the images it reached; a dynamic source can't be enumerated, so bake every import.
   if (out.bakeAllImages) {
@@ -261,17 +295,20 @@ export function lowerApp(
 
   // app_update() exists only when something has to be re-applied after a state change.
   const hasUpdate =
-    out.updates.length > 0 ||
-    out.svgUpdates.length > 0 ||
-    out.depEffects.length > 0;
+    nodesOf(root).some(
+      node => isStateDriven(node) || stateDrivenVectorOf(node) !== null,
+    ) || out.depEffects.length > 0;
   settleFunctions(out, hasUpdate);
 
+  const stateRecords = [...state.byName.values(), ...out.childStateRecords];
+  checkStateRecords(stateRecords);
+
   return {
-    state: [...state.byName.values(), ...out.childStateRecords],
+    state: stateRecords,
     refs: [...refs.values(), ...out.childRefs],
     animations: [...anims.values(), ...out.childAnimations],
     keyboard,
-    rootNodeId,
+    root,
     hasUpdate,
     images: [...out.images.entries()].map(([name, importPath]) => ({
       name,

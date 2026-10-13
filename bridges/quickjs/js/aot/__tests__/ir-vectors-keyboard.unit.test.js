@@ -25,8 +25,11 @@ import {
   printStateDrivenVector,
   printTapeValue,
   printVectorBlocks,
+  printVectorRebuild,
   printVectorTables,
 } from '../compiler/c/vectors.mts';
+import {printElementTree} from '../compiler/c/nodes.mts';
+import {stateDrivenVectorOf} from '../compiler/ir/nodes.mts';
 import {Out} from '../compiler/out.mts';
 
 // Keyboard configs and baked <Svg> drawings lower to IR data; these check it and the const tables it prints.
@@ -70,7 +73,7 @@ function emit(jsx, refs = new Map()) {
     byName: stateMap,
     bySetter: new Map(),
   });
-  return {element, out};
+  return {element, out, build: printElementTree(element)};
 }
 
 describe('keyboard IR', () => {
@@ -151,7 +154,7 @@ describe('keyboard IR', () => {
 
 describe('vector IR: baked drawings', () => {
   it('bakes a static <Svg> into tables its box node is wired to', () => {
-    const {element, out} = emit(
+    const {element, out, build} = emit(
       '<Svg width={40} height={20} style={{margin: 4}}><Circle cx={10} cy={10} r={5} fill="#f00" /></Svg>',
     );
     const node = element.node;
@@ -173,17 +176,17 @@ describe('vector IR: baked drawings', () => {
       data: printVectorTables(wire.tables).join('\n\n'),
       builders: '',
     });
-    expect(out.build.at(-1)).toBe(
+    expect(build.at(-1)).toBe(
       `    er_node_set_vector_ops(n0, s_svg0_ops, ${wire.tables.ops.length}, s_svg0_paints, 1, NULL, 0);`,
     );
   });
 
   it('leaves an empty drawing without tables', () => {
-    const {element, out} = emit('<Svg width={10} height={10} />');
+    const {element, out, build} = emit('<Svg width={10} height={10} />');
     expect(printVectorBlocks(out.vectors)).toEqual({data: '', builders: ''});
-    expect(
-      out.build.some(line => line.includes('er_node_set_vector_ops')),
-    ).toBe(false);
+    expect(build.some(line => line.includes('er_node_set_vector_ops'))).toBe(
+      false,
+    );
     expect(element.node.wiring).toEqual([
       expect.objectContaining({kind: 'vectorTables'}),
     ]);
@@ -255,8 +258,10 @@ describe('vector IR: state-driven drawings', () => {
     expect(printVectorBlocks(out.vectors).builders).toContain(
       '    const float rx_s0 = fminf(fmaxf(',
     );
-    expect(out.svgUpdates).toEqual([
-      {id: 0, len: vector.tape.length, nPaints: 1, nGrads: 0, nodeVar: 's_n0'},
+    expect(stateDrivenVectorOf(element.node)).toBe(vector);
+    expect(printVectorRebuild('n0', vector)).toEqual([
+      '    build_svg0();',
+      `    er_node_set_vector_ops(s_n0, s_svg0_ops, ${vector.tape.length}, s_svg0_paints, 1, NULL, 0);`,
     ]);
   });
 

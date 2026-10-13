@@ -85,7 +85,8 @@ export interface ScalarState extends StateSlot {
   isBool: boolean;
   /** How C reads it: `s_state.<cField>`. */
   cMember: string;
-  initCode: string;
+  /** Its initial value: a string for a string slot, a number otherwise. */
+  initial: number | string;
   /** Fed by the host through a generated er_app_set_<name>() (useHostValue). */
   host: boolean;
 }
@@ -114,7 +115,7 @@ export interface ValueRef {
   kind: 'value';
   cVar: string;
   cType: 'int' | 'float' | 'i64';
-  initCode: string;
+  initial: number;
   /** Whether the generated C reads or writes it; an unused ref declares nothing. */
   used: boolean;
 }
@@ -124,7 +125,6 @@ export interface NodeRef {
   kind: 'node';
   cVar: string;
   cType: 'ERNode*';
-  initCode: 'NULL';
   used: boolean;
 }
 
@@ -133,7 +133,7 @@ export type RefRecord = ValueRef | NodeRef;
 /** A useAnimatedValue: an engine-side ERAnimValueHandle. */
 export interface AnimRecord {
   cVar: string;
-  initCode: string;
+  initial: number;
 }
 
 /** The fixed-buffer caps, resolved per compile (see resolveOptions). */

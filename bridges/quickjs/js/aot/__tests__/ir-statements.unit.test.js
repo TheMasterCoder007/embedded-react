@@ -47,7 +47,7 @@ const valueRef = (cType, cVar) => ({
   kind: 'value',
   cVar,
   cType,
-  initCode: '0',
+  initial: 0,
   used: false,
 });
 
