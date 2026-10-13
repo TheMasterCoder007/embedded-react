@@ -19,7 +19,18 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {floatLit} from '../c-syntax.mts';
-import type {IrVectorPaint, IrVectorTables} from '../ir/vectors.mts';
+import {printCondition, printExpr} from './expressions.mts';
+import {printPropValue} from './nodes.mts';
+import type {
+  IrDrawingGradient,
+  IrDrawingPaint,
+  IrGradientRef,
+  IrPaintColor,
+  IrStateDrivenVector,
+  IrTapeValue,
+  IrVectorPaint,
+  IrVectorTables,
+} from '../ir/vectors.mts';
 import type {VectorGradient} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -121,5 +132,261 @@ export function printVectorOps(
   return [
     `    er_node_set_vector_ops(${nodeId}, s_svg${id}_ops, ${tables.ops.length}, ` +
       `s_svg${id}_paints, ${tables.paints.length}, ${gradsRef}, ${gradients.length});`,
+  ];
+}
+
+/**
+ * One op-tape slot as the C float it is.
+ *
+ * @param value  The slot.
+ *
+ * @returns The C.
+ */
+export function printTapeValue(value: IrTapeValue): string {
+  switch (value.kind) {
+    case 'op':
+      return value.op;
+    case 'number':
+      return floatLit(value.value);
+    case 'float':
+      return `(float)(${printExpr(value.value)})`;
+    case 'local':
+      return value.name;
+    case 'foreign':
+      return value.code;
+    case 'chain':
+      return `(${[
+        printTapeValue(value.first),
+        ...value.rest.map(term => `${term.op} ${printTapeValue(term.value)}`),
+      ].join(' ')})`;
+    case 'radians':
+      return `((${printTapeValue(value.degrees)} - 90.0f) * (float)M_PI / 180.0f)`;
+    case 'fullTurn':
+      return '(2.0f * (float)M_PI)';
+    case 'clampRadius':
+      return `fminf(fmaxf(${printTapeValue(value.radius)}, 0.0f), (${printTapeValue(value.side)}) * 0.5f)`;
+  }
+}
+
+/**
+ * A paint color as C: a constant ARGB, or the color state chooses.
+ *
+ * @param color  The color.
+ *
+ * @returns The C.
+ */
+const printPaintColor = (color: IrPaintColor): string =>
+  color.kind === 'static' ? `${color.argb}u` : printPropValue(color.value);
+
+/**
+ * A paint's gradient index as C: 0 for none, the index, or the index while its condition holds.
+ *
+ * @param ref  The gradient.
+ *
+ * @returns The C.
+ */
+function printGradientRef(ref: IrGradientRef): string {
+  if (!ref.index || !ref.when) {
+    return String(ref.index);
+  }
+
+  const test = printCondition(ref.when.test);
+  return `((${ref.when.negate ? `!(${test})` : test}) ? ${ref.index} : 0)`;
+}
+
+/**
+ * Whether a gradient follows state: a stop color or a geometry field does.
+ *
+ * @param gradient  The gradient.
+ *
+ * @returns Whether it does.
+ */
+const isGradientStateDriven = (gradient: IrDrawingGradient): boolean =>
+  gradient.stops.some(
+    stop => stop.color.kind === 'state' || stop.offset.kind !== 'number',
+  ) ||
+  [gradient.ax, gradient.ay, gradient.bx, gradient.by, gradient.r].some(
+    field => field.kind !== 'number',
+  );
+
+/**
+ * Whether a paint follows state: a color, the stroke width, or a gradient it uses (or its condition) does.
+ *
+ * @param paint  The paint.
+ * @param gradients  The drawing's gradients.
+ *
+ * @returns Whether it does.
+ */
+function isPaintStateDriven(
+  paint: IrDrawingPaint,
+  gradients: IrDrawingGradient[],
+): boolean {
+  const followsState = (ref: IrGradientRef) =>
+    ref.index > 0 &&
+    (ref.when !== null || isGradientStateDriven(gradients[ref.index - 1]));
+  return (
+    paint.fill.kind === 'state' ||
+    paint.stroke.kind === 'state' ||
+    paint.strokeWidth.kind !== 'number' ||
+    followsState(paint.fillGradient) ||
+    followsState(paint.strokeGradient)
+  );
+}
+
+/**
+ * A paint's ERVectorPaint fields, in struct order.
+ *
+ * @param paint  The paint.
+ *
+ * @returns Each field's name and C value.
+ */
+const paintFields = (paint: IrDrawingPaint): [string, string][] => [
+  ['fill', printPaintColor(paint.fill)],
+  ['stroke', printPaintColor(paint.stroke)],
+  ['stroke_w', printTapeValue(paint.strokeWidth)],
+  ['miter', floatLit(paint.miter)],
+  ['cap', String(paint.cap)],
+  ['join', String(paint.join)],
+  ['fill_rule', String(paint.fillRule)],
+  ['fill_grad', printGradientRef(paint.fillGradient)],
+  ['stroke_grad', printGradientRef(paint.strokeGradient)],
+];
+
+/**
+ * A gradient's ERVectorGradient fields after its stops, in struct order.
+ *
+ * @param gradient  The gradient.
+ *
+ * @returns Each field's name and C value.
+ */
+const gradientGeometry = (gradient: IrDrawingGradient): [string, string][] =>
+  (['ax', 'ay', 'bx', 'by', 'r'] as const).map(field => [
+    field,
+    printTapeValue(gradient[field]),
+  ]);
+
+/**
+ * A state-driven drawing's tables and its build_svg<id>() function. The op-tape is always mutable; the
+ * gradients and paints are const tables unless state drives something in them, in which case the builder
+ * rewrites them too.
+ *
+ * @param vector  The drawing.
+ *
+ * @returns The table declarations, and the builder function.
+ */
+export function printStateDrivenVector(vector: IrStateDrivenVector): {
+  data: string[];
+  builder: string;
+} {
+  const {id, gradients, paints} = vector;
+  const hasStatePaint = paints.some(paint =>
+    isPaintStateDriven(paint, gradients),
+  );
+  const hasStateGradient = gradients.some(isGradientStateDriven);
+
+  const data = [`static float s_svg${id}_ops[${vector.tape.length}];`];
+  if (gradients.length) {
+    if (hasStateGradient) {
+      data.push(
+        `static ERVectorGradient s_svg${id}_grads[${gradients.length}];`,
+      );
+    } else {
+      const inits = gradients.map(gradient => {
+        const stops = gradient.stops
+          .map(
+            stop =>
+              `{ ${printPaintColor(stop.color)}, ${printTapeValue(stop.offset)} }`,
+          )
+          .join(', ');
+        const geometry = gradientGeometry(gradient)
+          .map(([field, value]) => `.${field} = ${value}`)
+          .join(', ');
+        return (
+          `    { .type = ${gradient.type}, .stop_count = ${gradient.stops.length}, ` +
+          `.stops = { ${stops} }, ${geometry} }`
+        );
+      });
+      data.push(
+        `static const ERVectorGradient s_svg${id}_grads[] = {\n${inits.join(',\n')}\n};`,
+      );
+    }
+  }
+
+  if (hasStatePaint) {
+    data.push(`static ERVectorPaint s_svg${id}_paints[${paints.length}];`);
+  } else {
+    const inits = paints.map(
+      paint =>
+        `    { ${paintFields(paint)
+          .map(([field, value]) => `.${field} = ${value}`)
+          .join(', ')} }`,
+    );
+    data.push(
+      `static const ERVectorPaint s_svg${id}_paints[] = {\n${inits.join(',\n')}\n};`,
+    );
+  }
+
+  // The builder: the locals, every tape slot, then the paints and gradients state drives.
+  const lines = [
+    ...vector.locals.map(
+      local =>
+        `    const float ${local.name} = ${printTapeValue(local.value)};`,
+    ),
+    ...vector.tape.map(
+      (value, slot) =>
+        `    s_svg${id}_ops[${slot}] = ${printTapeValue(value)};`,
+    ),
+  ];
+  if (hasStatePaint) {
+    paints.forEach((paint, paintIndex) => {
+      for (const [field, value] of paintFields(paint)) {
+        lines.push(`    s_svg${id}_paints[${paintIndex}].${field} = ${value};`);
+      }
+    });
+  }
+  if (hasStateGradient) {
+    gradients.forEach((gradient, entry) => {
+      const prefix = `    s_svg${id}_grads[${entry}]`;
+      lines.push(
+        `${prefix}.type = ${gradient.type};`,
+        `${prefix}.stop_count = ${gradient.stops.length};`,
+      );
+      gradient.stops.forEach((stop, stopIndex) => {
+        lines.push(
+          `${prefix}.stops[${stopIndex}].color = ${printPaintColor(stop.color)};`,
+          `${prefix}.stops[${stopIndex}].position = ${printTapeValue(stop.offset)};`,
+        );
+      });
+      for (const [field, value] of gradientGeometry(gradient)) {
+        lines.push(`${prefix}.${field} = ${value};`);
+      }
+    });
+  }
+
+  return {
+    data,
+    builder: `static void build_svg${id}(void)\n{\n${lines.join('\n')}\n}`,
+  };
+}
+
+/**
+ * Builds a state-driven drawing once, points its node at the tables, and keeps the node's handle for app_update.
+ *
+ * @param nodeId  The node's variable.
+ * @param vector  The drawing.
+ *
+ * @returns The C lines.
+ */
+export function printStateDrivenVectorWiring(
+  nodeId: string,
+  vector: IrStateDrivenVector,
+): string[] {
+  const {id, gradients} = vector;
+  return [
+    `    build_svg${id}();`,
+    `    er_node_set_vector_ops(${nodeId}, s_svg${id}_ops, ${vector.tape.length}, ` +
+      `s_svg${id}_paints, ${vector.paints.length}, ` +
+      `${gradients.length ? `s_svg${id}_grads` : 'NULL'}, ${gradients.length});`,
+    `    s_${nodeId} = ${nodeId};`,
   ];
 }

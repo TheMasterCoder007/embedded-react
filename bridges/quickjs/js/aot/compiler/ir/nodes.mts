@@ -22,7 +22,7 @@ import type {AnimBind, TextSpan} from '../style-text.mts';
 import type {ListState, PanResponderRecord, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrText} from './text.mts';
-import type {IrVectorTables} from './vectors.mts';
+import type {IrStateDrivenVector, IrVectorTables} from './vectors.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -90,7 +90,9 @@ export type IrWire =
   /** A PanResponder spread onto the node; its functions are already in the output. */
   | {kind: 'responder'; pan: PanResponderRecord}
   /** An <Svg>'s drawing, baked into const tables. */
-  | {kind: 'vectorTables'; tables: IrVectorTables};
+  | {kind: 'vectorTables'; tables: IrVectorTables}
+  /** An <Svg>'s drawing that state drives: built once at boot and kept as a handle for app_update. */
+  | {kind: 'stateDrivenVector'; vector: IrStateDrivenVector};
 
 /**
  * An element as an engine node: a host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView), a

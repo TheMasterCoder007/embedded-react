@@ -31,14 +31,30 @@ import {
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {floatLit} from './c-syntax.mts';
-import {asCond, emitExpr} from './expressions.mts';
-import {emitColorExpr, collectStyleAssigns} from './style-text.mts';
+import {lowerExpr} from './expressions.mts';
+import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
 import {emitIrNode, lowerRefBinds} from './nodes.mts';
-import {printVectorPaint, printVectorTables} from './c/vectors.mts';
+import {
+  printStateDrivenVector,
+  printTapeValue,
+  printVectorPaint,
+  printVectorTables,
+} from './c/vectors.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrNode} from './ir/nodes.mts';
-import type {IrVectorPaint, IrVectorTables} from './ir/vectors.mts';
+import type {IrExpr} from './ir/expressions.mts';
+import type {
+  IrDrawingGradient,
+  IrDrawingPaint,
+  IrGeometry,
+  IrGradientRef,
+  IrPaintColor,
+  IrStateDrivenVector,
+  IrTapeValue,
+  IrVectorPaint,
+  IrVectorTables,
+} from './ir/vectors.mts';
 import type {
   EmitOptions,
   Env,
@@ -57,9 +73,9 @@ interface SvgElement {
   props: Record<string, unknown>;
 }
 
-/** A state-driven attribute: its lowered C expression (null for a `d`, which cannot be one) and its node. */
+/** A state-driven attribute: its lowered value (null for a `d`, which cannot be one) and its node. */
 interface DynamicAttr {
-  dyn: string | null;
+  value: IrExpr | null;
   node: t.Expression | t.JSXEmptyExpression;
 }
 
@@ -80,25 +96,17 @@ export interface VectorGeometry {
   locals: string[];
 }
 
-/** A gradient descriptor lowered to C-expression fields; `cond` makes the paint's index state-driven. */
-interface GradientSpec {
-  type: number;
-  stops: {color: string; offset: string}[];
-  ax: string;
-  ay: string;
-  bx: string;
-  by: string;
-  r: string;
-  anyDynamic: boolean;
-  cond?: string | null;
+/** A gradient a shape uses, and the condition it is used under (`cond ? {…} : null`), if any. */
+interface ShapeGradient {
+  gradient: IrDrawingGradient;
+  when: {test: IrExpr; negate: boolean} | null;
 }
 
-/** A shape's paint as C-expression fields in PAINT_FIELDS order, and whether any is state-driven. */
-interface PaintSpec {
-  fields: string[];
-  anyDynamic: boolean;
-  fillGrad: GradientSpec | null;
-  strokeGrad: GradientSpec | null;
+/** A shape's paint before its gradients have places in the drawing's table, and the gradients it uses. */
+interface ShapePaint {
+  paint: Omit<IrDrawingPaint, 'fillGradient' | 'strokeGradient'>;
+  fillGradient: ShapeGradient | null;
+  strokeGradient: ShapeGradient | null;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -109,19 +117,6 @@ interface PaintSpec {
 export const CAP_MAP: Record<string, number> = {butt: 0, round: 1, square: 2};
 /** strokeLinejoin → ERVectorPaint join. */
 export const JOIN_MAP: Record<string, number> = {miter: 0, round: 1, bevel: 2};
-
-/** The ERVectorPaint members, in paint-record order. */
-const PAINT_FIELDS = [
-  'fill',
-  'stroke',
-  'stroke_w',
-  'miter',
-  'cap',
-  'join',
-  'fill_rule',
-  'fill_grad',
-  'stroke_grad',
-];
 
 /** A C number (sign, decimals, exponent) as a regex source for reading folded literals back. */
 const C_NUMBER = '-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
@@ -288,23 +283,10 @@ export const svgNum = (value: unknown, fallback = 0): number => {
  * @returns Whether it is a DynamicAttr.
  */
 const isDynamicAttr = (value: unknown): value is DynamicAttr =>
-  value != null && typeof value === 'object' && 'dyn' in value;
+  value != null && typeof value === 'object' && 'node' in value;
 
 /**
- * Lowers an SVG coordinate attr to a C float expression (literal when static, cast expr when dynamic).
- *
- * @param attrValue  The attribute's value.
- * @param fallback  The value to use when it is absent or not a number.
- *
- * @returns C for a float.
- */
-const attrToCFloat = (attrValue: unknown, fallback = 0): string =>
-  isDynamicAttr(attrValue)
-    ? `(float)(${attrValue.dyn})`
-    : floatLit(svgNum(attrValue, fallback));
-
-/**
- * Reads an SVG element's attributes → { name: number|string|true | {dyn: cExpr} } (state attrs → {dyn}).
+ * Reads an SVG element's attributes → { name: number|string|true | DynamicAttr } (state attrs → DynamicAttr).
  *
  * @param openingElement  The element's opening tag.
  * @param scope  Compile-time constants in reach.
@@ -351,13 +333,13 @@ function svgAttrs(
       } catch {
         // Defer a state-driven `d` so pathEntries raises the error naming the fix, not the expression's own error.
         if (name === 'd') {
-          attrs[name] = {dyn: null, node: valueNode.expression};
+          attrs[name] = {value: null, node: valueNode.expression};
           continue;
         }
 
-        // Keep the node too: fill/stroke lower via emitColorExpr to an ARGB uint, not the numeric `dyn` code.
+        // Keep the node too: fill/stroke lower to an ARGB color from it, not from the numeric value.
         attrs[name] = {
-          dyn: emitExpr(valueNode.expression, env).code,
+          value: lowerExpr(valueNode.expression, env),
           node: valueNode.expression,
         };
       }
@@ -371,8 +353,8 @@ function svgAttrs(
 
 /**
  * Lowers a `{ type, ax, ay, bx, by, r, stops: [{ color, offset }] }` gradient descriptor — the SAME shape
- * Flow A's svg-ops.js takes — to C-expression fields. Every geometry field and every stop may be static
- * or state-driven; `type` and the stop COUNT must be static, since they decide the emitted table's shape.
+ * Flow A's svg-ops.js takes. Every geometry field and every stop may be static or state-driven; `type` and the
+ * stop COUNT must be static, since they decide the emitted table's shape.
  *
  * Conic gradients carry the sweep's start angle in `r` (radians, clockwise from the top), so a dial whose
  * ramp must follow a setpoint drives `r` from state — which is exactly why the table can't be const.
@@ -382,14 +364,14 @@ function svgAttrs(
  * @param env  The expression environment.
  * @param attrName  The attribute, for errors.
  *
- * @returns The lowered gradient.
+ * @returns The gradient.
  */
-function gradSpec(
+function lowerGradient(
   node: t.Node | null | undefined,
   scope: Scope,
   env: Env,
   attrName: string,
-): GradientSpec {
+): IrDrawingGradient {
   if (!node || node.type !== 'ObjectExpression') {
     throw new Error(`AOT: "${attrName}" must be an object literal`);
   }
@@ -407,18 +389,18 @@ function gradSpec(
     ] = property.value;
   }
 
-  // A numeric field: fold when it can be, otherwise emit the state-driven expression.
-  let anyDynamic = false;
+  // A numeric field: a number when it folds to one C can write, otherwise the state-driven value.
   const floatField = (
     valueNode: t.Node | undefined,
     fallback: number,
-  ): string => {
-    if (valueNode == null) return floatLit(fallback);
+  ): IrTapeValue => {
+    if (valueNode == null) return tapeNumber(fallback);
     try {
-      return floatLit(evalStatic(valueNode, scope));
+      const value = evalStatic(valueNode, scope);
+      floatLit(value);
+      return tapeNumber(Number(value));
     } catch {
-      anyDynamic = true;
-      return `(float)(${emitExpr(valueNode, env).code})`;
+      return {kind: 'float', value: lowerExpr(valueNode, env)};
     }
   };
 
@@ -452,7 +434,7 @@ function gradSpec(
     );
   }
 
-  // Lower each stop: a static color folds to a literal, a state-driven one to an ARGB expression.
+  // Lower each stop: a static color folds to its ARGB, a state-driven one to the color state chooses.
   const stops = stopsNode.elements.map(stopNode => {
     if (!stopNode || stopNode.type !== 'ObjectExpression') {
       throw new Error(
@@ -468,12 +450,14 @@ function gradSpec(
       ] = property.value;
     }
 
-    let color: string;
+    let color: IrPaintColor;
     try {
-      color = `${parseColor(evalStatic(stopProps.color, scope)) >>> 0}u`;
+      color = {
+        kind: 'static',
+        argb: parseColor(evalStatic(stopProps.color, scope)) >>> 0,
+      };
     } catch {
-      anyDynamic = true;
-      color = emitColorExpr(stopProps.color, env);
+      color = {kind: 'state', value: lowerColorValue(stopProps.color, env)};
     }
 
     return {color, offset: floatField(stopProps.offset, 0)};
@@ -487,14 +471,13 @@ function gradSpec(
     bx: floatField(props.bx, 0),
     by: floatField(props.by, 0),
     r: floatField(props.r, 0),
-    anyDynamic,
   };
 }
 
 /**
  * Unwraps a gradient attribute, which may be a bare object literal or a CONDITIONAL one:
  * `cond ? {…} : null` (either way round) or `cond && {…}`. The gradient table entry is emitted either
- * way; what the condition drives is the PAINT'S INDEX, which becomes a runtime ternary of N or 0.
+ * way; what the condition drives is the PAINT'S INDEX, which is the entry only while the condition holds.
  *
  * Without this a gradient applied to a shape that is only sometimes gradient-filled leaks into every
  * other state — the index is a compile-time constant, so "no gradient here" is not expressible by
@@ -505,19 +488,19 @@ function gradSpec(
  * @param env  The expression environment.
  * @param attrName  The attribute, for errors.
  *
- * @returns The lowered gradient and its condition, or null when the shape has none.
+ * @returns The gradient and its condition, or null when the shape has none.
  */
-function gradAttr(
+function lowerGradientAttr(
   gradientAttr: GradientAttr | undefined,
   scope: Scope,
   env: Env,
   attrName: string,
-): GradientSpec | null {
+): ShapeGradient | null {
   if (!gradientAttr) return null;
 
-  // Peel a conditional down to its object literal, keeping the condition as C.
+  // Peel a conditional down to its object literal, keeping the condition.
   let node: t.Node = gradientAttr.gradNode;
-  let cond = null;
+  let when: ShapeGradient['when'] = null;
   const nullish = (branch: t.Node) =>
     branch.type === 'NullLiteral' ||
     (branch.type === 'Identifier' && branch.name === 'undefined');
@@ -526,13 +509,13 @@ function gradAttr(
       node.consequent.type === 'ObjectExpression' &&
       nullish(node.alternate)
     ) {
-      cond = asCond(emitExpr(node.test, env));
+      when = {test: lowerExpr(node.test, env), negate: false};
       node = node.consequent;
     } else if (
       node.alternate.type === 'ObjectExpression' &&
       nullish(node.consequent)
     ) {
-      cond = `!(${asCond(emitExpr(node.test, env))})`;
+      when = {test: lowerExpr(node.test, env), negate: true};
       node = node.alternate;
     } else {
       throw new Error(
@@ -545,76 +528,19 @@ function gradAttr(
     node.operator === '&&' &&
     node.right.type === 'ObjectExpression'
   ) {
-    cond = asCond(emitExpr(node.left, env));
+    when = {test: lowerExpr(node.left, env), negate: false};
     node = node.right;
   }
 
-  // Lower the object literal itself.
-  const spec = gradSpec(node, scope, env, attrName);
-  spec.cond = cond;
-  return spec;
+  return {gradient: lowerGradient(node, scope, env, attrName), when};
 }
 
 /**
- * A `{ .type = …, .stops = { … }, … }` ERVectorGradient initializer from a gradSpec (const tables).
- *
- * @param gradient  The lowered gradient.
- *
- * @returns The C initializer.
- */
-function gradInitFromSpec(gradient: GradientSpec): string {
-  const stopInits = gradient.stops
-    .map(stop => `{ ${stop.color}, ${stop.offset} }`)
-    .join(', ');
-  return (
-    `{ .type = ${gradient.type}, .stop_count = ${gradient.stops.length}, .stops = { ${stopInits} }, ` +
-    `.ax = ${gradient.ax}, .ay = ${gradient.ay}, .bx = ${gradient.bx}, .by = ${gradient.by}, .r = ${gradient.r} }`
-  );
-}
-
-/**
- * Per-field assignments rebuilding one mutable gradient-table entry from state, for build_svgN().
- *
- * @param tableName  The table's C name.
- * @param entryIndex  The entry's index.
- * @param gradient  The lowered gradient.
- *
- * @returns The C statements.
- */
-function gradAssigns(
-  tableName: string,
-  entryIndex: number,
-  gradient: GradientSpec,
-): string[] {
-  const lines = [
-    `    ${tableName}[${entryIndex}].type = ${gradient.type};`,
-    `    ${tableName}[${entryIndex}].stop_count = ${gradient.stops.length};`,
-  ];
-  gradient.stops.forEach((stop, stopIndex) => {
-    lines.push(
-      `    ${tableName}[${entryIndex}].stops[${stopIndex}].color = ${stop.color};`,
-    );
-    lines.push(
-      `    ${tableName}[${entryIndex}].stops[${stopIndex}].position = ${stop.offset};`,
-    );
-  });
-
-  for (const field of ['ax', 'ay', 'bx', 'by', 'r'] as const) {
-    lines.push(
-      `    ${tableName}[${entryIndex}].${field} = ${gradient[field]};`,
-    );
-  }
-
-  return lines;
-}
-
-/**
- * A shape's paint as C-expr fields (matching PAINT_FIELDS) + whether any is state-driven.
- *   - fill / stroke may be DYNAMIC → lowered via emitColorExpr to an ARGB uint expr (a color string, a
- *     ternary of them, or a folded theme token); static → a baked `0xAARRGGBBu` literal.
- *   - strokeWidth may be DYNAMIC (numeric C expr); static → a float literal.
- *   - cap / join / miterlimit / fillRule must be STATIC (a dynamic one throws a clear error).
- *   - fillGrad / strokeGrad are lowered here; their table indices are filled in by the caller.
+ * Lowers a shape's paint and the gradients it uses:
+ *   - fill / stroke may be state-driven (a color string, a ternary of them, or a folded theme token);
+ *   - strokeWidth may be state-driven;
+ *   - cap / join / miterlimit / fillRule must be static (a state-driven one throws a clear error);
+ *   - fillGrad / strokeGrad are lowered here; the caller gives them places in the drawing's table.
  *
  * @param attrs  The shape's attributes.
  * @param env  The expression environment.
@@ -622,24 +548,16 @@ function gradAssigns(
  *
  * @returns The paint, and the shape's gradients.
  */
-function paintSpec(attrs: SvgAttrs, env: Env, scope: Scope): PaintSpec {
-  // Lower the colors and the stroke width, the only paint attributes that may be state-driven.
-  let anyDynamic = false;
-  const color = (attrValue: unknown, fallback: string): string => {
-    if (isDynamicAttr(attrValue)) {
-      anyDynamic = true;
-      return emitColorExpr(attrValue.node, env);
-    }
-    return `${parseColor(attrValue ?? fallback) >>> 0}u`;
-  };
+function lowerShapePaint(attrs: SvgAttrs, env: Env, scope: Scope): ShapePaint {
+  // Colors and the stroke width are the only paint attributes that may be state-driven.
+  const color = (attrValue: unknown, fallback: string): IrPaintColor =>
+    isDynamicAttr(attrValue)
+      ? {kind: 'state', value: lowerColorValue(attrValue.node, env)}
+      : {kind: 'static', argb: parseColor(attrValue ?? fallback) >>> 0};
 
-  let strokeWidth: string;
-  if (isDynamicAttr(attrs.strokeWidth)) {
-    anyDynamic = true;
-    strokeWidth = `(float)(${attrs.strokeWidth.dyn})`;
-  } else {
-    strokeWidth = floatLit(svgNum(attrs.strokeWidth, 1));
-  }
+  const strokeWidth: IrTapeValue = isDynamicAttr(attrs.strokeWidth)
+    ? {kind: 'float', value: attrs.strokeWidth.value!}
+    : checkedTapeNumber(svgNum(attrs.strokeWidth, 1));
 
   // The rest of the paint must be static.
   for (const attrName of [
@@ -656,112 +574,150 @@ function paintSpec(attrs: SvgAttrs, env: Env, scope: Scope): PaintSpec {
     }
   }
 
-  // Assemble the fields in PAINT_FIELDS order.
-  const fields = [
-    color(attrs.fill, 'black'),
-    color(attrs.stroke, 'none'),
+  const fill = color(attrs.fill, 'black');
+  const stroke = color(attrs.stroke, 'none');
+  const miter = svgNum(attrs.strokeMiterlimit, 4);
+  floatLit(miter);
+  const paint = {
+    fill,
+    stroke,
     strokeWidth,
-    floatLit(svgNum(attrs.strokeMiterlimit, 4)),
-    String(CAP_MAP[attrs.strokeLinecap as string] ?? 0),
-    String(JOIN_MAP[attrs.strokeLinejoin as string] ?? 0),
-    String(attrs.fillRule === 'evenodd' ? 1 : 0),
-  ];
-
-  // Placeholder gradient indices keep `fields` aligned with PAINT_FIELDS until the caller lays out the table.
-  fields.push('0', '0');
-
-  // Lower the gradients; a conditional one makes the paint index state-driven, so the paint table is mutable.
-  const fillGrad = gradAttr(
+    miter,
+    cap: CAP_MAP[attrs.strokeLinecap as string] ?? 0,
+    join: JOIN_MAP[attrs.strokeLinejoin as string] ?? 0,
+    fillRule: attrs.fillRule === 'evenodd' ? 1 : 0,
+  };
+  const fillGradient = lowerGradientAttr(
     attrs.fillGrad as GradientAttr | undefined,
     scope,
     env,
     'fillGrad',
   );
-  const strokeGrad = gradAttr(
+  const strokeGradient = lowerGradientAttr(
     attrs.strokeGrad as GradientAttr | undefined,
     scope,
     env,
     'strokeGrad',
   );
-  if (
-    fillGrad?.anyDynamic ||
-    strokeGrad?.anyDynamic ||
-    fillGrad?.cond ||
-    strokeGrad?.cond
-  ) {
-    anyDynamic = true;
-  }
 
-  return {fields, anyDynamic, fillGrad, strokeGrad};
+  return {paint, fillGradient, strokeGradient};
 }
 
-/**
- * A `{ .fill = …, … }` ERVectorPaint initializer from a paintSpec's C-expr fields (used for static paints).
- *
- * @param paint  The paint.
- *
- * @returns The C initializer.
- */
-function paintInitFromSpec(paint: PaintSpec): string {
-  return `{ ${PAINT_FIELDS.map((field, fieldIndex) => `.${field} = ${paint.fields[fieldIndex]}`).join(', ')} }`;
-}
+// Per-shape op-tape geometry, shared by the JSX path and the imperative updateVector path, as in svg-ops.
 
-// Per-shape op-tape entries; the ...C helpers take C floats so JSX and updateVector share geometry, as in svg-ops.
+/** A number as a tape slot. */
+const tapeNumber = (value: number): IrTapeValue => ({kind: 'number', value});
+
+/** The zero slot. */
+const TAPE_ZERO = tapeNumber(0);
 
 /**
- * An arc's op-tape entries. The engine measures angles in radians clockwise from 3 o'clock, so each
- * angle is shifted back a quarter turn and converted.
+ * A number from the app as a tape slot, checked now that C can write it, where the shape is lowered.
  *
- * @param cx  C for the center's x.
- * @param cy  C for the center's y.
- * @param radius  C for the radius.
- * @param startDeg  C for the start angle, in degrees clockwise from the top.
- * @param endDeg  C for the end angle, likewise.
+ * @param value  The number.
  *
- * @returns The entries.
+ * @returns The slot.
  */
-export const arcEntriesC = (
-  cx: string,
-  cy: string,
-  radius: string,
-  startDeg: string,
-  endDeg: string,
-): string[] => {
-  const startRad = `((${startDeg} - 90.0f) * (float)M_PI / 180.0f)`;
-  const endRad = `((${endDeg} - 90.0f) * (float)M_PI / 180.0f)`;
-  return ['ER_VOP_ARC', cx, cy, radius, startRad, endRad, '0.0f'];
+const checkedTapeNumber = (value: number): IrTapeValue => {
+  floatLit(value);
+  return tapeNumber(value);
 };
 
 /**
- * A circle's op-tape entries.
+ * An opcode as a tape slot.
  *
- * @param cx  C for the center's x.
- * @param cy  C for the center's y.
- * @param radius  C for the radius.
+ * @param op  The ER_VOP_* name.
  *
- * @returns The entries.
+ * @returns The slot.
  */
-export const circleEntriesC = (
-  cx: string,
-  cy: string,
-  radius: string,
-): string[] => [
-  'ER_VOP_MOVE',
-  `(${cx} + ${radius})`,
-  cy,
-  'ER_VOP_ARC',
+const tapeOp = (op: string): IrTapeValue => ({kind: 'op', op});
+
+/**
+ * `first`, then each operator and operand in turn.
+ *
+ * @param first  The first operand.
+ * @param rest  Each operator and the operand after it.
+ *
+ * @returns The slot.
+ */
+const tapeChain = (
+  first: IrTapeValue,
+  ...rest: ['+' | '-' | '*', IrTapeValue][]
+): IrTapeValue => ({
+  kind: 'chain',
+  first,
+  rest: rest.map(([op, value]) => ({op, value})),
+});
+
+/**
+ * The value of a slot that reads as a C float literal, or null when state drives it. This reads the slot's C
+ * text, the way the geometry folded before it was IR, so the generated C stays the same.
+ *
+ * @param value  The slot, if there is one.
+ *
+ * @returns Its value, or null.
+ */
+const tapeLiteral = (value: IrTapeValue | null): number | null =>
+  value == null ? null : cLiteralValue(printTapeValue(value));
+
+/**
+ * An arc's tape slots. The engine measures angles in radians clockwise from 3 o'clock, so each angle is
+ * converted from degrees clockwise from the top.
+ *
+ * @param cx  The center's x.
+ * @param cy  The center's y.
+ * @param radius  The radius.
+ * @param startDeg  The start angle, in degrees clockwise from the top.
+ * @param endDeg  The end angle, likewise.
+ *
+ * @returns The slots.
+ */
+const arcTape = (
+  cx: IrTapeValue,
+  cy: IrTapeValue,
+  radius: IrTapeValue,
+  startDeg: IrTapeValue,
+  endDeg: IrTapeValue,
+): IrTapeValue[] => [
+  tapeOp('ER_VOP_ARC'),
   cx,
   cy,
   radius,
-  '0.0f',
-  '(2.0f * (float)M_PI)',
-  '0.0f',
-  'ER_VOP_CLOSE',
+  {kind: 'radians', degrees: startDeg},
+  {kind: 'radians', degrees: endDeg},
+  TAPE_ZERO,
 ];
 
 /**
- * The numeric value of a C float literal (as produced by floatLit/attrToCFloat, or the `(float)(N)` cast
- * the imperative updateVector path emits), or null for a state-driven expr.
+ * A circle's tape slots.
+ *
+ * @param cx  The center's x.
+ * @param cy  The center's y.
+ * @param radius  The radius.
+ *
+ * @returns The slots.
+ */
+const circleTape = (
+  cx: IrTapeValue,
+  cy: IrTapeValue,
+  radius: IrTapeValue,
+): IrTapeValue[] => [
+  tapeOp('ER_VOP_MOVE'),
+  tapeChain(cx, ['+', radius]),
+  cy,
+  tapeOp('ER_VOP_ARC'),
+  cx,
+  cy,
+  radius,
+  TAPE_ZERO,
+  {kind: 'fullTurn'},
+  TAPE_ZERO,
+  tapeOp('ER_VOP_CLOSE'),
+];
+
+/**
+ * The numeric value of a C float literal (as produced by floatLit, or the `(float)(N)` cast the imperative
+ * updateVector path emits), or null for a state-driven expr.
  *
  * @param floatExpr  C for a float.
  *
@@ -790,84 +746,84 @@ export const geometryOf = (
   Array.isArray(geometry) ? {entries: geometry, locals: []} : geometry;
 
 /**
- * A corner radius clamped to half its side, mirroring svg-ops rectRadii. Folded to a literal when both
- * the radius and the side are static — the usual case, since only x/y/width tend to be state-driven.
+ * A corner radius clamped to half its side, mirroring svg-ops rectRadii. Folded to a number when both the
+ * radius and the side are known — the usual case, since only x/y/width tend to be state-driven.
  *
- * @param radius  C for the radius.
- * @param side  C for the side it is clamped against.
+ * @param radius  The radius.
+ * @param side  The side it is clamped against.
  *
- * @returns C for the clamped radius.
+ * @returns The clamped radius.
  */
-const clampRadiusC = (radius: string, side: string): string => {
-  const radiusValue = cLiteralValue(radius);
-  if (radiusValue != null && radiusValue <= 0) return '0.0f';
+const clampRadius = (radius: IrTapeValue, side: IrTapeValue): IrTapeValue => {
+  const radiusValue = tapeLiteral(radius);
+  if (radiusValue != null && radiusValue <= 0) return TAPE_ZERO;
 
-  const sideValue = cLiteralValue(side);
+  const sideValue = tapeLiteral(side);
   if (radiusValue != null && sideValue != null) {
-    return floatLit(Math.max(0, Math.min(radiusValue, sideValue / 2)));
+    return tapeNumber(Math.max(0, Math.min(radiusValue, sideValue / 2)));
   }
 
-  return `fminf(fmaxf(${radius}, 0.0f), (${side}) * 0.5f)`;
+  return {kind: 'clampRadius', radius, side};
 };
 
 /**
- * A square-cornered rectangle's op-tape entries.
+ * A square-cornered rectangle's tape slots.
  *
- * @param x  C for the left edge.
- * @param y  C for the top edge.
- * @param width  C for the width.
- * @param height  C for the height.
+ * @param x  The left edge.
+ * @param y  The top edge.
+ * @param width  The width.
+ * @param height  The height.
  *
- * @returns The entries.
+ * @returns The slots.
  */
-const sharpRectEntriesC = (
-  x: string,
-  y: string,
-  width: string,
-  height: string,
-): string[] => [
-  'ER_VOP_MOVE',
+const sharpRectTape = (
+  x: IrTapeValue,
+  y: IrTapeValue,
+  width: IrTapeValue,
+  height: IrTapeValue,
+): IrTapeValue[] => [
+  tapeOp('ER_VOP_MOVE'),
   x,
   y,
-  'ER_VOP_LINE',
-  `(${x} + ${width})`,
+  tapeOp('ER_VOP_LINE'),
+  tapeChain(x, ['+', width]),
   y,
-  'ER_VOP_LINE',
-  `(${x} + ${width})`,
-  `(${y} + ${height})`,
-  'ER_VOP_LINE',
+  tapeOp('ER_VOP_LINE'),
+  tapeChain(x, ['+', width]),
+  tapeChain(y, ['+', height]),
+  tapeOp('ER_VOP_LINE'),
   x,
-  `(${y} + ${height})`,
-  'ER_VOP_CLOSE',
+  tapeChain(y, ['+', height]),
+  tapeOp('ER_VOP_CLOSE'),
 ];
 
 /**
- * A rectangle's op-tape entries. rx/ry are null when the rect has no corner radius at all. Corners are
- * cubics, not ER_VOP_ARC, for the same reason svg-ops uses them: a corner must start at EXACTLY the preceding
- * line's endpoint. `tag` names the locals and must be unique within the caller's C block.
+ * A rectangle's tape slots. rx/ry are null when the rect has no corner radius at all. Corners are cubics, not
+ * ER_VOP_ARC, for the same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's
+ * endpoint. `tag` names the locals and must be unique within the caller's C block.
  *
- * @param x  C for the left edge.
- * @param y  C for the top edge.
- * @param width  C for the width.
- * @param height  C for the height.
- * @param rx  C for the horizontal corner radius, or null.
- * @param ry  C for the vertical corner radius, or null.
- * @param tag  Names the C locals a state-driven radius needs.
+ * @param x  The left edge.
+ * @param y  The top edge.
+ * @param width  The width.
+ * @param height  The height.
+ * @param rx  The horizontal corner radius, or null.
+ * @param ry  The vertical corner radius, or null.
+ * @param tag  Names the locals a state-driven radius needs.
  *
- * @returns The entries, and the locals to declare ahead of them.
+ * @returns The slots, and the locals to declare ahead of them.
  */
-export const rectEntriesC = (
-  x: string,
-  y: string,
-  width: string,
-  height: string,
-  rx: string | null = null,
-  ry: string | null = null,
-  tag = '',
-): VectorGeometry => {
+const rectTape = (
+  x: IrTapeValue,
+  y: IrTapeValue,
+  width: IrTapeValue,
+  height: IrTapeValue,
+  rx: IrTapeValue | null,
+  ry: IrTapeValue | null,
+  tag: string,
+): IrGeometry => {
   // A negative literal radius means `auto` (use the other one, as browsers do); a state-driven radius only clamps.
-  const isNegativeLiteral = (radius: string | null) => {
-    const value = cLiteralValue(radius);
+  const isNegativeLiteral = (radius: IrTapeValue | null) => {
+    const value = tapeLiteral(radius);
     return value != null && value < 0;
   };
   if (isNegativeLiteral(rx)) {
@@ -877,156 +833,266 @@ export const rectEntriesC = (
     ry = null;
   }
   if (rx == null && ry == null) {
-    return {entries: sharpRectEntriesC(x, y, width, height), locals: []};
+    return {entries: sharpRectTape(x, y, width, height), locals: []};
   }
 
   // A missing radius takes the other's value, each clamps to half its side, and a zero radius squares the corners.
-  let radiusX = clampRadiusC((rx ?? ry)!, width);
-  let radiusY = clampRadiusC((ry ?? rx)!, height);
-  if (cLiteralValue(radiusX) === 0 || cLiteralValue(radiusY) === 0) {
-    return {entries: sharpRectEntriesC(x, y, width, height), locals: []};
+  let radiusX = clampRadius((rx ?? ry)!, width);
+  let radiusY = clampRadius((ry ?? rx)!, height);
+  if (tapeLiteral(radiusX) === 0 || tapeLiteral(radiusY) === 0) {
+    return {entries: sharpRectTape(x, y, width, height), locals: []};
   }
 
   // Bind an unfolded clamp to a local rather than repeat it ten times in the tape; a folded radius stays inline.
-  const locals = [];
-  if (cLiteralValue(radiusX) == null) {
-    locals.push(`const float rx_${tag} = ${radiusX};`);
-    radiusX = `rx_${tag}`;
+  const locals: IrGeometry['locals'] = [];
+  if (tapeLiteral(radiusX) == null) {
+    locals.push({name: `rx_${tag}`, value: radiusX});
+    radiusX = {kind: 'local', name: `rx_${tag}`};
   }
-  if (cLiteralValue(radiusY) == null) {
-    locals.push(`const float ry_${tag} = ${radiusY};`);
-    radiusY = `ry_${tag}`;
+  if (tapeLiteral(radiusY) == null) {
+    locals.push({name: `ry_${tag}`, value: radiusY});
+    radiusY = {kind: 'local', name: `ry_${tag}`};
   }
 
   // Trace clockwise from the top edge's start: each side a line, each corner a cubic with KAPPA-length handles.
-  const kappa = floatLit(KAPPA);
-  const handleX = `(${radiusX} * ${kappa})`;
-  const handleY = `(${radiusY} * ${kappa})`;
-  const innerLeft = `(${x} + ${radiusX})`;
-  const innerRight = `(${x} + ${width} - ${radiusX})`;
-  const innerTop = `(${y} + ${radiusY})`;
-  const innerBottom = `(${y} + ${height} - ${radiusY})`;
-  const right = `(${x} + ${width})`;
-  const bottom = `(${y} + ${height})`;
+  const kappa = tapeNumber(KAPPA);
+  const handleX = tapeChain(radiusX, ['*', kappa]);
+  const handleY = tapeChain(radiusY, ['*', kappa]);
+  const innerLeft = tapeChain(x, ['+', radiusX]);
+  const innerRight = tapeChain(x, ['+', width], ['-', radiusX]);
+  const innerTop = tapeChain(y, ['+', radiusY]);
+  const innerBottom = tapeChain(y, ['+', height], ['-', radiusY]);
+  const right = tapeChain(x, ['+', width]);
+  const bottom = tapeChain(y, ['+', height]);
   const entries = [
-    'ER_VOP_MOVE',
+    tapeOp('ER_VOP_MOVE'),
     innerLeft,
     y,
-    'ER_VOP_LINE',
+    tapeOp('ER_VOP_LINE'),
     innerRight,
     y,
-    'ER_VOP_CUBIC',
-    `(${innerRight} + ${handleX})`,
+    tapeOp('ER_VOP_CUBIC'),
+    tapeChain(innerRight, ['+', handleX]),
     y,
     right,
-    `(${innerTop} - ${handleY})`,
+    tapeChain(innerTop, ['-', handleY]),
     right,
     innerTop,
-    'ER_VOP_LINE',
+    tapeOp('ER_VOP_LINE'),
     right,
     innerBottom,
-    'ER_VOP_CUBIC',
+    tapeOp('ER_VOP_CUBIC'),
     right,
-    `(${innerBottom} + ${handleY})`,
-    `(${innerRight} + ${handleX})`,
+    tapeChain(innerBottom, ['+', handleY]),
+    tapeChain(innerRight, ['+', handleX]),
     bottom,
     innerRight,
     bottom,
-    'ER_VOP_LINE',
+    tapeOp('ER_VOP_LINE'),
     innerLeft,
     bottom,
-    'ER_VOP_CUBIC',
-    `(${innerLeft} - ${handleX})`,
+    tapeOp('ER_VOP_CUBIC'),
+    tapeChain(innerLeft, ['-', handleX]),
     bottom,
     x,
-    `(${innerBottom} + ${handleY})`,
+    tapeChain(innerBottom, ['+', handleY]),
     x,
     innerBottom,
-    'ER_VOP_LINE',
+    tapeOp('ER_VOP_LINE'),
     x,
     innerTop,
-    'ER_VOP_CUBIC',
+    tapeOp('ER_VOP_CUBIC'),
     x,
-    `(${innerTop} - ${handleY})`,
-    `(${innerLeft} - ${handleX})`,
+    tapeChain(innerTop, ['-', handleY]),
+    tapeChain(innerLeft, ['-', handleX]),
     y,
     innerLeft,
     y,
-    'ER_VOP_CLOSE',
+    tapeOp('ER_VOP_CLOSE'),
   ];
 
   return {entries, locals};
 };
 
 /**
- * A line's op-tape entries.
+ * A line's tape slots.
  *
- * @param x1  C for the start's x.
- * @param y1  C for the start's y.
- * @param x2  C for the end's x.
- * @param y2  C for the end's y.
+ * @param x1  The start's x.
+ * @param y1  The start's y.
+ * @param x2  The end's x.
+ * @param y2  The end's y.
  *
- * @returns The entries.
+ * @returns The slots.
  */
+const lineTape = (
+  x1: IrTapeValue,
+  y1: IrTapeValue,
+  x2: IrTapeValue,
+  y2: IrTapeValue,
+): IrTapeValue[] => [
+  tapeOp('ER_VOP_MOVE'),
+  x1,
+  y1,
+  tapeOp('ER_VOP_LINE'),
+  x2,
+  y2,
+];
+
+// The C-text geometry the imperative updateVector path still takes, over the same tape builders.
+
+/**
+ * C an updateVector call has already written, as a tape slot.
+ *
+ * @param code  The C float.
+ *
+ * @returns The slot.
+ */
+const foreignTape = (code: string): IrTapeValue => ({kind: 'foreign', code});
+
+/** An arc's op-tape entries as C (see arcTape). */
+export const arcEntriesC = (
+  cx: string,
+  cy: string,
+  radius: string,
+  startDeg: string,
+  endDeg: string,
+): string[] =>
+  arcTape(
+    foreignTape(cx),
+    foreignTape(cy),
+    foreignTape(radius),
+    foreignTape(startDeg),
+    foreignTape(endDeg),
+  ).map(printTapeValue);
+
+/** A circle's op-tape entries as C (see circleTape). */
+export const circleEntriesC = (
+  cx: string,
+  cy: string,
+  radius: string,
+): string[] =>
+  circleTape(foreignTape(cx), foreignTape(cy), foreignTape(radius)).map(
+    printTapeValue,
+  );
+
+/** A rectangle's op-tape entries and locals as C (see rectTape). */
+export const rectEntriesC = (
+  x: string,
+  y: string,
+  width: string,
+  height: string,
+  rx: string | null = null,
+  ry: string | null = null,
+  tag = '',
+): VectorGeometry => {
+  const geometry = rectTape(
+    foreignTape(x),
+    foreignTape(y),
+    foreignTape(width),
+    foreignTape(height),
+    rx == null ? null : foreignTape(rx),
+    ry == null ? null : foreignTape(ry),
+    tag,
+  );
+  return {
+    entries: geometry.entries.map(printTapeValue),
+    locals: geometry.locals.map(
+      local => `const float ${local.name} = ${printTapeValue(local.value)};`,
+    ),
+  };
+};
+
+/** A line's op-tape entries as C (see lineTape). */
 export const lineEntriesC = (
   x1: string,
   y1: string,
   x2: string,
   y2: string,
-): string[] => ['ER_VOP_MOVE', x1, y1, 'ER_VOP_LINE', x2, y2];
+): string[] =>
+  lineTape(
+    foreignTape(x1),
+    foreignTape(y1),
+    foreignTape(x2),
+    foreignTape(y2),
+  ).map(printTapeValue);
 
-// The JSX path: each shape's attributes resolve to C floats via attrToCFloat.
-const arcEntries = (attrs: SvgAttrs) =>
-  arcEntriesC(
-    attrToCFloat(attrs.cx),
-    attrToCFloat(attrs.cy),
-    attrToCFloat(attrs.r),
-    attrToCFloat(attrs.startAngle),
-    attrToCFloat(attrs.endAngle),
-  );
-const circleEntries = (attrs: SvgAttrs) =>
-  circleEntriesC(
-    attrToCFloat(attrs.cx),
-    attrToCFloat(attrs.cy),
-    attrToCFloat(attrs.r),
-  );
-const rectEntries = (attrs: SvgAttrs, tag: string) =>
-  rectEntriesC(
-    attrToCFloat(attrs.x),
-    attrToCFloat(attrs.y),
-    attrToCFloat(attrs.width),
-    attrToCFloat(attrs.height),
-    attrs.rx == null ? null : attrToCFloat(attrs.rx),
-    attrs.ry == null ? null : attrToCFloat(attrs.ry),
+/**
+ * An SVG coordinate attribute as a tape slot: a number when static, the state-driven value read as a float.
+ *
+ * @param attrValue  The attribute's value.
+ * @param fallback  The value to use when it is absent or not a number.
+ *
+ * @returns The slot.
+ */
+const attrTape = (attrValue: unknown, fallback = 0): IrTapeValue =>
+  isDynamicAttr(attrValue)
+    ? {kind: 'float', value: attrValue.value!}
+    : checkedTapeNumber(svgNum(attrValue, fallback));
+
+// The JSX path: each shape's attributes resolve to tape slots via attrTape.
+const arcShape = (attrs: SvgAttrs): IrGeometry => ({
+  entries: arcTape(
+    attrTape(attrs.cx),
+    attrTape(attrs.cy),
+    attrTape(attrs.r),
+    attrTape(attrs.startAngle),
+    attrTape(attrs.endAngle),
+  ),
+  locals: [],
+});
+const circleShape = (attrs: SvgAttrs): IrGeometry => ({
+  entries: circleTape(
+    attrTape(attrs.cx),
+    attrTape(attrs.cy),
+    attrTape(attrs.r),
+  ),
+  locals: [],
+});
+const rectShape = (attrs: SvgAttrs, tag: string): IrGeometry =>
+  rectTape(
+    attrTape(attrs.x),
+    attrTape(attrs.y),
+    attrTape(attrs.width),
+    attrTape(attrs.height),
+    attrs.rx == null ? null : attrTape(attrs.rx),
+    attrs.ry == null ? null : attrTape(attrs.ry),
     tag,
   );
-const lineEntries = (attrs: SvgAttrs) =>
-  lineEntriesC(
-    attrToCFloat(attrs.x1),
-    attrToCFloat(attrs.y1),
-    attrToCFloat(attrs.x2),
-    attrToCFloat(attrs.y2),
-  );
-const pathEntries = (attrs: SvgAttrs) => {
-  if (attrs.d == null) return [];
+const lineShape = (attrs: SvgAttrs): IrGeometry => ({
+  entries: lineTape(
+    attrTape(attrs.x1),
+    attrTape(attrs.y1),
+    attrTape(attrs.x2),
+    attrTape(attrs.y2),
+  ),
+  locals: [],
+});
+const pathShape = (attrs: SvgAttrs): IrGeometry => {
+  if (attrs.d == null) return {entries: [], locals: []};
   if (isDynamicAttr(attrs.d)) {
     throw new Error(
       'AOT: a state-driven <Path d=…> is not yet supported (use Arc/Circle/Rect/Line for dynamic shapes)',
     );
   }
-  return parsePath(String(attrs.d)).map(floatLit); // opcodes are encoded as float values 0..6, like coords
+  // Opcodes are encoded as float values 0..6, like coords.
+  return {
+    entries: parsePath(String(attrs.d)).map((value: number) =>
+      checkedTapeNumber(value),
+    ),
+    locals: [],
+  };
 };
 
 /** The shapes a state-driven <Svg> can hold, by tag. */
-const SHAPE_ENTRIES: Record<
+const SHAPE_TAPES: Record<
   string,
-  (attrs: SvgAttrs, tag: string) => string[] | VectorGeometry
+  (attrs: SvgAttrs, tag: string) => IrGeometry
 > = {
-  Arc: arcEntries,
-  Circle: circleEntries,
-  Rect: rectEntries,
-  Line: lineEntries,
-  Path: pathEntries,
+  Arc: arcShape,
+  Circle: circleShape,
+  Rect: rectShape,
+  Line: lineShape,
+  Path: pathShape,
 };
 
 /**
@@ -1372,13 +1438,13 @@ function emitSvgDynamic(
     );
   }
 
-  // Lower each shape to op-tape entries (after an ER_VOP_SHAPE marker naming its paint) and a paint spec.
-  const entries = [];
-  const shapeLocals = []; // C locals the shapes need declared ahead of the tape (rounded-rect radii)
-  const paintSpecs = [];
+  // Lower each shape to tape slots (after an ER_VOP_SHAPE marker naming its paint) and its paint.
+  const tape: IrTapeValue[] = [];
+  const locals: IrGeometry['locals'] = []; // declared ahead of the tape (rounded-rect radii)
+  const shapePaints: ShapePaint[] = [];
   for (const child of svgShapeChildren(element.children)) {
     const type = (child.openingElement.name as t.JSXIdentifier).name;
-    const lowerShape = SHAPE_ENTRIES[type];
+    const lowerShape = SHAPE_TAPES[type];
     if (!lowerShape) {
       throw new Error(
         `AOT: <${type}> is not a supported shape in a state-driven <Svg> (no <G>/viewBox yet)`,
@@ -1387,92 +1453,47 @@ function emitSvgDynamic(
 
     const attrs = svgAttrs(child.openingElement, scope, env);
     // build_svgN() is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
-    const shape = geometryOf(lowerShape(attrs, `s${paintSpecs.length}`));
+    const shape = lowerShape(attrs, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;
-    shapeLocals.push(...shape.locals);
-    entries.push('ER_VOP_SHAPE', floatLit(paintSpecs.length), ...shape.entries);
-    paintSpecs.push(paintSpec(attrs, env, scope));
+    locals.push(...shape.locals);
+    tape.push(
+      tapeOp('ER_VOP_SHAPE'),
+      tapeNumber(shapePaints.length),
+      ...shape.entries,
+    );
+    shapePaints.push(lowerShapePaint(attrs, env, scope));
   }
 
   // Allocate the node and this <Svg>'s table names.
   const nodeId = `n${out.allocateNodeId()}`;
   const svgId = out.svgN++;
-  const opCount = entries.length;
-  const paintCount = paintSpecs.length;
-  const hasDynamicPaint = paintSpecs.some(paint => paint.anyDynamic);
   out.needsMath = true; // build_svg uses cosf/sinf/M_PI for arcs
 
-  // Flatten gradients into one 1-based table per <Svg>; done here as only the <Svg> knows each gradient's index.
-  const gradients: GradientSpec[] = [];
-  for (const paint of paintSpecs) {
-    const gradientIndexField = (gradient: GradientSpec | null) => {
-      if (!gradient) return '0';
-      const tableIndex = gradients.push(gradient); // push returns the new length = the 1-based index
-      return gradient.cond
-        ? `((${gradient.cond}) ? ${tableIndex} : 0)`
-        : String(tableIndex);
-    };
-    paint.fields[7] = gradientIndexField(paint.fillGrad);
-    paint.fields[8] = gradientIndexField(paint.strokeGrad);
-  }
+  // Gather the gradients into one 1-based table per <Svg>, fill then stroke, shape by shape.
+  const gradients: IrDrawingGradient[] = [];
+  const place = (shapeGradient: ShapeGradient | null): IrGradientRef =>
+    shapeGradient
+      ? {
+          index: gradients.push(shapeGradient.gradient),
+          when: shapeGradient.when,
+        }
+      : {index: 0, when: null};
+  const vector: IrStateDrivenVector = {
+    id: svgId,
+    locals,
+    tape,
+    paints: shapePaints.map(shapePaint => ({
+      ...shapePaint.paint,
+      fillGradient: place(shapePaint.fillGradient),
+      strokeGradient: place(shapePaint.strokeGradient),
+    })),
+    gradients,
+  };
 
-  // Declare the tables: the op-tape is always mutable, the gradients and paints only when state drives them.
-  const hasDynamicGradient = gradients.some(gradient => gradient.anyDynamic);
-  out.vectorData.push(`static float s_svg${svgId}_ops[${opCount}];`);
-  if (gradients.length) {
-    // Mutable when any field is state-driven, e.g., a conic ramp whose start angle follows a setpoint.
-    if (hasDynamicGradient) {
-      out.vectorData.push(
-        `static ERVectorGradient s_svg${svgId}_grads[${gradients.length}];`,
-      );
-    } else {
-      out.vectorData.push(
-        `static const ERVectorGradient s_svg${svgId}_grads[] = ` +
-          `{\n${gradients.map(gradient => '    ' + gradInitFromSpec(gradient)).join(',\n')}\n};`,
-      );
-    }
-  }
-
-  // Dynamic paint → a MUTABLE paint table (re)filled by build_svg from state each update; else a const table.
-  if (hasDynamicPaint) {
-    out.vectorData.push(
-      `static ERVectorPaint s_svg${svgId}_paints[${paintCount}];`,
-    );
-  } else {
-    out.vectorData.push(
-      `static const ERVectorPaint s_svg${svgId}_paints[] = ` +
-        `{\n${paintSpecs.map(paint => '    ' + paintInitFromSpec(paint)).join(',\n')}\n};`,
-    );
-  }
-
-  // Emit build_svgN(), which rewrites the tape, and any mutable paints and gradients, from state.
-  const builderLines = [
-    ...shapeLocals.map(local => `    ${local}`),
-    ...entries.map(
-      (entry, entryIndex) => `    s_svg${svgId}_ops[${entryIndex}] = ${entry};`,
-    ),
-  ];
-  if (hasDynamicPaint) {
-    paintSpecs.forEach((paint, paintIndex) =>
-      paint.fields.forEach((field, fieldIndex) =>
-        builderLines.push(
-          `    s_svg${svgId}_paints[${paintIndex}].${PAINT_FIELDS[fieldIndex]} = ${field};`,
-        ),
-      ),
-    );
-  }
-
-  if (hasDynamicGradient) {
-    gradients.forEach((gradient, gradientIndex) =>
-      builderLines.push(
-        ...gradAssigns(`s_svg${svgId}_grads`, gradientIndex, gradient),
-      ),
-    );
-  }
-
-  out.vectorBuilders.push(
-    `static void build_svg${svgId}(void)\n{\n${builderLines.join('\n')}\n}`,
-  );
+  // Declare the tables and emit build_svgN(), which rewrites the tape (and anything in the paints state drives).
+  const printed = printStateDrivenVector(vector);
+  out.vectorData.push(...printed.data);
+  out.vectorBuilders.push(printed.builder);
 
   // Create the vector node, build its tape once, and register it for app_update() to rebuild.
   const node = lowerSvgBox(
@@ -1484,20 +1505,13 @@ function emitSvgDynamic(
     scope,
     env,
   );
+  node.wiring.push({kind: 'stateDrivenVector', vector});
   emitIrNode(node, out);
-
-  out.build.push(
-    `    build_svg${svgId}();`,
-    `    er_node_set_vector_ops(${nodeId}, s_svg${svgId}_ops, ${opCount}, ` +
-      `s_svg${svgId}_paints, ${paintCount}, ` +
-      `${gradients.length ? `s_svg${svgId}_grads` : 'NULL'}, ${gradients.length});`,
-    `    s_${nodeId} = ${nodeId};`,
-  );
   out.handles.push(nodeId);
   out.svgUpdates.push({
     id: svgId,
-    len: opCount,
-    nPaints: paintCount,
+    len: tape.length,
+    nPaints: vector.paints.length,
     nGrads: gradients.length,
     nodeVar: `s_${nodeId}`,
   });

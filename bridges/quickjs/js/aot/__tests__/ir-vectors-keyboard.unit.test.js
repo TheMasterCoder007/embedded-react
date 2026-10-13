@@ -19,7 +19,11 @@ import {parse} from '@babel/parser';
 import {lowerKeyboardConfig} from '../compiler/keyboard.mts';
 import {printKeyboard} from '../compiler/c/keyboard.mts';
 import {emitNode} from '../compiler/nodes.mts';
-import {printVectorTables} from '../compiler/c/vectors.mts';
+import {
+  printStateDrivenVector,
+  printTapeValue,
+  printVectorTables,
+} from '../compiler/c/vectors.mts';
 import {Out} from '../compiler/out.mts';
 
 // Keyboard configs and baked <Svg> drawings lower to IR data; these check it and the const tables it prints.
@@ -28,14 +32,28 @@ import {Out} from '../compiler/out.mts';
 const keyboardOf = source =>
   lowerKeyboardConfig(parse(source, {sourceType: 'module'}).program);
 
-/** Emits one JSX element with no state, returning what it lowered to and the output. */
+/** One int state slot, `n`, and one boolean, `on`. */
+const scalar = (name, isBool) => ({
+  kind: 'scalar',
+  name,
+  cType: 'int',
+  isBool,
+  cField: name,
+  cMember: `s_state.${name}`,
+});
+const stateMap = new Map([
+  ['n', scalar('n', false)],
+  ['on', scalar('on', true)],
+]);
+
+/** Emits one JSX element over the state above, returning what it lowered to and the output. */
 function emit(jsx, refs = new Map()) {
   const expr = parse(`(${jsx})`, {
     sourceType: 'module',
     plugins: ['jsx'],
   }).program.body[0].expression;
   const env = {
-    state: new Map(),
+    state: stateMap,
     locals: new Map(),
     consts: {},
     refs,
@@ -46,7 +64,7 @@ function emit(jsx, refs = new Map()) {
   };
   const out = new Out(new Map(), null);
   const element = emitNode(expr, {}, out, env, {
-    byName: new Map(),
+    byName: stateMap,
     bySetter: new Map(),
   });
   return {element, out};
@@ -199,5 +217,100 @@ describe('vector IR: baked drawings', () => {
     expect(declarations[2]).toContain(
       '{ .type = 1, .stop_count = 2, .stops = { { 4278190335u, 0.0f }, { 4294901760u, 1.0f } }',
     );
+  });
+});
+
+describe('vector IR: state-driven drawings', () => {
+  /** The state-driven drawing an <Svg> lowered to. */
+  const drawingOf = element =>
+    element.node.wiring.find(wire => wire.kind === 'stateDrivenVector').vector;
+
+  it('lowers geometry to tape slots, binding each state-driven corner radius to a local', () => {
+    const {element, out} = emit(
+      '<Svg width={60} height={40}><Rect x={n} y={4} width={50} height={30} rx={n / 2} /></Svg>',
+    );
+    const vector = drawingOf(element);
+    expect(vector.tape.slice(0, 2)).toEqual([
+      {kind: 'op', op: 'ER_VOP_SHAPE'},
+      {kind: 'number', value: 0},
+    ]);
+    // Without ry, the vertical radius takes rx's value, so both are clamped locals.
+    expect(vector.locals).toEqual([
+      {name: 'rx_s0', value: expect.objectContaining({kind: 'clampRadius'})},
+      {name: 'ry_s0', value: expect.objectContaining({kind: 'clampRadius'})},
+    ]);
+
+    // The corner's x: the inner right edge plus the radius's KAPPA-length handle.
+    expect(printTapeValue(vector.tape[9])).toBe(
+      '(((float)(s_state.n) + 50.0f - rx_s0) + (rx_s0 * 0.5522847498307936f))',
+    );
+    expect(out.vectorBuilders[0]).toContain(
+      '    const float rx_s0 = fminf(fmaxf(',
+    );
+    expect(out.svgUpdates).toEqual([
+      {id: 0, len: vector.tape.length, nPaints: 1, nGrads: 0, nodeVar: 's_n0'},
+    ]);
+  });
+
+  it('folds a corner radius that is known at build time', () => {
+    const {element} = emit(
+      '<Svg width={60} height={40}><Rect x={n} y={0} width={10} height={10} rx={30} /></Svg>',
+    );
+    const vector = drawingOf(element);
+    expect(vector.locals).toEqual([]);
+    expect(vector.tape.map(printTapeValue)).toContain(
+      '((float)(s_state.n) + 5.0f)',
+    );
+  });
+
+  it('keeps paints const until state drives one, then rebuilds them', () => {
+    const {element: still} = emit(
+      '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fill="#f00" /></Svg>',
+    );
+    const stillVector = drawingOf(still);
+    expect(stillVector.paints[0].fill).toEqual({
+      kind: 'static',
+      argb: 0xffff0000,
+    });
+    expect(printStateDrivenVector(stillVector).data[1]).toMatch(
+      /^static const ERVectorPaint s_svg0_paints\[\] = \{/,
+    );
+
+    const {element: lit} = emit(
+      `<Svg width={10} height={10}><Circle cx={5} cy={5} r={2} fill={on ? '#f00' : '#00f'} /></Svg>`,
+    );
+    const litVector = drawingOf(lit);
+    expect(litVector.paints[0].fill).toMatchObject({
+      kind: 'state',
+      value: {kind: 'select'},
+    });
+    const printed = printStateDrivenVector(litVector);
+    expect(printed.data[1]).toBe('static ERVectorPaint s_svg0_paints[1];');
+    expect(printed.builder).toContain(
+      '    s_svg0_paints[0].fill = ((s_state.on) ? 0xFFFF0000u : 0xFF0000FFu);',
+    );
+  });
+
+  it('gives each gradient a table place, used only while its condition holds', () => {
+    const {element} = emit(
+      `<Svg width={10} height={10}><Circle cx={n} cy={5} r={2}
+        fillGrad={{type: 1, bx: n, stops: [{color: '#f00', offset: 0}, {color: '#00f', offset: 1}]}}
+        strokeGrad={on ? null : {type: 2, r: 4, stops: [{color: '#fff', offset: 0}, {color: '#000', offset: 1}]}} /></Svg>`,
+    );
+    const vector = drawingOf(element);
+    expect(vector.gradients.map(gradient => gradient.type)).toEqual([1, 2]);
+    expect(vector.gradients[0].bx.kind).toBe('float');
+    expect(vector.paints[0].fillGradient).toEqual({index: 1, when: null});
+    expect(vector.paints[0].strokeGradient).toMatchObject({
+      index: 2,
+      when: {negate: true, test: {kind: 'state'}},
+    });
+
+    const {data, builder} = printStateDrivenVector(vector);
+    expect(data).toContain('static ERVectorGradient s_svg0_grads[2];');
+    expect(builder).toContain(
+      '    s_svg0_paints[0].stroke_grad = ((!(s_state.on)) ? 2 : 0);',
+    );
+    expect(builder).toContain('    s_svg0_grads[0].bx = (float)(s_state.n);');
   });
 });

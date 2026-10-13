@@ -21,7 +21,7 @@
 import {cstr, floatLit} from '../c-syntax.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {printText} from './text.mts';
-import {printVectorOps} from './vectors.mts';
+import {printStateDrivenVectorWiring, printVectorOps} from './vectors.mts';
 import type {IrElement, IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {AnimBind} from '../style-text.mts';
 import type {NodeUpdate} from '../out.mts';
@@ -257,6 +257,9 @@ export function printNode(node: IrNode): PrintedNode {
         break;
       case 'vectorTables':
         build.push(...printVectorOps(id, wire.tables));
+        break;
+      case 'stateDrivenVector':
+        build.push(...printStateDrivenVectorWiring(id, wire.vector));
         break;
     }
   }

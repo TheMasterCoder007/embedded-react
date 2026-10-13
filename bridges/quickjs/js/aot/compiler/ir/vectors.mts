@@ -19,6 +19,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {VectorGradient} from '../types.mts';
+import type {IrExpr} from './expressions.mts';
+import type {IrPropValue} from './nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -50,4 +52,86 @@ export interface IrVectorTables {
   ops: number[];
   paints: IrVectorPaint[];
   gradients: VectorGradient[];
+}
+
+/**
+ * One float slot of a state-driven drawing's op-tape, recomputed on every update. Each combining form is one
+ * piece of shape geometry: a sum or difference of coordinates, a scaled handle, an angle, a clamped radius.
+ */
+export type IrTapeValue =
+  /** An opcode, an ER_VOP_* name. */
+  | {kind: 'op'; op: string}
+  | {kind: 'number'; value: number}
+  /** A state-driven attribute, read as a float. */
+  | {kind: 'float'; value: IrExpr}
+  /** A local the drawing declares ahead of its tape. */
+  | {kind: 'local'; name: string}
+  /** `first`, then each operator and operand in turn, left to right. */
+  | {
+      kind: 'chain';
+      first: IrTapeValue;
+      rest: {op: '+' | '-' | '*'; value: IrTapeValue}[];
+    }
+  /** An angle in degrees clockwise from the top, as the engine's radians clockwise from 3 o'clock. */
+  | {kind: 'radians'; degrees: IrTapeValue}
+  /** A whole turn, in radians. */
+  | {kind: 'fullTurn'}
+  /** A corner radius clamped to half the side it rounds. */
+  | {kind: 'clampRadius'; radius: IrTapeValue; side: IrTapeValue}
+  /** C from the imperative updateVector path, which does not lower to the IR yet. */
+  | {kind: 'foreign'; code: string};
+
+/** A shape's tape slots, and the locals declared ahead of them (a rounded rect's radii). */
+export interface IrGeometry {
+  entries: IrTapeValue[];
+  locals: {name: string; value: IrTapeValue}[];
+}
+
+/** A paint color: a constant ARGB, or one state chooses (a color, or a ternary of them). */
+export type IrPaintColor =
+  | {kind: 'static'; argb: number}
+  | {kind: 'state'; value: IrPropValue};
+
+/** A gradient of a state-driven drawing: any stop color or geometry field may follow state. */
+export interface IrDrawingGradient {
+  /** 1 linear, 2 radial, 3 conic. */
+  type: number;
+  stops: {color: IrPaintColor; offset: IrTapeValue}[];
+  ax: IrTapeValue;
+  ay: IrTapeValue;
+  bx: IrTapeValue;
+  by: IrTapeValue;
+  r: IrTapeValue;
+}
+
+/** A paint's gradient: a 1-based index into the drawing's table (0 for none), used only while `when` holds. */
+export interface IrGradientRef {
+  index: number;
+  when: {test: IrExpr; negate: boolean} | null;
+}
+
+/** One shape's paint in a state-driven drawing. */
+export interface IrDrawingPaint {
+  fill: IrPaintColor;
+  stroke: IrPaintColor;
+  strokeWidth: IrTapeValue;
+  miter: number;
+  cap: number;
+  join: number;
+  fillRule: number;
+  fillGradient: IrGradientRef;
+  strokeGradient: IrGradientRef;
+}
+
+/**
+ * A drawing state drives: its op-tape is rebuilt by build_svg<id>() at boot and on every update, and so are its
+ * paints and gradients when anything in them follows state. Otherwise they stay const tables.
+ */
+export interface IrStateDrivenVector {
+  /** Numbers the drawing's tables and builder (`s_svg<id>_…`, `build_svg<id>`). */
+  id: number;
+  locals: {name: string; value: IrTapeValue}[];
+  tape: IrTapeValue[];
+  paints: IrDrawingPaint[];
+  gradients: IrDrawingGradient[];
 }
