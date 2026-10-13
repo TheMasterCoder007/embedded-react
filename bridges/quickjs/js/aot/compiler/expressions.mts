@@ -20,13 +20,14 @@
 
 import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
-import {aotError, withLoc} from './diagnostics.mts';
+import {aotError, locateError, withLoc} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
 import type * as t from '@babel/types';
-import type {AotError} from './diagnostics.mts';
+import type {AotError, SourcePosition} from './diagnostics.mts';
+import type {IrSource, IrSourceDivisor} from './ir/source.mts';
 import type {
   CExpr,
   CType,
@@ -235,22 +236,15 @@ export function staticInt(node: t.Node, env: Env): number | null {
 }
 
 /**
- * A compile-time number. A whole number too big for an int is a 64-bit constant (`lit`), so whole-number
- * math keeps it exact; past 64 bits it is a float.
+ * A compile-time number, typed. A whole number too big for an int is a 64-bit constant, so whole-number math
+ * keeps it exact; past 64 bits it is a float.
  *
  * @param value  The number.
  *
  * @returns Its constant.
  */
 function numConst(value: number): IrNumber {
-  // A float holds no NaN or Infinity (a folded `0 / 0`, say); the check pass reports them at the expression.
-  if (!Number.isInteger(value)) {
-    checkNumber(value);
-    return {kind: 'number', value, type: FLOAT};
-  }
-
-  if (value < -(2 ** 63) || value >= 2 ** 63) {
-    checkNumber(value);
+  if (!Number.isInteger(value) || value < -(2 ** 63) || value >= 2 ** 63) {
     return {kind: 'number', value, type: FLOAT};
   }
 
@@ -259,6 +253,26 @@ function numConst(value: number): IrNumber {
   }
 
   return {kind: 'number', value, type: INT};
+}
+
+/**
+ * A compile-time number as written. One that ends up a float (a fraction, or past 64 bits) is checked by the
+ * check pass, at the expression: a float holds no NaN or Infinity, a folded `0 / 0` say.
+ *
+ * @param value  The number.
+ * @param loc  Where it is.
+ *
+ * @returns Its source.
+ */
+function numberSource(
+  value: number,
+  loc: SourcePosition | undefined,
+): IrSource {
+  if (numConst(value).type.kind === 'float') {
+    checkNumber(value);
+  }
+
+  return {kind: 'number', value, loc};
 }
 
 /**
@@ -301,18 +315,6 @@ const localRead = (local: Local): IrLocal => ({
 });
 
 /**
- * `+ - *` or a unary `-`: the operators that can overflow a whole number.
- *
- * @param node  The expression.
- *
- * @returns Whether it is one of them.
- */
-const isIntArith = (node: t.Node): boolean =>
-  (node.type === 'BinaryExpression' &&
-    Boolean(CHECKED_HELPER[node.operator])) ||
-  (node.type === 'UnaryExpression' && node.operator === '-');
-
-/**
  * Whole-number math JS would not cut to 32 bits: `+ - *`, negation, `%`, and the Math functions that keep a
  * whole number whole. Beside a 64-bit value all of it is worked out in 64 bits, however deep it sits.
  *
@@ -320,9 +322,10 @@ const isIntArith = (node: t.Node): boolean =>
  *
  * @returns Whether it is such math.
  */
-const keepsMath64 = (node: t.Node): boolean =>
-  isIntArith(node) ||
-  (node.type === 'BinaryExpression' && node.operator === '%') ||
+const keepsMath64Node = (node: t.Node): boolean =>
+  (node.type === 'BinaryExpression' &&
+    (Boolean(CHECKED_HELPER[node.operator]) || node.operator === '%')) ||
+  (node.type === 'UnaryExpression' && node.operator === '-') ||
   (node.type === 'CallExpression' &&
     node.callee.type === 'MemberExpression' &&
     !node.callee.computed &&
@@ -331,8 +334,21 @@ const keepsMath64 = (node: t.Node): boolean =>
     WHOLE_MATH.has((node.callee.property as t.Identifier).name));
 
 /**
- * A 64-bit value computed at runtime from a timestamp, as opposed to a 64-bit constant (`lit`) or
- * whole-number math widened to 64 bits beside one (`wide`).
+ * keepsMath64Node, for a source expression.
+ *
+ * @param source  The expression.
+ *
+ * @returns Whether it is whole-number math JS would not cut to 32 bits.
+ */
+const keepsMath64 = (source: IrSource): boolean =>
+  (source.kind === 'binary' &&
+    (Boolean(CHECKED_HELPER[source.op]) || source.op === '%')) ||
+  (source.kind === 'unary' && source.op === '-') ||
+  (source.kind === 'math' && source.wholeMath);
+
+/**
+ * A 64-bit value computed at runtime from a timestamp, as opposed to a 64-bit constant or whole-number math
+ * widened to 64 bits beside one.
  *
  * @param expr  The lowered expression.
  *
@@ -358,6 +374,27 @@ const litPeers = (...operands: IrExpr[]): IrExpr[] =>
     : operands;
 
 /**
+ * The error for a divisor that is not a constant where a time's has to be one.
+ *
+ * @param loc  Where the divisor is.
+ *
+ * @returns The error, for the caller to throw.
+ */
+function nonConstantDivisorError(loc: SourcePosition | undefined): AotError {
+  const error = aotError(
+    'AOT: a 64-bit time value can only be divided by a constant',
+    'the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / ' +
+      '60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / ' +
+      'period`.',
+  );
+  if (loc) {
+    error.aotLoc = loc;
+  }
+
+  return error;
+}
+
+/**
  * The divisor of a timestamp's `%` or Math.floor / ceil / round / trunc(a / b), which has to be a constant;
  * for one from state, an app reduces the timestamp first. A constant 0 gives JS's answer as the int math
  * converts it: a remainder of 0, or a quotient saturated by the dividend's sign.
@@ -371,17 +408,20 @@ export function constDivisor(node: t.Node, env: Env): number {
   const divisor = staticInt(node, env);
   if (divisor !== null) return divisor;
 
-  const error = aotError(
-    'AOT: a 64-bit time value can only be divided by a constant',
-    'the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / ' +
-      '60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / ' +
-      'period`.',
-  );
-  if (node.loc) {
-    error.aotLoc = node.loc.start;
-  }
+  throw nonConstantDivisorError(node.loc?.start);
+}
 
-  throw error;
+/**
+ * The divisor a source expression records, which has to be a constant (see constDivisor).
+ *
+ * @param divisor  The divisor.
+ *
+ * @returns Its value.
+ */
+function sourceDivisor(divisor: IrSourceDivisor): number {
+  if (divisor.constant !== null) return divisor.constant;
+
+  throw nonConstantDivisorError(divisor.loc);
 }
 
 /**
@@ -391,24 +431,22 @@ export function constDivisor(node: t.Node, env: Env): number {
  * ordinary number again. `/` is refused: JS would give a fraction, and the whole-number division is written
  * Math.floor(a / b).
  *
- * @param node  The binary expression.
- * @param left  Its lowered left operand.
- * @param right  Its lowered right operand.
- * @param env  The expression environment.
+ * @param source  The binary expression.
+ * @param left  Its typed left operand.
+ * @param right  Its typed right operand.
  *
- * @returns The lowered expression.
+ * @returns The typed expression.
  */
-function lowerArith64(
-  node: t.BinaryExpression,
+function typeArith64(
+  source: Extract<IrSource, {kind: 'binary'}>,
   left: IrExpr,
   right: IrExpr,
-  env: Env,
 ): IrExpr {
   if (left.type.kind === 'float' || right.type.kind === 'float') {
     throw mix64Error();
   }
 
-  if (node.operator === '/') {
+  if (source.op === '/') {
     throw aotError(
       'AOT: `/` on a 64-bit time value is not supported',
       'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / ' +
@@ -420,8 +458,8 @@ function lowerArith64(
   const isWide = !isTime64(left) && !isTime64(right);
 
   // `%`: zero/±1 divisors give 0, a timestamp needs a constant divisor, and the result narrows to int if it fits.
-  if (node.operator === '%') {
-    const staticDivisor = staticInt(node.right, env);
+  if (source.op === '%') {
+    const staticDivisor = source.divisor.constant;
     // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
     if (staticDivisor === 0) return numConst(0);
 
@@ -435,7 +473,7 @@ function lowerArith64(
       };
     }
 
-    const divisor = constDivisor(node.right, env);
+    const divisor = sourceDivisor(source.divisor);
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
     if (divisor === 1 || divisor === -1) return numConst(0);
 
@@ -455,7 +493,7 @@ function lowerArith64(
   // `+ - *`: the saturating 64-bit helper.
   return {
     kind: 'helper',
-    helper: CHECKED_HELPER[node.operator],
+    helper: CHECKED_HELPER[source.op],
     bits: 64,
     args: [left, right],
     type: isWide ? INT64_MATH : TIME,
@@ -468,28 +506,18 @@ function lowerArith64(
  * converts. Null when neither side is a timestamp, which leaves it to the whole-number or float path.
  *
  * @param fn  The Math function's name.
- * @param args  Its arguments.
- * @param env  The expression environment.
+ * @param division  Its one argument, the division.
+ * @param math64  Whole-number math is worked out in 64 bits here.
  *
- * @returns The lowered call, or null when it is not this case.
+ * @returns The typed call, or null when it is not this case.
  */
-function lowerTimeRoundDiv(
+function typeTimeRoundDiv(
   fn: string,
-  args: t.CallExpression['arguments'],
-  env: Env,
+  division: Extract<IrSource, {kind: 'binary'}>,
+  math64: boolean,
 ): IrExpr | null {
-  const division = args[0];
-  if (
-    !INT_ROUND_DIV.has(fn) ||
-    args.length !== 1 ||
-    division.type !== 'BinaryExpression' ||
-    division.operator !== '/'
-  ) {
-    return null;
-  }
-
-  const dividend = lowerExprWide(division.left, env);
-  const divisor = lowerExprWide(division.right, env);
+  const dividend = typeSource(division.left, math64);
+  const divisor = typeSource(division.right, math64);
   if (!isTime64(dividend) && !isTime64(divisor)) return null;
 
   if (dividend.type.kind === 'float' || divisor.type.kind === 'float') {
@@ -500,7 +528,7 @@ function lowerTimeRoundDiv(
     return null;
 
   // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
-  if (constDivisor(division.right, env) === -1) {
+  if (sourceDivisor(division.divisor) === -1) {
     return {
       kind: 'helper',
       helper: 'neg',
@@ -528,31 +556,21 @@ function lowerTimeRoundDiv(
  * operands to 32. Null for anything else, which leaves it to the float path.
  *
  * @param fn  The Math function's name.
- * @param args  Its arguments.
- * @param env  The expression environment.
+ * @param division  Its one argument, the division.
+ * @param math64  Whole-number math is worked out in 64 bits here.
  *
- * @returns The lowered call, or null when it is not this case.
+ * @returns The typed call, or null when it is not this case.
  */
-function lowerIntRoundDiv(
+function typeIntRoundDiv(
   fn: string,
-  args: t.CallExpression['arguments'],
-  env: Env,
+  division: Extract<IrSource, {kind: 'binary'}>,
+  math64: boolean,
 ): IrExpr | null {
-  const division = args[0];
-  if (
-    !INT_ROUND_DIV.has(fn) ||
-    args.length !== 1 ||
-    division.type !== 'BinaryExpression' ||
-    division.operator !== '/'
-  ) {
-    return null;
-  }
-
   // Divide in 64 bits beside a 64-bit value, when both operands are whole numbers and neither is a timestamp.
-  const dividend = lowerExprWide(division.left, env);
-  const divisor = lowerExprWide(division.right, env);
+  const dividend = typeSource(division.left, math64);
+  const divisor = typeSource(division.right, math64);
   if (
-    env.math64 ||
+    math64 ||
     dividend.type.kind === 'int64' ||
     divisor.type.kind === 'int64'
   ) {
@@ -584,11 +602,11 @@ function lowerIntRoundDiv(
  * Math.* over a 64-bit timestamp: only what stays exact in whole numbers.
  *
  * @param fn  The Math function's name.
- * @param argExprs  Its lowered arguments, at least one of them 64-bit.
+ * @param argExprs  Its typed arguments, at least one of them 64-bit.
  *
- * @returns The lowered call.
+ * @returns The typed call.
  */
-function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
+function typeMath64(fn: string, argExprs: IrExpr[]): IrExpr {
   if (argExprs.some(argExpr => argExpr.type.kind === 'float')) {
     throw mix64Error();
   }
@@ -641,30 +659,566 @@ function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
 }
 
 /**
- * Lowers one JS expression to the IR (see lowerExprWide, the located entry point).
+ * Types a unary expression: a whole number negates through the saturating helper, anything else as itself.
+ *
+ * @param source  The expression.
+ * @param math64  Whole-number math is worked out in 64 bits here.
+ *
+ * @returns The typed expression.
+ */
+function typeUnary(
+  source: Extract<IrSource, {kind: 'unary'}>,
+  math64: boolean,
+): IrExpr {
+  const operand = typeSource(source.operand, math64);
+  if (
+    (source.op === '-' || source.op === '+') &&
+    operand.type.kind === 'string'
+  ) {
+    throw aotError(
+      `AOT: unary "${source.op}" on a string is not supported`,
+      'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
+    );
+  }
+
+  // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
+  if (
+    source.op === '-' &&
+    (isIntSlot(operand.type) || operand.type.kind === 'int64')
+  ) {
+    const is64Bit = operand.type.kind === 'int64' || math64;
+    return is64Bit
+      ? {
+          kind: 'helper',
+          helper: 'neg',
+          bits: 64,
+          args: [operand],
+          type: isTime64(operand) ? TIME : INT64_MATH,
+        }
+      : {
+          kind: 'helper',
+          helper: 'neg',
+          bits: 32,
+          args: [operand],
+          type: INT,
+        };
+  }
+
+  // Only `!` yields a boolean; unary +/- coerce to a number, so `+flag` drops its boolean-ness.
+  return {
+    kind: 'unary',
+    op: source.op,
+    operand,
+    type: source.op === '!' ? BOOL : plainOf(operand.type),
+  };
+}
+
+/**
+ * Types a binary expression: arithmetic (whole numbers saturate, 64-bit beside a time, floats as floats) or a
+ * comparison. Beside a 64-bit value, whole-number math on either side is typed again in 64 bits, as JS never
+ * cuts it to 32.
+ *
+ * @param source  The expression.
+ * @param math64  Whole-number math is worked out in 64 bits here.
+ *
+ * @returns The typed expression.
+ */
+function typeBinary(
+  source: Extract<IrSource, {kind: 'binary'}>,
+  math64: boolean,
+): IrExpr {
+  let left = typeSource(source.left, math64);
+  let right = typeSource(source.right, math64);
+  if (left.type.kind === 'int64' || right.type.kind === 'int64') {
+    if (isIntSlot(left.type) && keepsMath64(source.left)) {
+      left = typeSource(source.left, true);
+    }
+
+    if (isIntSlot(right.type) && keepsMath64(source.right)) {
+      right = typeSource(source.right, true);
+    }
+  }
+  [left, right] = litPeers(left, right);
+
+  // Arithmetic: refuse strings, hand 64-bit math to typeArith64, and saturate whole-number `+ - *`.
+  if (ARITH.has(source.op)) {
+    if (left.type.kind === 'string' || right.type.kind === 'string') {
+      // String `+` has no single C value; only a char-buffer destination can lower it, via emitFormat().
+      if (source.op === '+') {
+        throw aotError(
+          'AOT: string concatenation is not supported in this position',
+          'a `+` chain over strings lowers to a printf format, which only works where the value ' +
+            'lands in a text buffer: a <Text> body, a string useState setter, or a <TextInput ' +
+            'value>.',
+        );
+      }
+      // JS would coerce the string to a number; C would do pointer arithmetic or refuse to compile.
+      throw aotError(
+        `AOT: "${source.op}" on a string is not supported`,
+        'keep both operands numeric — a string cannot be coerced to a number here.',
+      );
+    }
+    // `/` takes a 64-bit constant as an ordinary C number; only a runtime 64-bit value is refused it.
+    if (
+      isTime64(left) ||
+      isTime64(right) ||
+      ((left.type.kind === 'int64' || right.type.kind === 'int64') &&
+        (CHECKED_HELPER[source.op] || source.op === '%'))
+    ) {
+      return typeArith64(source, left, right);
+    }
+
+    if (source.op === '/') {
+      return {kind: 'floatDivide', left, right, type: FLOAT};
+    }
+
+    const isFloat = left.type.kind === 'float' || right.type.kind === 'float';
+    const checkedHelper = !isFloat && CHECKED_HELPER[source.op];
+    if (checkedHelper) {
+      return math64
+        ? {
+            kind: 'helper',
+            helper: checkedHelper,
+            bits: 64,
+            args: [left, right],
+            type: INT64_MATH,
+          }
+        : {
+            kind: 'helper',
+            helper: checkedHelper,
+            bits: 32,
+            args: [left, right],
+            type: INT,
+          };
+    }
+
+    // A 0 divisor (NaN in JS) or -1 (INT_MIN % -1 overflows C) gives 0; other constants need no check.
+    if (!isFloat && source.op === '%') {
+      const staticDivisor = source.divisor.constant;
+      if (staticDivisor === 0 || staticDivisor === -1) {
+        return numConst(0);
+      }
+      if (staticDivisor === null) {
+        return {
+          kind: 'helper',
+          helper: 'mod',
+          bits: 32,
+          args: [left, right],
+          type: INT,
+        };
+      }
+    }
+
+    // C has no float `%`; fmodf matches JS's `%` exactly, zero and infinite divisors included.
+    if (isFloat && source.op === '%') {
+      return {
+        kind: 'floatMath',
+        fn: 'mod',
+        args: [left, right],
+        type: FLOAT,
+      };
+    }
+
+    return {
+      kind: 'arithmetic',
+      op: source.op as IrArithmetic['op'],
+      left,
+      right,
+      type: isFloat ? FLOAT : INT,
+    };
+  }
+
+  // Comparisons: strings through strcmp, everything else as a plain C comparison yielding a boolean.
+  if (COMPARE.has(source.op)) {
+    const cOperator =
+      source.op === '===' ? '==' : source.op === '!==' ? '!=' : source.op;
+    if (left.type.kind === 'string' || right.type.kind === 'string') {
+      if (slotOf(left.type) !== slotOf(right.type)) {
+        // A strict comparison never coerces, so a string against a number is decided statically.
+        if (source.op === '===' || source.op === '!==') {
+          return boolConst(source.op === '!==');
+        }
+
+        throw aotError(
+          'AOT: a string cannot be compared with a number',
+          `\`${source.op}\` coerces the string to a number in JS, which C cannot reproduce. ` +
+            `Compare like with like, or use === / !== (which never coerce).`,
+        );
+      }
+      // Equality is exact, but strcmp's UTF-8 order can differ from JS's UTF-16 order, so refuse ordering.
+      if (cOperator !== '==' && cOperator !== '!=') {
+        throw aotError(
+          `AOT: ordering strings with "${source.op}" is not supported`,
+          'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can ' +
+            'differ. Use === / !==, or compare numbers.',
+        );
+      }
+
+      return {
+        kind: 'stringEquals',
+        op: cOperator,
+        left,
+        right,
+        type: BOOL,
+      };
+    }
+    // A float compared with a timestamp would round it.
+    if (
+      (left.type.kind === 'int64' || right.type.kind === 'int64') &&
+      (left.type.kind === 'float' || right.type.kind === 'float')
+    ) {
+      throw mix64Error();
+    }
+
+    // `true === 1` is false in JS but true in C's int slot; fold it when the other side is surely a number.
+    const isSurelyNumber = (isWrittenAsNumber: boolean, operand: IrExpr) =>
+      !isBoolean(operand.type) &&
+      (operand.type.kind === 'float' ||
+        operand.type.kind === 'int64' ||
+        isWrittenAsNumber);
+    if (
+      (source.op === '===' || source.op === '!==') &&
+      ((isBoolean(left.type) && isSurelyNumber(source.rightIsNumber, right)) ||
+        (isBoolean(right.type) && isSurelyNumber(source.leftIsNumber, left)))
+    ) {
+      return boolConst(source.op === '!==');
+    }
+
+    return {
+      kind: 'compare',
+      op: cOperator as IrCompare['op'],
+      left,
+      right,
+      type: BOOL,
+    };
+  }
+
+  throw new Error(`AOT: unsupported binary operator "${source.op}"`);
+}
+
+/**
+ * Types `&&` / `||`. JS returns an operand, so with a 64-bit side the value is kept instead of collapsing it
+ * to 0/1.
+ *
+ * @param source  The expression.
+ * @param math64  Whole-number math is worked out in 64 bits here.
+ *
+ * @returns The typed expression.
+ */
+function typeLogical(
+  source: Extract<IrSource, {kind: 'logical'}>,
+  math64: boolean,
+): IrExpr {
+  const [left, right] = litPeers(
+    typeSource(source.left, math64),
+    typeSource(source.right, math64),
+  );
+  if (left.type.kind === 'int64' || right.type.kind === 'int64') {
+    if (left.type.kind === 'float' || right.type.kind === 'float') {
+      throw mix64Error();
+    }
+
+    if (left.type.kind === 'string' || right.type.kind === 'string') {
+      throw aotError(
+        `AOT: "${source.op}" cannot mix a 64-bit time value with a string`,
+        'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
+      );
+    }
+
+    if (isBoolean(left.type) || isBoolean(right.type)) {
+      throw bool64Error(`"${source.op}"`);
+    }
+
+    return {kind: 'pick', op: source.op, left, right, type: TIME};
+  }
+
+  // Otherwise the C result is the truth of the expression, a boolean only when both operands are.
+  return {
+    kind: 'logical',
+    op: source.op,
+    left,
+    right,
+    type: isBoolean(left.type) && isBoolean(right.type) ? BOOL : INT,
+  };
+}
+
+/**
+ * Types `test ? consequent : alternate`. Both branches share one C slot: float or 64-bit if either is, and a
+ * 64-bit branch beside a float or a boolean one is refused.
+ *
+ * @param source  The expression.
+ * @param math64  Whole-number math is worked out in 64 bits here.
+ *
+ * @returns The typed expression.
+ */
+function typeConditional(
+  source: Extract<IrSource, {kind: 'conditional'}>,
+  math64: boolean,
+): IrExpr {
+  const test = typeSource(source.test, math64);
+  const [consequent, alternate] = litPeers(
+    typeSource(source.consequent, math64),
+    typeSource(source.alternate, math64),
+  );
+  // A string branch beside a numeric one is ill-typed C with no single printf spec, so refuse it here.
+  if (
+    (consequent.type.kind === 'string') !==
+    (alternate.type.kind === 'string')
+  ) {
+    throw aotError(
+      'AOT: a ternary cannot mix a string branch with a numeric one',
+      "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
+    );
+  }
+
+  const eitherIs = (kind: CType) =>
+    slotOf(consequent.type) === kind || slotOf(alternate.type) === kind;
+  if (eitherIs('i64') && eitherIs('float')) {
+    throw mix64Error();
+  }
+
+  if (
+    eitherIs('i64') &&
+    (isBoolean(consequent.type) || isBoolean(alternate.type))
+  ) {
+    throw bool64Error('a ternary');
+  }
+
+  const slot = eitherIs('float')
+    ? 'float'
+    : eitherIs('i64')
+      ? 'i64'
+      : slotOf(consequent.type) === slotOf(alternate.type)
+        ? slotOf(consequent.type)
+        : 'int';
+  return {
+    kind: 'conditional',
+    test,
+    consequent,
+    alternate,
+    type: typeOfSlot(
+      slot,
+      isBoolean(consequent.type) && isBoolean(alternate.type),
+    ),
+  };
+}
+
+/**
+ * Types a Math call: exact integer division first, then 64-bit math, then whole-int abs/min/max/trunc, then
+ * floats.
+ *
+ * @param source  The call.
+ * @param math64  Whole-number math is worked out in 64 bits here.
+ *
+ * @returns The typed call.
+ */
+function typeMath(
+  source: Extract<IrSource, {kind: 'math'}>,
+  math64: boolean,
+): IrExpr {
+  const {fn} = source;
+  if (source.exactDivision) {
+    const division = source.args[0] as Extract<IrSource, {kind: 'binary'}>;
+    const timeDiv = typeTimeRoundDiv(fn, division, math64);
+    if (timeDiv) return timeDiv;
+
+    const intDiv = typeIntRoundDiv(fn, division, math64);
+    if (intDiv) return intDiv;
+  }
+
+  const argExprs = litPeers(...source.args.map(arg => typeSource(arg, math64)));
+  if (argExprs.some(argExpr => argExpr.type.kind === 'int64')) {
+    return typeMath64(fn, argExprs);
+  }
+
+  // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.
+  if (argExprs.length && argExprs.every(argExpr => isIntSlot(argExpr.type))) {
+    if (fn === 'abs' && argExprs.length === 1) {
+      return math64
+        ? {
+            kind: 'helper',
+            helper: 'abs',
+            bits: 64,
+            args: [argExprs[0]],
+            type: INT64_MATH,
+          }
+        : {
+            kind: 'helper',
+            helper: 'abs',
+            bits: 32,
+            args: [argExprs[0]],
+            type: INT,
+          };
+    }
+
+    if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
+      return {
+        kind: 'helper',
+        helper: fn,
+        bits: 32,
+        args: [argExprs[0], argExprs[1]],
+        type: INT,
+      };
+    }
+  }
+
+  // Math.trunc stays an int: an int as is, a float via app_f2i (toward zero, NaN as 0, saturating).
+  if (fn === 'trunc' && argExprs.length === 1) {
+    return isIntSlot(argExprs[0].type)
+      ? {kind: 'wholeRound', operand: argExprs[0], type: INT}
+      : {kind: 'trunc', operand: argExprs[0], type: INT};
+  }
+
+  if (FLOAT_MATH_UNARY.has(fn) && argExprs.length === 1) {
+    // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
+    const roundsToWhole = fn === 'round' || fn === 'floor' || fn === 'ceil';
+    if (roundsToWhole && isIntSlot(argExprs[0].type)) {
+      return {kind: 'wholeRound', operand: argExprs[0], type: INT};
+    }
+
+    const floatCall: IrExpr = {
+      kind: 'floatMath',
+      fn: fn as FloatMath,
+      args: [argExprs[0]],
+      type: FLOAT,
+    };
+    // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
+    return roundsToWhole
+      ? {kind: 'toInt', operand: floatCall, type: INT}
+      : floatCall;
+  }
+
+  if (FLOAT_MATH_BINARY.has(fn) && argExprs.length === 2) {
+    return {
+      kind: 'floatMath',
+      fn: fn as FloatMath,
+      args: [argExprs[0], argExprs[1]],
+      type: FLOAT,
+    };
+  }
+
+  throw new Error(
+    `AOT: unsupported Math.${fn}(...) (arity ${argExprs.length})`,
+  );
+}
+
+/**
+ * The typing pass over one source expression: gives it its type and decides how it is computed. Pure, so a
+ * subexpression can be typed again, as whole-number math beside a 64-bit value is. An AOT error is pinned to
+ * the expression it is about, as lowering it would have been.
+ *
+ * @param source  The expression.
+ * @param math64  Whole-number math is worked out in 64 bits around it.
+ *
+ * @returns The typed expression.
+ */
+export function typeSource(source: IrSource, math64: boolean): IrExpr {
+  // 64-bit int math reaches only through whole-number math (keepsMath64); other expressions are typed as usual.
+  const wide = math64 && keepsMath64(source);
+  try {
+    switch (source.kind) {
+      case 'number':
+        return numConst(source.value);
+      case 'string':
+        return stringConst(source.value);
+      case 'boolean':
+        return boolConst(source.value);
+      case 'state':
+        return {
+          kind: 'state',
+          state: source.state,
+          type: typeOfSlot(source.state.cType, source.state.isBool),
+        };
+      case 'local':
+        return localRead(source.local);
+      case 'ref':
+        return {kind: 'ref', ref: source.ref, type: refType(source.ref)};
+      case 'fixed':
+        return source.expr;
+      case 'unary':
+        return typeUnary(source, wide);
+      case 'binary':
+        return typeBinary(source, wide);
+      case 'logical':
+        return typeLogical(source, wide);
+      case 'conditional':
+        return typeConditional(source, wide);
+      case 'math':
+        return typeMath(source, wide);
+    }
+  } catch (error) {
+    locateError(error, source.loc);
+    throw error;
+  }
+}
+
+/**
+ * Whether an operand is written as a number, so a boolean on the other side of `===` never equals it: a
+ * numeric literal, a negated one, or a non-boolean state read by name.
+ *
+ * @param node  The operand.
+ * @param env  The expression environment.
+ *
+ * @returns True when it is surely a number.
+ */
+const isWrittenAsNumber = (node: t.Node, env: Env): boolean =>
+  node.type === 'NumericLiteral' ||
+  (node.type === 'UnaryExpression' &&
+    node.argument.type === 'NumericLiteral') ||
+  (node.type === 'Identifier' &&
+    !env.locals.has(node.name) &&
+    (env.state.get(node.name) as ScalarState | undefined)?.isBool === false);
+
+/**
+ * A binary expression's source, from its operands' sources.
+ *
+ * @param node  The expression.
+ * @param left  Its left operand's source.
+ * @param right  Its right operand's source.
+ * @param env  The expression environment.
+ *
+ * @returns The source.
+ */
+const binarySource = (
+  node: t.BinaryExpression,
+  left: IrSource,
+  right: IrSource,
+  env: Env,
+): IrSource => ({
+  kind: 'binary',
+  op: node.operator,
+  left,
+  right,
+  divisor: {constant: staticInt(node.right, env), loc: node.right.loc?.start},
+  leftIsNumber: isWrittenAsNumber(node.left, env),
+  rightIsNumber: isWrittenAsNumber(node.right, env),
+  loc: node.loc?.start,
+});
+
+/**
+ * Lowers one JS expression to its source: names resolved, constants folded, and each operand lowered and typed
+ * in turn, so an error in it is reported before anything after it.
  *
  * @param node  The expression.
  * @param env  The expression environment.
  *
- * @returns The lowered expression.
+ * @returns The source.
  */
-function lowerExprImpl(node: t.Node, env: Env): IrExpr {
-  // 64-bit int math reaches only through whole-number math (keepsMath64); other nodes are typed as usual.
-  if (env.math64 && !keepsMath64(node)) {
-    env = {...env, math64: false};
-  }
-
+function sourceOf(node: t.Node, env: Env): IrSource {
+  const loc = node.loc?.start;
+  const operand = (operandNode: t.Node): IrSource =>
+    lowerSource(operandNode, env).source;
   switch (node.type) {
     case 'NumericLiteral':
-      return numConst(node.value);
+      return numberSource(node.value, loc);
     case 'StringLiteral':
-      return stringConst(node.value);
+      return {kind: 'string', value: node.value, loc};
     case 'BooleanLiteral':
-      return boolConst(node.value);
+      return {kind: 'boolean', value: node.value, loc};
     case 'Identifier': {
       // A name resolves to a local first, then to state, then to a compile-time constant.
       if (env.locals.has(node.name)) {
-        return localRead(env.locals.get(node.name)!);
+        return {kind: 'local', local: env.locals.get(node.name)!, loc};
       }
 
       if (env.state.has(node.name)) {
@@ -675,23 +1229,20 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           );
         }
 
-        return {
-          kind: 'state',
-          state: stateRecord,
-          type: typeOfSlot(stateRecord.cType, stateRecord.isBool),
-        };
+        return {kind: 'state', state: stateRecord, loc};
       }
 
       if (node.name in env.consts) {
         const constValue = env.consts[node.name];
-        if (typeof constValue === 'number') return numConst(constValue);
+        if (typeof constValue === 'number')
+          return numberSource(constValue, loc);
 
         if (typeof constValue === 'string') {
-          return stringConst(constValue);
+          return {kind: 'string', value: constValue, loc};
         }
 
         if (typeof constValue === 'boolean') {
-          return boolConst(constValue);
+          return {kind: 'boolean', value: constValue, loc};
         }
       }
       throw new Error(
@@ -702,54 +1253,15 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       // A constant is negated here, so `-A` is its value, and -2147483648 is not an int overflow.
       const staticOperand =
         node.operator === '-' ? staticInt(node.argument, env) : null;
-      if (staticOperand !== null) return numConst(-staticOperand);
+      if (staticOperand !== null) return numberSource(-staticOperand, loc);
 
-      const operand = lowerExprWide(node.argument, env);
-      if (
-        (node.operator === '-' || node.operator === '+') &&
-        operand.type.kind === 'string'
-      ) {
-        throw aotError(
-          `AOT: unary "${node.operator}" on a string is not supported`,
-          'JS would coerce the string to a number; C has no such coercion. Keep the operand numeric.',
-        );
-      }
-
-      // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
-      if (
-        node.operator === '-' &&
-        (isIntSlot(operand.type) || operand.type.kind === 'int64')
-      ) {
-        const is64Bit = operand.type.kind === 'int64' || env.math64;
-        return is64Bit
-          ? {
-              kind: 'helper',
-              helper: 'neg',
-              bits: 64,
-              args: [operand],
-              type: isTime64(operand) ? TIME : INT64_MATH,
-            }
-          : {
-              kind: 'helper',
-              helper: 'neg',
-              bits: 32,
-              args: [operand],
-              type: INT,
-            };
-      }
-
+      const operandSource = operand(node.argument);
       if (
         node.operator === '-' ||
         node.operator === '+' ||
         node.operator === '!'
       ) {
-        // Only `!` yields a boolean; unary +/- coerce to a number, so `+flag` drops its boolean-ness.
-        return {
-          kind: 'unary',
-          op: node.operator,
-          operand,
-          type: node.operator === '!' ? BOOL : plainOf(operand.type),
-        };
+        return {kind: 'unary', op: node.operator, operand: operandSource, loc};
       }
 
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
@@ -761,196 +1273,17 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         : null;
       const rightConst = leftConst === null ? null : staticInt(node.right, env);
       if (rightConst !== null) {
-        return numConst(
+        return numberSource(
           node.operator === '+'
             ? leftConst! + rightConst
             : node.operator === '-'
               ? leftConst! - rightConst
               : leftConst! * rightConst,
+          loc,
         );
       }
 
-      // Lower both operands; besides a 64-bit value, redo whole-number math in 64 bits, as JS never cuts it to 32.
-      let left = lowerExprWide(node.left, env);
-      let right = lowerExprWide(node.right, env);
-      if (left.type.kind === 'int64' || right.type.kind === 'int64') {
-        if (isIntSlot(left.type) && keepsMath64(node.left)) {
-          left = lowerExprWide(node.left, {...env, math64: true});
-        }
-
-        if (isIntSlot(right.type) && keepsMath64(node.right)) {
-          right = lowerExprWide(node.right, {...env, math64: true});
-        }
-      }
-      [left, right] = litPeers(left, right);
-
-      // Arithmetic: refuse strings, hand 64-bit math to lowerArith64, and saturate whole-number `+ - *`.
-      if (ARITH.has(node.operator)) {
-        if (left.type.kind === 'string' || right.type.kind === 'string') {
-          // String `+` has no single C value; only a char-buffer destination can lower it, via emitFormat().
-          if (node.operator === '+') {
-            throw aotError(
-              'AOT: string concatenation is not supported in this position',
-              'a `+` chain over strings lowers to a printf format, which only works where the value ' +
-                'lands in a text buffer: a <Text> body, a string useState setter, or a <TextInput ' +
-                'value>.',
-            );
-          }
-          // JS would coerce the string to a number; C would do pointer arithmetic or refuse to compile.
-          throw aotError(
-            `AOT: "${node.operator}" on a string is not supported`,
-            'keep both operands numeric — a string cannot be coerced to a number here.',
-          );
-        }
-        // `/` takes a 64-bit constant as an ordinary C number; only a runtime 64-bit value is refused it.
-        if (
-          isTime64(left) ||
-          isTime64(right) ||
-          ((left.type.kind === 'int64' || right.type.kind === 'int64') &&
-            (CHECKED_HELPER[node.operator] || node.operator === '%'))
-        ) {
-          return lowerArith64(node, left, right, env);
-        }
-
-        if (node.operator === '/') {
-          return {kind: 'floatDivide', left, right, type: FLOAT};
-        }
-
-        const cType =
-          left.type.kind === 'float' || right.type.kind === 'float'
-            ? 'float'
-            : 'int';
-        const checkedHelper = cType === 'int' && CHECKED_HELPER[node.operator];
-        if (checkedHelper) {
-          return env.math64
-            ? {
-                kind: 'helper',
-                helper: checkedHelper,
-                bits: 64,
-                args: [left, right],
-                type: INT64_MATH,
-              }
-            : {
-                kind: 'helper',
-                helper: checkedHelper,
-                bits: 32,
-                args: [left, right],
-                type: INT,
-              };
-        }
-
-        // A 0 divisor (NaN in JS) or -1 (INT_MIN % -1 overflows C) gives 0; other constants need no check.
-        if (cType === 'int' && node.operator === '%') {
-          const staticDivisor = staticInt(node.right, env);
-          if (staticDivisor === 0 || staticDivisor === -1) {
-            return numConst(0);
-          }
-          if (staticDivisor === null) {
-            return {
-              kind: 'helper',
-              helper: 'mod',
-              bits: 32,
-              args: [left, right],
-              type: INT,
-            };
-          }
-        }
-
-        // C has no float `%`; fmodf matches JS's `%` exactly, zero and infinite divisors included.
-        if (cType === 'float' && node.operator === '%') {
-          return {
-            kind: 'floatMath',
-            fn: 'mod',
-            args: [left, right],
-            type: FLOAT,
-          };
-        }
-
-        return {
-          kind: 'arithmetic',
-          op: node.operator as IrArithmetic['op'],
-          left,
-          right,
-          type: typeOfSlot(cType),
-        };
-      }
-
-      // Comparisons: strings through strcmp, everything else as a plain C comparison yielding a boolean.
-      if (COMPARE.has(node.operator)) {
-        const cOperator =
-          node.operator === '==='
-            ? '=='
-            : node.operator === '!=='
-              ? '!='
-              : node.operator;
-        if (left.type.kind === 'string' || right.type.kind === 'string') {
-          if (slotOf(left.type) !== slotOf(right.type)) {
-            // A strict comparison never coerces, so a string against a number is decided statically.
-            if (node.operator === '===' || node.operator === '!==') {
-              return boolConst(node.operator === '!==');
-            }
-
-            throw aotError(
-              'AOT: a string cannot be compared with a number',
-              `\`${node.operator}\` coerces the string to a number in JS, which C cannot reproduce. ` +
-                `Compare like with like, or use === / !== (which never coerce).`,
-            );
-          }
-          // Equality is exact, but strcmp's UTF-8 order can differ from JS's UTF-16 order, so refuse ordering.
-          if (cOperator !== '==' && cOperator !== '!=') {
-            throw aotError(
-              `AOT: ordering strings with "${node.operator}" is not supported`,
-              'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can ' +
-                'differ. Use === / !==, or compare numbers.',
-            );
-          }
-
-          return {
-            kind: 'stringEquals',
-            op: cOperator,
-            left,
-            right,
-            type: BOOL,
-          };
-        }
-        // A float compared with a timestamp would round it.
-        if (
-          (left.type.kind === 'int64' || right.type.kind === 'int64') &&
-          (left.type.kind === 'float' || right.type.kind === 'float')
-        ) {
-          throw mix64Error();
-        }
-
-        // `true === 1` is false in JS but true in C's int slot; fold it when the other side is surely a number.
-        const isSurelyNumber = (operandNode: t.Node, operand: IrExpr) =>
-          !isBoolean(operand.type) &&
-          (operand.type.kind === 'float' ||
-            operand.type.kind === 'int64' ||
-            operandNode.type === 'NumericLiteral' ||
-            (operandNode.type === 'UnaryExpression' &&
-              operandNode.argument.type === 'NumericLiteral') ||
-            (operandNode.type === 'Identifier' &&
-              !env.locals.has(operandNode.name) &&
-              (env.state.get(operandNode.name) as ScalarState | undefined)
-                ?.isBool === false));
-        if (
-          (node.operator === '===' || node.operator === '!==') &&
-          ((isBoolean(left.type) && isSurelyNumber(node.right, right)) ||
-            (isBoolean(right.type) && isSurelyNumber(node.left, left)))
-        ) {
-          return boolConst(node.operator === '!==');
-        }
-
-        return {
-          kind: 'compare',
-          op: cOperator as IrCompare['op'],
-          left,
-          right,
-          type: BOOL,
-        };
-      }
-
-      throw new Error(`AOT: unsupported binary operator "${node.operator}"`);
+      return binarySource(node, operand(node.left), operand(node.right), env);
     }
     case 'LogicalExpression': {
       // Only `&&` and `||` are supported (not `??`).
@@ -960,103 +1293,37 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
       }
 
-      // JS `&&`/`||` return an operand, so with a 64-bit side keep its value instead of collapsing it to 0/1.
-      const [left, right] = litPeers(
-        lowerExprWide(node.left, env),
-        lowerExprWide(node.right, env),
-      );
-      if (left.type.kind === 'int64' || right.type.kind === 'int64') {
-        if (left.type.kind === 'float' || right.type.kind === 'float') {
-          throw mix64Error();
-        }
-
-        if (left.type.kind === 'string' || right.type.kind === 'string') {
-          throw aotError(
-            `AOT: "${operator}" cannot mix a 64-bit time value with a string`,
-            'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
-          );
-        }
-
-        if (isBoolean(left.type) || isBoolean(right.type)) {
-          throw bool64Error(`"${operator}"`);
-        }
-
-        return {kind: 'pick', op: operator, left, right, type: TIME};
-      }
-
-      // Otherwise the C result is the truth of the expression, a boolean only when both operands are.
       return {
         kind: 'logical',
         op: operator,
-        left,
-        right,
-        type: isBoolean(left.type) && isBoolean(right.type) ? BOOL : INT,
+        left: operand(node.left),
+        right: operand(node.right),
+        loc,
       };
     }
-    case 'ConditionalExpression': {
-      const test = lowerExprWide(node.test, env);
-      const [consequent, alternate] = litPeers(
-        lowerExprWide(node.consequent, env),
-        lowerExprWide(node.alternate, env),
-      );
-      // A string branch beside a numeric one is ill-typed C with no single printf spec, so refuse it here.
-      if (
-        (consequent.type.kind === 'string') !==
-        (alternate.type.kind === 'string')
-      ) {
-        throw aotError(
-          'AOT: a ternary cannot mix a string branch with a numeric one',
-          "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
-        );
-      }
-
-      // Both branches share one C slot, float or i64 if either is; i64 beside a float or boolean is refused.
-      const eitherIs = (kind: CType) =>
-        slotOf(consequent.type) === kind || slotOf(alternate.type) === kind;
-      if (eitherIs('i64') && eitherIs('float')) {
-        throw mix64Error();
-      }
-
-      if (
-        eitherIs('i64') &&
-        (isBoolean(consequent.type) || isBoolean(alternate.type))
-      ) {
-        throw bool64Error('a ternary');
-      }
-
-      const cType = eitherIs('float')
-        ? 'float'
-        : eitherIs('i64')
-          ? 'i64'
-          : slotOf(consequent.type) === slotOf(alternate.type)
-            ? slotOf(consequent.type)
-            : 'int';
+    case 'ConditionalExpression':
       return {
         kind: 'conditional',
-        test,
-        consequent,
-        alternate,
-        type: typeOfSlot(
-          cType,
-          isBoolean(consequent.type) && isBoolean(alternate.type),
-        ),
+        test: operand(node.test),
+        consequent: operand(node.consequent),
+        alternate: operand(node.alternate),
+        loc,
       };
-    }
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g., a .map item's `.key`).
       try {
         const constValue = evalStatic(node, foldScope(env, env.consts ?? {}));
         // A number with no float form falls through too, so its check runs now, not in the check pass.
         if (typeof constValue === 'number') {
-          return attemptLowering(() => numConst(constValue));
+          return attemptLowering(() => numberSource(constValue, loc));
         }
 
         if (typeof constValue === 'string') {
-          return stringConst(constValue);
+          return {kind: 'string', value: constValue, loc};
         }
 
         if (typeof constValue === 'boolean') {
-          return boolConst(constValue);
+          return {kind: 'boolean', value: constValue, loc};
         }
       } catch {
         /* not static — fall through to the dynamic member forms below */
@@ -1065,17 +1332,18 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       // Otherwise the object must be one of the runtime forms below; `prop` is null for a computed member.
       const object = node.object;
       const prop = node.computed ? null : (node.property as t.Identifier).name;
+      const fixed = (expr: IrExpr): IrSource => ({kind: 'fixed', expr, loc});
       // `<list>.length` → the runtime count.
       if (
         object.type === 'Identifier' &&
         env.state.get(object.name)?.kind === 'list' &&
         prop === 'length'
       ) {
-        return {
+        return fixed({
           kind: 'listLength',
           list: env.state.get(object.name) as ListState,
           type: INT,
-        };
+        });
       }
 
       // `<item>.field` where item is a struct local (a list row's bound element).
@@ -1092,12 +1360,12 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           throw new Error(`AOT: unknown field "${prop}" on a list item`);
         }
 
-        return {
+        return fixed({
           kind: 'itemField',
           item,
           field,
           type: typeOfSlot(field.kind),
-        };
+        });
       }
 
       // `<ref>.current` — a value ref's mutable C slot.
@@ -1108,7 +1376,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       ) {
         const ref = env.refs.get(object.name)!;
         ref.used = true;
-        return {kind: 'ref', ref, type: refType(ref)};
+        return {kind: 'ref', ref, loc};
       }
 
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
@@ -1117,7 +1385,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         env.event === object.name &&
         (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')
       ) {
-        return {kind: 'event', field: prop, type: INT};
+        return fixed({kind: 'event', field: prop, type: INT});
       }
 
       // `<event>.vx / .vy` — finger velocity (px/ms) at the last move; the engine measures it, a handler cannot.
@@ -1126,12 +1394,12 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         env.event === object.name &&
         (prop === 'vx' || prop === 'vy')
       ) {
-        return {kind: 'event', field: prop, type: FLOAT};
+        return fixed({kind: 'event', field: prop, type: FLOAT});
       }
 
       // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
       if (object.type === 'Identifier' && env.gesture === object.name && prop) {
-        return lowerGestureField(prop, env.pan);
+        return fixed(lowerGestureField(prop, env.pan));
       }
 
       // `<event>.layout.x / .y / .width / .height` — the onLayout rect.
@@ -1147,7 +1415,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             `AOT: unknown onLayout rect field "${prop}" (use x / y / width / height)`,
           );
         }
-        return {kind: 'layout', field: prop as LayoutField, type: INT};
+        return fixed({kind: 'layout', field: prop as LayoutField, type: INT});
       }
 
       // `Math.PI` — the only Math constant.
@@ -1156,7 +1424,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         object.name === 'Math' &&
         prop === 'PI'
       ) {
-        return {kind: 'pi', type: FLOAT};
+        return fixed({kind: 'pi', type: FLOAT});
       }
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
@@ -1177,7 +1445,11 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         !env.shadowedClock?.has(node)
       ) {
         if ((callee.property as t.Identifier).name === 'now') {
-          return {kind: 'clock', clock: callee.object.name, type: TIME};
+          return {
+            kind: 'fixed',
+            expr: {kind: 'clock', clock: callee.object.name, type: TIME},
+            loc,
+          };
         }
         if (callee.object.name === 'Date') {
           throw dateObjectError();
@@ -1192,98 +1464,35 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         throw dateObjectError();
       }
 
-      // Math.*: exact integer division first, then 64-bit math, then whole-int abs/min/max/trunc, then floats.
+      // Math.*: a division under floor / ceil / round / trunc stays apart, for the typing pass to divide exactly.
       if (
         callee.type === 'MemberExpression' &&
         (callee.object as t.Identifier).name === 'Math'
       ) {
         const fn = (callee.property as t.Identifier).name;
-        const timeDiv = lowerTimeRoundDiv(fn, node.arguments, env);
-        if (timeDiv) return timeDiv;
-
-        const intDiv = lowerIntRoundDiv(fn, node.arguments, env);
-        if (intDiv) return intDiv;
-
-        const argExprs = litPeers(
-          ...node.arguments.map(argNode => lowerExprWide(argNode, env)),
-        );
-        if (argExprs.some(argExpr => argExpr.type.kind === 'int64')) {
-          return lowerMath64(fn, argExprs);
-        }
-
-        // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.
-        if (
-          argExprs.length &&
-          argExprs.every(argExpr => isIntSlot(argExpr.type))
-        ) {
-          if (fn === 'abs' && argExprs.length === 1) {
-            return env.math64
-              ? {
-                  kind: 'helper',
-                  helper: 'abs',
-                  bits: 64,
-                  args: [argExprs[0]],
-                  type: INT64_MATH,
-                }
-              : {
-                  kind: 'helper',
-                  helper: 'abs',
-                  bits: 32,
-                  args: [argExprs[0]],
-                  type: INT,
-                };
-          }
-
-          if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
-            return {
-              kind: 'helper',
-              helper: fn,
-              bits: 32,
-              args: [argExprs[0], argExprs[1]],
-              type: INT,
-            };
-          }
-        }
-
-        // Math.trunc stays an int: an int as is, a float via app_f2i (toward zero, NaN as 0, saturating).
-        if (fn === 'trunc' && argExprs.length === 1) {
-          return isIntSlot(argExprs[0].type)
-            ? {kind: 'wholeRound', operand: argExprs[0], type: INT}
-            : {kind: 'trunc', operand: argExprs[0], type: INT};
-        }
-
-        if (FLOAT_MATH_UNARY.has(fn) && argExprs.length === 1) {
-          // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
-          const roundsToWhole =
-            fn === 'round' || fn === 'floor' || fn === 'ceil';
-          if (roundsToWhole && isIntSlot(argExprs[0].type)) {
-            return {kind: 'wholeRound', operand: argExprs[0], type: INT};
-          }
-
-          const floatCall: IrExpr = {
-            kind: 'floatMath',
-            fn: fn as FloatMath,
-            args: [argExprs[0]],
-            type: FLOAT,
-          };
-          // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
-          return roundsToWhole
-            ? {kind: 'toInt', operand: floatCall, type: INT}
-            : floatCall;
-        }
-
-        if (FLOAT_MATH_BINARY.has(fn) && argExprs.length === 2) {
-          return {
-            kind: 'floatMath',
-            fn: fn as FloatMath,
-            args: [argExprs[0], argExprs[1]],
-            type: FLOAT,
-          };
-        }
-
-        throw new Error(
-          `AOT: unsupported Math.${fn}(...) (arity ${argExprs.length})`,
-        );
+        const division = node.arguments[0];
+        const exactDivision =
+          INT_ROUND_DIV.has(fn) &&
+          node.arguments.length === 1 &&
+          division.type === 'BinaryExpression' &&
+          division.operator === '/';
+        return {
+          kind: 'math',
+          fn,
+          args: exactDivision
+            ? [
+                binarySource(
+                  division as t.BinaryExpression,
+                  operand((division as t.BinaryExpression).left),
+                  operand((division as t.BinaryExpression).right),
+                  env,
+                ),
+              ]
+            : node.arguments.map(operand),
+          exactDivision,
+          wholeMath: keepsMath64Node(node),
+          loc,
+        };
       }
 
       throw new Error(
@@ -1307,8 +1516,32 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
   );
 }
 
-/** Lowers one JS expression to the IR, with the expression's location attached to any AOT error it throws. */
-export const lowerExprWide = withLoc(lowerExprImpl);
+/**
+ * Lowers one JS expression to its source and types it, with the expression's location attached to any AOT
+ * error either step throws.
+ */
+export const lowerSource = withLoc(
+  (node: t.Node, env: Env): {source: IrSource; expr: IrExpr} => {
+    // Below a node that is not whole-number math, its operands are typed as usual (see keepsMath64Node).
+    if (env.math64 && !keepsMath64Node(node)) {
+      env = {...env, math64: false};
+    }
+
+    const source = sourceOf(node, env);
+    return {source, expr: typeSource(source, env.math64 ?? false)};
+  },
+);
+
+/**
+ * Lowers one JS expression to the IR: its source, typed by the typing pass.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ *
+ * @returns The typed expression.
+ */
+export const lowerExprWide = (node: t.Node, env: Env): IrExpr =>
+  lowerSource(node, env).expr;
 
 /**
  * emitExpr for the destinations that can hold a 64-bit timestamp: state, refs, locals, text, conditions.

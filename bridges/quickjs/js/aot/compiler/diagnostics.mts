@@ -87,6 +87,27 @@ export function aotError(message: string, hint?: string): AotError {
 }
 
 /**
+ * Pins an AOT error that has no location yet to `loc`, as a located emitter does.
+ *
+ * @param error  The thrown value.
+ * @param loc  Where the construct being lowered is, if it is anywhere.
+ */
+export function locateError(
+  error: unknown,
+  loc: SourcePosition | undefined,
+): void {
+  if (
+    error &&
+    typeof (error as AotError).message === 'string' &&
+    (error as AotError).message.startsWith('AOT:') &&
+    !(error as AotError).aotLoc &&
+    loc
+  ) {
+    (error as AotError).aotLoc = loc;
+  }
+}
+
+/**
  * Wraps an emit function so a thrown AOT error (without a location yet) is tagged with the current node's
  * loc. Wrapped emitters nest, so the deepest node that failed is the one reported. The expression, node, and
  * handler emitters are all wrapped, and compileSource formats the result with formatAotError. While it runs,
@@ -108,17 +129,7 @@ export function withLoc<
     try {
       return fn(node, ...rest);
     } catch (error) {
-      if (
-        error &&
-        typeof (error as AotError).message === 'string' &&
-        (error as AotError).message.startsWith('AOT:') &&
-        !(error as AotError).aotLoc &&
-        node &&
-        node.loc
-      ) {
-        (error as AotError).aotLoc = node.loc.start; // babel loc: { line (1-based), column (0-based) }
-      }
-
+      locateError(error, node?.loc?.start); // babel loc: { line (1-based), column (0-based) }
       throw error;
     } finally {
       loweringAt.pop();
