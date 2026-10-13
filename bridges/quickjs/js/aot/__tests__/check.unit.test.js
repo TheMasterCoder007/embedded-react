@@ -32,7 +32,7 @@ import {resolveOptions} from '../compiler/options.mts';
 const opts = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, opts, new Set(), new Set());
+const lower = source => lowerApp(source, opts, new Set(), []);
 
 /** An app whose component returns `jsx`. */
 const app = jsx =>

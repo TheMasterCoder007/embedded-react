@@ -21,7 +21,7 @@
 import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {findShadowedClockCalls, emitExprWide} from './expressions.mts';
+import {findShadowedClockCalls, emitSourcedWide} from './expressions.mts';
 import {
   findComponent,
   declaredNames,
@@ -47,6 +47,7 @@ import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
 import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
 import type {IrApp} from './ir/app.mts';
+import type {IrSlotStore} from './ir/source.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
 import type {Env, Scope, StateRecord} from './types.mts';
 
@@ -161,7 +162,7 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
  * @param src  The App.jsx/App.tsx source text.
  * @param opts  compileSource's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
- * @param found  Collects the int slots a 64-bit timestamp was stored in.
+ * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app.
  */
@@ -169,10 +170,10 @@ export function lowerApp(
   src: string,
   opts: ResolvedOptions,
   wide: Set<string>,
-  found: Set<string>,
+  stores: IrSlotStore[],
 ): IrApp {
   const {result, checks} = lowerWithChecks(() =>
-    lowerProgram(src, opts, wide, found),
+    lowerProgram(src, opts, wide, stores),
   );
   const app = {...result, checks};
   runChecks(app.checks);
@@ -186,7 +187,7 @@ export function lowerApp(
  * @param src  The App.jsx/App.tsx source text.
  * @param opts  compileSource's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
- * @param found  Collects the int slots a 64-bit timestamp was stored in.
+ * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app, without its checks.
  */
@@ -194,7 +195,7 @@ function lowerProgram(
   src: string,
   opts: ResolvedOptions,
   wide: Set<string>,
-  found: Set<string>,
+  stores: IrSlotStore[],
 ): Omit<IrApp, 'checks'> {
   // Parse the app and prepare the AST for the passes below.
   const ast = parseApp(src, opts);
@@ -284,7 +285,7 @@ function lowerProgram(
     svgArtifacts: opts.svgArtifacts || {},
     caps: opts.caps,
     wide,
-    found,
+    stores,
     shadowedClock,
   };
 
@@ -293,11 +294,12 @@ function lowerProgram(
     try {
       scope[name] = evalStatic(expr, scope);
     } catch {
-      const cExpr = emitExprWide(expr, env);
+      const cExpr = emitSourcedWide(expr, env);
       env.locals.set(name, {
         code: `(${cExpr.code})`,
         cType: cExpr.cType,
         isBool: cExpr.isBool,
+        source: cExpr.source,
       });
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }

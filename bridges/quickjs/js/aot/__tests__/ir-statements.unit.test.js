@@ -72,7 +72,7 @@ function lowerBody(source, state, refs = new Map()) {
     refs,
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
-    found: new Set(),
+    stores: [],
   };
   const ctx = {stateChanged: false, animIdx: 0, out: new Out(new Map(), null)};
   return {stmts: lowerStmts(statements, env, state, ctx), ctx};

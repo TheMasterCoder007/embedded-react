@@ -23,6 +23,7 @@ import type {Out} from './out.mts';
 import type {IrPropValue, IrShow} from './ir/nodes.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrStaticDecl} from './ir/functions.mts';
+import type {IrSlotStore, IrSource} from './ir/source.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -66,6 +67,8 @@ export interface ItemStruct {
 /** A name bound at runtime: a handler local, a dynamic prop, or a list row's item (which has a `struct`). */
 export interface Local extends CExpr {
   struct?: ItemStruct;
+  /** What it was set from, which the typing pass reads when it infers slot widths. */
+  source?: IrSource;
 }
 
 /** What a useState / useHostValue slot and a list state have in common. */
@@ -291,8 +294,8 @@ export interface Env {
   caps: Caps;
   /** State and ref slots declared 64-bit this pass (see compileWidened). */
   wide: Set<string>;
-  /** Collects the int slots a 64-bit timestamp was stored in, for the next pass to widen. */
-  found: Set<string>;
+  /** Collects every value stored into an int slot, from which the typing pass infers the slots to widen. */
+  stores: IrSlotStore[];
   /** `Date` / `performance` calls that name the app's own binding rather than the engine clock. */
   shadowedClock: WeakSet<t.Node>;
   /** Children passed to the component being inlined. */

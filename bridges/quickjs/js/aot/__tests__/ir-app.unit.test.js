@@ -35,7 +35,7 @@ import {printVectorBlocks} from '../compiler/c/vectors.mts';
 const opts = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, opts, new Set(), new Set());
+const lower = source => lowerApp(source, opts, new Set(), []);
 
 describe('the lowered app', () => {
   it('keeps the keyboard config as IR, which the writer prints with its setup call', () => {

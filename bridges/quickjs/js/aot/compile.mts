@@ -89,8 +89,10 @@ import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
+import {inferWideSlots} from './compiler/expressions.mts';
 import type {CompileOptions, ResolvedOptions} from './compiler/options.mts';
 import type {CompileResult} from './compiler/assemble.mts';
+import type {IrSlotStore} from './compiler/ir/source.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -109,8 +111,9 @@ export {bakeSvgArtifacts, demoMarker};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
- * Date.now() in it. A compile reports such slots (env.found); this compiles again with them widened to
- * int64_t until none are new, so every read of a slot sees its final type.
+ * Date.now() in it. A compile records every value stored into an int slot (env.stores), and the typing pass
+ * infers from them which slots have to hold 64 bits, following a timestamp through every slot it reaches; the
+ * app is then compiled again with those slots widened, so every read of a slot sees its final type.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param demo  Demo name (only used in the generated-by header comment).
@@ -124,30 +127,28 @@ function compileWidened(
   opts: ResolvedOptions,
 ): CompileResult {
   // The slots found so far that need 64 bits; every pass compiles with all of them widened.
-  const wide = new Set<string>();
+  let wide = new Set<string>();
   for (;;) {
     // Run one pass, holding on to its error instead of throwing it straight away.
-    const found = new Set<string>();
+    const stores: IrSlotStore[] = [];
     let result: CompileResult | undefined;
     let error: unknown;
     try {
-      result = compileSourceImpl(src, demo, opts, wide, found);
+      result = compileSourceImpl(src, demo, opts, wide, stores);
     } catch (caught) {
       error = caught;
     }
 
-    // Stop once a pass finds no new slot; a failed pass with new ones may have failed on a narrow type, so retry.
-    const newSlots = [...found].filter(slot => !wide.has(slot));
-    if (!newSlots.length) {
+    // Stop once no slot is inferred to widen; a failed pass with new ones may have failed on a narrow type.
+    const inferred = inferWideSlots(stores, wide);
+    if (inferred.size === wide.size) {
       if (error) {
         throw error;
       }
       return result!;
     }
 
-    for (const slot of newSlots) {
-      wide.add(slot);
-    }
+    wide = inferred;
   }
 }
 

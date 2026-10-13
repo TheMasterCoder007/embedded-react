@@ -67,7 +67,7 @@ function emit(jsx, refs = new Map(), components = new Map(), program = null) {
     animations: new Map(),
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
-    found: new Set(),
+    stores: [],
   };
   const out = new Out(components, program);
   const element = emitNode(expr, {}, out, env, state);

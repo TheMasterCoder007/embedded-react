@@ -66,7 +66,7 @@ function emit(jsx, refs = new Map()) {
     animations: new Map(),
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
-    found: new Set(),
+    stores: [],
   };
   const out = new Out(new Map(), null);
   const element = emitNode(expr, {}, out, env, {
@@ -340,7 +340,7 @@ describe('vector IR: updateVector', () => {
       event: 'e',
       math64: false,
       caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
-      found: new Set(),
+      stores: [],
     };
     const ctx = {
       stateChanged: false,

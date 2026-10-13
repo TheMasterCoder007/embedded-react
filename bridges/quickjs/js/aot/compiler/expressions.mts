@@ -27,7 +27,7 @@ import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
 import type * as t from '@babel/types';
 import type {AotError, SourcePosition} from './diagnostics.mts';
-import type {IrSource, IrSourceDivisor} from './ir/source.mts';
+import type {IrSlotStore, IrSource, IrSourceDivisor} from './ir/source.mts';
 import type {
   CExpr,
   CType,
@@ -141,6 +141,9 @@ const FLOAT_MATH_UNARY = new Set([
   'ceil',
 ]);
 const FLOAT_MATH_BINARY = new Set(['min', 'max', 'atan2', 'pow']);
+
+/** While the typing pass infers slot widths: the int slots it takes to hold 64 bits. Null otherwise. */
+let assumedWide: Set<string> | null = null;
 
 /** The fields of an onLayout rect. */
 const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
@@ -1123,16 +1126,31 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         return stringConst(source.value);
       case 'boolean':
         return boolConst(source.value);
-      case 'state':
+      case 'state': {
+        const {state} = source;
+        const isAssumedWide =
+          assumedWide?.has(state.cField) &&
+          state.cType === 'int' &&
+          !state.isBool;
         return {
           kind: 'state',
-          state: source.state,
-          type: typeOfSlot(source.state.cType, source.state.isBool),
+          state,
+          type: isAssumedWide ? TIME : typeOfSlot(state.cType, state.isBool),
         };
+      }
       case 'local':
-        return localRead(source.local);
-      case 'ref':
-        return {kind: 'ref', ref: source.ref, type: refType(source.ref)};
+        // While slot widths are inferred, a local is what it was set from, typed with the slots assumed so far.
+        return assumedWide && source.local.source
+          ? typeSource(source.local.source, false)
+          : localRead(source.local);
+      case 'ref': {
+        const {ref} = source;
+        const isAssumedWide =
+          assumedWide?.has(ref.cVar) &&
+          ref.kind === 'value' &&
+          ref.cType === 'int';
+        return {kind: 'ref', ref, type: isAssumedWide ? TIME : refType(ref)};
+      }
       case 'fixed':
         return source.expr;
       case 'unary':
@@ -1150,6 +1168,43 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
     locateError(error, source.loc);
     throw error;
   }
+}
+
+/**
+ * Infers the int slots that have to hold 64 bits: those a value stored into is a 64-bit number, once the slots
+ * found so far are taken to hold 64 bits too, until no more are found. A value whose typing fails leaves its
+ * slot as it is; lowering it again reports the error.
+ *
+ * @param stores  Every value lowering stored into an int slot.
+ * @param wide  The slots already 64-bit.
+ *
+ * @returns Those slots, and every one inferred.
+ */
+export function inferWideSlots(
+  stores: IrSlotStore[],
+  wide: Set<string>,
+): Set<string> {
+  const inferred = new Set(wide);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const store of stores) {
+      if (inferred.has(store.slot)) continue;
+      assumedWide = inferred;
+      try {
+        if (typeSource(store.value, store.math64).type.kind === 'int64') {
+          inferred.add(store.slot);
+          grew = true;
+        }
+      } catch {
+        // Lowering the value again, with the widths inferred, reports its error.
+      } finally {
+        assumedWide = null;
+      }
+    }
+  }
+
+  return inferred;
 }
 
 /**
@@ -1553,6 +1608,23 @@ export const lowerExprWide = (node: t.Node, env: Env): IrExpr =>
  */
 export const emitExprWide = (node: t.Node, env: Env): CExpr =>
   toCExpr(lowerExprWide(node, env));
+
+/**
+ * emitExprWide, for a local that holds the value: with the source it was lowered from, which the typing pass
+ * reads when it infers slot widths.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ *
+ * @returns The expression as C, and its source.
+ */
+export function emitSourcedWide(
+  node: t.Node,
+  env: Env,
+): CExpr & {source: IrSource} {
+  const lowered = lowerSource(node, env);
+  return {...toCExpr(lowered.expr), source: lowered.source};
+}
 
 /**
  * Lowers an expression for a destination that holds an int, a float, or a string. C would narrow a 64-bit

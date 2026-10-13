@@ -21,7 +21,7 @@
 import {attemptLowering} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {emitExprWide, lowerExpr} from './expressions.mts';
+import {emitSourcedWide, lowerExpr} from './expressions.mts';
 import {
   isFn,
   declaredNames,
@@ -170,7 +170,7 @@ function extractProps(
     } catch {
       props[(attr.name as t.JSXIdentifier).name] = {
         static: false,
-        ...emitExprWide(node, env),
+        ...emitSourcedWide(node, env),
       };
     }
   }
@@ -345,6 +345,7 @@ export function emitComponent(
         cType: descriptor.cType,
         struct: descriptor.struct,
         isBool: descriptor.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
+        source: descriptor.source,
       });
 
       // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.
@@ -436,11 +437,12 @@ export function emitComponent(
     try {
       childScope[name] = evalStatic(expr, childScope);
     } catch {
-      const cExpr = emitExprWide(expr, childEnv);
+      const cExpr = emitSourcedWide(expr, childEnv);
       childLocals.set(name, {
         code: `(${cExpr.code})`,
         cType: cExpr.cType,
         isBool: cExpr.isBool,
+        source: cExpr.source,
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }

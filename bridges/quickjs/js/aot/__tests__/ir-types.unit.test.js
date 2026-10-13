@@ -33,6 +33,9 @@ import {
   typeOfSlot,
 } from '../compiler/ir/types.mts';
 import {compileSource} from '../compile.mts';
+import {inferWideSlots} from '../compiler/expressions.mts';
+import {lowerApp} from '../compiler/lower.mts';
+import {resolveOptions} from '../compiler/options.mts';
 
 // The IR types its values itself; a backend picks the slot each one is stored in.
 
@@ -85,5 +88,60 @@ describe('IR types: updaters', () => {
     );
     expect(c.match(/s_state\.on = 0;/g)).toHaveLength(2);
     expect(c).not.toContain('s_state.on == 1');
+  });
+});
+
+describe('IR types: slot widths', () => {
+  const app =
+    "import React, {useState, useRef} from 'react';\n" +
+    "import {View, Text} from 'embedded-react';\n" +
+    'export function App() {\n' +
+    '  const [a, setA] = useState(0);\n' +
+    '  const [b, setB] = useState(0);\n' +
+    '  const [c, setC] = useState(0);\n' +
+    '  const [n, setN] = useState(0);\n' +
+    '  const r = useRef(0);\n' +
+    '  return (\n' +
+    '    <View onTouchStart={() => { setA(Date.now()); setB(a); const t = b + 1; setC(t); r.current = c; setN(n + 1); }}>\n' +
+    '      <Text>{c}</Text>\n' +
+    '    </View>\n' +
+    '  );\n' +
+    '}';
+
+  it('records every value stored into an int slot', () => {
+    const stores = [];
+    lowerApp(app, resolveOptions({}), new Set(), stores);
+    expect(stores.map(store => store.slot)).toEqual([
+      'a',
+      'b',
+      'c',
+      's_ref_r',
+      'n',
+    ]);
+    expect(stores[0].value).toMatchObject({
+      kind: 'fixed',
+      expr: {kind: 'clock'},
+    });
+    expect(stores[2].value).toMatchObject({kind: 'local'});
+  });
+
+  it('follows a timestamp through every slot it reaches, through locals too', () => {
+    const stores = [];
+    lowerApp(app, resolveOptions({}), new Set(), stores);
+    expect([...inferWideSlots(stores, new Set())].sort()).toEqual([
+      'a',
+      'b',
+      'c',
+      's_ref_r',
+    ]);
+  });
+
+  it('compiles the widened slots as 64-bit', () => {
+    const {c} = compileSource(app);
+    for (const field of ['a', 'b', 'c']) {
+      expect(c).toContain(`    int64_t ${field};`);
+    }
+    expect(c).toContain('    int n;');
+    expect(c).toContain('static int64_t s_ref_r = 0;');
   });
 });

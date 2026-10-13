@@ -39,6 +39,17 @@ export interface IrSourceDivisor {
 }
 
 /**
+ * A value stored into an int slot, kept so the typing pass can tell whether the slot has to hold 64 bits.
+ */
+export interface IrSlotStore {
+  /** The slot's C name: a state's field, or a ref's variable. */
+  slot: string;
+  value: IrSource;
+  /** The value was typed with whole-number math in 64 bits. */
+  math64: boolean;
+}
+
+/**
  * An expression as the app wrote it: names resolved and constants folded, but not yet typed. The typing pass
  * decides how each operation is computed (whole numbers that saturate, 64-bit math beside a time, float math)
  * and gives every value its type.

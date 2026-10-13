@@ -54,7 +54,7 @@ const env = {
   refs: new Map(),
   math64: false,
   caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
-  found: new Set(),
+  stores: [],
 };
 
 /** The responder `pan` a component body declares with this config, given gesture id 1. */
