@@ -236,13 +236,13 @@ export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
  *
  * @returns The paints.
  */
-const paintsOf = (records: ArrayLike<number>): IrVectorPaint[] =>
-  Array.from({length: records.length / PAINT_STRIDE}, (_, paintIndex) => {
+function paintsOf(records: ArrayLike<number>): IrVectorPaint[] {
+  const values = Array.from(records);
+  return Array.from({length: values.length / PAINT_STRIDE}, (_, paintIndex) => {
     const start = paintIndex * PAINT_STRIDE;
-    return vectorPaintOf(
-      Array.from(records).slice(start, start + PAINT_STRIDE),
-    );
+    return vectorPaintOf(values.slice(start, start + PAINT_STRIDE));
   });
+}
 
 /**
  * Static numeric coercion for an SVG attribute value (mirrors svg-ops `num`).

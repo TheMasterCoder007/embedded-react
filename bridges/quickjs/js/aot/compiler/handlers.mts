@@ -94,6 +94,14 @@ export {APP_UPDATE_CALL};
 /** The constant 0, which a remainder by 0 or ±1 stores. */
 const ZERO: IrExpr = {kind: 'number', value: 0, cType: 'int'};
 
+/** Each updateVector shape key and the numbers its array takes, for errors. */
+const UPDATE_VECTOR_ARGS: Record<string, string> = {
+  arc: '[cx, cy, r, startAngle, endAngle]',
+  circle: '[cx, cy, r]',
+  rect: '[x, y, width, height] or [x, y, width, height, rx, ry]',
+  line: '[x1, y1, x2, y2]',
+};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -419,16 +427,25 @@ function imperativeShape(
     }
 
     const elements = (props[key] as t.ArrayExpression).elements;
+    const shapeHint = `${key}: ${UPDATE_VECTOR_ARGS[key]}.`;
     if (elements.length < required) {
       throw aotError(
         `AOT: updateVector "${key}" needs ${required} numbers (got ${elements.length})`,
-        key === 'rect'
-          ? 'rect: [x, y, width, height] or [x, y, width, height, rx, ry].'
-          : `${key}: [${{arc: 'cx, cy, r, startAngle, endAngle', circle: 'cx, cy, r', line: 'x1, y1, x2, y2'}[key]}].`,
+        shapeHint,
       );
     }
 
-    return elements.slice(0, count).map(valueNode => ({
+    // A hole (`[1, , 3]`) has no value to lower; an optional rect radius left out is just a shorter array.
+    const values = elements.slice(0, count);
+    const hole = values.findIndex(valueNode => valueNode == null);
+    if (hole >= 0) {
+      throw aotError(
+        `AOT: updateVector "${key}" has an empty slot at position ${hole}`,
+        shapeHint,
+      );
+    }
+
+    return values.map(valueNode => ({
       kind: 'float',
       value: lowerExpr(valueNode!, env),
     }));

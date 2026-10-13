@@ -47,8 +47,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   the animation during that wait calls the callback with `finished: false`, as React Native does. A callback on a
   spring or decay beside a longer delay is now an `AOT:` error, since a spring has no fixed length to wait against.
 
-- A Flow B `updateVector` shape with too few numbers (`arc: [10, 20]`) fails with an `AOT:` error naming the
-  count it needs. It used to write `undefined` into the generated C.
+- A Flow B `updateVector` shape with too few numbers (`arc: [10, 20]`) or an empty slot (`[1, , 3, 4, 5]`) fails
+  with an `AOT:` error. It used to write `undefined` into the generated C, or crash the compiler.
 
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent

@@ -391,4 +391,13 @@ describe('vector IR: updateVector', () => {
       lowerHandler('updateVector(art, [{rect: [1, 2, 3]}]);'),
     ).toThrow('AOT: updateVector "rect" needs 4 numbers (got 3)');
   });
+
+  it('rejects an empty slot, including in an optional rect radius', () => {
+    expect(() =>
+      lowerHandler('updateVector(art, [{arc: [1, , 3, 4, 5]}]);'),
+    ).toThrow('AOT: updateVector "arc" has an empty slot at position 1');
+    expect(() =>
+      lowerHandler('updateVector(art, [{rect: [1, 2, 3, 4, , 6]}]);'),
+    ).toThrow('AOT: updateVector "rect" has an empty slot at position 4');
+  });
 });
