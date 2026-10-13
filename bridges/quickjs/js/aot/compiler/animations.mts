@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {checkNumber} from './check.mts';
+import {check, checkNumber} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {
   evalStaticOrThrow,
@@ -429,11 +429,7 @@ export function parseInterp(
       'AOT: .interpolate() inputRange and outputRange must be the same length (>= 2)',
     );
   }
-  if (input.length > 8) {
-    throw aotError(
-      'AOT: .interpolate() supports up to 8 breakpoints (ER_INTERPOLATE_MAX_POINTS)',
-    );
-  }
+  check({kind: 'interpolationPoints', count: input.length});
 
   // Convert RN extrapolation strings to engine enum names, defaulting to extend like React Native.
   const ex = (node: t.Node | undefined): string => {

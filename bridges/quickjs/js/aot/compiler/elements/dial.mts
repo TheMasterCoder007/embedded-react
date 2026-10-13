@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {check} from '../check.mts';
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
@@ -314,11 +315,7 @@ export function emitDial(
       const stops = Array.isArray(gradient?.stops)
         ? gradient!.stops!.slice(0, 4)
         : [];
-      if (stops.length < 2) {
-        throw aotError(
-          'AOT: <Dial indicatorGradient> needs at least two stops (max 4)',
-        );
-      }
+      check({kind: 'dialGradientStops', count: stops.length});
       staticAssigns.push({
         field: 'gradient_type',
         expr:

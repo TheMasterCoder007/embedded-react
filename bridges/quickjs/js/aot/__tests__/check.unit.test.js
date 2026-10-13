@@ -17,7 +17,9 @@
 import {describe, it, expect} from 'vitest';
 import {
   attemptLowering,
+  check,
   checkNumber,
+  checkProblem,
   lowerWithChecks,
   numberProblem,
   runChecks,
@@ -35,7 +37,7 @@ const lower = source => lowerApp(source, opts, new Set(), new Set());
 /** An app whose component returns `jsx`. */
 const app = jsx =>
   "import React, {useState} from 'react';\n" +
-  "import {View, Svg, Circle} from 'embedded-react';\n" +
+  "import {View, Svg, Circle, Animated, useAnimatedValue} from 'embedded-react';\n" +
   `export function App() {\n  const [n, setN] = useState(0);\n  return ${jsx};\n}`;
 
 /** What a call throws. */
@@ -115,5 +117,74 @@ describe('check pass: numbers', () => {
       ),
     );
     expect(error.message).toMatch(/onTouchStart must be an inline function/);
+  });
+});
+
+describe('check pass: fixed caps', () => {
+  it('holds each count to the most the engine keeps', () => {
+    expect(checkProblem({kind: 'interpolationPoints', count: 8})).toBeNull();
+    expect(checkProblem({kind: 'interpolationPoints', count: 9}).message).toBe(
+      'AOT: .interpolate() supports up to 8 breakpoints (ER_INTERPOLATE_MAX_POINTS)',
+    );
+    expect(checkProblem({kind: 'textSpans', count: 4, max: 4})).toBeNull();
+    expect(checkProblem({kind: 'textSpans', count: 5, max: 4})).toMatchObject({
+      message:
+        'AOT: a <Text> has 5 inline segments but the engine renders at most 4',
+      aotHint: expect.stringContaining('ER_AOT_MAX_TEXT_SPANS'),
+    });
+    for (const count of [2, 8]) {
+      expect(
+        checkProblem({kind: 'gradientStops', attribute: 'fillGrad', count}),
+      ).toBeNull();
+    }
+    for (const count of [1, 9]) {
+      expect(
+        checkProblem({kind: 'gradientStops', attribute: 'fillGrad', count})
+          .message,
+      ).toBe(`AOT: "fillGrad.stops" needs 2..8 entries (got ${count})`);
+    }
+    expect(checkProblem({kind: 'dialGradientStops', count: 2})).toBeNull();
+    expect(checkProblem({kind: 'dialGradientStops', count: 1}).message).toBe(
+      'AOT: <Dial indicatorGradient> needs at least two stops (max 4)',
+    );
+  });
+
+  it('records a cap with the rest of the checks during a compile', () => {
+    const {checks} = lowerWithChecks(() =>
+      check({kind: 'interpolationPoints', count: 9}),
+    );
+    expect(checks).toEqual([
+      {kind: 'interpolationPoints', count: 9, loc: undefined},
+    ]);
+  });
+
+  it('reports a gradient with too many stops ahead of the stops lowering cannot read', () => {
+    const error = thrown(() =>
+      lower(
+        app(
+          '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} ' +
+            'fillGrad={{type: 1, stops: [1, 2, 3, 4, 5, 6, 7, 8, 9]}} /></Svg>',
+        ),
+      ),
+    );
+    expect(error.message).toBe(
+      'AOT: "fillGrad.stops" needs 2..8 entries (got 9)',
+    );
+    expect(error.aotLoc).toMatchObject({line: 5, column: 9});
+  });
+
+  it("reports an earlier element's error ahead of a later cap", () => {
+    const points = '[0, 1, 2, 3, 4, 5, 6, 7, 8]';
+    /** An app with an over-long interpolation after `before`. */
+    const capApp = before =>
+      "import React from 'react';\n" +
+      "import {View, Animated, useAnimatedValue} from 'embedded-react';\n" +
+      'export function App() {\n  const a = useAnimatedValue(0);\n' +
+      `  return <View>${before}<Animated.View style={{opacity: a.interpolate(` +
+      `{inputRange: ${points}, outputRange: ${points}})}} /></View>;\n}`;
+    expect(() => lower(capApp(''))).toThrow(/up to 8 breakpoints/);
+    expect(() => lower(capApp('<View onTouchStart={5} />'))).toThrow(
+      /onTouchStart must be an inline function/,
+    );
   });
 });

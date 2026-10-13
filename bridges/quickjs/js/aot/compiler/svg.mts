@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {checkNumber, numberProblem} from './check.mts';
+import {check, checkNumber, numberProblem} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
 import {
   flattenSvg,
@@ -26,7 +26,6 @@ import {
   parsePath,
   KAPPA,
   PAINT_STRIDE,
-  GRAD_MAX_STOPS,
   scaleVectorArtifact,
 } from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
@@ -435,14 +434,11 @@ function lowerGradient(
     throw new Error(`AOT: "${attrName}.stops" must be an array literal`);
   }
 
-  if (
-    stopsNode.elements.length < 2 ||
-    stopsNode.elements.length > GRAD_MAX_STOPS
-  ) {
-    throw new Error(
-      `AOT: "${attrName}.stops" needs 2..${GRAD_MAX_STOPS} entries (got ${stopsNode.elements.length})`,
-    );
-  }
+  check({
+    kind: 'gradientStops',
+    attribute: attrName,
+    count: stopsNode.elements.length,
+  });
 
   // Lower each stop: a static color folds to its ARGB, a state-driven one to the color state chooses.
   const stops = stopsNode.elements.map(stopNode => {

@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {check} from './check.mts';
 import {
   lowerStyle,
   isStyleKey,
@@ -795,15 +796,12 @@ export function collectTextSpans(
     }
   }
 
-  // The engine renders at most ER_TEXT_MAX_SPANS segments; refuse to silently drop the rest.
-  if (spans.length > env.caps.maxTextSpans) {
-    throw aotError(
-      `AOT: a <Text> has ${spans.length} inline segments but the engine renders at most ${env.caps.maxTextSpans}`,
-      `combine adjacent plain-text segments, or end the sentence right after a styled ` +
-        `<Text> (e.g. "A <b>B</b> C <b>D</b>" is 4). If your engine build raised ` +
-        `ER_TEXT_MAX_SPANS, set ER_AOT_MAX_TEXT_SPANS to match when running the AOT.`,
-    );
-  }
+  // The engine renders at most ER_TEXT_MAX_SPANS segments; the check pass refuses to silently drop the rest.
+  check({
+    kind: 'textSpans',
+    count: spans.length,
+    max: env.caps.maxTextSpans,
+  });
 
   return spans;
 }
