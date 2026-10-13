@@ -57,7 +57,7 @@ export function emitTextInput(
   out: Out,
   env: Env,
   state: StateTable,
-): string {
+): IrNode {
   // get node id
   const nodeId = `n${out.allocateNodeId()}`;
 
@@ -154,6 +154,7 @@ export function emitTextInput(
     text: valueNode ? lowerText(valueNode, env, scope) : null,
     image: null,
     spans: null,
+    children: [],
     wiring: [],
   };
 
@@ -190,5 +191,5 @@ export function emitTextInput(
 
   emitIrNode(node, out);
 
-  return nodeId;
+  return node;
 }

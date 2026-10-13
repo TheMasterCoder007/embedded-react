@@ -70,7 +70,7 @@ export function emitModal(
   out: Out,
   env: Env,
   state: StateTable,
-): string {
+): IrNode {
   // get node id
   const nodeId = `n${out.allocateNodeId()}`;
 
@@ -160,13 +160,22 @@ export function emitModal(
     text: null,
     image: null,
     spans: null,
+    children: [],
     wiring: lowerRefBinds(element.openingElement, env).map(slot => ({
       kind: 'ref',
       slot,
     })),
   };
   emitIrNode(node, out);
-  emitChildren(element.children, nodeId, scope, out, env, state); // the modal's content (shown/hidden with the modal)
+  // The modal's content, shown and hidden with the modal.
+  node.children = emitChildren(
+    element.children,
+    nodeId,
+    scope,
+    out,
+    env,
+    state,
+  );
 
-  return nodeId;
+  return node;
 }

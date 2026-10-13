@@ -21,7 +21,7 @@
 import {cstr, floatLit} from '../c-syntax.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {printText} from './text.mts';
-import type {IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
+import type {IrElement, IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {AnimBind} from '../style-text.mts';
 import type {NodeUpdate} from '../out.mts';
 import type {PanResponderRecord} from '../types.mts';
@@ -259,3 +259,14 @@ export function printNode(node: IrNode): PrintedNode {
 
   return {build, update};
 }
+
+/**
+ * Appends a built element to its container.
+ *
+ * @param parentId  The container's variable.
+ * @param child  The element.
+ *
+ * @returns The C line.
+ */
+export const printAppend = (parentId: string, child: IrElement): string =>
+  `    er_tree_append_child(${parentId}, ${child.id});`;

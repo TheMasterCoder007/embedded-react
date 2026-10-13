@@ -24,6 +24,7 @@ import {attrExpr} from '../style-text.mts';
 import {emitNode} from '../nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
+import type {IrElement} from '../ir/nodes.mts';
 import type {EmitOptions, Env, Scope, StateTable} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -52,7 +53,7 @@ export function emitFlatList(
   env: Env,
   state: StateTable,
   opts?: EmitOptions,
-): string {
+): IrElement {
   // Collect the supported <FlatList> props, rejecting anything the AOT rewrite cannot statically lower.
   let dataNode: t.Node | null = null;
   let renderItem: t.Node | null = null;

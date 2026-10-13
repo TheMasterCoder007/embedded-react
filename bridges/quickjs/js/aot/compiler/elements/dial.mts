@@ -148,7 +148,7 @@ export function emitDial(
   out: Out,
   env: Env,
   state: StateTable,
-): string {
+): IrNode {
   // get node id
   const nodeID = `n${out.allocateNodeId()}`;
 
@@ -382,6 +382,7 @@ export function emitDial(
         ? {kind: 'static', name: knobImage, resetOnUpdate: true}
         : null,
     spans: null,
+    children: [],
     wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),
   };
 
@@ -429,6 +430,13 @@ export function emitDial(
   }
 
   emitIrNode(node, out);
-  emitChildren(element.children, nodeID, scope, out, env, state);
-  return nodeID;
+  node.children = emitChildren(
+    element.children,
+    nodeID,
+    scope,
+    out,
+    env,
+    state,
+  );
+  return node;
 }

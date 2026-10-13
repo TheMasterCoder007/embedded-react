@@ -242,7 +242,7 @@ export function compileSourceImpl(
   // Emit the scene graph from the root JSX; `out` collects every generated fragment.
   const out = new Out(components, ast.program);
   compileKeyboardConfig(ast.program, out); // module-level setKeyboardConfig({...}) → static ERKeyboardConfig
-  const rootNodeId = emitNode(rootJSX, scope, out, env, state);
+  const rootNodeId = emitNode(rootJSX, scope, out, env, state).id;
 
   // Emit registered only the images it reached; a dynamic source can't be enumerated, so bake every import.
   if (out.bakeAllImages) {

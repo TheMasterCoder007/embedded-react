@@ -32,14 +32,24 @@ const scalar = (name, cType, isBool = false) => ({
   cMember: `s_state.${name}`,
 });
 
-const slots = [scalar('n', 'int'), scalar('on', 'int', true)];
+/** A list state of up to 3 items with one int field. */
+const items = {
+  kind: 'list',
+  name: 'items',
+  struct: {fields: [{key: 'w', cType: 'int'}]},
+  cap: 3,
+  arrayName: 's_items',
+  countMember: 's_items_count',
+};
+
+const slots = [scalar('n', 'int'), scalar('on', 'int', true), items];
 const state = {
   byName: new Map(slots.map(slot => [slot.name, slot])),
   bySetter: new Map([['setN', slots[0]]]),
 };
 
-/** Emits one JSX element over the state above, returning what it added to the output. */
-function emit(jsx, refs = new Map()) {
+/** Emits one JSX element over the state above, returning what it lowered to and what it added to the output. */
+function emit(jsx, refs = new Map(), components = new Map(), program = null) {
   const expr = parse(`(${jsx})`, {
     sourceType: 'module',
     plugins: ['jsx'],
@@ -54,9 +64,9 @@ function emit(jsx, refs = new Map()) {
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     found: new Set(),
   };
-  const out = new Out(new Map(), null);
-  const nodeId = emitNode(expr, {}, out, env, state);
-  return {nodeId, out};
+  const out = new Out(components, program);
+  const element = emitNode(expr, {}, out, env, state);
+  return {nodeId: element.id, element, out};
 }
 
 /** A state-driven prop of the update entry for `nodeId`, by field. */
@@ -220,5 +230,85 @@ describe('node IR: typed elements', () => {
       '    s_ref_box = n0;',
     ]);
     expect(refs.get('box').used).toBe(true);
+  });
+});
+
+describe('node IR: children and control flow', () => {
+  it('records state-driven conditionals with the test their branches are shown by', () => {
+    const {element} = emit(
+      '<View>{on && <Text>a</Text>}{on ? <View /> : <Text>b</Text>}</View>',
+    );
+    const [andChild, ternary] = element.node.children;
+    expect(andChild).toMatchObject({
+      kind: 'conditional',
+      test: {kind: 'state'},
+      whenTrue: {kind: 'node', id: 'n1'},
+      whenFalse: null,
+    });
+    expect(ternary).toMatchObject({
+      kind: 'conditional',
+      whenTrue: {kind: 'node', id: 'n2'},
+      whenFalse: {kind: 'node', id: 'n3'},
+    });
+
+    // The else branch's display is the conditional's own test, negated.
+    const display = ternary.whenFalse.node.stateProps.find(
+      prop => prop.field === 'display',
+    ).value;
+    expect(display.show).toMatchObject({negate: true});
+    expect(display.show.test).toBe(ternary.test);
+  });
+
+  it('folds conditions known at build time to plain elements', () => {
+    const {element, out} = emit(
+      '<View>{false && <Text>a</Text>}{true ? <View /> : <Text>b</Text>}</View>',
+    );
+    expect(element.node.children).toEqual([
+      {kind: 'element', element: expect.objectContaining({id: 'n1'})},
+    ]);
+    expect(out.build).toContain('    er_tree_append_child(n0, n1);');
+  });
+
+  it('builds a .map over list state as a pool of rows', () => {
+    const {element} = emit(
+      '<View>{items.map(item => <View style={{width: item.w}} />)}</View>',
+    );
+    const [pool] = element.node.children;
+    expect(pool.kind).toBe('pool');
+    expect(pool.list).toBe(items);
+    expect(pool.rows.map(row => row.id)).toEqual(['n1', 'n2', 'n3']);
+    expect(
+      pool.rows[2].node.stateProps.find(prop => prop.field === 'display').value
+        .show,
+    ).toEqual({kind: 'rowInUse', row: 2, list: items});
+  });
+
+  it('unrolls a .map over a constant array into plain elements', () => {
+    const {element} = emit('<View>{[1, 2].map(x => <Text>{x}</Text>)}</View>');
+    expect(element.node.children.map(child => child.kind)).toEqual([
+      'element',
+      'element',
+    ]);
+  });
+
+  it('wraps a component instance around the element its body returns', () => {
+    const {program} = parse(
+      'function Card({title}) { return <View><Text>{title}</Text></View>; }',
+      {sourceType: 'module', plugins: ['jsx']},
+    );
+    const {element} = emit(
+      '<View><Card title="hi" /></View>',
+      new Map(),
+      new Map([['Card', program.body[0]]]),
+      program,
+    );
+    const [child] = element.node.children;
+    expect(child.element).toMatchObject({
+      kind: 'component',
+      name: 'Card',
+      prefix: 'c0_',
+      id: 'n1',
+      root: {kind: 'node', id: 'n1', node: {type: 'ER_NODE_VIEW'}},
+    });
   });
 });

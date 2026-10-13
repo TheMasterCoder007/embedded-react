@@ -37,8 +37,10 @@ import {attrExpr} from './style-text.mts';
 import {compileEffect} from './handlers.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
+import {printAppend} from './c/nodes.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
+import type {IrChild, IrElement} from './ir/nodes.mts';
 import type {
   ChildrenRef,
   ChildrenSlot,
@@ -277,7 +279,7 @@ function isChildrenRef(expr: t.Node, env: Env): boolean {
  * @param state  The caller's state table.
  * @param opts  How the instance is placed.
  *
- * @returns The variable of the node the component's JSX lowered to.
+ * @returns The instance, wrapping the element the component's JSX lowered to.
  */
 export function emitComponent(
   element: t.JSXElement,
@@ -286,7 +288,7 @@ export function emitComponent(
   env: Env,
   state: StateTable,
   opts?: EmitOptions,
-): string {
+): IrElement {
   // Look up the component and keep the call-site children that render something.
   const componentName = (element.openingElement.name as t.JSXIdentifier).name;
   const fn = out.components.get(componentName)!;
@@ -449,7 +451,7 @@ export function emitComponent(
   }
 
   // Emit the JSX the component returns, in the child's own scope.
-  return emitNode(
+  const root = emitNode(
     componentReturnJSX(fn, childScope),
     childScope,
     out,
@@ -457,6 +459,7 @@ export function emitComponent(
     childState,
     opts,
   );
+  return {kind: 'component', id: root.id, name: componentName, prefix, root};
 }
 
 /**
@@ -469,6 +472,8 @@ export function emitComponent(
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param opts  How the child is placed.
+ *
+ * @returns The child.
  */
 function emitElementInto(
   node: t.Node,
@@ -478,13 +483,14 @@ function emitElementInto(
   env: Env,
   state: StateTable,
   opts?: EmitOptions,
-): void {
+): IrElement {
   if (node.type !== 'JSXElement') {
     throw new Error(`AOT: expected a JSX element here, got ${node.type}`);
   }
 
-  const childNodeId = emitNode(node, scope, out, env, state, opts);
-  out.build.push(`    er_tree_append_child(${parentVar}, ${childNodeId});`);
+  const child = emitNode(node, scope, out, env, state, opts);
+  out.build.push(printAppend(parentVar, child));
+  return child;
 }
 
 /**
@@ -496,6 +502,8 @@ function emitElementInto(
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  * @param state  The component's state table.
+ *
+ * @returns The rows.
  */
 function emitMap(
   call: t.CallExpression,
@@ -504,7 +512,7 @@ function emitMap(
   out: Out,
   env: Env,
   state: StateTable,
-): void {
+): IrElement[] {
   // The array must fold at compile time and the callback must be inline.
   let items;
   try {
@@ -529,7 +537,7 @@ function emitMap(
   const rowJSX = componentReturnJSX(mapFn);
 
   // Emit one row per element, with its item and index bound as compile-time constants.
-  items.forEach((item, index) => {
+  return items.map((item, index) => {
     const rowScope: Scope = {...scope};
     if (itemName) {
       rowScope[itemName] = item;
@@ -537,7 +545,7 @@ function emitMap(
     if (indexName) {
       rowScope[indexName] = index;
     }
-    emitElementInto(
+    return emitElementInto(
       rowJSX,
       parentVar,
       rowScope,
@@ -614,6 +622,8 @@ function rowEnv(
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  * @param state  The component's state table.
+ *
+ * @returns The pool.
  */
 function emitDynamicMap(
   call: t.CallExpression,
@@ -623,7 +633,7 @@ function emitDynamicMap(
   out: Out,
   env: Env,
   state: StateTable,
-): void {
+): IrChild {
   const mapFn = call.arguments[0];
   if (!isFn(mapFn)) {
     throw new Error('AOT: .map argument must be an inline function');
@@ -634,6 +644,7 @@ function emitDynamicMap(
   const rowJSX = componentReturnJSX(mapFn);
 
   // Build every row of the pool; each row's display is tied to the list's current count.
+  const rows: IrElement[] = [];
   for (let rowIndex = 0; rowIndex < listState.cap; rowIndex++) {
     // The item is a runtime struct slot, so drop any same-named const from the row scope, as emitComponent does.
     const rowScope: Scope = {...scope};
@@ -658,16 +669,20 @@ function emitDynamicMap(
       } as Local);
     }
 
-    emitElementInto(
-      rowJSX,
-      parentVar,
-      rowScope,
-      out,
-      rowEnv(env, [itemName, indexName], rowScope, rowLocals),
-      state,
-      {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
+    rows.push(
+      emitElementInto(
+        rowJSX,
+        parentVar,
+        rowScope,
+        out,
+        rowEnv(env, [itemName, indexName], rowScope, rowLocals),
+        state,
+        {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
+      ),
     );
   }
+
+  return {kind: 'pool', list: listState, rows};
 }
 
 /**
@@ -682,6 +697,8 @@ function emitDynamicMap(
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  * @param state  The component's state table.
+ *
+ * @returns The container's children.
  */
 export function emitChildren(
   children: t.JSXElement['children'],
@@ -690,24 +707,29 @@ export function emitChildren(
   out: Out,
   env: Env,
   state: StateTable,
-): void {
+): IrChild[] {
+  const lowered: IrChild[] = [];
+  const element = (built: IrElement) =>
+    lowered.push({kind: 'element', element: built});
   for (const child of children) {
     // An element child is emitted as it is; an {expression} child is lowered by its shape below.
     if (child.type === 'JSXElement') {
-      emitElementInto(child, parentVar, scope, out, env, state);
+      element(emitElementInto(child, parentVar, scope, out, env, state));
     } else if (child.type === 'JSXExpressionContainer') {
       const expr = child.expression;
       if (expr.type === 'JSXEmptyExpression') continue;
 
       if (isChildrenRef(expr, env)) {
         // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
-        emitChildren(
-          env.children!.nodes,
-          parentVar,
-          env.children!.scope,
-          out,
-          env.children!.env,
-          state,
+        lowered.push(
+          ...emitChildren(
+            env.children!.nodes,
+            parentVar,
+            env.children!.scope,
+            out,
+            env.children!.env,
+            state,
+          ),
         );
         continue;
       }
@@ -718,12 +740,25 @@ export function emitChildren(
         try {
           condValue = evalStatic(expr.left, scope);
           if (condValue) {
-            emitElementInto(expr.right, parentVar, scope, out, env, state);
+            element(
+              emitElementInto(expr.right, parentVar, scope, out, env, state),
+            );
           }
         } catch {
           const test = lowerExpr(expr.left, env);
-          emitElementInto(expr.right, parentVar, scope, out, env, state, {
-            show: {kind: 'condition', test, negate: false},
+          lowered.push({
+            kind: 'conditional',
+            test,
+            whenTrue: emitElementInto(
+              expr.right,
+              parentVar,
+              scope,
+              out,
+              env,
+              state,
+              {show: {kind: 'condition', test, negate: false}},
+            ),
+            whenFalse: null,
           });
         }
       } else if (
@@ -735,34 +770,43 @@ export function emitChildren(
         let testValue;
         try {
           testValue = evalStatic(expr.test, scope);
-          emitElementInto(
-            testValue ? expr.consequent : expr.alternate,
-            parentVar,
-            scope,
-            out,
-            env,
-            state,
-          );
-        } catch {
-          const test = lowerExpr(expr.test, env);
-
-          if (expr.consequent.type === 'JSXElement') {
+          element(
             emitElementInto(
-              expr.consequent,
+              testValue ? expr.consequent : expr.alternate,
               parentVar,
               scope,
               out,
               env,
               state,
-              {show: {kind: 'condition', test, negate: false}},
-            );
-          }
-
-          if (expr.alternate.type === 'JSXElement') {
-            emitElementInto(expr.alternate, parentVar, scope, out, env, state, {
-              show: {kind: 'condition', test, negate: true},
-            });
-          }
+            ),
+          );
+        } catch {
+          const test = lowerExpr(expr.test, env);
+          const whenTrue =
+            expr.consequent.type === 'JSXElement'
+              ? emitElementInto(
+                  expr.consequent,
+                  parentVar,
+                  scope,
+                  out,
+                  env,
+                  state,
+                  {show: {kind: 'condition', test, negate: false}},
+                )
+              : null;
+          const whenFalse =
+            expr.alternate.type === 'JSXElement'
+              ? emitElementInto(
+                  expr.alternate,
+                  parentVar,
+                  scope,
+                  out,
+                  env,
+                  state,
+                  {show: {kind: 'condition', test, negate: true}},
+                )
+              : null;
+          lowered.push({kind: 'conditional', test, whenTrue, whenFalse});
         }
       } else if (
         expr.type === 'CallExpression' &&
@@ -776,9 +820,19 @@ export function emitChildren(
             ? env.state.get(mapTarget.name)
             : null;
         if (stateRecord?.kind === 'list') {
-          emitDynamicMap(expr, stateRecord, parentVar, scope, out, env, state);
+          lowered.push(
+            emitDynamicMap(
+              expr,
+              stateRecord,
+              parentVar,
+              scope,
+              out,
+              env,
+              state,
+            ),
+          );
         } else {
-          emitMap(expr, parentVar, scope, out, env, state);
+          emitMap(expr, parentVar, scope, out, env, state).forEach(element);
         }
       } else {
         // A constant that renders nothing (false/null/'') is fine; anything else is unsupported.
@@ -812,4 +866,6 @@ export function emitChildren(
       }
     }
   }
+
+  return lowered;
 }

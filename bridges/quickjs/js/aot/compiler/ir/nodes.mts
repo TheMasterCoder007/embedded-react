@@ -111,4 +111,38 @@ export interface IrNode {
   /** A <Text> with nested <Text> children draws these inline spans instead of a body. */
   spans: TextSpan[] | null;
   wiring: IrWire[];
+  /** The node's children, appended after it is built; none for a <Text>, whose children are its text. */
+  children: IrChild[];
 }
+
+/**
+ * What a JSX element lowered to: an engine node (null for one that does not lower to the IR yet, an <Svg>), or a
+ * function component inlined in place, wrapping the element its body returns.
+ */
+export type IrElement =
+  | {kind: 'node'; id: string; node: IrNode | null}
+  | {
+      kind: 'component';
+      /** The variable of the node its body lowered to. */
+      id: string;
+      name: string;
+      /** Namespaces the instance's own state, refs and animated values (`c<n>_`). */
+      prefix: string;
+      root: IrElement;
+    };
+
+/**
+ * One entry of a container's children. Everything is built at boot, so the node count never changes: a condition
+ * or a `.map` that folds at build time is plain elements, and a state-driven one is built in full and toggled.
+ */
+export type IrChild =
+  | {kind: 'element'; element: IrElement}
+  /** `cond && <X/>` or `cond ? <A/> : <B/>` on state: each branch is built and shown only while it is chosen. */
+  | {
+      kind: 'conditional';
+      test: IrExpr;
+      whenTrue: IrElement | null;
+      whenFalse: IrElement | null;
+    }
+  /** `items.map(…)` over list state: a fixed pool of rows, row i shown while the list holds more than i items. */
+  | {kind: 'pool'; list: ListState; rows: IrElement[]};

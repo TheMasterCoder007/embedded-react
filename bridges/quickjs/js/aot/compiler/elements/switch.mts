@@ -55,7 +55,7 @@ export function emitSwitch(
   out: Out,
   env: Env,
   state: StateTable,
-): string {
+): IrNode {
   // get node id
   const nodeId = `n${out.allocateNodeId()}`;
 
@@ -155,6 +155,7 @@ export function emitSwitch(
     text: null,
     image: null,
     spans: null,
+    children: [],
     wiring: [],
   };
 
@@ -203,5 +204,5 @@ export function emitSwitch(
 
   emitIrNode(node, out);
 
-  return nodeId;
+  return node;
 }

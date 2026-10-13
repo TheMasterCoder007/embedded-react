@@ -69,7 +69,7 @@ export function emitActivityIndicator(
   scope: Scope,
   out: Out,
   env: Env,
-): string {
+): IrNode {
   // get node id
   const nodeId = `n${out.allocateNodeId()}`;
 
@@ -162,6 +162,7 @@ export function emitActivityIndicator(
     text: null,
     image: null,
     spans: null,
+    children: [],
     wiring: lowerRefBinds(element.openingElement, env).map(slot => ({
       kind: 'ref',
       slot,
@@ -169,5 +170,5 @@ export function emitActivityIndicator(
   };
   emitIrNode(node, out);
 
-  return nodeId;
+  return node;
 }

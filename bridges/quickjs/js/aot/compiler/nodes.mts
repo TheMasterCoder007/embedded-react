@@ -47,7 +47,7 @@ import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {AnimBind} from './style-text.mts';
-import type {IrNode, IrWire} from './ir/nodes.mts';
+import type {IrElement, IrNode, IrWire} from './ir/nodes.mts';
 import type {
   DynAssign,
   EmitOptions,
@@ -353,7 +353,7 @@ function touchablePressFades(
  * @param state  The component's state table.
  * @param opts  How the element is placed.
  *
- * @returns The node's variable.
+ * @returns What the element lowered to.
  */
 function emitNodeImpl(
   element: t.JSXElement,
@@ -362,20 +362,35 @@ function emitNodeImpl(
   env: Env,
   state: StateTable,
   opts: EmitOptions = {},
-): string {
+): IrElement {
   // Drop props that fold to undefined, then hand each typed element to its own emitter.
   element = omitUndefinedAttrs(element, scope, env);
   const tag = resolveTag(element.openingElement);
-  if (tag === 'Svg') return emitSvg(element, scope, out, env, state, opts);
-  if (tag === 'Switch') return emitSwitch(element, scope, out, env, state);
-  if (tag === 'Dial') return emitDial(element, scope, out, env, state);
+  const typed = (node: IrNode): IrElement => ({
+    kind: 'node',
+    id: node.id,
+    node,
+  });
+  if (tag === 'Svg') {
+    return {
+      kind: 'node',
+      id: emitSvg(element, scope, out, env, state, opts),
+      node: null,
+    };
+  }
+  if (tag === 'Switch') {
+    return typed(emitSwitch(element, scope, out, env, state));
+  }
+  if (tag === 'Dial') return typed(emitDial(element, scope, out, env, state));
   if (tag === 'TextInput') {
-    return emitTextInput(element, scope, out, env, state);
+    return typed(emitTextInput(element, scope, out, env, state));
   }
   if (tag === 'ActivityIndicator') {
-    return emitActivityIndicator(element, scope, out, env);
+    return typed(emitActivityIndicator(element, scope, out, env));
   }
-  if (tag === 'Modal') return emitModal(element, scope, out, env, state);
+  if (tag === 'Modal') {
+    return typed(emitModal(element, scope, out, env, state));
+  }
   if (tag === 'FlatList') {
     return emitFlatList(element, scope, out, env, state, opts);
   }
@@ -572,6 +587,7 @@ function emitNodeImpl(
           : null,
     spans,
     wiring,
+    children: [],
   };
 
   // Compile each event prop into a handler; a disabled <TouchableOpacity> drops its press events.
@@ -670,10 +686,17 @@ function emitNodeImpl(
 
   // A <Text>'s children are its text, already consumed above.
   if (tag !== 'Text') {
-    emitChildren(element.children, nodeId, scope, out, env, state);
+    node.children = emitChildren(
+      element.children,
+      nodeId,
+      scope,
+      out,
+      env,
+      state,
+    );
   }
 
-  return nodeId;
+  return {kind: 'node', id: nodeId, node};
 }
 
 /**
