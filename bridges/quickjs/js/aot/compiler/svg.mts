@@ -396,19 +396,22 @@ function lowerGradient(
     ] = property.value;
   }
 
-  // A numeric field: a number when it folds to one a float holds, otherwise the state-driven value.
+  // A numeric field: a number when it folds to one (which the check pass checks), otherwise the state-driven value.
   const floatField = (
     valueNode: t.Node | undefined,
     fallback: number,
   ): IrTapeValue => {
     if (valueNode == null) return tapeNumber(fallback);
+    let value: unknown;
     try {
-      const value = evalStatic(valueNode, scope);
-      if (!numberProblem(value)) {
-        return tapeNumber(Number(value));
-      }
+      value = evalStatic(valueNode, scope);
     } catch {
-      // Not static: the state-driven value below.
+      return {kind: 'float', value: lowerExpr(valueNode, env)};
+    }
+
+    if (typeof value === 'number' || !numberProblem(value)) {
+      checkNumber(value);
+      return tapeNumber(Number(value));
     }
     return {kind: 'float', value: lowerExpr(valueNode, env)};
   };

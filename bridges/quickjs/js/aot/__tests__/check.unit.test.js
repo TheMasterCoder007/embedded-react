@@ -120,6 +120,30 @@ describe('check pass: numbers', () => {
   });
 });
 
+describe('check pass: state-driven drawings', () => {
+  it('refuses a gradient number that folds to NaN or Infinity, at its <Svg>', () => {
+    /** A state-driven circle whose radial gradient's center x is `ax`. */
+    const gradientApp = ax =>
+      app(
+        '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fillGrad={{type: 2, ' +
+          `ax: ${ax}, ay: 5, r: 3, stops: [{offset: 0, color: '#f00'}, {offset: 1, color: '#00f'}]}} /></Svg>`,
+      );
+    expect(lower(gradientApp('2.5')).checks).toContainEqual(
+      expect.objectContaining({kind: 'number', value: 2.5}),
+    );
+    for (const [ax, folded] of [
+      ['0 / 0', 'NaN'],
+      ['1 / 0', 'Infinity'],
+    ]) {
+      const error = thrown(() => lower(gradientApp(ax)));
+      expect(error.message).toBe(
+        `AOT: a numeric constant folded to ${folded}, which has no C form`,
+      );
+      expect(error.aotLoc).toMatchObject({line: 5, column: 9});
+    }
+  });
+});
+
 describe('check pass: fixed caps', () => {
   it('holds each count to the most the engine keeps', () => {
     expect(checkProblem({kind: 'interpolationPoints', count: 8})).toBeNull();

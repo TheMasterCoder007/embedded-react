@@ -53,6 +53,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A Flow B list state item holding `NaN` or `Infinity` (`useState([{v: 0 / 0}])`) fails with an `AOT:` error.
   It used to start at 0, or write `Infinity` into the generated C. A field an item leaves out still starts at 0.
 
+- A Flow B gradient on a state-driven `<Svg>` shape with a number that folds to `NaN` or `Infinity`
+  (`fillGrad={{type: 2, ax: 0 / 0, …}}`) fails with an `AOT:` error. It used to compute it at runtime.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.
