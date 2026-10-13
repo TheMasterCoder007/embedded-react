@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {check, checkNumber, numberProblem} from './check.mts';
+import {check, checkNumber} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
 import {
   flattenSvg,
@@ -409,11 +409,8 @@ function lowerGradient(
       return {kind: 'float', value: lowerExpr(valueNode, env)};
     }
 
-    if (typeof value === 'number' || !numberProblem(value)) {
-      checkNumber(value);
-      return tapeNumber(Number(value));
-    }
-    return {kind: 'float', value: lowerExpr(valueNode, env)};
+    checkNumber(value);
+    return tapeNumber(Number(value));
   };
 
   // The type and the stop count decide the table's shape, so both must be static.

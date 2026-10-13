@@ -121,7 +121,7 @@ describe('check pass: numbers', () => {
 });
 
 describe('check pass: state-driven drawings', () => {
-  it('refuses a gradient number that folds to NaN or Infinity, at its <Svg>', () => {
+  it('refuses a gradient value that folds to NaN, Infinity or a non-number, at its <Svg>', () => {
     /** A state-driven circle whose radial gradient's center x is `ax`. */
     const gradientApp = ax =>
       app(
@@ -134,6 +134,7 @@ describe('check pass: state-driven drawings', () => {
     for (const [ax, folded] of [
       ['0 / 0', 'NaN'],
       ['1 / 0', 'Infinity'],
+      ["'oops'", 'oops'],
     ]) {
       const error = thrown(() => lower(gradientApp(ax)));
       expect(error.message).toBe(
