@@ -56,7 +56,7 @@ describe('expressions lower to the IR', () => {
       kind: 'helper',
       helper: 'add',
       bits: 32,
-      cType: 'int',
+      type: {kind: 'int'},
     });
     expect(printExpr(expr)).toBe('app_add(s_state.count, 1)');
   });
@@ -67,8 +67,7 @@ describe('expressions lower to the IR', () => {
       kind: 'helper',
       helper: 'sub',
       bits: 64,
-      cType: 'i64',
-      wide: false,
+      type: {kind: 'int64', source: 'time'},
     });
     expect(expr.args[0]).toMatchObject({kind: 'clock', clock: 'Date'});
     expect(printExpr(expr)).toBe('app_sub64(app_date_now(), s_state.start)');
@@ -76,26 +75,26 @@ describe('expressions lower to the IR', () => {
 
   it('narrows a timestamp remainder by a small constant to an int', () => {
     const expr = lower('ms % 1000', envWith(scalar('ms', 'i64')));
-    expect(expr).toMatchObject({kind: 'narrowRemainder', cType: 'int'});
+    expect(expr).toMatchObject({kind: 'narrowRemainder', type: {kind: 'int'}});
     expect(printExpr(expr)).toBe('((int)(s_state.ms % 1000))');
   });
 
   it('divides in floats, as JS does', () => {
     const expr = lower('count / 2', envWith(scalar('count', 'int')));
-    expect(expr).toMatchObject({kind: 'floatDivide', cType: 'float'});
+    expect(expr).toMatchObject({kind: 'floatDivide', type: {kind: 'float'}});
     expect(printExpr(expr)).toBe('((float)(s_state.count) / (float)(2))');
   });
 
   it('rounds a float through the float function and back to an int', () => {
     const expr = lower('Math.floor(level)', envWith(scalar('level', 'float')));
-    expect(expr).toMatchObject({kind: 'toInt', cType: 'int'});
+    expect(expr).toMatchObject({kind: 'toInt', type: {kind: 'int'}});
     expect(expr.operand).toMatchObject({kind: 'floatMath', fn: 'floor'});
     expect(printExpr(expr)).toBe('app_f2i(floorf((float)(s_state.level)))');
   });
 
   it('leaves an int as it is under Math.round', () => {
     const expr = lower('Math.round(count)', envWith(scalar('count', 'int')));
-    expect(expr).toMatchObject({kind: 'wholeRound', cType: 'int'});
+    expect(expr).toMatchObject({kind: 'wholeRound', type: {kind: 'int'}});
     expect(printExpr(expr)).toBe('s_state.count');
   });
 
@@ -104,19 +103,27 @@ describe('expressions lower to the IR', () => {
     expect(expr).toMatchObject({
       kind: 'stringEquals',
       op: '==',
-      isBool: true,
+      type: {kind: 'bool'},
     });
     expect(printExpr(expr)).toBe('(strcmp(s_state.mode, "on") == 0)');
   });
 
   it('folds `flag === 1` to false, since a boolean never equals a number in JS', () => {
     const expr = lower('flag === 1', envWith(scalar('flag', 'int', true)));
-    expect(expr).toMatchObject({kind: 'boolean', value: false, isBool: true});
+    expect(expr).toMatchObject({
+      kind: 'boolean',
+      value: false,
+      type: {kind: 'bool'},
+    });
   });
 
   it('keeps the operand `||` returns when it is 64-bit', () => {
     const expr = lower('last || Date.now()', envWith(scalar('last', 'i64')));
-    expect(expr).toMatchObject({kind: 'pick', op: '||', cType: 'i64'});
+    expect(expr).toMatchObject({
+      kind: 'pick',
+      op: '||',
+      type: {kind: 'int64', source: 'time'},
+    });
     expect(printExpr(expr)).toBe(
       '(s_state.last ? s_state.last : app_date_now())',
     );
@@ -127,8 +134,7 @@ describe('expressions lower to the IR', () => {
     expect(expr).toMatchObject({
       kind: 'number',
       value: 2147483648,
-      cType: 'i64',
-      lit: true,
+      type: {kind: 'int64', source: 'constant'},
     });
   });
 
@@ -138,7 +144,7 @@ describe('expressions lower to the IR', () => {
 
   it("reads a list's runtime count for `.length`", () => {
     const expr = lower('items.length', envWith(list('items')));
-    expect(expr).toMatchObject({kind: 'listLength', cType: 'int'});
+    expect(expr).toMatchObject({kind: 'listLength', type: {kind: 'int'}});
     expect(printExpr(expr)).toBe('s_items_count');
   });
 
@@ -150,7 +156,11 @@ describe('expressions lower to the IR', () => {
 
   it("reads an onLayout rect field from the engine's rect", () => {
     const expr = lower('e.layout.width', {...envWith(), event: 'e'});
-    expect(expr).toMatchObject({kind: 'layout', field: 'width', cType: 'int'});
+    expect(expr).toMatchObject({
+      kind: 'layout',
+      field: 'width',
+      type: {kind: 'int'},
+    });
     expect(printExpr(expr)).toBe('data->layout_rect.w');
   });
 

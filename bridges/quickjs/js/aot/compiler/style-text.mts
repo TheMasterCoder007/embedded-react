@@ -337,7 +337,7 @@ function lowerDynamicStyleValue(
 
   // Opacity and every size are numbers; C would take a char[] here as its address or refuse it.
   const valueExpr = lowerExpr(valueNode, env);
-  if (valueExpr.cType === 'string') {
+  if (valueExpr.type.kind === 'string') {
     const error = aotError(
       `AOT: style "${key}" needs a number, but the value is a string`,
       "JS would coerce the string; C cannot. Keep the state numeric — useState(10), not useState('10').",

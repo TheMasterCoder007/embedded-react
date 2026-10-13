@@ -56,6 +56,15 @@ import {toCExpr} from './c/expressions.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr, IrTyped} from './ir/expressions.mts';
+import {
+  INT,
+  isBoolean,
+  isInt64Constant,
+  isIntSlot,
+  refType,
+  slotOf,
+  typeOfSlot,
+} from './ir/types.mts';
 import type {IrDepEffect} from './ir/functions.mts';
 import type {
   IrCallback,
@@ -85,7 +94,7 @@ import type {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The constant 0, which a remainder by 0 or ±1 stores. */
-const ZERO: IrExpr = {kind: 'number', value: 0, cType: 'int'};
+const ZERO: IrExpr = {kind: 'number', value: 0, type: INT};
 
 /** Each updateVector shape key and the numbers its array takes, for errors. */
 const UPDATE_VECTOR_ARGS: Record<string, string> = {
@@ -199,7 +208,7 @@ function lowerListOp(
         {
           kind: 'sliceItems',
           list: listState,
-          end: {kind: 'number', value: clampedEnd, cType: 'int'},
+          end: {kind: 'number', value: clampedEnd, type: INT},
         },
       ];
     }
@@ -248,13 +257,13 @@ function storeCheck(
   slotDescription: string,
   env: Env,
 ): void {
-  if (value.cType === 'i64' && slotType !== 'i64') {
+  if (value.type.kind === 'int64' && slotType !== 'i64') {
     if (slotType === 'int' && !isBool) {
       env.found.add(slotCName);
       return;
     }
 
-    if (value.lit && slotType === 'float') return;
+    if (isInt64Constant(value.type) && slotType === 'float') return;
 
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${slotDescription}`,
@@ -262,7 +271,7 @@ function storeCheck(
     );
   }
 
-  if (slotType === 'i64' && value.cType === 'float') {
+  if (slotType === 'i64' && value.type.kind === 'float') {
     throw mix64Error();
   }
 }
@@ -276,8 +285,8 @@ function storeCheck(
  * @returns The value as an int.
  */
 const asInt = (value: IrExpr): IrExpr =>
-  value.cType === 'float'
-    ? {kind: 'toInt', operand: value, cType: 'int'}
+  value.type.kind === 'float'
+    ? {kind: 'toInt', operand: value, type: INT}
     : value;
 
 /**
@@ -301,7 +310,7 @@ const storeValue = (value: IrExpr, slotType: CType): IrExpr =>
 const refRead = (ref: RefRecord): IrExpr => ({
   kind: 'ref',
   ref,
-  cType: ref.cType as CType,
+  type: refType(ref),
 });
 
 /**
@@ -780,11 +789,11 @@ function lowerHandlerExprImpl(
     )[expr.operator];
     const isFloatMod =
       expr.operator === '%=' &&
-      (ref.cType === 'float' || valueExpr.cType === 'float');
+      (ref.cType === 'float' || valueExpr.type.kind === 'float');
     if (
       (isWholeRef &&
         (binaryOp ||
-          (expr.operator === '/=' && valueExpr.cType === 'float'))) ||
+          (expr.operator === '/=' && valueExpr.type.kind === 'float'))) ||
       isFloatMod
     ) {
       const resultExpr = lowerExprWide(
@@ -811,7 +820,7 @@ function lowerHandlerExprImpl(
     // Int `/=` and `%=` use app_div/app_mod for JS's answer; a constant divisor other than 0 or -1 needs no check.
     if (
       ref.cType === 'int' &&
-      valueExpr.cType === 'int' &&
+      isIntSlot(valueExpr.type) &&
       (expr.operator === '/=' || expr.operator === '%=')
     ) {
       const staticDivisor = staticInt(expr.right, env);
@@ -829,7 +838,7 @@ function lowerHandlerExprImpl(
               helper: 'div',
               bits: 32,
               args: [refRead(ref), valueExpr],
-              cType: 'int',
+              type: INT,
             },
           },
         ];
@@ -853,7 +862,7 @@ function lowerHandlerExprImpl(
               helper: 'mod',
               bits: 32,
               args: [refRead(ref), valueExpr],
-              cType: 'int',
+              type: INT,
             },
           },
         ];
@@ -898,8 +907,8 @@ function lowerHandlerExprImpl(
             kind: 'helper',
             helper: expr.operator === '++' ? 'add' : 'sub',
             bits: ref.cType === 'i64' ? 64 : 32,
-            args: [refRead(ref), {kind: 'number', value: 1, cType: 'int'}],
-            cType: ref.cType,
+            args: [refRead(ref), {kind: 'number', value: 1, type: INT}],
+            type: typeOfSlot(ref.cType),
           },
         },
       ];
@@ -980,13 +989,14 @@ function lowerHandlerExprImpl(
     (setterArg.type === 'ArrowFunctionExpression' ||
       setterArg.type === 'FunctionExpression')
   ) {
-    // setState(prev => expr): bind the param to the current value, assign the result.
+    // setState(prev => expr): bind the param to the current value, typed as a read of it, and assign the result.
     const prevParam = (setterArg.params[0] as t.Identifier | undefined)?.name;
     const locals = new Map<string, Local>(env.locals);
     if (prevParam) {
       locals.set(prevParam, {
         code: targetState.cMember,
         cType: targetState.cType,
+        isBool: targetState.isBool,
       });
     }
 
@@ -1095,7 +1105,7 @@ export function lowerStmts(
 
         // Any other initializer must lower to a number, a boolean or a string.
         const initExpr = lowerExprWide(decl.init, env);
-        if (initExpr.cType === 'string') {
+        if (initExpr.type.kind === 'string') {
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
             ctx.hoist!.decls.push({
@@ -1105,11 +1115,8 @@ export function lowerStmts(
             });
           }
         } else {
-          if (
-            initExpr.cType !== 'int' &&
-            initExpr.cType !== 'float' &&
-            initExpr.cType !== 'i64'
-          ) {
+          const slot = slotOf(initExpr.type);
+          if (slot !== 'int' && slot !== 'float' && slot !== 'i64') {
             throw aotError(
               'AOT: a handler local must hold a number, a boolean or a string',
               'bind the value itself — e.g. `const id = item.id` — rather than a list item or a node ref.',
@@ -1120,7 +1127,7 @@ export function lowerStmts(
             ctx.hoist!.decls.push({
               kind: 'local',
               name: cName,
-              cType: initExpr.cType,
+              cType: slot,
             });
           }
         }
@@ -1138,8 +1145,8 @@ export function lowerStmts(
           ...env,
           locals: new Map(env.locals).set(decl.id.name, {
             code: cName,
-            cType: initExpr.cType,
-            isBool: initExpr.isBool,
+            cType: slotOf(initExpr.type)!,
+            isBool: isBoolean(initExpr.type),
           }),
         };
       }

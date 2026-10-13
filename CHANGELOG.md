@@ -57,6 +57,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   non-number (`fillGrad={{type: 2, ax: 0 / 0, …}}`, `ax: 'oops'`) fails with an `AOT:` error. It used to be
   computed at runtime, or written into the generated C as an invalid cast.
 
+- In Flow B, the parameter of a `setX(prev => …)` updater keeps the state's boolean type, so `prev === 1` is
+  false for a boolean, as in JS. It used to compare the boolean as the number 1.
+
 - An auto-height row with `flexWrap: 'wrap'` grows to hold every wrapped line. It used to reserve a single line's
   height, so the lines below painted over the siblings that follow it. Measurement now takes the width the parent
   offers and breaks the row into lines at that width, as Yoga does.

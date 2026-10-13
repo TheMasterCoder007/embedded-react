@@ -18,8 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import type {IrType} from './types.mts';
 import type {
-  CExpr,
   ItemField,
   ListState,
   Local,
@@ -31,11 +31,10 @@ import type {
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/**
- * What every expression node knows about its value: the slot it needs (int, i64, float, or string) and how JS
- * would treat it (a boolean, a 64-bit constant, or whole-number math widened to 64 bits).
- */
-export type IrTyped = Omit<CExpr, 'code'>;
+/** What every expression node knows about its value. */
+export interface IrTyped {
+  type: IrType;
+}
 
 /** A whole-number helper that saturates where C's own arithmetic would overflow. */
 export type WholeHelper =

@@ -85,7 +85,7 @@ describe('PanResponder IR: gesture fields', () => {
     const visit = node => {
       if (node && typeof node === 'object') {
         if (node.kind === 'gesture') {
-          fields.push([node.field, node.cType, printExpr(node)]);
+          fields.push([node.field, node.type.kind, printExpr(node)]);
         }
         Object.values(node).forEach(visit);
       }

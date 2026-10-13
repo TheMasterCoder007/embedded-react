@@ -22,6 +22,7 @@ import {aotError} from './diagnostics.mts';
 import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
 import {lowerHandler} from './handlers.mts';
+import {FLOAT, INT} from './ir/types.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {GestureField, IrExpr, IrGesture} from './ir/expressions.mts';
@@ -120,7 +121,7 @@ export function lowerGestureField(
       field: field as GestureField,
       statePrefix: pan!.cPrefix,
       stateID: pan!.stateID,
-      cType: field === 'vx' || field === 'vy' ? 'float' : 'int',
+      type: field === 'vx' || field === 'vy' ? FLOAT : INT,
     };
   }
 

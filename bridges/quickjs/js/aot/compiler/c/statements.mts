@@ -23,6 +23,7 @@ import {printAnimationStart} from './animations.mts';
 import {printUpdateVector} from './vectors.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {formatArgs, printText} from './text.mts';
+import {slotOf} from '../ir/types.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 import type {
   IrAppendItem,
@@ -81,9 +82,9 @@ function printTimerAdd(timer: IrTimer): string {
   const delay = timer.delay;
   const delayMs = !delay
     ? '0'
-    : delay.cType === 'i64'
+    : delay.type.kind === 'int64'
       ? `app_delay_ms64(${printExpr(delay)})`
-      : delay.cType === 'float'
+      : delay.type.kind === 'float'
         ? `app_delay_msf(${printExpr(delay)})`
         : printExpr(delay);
   return `er_timer_add((int)(${delayMs}), ${timer.isRepeating ? 'true' : 'false'}, ${timer.fn})`;
@@ -157,7 +158,7 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
     case 'declareLocal': {
       // A string local is a buffer of its own, so a later write to the state it copied cannot change it.
       const init: IrExpr = stmt.init;
-      if (init.cType === 'string') {
+      if (init.type.kind === 'string') {
         const declaration = stmt.isHoisted
           ? []
           : [`${indent}char ${stmt.name}[${stmt.stringCap}];`];
@@ -167,7 +168,9 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
         ];
       }
 
-      const declaredType = stmt.isHoisted ? '' : cScalarType(init.cType) + ' ';
+      const declaredType = stmt.isHoisted
+        ? ''
+        : cScalarType(slotOf(init.type)!) + ' ';
       return [`${indent}${declaredType}${stmt.name} = ${printExpr(init)};`];
     }
     case 'startTimer': {

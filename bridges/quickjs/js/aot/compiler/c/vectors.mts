@@ -426,7 +426,7 @@ export function printUpdateVector(update: IrUpdateVector): string[] {
       `s_uv${id}_paints, ${update.paints.length}, NULL, 0);`,
   ];
   if (update.dirty) {
-    const dirtyFn = update.dirty.some(edge => edge.cType === 'float')
+    const dirtyFn = update.dirty.some(edge => edge.type.kind === 'float')
       ? 'app_vector_dirty'
       : 'er_node_set_vector_dirty_rect';
     lines.push(

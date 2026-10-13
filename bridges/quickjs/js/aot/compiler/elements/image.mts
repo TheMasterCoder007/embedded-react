@@ -148,7 +148,7 @@ export function resolveImageAttrs(
       // Only triggered when a dynamic source is actually REACHED.
       out.bakeAllImages = true;
       const nameExpr = lowerExpr(srcExpr, env);
-      if (nameExpr.cType !== 'string') {
+      if (nameExpr.type.kind !== 'string') {
         const err = aotError(
           'AOT: an <Image source> must resolve to an asset NAME (a string)',
           "use an imported image (`import logo from './logo.png'` → source={logo}), " +

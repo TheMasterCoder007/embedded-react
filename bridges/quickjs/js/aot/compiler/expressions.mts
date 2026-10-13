@@ -51,6 +51,24 @@ import type {
   WholeHelper,
 } from './ir/expressions.mts';
 import type {IrText, IrTextPart} from './ir/text.mts';
+import {
+  BOOL,
+  FLOAT,
+  INT,
+  INT64_CONSTANT,
+  INT64_MATH,
+  STRING,
+  TIME,
+  isBoolean,
+  isInt64Constant,
+  isIntSlot,
+  isTime,
+  plainOf,
+  refType,
+  slotOf,
+  typeOfCExpr,
+  typeOfSlot,
+} from './ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -228,19 +246,19 @@ function numConst(value: number): IrNumber {
   // A float holds no NaN or Infinity (a folded `0 / 0`, say); the check pass reports them at the expression.
   if (!Number.isInteger(value)) {
     checkNumber(value);
-    return {kind: 'number', value, cType: 'float'};
+    return {kind: 'number', value, type: FLOAT};
   }
 
   if (value < -(2 ** 63) || value >= 2 ** 63) {
     checkNumber(value);
-    return {kind: 'number', value, cType: 'float'};
+    return {kind: 'number', value, type: FLOAT};
   }
 
   if (value < INT_MIN || value > INT_MAX) {
-    return {kind: 'number', value, cType: 'i64', lit: true};
+    return {kind: 'number', value, type: INT64_CONSTANT};
   }
 
-  return {kind: 'number', value, cType: 'int'};
+  return {kind: 'number', value, type: INT};
 }
 
 /**
@@ -253,7 +271,7 @@ function numConst(value: number): IrNumber {
 const stringConst = (value: string): IrString => ({
   kind: 'string',
   value,
-  cType: 'string',
+  type: STRING,
 });
 
 /**
@@ -266,8 +284,7 @@ const stringConst = (value: string): IrString => ({
 const boolConst = (value: boolean): IrBoolean => ({
   kind: 'boolean',
   value,
-  cType: 'int',
-  isBool: true,
+  type: BOOL,
 });
 
 /**
@@ -280,10 +297,7 @@ const boolConst = (value: boolean): IrBoolean => ({
 const localRead = (local: Local): IrLocal => ({
   kind: 'local',
   local,
-  cType: local.cType,
-  isBool: local.isBool,
-  lit: local.lit,
-  wide: local.wide,
+  type: typeOfCExpr(local),
 });
 
 /**
@@ -324,8 +338,7 @@ const keepsMath64 = (node: t.Node): boolean =>
  *
  * @returns Whether it is a timestamp.
  */
-export const isTime64 = (expr: IrTyped): boolean =>
-  expr.cType === 'i64' && !expr.lit && !expr.wide;
+export const isTime64 = (expr: IrTyped): boolean => isTime(expr.type);
 
 /**
  * Besides a float, a 64-bit constant is an ordinary number that converts, as in JS; only a timestamp refuses.
@@ -335,10 +348,12 @@ export const isTime64 = (expr: IrTyped): boolean =>
  * @returns The operands, with any 64-bit constant converted to float when one of them is a float.
  */
 const litPeers = (...operands: IrExpr[]): IrExpr[] =>
-  operands.some(operand => operand.cType === 'float')
+  operands.some(operand => operand.type.kind === 'float')
     ? operands.map(
         (operand): IrExpr =>
-          operand.lit ? {kind: 'toFloat', operand, cType: 'float'} : operand,
+          isInt64Constant(operand.type)
+            ? {kind: 'toFloat', operand, type: FLOAT}
+            : operand,
       )
     : operands;
 
@@ -389,7 +404,7 @@ function lowerArith64(
   right: IrExpr,
   env: Env,
 ): IrExpr {
-  if (left.cType === 'float' || right.cType === 'float') {
+  if (left.type.kind === 'float' || right.type.kind === 'float') {
     throw mix64Error();
   }
 
@@ -416,8 +431,7 @@ function lowerArith64(
         helper: 'mod',
         bits: 64,
         args: [left, right],
-        cType: 'i64',
-        wide: true,
+        type: INT64_MATH,
       };
     }
 
@@ -425,8 +439,8 @@ function lowerArith64(
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows in C.
     if (divisor === 1 || divisor === -1) return numConst(0);
 
-    if (Math.abs(divisor) <= 0x7fffffff || left.cType === 'int') {
-      return {kind: 'narrowRemainder', left, right, cType: 'int'};
+    if (Math.abs(divisor) <= 0x7fffffff || isIntSlot(left.type)) {
+      return {kind: 'narrowRemainder', left, right, type: INT};
     }
 
     return {
@@ -434,8 +448,7 @@ function lowerArith64(
       op: '%',
       left,
       right,
-      cType: 'i64',
-      wide: isWide,
+      type: isWide ? INT64_MATH : TIME,
     };
   }
 
@@ -445,8 +458,7 @@ function lowerArith64(
     helper: CHECKED_HELPER[node.operator],
     bits: 64,
     args: [left, right],
-    cType: 'i64',
-    wide: isWide,
+    type: isWide ? INT64_MATH : TIME,
   };
 }
 
@@ -480,11 +492,12 @@ function lowerTimeRoundDiv(
   const divisor = lowerExprWide(division.right, env);
   if (!isTime64(dividend) && !isTime64(divisor)) return null;
 
-  if (dividend.cType === 'float' || divisor.cType === 'float') {
+  if (dividend.type.kind === 'float' || divisor.type.kind === 'float') {
     throw mix64Error();
   }
 
-  if (dividend.cType === 'string' || divisor.cType === 'string') return null;
+  if (dividend.type.kind === 'string' || divisor.type.kind === 'string')
+    return null;
 
   // Dividing by -1 is a negation, which saturates; C's `/` would overflow on INT64_MIN / -1.
   if (constDivisor(division.right, env) === -1) {
@@ -493,7 +506,7 @@ function lowerTimeRoundDiv(
       helper: 'neg',
       bits: 64,
       args: [dividend],
-      cType: 'i64',
+      type: TIME,
     };
   }
 
@@ -502,7 +515,7 @@ function lowerTimeRoundDiv(
     helper: INT_ROUND_DIV.get(fn)!,
     bits: 64,
     args: [dividend, divisor],
-    cType: 'i64',
+    type: TIME,
   };
 }
 
@@ -538,29 +551,32 @@ function lowerIntRoundDiv(
   // Divide in 64 bits beside a 64-bit value, when both operands are whole numbers and neither is a timestamp.
   const dividend = lowerExprWide(division.left, env);
   const divisor = lowerExprWide(division.right, env);
-  if (env.math64 || dividend.cType === 'i64' || divisor.cType === 'i64') {
+  if (
+    env.math64 ||
+    dividend.type.kind === 'int64' ||
+    divisor.type.kind === 'int64'
+  ) {
     const isWhole = (operand: IrExpr) =>
-      operand.cType === 'int' ||
-      (operand.cType === 'i64' && !isTime64(operand));
+      isIntSlot(operand.type) ||
+      (operand.type.kind === 'int64' && !isTime64(operand));
     if (!isWhole(dividend) || !isWhole(divisor)) return null;
     return {
       kind: 'helper',
       helper: INT_ROUND_DIV.get(fn)!,
       bits: 64,
       args: [dividend, divisor],
-      cType: 'i64',
-      wide: true,
+      type: INT64_MATH,
     };
   }
 
   // Otherwise divide two ints in 32 bits; anything else is left to the float path.
-  if (dividend.cType !== 'int' || divisor.cType !== 'int') return null;
+  if (!isIntSlot(dividend.type) || !isIntSlot(divisor.type)) return null;
   return {
     kind: 'helper',
     helper: INT_ROUND_DIV.get(fn)!,
     bits: 32,
     args: [dividend, divisor],
-    cType: 'int',
+    type: INT,
   };
 }
 
@@ -573,13 +589,13 @@ function lowerIntRoundDiv(
  * @returns The lowered call.
  */
 function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
-  if (argExprs.some(argExpr => argExpr.cType === 'float')) {
+  if (argExprs.some(argExpr => argExpr.type.kind === 'float')) {
     throw mix64Error();
   }
 
   if (
     argExprs.every(
-      argExpr => argExpr.cType === 'int' || argExpr.cType === 'i64',
+      argExpr => isIntSlot(argExpr.type) || argExpr.type.kind === 'int64',
     )
   ) {
     // Whole-number math with no timestamp in it stays whole-number math.
@@ -592,8 +608,7 @@ function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
       return {
         kind: 'wholeRound',
         operand: argExprs[0],
-        cType: 'i64',
-        wide: isWide,
+        type: isWide ? INT64_MATH : TIME,
       };
     }
 
@@ -603,8 +618,7 @@ function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
         helper: 'abs',
         bits: 64,
         args: [argExprs[0]],
-        cType: 'i64',
-        wide: isWide,
+        type: isWide ? INT64_MATH : TIME,
       };
     }
 
@@ -614,8 +628,7 @@ function lowerMath64(fn: string, argExprs: IrExpr[]): IrExpr {
         helper: fn,
         bits: 64,
         args: [argExprs[0], argExprs[1]],
-        cType: 'i64',
-        wide: isWide,
+        type: isWide ? INT64_MATH : TIME,
       };
     }
   }
@@ -665,8 +678,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         return {
           kind: 'state',
           state: stateRecord,
-          cType: stateRecord.cType,
-          isBool: stateRecord.isBool,
+          type: typeOfSlot(stateRecord.cType, stateRecord.isBool),
         };
       }
 
@@ -695,7 +707,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       const operand = lowerExprWide(node.argument, env);
       if (
         (node.operator === '-' || node.operator === '+') &&
-        operand.cType === 'string'
+        operand.type.kind === 'string'
       ) {
         throw aotError(
           `AOT: unary "${node.operator}" on a string is not supported`,
@@ -706,24 +718,23 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
       if (
         node.operator === '-' &&
-        (operand.cType === 'int' || operand.cType === 'i64')
+        (isIntSlot(operand.type) || operand.type.kind === 'int64')
       ) {
-        const is64Bit = operand.cType === 'i64' || env.math64;
+        const is64Bit = operand.type.kind === 'int64' || env.math64;
         return is64Bit
           ? {
               kind: 'helper',
               helper: 'neg',
               bits: 64,
               args: [operand],
-              cType: 'i64',
-              wide: !isTime64(operand),
+              type: isTime64(operand) ? TIME : INT64_MATH,
             }
           : {
               kind: 'helper',
               helper: 'neg',
               bits: 32,
               args: [operand],
-              cType: 'int',
+              type: INT,
             };
       }
 
@@ -737,8 +748,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           kind: 'unary',
           op: node.operator,
           operand,
-          cType: node.operator === '!' ? 'int' : operand.cType,
-          isBool: node.operator === '!',
+          type: node.operator === '!' ? BOOL : plainOf(operand.type),
         };
       }
 
@@ -763,12 +773,12 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       // Lower both operands; besides a 64-bit value, redo whole-number math in 64 bits, as JS never cuts it to 32.
       let left = lowerExprWide(node.left, env);
       let right = lowerExprWide(node.right, env);
-      if (left.cType === 'i64' || right.cType === 'i64') {
-        if (left.cType === 'int' && keepsMath64(node.left)) {
+      if (left.type.kind === 'int64' || right.type.kind === 'int64') {
+        if (isIntSlot(left.type) && keepsMath64(node.left)) {
           left = lowerExprWide(node.left, {...env, math64: true});
         }
 
-        if (right.cType === 'int' && keepsMath64(node.right)) {
+        if (isIntSlot(right.type) && keepsMath64(node.right)) {
           right = lowerExprWide(node.right, {...env, math64: true});
         }
       }
@@ -776,7 +786,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
 
       // Arithmetic: refuse strings, hand 64-bit math to lowerArith64, and saturate whole-number `+ - *`.
       if (ARITH.has(node.operator)) {
-        if (left.cType === 'string' || right.cType === 'string') {
+        if (left.type.kind === 'string' || right.type.kind === 'string') {
           // String `+` has no single C value; only a char-buffer destination can lower it, via emitFormat().
           if (node.operator === '+') {
             throw aotError(
@@ -796,18 +806,20 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         if (
           isTime64(left) ||
           isTime64(right) ||
-          ((left.cType === 'i64' || right.cType === 'i64') &&
+          ((left.type.kind === 'int64' || right.type.kind === 'int64') &&
             (CHECKED_HELPER[node.operator] || node.operator === '%'))
         ) {
           return lowerArith64(node, left, right, env);
         }
 
         if (node.operator === '/') {
-          return {kind: 'floatDivide', left, right, cType: 'float'};
+          return {kind: 'floatDivide', left, right, type: FLOAT};
         }
 
         const cType =
-          left.cType === 'float' || right.cType === 'float' ? 'float' : 'int';
+          left.type.kind === 'float' || right.type.kind === 'float'
+            ? 'float'
+            : 'int';
         const checkedHelper = cType === 'int' && CHECKED_HELPER[node.operator];
         if (checkedHelper) {
           return env.math64
@@ -816,15 +828,14 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
                 helper: checkedHelper,
                 bits: 64,
                 args: [left, right],
-                cType: 'i64',
-                wide: true,
+                type: INT64_MATH,
               }
             : {
                 kind: 'helper',
                 helper: checkedHelper,
                 bits: 32,
                 args: [left, right],
-                cType: 'int',
+                type: INT,
               };
         }
 
@@ -840,7 +851,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
               helper: 'mod',
               bits: 32,
               args: [left, right],
-              cType: 'int',
+              type: INT,
             };
           }
         }
@@ -851,7 +862,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             kind: 'floatMath',
             fn: 'mod',
             args: [left, right],
-            cType: 'float',
+            type: FLOAT,
           };
         }
 
@@ -860,7 +871,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           op: node.operator as IrArithmetic['op'],
           left,
           right,
-          cType,
+          type: typeOfSlot(cType),
         };
       }
 
@@ -872,8 +883,8 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             : node.operator === '!=='
               ? '!='
               : node.operator;
-        if (left.cType === 'string' || right.cType === 'string') {
-          if (left.cType !== right.cType) {
+        if (left.type.kind === 'string' || right.type.kind === 'string') {
+          if (slotOf(left.type) !== slotOf(right.type)) {
             // A strict comparison never coerces, so a string against a number is decided statically.
             if (node.operator === '===' || node.operator === '!==') {
               return boolConst(node.operator === '!==');
@@ -899,23 +910,22 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             op: cOperator,
             left,
             right,
-            cType: 'int',
-            isBool: true,
+            type: BOOL,
           };
         }
         // A float compared with a timestamp would round it.
         if (
-          (left.cType === 'i64' || right.cType === 'i64') &&
-          (left.cType === 'float' || right.cType === 'float')
+          (left.type.kind === 'int64' || right.type.kind === 'int64') &&
+          (left.type.kind === 'float' || right.type.kind === 'float')
         ) {
           throw mix64Error();
         }
 
         // `true === 1` is false in JS but true in C's int slot; fold it when the other side is surely a number.
         const isSurelyNumber = (operandNode: t.Node, operand: IrExpr) =>
-          !operand.isBool &&
-          (operand.cType === 'float' ||
-            operand.cType === 'i64' ||
+          !isBoolean(operand.type) &&
+          (operand.type.kind === 'float' ||
+            operand.type.kind === 'int64' ||
             operandNode.type === 'NumericLiteral' ||
             (operandNode.type === 'UnaryExpression' &&
               operandNode.argument.type === 'NumericLiteral') ||
@@ -925,8 +935,8 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
                 ?.isBool === false));
         if (
           (node.operator === '===' || node.operator === '!==') &&
-          ((left.isBool && isSurelyNumber(node.right, right)) ||
-            (right.isBool && isSurelyNumber(node.left, left)))
+          ((isBoolean(left.type) && isSurelyNumber(node.right, right)) ||
+            (isBoolean(right.type) && isSurelyNumber(node.left, left)))
         ) {
           return boolConst(node.operator === '!==');
         }
@@ -936,8 +946,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           op: cOperator as IrCompare['op'],
           left,
           right,
-          cType: 'int',
-          isBool: true,
+          type: BOOL,
         };
       }
 
@@ -956,23 +965,23 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         lowerExprWide(node.left, env),
         lowerExprWide(node.right, env),
       );
-      if (left.cType === 'i64' || right.cType === 'i64') {
-        if (left.cType === 'float' || right.cType === 'float') {
+      if (left.type.kind === 'int64' || right.type.kind === 'int64') {
+        if (left.type.kind === 'float' || right.type.kind === 'float') {
           throw mix64Error();
         }
 
-        if (left.cType === 'string' || right.cType === 'string') {
+        if (left.type.kind === 'string' || right.type.kind === 'string') {
           throw aotError(
             `AOT: "${operator}" cannot mix a 64-bit time value with a string`,
             'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
           );
         }
 
-        if (left.isBool || right.isBool) {
+        if (isBoolean(left.type) || isBoolean(right.type)) {
           throw bool64Error(`"${operator}"`);
         }
 
-        return {kind: 'pick', op: operator, left, right, cType: 'i64'};
+        return {kind: 'pick', op: operator, left, right, type: TIME};
       }
 
       // Otherwise the C result is the truth of the expression, a boolean only when both operands are.
@@ -981,8 +990,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         op: operator,
         left,
         right,
-        cType: 'int',
-        isBool: Boolean(left.isBool && right.isBool),
+        type: isBoolean(left.type) && isBoolean(right.type) ? BOOL : INT,
       };
     }
     case 'ConditionalExpression': {
@@ -992,7 +1000,10 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         lowerExprWide(node.alternate, env),
       );
       // A string branch beside a numeric one is ill-typed C with no single printf spec, so refuse it here.
-      if ((consequent.cType === 'string') !== (alternate.cType === 'string')) {
+      if (
+        (consequent.type.kind === 'string') !==
+        (alternate.type.kind === 'string')
+      ) {
         throw aotError(
           'AOT: a ternary cannot mix a string branch with a numeric one',
           "both branches must be the same kind — quote the number to keep it text, e.g. {ok ? '1' : 'none'}.",
@@ -1001,12 +1012,15 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
 
       // Both branches share one C slot, float or i64 if either is; i64 beside a float or boolean is refused.
       const eitherIs = (kind: CType) =>
-        consequent.cType === kind || alternate.cType === kind;
+        slotOf(consequent.type) === kind || slotOf(alternate.type) === kind;
       if (eitherIs('i64') && eitherIs('float')) {
         throw mix64Error();
       }
 
-      if (eitherIs('i64') && (consequent.isBool || alternate.isBool)) {
+      if (
+        eitherIs('i64') &&
+        (isBoolean(consequent.type) || isBoolean(alternate.type))
+      ) {
         throw bool64Error('a ternary');
       }
 
@@ -1014,16 +1028,18 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         ? 'float'
         : eitherIs('i64')
           ? 'i64'
-          : consequent.cType === alternate.cType
-            ? consequent.cType
+          : slotOf(consequent.type) === slotOf(alternate.type)
+            ? slotOf(consequent.type)
             : 'int';
       return {
         kind: 'conditional',
         test,
         consequent,
         alternate,
-        cType,
-        isBool: Boolean(consequent.isBool && alternate.isBool),
+        type: typeOfSlot(
+          cType,
+          isBoolean(consequent.type) && isBoolean(alternate.type),
+        ),
       };
     }
     case 'MemberExpression': {
@@ -1058,7 +1074,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         return {
           kind: 'listLength',
           list: env.state.get(object.name) as ListState,
-          cType: 'int',
+          type: INT,
         };
       }
 
@@ -1080,7 +1096,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
           kind: 'itemField',
           item,
           field,
-          cType: field.kind === 'string' ? 'string' : field.kind,
+          type: typeOfSlot(field.kind),
         };
       }
 
@@ -1092,7 +1108,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
       ) {
         const ref = env.refs.get(object.name)!;
         ref.used = true;
-        return {kind: 'ref', ref, cType: ref.cType as CType};
+        return {kind: 'ref', ref, type: refType(ref)};
       }
 
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
@@ -1101,7 +1117,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         env.event === object.name &&
         (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')
       ) {
-        return {kind: 'event', field: prop, cType: 'int'};
+        return {kind: 'event', field: prop, type: INT};
       }
 
       // `<event>.vx / .vy` — finger velocity (px/ms) at the last move; the engine measures it, a handler cannot.
@@ -1110,7 +1126,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         env.event === object.name &&
         (prop === 'vx' || prop === 'vy')
       ) {
-        return {kind: 'event', field: prop, cType: 'float'};
+        return {kind: 'event', field: prop, type: FLOAT};
       }
 
       // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
@@ -1131,7 +1147,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             `AOT: unknown onLayout rect field "${prop}" (use x / y / width / height)`,
           );
         }
-        return {kind: 'layout', field: prop as LayoutField, cType: 'int'};
+        return {kind: 'layout', field: prop as LayoutField, type: INT};
       }
 
       // `Math.PI` — the only Math constant.
@@ -1140,7 +1156,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         object.name === 'Math' &&
         prop === 'PI'
       ) {
-        return {kind: 'pi', cType: 'float'};
+        return {kind: 'pi', type: FLOAT};
       }
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
@@ -1161,7 +1177,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         !env.shadowedClock?.has(node)
       ) {
         if ((callee.property as t.Identifier).name === 'now') {
-          return {kind: 'clock', clock: callee.object.name, cType: 'i64'};
+          return {kind: 'clock', clock: callee.object.name, type: TIME};
         }
         if (callee.object.name === 'Date') {
           throw dateObjectError();
@@ -1191,14 +1207,14 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
         const argExprs = litPeers(
           ...node.arguments.map(argNode => lowerExprWide(argNode, env)),
         );
-        if (argExprs.some(argExpr => argExpr.cType === 'i64')) {
+        if (argExprs.some(argExpr => argExpr.type.kind === 'int64')) {
           return lowerMath64(fn, argExprs);
         }
 
         // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.
         if (
           argExprs.length &&
-          argExprs.every(argExpr => argExpr.cType === 'int')
+          argExprs.every(argExpr => isIntSlot(argExpr.type))
         ) {
           if (fn === 'abs' && argExprs.length === 1) {
             return env.math64
@@ -1207,15 +1223,14 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
                   helper: 'abs',
                   bits: 64,
                   args: [argExprs[0]],
-                  cType: 'i64',
-                  wide: true,
+                  type: INT64_MATH,
                 }
               : {
                   kind: 'helper',
                   helper: 'abs',
                   bits: 32,
                   args: [argExprs[0]],
-                  cType: 'int',
+                  type: INT,
                 };
           }
 
@@ -1225,35 +1240,35 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
               helper: fn,
               bits: 32,
               args: [argExprs[0], argExprs[1]],
-              cType: 'int',
+              type: INT,
             };
           }
         }
 
         // Math.trunc stays an int: an int as is, a float via app_f2i (toward zero, NaN as 0, saturating).
         if (fn === 'trunc' && argExprs.length === 1) {
-          return argExprs[0].cType === 'int'
-            ? {kind: 'wholeRound', operand: argExprs[0], cType: 'int'}
-            : {kind: 'trunc', operand: argExprs[0], cType: 'int'};
+          return isIntSlot(argExprs[0].type)
+            ? {kind: 'wholeRound', operand: argExprs[0], type: INT}
+            : {kind: 'trunc', operand: argExprs[0], type: INT};
         }
 
         if (FLOAT_MATH_UNARY.has(fn) && argExprs.length === 1) {
           // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
           const roundsToWhole =
             fn === 'round' || fn === 'floor' || fn === 'ceil';
-          if (roundsToWhole && argExprs[0].cType === 'int') {
-            return {kind: 'wholeRound', operand: argExprs[0], cType: 'int'};
+          if (roundsToWhole && isIntSlot(argExprs[0].type)) {
+            return {kind: 'wholeRound', operand: argExprs[0], type: INT};
           }
 
           const floatCall: IrExpr = {
             kind: 'floatMath',
             fn: fn as FloatMath,
             args: [argExprs[0]],
-            cType: 'float',
+            type: FLOAT,
           };
           // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
           return roundsToWhole
-            ? {kind: 'toInt', operand: floatCall, cType: 'int'}
+            ? {kind: 'toInt', operand: floatCall, type: INT}
             : floatCall;
         }
 
@@ -1262,7 +1277,7 @@ function lowerExprImpl(node: t.Node, env: Env): IrExpr {
             kind: 'floatMath',
             fn: fn as FloatMath,
             args: [argExprs[0], argExprs[1]],
-            cType: 'float',
+            type: FLOAT,
           };
         }
 
@@ -1321,7 +1336,7 @@ export const emitExprWide = (node: t.Node, env: Env): CExpr =>
  */
 export function lowerExpr(node: t.Node, env: Env): IrExpr {
   const expr = lowerExprWide(node, env);
-  if (expr.cType !== 'i64') return expr;
+  if (expr.type.kind !== 'int64') return expr;
 
   const error = aotError(
     'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
@@ -1467,7 +1482,7 @@ function lowerTextParts(
   const value = lowerExprWide(node, env);
 
   // C collapses `&&`/`||` to 0/1 and a ternary to one slot, so text matches JS only when operands agree in kind.
-  if (node.type === 'LogicalExpression' && !value.isBool) {
+  if (node.type === 'LogicalExpression' && !isBoolean(value.type)) {
     throw textShapeError(
       node,
       `AOT: "${node.operator}" in text evaluates to one of its operands, not to true/false`,
@@ -1478,8 +1493,8 @@ function lowerTextParts(
 
   if (
     node.type === 'ConditionalExpression' &&
-    Boolean(lowerExprWide(node.consequent, env).isBool) !==
-      Boolean(lowerExprWide(node.alternate, env).isBool)
+    isBoolean(lowerExprWide(node.consequent, env).type) !==
+      isBoolean(lowerExprWide(node.alternate, env).type)
   ) {
     throw textShapeError(
       node,
@@ -1490,14 +1505,14 @@ function lowerTextParts(
   }
 
   // A boolean prints nothing as a child, "true"/"false" as an operand; isString stays false so `on + n` adds.
-  if (value.isBool) {
+  if (isBoolean(value.type)) {
     return isOperand
       ? {isString: false, parts: [{kind: 'booleanWord', value}]}
       : {isString: false, parts: [{kind: 'literal', text: ''}]};
   }
 
   return {
-    isString: value.cType === 'string',
+    isString: value.type.kind === 'string',
     parts: [{kind: 'value', value}],
   };
 }

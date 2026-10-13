@@ -50,15 +50,15 @@ interface PrintfPart {
  */
 function printfPart(value: IrExpr): PrintfPart {
   const code = printExpr(value);
-  if (value.cType === 'string') {
+  if (value.type.kind === 'string') {
     return {spec: '%s', code};
   }
 
-  if (value.cType === 'float') {
+  if (value.type.kind === 'float') {
     return {spec: '%s', code: `app_ftoa((char[16]){0}, ${code})`};
   }
 
-  if (value.cType === 'i64') {
+  if (value.type.kind === 'int64') {
     return {spec: '%lld', code: `(long long)(${code})`};
   }
 

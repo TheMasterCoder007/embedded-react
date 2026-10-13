@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {cstr, floatLit, i64Lit} from '../c-syntax.mts';
+import {slotOf} from '../ir/types.mts';
 import type {CExpr} from '../types.mts';
 import type {
   FloatMath,
@@ -113,11 +114,11 @@ function printGestureField(expr: IrGesture): string {
  * @returns Its C constant.
  */
 function printNumber(expr: IrNumber): string {
-  if (expr.cType === 'float') {
+  if (expr.type.kind === 'float') {
     return floatLit(expr.value);
   }
 
-  if (expr.cType === 'i64') {
+  if (expr.type.kind === 'int64') {
     return i64Lit(expr.value);
   }
 
@@ -133,7 +134,7 @@ function printNumber(expr: IrNumber): string {
  * @returns C that is true exactly when JS would find it truthy.
  */
 export const printCondition = (expr: IrExpr): string =>
-  asCond({code: printExpr(expr), cType: expr.cType});
+  asCond({code: printExpr(expr), cType: slotOf(expr.type)!});
 
 /**
  * Prints an expression as C.
@@ -230,17 +231,11 @@ export function toCExpr(expr: IrExpr): CExpr {
     return expr.local;
   }
 
-  const cExpr: CExpr = {code: printExpr(expr), cType: expr.cType};
-  if (expr.isBool !== undefined) {
-    cExpr.isBool = expr.isBool;
-  }
-
-  if (expr.lit !== undefined) {
-    cExpr.lit = expr.lit;
-  }
-
-  if (expr.wide !== undefined) {
-    cExpr.wide = expr.wide;
+  const cExpr: CExpr = {code: printExpr(expr), cType: slotOf(expr.type)!};
+  if (expr.type.kind === 'bool') {
+    cExpr.isBool = true;
+  } else if (expr.type.kind === 'int64' && expr.type.source !== 'time') {
+    cExpr[expr.type.source === 'constant' ? 'lit' : 'wide'] = true;
   }
 
   return cExpr;
