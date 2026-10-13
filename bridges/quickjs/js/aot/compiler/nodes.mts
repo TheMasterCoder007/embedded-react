@@ -154,26 +154,6 @@ export function lowerRefBinds(
 }
 
 /**
- * Captures `ref={myRef}` (a node ref from useRef) by storing the freshly created node handle in the ref's
- * slot (see lowerRefBinds).
- *
- * @param nodeId  The node's variable.
- * @param openingElement  The element's opening tag.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
- */
-export function emitRefBind(
-  nodeId: string,
-  openingElement: t.JSXOpeningElement,
-  out: Out,
-  env: Env,
-): void {
-  for (const ref of lowerRefBinds(openingElement, env)) {
-    out.build.push(`    ${ref} = ${nodeId};`);
-  }
-}
-
-/**
  * A JSX element's named attribute, or undefined.
  *
  * @param openingElement  The element's opening tag.
@@ -372,11 +352,7 @@ function emitNodeImpl(
     node,
   });
   if (tag === 'Svg') {
-    return {
-      kind: 'node',
-      id: emitSvg(element, scope, out, env, state, opts),
-      node: null,
-    };
+    return typed(emitSvg(element, scope, out, env, state, opts));
   }
   if (tag === 'Switch') {
     return typed(emitSwitch(element, scope, out, env, state));

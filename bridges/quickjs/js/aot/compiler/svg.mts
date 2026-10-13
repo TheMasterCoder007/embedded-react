@@ -30,12 +30,15 @@ import {
 } from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {floatLit, cstr} from './c-syntax.mts';
+import {floatLit} from './c-syntax.mts';
 import {asCond, emitExpr} from './expressions.mts';
 import {emitColorExpr, collectStyleAssigns} from './style-text.mts';
-import {emitRefBind} from './nodes.mts';
+import {emitIrNode, lowerRefBinds} from './nodes.mts';
+import {printVectorPaint, printVectorTables} from './c/vectors.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
+import type {IrNode} from './ir/nodes.mts';
+import type {IrVectorPaint, IrVectorTables} from './ir/vectors.mts';
 import type {
   EmitOptions,
   Env,
@@ -218,46 +221,50 @@ function jsxToSvgElement(
 }
 
 /**
- * Emits one ERVectorPaint initializer from a flattenSvg paint record
- * [fill, stroke, w, miter, cap, join, rule, fill_grad, stroke_grad]. fill_grad/stroke_grad (1-based gradient-table
- * indices, 0 = solid) are absent on inline-<Svg> records (7-wide) → zero, and set on a baked <Svg source>.
+ * A flattenSvg paint record [fill, stroke, w, miter, cap, join, rule, fill_grad, stroke_grad] as a paint.
+ * fill_grad/stroke_grad (1-based gradient-table indices, 0 = solid) are absent on inline-<Svg> records (7-wide)
+ * and set on a baked <Svg source>.
  *
- * @param paint  The paint record.
+ * @param record  The paint record.
  *
- * @returns The C initializer.
+ * @returns The paint.
  */
-export function emitVectorPaint(paint: number[]): string {
-  return (
-    `{ .fill = ${paint[0] >>> 0}u, .stroke = ${paint[1] >>> 0}u, .stroke_w = ` +
-    `${floatLit(paint[2])}, .miter = ${floatLit(paint[3])}, .cap = ${paint[4] | 0}, .join ` +
-    `= ${paint[5] | 0}, .fill_rule = ${paint[6] | 0}, .fill_grad = ` +
-    `${(paint[7] || 0) | 0}, .stroke_grad = ${(paint[8] || 0) | 0} }`
-  );
-}
+export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
+  fill: record[0] >>> 0,
+  stroke: record[1] >>> 0,
+  strokeWidth: record[2],
+  miter: record[3],
+  cap: record[4] | 0,
+  join: record[5] | 0,
+  fillRule: record[6] | 0,
+  fillGradient: (record[7] || 0) | 0,
+  strokeGradient: (record[8] || 0) | 0,
+});
 
 /**
- * Emits one ERVectorGradient initializer from a baked artifact gradient
- * { type, stops:[{color, offset}], ax, ay, bx, by, r }. Stops fill the C ERGradientStop[] positionally
- * ({color, position}); the engine zero-inits the rest of stops[ER_VGRAD_MAX_STOPS]. Geometry meaning per
- * type: linear axis (ax, ay)->(bx, by); radial center (ax, ay)+radius r; conic center (ax, ay) + start angle r.
- * Stops past the engine's 8 are dropped.
+ * One flattenSvg paint record as an ERVectorPaint initializer (see vectorPaintOf).
  *
- * @param gradient  The gradient.
+ * @param record  The paint record.
  *
  * @returns The C initializer.
  */
-function emitVectorGradient(gradient: VectorGradient): string {
-  const allStops = gradient.stops || [];
-  const keptStops = allStops.length > 8 ? allStops.slice(0, 8) : allStops;
-  const stopInits = keptStops
-    .map(stop => `{ ${stop.color >>> 0}u, ${floatLit(stop.offset)} }`)
-    .join(', ');
-  return (
-    `{ .type = ${gradient.type | 0}, .stop_count = ${keptStops.length}, .stops = { ${stopInits} }, ` +
-    `.ax = ${floatLit(gradient.ax || 0)}, .ay = ${floatLit(gradient.ay || 0)}, .bx = ${floatLit(gradient.bx || 0)}, ` +
-    `.by = ${floatLit(gradient.by || 0)}, .r = ${floatLit(gradient.r || 0)} }`
-  );
-}
+export const emitVectorPaint = (record: number[]): string =>
+  printVectorPaint(vectorPaintOf(record));
+
+/**
+ * A drawing's flat paint records as paints, one per shape.
+ *
+ * @param records  The records, PAINT_STRIDE numbers each.
+ *
+ * @returns The paints.
+ */
+const paintsOf = (records: ArrayLike<number>): IrVectorPaint[] =>
+  Array.from({length: records.length / PAINT_STRIDE}, (_, paintIndex) => {
+    const start = paintIndex * PAINT_STRIDE;
+    return vectorPaintOf(
+      Array.from(records).slice(start, start + PAINT_STRIDE),
+    );
+  });
 
 /**
  * Static numeric coercion for an SVG attribute value (mirrors svg-ops `num`).
@@ -1068,45 +1075,53 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
 }
 
 /**
- * Emits the vector node's box: create + props + width/height + optional style={}.
+ * Lowers the box an <Svg> draws in: a node of `type` sized to a numeric width/height, then its static style,
+ * then its refs. Width and height are written as int16 casts, ahead of the style.
  *
  * @param nodeId  The node's variable.
+ * @param type  The engine node type: a vector node, or an image for a rasterized .svg.
  * @param width  Its width, when a number.
  * @param height  Its height, when a number.
  * @param openingElement  The <Svg>'s opening tag, for its style and ref.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
  * @param env  The expression environment.
+ *
+ * @returns The node, with its refs wired.
  */
-function emitSvgBox(
+function lowerSvgBox(
   nodeId: string,
+  type: string,
   width: unknown,
   height: unknown,
   openingElement: t.JSXOpeningElement,
   scope: Scope,
-  out: Out,
   env: Env,
-): void {
+): IrNode {
   const {staticAssigns} = collectStyleAssigns(openingElement, scope, env);
-  out.build.push(
-    `    ${nodeId} = er_node_create(ER_NODE_VECTOR);`,
-    `    er_props_default(&p);`,
-  );
-
+  const size = [];
   if (typeof width === 'number') {
-    out.build.push(`    p.width = (int16_t)${Math.round(width)};`);
+    size.push({field: 'width', expr: `(int16_t)${Math.round(width)}`});
   }
 
   if (typeof height === 'number') {
-    out.build.push(`    p.height = (int16_t)${Math.round(height)};`);
+    size.push({field: 'height', expr: `(int16_t)${Math.round(height)}`});
   }
 
-  for (const assign of staticAssigns) {
-    out.build.push(`    p.${assign.field} = ${assign.expr};`);
-  }
-
-  out.build.push(`    er_node_set_props(${nodeId}, &p);`);
-  emitRefBind(nodeId, openingElement, out, env);
+  return {
+    id: nodeId,
+    type,
+    constantProps: [...size, ...staticAssigns],
+    stateProps: [],
+    placeholder: null,
+    text: null,
+    image: null,
+    spans: null,
+    wiring: lowerRefBinds(openingElement, env).map(slot => ({
+      kind: 'ref',
+      slot,
+    })),
+    children: [],
+  };
 }
 
 /**
@@ -1121,7 +1136,7 @@ function emitSvgBox(
  * @param state  The component's state table.
  * @param opts  How the element is placed.
  *
- * @returns The node's variable.
+ * @returns The node.
  */
 export function emitSvg(
   element: t.JSXElement,
@@ -1130,7 +1145,7 @@ export function emitSvg(
   env: Env,
   state: StateTable,
   opts: EmitOptions,
-): string {
+): IrNode {
   if (opts.show) {
     throw new Error(
       'AOT: an <Svg> inside a dynamic conditional is not yet supported',
@@ -1174,53 +1189,39 @@ export function emitSvg(
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  *
- * @returns The node's variable.
+ * @returns The node.
  */
 function emitSvgStatic(
   element: t.JSXElement,
   scope: Scope,
   out: Out,
   env: Env,
-): string {
+): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
   const svgElement = jsxToSvgElement(element, scope)!;
   const {ops, paints} = flattenSvg(svgElement.props);
   const nodeId = `n${out.allocateNodeId()}`;
-  const svgId = out.svgN++;
-  const paintCount = paints.length / PAINT_STRIDE;
-  if (ops.length) {
-    out.vectorData.push(
-      `static const float s_svg${svgId}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`,
-    );
-    const paintRows = Array.from({length: paintCount}, (_, paintIndex) => {
-      const start = paintIndex * PAINT_STRIDE;
-      return (
-        '    ' + emitVectorPaint(paints.slice(start, start + PAINT_STRIDE))
-      );
-    });
-    out.vectorData.push(
-      `static const ERVectorPaint s_svg${svgId}_paints[] = {\n${paintRows.join(',\n')}\n};`,
-    );
-  }
+  const tables: IrVectorTables = {
+    id: out.svgN++,
+    ops: Array.from(ops),
+    paints: paintsOf(paints),
+    gradients: [],
+  };
+  out.vectorData.push(...printVectorTables(tables));
 
   // Create the vector node and point it at the tables.
-  emitSvgBox(
+  const node = lowerSvgBox(
     nodeId,
+    'ER_NODE_VECTOR',
     svgElement.props.width,
     svgElement.props.height,
     element.openingElement,
     scope,
-    out,
     env,
   );
-  if (ops.length) {
-    out.build.push(
-      `    er_node_set_vector_ops(${nodeId}, s_svg${svgId}_ops, ${ops.length}, ` +
-        `s_svg${svgId}_paints, ${paintCount}, NULL, 0);`,
-    );
-  }
-
-  return nodeId;
+  node.wiring.push({kind: 'vectorTables', tables});
+  emitIrNode(node, out);
+  return node;
 }
 
 /**
@@ -1235,7 +1236,7 @@ function emitSvgStatic(
  * @param out  Everything emitted so far.
  * @param env  The expression environment.
  *
- * @returns The node's variable.
+ * @returns The node.
  */
 function emitSvgSource(
   element: t.JSXElement,
@@ -1243,7 +1244,7 @@ function emitSvgSource(
   scope: Scope,
   out: Out,
   env: Env,
-): string {
+): IrNode {
   // Resolve the source to its imported .svg's baked artifact.
   const expr =
     sourceAttr.value && sourceAttr.value.type === 'JSXExpressionContainer'
@@ -1304,82 +1305,44 @@ function emitSvgSource(
       out.images.set(artifact.name, artifact.png);
     }
 
-    const imageNodeId = `n${out.allocateNodeId()}`;
-    const {staticAssigns} = collectStyleAssigns(
+    const node = lowerSvgBox(
+      `n${out.allocateNodeId()}`,
+      NODE_TYPES.Image,
+      width,
+      height,
       element.openingElement,
       scope,
       env,
     );
-    out.build.push(
-      `    ${imageNodeId} = er_node_create(${NODE_TYPES.Image});`,
-      `    er_props_default(&p);`,
-    );
-
-    if (typeof width === 'number') {
-      out.build.push(`    p.width = (int16_t)${Math.round(width)};`);
-    }
-
-    if (typeof height === 'number') {
-      out.build.push(`    p.height = (int16_t)${Math.round(height)};`);
-    }
-
-    for (const assign of staticAssigns) {
-      out.build.push(`    p.${assign.field} = ${assign.expr};`);
-    }
-
-    out.build.push(
-      `    snprintf(p.image_name, sizeof(p.image_name), "%s", ${cstr(artifact.name)});`,
-    );
-
-    out.build.push(`    er_node_set_props(${imageNodeId}, &p);`);
-    emitRefBind(imageNodeId, element.openingElement, out, env);
-    return imageNodeId;
+    node.image = {kind: 'static', name: artifact.name, resetOnUpdate: false};
+    emitIrNode(node, out);
+    return node;
   }
 
   // Scale the vector artifact to the box and bake its ops, paints and gradients into const tables.
   const scaled = scaleVectorArtifact(artifact, width, height);
-  const ops = scaled.ops;
-  const paints = scaled.paints;
-  const gradients: VectorGradient[] = scaled.gradients || [];
-
   const nodeId = `n${out.allocateNodeId()}`;
-  const svgId = out.svgN++;
-  const paintCount = paints.length / PAINT_STRIDE;
-  if (ops.length) {
-    out.vectorData.push(
-      `static const float s_svg${svgId}_ops[] = {\n    ${Array.from(ops, floatLit).join(', ')}\n};`,
-    );
-
-    const paintRows = Array.from({length: paintCount}, (_, paintIndex) => {
-      const start = paintIndex * PAINT_STRIDE;
-      return (
-        '    ' + emitVectorPaint(paints.slice(start, start + PAINT_STRIDE))
-      );
-    });
-
-    out.vectorData.push(
-      `static const ERVectorPaint s_svg${svgId}_paints[] = {\n${paintRows.join(',\n')}\n};`,
-    );
-
-    if (gradients.length) {
-      out.vectorData.push(
-        `static const ERVectorGradient s_svg${svgId}_grads[] = ` +
-          `{\n${gradients.map(gradient => '    ' + emitVectorGradient(gradient)).join(',\n')}\n};`,
-      );
-    }
-  }
+  const tables: IrVectorTables = {
+    id: out.svgN++,
+    ops: Array.from(scaled.ops),
+    paints: paintsOf(scaled.paints),
+    gradients: scaled.gradients || [],
+  };
+  out.vectorData.push(...printVectorTables(tables));
 
   // Create the vector node and point it at the tables.
-  emitSvgBox(nodeId, width, height, element.openingElement, scope, out, env);
-  if (ops.length) {
-    const gradsRef = gradients.length ? `s_svg${svgId}_grads` : 'NULL';
-    out.build.push(
-      `    er_node_set_vector_ops(${nodeId}, s_svg${svgId}_ops, ${ops.length}, ` +
-        `s_svg${svgId}_paints, ${paintCount}, ${gradsRef}, ${gradients.length});`,
-    );
-  }
-
-  return nodeId;
+  const node = lowerSvgBox(
+    nodeId,
+    'ER_NODE_VECTOR',
+    width,
+    height,
+    element.openingElement,
+    scope,
+    env,
+  );
+  node.wiring.push({kind: 'vectorTables', tables});
+  emitIrNode(node, out);
+  return node;
 }
 
 /**
@@ -1392,7 +1355,7 @@ function emitSvgSource(
  * @param env  The expression environment.
  * @param state  The component's state table.
  *
- * @returns The node's variable.
+ * @returns The node.
  */
 function emitSvgDynamic(
   element: t.JSXElement,
@@ -1400,7 +1363,7 @@ function emitSvgDynamic(
   out: Out,
   env: Env,
   state: StateTable,
-): string {
+): IrNode {
   // The root's attributes give the box; this path has no viewBox transform.
   const rootAttrs = svgAttrs(element.openingElement, scope, env);
   if (rootAttrs.viewBox != null) {
@@ -1512,15 +1475,16 @@ function emitSvgDynamic(
   );
 
   // Create the vector node, build its tape once, and register it for app_update() to rebuild.
-  emitSvgBox(
+  const node = lowerSvgBox(
     nodeId,
+    'ER_NODE_VECTOR',
     rootAttrs.width,
     rootAttrs.height,
     element.openingElement,
     scope,
-    out,
     env,
   );
+  emitIrNode(node, out);
 
   out.build.push(
     `    build_svg${svgId}();`,
@@ -1538,5 +1502,5 @@ function emitSvgDynamic(
     nodeVar: `s_${nodeId}`,
   });
 
-  return nodeId;
+  return node;
 }

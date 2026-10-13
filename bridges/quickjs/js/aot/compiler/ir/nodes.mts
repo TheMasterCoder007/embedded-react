@@ -22,6 +22,7 @@ import type {AnimBind, TextSpan} from '../style-text.mts';
 import type {ListState, PanResponderRecord, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrText} from './text.mts';
+import type {IrVectorTables} from './vectors.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -87,12 +88,14 @@ export type IrWire =
   /** An engine event (an ER_EVENT_* name) and the C handler lowering already added to the output. */
   | {kind: 'event'; event: string; handler: string}
   /** A PanResponder spread onto the node; its functions are already in the output. */
-  | {kind: 'responder'; pan: PanResponderRecord};
+  | {kind: 'responder'; pan: PanResponderRecord}
+  /** An <Svg>'s drawing, baked into const tables. */
+  | {kind: 'vectorTables'; tables: IrVectorTables};
 
 /**
- * An element as an engine node: a host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView) or a
- * typed one (Switch, Dial, TextInput, ActivityIndicator, Modal). A node with any state-driven content keeps a
- * file-scope handle, and app_update sets all of its props again.
+ * An element as an engine node: a host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView), a
+ * typed one (Switch, Dial, TextInput, ActivityIndicator, Modal), or an <Svg>'s box. A node with any state-driven
+ * content keeps a file-scope handle, and app_update sets all of its props again.
  */
 export interface IrNode {
   /** The node's variable (`n<id>`); its handle is `s_n<id>`. */
@@ -115,12 +118,9 @@ export interface IrNode {
   children: IrChild[];
 }
 
-/**
- * What a JSX element lowered to: an engine node (null for one that does not lower to the IR yet, an <Svg>), or a
- * function component inlined in place, wrapping the element its body returns.
- */
+/** What a JSX element lowered to: an engine node, or a function component inlined in place, wrapping its root. */
 export type IrElement =
-  | {kind: 'node'; id: string; node: IrNode | null}
+  | {kind: 'node'; id: string; node: IrNode}
   | {
       kind: 'component';
       /** The variable of the node its body lowered to. */
