@@ -21,11 +21,13 @@
 import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
 import {aotError, locateError, withLoc} from './diagnostics.mts';
+import {bootSlotOf, foldBoot, isBoot} from './boot.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
 import type * as t from '@babel/types';
+import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import type {IrSlotStore, IrSource, IrSourceDivisor} from './ir/source.mts';
 import type {
@@ -234,7 +236,7 @@ export function findShadowedClockCalls(ast: t.File): WeakSet<t.Node> {
  */
 export function staticInt(node: t.Node, env: Env): number | null {
   try {
-    const value = evalStatic(node, foldScope(env, env.consts ?? {}));
+    const value = evalStatic(node, foldScope(env, env.consts ?? {}), 'strict');
     return Number.isInteger(value) ? (value as number) : null;
   } catch {
     return null;
@@ -279,6 +281,39 @@ function numberSource(
   }
 
   return {kind: 'number', value, loc};
+}
+
+/**
+ * A read of a value worked out at boot. One boot cannot work out is taken at the build's panel instead, which
+ * the panel at boot must then give too.
+ *
+ * @param value  The value.
+ * @param loc  Where it is read.
+ *
+ * @returns Its source.
+ */
+function bootSource(
+  value: BootValue,
+  loc: SourcePosition | undefined,
+): IrSource {
+  const slot = bootSlotOf(value);
+  if (slot) {
+    return {kind: 'fixed', expr: {kind: 'boot', slot, type: slot.type}, loc};
+  }
+
+  const buildValue = foldBoot(value);
+  if (typeof buildValue === 'number') return numberSource(buildValue, loc);
+  if (typeof buildValue === 'string') {
+    return {kind: 'string', value: buildValue, loc};
+  }
+
+  if (typeof buildValue === 'boolean') {
+    return {kind: 'boolean', value: buildValue, loc};
+  }
+
+  throw new Error(
+    'AOT: a value derived from the panel size cannot be used in a dynamic expression',
+  );
 }
 
 /**
@@ -1331,6 +1366,7 @@ function sourceOf(node: t.Node, env: Env): IrSource {
 
       if (node.name in env.consts) {
         const constValue = env.consts[node.name];
+        if (isBoot(constValue)) return bootSource(constValue, loc);
         if (typeof constValue === 'number')
           return numberSource(constValue, loc);
 
@@ -1409,7 +1445,12 @@ function sourceOf(node: t.Node, env: Env): IrSource {
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g., a .map item's `.key`).
       try {
-        const constValue = evalStatic(node, foldScope(env, env.consts ?? {}));
+        const constValue = evalStatic(
+          node,
+          foldScope(env, env.consts ?? {}),
+          'boot',
+        );
+        if (isBoot(constValue)) return bootSource(constValue, loc);
         // A number with no float form falls through too, so its check runs now, not in the check pass.
         if (typeof constValue === 'number') {
           return attemptLowering(() => numberSource(constValue, loc));
@@ -1768,9 +1809,9 @@ function lowerTextParts(
     };
   }
 
-  // A compile-time constant becomes literal text.
+  // A compile-time constant becomes literal text; a value worked out at boot is a runtime value.
   try {
-    const constValue = evalStatic(node, scope);
+    const constValue = evalStatic(node, scope, 'strict');
     return {
       isString: typeof constValue === 'string',
       parts: [

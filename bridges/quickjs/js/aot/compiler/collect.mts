@@ -23,6 +23,7 @@ import {parse} from '@babel/parser';
 import {readFileSync, existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {aotError} from './diagnostics.mts';
+import {nameBootValues, screenBinding} from './boot.mts';
 import {evalStaticOrThrow, evalStatic, withUndefined} from './static-eval.mts';
 import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
@@ -165,7 +166,21 @@ export function declaredNames(body: t.Statement[]): string[] {
 }
 
 /**
- * The module's compile-time scope: `screen`, the seed, and every module-level `const` that folds.
+ * A const's folded value, with the boot values in it named after the const.
+ *
+ * @param name  The const's name.
+ * @param value  Its folded value.
+ *
+ * @returns The value.
+ */
+export function bindConst(name: string, value: unknown): unknown {
+  nameBootValues(value, name);
+  return value;
+}
+
+/**
+ * The module's compile-time scope: `screen`, the seed, and every module-level `const` that folds. A const
+ * derived from `screen` is a boot value (see BootValue).
  *
  * @param program  The parsed module.
  * @param screen  The panel size in this build folds its layout at.
@@ -179,7 +194,7 @@ export function moduleScope(
   seed: Scope = {},
 ): Scope {
   // Seed the scope (image imports as asset names) before folding module consts, so a const can reference them.
-  const scope: Scope = {screen, ...seed};
+  const scope: Scope = {screen: screenBinding(screen), ...seed};
 
   // Fold module variables in order so later ones see earlier ones; skip functions, destructuring and non-folds.
   for (const stmt of program.body) {
@@ -196,7 +211,10 @@ export function moduleScope(
         continue;
       }
       try {
-        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
+        scope[decl.id.name] = bindConst(
+          decl.id.name,
+          evalStatic(decl.init, withUndefined(scope), 'boot'),
+        );
       } catch {
         /* not a static const — skip */
       }

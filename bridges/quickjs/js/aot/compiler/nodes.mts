@@ -21,6 +21,7 @@
 import {checkNumber} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
 import {aotError, withLoc} from './diagnostics.mts';
+import {buildValueOf} from './boot.mts';
 import {evalStaticOrThrow, evalStatic, foldScope} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
 import {isFn} from './collect.mts';
@@ -893,7 +894,8 @@ function omitUndefinedAttrs(
       undefined,
     });
     try {
-      return evalStatic(attr.value.expression, foldingScope!) !== undefined;
+      const value = evalStatic(attr.value.expression, foldingScope!, 'boot');
+      return buildValueOf(value) !== undefined;
     } catch {
       return true; // not a compile-time value — its reader decides
     }

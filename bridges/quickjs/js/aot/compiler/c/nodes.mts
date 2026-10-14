@@ -23,7 +23,7 @@ import {printCondition, printExpr} from './expressions.mts';
 import {panEventName, panQueryName} from './pan-responder.mts';
 import {printText} from './text.mts';
 import {printStateDrivenVectorWiring, printVectorOps} from './vectors.mts';
-import {branchElements, isStateDriven} from '../ir/nodes.mts';
+import {branchElements, hasRuntimeProps, isStateDriven} from '../ir/nodes.mts';
 import type {IrElement, IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrPanResponder} from '../ir/pan-responder.mts';
 import type {AnimBind} from '../style-text.mts';
@@ -206,6 +206,22 @@ export function printNode(node: IrNode): PrintedNode {
       imageName,
       placeholder: node.placeholder,
     };
+  } else if (hasRuntimeProps(node)) {
+    // Props that read-only values worked out at boot are set once, here.
+    build.push(
+      ...printNodeUpdate(
+        {
+          nodeId: id,
+          styleAssigns: node.constantProps,
+          text,
+          dynAssigns: node.stateProps,
+          imageName:
+            node.image?.kind === 'static' ? cstr(node.image.name) : imageName,
+          placeholder: node.placeholder,
+        },
+        id,
+      ),
+    );
   } else {
     build.push(`    er_props_default(&p);`);
     for (const prop of node.constantProps) {
@@ -325,10 +341,14 @@ export function printElementTree(element: IrElement): string[] {
  * A state-driven node's app_update() entry: its props built again, then set.
  *
  * @param update  The node's entry.
+ * @param target  The node's variable: its file-scope handle, unless er_app_build() sets it.
  *
  * @returns The C lines.
  */
-export function printNodeUpdate(update: NodeUpdate): string[] {
+export function printNodeUpdate(
+  update: NodeUpdate,
+  target = `s_${update.nodeId}`,
+): string[] {
   const lines = [`    er_props_default(&p);`];
   for (const assign of update.styleAssigns) {
     lines.push(`    p.${assign.field} = ${assign.expr};`);
@@ -357,6 +377,6 @@ export function printNodeUpdate(update: NodeUpdate): string[] {
       );
     }
   }
-  lines.push(`    er_node_set_props(s_${update.nodeId}, &p);`);
+  lines.push(`    er_node_set_props(${target}, &p);`);
   return lines;
 }

@@ -26,6 +26,7 @@ import type {
   RefRecord,
   StateRecord,
 } from '../types.mts';
+import type {IrBoot} from './boot.mts';
 import type {IrKeyboard} from './keyboard.mts';
 import type {IrElement} from './nodes.mts';
 
@@ -49,6 +50,8 @@ export interface IrApp {
   hasUpdate: boolean;
   /** The image imports the app reaches, which the CLI bakes. */
   images: AssetImport[];
+  /** The values er_app_build() works out from the panel size, and what the build assumed of the panel. */
+  boot: IrBoot;
   /** The values lowering recorded for the check pass, in order. */
   checks: IrCheck[];
   /** Everything else the tree and its effects emitted. */

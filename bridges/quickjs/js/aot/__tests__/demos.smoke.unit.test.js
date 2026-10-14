@@ -39,7 +39,7 @@ describe('AOT demo compile smoke', () => {
       screen: {width: 240, height: 280},
       filename: 'demos/watch-face/App.jsx',
     });
-    expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
+    expect(r.c).toContain('bool er_app_build(int screen_w, int screen_h)');
     expect(r.nodes).toBeGreaterThan(0);
     expect(r.c).toContain('static void er_timer_fn_1(void);');
     // Its swipe pager is a PanResponder, lowered onto the engine's own responder negotiation.
@@ -58,7 +58,7 @@ describe('AOT demo compile smoke', () => {
       filename: 'demos/thermostat/App.jsx',
       svgArtifacts,
     });
-    expect(r.c).toContain('void er_app_build(int screen_w, int screen_h)');
+    expect(r.c).toContain('bool er_app_build(int screen_w, int screen_h)');
     expect(r.c).toContain('er_node_create(ER_NODE_ARC)');
     expect(r.c).not.toMatch(/build_svg\d+\(/);
     expect(r.c).toContain('p.arc_range ='); // AUTO's two-setpoint band is state-driven

@@ -21,7 +21,12 @@
 import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
-import {findShadowedClockCalls, emitSourcedWide} from './expressions.mts';
+import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
+import {
+  findShadowedClockCalls,
+  emitSourcedWide,
+  lowerExpr,
+} from './expressions.mts';
 import {
   findComponent,
   declaredNames,
@@ -35,6 +40,7 @@ import {
   collectCallbacks,
   collectMemos,
   collectEffects,
+  bindConst,
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
 import {lowerEffect} from './handlers.mts';
@@ -45,7 +51,7 @@ import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
-import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
+import {isStateDriven, nodesOf, updatedVectorOf} from './ir/nodes.mts';
 import {nodeReads, vectorReads} from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
@@ -132,7 +138,7 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
  */
 function watchState(nodes: IrNode[]): void {
   for (const node of nodes) {
-    const vector = stateDrivenVectorOf(node);
+    const vector = updatedVectorOf(node);
     for (const reads of [nodeReads(node), vector && vectorReads(vector)]) {
       reads?.forEach(record => {
         record.isWatched = true;
@@ -192,12 +198,17 @@ export function lowerApp(
   wide: SlotWidths,
   stores: IrSlotStore[],
 ): IrApp {
-  const {result, checks} = lowerWithChecks(() =>
-    lowerProgram(src, opts, wide, stores),
-  );
-  const app = {...result, checks};
-  runChecks(app.checks);
-  return app;
+  beginBoot();
+  try {
+    const {result, checks} = lowerWithChecks(() =>
+      lowerProgram(src, opts, wide, stores),
+    );
+    const app = {...result, boot: endBoot(), checks};
+    runChecks(app.checks);
+    return app;
+  } finally {
+    abandonBoot();
+  }
 }
 
 /**
@@ -216,7 +227,7 @@ function lowerProgram(
   opts: ResolvedOptions,
   wide: SlotWidths,
   stores: IrSlotStore[],
-): Omit<IrApp, 'checks'> {
+): Omit<IrApp, 'boot' | 'checks'> {
   // Parse the app and prepare the AST for the passes below.
   const ast = parseApp(src, opts);
   normalizeUndefined(ast);
@@ -249,7 +260,10 @@ function lowerProgram(
     for (const decl of statement.declarations) {
       if (decl.id.type !== 'Identifier' || !decl.init) continue;
       try {
-        scope[decl.id.name] = evalStatic(decl.init, withUndefined(scope));
+        scope[decl.id.name] = bindConst(
+          decl.id.name,
+          evalStatic(decl.init, withUndefined(scope), 'boot'),
+        );
       } catch {
         // A dynamic const must hide a same-named module const, or the JSX quietly renders the module value.
         delete scope[decl.id.name];
@@ -309,10 +323,13 @@ function lowerProgram(
     shadowedClock,
   };
 
+  // A value worked out at boot lowers its slot against the app's environment.
+  setBootLowering(env, lowerExpr);
+
   // Before emit, fold each memo or inline its C expression at each use (no cache needed: dep tracking re-applies).
   for (const [name, expr] of memos) {
     try {
-      scope[name] = evalStatic(expr, scope);
+      scope[name] = bindConst(name, evalStatic(expr, scope, 'boot'));
     } catch {
       const cExpr = emitSourcedWide(expr, env);
       env.locals.set(name, {
@@ -347,7 +364,7 @@ function lowerProgram(
   // app_update() exists only when something has to be re-applied after a state change.
   const hasUpdate =
     nodesOf(root).some(
-      node => isStateDriven(node) || stateDrivenVectorOf(node) !== null,
+      node => isStateDriven(node) || updatedVectorOf(node) !== null,
     ) || out.depEffects.length > 0;
   settleFunctions(out, hasUpdate);
   if (hasUpdate) {

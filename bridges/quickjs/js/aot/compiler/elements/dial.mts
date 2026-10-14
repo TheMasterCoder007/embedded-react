@@ -148,7 +148,7 @@ export function emitDial(
   ): void => {
     let number: unknown;
     try {
-      number = evalStatic(node, scope);
+      number = evalStatic(node, scope, 'strict');
     } catch {
       const value = lowerExpr(node, env);
       dynAssigns.push({

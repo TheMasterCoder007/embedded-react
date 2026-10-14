@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import type {IrBootSlot} from './boot.mts';
 import type {IrType} from './types.mts';
 import type {
   ItemField,
@@ -108,6 +109,12 @@ export interface IrBoolean extends IrTyped {
 export interface IrState extends IrTyped {
   kind: 'state';
   state: ScalarState;
+}
+
+/** A read of a value worked out at boot, from the panel size (`screen.width`, or a const derived from it). */
+export interface IrBoot extends IrTyped {
+  kind: 'boot';
+  slot: IrBootSlot;
 }
 
 /** A read of a local: a handler `const`, a memo, a dynamic prop, an updater's parameter, or a list row. */
@@ -285,6 +292,7 @@ export type IrExpr =
   | IrString
   | IrBoolean
   | IrState
+  | IrBoot
   | IrLocal
   | IrRef
   | IrListLength

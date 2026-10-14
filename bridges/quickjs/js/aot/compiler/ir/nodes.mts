@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {isBootOnlyNode, isBootOnlyVector} from './reads.mts';
 import type {AnimBind, TextSpan} from '../style-text.mts';
 import type {ListState, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
@@ -168,17 +169,40 @@ export type IrBranch = IrElement | IrConditional | null;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * Whether any of a node's props, text, or image is a runtime value rather than a constant.
+ *
+ * @param node  The node.
+ *
+ * @returns True when one is.
+ */
+export const hasRuntimeProps = (node: IrNode): boolean =>
+  (node.text?.parts.some(part => part.kind !== 'literal') ?? false) ||
+  node.stateProps.length > 0 ||
+  node.image?.kind === 'value';
+
+/**
  * Whether state drives any of a node's props, text or image, so it keeps a handle and app_update() sets its
- * props again.
+ * props again. Props that read-only values worked out at boot are set once, by er_app_build().
  *
  * @param node  The node.
  *
  * @returns True when state drives it.
  */
 export const isStateDriven = (node: IrNode): boolean =>
-  (node.text?.parts.some(part => part.kind !== 'literal') ?? false) ||
-  node.stateProps.length > 0 ||
-  node.image?.kind === 'value';
+  hasRuntimeProps(node) && !isBootOnlyNode(node);
+
+/**
+ * The drawing state drives on a node if it has one: a drawing that reads only values worked out at boot is
+ * built once, by er_app_build().
+ *
+ * @param node  The node.
+ *
+ * @returns The drawing, or null.
+ */
+export function updatedVectorOf(node: IrNode): IrStateDrivenVector | null {
+  const vector = stateDrivenVectorOf(node);
+  return vector && !isBootOnlyVector(vector) ? vector : null;
+}
 
 /**
  * The drawing state drives on a node, if it has one.

@@ -18,7 +18,14 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {check} from './check.mts';
+import {attemptLowering, check} from './check.mts';
+import {
+  BootReadError,
+  bootEnvOf,
+  bootSlotOf,
+  foldBoot,
+  isBoot,
+} from './boot.mts';
 import {
   lowerStyle,
   isStyleKey,
@@ -46,6 +53,7 @@ import {
   parseInterp,
 } from './animations.mts';
 import type * as t from '@babel/types';
+import type {BootValue} from './boot.mts';
 import type {Interpolation} from './animations.mts';
 import type {AotError} from './diagnostics.mts';
 import type {IrPropValue} from './ir/nodes.mts';
@@ -83,6 +91,19 @@ export interface TextSpan {
   text_decoration: string;
   letter_spacing: string;
 }
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** Pixel style keys state cannot drive but a value worked out at boot still sets, with their ERProps fields. */
+const BOOT_PIXEL_FIELDS: Record<string, string> = {
+  left: 'left',
+  top: 'top',
+  right: 'right',
+  bottom: 'bottom',
+  flexBasis: 'flex_basis',
+};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -353,6 +374,98 @@ function lowerDynamicStyleValue(
 }
 
 /**
+ * A style entry worked out at boot, as the runtime write of its field: a size or an opacity. Null for a value
+ * boot cannot work out, one that is no number, or a key that takes no runtime number, which then fold.
+ *
+ * @param key  The style key.
+ * @param value  The entry.
+ *
+ * @returns The write, or null.
+ */
+function bootStyleAssign(key: string, value: BootValue): DynAssign | null {
+  const dynamicField = Object.hasOwn(DYN_FIELDS, key)
+    ? DYN_FIELDS[key]
+    : undefined;
+  const pixelField = Object.hasOwn(BOOT_PIXEL_FIELDS, key)
+    ? BOOT_PIXEL_FIELDS[key]
+    : undefined;
+  // A color or an enum lowers its own expression (a ternary of literals) against the names it reads.
+  if (dynamicField?.kind === 'color' || dynamicField?.kind === 'enum') {
+    const env = bootEnvOf(value);
+    const valueNode = value.node;
+    if (!env || !valueNode) return null;
+    const propValue = tryLowering(() =>
+      dynamicField.kind === 'enum'
+        ? lowerEnumValue(valueNode, dynamicField.table, env)
+        : lowerColorValue(valueNode, env),
+    );
+    return propValue && {field: dynamicField.field, value: propValue};
+  }
+
+  const isNumeric =
+    pixelField ||
+    dynamicField?.kind === 'opacity' ||
+    dynamicField?.kind === 'num';
+  if (!isNumeric) return null;
+  value.name ??= key;
+
+  const slot = bootSlotOf(value);
+  if (!slot || (slot.type.kind !== 'int' && slot.type.kind !== 'float')) {
+    return null;
+  }
+
+  return {
+    field: pixelField ?? dynamicField!.field,
+    value: {
+      kind: dynamicField?.kind === 'opacity' ? 'opacity' : 'dimension',
+      value: {kind: 'boot', slot, type: slot.type},
+    },
+  };
+}
+
+/**
+ * Lowers a style value worked out at boot: as a state-driven one, or, for an inset or flexBasis, which state
+ * cannot drive, as the pixel size it is.
+ *
+ * @param key  The style key.
+ * @param valueNode  The value expression.
+ * @param env  The expression environment.
+ *
+ * @returns The runtime writes.
+ */
+function lowerBootStyleValue(
+  key: string,
+  valueNode: t.Node,
+  env: Env,
+): DynAssign[] {
+  if (!Object.hasOwn(BOOT_PIXEL_FIELDS, key)) {
+    return lowerDynamicStyleValue(key, valueNode, env);
+  }
+
+  const value = lowerExpr(valueNode, env);
+  if (value.type.kind !== 'int' && value.type.kind !== 'float') {
+    throw new Error(`AOT: style "${key}" needs a number`);
+  }
+
+  return [{field: BOOT_PIXEL_FIELDS[key], value: {kind: 'dimension', value}}];
+}
+
+/**
+ * Runs a lowering whose failure picks a fallback.
+ *
+ * @param attempt  The lowering.
+ *
+ * @returns What it returns, or null when it throws.
+ */
+function tryLowering<Result>(attempt: () => Result): Result | null {
+  try {
+    return attemptLowering(attempt);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether a style already writes `field`, counting its percentage twin: `width: '50%'` lowers to
  * `width_pct`, and the author has still set the width. Used by the components that fall back to a
  * built-in size or inset when the style leaves one out — without the twin they inject a pixel default
@@ -574,10 +687,30 @@ export function collectStyleAssigns(
 
         // Only a failed fold falls back to the dynamic path, so an unknown key is not misreported as state-driven.
         let staticValue: {v: unknown} | null;
+        let readsBoot = false;
         try {
-          staticValue = {v: evalStatic(prop.value, withUndefined(scope))};
-        } catch {
+          staticValue = {
+            v: evalStatic(prop.value, withUndefined(scope), 'strict'),
+          };
+        } catch (error) {
           staticValue = null; // references state — lower it as a dynamic value
+          readsBoot = error instanceof BootReadError;
+        }
+
+        // A value worked out at boot is set once at build; a key that takes no runtime value folds it instead.
+        if (readsBoot) {
+          const bootAssigns = tryLowering(() =>
+            lowerBootStyleValue(key, prop.value, env),
+          );
+          if (bootAssigns) {
+            checkStyleKey(spec, key, prop);
+            for (const assign of bootAssigns) {
+              setField(assign.field, {value: assign.value});
+            }
+            continue;
+          }
+
+          staticValue = {v: evalStatic(prop.value, withUndefined(scope))};
         }
 
         if (staticValue) {
@@ -600,12 +733,27 @@ export function collectStyleAssigns(
     }
 
     // A static style reference; null, undefined or false (`cond && s`) means no style, as in RN.
-    const resolved = evalStatic(expr, withUndefined(scope));
+    let resolved = evalStatic(expr, withUndefined(scope), 'boot');
+    if (isBoot(resolved)) {
+      resolved = foldBoot(resolved);
+    }
+
     if (resolved === null || resolved === undefined || resolved === false) {
       return;
     }
 
-    for (const [styleKey, styleValue] of Object.entries(resolved as object)) {
+    for (const [styleKey, entry] of Object.entries(resolved as object)) {
+      // An entry worked out at boot is set once at build, if its key takes a runtime value.
+      const bootAssign = isBoot(entry)
+        ? bootStyleAssign(styleKey, entry)
+        : null;
+      if (bootAssign) {
+        checkStyleKey(spec, styleKey, expr);
+        setField(bootAssign.field, {value: bootAssign.value});
+        continue;
+      }
+
+      const styleValue = foldBoot(entry);
       if (styleValue === undefined || styleValue === null) continue;
 
       checkStyleKey(spec, styleKey, expr);

@@ -43,6 +43,8 @@ export type StateReads = Set<StateRecord> | null;
 interface ReadsFound {
   states: Set<StateRecord>;
   untracked: boolean;
+  /** A value worked out at boot, which never changes after it. */
+  boot?: boolean;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -124,6 +126,9 @@ function readExpr(expr: IrExpr, found: ReadsFound): void {
       return;
     case 'state':
       found.states.add(expr.state);
+      return;
+    case 'boot':
+      found.boot = true;
       return;
     case 'local':
       readLocal(expr.local, found);
@@ -299,7 +304,46 @@ const readsOf = (found: ReadsFound): StateReads =>
  *
  * @returns Its reads.
  */
-export function nodeReads(node: IrNode): StateReads {
+export const nodeReads = (node: IrNode): StateReads => readsOf(nodeFound(node));
+
+/**
+ * Whether a node's runtime props read only values worked out at boot, so er_app_build() sets them once.
+ *
+ * @param node  The node.
+ *
+ * @returns True when they do.
+ */
+export const isBootOnlyNode = (node: IrNode): boolean =>
+  isBootOnly(nodeFound(node));
+
+/**
+ * Whether a drawing reads only values worked out at boot, so er_app_build() builds it once.
+ *
+ * @param vector  The drawing.
+ *
+ * @returns True when it does.
+ */
+export const isBootOnlyVector = (vector: IrStateDrivenVector): boolean =>
+  isBootOnly(vectorFound(vector));
+
+/**
+ * Whether a walk found boot values and nothing that changes.
+ *
+ * @param found  What the walk found.
+ *
+ * @returns True when it did.
+ */
+const isBootOnly = (found: ReadsFound): boolean =>
+  !!found.boot && !found.untracked && found.states.size === 0;
+
+/**
+ * Walks everything a node's props, text and image read.
+ *
+ * @param node  The node.
+ *
+ * @returns What the walk found.
+ */
+function nodeFound(node: IrNode): ReadsFound {
   const found: ReadsFound = {states: new Set(), untracked: false};
   node.stateProps.forEach(prop => readPropValue(prop.value, found));
   if (node.text) {
@@ -310,7 +354,7 @@ export function nodeReads(node: IrNode): StateReads {
     readExpr(node.image.value, found);
   }
 
-  return readsOf(found);
+  return found;
 }
 
 /**
@@ -320,7 +364,17 @@ export function nodeReads(node: IrNode): StateReads {
  *
  * @returns Its reads.
  */
-export function vectorReads(vector: IrStateDrivenVector): StateReads {
+export const vectorReads = (vector: IrStateDrivenVector): StateReads =>
+  readsOf(vectorFound(vector));
+
+/**
+ * Walks everything a drawing reads.
+ *
+ * @param vector  The drawing.
+ *
+ * @returns What the walk found.
+ */
+function vectorFound(vector: IrStateDrivenVector): ReadsFound {
   const found: ReadsFound = {states: new Set(), untracked: false};
   vector.locals.forEach(local => readTapeValue(local.value, found));
   vector.tape.forEach(value => readTapeValue(value, found));
@@ -350,5 +404,5 @@ export function vectorReads(vector: IrStateDrivenVector): StateReads {
     }
   }
 
-  return readsOf(found);
+  return found;
 }

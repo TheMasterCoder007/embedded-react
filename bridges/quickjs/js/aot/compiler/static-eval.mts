@@ -18,9 +18,34 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {
+  BootReadError,
+  BootValue,
+  buildValueOf,
+  containsBoot,
+  foldBoot,
+  isBoot,
+  isContainer,
+} from './boot.mts';
 import {aotError} from './diagnostics.mts';
 import type * as t from '@babel/types';
 import type {Env, Scope} from './types.mts';
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Interfaces
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * How a value derived from the panel size folds: at the build's panel (`fold`), as a boot value (`boot`), or
+ * not at all (`strict`). See evalStatic.
+ */
+export type BootMode = 'fold' | 'boot' | 'strict';
+
+/** One evalStatic call: the scope it folds in, and that scope's copy, made once a boot value needs it. */
+interface Fold {
+  scope: Scope;
+  snapshot: Scope | null;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -60,14 +85,200 @@ export function evalStaticOrThrow(
  * Styles and state initial values fold through here. A caller that can also handle a runtime value catches
  * the error thrown on anything dynamic (a state reference, say) and emits C instead.
  *
+ * A value derived from the panel size (see BootValue) folds by `mode`: `fold` takes what it is on the build's
+ * panel and records that as an assumption the panel at boot must meet; `boot` keeps it as a boot value, which
+ * boot works out; `strict` throws a BootReadError, so the caller lowers it as a runtime value instead.
+ *
  * @param node  The expression.
  * @param scope  Compile-time constants in reach.
+ * @param mode  How a value derived from the panel size folds.
  *
  * @returns The value: a number, string, boolean, null, or an object or array of those.
  *
  * @throws An error when any part of the expression is not a compile-time constant.
  */
-export function evalStatic(node: t.Node, scope: Scope): unknown {
+export function evalStatic(
+  node: t.Node,
+  scope: Scope,
+  mode: BootMode = 'fold',
+): unknown {
+  const value = evaluate(node, scope, {scope, snapshot: null});
+  if (mode === 'boot') return value;
+  if (mode === 'fold') return foldBoot(value);
+  if (containsBoot(value)) {
+    throw new BootReadError();
+  }
+
+  return value;
+}
+
+/**
+ * The names a boot value's expression reads, copied once per fold: the scope a const was folded in can lose
+ * or rebind names afterward.
+ *
+ * @param fold  The fold.
+ *
+ * @returns The copy.
+ */
+function snapshotOf(fold: Fold): Scope {
+  if (!fold.snapshot) {
+    const copy: Scope = {};
+    for (const name in fold.scope) {
+      copy[name] = fold.scope[name];
+    }
+    fold.snapshot = copy;
+  }
+
+  return fold.snapshot;
+}
+
+/**
+ * A boot value for an expression the fold could only take so far because it reads one.
+ *
+ * @param node  The expression.
+ * @param value  What it is on the build's panel.
+ * @param fold  The fold.
+ * @param lowerable  Boot can work it out from the expression.
+ * @param basis  What a fold of it assumes when boot cannot work it out.
+ *
+ * @returns The boot value.
+ */
+const bootOf = (
+  node: t.Node,
+  value: unknown,
+  fold: Fold,
+  lowerable = true,
+  basis: BootValue[] = [],
+): BootValue =>
+  new BootValue(
+    node as t.Expression,
+    snapshotOf(fold),
+    buildValueOf(value),
+    lowerable,
+    null,
+    null,
+    basis,
+  );
+
+/**
+ * `test ? consequent : alternate` with a test that depends on the panel. Two objects with the same keys merge
+ * into one whose differing entries each pick at boot, so a branch that changes only values stays one value;
+ * anything else is one boot value.
+ *
+ * @param node  The expression.
+ * @param test  The test, as a boot value.
+ * @param fold  The fold.
+ *
+ * @returns The value.
+ */
+function bootConditional(
+  node: t.ConditionalExpression,
+  test: BootValue,
+  fold: Fold,
+): unknown {
+  const taken = buildValueOf(test) ? node.consequent : node.alternate;
+  const takenValue = evaluate(taken, fold.scope, fold);
+  let otherValue: unknown;
+  try {
+    otherValue = evaluate(
+      taken === node.consequent ? node.alternate : node.consequent,
+      fold.scope,
+      fold,
+    );
+  } catch {
+    // The branch the build's panel does not take does not fold, so boot cannot pick between them.
+    return bootOf(node, takenValue, fold, false, [test]);
+  }
+
+  const [consequent, alternate] =
+    taken === node.consequent
+      ? [takenValue, otherValue]
+      : [otherValue, takenValue];
+  return mergeBranches(node, node.consequent, node.alternate, [
+    consequent,
+    alternate,
+    takenValue,
+  ]);
+
+  /**
+   * Merges two branch values at `at`, entry by entry where both are objects. An entry only one branch has is
+   * taken at the build's panel, which assumes the test.
+   *
+   * @param at  The expression the merged value stands for.
+   * @param consequentNode  The consequent branch's expression.
+   * @param alternateNode  The alternate branch's expression.
+   * @param values  The consequent's value, the alternate's, and the one the build's panel takes.
+   *
+   * @returns The merged value.
+   */
+  function mergeBranches(
+    at: t.Node,
+    consequentNode: t.Expression,
+    alternateNode: t.Expression,
+    [whenTrue, whenFalse, built]: unknown[],
+  ): unknown {
+    if (whenTrue === whenFalse) return whenTrue;
+    const mergeable =
+      isContainer(whenTrue) &&
+      isContainer(whenFalse) &&
+      !Array.isArray(whenTrue) &&
+      !Array.isArray(whenFalse);
+    if (!mergeable) {
+      return bootOf(at, built, fold, !isContainer(buildValueOf(built)), [test]);
+    }
+
+    // Each entry is `test ? (consequent).key : (alternate).key`, which boot works out on its own.
+    const merged: Record<string, unknown> = {};
+    const keys = new Set([...Object.keys(whenTrue), ...Object.keys(whenFalse)]);
+    for (const key of keys) {
+      if (!Object.hasOwn(whenTrue, key) || !Object.hasOwn(whenFalse, key)) {
+        const builtEntry = (built as Record<string, unknown>)[key];
+        merged[key] = bootOf(at, builtEntry, fold, false, [test]);
+        continue;
+      }
+
+      const entryOf = (object: t.Expression): t.Expression =>
+        ({
+          type: 'MemberExpression',
+          object,
+          property: {type: 'StringLiteral', value: key},
+          computed: true,
+          loc: object.loc,
+        }) as t.MemberExpression;
+      const consequentEntry = entryOf(consequentNode);
+      const alternateEntry = entryOf(alternateNode);
+      merged[key] = mergeBranches(
+        {
+          type: 'ConditionalExpression',
+          test: node.test,
+          consequent: consequentEntry,
+          alternate: alternateEntry,
+          loc: at.loc,
+        } as t.ConditionalExpression,
+        consequentEntry,
+        alternateEntry,
+        [
+          (whenTrue as Record<string, unknown>)[key],
+          (whenFalse as Record<string, unknown>)[key],
+          (built as Record<string, unknown>)[key],
+        ],
+      );
+    }
+
+    return merged;
+  }
+}
+
+/**
+ * evalStatic's fold, which keeps a value derived from the panel size as a boot value.
+ *
+ * @param node  The expression.
+ * @param scope  Compile-time constants in reach.
+ * @param fold  The fold this expression is part of.
+ *
+ * @returns The value.
+ */
+function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
   switch (node.type) {
     case 'NumericLiteral':
     case 'StringLiteral':
@@ -76,68 +287,92 @@ export function evalStatic(node: t.Node, scope: Scope): unknown {
     case 'NullLiteral':
       return null;
     case 'UnaryExpression': {
-      const operand: any = evalStatic(node.argument, scope);
-      if (node.operator === '-') return -operand;
-      if (node.operator === '+') return +operand;
-      if (node.operator === '!') return !operand;
-      break;
-    }
-    case 'BinaryExpression': {
-      const left: any = evalStatic(node.left, scope);
-      const right: any = evalStatic(node.right, scope);
-      switch (node.operator) {
-        case '+':
-          return left + right;
-        case '-':
-          return left - right;
-        case '*':
-          return left * right;
-        case '/':
-          return left / right;
-        case '%':
-          return left % right;
-        case '<':
-          return left < right;
-        case '>':
-          return left > right;
-        case '<=':
-          return left <= right;
-        case '>=':
-          return left >= right;
-        case '==':
-        case '===':
-          return left === right;
-        case '!=':
-        case '!==':
-          return left !== right;
-      }
-      break;
-    }
-    case 'LogicalExpression': {
-      const left = evalStatic(node.left, scope);
-      if (node.operator === '&&') {
-        return left ? evalStatic(node.right, scope) : left;
+      const operand: any = evaluate(node.argument, scope, fold);
+      const apply = (value: any): unknown => {
+        if (node.operator === '-') return -value;
+        if (node.operator === '+') return +value;
+        if (node.operator === '!') return !value;
+        throw new Error(
+          'AOT: unsupported expression "UnaryExpression" in static context',
+        );
+      };
+      if (isBoot(operand)) {
+        const result = bootOf(node, apply(buildValueOf(operand)), fold);
+        // `!flag` holds exactly when `flag` does not, so a fold of it assumes the flag itself.
+        if (
+          node.operator === '!' &&
+          typeof buildValueOf(operand) === 'boolean'
+        ) {
+          result.equivalent = operand.equivalent ?? operand;
+        }
+
+        return result;
       }
 
-      if (node.operator === '||') {
-        return left ? left : evalStatic(node.right, scope);
-      }
-      break;
+      return apply(operand);
     }
-    case 'ConditionalExpression':
-      return evalStatic(node.test, scope)
-        ? evalStatic(node.consequent, scope)
-        : evalStatic(node.alternate, scope);
+    case 'BinaryExpression': {
+      const left: any = evaluate(node.left, scope, fold);
+      const right: any = evaluate(node.right, scope, fold);
+      const result = binary(
+        node.operator,
+        buildValueOf(left),
+        buildValueOf(right),
+      );
+      return isBoot(left) || isBoot(right)
+        ? bootOf(node, result, fold)
+        : result;
+    }
+    case 'LogicalExpression': {
+      const left = evaluate(node.left, scope, fold);
+      if (node.operator !== '&&' && node.operator !== '||') break;
+      if (!isBoot(left)) {
+        const takesRight = node.operator === '&&' ? left : !left;
+        return takesRight ? evaluate(node.right, scope, fold) : left;
+      }
+
+      // A test that depends on the panel: boot picks a side, so both have to fold.
+      const takesRight =
+        node.operator === '&&' ? buildValueOf(left) : !buildValueOf(left);
+      try {
+        const right = evaluate(node.right, scope, fold);
+        return bootOf(node, takesRight ? right : left.value, fold);
+      } catch {
+        if (takesRight) throw new Error('AOT: the right side does not fold');
+        return bootOf(node, left.value, fold, false, [left]);
+      }
+    }
+    case 'ConditionalExpression': {
+      const test = evaluate(node.test, scope, fold);
+      if (isBoot(test)) return bootConditional(node, test, fold);
+      return test
+        ? evaluate(node.consequent, scope, fold)
+        : evaluate(node.alternate, scope, fold);
+    }
     case 'Identifier':
       if (node.name in scope) return scope[node.name];
       throw new Error(
         `AOT: cannot statically resolve identifier "${node.name}"`,
       );
     case 'MemberExpression': {
-      const object: any = evalStatic(node.object, scope);
+      const object: any = evaluate(node.object, scope, fold);
       const key: any = node.computed
-        ? evalStatic(node.property, scope)
+        ? evaluate(node.property, scope, fold)
         : (node.property as t.Identifier).name;
+      if (isBoot(key)) {
+        throw new Error('AOT: a member key that depends on the panel size');
+      }
+
+      // A member of a boot value is one too, which only a fold can take.
+      if (isBoot(object)) {
+        const objectValue: any = buildValueOf(object);
+        if (objectValue == null) {
+          throw new Error(`AOT: member access on null/undefined ("${key}")`);
+        }
+
+        return bootOf(node, objectValue[key], fold, false, [object]);
+      }
+
       if (object == null) {
         throw new Error(`AOT: member access on null/undefined ("${key}")`);
       }
@@ -152,17 +387,21 @@ export function evalStatic(node: t.Node, scope: Scope): unknown {
           );
         }
         const key: any = prop.computed
-          ? evalStatic(prop.key, scope)
+          ? evaluate(prop.key, scope, fold)
           : ((prop.key as t.Identifier).name ??
             (prop.key as t.StringLiteral).value);
-        folded[key] = evalStatic(prop.value, scope);
+        if (isBoot(key)) {
+          throw new Error('AOT: an object key that depends on the panel size');
+        }
+
+        folded[key] = evaluate(prop.value, scope, fold);
       }
 
       return folded;
     }
     case 'ArrayExpression':
       return node.elements.map(element =>
-        element ? evalStatic(element, scope) : null,
+        element ? evaluate(element, scope, fold) : null,
       );
     case 'CallExpression': {
       // `StyleSheet.create({…})` folds to its argument; any other call is dynamic.
@@ -172,7 +411,7 @@ export function evalStatic(node: t.Node, scope: Scope): unknown {
         (callee.object as t.Identifier).name === 'StyleSheet' &&
         (callee.property as t.Identifier).name === 'create'
       ) {
-        return evalStatic(node.arguments[0], scope);
+        return evaluate(node.arguments[0], scope, fold);
       }
 
       throw new Error(`AOT: cannot statically evaluate call expression`);
@@ -181,6 +420,48 @@ export function evalStatic(node: t.Node, scope: Scope): unknown {
 
   throw new Error(
     `AOT: unsupported expression "${node.type}" in static context`,
+  );
+}
+
+/**
+ * A binary operator applied as JS applies it.
+ *
+ * @param operator  The operator.
+ * @param left  The left operand.
+ * @param right  The right operand.
+ *
+ * @returns The result.
+ */
+function binary(operator: string, left: any, right: any): unknown {
+  switch (operator) {
+    case '+':
+      return left + right;
+    case '-':
+      return left - right;
+    case '*':
+      return left * right;
+    case '/':
+      return left / right;
+    case '%':
+      return left % right;
+    case '<':
+      return left < right;
+    case '>':
+      return left > right;
+    case '<=':
+      return left <= right;
+    case '>=':
+      return left >= right;
+    case '==':
+    case '===':
+      return left === right;
+    case '!=':
+    case '!==':
+      return left !== right;
+  }
+
+  throw new Error(
+    'AOT: unsupported expression "BinaryExpression" in static context',
   );
 }
 

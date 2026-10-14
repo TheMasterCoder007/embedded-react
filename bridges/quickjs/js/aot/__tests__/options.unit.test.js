@@ -26,7 +26,10 @@ const LIST_APP = `${IMPORTS}export function App() {
   return (<View>{items.map(item => <Text>{item.label}</Text>)}</View>);
 }`;
 const RESPONSIVE_APP = `${IMPORTS}export function App() {
-  return (<View style={{width: screen.width < 400 ? 111 : 333}} />);
+  if (screen.width < 400) {
+    return (<Text>small</Text>);
+  }
+  return (<View><Text>wide</Text></View>);
 }`;
 const THREE_SPANS_APP = `${IMPORTS}export function App() {
   return (<Text>A <Text style={{color: '#f00'}}>B</Text> C</Text>);
@@ -67,9 +70,9 @@ describe('AOT compile options', () => {
     const wide = compileSource(RESPONSIVE_APP, 'demo', {
       screen: {width: 800, height: 480},
     });
-    expect(small.c).toContain('p.width = 111;');
+    expect(small.c).toContain('"small"');
     expect(small.h).toContain('#define ER_AOT_SCREEN_W 240');
-    expect(wide.c).toContain('p.width = 333;');
+    expect(wide.c).toContain('"wide"');
     expect(wide.h).toContain('#define ER_AOT_SCREEN_W 800');
   });
 
@@ -79,15 +82,15 @@ describe('AOT compile options', () => {
     const result = compileSource(RESPONSIVE_APP, 'demo', {
       screen: {width: 240, height: 320},
     });
-    expect(result.c).toContain('p.width = 111;');
+    expect(result.c).toContain('"small"');
   });
 
   it('reads ER_AOT_SCREEN_W/H on each call, not at import', () => {
     vi.stubEnv('ER_AOT_SCREEN_W', '240');
     vi.stubEnv('ER_AOT_SCREEN_H', '320');
-    expect(compileSource(RESPONSIVE_APP, 'demo').c).toContain('p.width = 111;');
+    expect(compileSource(RESPONSIVE_APP, 'demo').c).toContain('"small"');
     vi.stubEnv('ER_AOT_SCREEN_W', '800');
-    expect(compileSource(RESPONSIVE_APP, 'demo').c).toContain('p.width = 333;');
+    expect(compileSource(RESPONSIVE_APP, 'demo').c).toContain('"wide"');
   });
 
   it('names the screen size an error was compiled at when it came from the option', () => {

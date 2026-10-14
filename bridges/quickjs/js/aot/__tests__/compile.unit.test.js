@@ -36,7 +36,7 @@ describe('AOT baseline (regression)', () => {
     expect(c).toContain('er_node_create(ER_NODE_VIEW)');
     expect(c).toContain('er_node_create(ER_NODE_TEXT)');
     expect(c).toContain('"Hello"');
-    expect(c).toContain('void er_app_build(int screen_w, int screen_h)');
+    expect(c).toContain('bool er_app_build(int screen_w, int screen_h)');
   });
 
   it('lowers useState + an onPress setter to C state and a handler', () => {

@@ -50,6 +50,23 @@ const FLOAT_MATH_C: Record<FloatMath, string> = {
   mod: 'fmodf',
 };
 
+/** The C function each float Math function prints as when a boot value is worked out in double precision. */
+const DOUBLE_MATH_C: Record<FloatMath, string> = {
+  sin: 'sin',
+  cos: 'cos',
+  tan: 'tan',
+  sqrt: 'sqrt',
+  abs: 'fabs',
+  round: 'app_round',
+  floor: 'floor',
+  ceil: 'ceil',
+  min: 'fmin',
+  max: 'fmax',
+  atan2: 'atan2',
+  pow: 'pow',
+  mod: 'fmod',
+};
+
 /** The field of the engine's ERRect each onLayout field reads. */
 const LAYOUT_RECT_C: Record<LayoutField, string> = {
   x: 'x',
@@ -60,6 +77,9 @@ const LAYOUT_RECT_C: Record<LayoutField, string> = {
 
 /** The smallest C int. */
 const INT_MIN = -(2 ** 31);
+
+/** Whether a fraction prints as a double, as JS computes it, rather than a float (see printInDoubles). */
+let inDoubles = false;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -115,7 +135,7 @@ function printGestureField(expr: IrGesture): string {
  */
 function printNumber(expr: IrNumber): string {
   if (expr.type.kind === 'float') {
-    return floatLit(expr.value);
+    return inDoubles ? doubleLit(expr.value) : floatLit(expr.value);
   }
 
   if (expr.type.kind === 'int64') {
@@ -127,6 +147,34 @@ function printNumber(expr: IrNumber): string {
 }
 
 /**
+ * A number as a C double constant.
+ *
+ * @param value  The number.
+ *
+ * @returns Its C constant.
+ */
+export const doubleLit = (value: number): string =>
+  floatLit(value).replace(/f$/, '');
+
+/**
+ * Prints with every fraction worked out in double precision, as JS works it out: a value set once at boot then
+ * rounds exactly as the compiler's own fold would have.
+ *
+ * @param print  The printing.
+ *
+ * @returns What it prints.
+ */
+export function printInDoubles<Result>(print: () => Result): Result {
+  const outer = inDoubles;
+  inDoubles = true;
+  try {
+    return print();
+  } finally {
+    inDoubles = outer;
+  }
+}
+
+/**
  * An expression as a C condition (see asCond).
  *
  * @param expr  The expression.
@@ -135,6 +183,13 @@ function printNumber(expr: IrNumber): string {
  */
 export const printCondition = (expr: IrExpr): string =>
   asCond({code: printExpr(expr), cType: slotOf(expr.type)!});
+
+/**
+ * The C type a fraction is worked out in.
+ *
+ * @returns `double` while printing in doubles, else `float`.
+ */
+const fraction = (): string => (inDoubles ? 'double' : 'float');
 
 /**
  * Prints an expression as C.
@@ -153,6 +208,8 @@ export function printExpr(expr: IrExpr): string {
       return expr.value ? '1' : '0';
     case 'state':
       return expr.state.cMember;
+    case 'boot':
+      return `s_boot.${expr.slot.field}`;
     case 'local':
       return expr.local.code;
     case 'ref':
@@ -168,11 +225,11 @@ export function printExpr(expr: IrExpr): string {
     case 'clock':
       return expr.clock === 'Date' ? 'app_date_now()' : 'app_perf_now()';
     case 'pi':
-      return '(float)M_PI';
+      return inDoubles ? 'M_PI' : '(float)M_PI';
     case 'gesture':
       return printGestureField(expr);
     case 'toFloat':
-      return `((float)${printExpr(expr.operand)})`;
+      return `((${fraction()})${printExpr(expr.operand)})`;
     case 'unary': {
       // The operand is parenthesized so `-` on a negative operand prints `(-(-x))`, not `(--x)` (a decrement).
       const operand =
@@ -186,12 +243,13 @@ export function printExpr(expr: IrExpr): string {
     case 'arithmetic':
       return `(${printExpr(expr.left)} ${expr.op} ${printExpr(expr.right)})`;
     case 'floatDivide':
-      return `((float)(${printExpr(expr.left)}) / (float)(${printExpr(expr.right)}))`;
+      return `((${fraction()})(${printExpr(expr.left)}) / (${fraction()})(${printExpr(expr.right)}))`;
     case 'narrowRemainder':
       return `((int)(${printExpr(expr.left)} % ${printExpr(expr.right)}))`;
     case 'floatMath': {
-      const args = expr.args.map(arg => `(float)(${printExpr(arg)})`);
-      return `${FLOAT_MATH_C[expr.fn]}(${args.join(', ')})`;
+      const args = expr.args.map(arg => `(${fraction()})(${printExpr(arg)})`);
+      const fn = (inDoubles ? DOUBLE_MATH_C : FLOAT_MATH_C)[expr.fn];
+      return `${fn}(${args.join(', ')})`;
     }
     case 'wholeRound':
       return printExpr(expr.operand);
