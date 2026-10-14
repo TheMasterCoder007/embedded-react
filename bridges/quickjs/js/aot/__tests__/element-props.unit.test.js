@@ -362,6 +362,15 @@ describe('declared element props', () => {
     );
   }
 
+  it('refuses an undeclared prop whose value is undefined', () => {
+    expect(errorOf('<View bogus={undefined} />')).toBe(
+      'AOT: <View> prop "bogus" is not supported',
+    );
+    expect(errorOf('<TextInput autoFocus={undefined} />')).toBe(
+      'AOT: <TextInput> prop "autoFocus" is not supported',
+    );
+  });
+
   it('refuses an undeclared prop on every element, at the prop', () => {
     for (const tag of ELEMENT_TAGS) {
       expect(errorOf(`<View><${tag} bogus={1} /></View>`), tag).toBe(
@@ -380,8 +389,16 @@ describe('declared element props', () => {
   });
 
   it('takes the RN props that wrap a missing OS service, except on <FlatList>', () => {
-    expect(gen('<View testID="home" accessibilityLabel="Home" />')).toBe(
-      gen('<View />'),
+    for (const tag of ELEMENT_TAGS.filter(tag => tag !== 'FlatList')) {
+      const {base = '', children = ''} = SAMPLES[tag];
+      const jsx = attrs => `<${tag} ${base} ${attrs}>${children}</${tag}>`;
+      expect(gen(jsx('testID="x" accessibilityLabel="y"')), tag).toBe(
+        gen(jsx('')),
+      );
+    }
+
+    expect(gen('<Text>a<Text testID="x">b</Text></Text>')).toBe(
+      gen('<Text>a<Text>b</Text></Text>'),
     );
     expect(
       errorOf(
@@ -538,6 +555,17 @@ describe('declared children', () => {
       'AOT: a non-element expression child ("oops") cannot render here',
     );
   });
+
+  it('refuses a constant `&&` whose falsy value React would draw as text', () => {
+    expect(errorOf('<View>{0 && <Text>A</Text>}</View>')).toBe(
+      'AOT: a non-element expression child (0) cannot render here',
+    );
+    for (const left of ['false', 'null', "''"]) {
+      expect(gen(`<View>{${left} && <Text>A</Text>}</View>`), left).toBe(
+        gen('<View />'),
+      );
+    }
+  });
 });
 
 describe('values a declared prop cannot lower', () => {
@@ -591,6 +619,11 @@ describe('values a declared prop cannot lower', () => {
       'a non-number <Dial> number',
       '<Dial min="0" />',
       /<Dial min> must be a number/,
+    ],
+    [
+      'an infinite whole <Dial> number',
+      '<Dial segments={1 / 0} />',
+      /folded to Infinity/,
     ],
     [
       'a disabled <Switch>',
@@ -675,10 +708,15 @@ describe('values a declared prop cannot lower', () => {
 });
 
 describe('animated style keys', () => {
-  it('binds an animated transform on a typed element', () => {
+  it('binds an animated transform on a typed element and an <Svg>', () => {
     expect(gen('<Switch style={{transform: [{scale: a}]}} />')).toContain(
       'er_anim_value_bind(s_av_a, n0, ER_PROP_SCALE_X);',
     );
+    expect(
+      gen(
+        '<Svg width={9} height={9} style={{transform: [{scale: a}]}}><Circle r={4} /></Svg>',
+      ),
+    ).toContain('er_anim_value_bind(s_av_a, n0, ER_PROP_SCALE_X);');
   });
 
   it.each([

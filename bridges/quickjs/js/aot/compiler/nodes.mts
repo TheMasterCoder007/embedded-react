@@ -36,6 +36,7 @@ import {
   checkNoChildren,
   elementSpec,
   EVENT_TYPES,
+  withoutPlatformNoOps,
 } from './elements/props.mts';
 import {lowerHandler} from './handlers.mts';
 import {emitPanResponder, panSpreadTarget} from './pan-responder.mts';
@@ -508,8 +509,8 @@ function emitNodeImpl(
   state: StateTable,
   opts: EmitOptions = {},
 ): IrElement {
-  // Drop props that fold to undefined, refuse any the element does not declare, then dispatch.
-  element = omitUndefinedAttrs(element, scope, env);
+  // Refuse any prop the element does not declare, whatever its value, then drop the no-ops and the props that
+  // fold to undefined before dispatch.
   const tag = resolveTag(element.openingElement);
   const spec = elementSpec(tag);
   if (spec) {
@@ -517,7 +518,11 @@ function emitNodeImpl(
     if (spec.children === 'none') {
       checkNoChildren(spec, element.children);
     }
+
+    element = withoutPlatformNoOps(spec, element);
   }
+
+  element = omitUndefinedAttrs(element, scope, env);
 
   const typed = (node: IrNode): IrElement => ({
     kind: 'node',

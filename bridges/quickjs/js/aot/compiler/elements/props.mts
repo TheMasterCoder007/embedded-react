@@ -387,10 +387,14 @@ const SVG_SHAPES: Record<string, ElementSpec> = {
 };
 
 /** A <Text> nested in a <Text>: one inline span of the outer one. */
-export const TEXT_SPAN: ElementSpec = {
-  ...element('Text', ['style'], SPAN_STYLE, 'text', {}, []),
-  platformNoOps: false,
-};
+export const TEXT_SPAN: ElementSpec = element(
+  'Text',
+  ['style'],
+  SPAN_STYLE,
+  'text',
+  {},
+  [],
+);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -502,6 +506,46 @@ export function at(error: AotError, node: t.Node): AotError {
 }
 
 /**
+ * Whether an element takes an attribute: `key`, a declared prop, or a platform no-op it accepts.
+ *
+ * @param spec  The element.
+ * @param name  The attribute's name.
+ *
+ * @returns Whether it is declared.
+ */
+const declares = (spec: ElementSpec, name: string): boolean =>
+  name === 'key' ||
+  spec.props.has(name) ||
+  (spec.platformNoOps && RN_PLATFORM_NO_OPS.includes(name));
+
+/**
+ * Whether `attr` sits on a built-in element or shape that does not declare it. A component's props are its own,
+ * so an attribute on one is never undeclared.
+ *
+ * @param openingElement  The element's opening tag.
+ * @param attr  One of its attributes.
+ *
+ * @returns Whether the element would refuse it.
+ */
+export function isUndeclaredAttribute(
+  openingElement: t.JSXOpeningElement,
+  attr: t.JSXAttribute,
+): boolean {
+  const nameNode = openingElement.name;
+  const tag =
+    nameNode.type === 'JSXIdentifier'
+      ? nameNode.name
+      : nameNode.type === 'JSXMemberExpression' &&
+          nameNode.object.type === 'JSXIdentifier' &&
+          nameNode.object.name === 'Animated'
+        ? nameNode.property.name
+        : null;
+  const spec =
+    tag == null ? undefined : (elementSpec(tag) ?? svgShapeSpec(tag));
+  return spec != null && !declares(spec, attrName(attr));
+}
+
+/**
  * Refuses every attribute `spec` does not declare, at the attribute. Spreads are left to the element's
  * emitter, which knows the one spread it may take.
  *
@@ -516,8 +560,7 @@ export function checkAttributes(
     if (attr.type !== 'JSXAttribute') continue;
 
     const name = attrName(attr);
-    if (name === 'key' || spec.props.has(name)) continue;
-    if (spec.platformNoOps && RN_PLATFORM_NO_OPS.includes(name)) continue;
+    if (declares(spec, name)) continue;
 
     const refusal = Object.hasOwn(spec.refused, name)
       ? spec.refused[name]
@@ -530,6 +573,35 @@ export function checkAttributes(
       attr,
     );
   }
+}
+
+/**
+ * `element` without the platform no-op props its declaration accepts, so no emitter has to know them. A copy
+ * is returned only when one is dropped.
+ *
+ * @param spec  The element.
+ * @param element  The element, its attributes already checked.
+ *
+ * @returns The element, or a copy of it without those attributes.
+ */
+export function withoutPlatformNoOps(
+  spec: ElementSpec,
+  element: t.JSXElement,
+): t.JSXElement {
+  if (!spec.platformNoOps) return element;
+
+  const attrs = element.openingElement.attributes;
+  const kept = attrs.filter(
+    attr =>
+      attr.type !== 'JSXAttribute' ||
+      !RN_PLATFORM_NO_OPS.includes(attrName(attr)),
+  );
+  return kept.length === attrs.length
+    ? element
+    : {
+        ...element,
+        openingElement: {...element.openingElement, attributes: kept},
+      };
 }
 
 /**

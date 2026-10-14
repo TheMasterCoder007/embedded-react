@@ -32,7 +32,7 @@ import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
 import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
-import {lowerRefBinds} from './nodes.mts';
+import {checkInterpolations, lowerRefBinds} from './nodes.mts';
 import {
   at,
   checkAttributes,
@@ -1200,8 +1200,8 @@ function svgBoxSize(
 }
 
 /**
- * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, then its refs.
- * The box's style is constant: it is not a node app_update() rewrites.
+ * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, its animated
+ * transform and its refs. No state drives the box: it is not a node app_update() rewrites.
  *
  * @param nodeId  The node's variable.
  * @param type  The engine node type: a vector node, or an image for a rasterized .svg.
@@ -1228,14 +1228,14 @@ function lowerSvgBox(
     env,
     elementSpec('Svg')!,
   );
-  if (dynAssigns.length || binds.length) {
+  if (dynAssigns.length) {
     throw aotError(
-      `AOT: ${binds.length ? 'an animated' : 'a state-driven'} style on an <Svg> is not supported`,
+      'AOT: a state-driven style on an <Svg> is not supported',
       'put the changing style on a wrapping <View>: <View style={…}><Svg …/></View>.',
     );
   }
 
-  return {
+  const node: IrNode = {
     id: nodeId,
     type,
     constantProps: [...width, ...height, ...staticAssigns],
@@ -1244,12 +1244,17 @@ function lowerSvgBox(
     text: null,
     image: null,
     spans: null,
-    wiring: lowerRefBinds(openingElement, env).map(slot => ({
-      kind: 'ref',
-      slot,
-    })),
+    wiring: [
+      ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
+      ...lowerRefBinds(openingElement, env).map(slot => ({
+        kind: 'ref' as const,
+        slot,
+      })),
+    ],
     children: [],
   };
+  checkInterpolations(node);
+  return node;
 }
 
 /**

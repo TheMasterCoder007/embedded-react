@@ -20,6 +20,7 @@
 
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
+import {isUndeclaredAttribute} from './elements/props.mts';
 import type {ParserPlugin} from '@babel/parser';
 import type * as t from '@babel/types';
 import type {CompileOptions} from './options.mts';
@@ -191,7 +192,8 @@ function stripTypeScript(root: t.File): t.File {
  *   so the node keeps its default — `visible={undefined}` stays visible. Doing it here gives the twenty-odd
  *   prop readers that view at once, instead of each deciding what an undefined value means.
  *   A value that only becomes undefined in some scope — a prop a child was never given — is dropped per
- *   emission by omitUndefinedAttrs. This literal pass still matters for <Svg> shapes, which bypass it.
+ *   emission by omitUndefinedAttrs. This literal pass still matters for <Svg> shapes, which bypass it. An
+ *   attribute a built-in element does not declare is kept, for the element to refuse by name.
  * - A BINDING named `undefined` is refused. JS allows shadowing the global, but Flow B gives `undefined`
  *   a meaning of its own (an omitted prop, empty text), and a shadowing local would silently lose to it.
  *
@@ -289,9 +291,11 @@ export function normalizeUndefined(ast: t.File): void {
         rejectUndefinedName(node.local);
         break;
       case 'JSXOpeningElement':
+        // An undeclared prop stays, so the element refuses it by name whatever its value.
         node.attributes = node.attributes.filter(
           (attr: t.JSXAttribute | t.JSXSpreadAttribute) =>
-            !isUndefinedAttr(attr),
+            !isUndefinedAttr(attr) ||
+            isUndeclaredAttribute(node, attr as t.JSXAttribute),
         );
         break;
     }

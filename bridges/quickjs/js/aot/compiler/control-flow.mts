@@ -778,6 +778,14 @@ function lowerBranch(
     }
 
     if (folded) {
+      // A false `&&` yields its left value, which must be one React renders as nothing (`0` is text).
+      if (isAnd && !folded.value && !rendersNothing(folded.value)) {
+        throw unsupportedChild(
+          expr,
+          JSON.stringify(folded.value) ?? String(folded.value),
+        );
+      }
+
       const chosen = folded.value ? whenTrue : whenFalse;
       return chosen
         ? lowerBranch(chosen, scope, out, env, state, within)

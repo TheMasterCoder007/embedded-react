@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {check, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
+import {check, checkNumber, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
@@ -165,6 +165,11 @@ export function emitDial(
         ),
         attr,
       );
+    }
+
+    // floatLit checks a float field itself; an int field needs the same check before it is rounded.
+    if (!isFloat) {
+      checkNumber(number);
     }
 
     staticAssigns.push({
