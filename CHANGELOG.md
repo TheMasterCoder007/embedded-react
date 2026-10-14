@@ -52,6 +52,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A Flow B `<Svg source>` with a style width or height bakes its drawing at that size, as Flow A does. It used
   to bake at the attribute's size and draw it clipped into the styled box.
 
+- In Flow B, a later style size replaces an earlier one in the other unit: `[{width: '50%'}, {width: 30}]` is
+  30 pixels. Both used to be written, and the percentage won.
+
 - A Flow B transform entry beside an animated one, an animated `rotateX`, and a fifth `<Dial>` gradient stop
   fail with an `AOT:` error. They used to be dropped.
 

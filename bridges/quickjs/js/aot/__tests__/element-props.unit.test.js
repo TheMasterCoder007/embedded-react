@@ -782,6 +782,31 @@ export function App() { return <Svg source={art} ${attrs} />; }`,
       baked("width={20} height={20} style={{width: '50%'}}"),
     ).toThrow(/percentage style width on an <Svg source> is not supported/);
   });
+
+  it('takes the last style size, a percentage overridden by pixels or the reverse', () => {
+    const tape = c => c.match(/s_svg0_ops\[\] = \{[^}]*\}/)[0];
+    const overridden = baked(
+      "style={[{width: '50%', height: 30}, {width: 30}]}",
+    );
+    expect(tape(overridden)).toBe(
+      tape(baked('style={{width: 30, height: 30}}')),
+    );
+    expect(overridden).not.toContain('width_pct');
+    expect(() =>
+      baked("style={[{width: 30, height: 30}, {width: '50%'}]}"),
+    ).toThrow(/percentage style width on an <Svg source> is not supported/);
+  });
+});
+
+describe('a pixel size and its percentage twin', () => {
+  it('are one style key, so the later one replaces the other', () => {
+    expect(gen("<View style={[{width: '50%'}, {width: 30}]} />")).toBe(
+      gen('<View style={{width: 30}} />'),
+    );
+    expect(gen("<View style={[{left: 30}, {left: '50%'}]} />")).toBe(
+      gen("<View style={{left: '50%'}} />"),
+    );
+  });
 });
 
 describe('animated style keys', () => {

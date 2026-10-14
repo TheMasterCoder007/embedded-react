@@ -398,6 +398,17 @@ export function collectStyleAssigns(
   const fields = new Map<string, {code: string} | {value: IrPropValue}>();
   const binds: AnimBind[] = []; // animated values bound to node properties (native driver)
 
+  // A size in pixels and its percentage twin are one style key, so a later write of either replaces both.
+  const setField = (
+    field: string,
+    write: {code: string} | {value: IrPropValue},
+  ): void => {
+    fields.delete(
+      field.endsWith('_pct') ? field.slice(0, -'_pct'.length) : `${field}_pct`,
+    );
+    fields.set(field, write);
+  };
+
   // The C handle of an animated value used directly as a style value, or null.
   const animRef = (node: t.Node | null | undefined): string | null =>
     node?.type === 'Identifier' && env.animations?.has(node.name)
@@ -575,12 +586,12 @@ export function collectStyleAssigns(
           }
 
           for (const assign of lowerStyleChecked(key, staticValue.v)) {
-            fields.set(assign.field, {code: assign.expr});
+            setField(assign.field, {code: assign.expr});
           }
         } else {
           checkStyleKey(spec, key, prop);
           for (const assign of lowerDynamicStyleValue(key, prop.value, env)) {
-            fields.set(assign.field, {value: assign.value});
+            setField(assign.field, {value: assign.value});
           }
         }
       }
@@ -599,7 +610,7 @@ export function collectStyleAssigns(
 
       checkStyleKey(spec, styleKey, expr);
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
-        fields.set(assign.field, {code: assign.expr});
+        setField(assign.field, {code: assign.expr});
       }
     }
   };
