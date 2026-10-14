@@ -36,7 +36,7 @@ export type IrCheckSubject =
   | {kind: 'textSpans'; count: number; max: number}
   /** The stops of an <Svg> shape's gradient, by the attribute that holds it. */
   | {kind: 'gradientStops'; attribute: string; count: number}
-  /** The stops a <Dial indicatorGradient> keeps. */
+  /** The stops a <Dial indicatorGradient> has. */
   | {kind: 'dialGradientStops'; count: number};
 
 /** A recorded check, and where its error is reported. */
@@ -48,6 +48,9 @@ export type IrCheck = IrCheckSubject & {loc: SourcePosition | undefined};
 
 /** The most breakpoints an interpolation holds (the engine's ER_INTERPOLATE_MAX_POINTS). */
 const MAX_INTERPOLATION_POINTS = 8;
+
+/** The most stops a <Dial indicatorGradient> holds (the engine's ER_GRADIENT_MAX_STOPS). */
+export const DIAL_MAX_GRADIENT_STOPS = 4;
 
 /** Where lowering records its checks while a compile runs, or null outside one, when a check runs at once. */
 let recording: IrCheck[] | null = null;
@@ -121,9 +124,16 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
           )
         : null;
     case 'dialGradientStops':
-      return subject.count < 2
+      if (subject.count < 2) {
+        return aotError(
+          'AOT: <Dial indicatorGradient> needs at least two stops (max 4)',
+        );
+      }
+
+      return subject.count > DIAL_MAX_GRADIENT_STOPS
         ? aotError(
-            'AOT: <Dial indicatorGradient> needs at least two stops (max 4)',
+            `AOT: <Dial indicatorGradient> takes at most ${DIAL_MAX_GRADIENT_STOPS} stops (got ${subject.count})`,
+            "the engine's arc holds 4 (ER_GRADIENT_MAX_STOPS); merge stops that sit close together.",
           )
         : null;
   }

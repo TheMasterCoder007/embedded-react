@@ -61,7 +61,7 @@ style={{transform: [{rotate: '45deg'}, {scale: pulse}], transformOrigin: [0.5, 1
 both axes at once. `transformOrigin` is a fractional `[x, y]` pivot in 0 to 1, default the centre.
 `rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`. **Flow B** takes a
 transform only as `Animated.Value`s on `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` or
-`rotate`/`rotateZ`; a static transform is rejected.
+`rotate`/`rotateZ`; a static transform, or a static entry beside an animated one, is rejected.
 
 A transformed subtree renders through the transform scratch buffer, whose size caps the largest node
 that can rotate or scale; see [Memory](../guides/memory.md).
@@ -112,11 +112,19 @@ reference rather than an inline object.
 The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
 `aspectRatio`, `flexWrap`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
 border widths and colors, the shadow keys and `elevation`, `transformOrigin`, `fontFamily`,
-`fontStyle`, `textAlign` or `textDecorationLine`. `Text`'s `numberOfLines` and `ellipsizeMode` are
-not read.
+`fontStyle`, `textAlign` or `textDecorationLine`.
+
+It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
+The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on
+`View`, `ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`, and on `TextInput` without the
+per-corner radii. `color`, `fontSize`, `fontWeight`, `lineHeight` and `letterSpacing` work on `Text`;
+`TextInput` takes `color` and `fontSize`, and `ActivityIndicator` takes `color` as its tint. A nested
+`<Text>` span takes `color`, `fontSize`, `fontWeight` and `letterSpacing` only.
 
 ## Animated values in styles
 
-An `Animated.Value` can sit directly in `backgroundColor`, `opacity`, `color`, any `transform` axis,
-and a `Dial`'s `value`/`valueStart`, on any element; the `Animated.*` wrappers are pass-through. The engine binds the value to the property and drives it natively; no JavaScript runs per
+An `Animated.Value` can sit directly in any `transform` axis on any element, in `backgroundColor` and
+`opacity` on a `View`, `ScrollView`, `Pressable` or `Modal`, in `color` on a `Text`, and in a `Dial`'s
+`value`/`valueStart`; the engine animates nothing else, so Flow B rejects it. The `Animated.*`
+wrappers are pass-through. The engine binds the value to the property and drives it natively; no JavaScript runs per
 frame. See [Animated](./animated.md).

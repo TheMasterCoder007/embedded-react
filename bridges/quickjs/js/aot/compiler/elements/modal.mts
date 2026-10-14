@@ -24,7 +24,8 @@ import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
 import {emitChildren} from '../control-flow.mts';
-import {lowerRefBinds} from '../nodes.mts';
+import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
+import {at, elementSpec} from './props.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
@@ -54,7 +55,8 @@ const DEFAULTS = [
  * <Modal visible={show} backdropColor=… style=…>{content}</Modal> → ER_NODE_MODAL. The engine draws a
  * full-screen backdrop then the modal and its children when visible, and toggles the node's layout display
  * from `visible`. Defaults to an absolute full-screen overlay centring its content (style can override).
- * transparent / animationType / onRequestClose are accepted but currently no-ops.
+ * onRequestClose and statusBarTranslucent lower to nothing (no back button, no status bar), and animationType
+ * may only be 'none'.
  *
  * @param element  The <Modal>.
  * @param scope  Compile-time constants in reach.
@@ -75,10 +77,11 @@ export function emitModal(
   const nodeId = `n${out.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns} = collectStyleAssigns(
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
     env,
+    elementSpec('Modal')!,
   );
   const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
 
@@ -111,18 +114,28 @@ export function emitModal(
         field: 'backdrop_color',
         expr: colorLiteral(String(evalStatic(node, scope))),
       });
-    } else if (
-      name === 'transparent' ||
-      name === 'animationType' ||
-      name === 'onRequestClose' ||
-      name === 'statusBarTranslucent'
-    ) {
-      /* accepted for RN compatibility; no-op in the AOT today */
+    } else if (name === 'animationType') {
+      // The engine shows and hides a Modal at once, which is RN's 'none'.
+      let animationType: unknown;
+      try {
+        animationType = evalStatic(node, scope);
+      } catch {
+        /* state-driven: refused below */
+      }
+
+      if (animationType !== 'none') {
+        throw at(
+          aotError(
+            `AOT: <Modal animationType> ${typeof animationType === 'string' ? `"${animationType}"` : 'from state'} is not supported`,
+            'the engine shows and hides a Modal at once; use animationType="none", or drop the prop.',
+          ),
+          attr,
+        );
+      }
+    } else if (name === 'onRequestClose' || name === 'statusBarTranslucent') {
+      // Nothing on a panel asks a Modal to close, and there is no status bar: both lower to nothing at all.
     } else {
-      throw aotError(
-        `AOT: <Modal> prop "${name}" is not supported`,
-        'supported: visible, backdropColor, style, children (transparent / animationType / onRequestClose are accepted but no-ops).',
-      );
+      throw aotError(`AOT: <Modal> prop "${name}" is not supported`);
     }
   }
 
@@ -161,11 +174,16 @@ export function emitModal(
     image: null,
     spans: null,
     children: [],
-    wiring: lowerRefBinds(element.openingElement, env).map(slot => ({
-      kind: 'ref',
-      slot,
-    })),
+    wiring: [
+      ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
+      ...lowerRefBinds(element.openingElement, env).map(slot => ({
+        kind: 'ref' as const,
+        slot,
+      })),
+    ],
   };
+  checkInterpolations(node);
+
   // The modal's content, shown and hidden with the modal.
   node.children = emitChildren(element.children, scope, out, env, state);
 

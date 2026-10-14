@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from '../diagnostics.mts';
+import {at} from './props.mts';
 import {evalStatic, evalStaticOr} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {attrExpr, argbLiteral} from '../style-text.mts';
@@ -191,9 +192,17 @@ export function resolveImageAttrs(
   const tcAttr = find('tintColor');
   if (tcAttr) {
     const tc = evalStaticOr(attrExpr(tcAttr), env, null);
-    if (typeof tc === 'string' || typeof tc === 'number') {
-      tintColor = argbLiteral(tc);
+    if (typeof tc !== 'string' && typeof tc !== 'number') {
+      throw at(
+        aotError(
+          'AOT: <Image tintColor> must be a constant color',
+          'the tint is baked into the node when it is built; a state-driven one is not lowered yet.',
+        ),
+        tcAttr,
+      );
     }
+
+    tintColor = argbLiteral(tc);
   }
 
   return {imageName, imageNameDyn, resizeMode, tintColor};

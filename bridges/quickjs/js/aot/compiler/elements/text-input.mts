@@ -25,11 +25,27 @@ import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, collectStyleAssigns} from '../style-text.mts';
 import {lowerValueHandler} from '../handlers.mts';
-import {lowerRefBinds} from '../nodes.mts';
+import {
+  checkInterpolations,
+  lowerEventHandler,
+  lowerRefBinds,
+} from '../nodes.mts';
+import {elementSpec} from './props.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
 import type {IrNode} from '../ir/nodes.mts';
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The <TextInput> events that carry no value, and the engine event each one is. */
+const INPUT_EVENTS: Record<string, string> = {
+  onSubmitEditing: 'ER_EVENT_SUBMIT_EDITING',
+  onFocus: 'ER_EVENT_FOCUS',
+  onBlur: 'ER_EVENT_BLUR',
+};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -62,16 +78,18 @@ export function emitTextInput(
   const nodeId = `n${out.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns} = collectStyleAssigns(
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
     env,
+    elementSpec('TextInput')!,
   );
 
   // process element attributes
   let valueNode: t.Node | null = null;
   let onChangeFn: t.Node | null = null;
   let placeholder: string | null = null;
+  const events: t.JSXAttribute[] = [];
   for (const attr of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
@@ -120,26 +138,10 @@ export function emitTextInput(
           },
         });
       }
-    } else if (
-      [
-        'autoFocus',
-        'keyboardType',
-        'maxLength',
-        'multiline',
-        'autoCapitalize',
-        'autoCorrect',
-        'returnKeyType',
-        'onSubmitEditing',
-        'onFocus',
-        'onBlur',
-      ].includes(name)
-    ) {
-      /* accepted but not yet lowered (no on-screen keyboard / submit wiring in the AOT path) */
+    } else if (Object.hasOwn(INPUT_EVENTS, name)) {
+      events.push(attr);
     } else {
-      throw aotError(
-        `AOT: <TextInput> prop "${name}" is not supported`,
-        'supported props: value, onChangeText, placeholder, placeholderTextColor, cursorColor, editable, secureTextEntry, style.',
-      );
+      throw aotError(`AOT: <TextInput> prop "${name}" is not supported`);
     }
   }
 
@@ -155,7 +157,7 @@ export function emitTextInput(
     image: null,
     spans: null,
     children: [],
-    wiring: [],
+    wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),
   };
 
   // Compile onChangeText into an ER_EVENT_CHANGE_TEXT handler that receives the edited text.
@@ -186,9 +188,19 @@ export function emitTextInput(
     });
   }
 
+  // Return, focus and blur take no value: plain handlers, wired in source order.
+  for (const attr of events) {
+    node.wiring.push({
+      kind: 'event',
+      event: INPUT_EVENTS[attr.name.name as string],
+      handler: lowerEventHandler(attr, out, env, state),
+    });
+  }
+
   for (const slot of lowerRefBinds(element.openingElement, env)) {
     node.wiring.push({kind: 'ref', slot});
   }
 
+  checkInterpolations(node);
   return node;
 }

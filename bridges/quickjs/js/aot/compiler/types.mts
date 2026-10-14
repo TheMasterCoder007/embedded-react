@@ -257,7 +257,7 @@ export interface ChildrenRef {
 
 /** The children passed to an inlined component, emitted in the caller's scope wherever the body uses them. */
 export interface ChildrenSlot {
-  nodes: (t.JSXElement | t.JSXExpressionContainer)[];
+  nodes: t.JSXElement['children'];
   scope: Scope;
   env: Env;
   ref: ChildrenRef | null;

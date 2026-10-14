@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {check} from '../check.mts';
+import {check, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
 import {colorLiteral} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
@@ -35,6 +35,7 @@ import {
 import {lowerValueHandler} from '../handlers.mts';
 import {emitChildren} from '../control-flow.mts';
 import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
+import {at, elementSpec} from './props.mts';
 import {imageNameFromSource} from './image.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
@@ -45,37 +46,6 @@ import type {IrNode} from '../ir/nodes.mts';
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-const props: string[] = [
-  'value',
-  'min',
-  'max',
-  'startAngle',
-  'sweepAngle',
-  'step',
-  'thickness',
-  'bandThickness',
-  'trackColor',
-  'indicatorColor',
-  'indicatorGradient',
-  'bandColor',
-  'cap',
-  'segments',
-  'gapAngle',
-  'knob',
-  'knobSize',
-  'minSpan',
-  'knobColor',
-  'knobBorderColor',
-  'knobBorderWidth',
-  'knobImage',
-  'adjustable',
-  'range',
-  'valueStart',
-  'onChange',
-  'style',
-];
-const SUPPORTED_PROPS = `supported props: ${props.join(', ')}.`;
 
 /** <Dial> prop → ERProps field tables (see emitDial). */
 const DIAL_FLOAT_PROPS: Record<string, string> = {
@@ -158,6 +128,7 @@ export function emitDial(
     element.openingElement,
     scope,
     env,
+    elementSpec('Dial')!,
   );
   const hasField = (field: string) =>
     styleWrites(staticAssigns, dynAssigns, field);
@@ -169,36 +140,59 @@ export function emitDial(
   }
 
   // Fold numeric props when possible; otherwise emit runtime assignments for app_update().
-  const numeric = (field: string, node: t.Node, isFloat: boolean): void => {
+  const numeric = (
+    field: string,
+    node: t.Node,
+    isFloat: boolean,
+    attr: t.JSXAttribute,
+  ): void => {
+    let number: unknown;
     try {
-      const number = evalStatic(node, scope);
-      if (typeof number === 'number') {
-        staticAssigns.push({
-          field,
-          expr: isFloat ? floatLit(number) : String(Math.round(number)),
-        });
-        return;
-      }
+      number = evalStatic(node, scope);
     } catch {
       const value = lowerExpr(node, env);
       dynAssigns.push({
         field,
         value: isFloat ? {kind: 'float', value} : {kind: 'dimension', value},
       });
+      return;
     }
+
+    if (typeof number !== 'number') {
+      throw at(
+        aotError(
+          `AOT: <Dial ${attr.name.name as string}> must be a number (got ${JSON.stringify(number) ?? String(number)})`,
+        ),
+        attr,
+      );
+    }
+
+    staticAssigns.push({
+      field,
+      expr: isFloat ? floatLit(number) : String(Math.round(number)),
+    });
   };
 
   // Fold static colors now; emit dynamic color expressions for app_update().
-  const colour = (field: string, node: t.Node): void => {
+  const colour = (field: string, node: t.Node, attr: t.JSXAttribute): void => {
+    let color: unknown;
     try {
-      const color = evalStatic(node, scope);
-      if (typeof color === 'string') {
-        staticAssigns.push({field, expr: colorLiteral(color)});
-      }
-      return;
+      color = evalStatic(node, scope);
     } catch {
       dynAssigns.push({field, value: lowerColorValue(node, env)});
+      return;
     }
+
+    if (typeof color !== 'string') {
+      throw at(
+        aotError(
+          `AOT: <Dial ${attr.name.name as string}> must be a color string (got ${JSON.stringify(color) ?? String(color)})`,
+        ),
+        attr,
+      );
+    }
+
+    staticAssigns.push({field, expr: colorLiteral(color)});
   };
 
   // Process <Dial> props, splitting them into static props, dynamic updates, binds, assets, and handlers.
@@ -228,11 +222,11 @@ export function emitDial(
           name === 'value' ? 'ER_PROP_ARC_VALUE' : 'ER_PROP_ARC_VALUE_START',
       });
     } else if (DIAL_FLOAT_PROPS[name]) {
-      numeric(DIAL_FLOAT_PROPS[name], node, true);
+      numeric(DIAL_FLOAT_PROPS[name], node, true, attr);
     } else if (DIAL_INT_PROPS[name]) {
-      numeric(DIAL_INT_PROPS[name], node, false);
+      numeric(DIAL_INT_PROPS[name], node, false, attr);
     } else if (DIAL_COLOR_PROPS[name]) {
-      colour(DIAL_COLOR_PROPS[name], node);
+      colour(DIAL_COLOR_PROPS[name], node, attr);
     } else if (DIAL_ENUM_PROPS[name]) {
       const {field, table} = DIAL_ENUM_PROPS[name];
       let token: unknown = null;
@@ -312,10 +306,9 @@ export function emitDial(
         | {type?: unknown; stops?: {color?: unknown; offset?: unknown}[]}
         | null
         | undefined;
-      const stops = Array.isArray(gradient?.stops)
-        ? gradient!.stops!.slice(0, 4)
-        : [];
-      check({kind: 'dialGradientStops', count: stops.length});
+      const allStops = Array.isArray(gradient?.stops) ? gradient!.stops! : [];
+      check({kind: 'dialGradientStops', count: allStops.length});
+      const stops = allStops.slice(0, DIAL_MAX_GRADIENT_STOPS);
       staticAssigns.push({
         field: 'gradient_type',
         expr:
@@ -359,10 +352,7 @@ export function emitDial(
     } else if (name === 'onChange') {
       onChangeFn = node;
     } else {
-      throw aotError(
-        `AOT: <Dial> prop "${name}" is not supported`,
-        SUPPORTED_PROPS,
-      );
+      throw aotError(`AOT: <Dial> prop "${name}" is not supported`);
     }
   }
 

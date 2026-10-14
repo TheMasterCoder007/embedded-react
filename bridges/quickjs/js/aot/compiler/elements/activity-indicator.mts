@@ -28,7 +28,8 @@ import {
   styleWrites,
   collectStyleAssigns,
 } from '../style-text.mts';
-import {lowerRefBinds} from '../nodes.mts';
+import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
+import {at, elementSpec} from './props.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope} from '../types.mts';
@@ -74,13 +75,21 @@ export function emitActivityIndicator(
   const nodeId = `n${out.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns} = collectStyleAssigns(
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
     env,
+    elementSpec('ActivityIndicator')!,
   );
   const hasField = (field: string) =>
     styleWrites(staticAssigns, dynAssigns, field);
+
+  // `style.color` tints the spinner, as in Flow A; a `color` prop written after it wins.
+  for (const assign of [...staticAssigns, ...dynAssigns]) {
+    if (assign.field === 'color') {
+      assign.field = 'indicator_color';
+    }
+  }
 
   // process element attributes
   let size = SIZE_LARGE;
@@ -118,7 +127,19 @@ export function emitActivityIndicator(
           ? SIZE_SMALL
           : sizeValue === 'large'
             ? SIZE_LARGE
-            : Number(sizeValue) || SIZE_LARGE;
+            : typeof sizeValue === 'number' &&
+                Number.isFinite(sizeValue) &&
+                sizeValue > 0
+              ? Math.round(sizeValue)
+              : NaN;
+      if (Number.isNaN(size)) {
+        throw at(
+          aotError(
+            `AOT: <ActivityIndicator size> must be 'small', 'large' or a number of pixels (got ${JSON.stringify(sizeValue) ?? String(sizeValue)})`,
+          ),
+          attr,
+        );
+      }
     } else if (name === 'animating') {
       try {
         staticAssigns.push({
@@ -163,11 +184,15 @@ export function emitActivityIndicator(
     image: null,
     spans: null,
     children: [],
-    wiring: lowerRefBinds(element.openingElement, env).map(slot => ({
-      kind: 'ref',
-      slot,
-    })),
+    wiring: [
+      ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
+      ...lowerRefBinds(element.openingElement, env).map(slot => ({
+        kind: 'ref' as const,
+        slot,
+      })),
+    ],
   };
 
+  checkInterpolations(node);
   return node;
 }

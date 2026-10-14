@@ -18,7 +18,6 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {attemptLowering} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {emitSourcedWide, lowerExpr} from './expressions.mts';
@@ -35,12 +34,14 @@ import {
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
 import {attrExpr} from './style-text.mts';
+import {inlineFragments} from './elements/props.mts';
 import {lowerEffect} from './handlers.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import type * as t from '@babel/types';
+import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
-import type {IrChild, IrElement} from './ir/nodes.mts';
+import type {IrBranch, IrChild, IrElement, IrShow} from './ir/nodes.mts';
 import type {
   ChildrenRef,
   ChildrenSlot,
@@ -292,11 +293,13 @@ export function emitComponent(
   // Look up the component and keep the call-site children that render something.
   const componentName = (element.openingElement.name as t.JSXIdentifier).name;
   const fn = out.components.get(componentName)!;
-  const childNodes = element.children.filter(
-    (child): child is t.JSXElement | t.JSXExpressionContainer =>
-      child.type === 'JSXElement' ||
-      (child.type === 'JSXExpressionContainer' &&
-        child.expression.type !== 'JSXEmptyExpression'),
+  const childNodes = inlineFragments(element.children).filter(
+    child =>
+      !(child.type === 'JSXText' && !child.value.trim()) &&
+      !(
+        child.type === 'JSXExpressionContainer' &&
+        child.expression.type === 'JSXEmptyExpression'
+      ),
   );
 
   // How the body refers to children: destructured `{ children }` (a local) or whole `props` → props.children.
@@ -356,9 +359,12 @@ export function emitComponent(
   }
 
   // Capture the call-site children with the caller's scope and env, for wherever the body renders them.
-  const children: ChildrenSlot | null = childNodes.length
-    ? {nodes: childNodes, scope, env, ref: childrenRef}
-    : null;
+  const children: ChildrenSlot = {
+    nodes: childNodes,
+    scope,
+    env,
+    ref: childrenRef,
+  };
 
   // Each inlined instance namespaces its own hooks under a unique `c<N>_` prefix so instances stay independent.
   const prefix = `c${out.instN++}_`;
@@ -682,10 +688,141 @@ function emitDynamicMap(
 }
 
 /**
- * Emits the children of a container node, handling element + {expression} children. Everything unrolls at
- * compile time into a fixed set of nodes: a state-driven condition builds its elements and toggles their
- * display, and a `.map` over list state builds a fixed pool of rows. Anything that would change the node
- * count at runtime is refused with an "AOT: …" error.
+ * Whether a folded child value renders nothing, as React treats it: false, null, undefined and the empty string.
+ *
+ * @param value  The folded value.
+ *
+ * @returns Whether it renders nothing.
+ */
+const rendersNothing = (value: unknown): boolean =>
+  value === false || value == null || value === '';
+
+/**
+ * The error for a child expression that is not lowered; `what` describes it when it folded to a value.
+ *
+ * @param expr  The child expression.
+ * @param what  Its folded value, described, or null when it does not fold.
+ *
+ * @returns The error, for the caller to throw.
+ */
+function unsupportedChild(expr: t.Node, what: string | null): AotError {
+  const error =
+    what == null
+      ? aotError(
+          `AOT: unsupported expression child "${expr.type}" in a container`,
+          'a child expression must be a JSX element, `cond && <El/>` / a ternary of elements, ' +
+            "or `list.map(item => <El/>)`. A bare variable holding JSX isn't inlined — write the " +
+            'element directly. (If this is a responsive Flow-A-only branch, compile at the target ' +
+            'board size via ER_AOT_SCREEN_W/H so the AOT folds the supported branch.)',
+        )
+      : aotError(
+          `AOT: a non-element expression child (${what}) cannot render here`,
+          'only JSX elements render as children; wrap text in a <Text>{…}</Text>.',
+        );
+  if (expr.loc) {
+    error.aotLoc = expr.loc.start;
+  }
+
+  return error;
+}
+
+/**
+ * Lowers one branch of a conditional child: an element, a nested `&&` or ternary, or something that renders
+ * nothing. A condition that folds picks its branch now; a state-driven one builds every branch and shows each
+ * only while it is chosen, `within` the branch it sits in.
+ *
+ * @param expr  The branch.
+ * @param scope  Compile-time constants in reach.
+ * @param out  Everything emitted so far.
+ * @param env  The expression environment.
+ * @param state  The component's state table.
+ * @param within  When the branch it sits in shows, or null at the top.
+ *
+ * @returns The branch.
+ */
+function lowerBranch(
+  expr: t.Node,
+  scope: Scope,
+  out: Out,
+  env: Env,
+  state: StateTable,
+  within: IrShow | null,
+): IrBranch {
+  if (expr.type === 'JSXElement') {
+    return emitElementInto(
+      expr,
+      scope,
+      out,
+      env,
+      state,
+      within ? {show: within} : {},
+    );
+  }
+
+  const isAnd = expr.type === 'LogicalExpression' && expr.operator === '&&';
+  if (isAnd || expr.type === 'ConditionalExpression') {
+    const testNode = isAnd ? expr.left : (expr as t.ConditionalExpression).test;
+    const whenTrue = isAnd
+      ? expr.right
+      : (expr as t.ConditionalExpression).consequent;
+    const whenFalse = isAnd
+      ? null
+      : (expr as t.ConditionalExpression).alternate;
+
+    // A test that folds picks its branch at build time; `&&` with a false test renders nothing.
+    let folded: {value: unknown} | null;
+    try {
+      folded = {value: evalStatic(testNode, scope)};
+    } catch {
+      folded = null;
+    }
+
+    if (folded) {
+      const chosen = folded.value ? whenTrue : whenFalse;
+      return chosen
+        ? lowerBranch(chosen, scope, out, env, state, within)
+        : null;
+    }
+
+    // A state-driven test builds every branch; each shows while the test picks it.
+    const test = lowerExpr(testNode, env);
+    const shown = (negate: boolean): IrShow => ({
+      kind: 'condition',
+      test,
+      negate,
+      within,
+    });
+    return {
+      kind: 'conditional',
+      test,
+      whenTrue: lowerBranch(whenTrue, scope, out, env, state, shown(false)),
+      whenFalse: whenFalse
+        ? lowerBranch(whenFalse, scope, out, env, state, shown(true))
+        : null,
+    };
+  }
+
+  // Anything else must be a constant that renders nothing.
+  let value: unknown;
+  try {
+    value = evalStatic(expr, withUndefined(scope));
+  } catch {
+    throw unsupportedChild(expr, null);
+  }
+
+  if (!rendersNothing(value)) {
+    throw unsupportedChild(expr, JSON.stringify(value) ?? String(value));
+  }
+
+  return null;
+}
+
+/**
+ * Emits the children of a container node. Everything unrolls at compile time into a fixed set of nodes:
+ * fragments are inlined, a state-driven condition builds its elements and toggles their display, and a
+ * `.map` over list state builds a fixed pool of rows. Every child is either emitted or refused with an
+ * "AOT: …" error: one that would change the node count at runtime, text outside a <Text>, or anything else
+ * the engine has no node for.
  *
  * @param children  The container's children.
  * @param scope  Compile-time constants in reach.
@@ -705,137 +842,75 @@ export function emitChildren(
   const lowered: IrChild[] = [];
   const element = (built: IrElement) =>
     lowered.push({kind: 'element', element: built});
-  for (const child of children) {
+  for (const child of inlineFragments(children)) {
     // An element child is emitted as it is; an {expression} child is lowered by its shape below.
     if (child.type === 'JSXElement') {
       element(emitElementInto(child, scope, out, env, state));
-    } else if (child.type === 'JSXExpressionContainer') {
-      const expr = child.expression;
-      if (expr.type === 'JSXEmptyExpression') continue;
+      continue;
+    }
 
-      if (isChildrenRef(expr, env)) {
-        // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
-        lowered.push(
-          ...emitChildren(
-            env.children!.nodes,
-            env.children!.scope,
-            out,
-            env.children!.env,
-            state,
-          ),
+    // Text needs a <Text>; the whitespace between tags is not a child.
+    if (child.type === 'JSXText') {
+      if (child.value.trim()) {
+        const error = aotError(
+          `AOT: text ${JSON.stringify(child.value.trim())} must be inside a <Text>`,
+          'only a <Text> draws text: <Text>…</Text>.',
         );
-        continue;
+        if (child.loc) {
+          error.aotLoc = child.loc.start;
+        }
+
+        throw error;
       }
 
-      if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
-        // `{cond && <X/>}`: a static cond includes or omits X; a dynamic one builds X and toggles its display.
-        let condValue;
-        try {
-          condValue = evalStatic(expr.left, scope);
-          // A failure anywhere in X falls back to the dynamic form, so X's checks run now.
-          if (condValue) {
-            element(
-              attemptLowering(() =>
-                emitElementInto(expr.right, scope, out, env, state),
-              ),
-            );
-          }
-        } catch {
-          const test = lowerExpr(expr.left, env);
-          lowered.push({
-            kind: 'conditional',
-            test,
-            whenTrue: emitElementInto(expr.right, scope, out, env, state, {
-              show: {kind: 'condition', test, negate: false},
-            }),
-            whenFalse: null,
-          });
-        }
-      } else if (
-        expr.type === 'ConditionalExpression' &&
-        (expr.consequent.type === 'JSXElement' ||
-          expr.alternate.type === 'JSXElement')
-      ) {
-        // `{cond ? <A/> : <B/>}`. Static cond picks a branch; dynamic cond builds both and toggles each.
-        let testValue: unknown;
-        try {
-          testValue = evalStatic(expr.test, scope);
-          // A failure anywhere in the branch falls back to the dynamic form, so its checks run now.
-          element(
-            attemptLowering(() =>
-              emitElementInto(
-                testValue ? expr.consequent : expr.alternate,
-                scope,
-                out,
-                env,
-                state,
-              ),
-            ),
-          );
-        } catch {
-          const test = lowerExpr(expr.test, env);
-          const whenTrue =
-            expr.consequent.type === 'JSXElement'
-              ? emitElementInto(expr.consequent, scope, out, env, state, {
-                  show: {kind: 'condition', test, negate: false},
-                })
-              : null;
-          const whenFalse =
-            expr.alternate.type === 'JSXElement'
-              ? emitElementInto(expr.alternate, scope, out, env, state, {
-                  show: {kind: 'condition', test, negate: true},
-                })
-              : null;
-          lowered.push({kind: 'conditional', test, whenTrue, whenFalse});
-        }
-      } else if (
-        expr.type === 'CallExpression' &&
-        expr.callee.type === 'MemberExpression' &&
-        (expr.callee.property as t.Identifier).name === 'map'
-      ) {
-        // `{items.map(item => <X/>)}`: a pool of rows over list state, else unrolled over a constant array.
-        const mapTarget = expr.callee.object;
-        const stateRecord =
-          mapTarget.type === 'Identifier'
-            ? env.state.get(mapTarget.name)
-            : null;
-        if (stateRecord?.kind === 'list') {
-          lowered.push(
-            emitDynamicMap(expr, stateRecord, scope, out, env, state),
-          );
-        } else {
-          emitMap(expr, scope, out, env, state).forEach(element);
-        }
+      continue;
+    }
+
+    if (child.type === 'JSXSpreadChild') {
+      throw unsupportedChild(child, null);
+    }
+
+    const expr = child.expression;
+    if (expr.type === 'JSXEmptyExpression') continue;
+
+    if (isChildrenRef(expr, env)) {
+      // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
+      lowered.push(
+        ...emitChildren(
+          env.children!.nodes,
+          env.children!.scope,
+          out,
+          env.children!.env,
+          state,
+        ),
+      );
+      continue;
+    }
+
+    if (
+      expr.type === 'CallExpression' &&
+      expr.callee.type === 'MemberExpression' &&
+      (expr.callee.property as t.Identifier).name === 'map'
+    ) {
+      // `{items.map(item => <X/>)}`: a pool of rows over list state, else unrolled over a constant array.
+      const mapTarget = expr.callee.object;
+      const stateRecord =
+        mapTarget.type === 'Identifier' ? env.state.get(mapTarget.name) : null;
+      if (stateRecord?.kind === 'list') {
+        lowered.push(emitDynamicMap(expr, stateRecord, scope, out, env, state));
       } else {
-        // A constant that renders nothing (false/null/'') is fine; anything else is unsupported.
-        let value;
-        try {
-          value = evalStatic(expr, scope);
-        } catch {
-          const error = aotError(
-            `AOT: unsupported expression child "${expr.type}" in a container`,
-            'a child expression must be a JSX element, `cond && <El/>` / a ternary of elements, ' +
-              "or `list.map(item => <El/>)`. A bare variable holding JSX isn't inlined — write the " +
-              'element directly. (If this is a responsive Flow-A-only branch, compile at the target ' +
-              'board size via ER_AOT_SCREEN_W/H so the AOT folds the supported branch.)',
-          );
-          if (expr.loc) {
-            error.aotLoc = expr.loc.start;
-          }
-          throw error;
-        }
-
-        if (value !== false && value != null && value !== '') {
-          const error = aotError(
-            `AOT: a non-element expression child (${JSON.stringify(value)}) cannot render here`,
-            'only JSX elements render as children; wrap text in a <Text>{…}</Text>.',
-          );
-          if (expr.loc) {
-            error.aotLoc = expr.loc.start;
-          }
-          throw error;
-        }
+        emitMap(expr, scope, out, env, state).forEach(element);
       }
+
+      continue;
+    }
+
+    // An element, `cond && <X/>`, a ternary of them (nested too), or a constant that renders nothing.
+    const branch = lowerBranch(expr, scope, out, env, state, null);
+    if (branch?.kind === 'conditional') {
+      lowered.push(branch);
+    } else if (branch) {
+      element(branch);
     }
   }
 

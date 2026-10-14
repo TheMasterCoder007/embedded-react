@@ -28,6 +28,14 @@ import {
 } from '../style-map.mts';
 import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import {aotError} from './diagnostics.mts';
+import {
+  at,
+  checkAnimatedStyleKey,
+  checkAttributes,
+  checkStyleKey,
+  inlineFragments,
+  TEXT_SPAN,
+} from './elements/props.mts';
 import {evalStatic, foldScope, withUndefined} from './static-eval.mts';
 import {cstr} from './c-syntax.mts';
 import {jsxChildText, lowerExpr, lowerText} from './expressions.mts';
@@ -42,6 +50,7 @@ import type {Interpolation} from './animations.mts';
 import type {AotError} from './diagnostics.mts';
 import type {IrPropValue} from './ir/nodes.mts';
 import type {IrText, IrTextPart} from './ir/text.mts';
+import type {ElementSpec} from './elements/props.mts';
 import type {DynAssign, Env, Scope, StaticAssign} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -74,22 +83,6 @@ export interface TextSpan {
   text_decoration: string;
   letter_spacing: string;
 }
-
-/*----------------------------------------------------------------------------------------------------------------------
- - Constants
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/** A JSX event prop → the engine event it registers a handler for. */
-export const EVENT_TYPES: Record<string, string> = {
-  onPress: 'ER_EVENT_PRESS',
-  onLongPress: 'ER_EVENT_LONG_PRESS',
-  onPressIn: 'ER_EVENT_PRESS_IN',
-  onPressOut: 'ER_EVENT_PRESS_OUT',
-  onTouchStart: 'ER_EVENT_TOUCH_START',
-  onTouchMove: 'ER_EVENT_TOUCH_MOVE',
-  onTouchEnd: 'ER_EVENT_TOUCH_END',
-  onLayout: 'ER_EVENT_LAYOUT',
-};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -385,11 +378,13 @@ export const styleWrites = (
 /**
  * Collects an element's merged style into static field assigns and dynamic (state-driven) field assigns.
  * Inline object values are tried statically first; a value that references state becomes a dynAssign.
- * Later style sources override earlier ones per field (RN merge), kept in `fields` by ERProps field.
+ * Later style sources override earlier ones per field (RN merge), kept in `fields` by ERProps field. A key the
+ * element's node neither lays out nor draws with is refused.
  *
  * @param openingElement  The element's opening tag.
  * @param scope  Compile-time constants in reach.
  * @param env  The expression environment.
+ * @param spec  The element, for the style keys it takes.
  *
  * @returns The style's constant writes, state-driven writes, and animated-value binds.
  */
@@ -397,6 +392,7 @@ export function collectStyleAssigns(
   openingElement: t.JSXOpeningElement,
   scope: Scope,
   env: Env,
+  spec: ElementSpec,
 ): StyleAssigns {
   // ERProps field → its last write: a constant's C, or a state-driven value.
   const fields = new Map<string, {code: string} | {value: IrPropValue}>();
@@ -426,6 +422,69 @@ export function collectStyleAssigns(
     }
 
     return null;
+  };
+
+  // A transform array's binds, or null when no entry is animated. Flow B has no static transform, so once one
+  // entry binds an animated value, every other entry must too; one left behind would be dropped.
+  const animatedTransform = (array: t.ArrayExpression): AnimBind[] | null => {
+    const transformBinds: AnimBind[] = [];
+    const leftOver: t.Node[] = [];
+    for (const transformEntry of array.elements) {
+      if (transformEntry?.type !== 'ObjectExpression') {
+        leftOver.push(transformEntry ?? array);
+        continue;
+      }
+
+      for (const transformProp of transformEntry.properties) {
+        if (transformProp.type !== 'ObjectProperty') {
+          leftOver.push(transformProp);
+          continue;
+        }
+
+        const transformKey =
+          (transformProp.key as t.Identifier).name ??
+          (transformProp.key as t.StringLiteral).value;
+        const direct = animRef(transformProp.value);
+        const mapped = direct ? null : animInterpRef(transformProp.value);
+        if (!direct && !mapped) {
+          leftOver.push(transformProp);
+          continue;
+        }
+
+        // An animated entry the engine has no property for is refused, not skipped.
+        if (!Object.hasOwn(ANIM_TRANSFORM_PROPS, transformKey)) {
+          throw at(
+            aotError(
+              `AOT: transform "${transformKey}" cannot be animated in Flow B`,
+              `animated transforms: ${Object.keys(ANIM_TRANSFORM_PROPS).join(', ')}.`,
+            ),
+            transformProp,
+          );
+        }
+
+        for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
+          transformBinds.push(
+            mapped
+              ? {cVar: mapped.cVar, prop: animProp, interp: mapped.interp}
+              : {cVar: direct!, prop: animProp},
+          );
+        }
+      }
+    }
+
+    if (!transformBinds.length) return null;
+    if (leftOver.length) {
+      throw at(
+        aotError(
+          'AOT: a transform entry that is not an animated value cannot sit beside an animated one',
+          'Flow B lowers a transform only as animated values bound on the native driver, so this entry ' +
+            'would be dropped. Drive it from an animated value too (useAnimatedValue(45) holds a fixed one).',
+        ),
+        leftOver[0],
+      );
+    }
+
+    return transformBinds;
   };
 
   // Lowers one style source (an array, an inline object, or a static reference) into `fields` and `binds`.
@@ -471,6 +530,7 @@ export function collectStyleAssigns(
         // Bind an animated value to its prop (opacity / backgroundColor / color), directly or via .interpolate().
         const animVar = animRef(prop.value);
         if (animVar && ANIM_STYLE_PROPS[key]) {
+          checkAnimatedStyleKey(spec, key, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
             binds.push({cVar: animVar, prop: animProp});
           }
@@ -479,6 +539,7 @@ export function collectStyleAssigns(
 
         const animInterp = animInterpRef(prop.value);
         if (animInterp && ANIM_STYLE_PROPS[key]) {
+          checkAnimatedStyleKey(spec, key, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
             binds.push({
               cVar: animInterp.cVar,
@@ -492,38 +553,12 @@ export function collectStyleAssigns(
 
         // transform: [{ scale: <anim> }, { translateX: <anim>.interpolate(...) }, ...] — bind each entry.
         if (key === 'transform' && prop.value.type === 'ArrayExpression') {
-          let handled = false;
-          for (const transformEntry of prop.value.elements) {
-            if (transformEntry?.type !== 'ObjectExpression') continue;
-
-            for (const transformProp of transformEntry.properties as t.ObjectProperty[]) {
-              const transformKey =
-                (transformProp.key as t.Identifier).name ??
-                (transformProp.key as t.StringLiteral).value;
-              const transformAnimVar = animRef(transformProp.value);
-              if (transformAnimVar && ANIM_TRANSFORM_PROPS[transformKey]) {
-                for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
-                  binds.push({cVar: transformAnimVar, prop: animProp});
-                }
-                handled = true;
-                continue;
-              }
-
-              const transformAnimInterp = animInterpRef(transformProp.value);
-              if (transformAnimInterp && ANIM_TRANSFORM_PROPS[transformKey]) {
-                for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
-                  binds.push({
-                    cVar: transformAnimInterp.cVar,
-                    prop: animProp,
-                    interp: transformAnimInterp.interp,
-                  });
-                }
-                handled = true;
-              }
-            }
+          const transformBinds = animatedTransform(prop.value);
+          if (transformBinds) {
+            checkAnimatedStyleKey(spec, key, prop);
+            binds.push(...transformBinds);
+            continue;
           }
-
-          if (handled) continue;
         }
 
         // Only a failed fold falls back to the dynamic path, so an unknown key is not misreported as state-driven.
@@ -535,10 +570,15 @@ export function collectStyleAssigns(
         }
 
         if (staticValue) {
+          if (staticValue.v != null) {
+            checkStyleKey(spec, key, prop);
+          }
+
           for (const assign of lowerStyleChecked(key, staticValue.v)) {
             fields.set(assign.field, {code: assign.expr});
           }
         } else {
+          checkStyleKey(spec, key, prop);
           for (const assign of lowerDynamicStyleValue(key, prop.value, env)) {
             fields.set(assign.field, {value: assign.value});
           }
@@ -557,6 +597,7 @@ export function collectStyleAssigns(
     for (const [styleKey, styleValue] of Object.entries(resolved as object)) {
       if (styleValue === undefined || styleValue === null) continue;
 
+      checkStyleKey(spec, styleKey, expr);
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
         fields.set(assign.field, {code: assign.expr});
       }
@@ -605,7 +646,7 @@ export function lowerNodeText(
   env: Env,
 ): IrText {
   const parts: IrTextPart[] = [];
-  for (const child of children) {
+  for (const child of inlineFragments(children)) {
     if (child.type === 'JSXText') {
       const text = /\n/.test(child.value)
         ? child.value.replace(/\s+/g, ' ').trim()
@@ -619,11 +660,29 @@ export function lowerNodeText(
       throw new Error(
         'AOT: nested <Text> / element children inside <Text> not yet supported (spans)',
       );
+    } else {
+      throw unsupportedTextChild(child);
     }
   }
 
   return {parts};
 }
+
+/**
+ * The error for a <Text> child that is neither text, a `{…}` value nor a nested <Text>.
+ *
+ * @param child  The child.
+ *
+ * @returns The error, for the caller to throw.
+ */
+const unsupportedTextChild = (child: t.Node): AotError =>
+  at(
+    aotError(
+      `AOT: a ${child.type} cannot be part of a <Text>`,
+      'a <Text> holds text, {values} and nested <Text> spans.',
+    ),
+    child,
+  );
 
 /**
  * Normalizes JSX text the way Babel does: trim per-line, drop blank lines, join with single spaces; a
@@ -676,7 +735,7 @@ function staticTextContent(
   scope: Scope,
 ): string {
   let text = '';
-  for (const child of children) {
+  for (const child of inlineFragments(children)) {
     if (child.type === 'JSXText') {
       text += cleanJsxText(child.value);
     } else if (
@@ -689,6 +748,8 @@ function staticTextContent(
       throw aotError(
         'AOT: a nested <Text> span may not itself contain another <Text> (one level of spans only)',
       );
+    } else if (child.type === 'JSXSpreadChild') {
+      throw unsupportedTextChild(child);
     }
   }
 
@@ -713,6 +774,7 @@ export function collectTextSpans(
   env: Env,
 ): TextSpan[] | null {
   // Without a nested <Text>, the caller uses the single-string buildText path.
+  children = inlineFragments(children);
   if (
     !children.some(
       child =>
@@ -763,10 +825,12 @@ export function collectTextSpans(
       child.type === 'JSXElement' &&
       (child.openingElement.name as t.JSXIdentifier).name === 'Text'
     ) {
+      checkAttributes(TEXT_SPAN, child.openingElement);
       const {staticAssigns, dynAssigns} = collectStyleAssigns(
         child.openingElement,
         scope,
         env,
+        TEXT_SPAN,
       );
       if (dynAssigns.length) {
         throw aotError(

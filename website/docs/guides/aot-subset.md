@@ -35,10 +35,19 @@ while the code that breaks it is still one line.
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
   props (`...rest`) are not supported. A spread onto a component (`{...x}`) must be a
   compile-time-constant object.
-- `<Modal>` needs a `visible` prop; `<Switch>` with `onValueChange` needs a `value` prop;
-  `<TouchableOpacity>`'s `activeOpacity` and `disabled` must be constants. `<Image source>` takes an
-  imported asset, a string asset name, `{uri: 'name'}` or string state; a state-driven source bakes
-  every image the app imports. `visible` on an `<Svg>` is not supported: wrap it in a `<View>`.
+- Every element takes a fixed set of props, style keys, and children; anything else is an `AOT:`
+  error at the prop. That covers a prop the element does not have, a style key the engine does not
+  draw on it (`opacity` on a `<Text>`, `borderRadius` on an `<Image>`; see
+  [Styles](../api/styles.md#flow-b)), text outside a `<Text>`, and children on an `<Image>`,
+  `<Switch>`, `<TextInput>` or `<ActivityIndicator>`. `testID` and the accessibility props are
+  accepted and ignored everywhere but `<FlatList>`.
+- `<Modal>` needs a `visible` prop, and its `animationType` can only be `'none'`; `<Switch>` with
+  `onValueChange` needs a `value` prop, and cannot be `disabled`; `disabled` on a `<Pressable>` or
+  `<TouchableOpacity>` and `activeOpacity` must be constants. `<Image source>` takes an imported
+  asset, a string asset name, `{uri: 'name'}` or string state; a state-driven source bakes every
+  image the app imports. `<Text numberOfLines>` and `ellipsizeMode` must be constants, and
+  `ellipsizeMode` is `'tail'` or `'clip'`. `visible` or an event on an `<Svg>` is not supported:
+  wrap it in a `<View>` or `<Pressable>`.
 - `<TextInput>`, `<Switch>`, `<ActivityIndicator>`, `Animated.View`/`Text`/`Image` and a
   module-level `setKeyboardConfig({...})` also compile.
 - `<FlatList>` honours `data`, `renderItem`, `keyExtractor` and `style` only, and
@@ -129,8 +138,7 @@ character it cannot find. See [Assets](../concepts/assets.md).
   (`ERUI_VECTOR_PAINTS_MAX`, `ERUI_MAX_VECTOR_NODES`; see [Memory](./memory.md)). Combine many tick
   marks into one `<Path>` with several subpaths rather than many `<Line>`s.
 - For a dial, gauge or progress ring, use `<Dial>`: one engine node, animated natively, with
-  built-in drag-to-set. Its `indicatorGradient` must be a static object with at least 2 stops
-  (stops past the fourth are dropped), and its
+  built-in drag-to-set. Its `indicatorGradient` must be a static object with 2 to 4 stops, and its
   `onChange` an inline function or a `useCallback`.
 
 ## Gestures

@@ -259,7 +259,7 @@ describe('the lowered app: er_app_build and app_update', () => {
       app(
         "  const [n, setN] = useState(3);\n  const [label] = useState('hi');\n  const [f] = useState(1.5);\n" +
           '  const r = useRef(2);\n  const a = useAnimatedValue(0.5);',
-        '<Text onTouchStart={() => { r.current = 4; }} style={{opacity: a}}>{label + n + f}</Text>',
+        '<View onTouchStart={() => { r.current = 4; }} style={{opacity: a}}><Text>{label + n + f}</Text></View>',
       ),
     );
     expect(lowered.state.map(record => record.initial)).toEqual([3, 'hi', 1.5]);

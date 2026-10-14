@@ -62,6 +62,7 @@ font unless a baked `fontFamily` is set; see [Assets](../concepts/assets.md) for
 
 **Flow B:** one level of nested spans; a span cannot carry a state-driven style; a `<Text>` compiles
 to a single `snprintf`, so a ternary in text cannot mix a string branch with a numeric one.
+`numberOfLines` and `ellipsizeMode` must be constants, and `ellipsizeMode` is `tail` or `clip`.
 
 ## Image
 
@@ -255,7 +256,7 @@ Its layout and colours are configurable with `setKeyboardConfig`, below. The sty
 | `trackColor`    | `{false?, true?}` |       |
 | `thumbColor`    | colour            |       |
 
-**Flow B:** a `Switch` with `onValueChange` needs a `value` prop.
+**Flow B:** a `Switch` with `onValueChange` needs a `value` prop, and `disabled` is not supported.
 
 ## ActivityIndicator
 
@@ -282,7 +283,8 @@ The spinner animates in the engine.
 Give a modal an explicit full-screen style
 (`{position: 'absolute', left: 0, top: 0, width: screen.width, height: screen.height, alignItems: 'center', justifyContent: 'center'}`):
 the engine lays a modal out as an ordinary flex child, so without one the sheet is flex-sized rather
-than centred on screen. The AOT honours the same style. **Flow B:** `visible` is required.
+than centred on screen. The AOT honours the same style. **Flow B:** `visible` is required, and
+`animationType` can only be `'none'`.
 
 ## Dial
 
@@ -353,18 +355,18 @@ import gauge from './gauge.svg';
 </Svg>
 ```
 
-| Prop              | Type              | Notes                                                                                                                                             |
-| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored |
-| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** takes numbers only             |
-| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers                                                            |
-| paint props       |                   | See below; set on `<Svg>` they apply to every shape                                                                                               |
+| Prop              | Type              | Notes                                                                                                                                                                           |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored                               |
+| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
+| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers                                                                                          |
+| paint props       |                   | Go on `<G>` and the shapes; set on `<Svg>` itself they draw nothing (Flow B refuses them)                                                                                       |
 
-**Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
+**Paint props**, on `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
 `fillRule` (`nonzero`/`evenodd`), and `fillGrad`/`strokeGrad`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
-stops. Colours accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and a few names.
+stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and a few names.
 **An unfilled shape defaults to black**: set `fill="none"` on anything meant to be stroke-only.
 
 | Shape       | Props                                                                                                                                                                                                  |
@@ -381,8 +383,8 @@ Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECT
 `ERUI_MAX_VECTOR_NODES`). Combine many tick marks into one `<Path>` with several subpaths.
 
 **Flow B:** a state-driven `<Svg>` uses absolute pixels (no `viewBox`, no `<G>`) and literal shape
-children; a state-driven `<Path d>` is not supported, and `visible` on an `<Svg>` is rejected (wrap
-it in a `View`).
+children; a state-driven `<Path d>` is not supported, and `visible` or an event on an `<Svg>` is
+rejected (wrap it in a `View` or `Pressable`).
 
 ## Intentionally absent React Native APIs
 

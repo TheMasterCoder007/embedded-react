@@ -25,7 +25,8 @@ import {asCond, emitExpr, lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
 import {lowerValueHandler} from '../handlers.mts';
-import {lowerRefBinds} from '../nodes.mts';
+import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
+import {at, elementSpec} from './props.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
@@ -60,10 +61,11 @@ export function emitSwitch(
   const nodeId = `n${out.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns} = collectStyleAssigns(
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
     env,
+    elementSpec('Switch')!,
   );
   const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
   if (!hasField('width')) {
@@ -99,24 +101,55 @@ export function emitSwitch(
         expr: colorLiteral(String(evalStatic(node, scope))),
       });
     } else if (name === 'trackColor') {
-      const trackColor = evalStatic(node, scope) as
-        | {false?: unknown; true?: unknown}
-        | null
-        | undefined;
-      if (trackColor?.false != null) {
+      const trackColor = evalStatic(node, scope) as {
+        false?: unknown;
+        true?: unknown;
+      } | null;
+      if (
+        trackColor == null ||
+        typeof trackColor !== 'object' ||
+        Object.keys(trackColor).some(key => key !== 'false' && key !== 'true')
+      ) {
+        throw at(
+          aotError(
+            'AOT: <Switch trackColor> must be an object of two colors',
+            "trackColor={{false: '#767577', true: '#81b0ff'}}",
+          ),
+          attr,
+        );
+      }
+
+      if (trackColor.false != null) {
         staticAssigns.push({
           field: 'track_color_false',
           expr: colorLiteral(String(trackColor.false)),
         });
       }
-      if (trackColor?.true != null) {
+      if (trackColor.true != null) {
         staticAssigns.push({
           field: 'track_color_true',
           expr: colorLiteral(String(trackColor.true)),
         });
       }
     } else if (name === 'disabled') {
-      /* accepted; the AOT has no disabled-visual yet, so it is a no-op */
+      // The engine flips a Switch on every press, so only a Switch that is never disabled lowers.
+      let disabled: unknown = true;
+      try {
+        disabled = evalStatic(node, scope);
+      } catch {
+        /* state-driven: refused below */
+      }
+
+      if (disabled !== false) {
+        throw at(
+          aotError(
+            'AOT: a disabled <Switch> is not supported',
+            'the engine flips a Switch on every press and has no disabled state. Leave it enabled and ' +
+              'ignore the change in onValueChange while it should not move.',
+          ),
+          attr,
+        );
+      }
     } else {
       throw aotError(
         `AOT: <Switch> prop "${name}" is not supported`,
@@ -156,7 +189,7 @@ export function emitSwitch(
     image: null,
     spans: null,
     children: [],
-    wiring: [],
+    wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),
   };
 
   // Compile onValueChange into a press handler that receives the toggled switch value.
@@ -203,5 +236,6 @@ export function emitSwitch(
     node.wiring.push({kind: 'ref', slot});
   }
 
+  checkInterpolations(node);
   return node;
 }

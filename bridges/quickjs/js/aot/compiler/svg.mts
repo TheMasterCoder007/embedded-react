@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {check, checkNumber} from './check.mts';
-import {NODE_TYPES} from '../style-map.mts';
+import {lowerStyle, NODE_TYPES} from '../style-map.mts';
 import {
   flattenSvg,
   parseColor,
@@ -33,8 +33,16 @@ import {evalStatic, withUndefined} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
 import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
 import {lowerRefBinds} from './nodes.mts';
+import {
+  at,
+  checkAttributes,
+  checkNoChildren,
+  elementSpec,
+  svgShapeSpec,
+} from './elements/props.mts';
 import {MAX_GRADIENT_STOPS, printTapeValue} from './c/vectors.mts';
 import type * as t from '@babel/types';
+import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {IrNode} from './ir/nodes.mts';
 import type {IrExpr} from './ir/expressions.mts';
@@ -49,7 +57,13 @@ import type {
   IrVectorPaint,
   IrVectorTables,
 } from './ir/vectors.mts';
-import type {EmitOptions, Env, Scope, StateTable} from './types.mts';
+import type {
+  EmitOptions,
+  Env,
+  Scope,
+  StateTable,
+  StaticAssign,
+} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -108,6 +122,65 @@ const C_NUMBER = '-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * Refuses a child an <Svg> cannot draw, an attribute its shape does not declare, and children on a shape
+ * other than a <G>.
+ *
+ * @param child  The child element.
+ */
+function checkShape(child: t.JSXElement): void {
+  const nameNode = child.openingElement.name;
+  const tag = nameNode.type === 'JSXIdentifier' ? nameNode.name : null;
+  const spec = tag == null ? undefined : svgShapeSpec(tag);
+  if (!spec) {
+    throw at(
+      aotError(
+        `AOT: <${tag ?? 'this element'}> is not a shape an <Svg> draws`,
+        'an <Svg> draws Path, Circle, Ellipse, Rect, Line and Arc, grouped by G. A component is not ' +
+          'rendered inside one: inline its shapes.',
+      ),
+      child,
+    );
+  }
+
+  checkAttributes(spec, child.openingElement);
+  if (spec.children === 'none') {
+    checkNoChildren(spec, child.children);
+  }
+}
+
+/**
+ * Refuses a constant `fillGrad` / `strokeGrad` the engine cannot draw as written: the same type and stop rules
+ * a state-driven one meets (see lowerGradient). `null` is no gradient.
+ *
+ * @param name  The attribute.
+ * @param value  Its folded value.
+ */
+function checkStaticGradient(name: string, value: unknown): void {
+  if (value == null) return;
+
+  const gradient = value as {type?: unknown; stops?: unknown};
+  if (
+    typeof value !== 'object' ||
+    ![1, 2, 3].includes(gradient.type as number)
+  ) {
+    throw aotError(
+      `AOT: "${name}.type" must be 1 (linear), 2 (radial) or 3 (conic)`,
+    );
+  }
+
+  if (!Array.isArray(gradient.stops)) {
+    throw aotError(`AOT: "${name}.stops" must be an array`);
+  }
+
+  check({kind: 'gradientStops', attribute: name, count: gradient.stops.length});
+  for (const stop of gradient.stops) {
+    if (stop == null || typeof stop !== 'object') {
+      throw aotError(`AOT: each "${name}.stops" entry must be an object`);
+    }
+  }
+}
+
+/**
  * Yields an <Svg> subtree's shape children in source order, inlining any `<>…</>` in place: a fragment
  * carries no paint and no transform, so it is transparent to the tape (the Flow A walk in flattenSvg
  * treats it the same way). Whitespace between elements and JSX comments are skipped; anything else
@@ -122,6 +195,7 @@ function* svgShapeChildren(
 ): Generator<t.JSXElement, void, undefined> {
   for (const child of children) {
     if (child.type === 'JSXElement') {
+      checkShape(child);
       yield child;
     } else if (child.type === 'JSXFragment') {
       yield* svgShapeChildren(child.children);
@@ -169,7 +243,7 @@ function jsxToSvgElement(
     }
 
     const name = (attr.name as t.JSXIdentifier).name;
-    if (name === 'ref' || name === 'key') continue; // not geometry/paint
+    if (name === 'ref' || name === 'key' || name === 'style') continue; // the box's, not the drawing's
 
     if (attr.value == null) {
       props[name] = true;
@@ -182,6 +256,11 @@ function jsxToSvgElement(
         `AOT: unsupported <${type}> attribute value for "${name}"`,
       );
     }
+  }
+
+  // A baked gradient takes the same checks as a state-driven one.
+  for (const name of ['fillGrad', 'strokeGrad']) {
+    checkStaticGradient(name, props[name]);
   }
 
   // Convert the shape children the same way, with fragments inlined.
@@ -314,9 +393,9 @@ function svgAttrs(
       );
     }
 
-    // not geometry/paint
+    // Not geometry or paint: the box's style and ref are lowerSvgBox's.
     const name = (attr.name as t.JSXIdentifier).name;
-    if (name === 'ref' || name === 'key') continue;
+    if (name === 'ref' || name === 'key' || name === 'style') continue;
 
     // Keep a gradient as its expression; gradAttr lowers it, conditions included.
     const valueNode = attr.value;
@@ -1036,6 +1115,7 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
         attr.type === 'JSXAttribute' &&
         (attr.name as t.JSXIdentifier).name !== 'ref' &&
         (attr.name as t.JSXIdentifier).name !== 'key' &&
+        (attr.name as t.JSXIdentifier).name !== 'style' &&
         attr.value?.type === 'JSXExpressionContainer'
       ) {
         try {
@@ -1056,13 +1136,77 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
 }
 
 /**
- * Lowers the box an <Svg> draws in: a node of `type` sized to a numeric width/height, then its static style,
- * then its refs. Width and height are written as int16 casts, ahead of the style.
+ * An <Svg> width or height as pixels.
+ *
+ * @param field  Which one.
+ * @param value  Its folded value.
+ * @param scaled  Whether the drawing is scaled to it, which takes pixels.
+ *
+ * @returns The pixels.
+ */
+function svgPixels(
+  field: 'width' | 'height',
+  value: unknown,
+  scaled: boolean,
+): number {
+  const pixels = typeof value === 'number' ? value : NaN;
+  if (!Number.isFinite(pixels)) {
+    throw aotError(
+      `AOT: <Svg ${field}> must be a number of pixels${scaled ? '' : ' or a percentage'} ` +
+        `(got ${JSON.stringify(value) ?? String(value)})`,
+      scaled
+        ? 'a viewBox or a baked source is scaled to the box, so the box takes pixels; size a wrapping ' +
+            "<View> with style={{width: '50%'}} for a share of the parent."
+        : `write the pixels as a number (${field}={100}): Flow A ignores a numeric string here.`,
+    );
+  }
+
+  return pixels;
+}
+
+/**
+ * The ERProps writes for an <Svg> width or height: pixels as an int16, or a percentage of the parent when the
+ * drawing is not scaled to the box. Absent, it writes nothing.
+ *
+ * @param field  Which one.
+ * @param value  Its folded value, or the state-driven one.
+ * @param scaled  Whether the drawing is scaled to the box (a viewBox or a baked source).
+ *
+ * @returns The writes.
+ */
+function svgBoxSize(
+  field: 'width' | 'height',
+  value: unknown,
+  scaled: boolean,
+): StaticAssign[] {
+  if (value == null) return [];
+  if (isDynamicAttr(value)) {
+    throw aotError(
+      `AOT: a state-driven <Svg ${field}> is not supported`,
+      `give the <Svg> a constant ${field} and drive the size of a wrapping <View> from state instead.`,
+    );
+  }
+
+  if (!scaled && typeof value === 'string' && value.trim().endsWith('%')) {
+    return lowerStyle({[field]: value});
+  }
+
+  return [
+    {
+      field,
+      expr: `(int16_t)${Math.round(svgPixels(field, value, scaled))}`,
+    },
+  ];
+}
+
+/**
+ * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, then its refs.
+ * The box's style is constant: it is not a node app_update() rewrites.
  *
  * @param nodeId  The node's variable.
  * @param type  The engine node type: a vector node, or an image for a rasterized .svg.
- * @param width  Its width, when a number.
- * @param height  Its height, when a number.
+ * @param width  Its width writes (see svgBoxSize).
+ * @param height  Its height writes.
  * @param openingElement  The <Svg>'s opening tag, for its style and ref.
  * @param scope  Compile-time constants in reach.
  * @param env  The expression environment.
@@ -1072,26 +1216,29 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
 function lowerSvgBox(
   nodeId: string,
   type: string,
-  width: unknown,
-  height: unknown,
+  width: StaticAssign[],
+  height: StaticAssign[],
   openingElement: t.JSXOpeningElement,
   scope: Scope,
   env: Env,
 ): IrNode {
-  const {staticAssigns} = collectStyleAssigns(openingElement, scope, env);
-  const size = [];
-  if (typeof width === 'number') {
-    size.push({field: 'width', expr: `(int16_t)${Math.round(width)}`});
-  }
-
-  if (typeof height === 'number') {
-    size.push({field: 'height', expr: `(int16_t)${Math.round(height)}`});
+  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+    openingElement,
+    scope,
+    env,
+    elementSpec('Svg')!,
+  );
+  if (dynAssigns.length || binds.length) {
+    throw aotError(
+      `AOT: ${binds.length ? 'an animated' : 'a state-driven'} style on an <Svg> is not supported`,
+      'put the changing style on a wrapping <View>: <View style={…}><Svg …/></View>.',
+    );
   }
 
   return {
     id: nodeId,
     type,
-    constantProps: [...size, ...staticAssigns],
+    constantProps: [...width, ...height, ...staticAssigns],
     stateProps: [],
     placeholder: null,
     text: null,
@@ -1133,21 +1280,6 @@ export function emitSvg(
     );
   }
 
-  // The vector box takes static style only, so reject `visible` rather than silently ignoring a hide prop.
-  if (
-    element.openingElement.attributes.some(
-      attr =>
-        attr.type === 'JSXAttribute' &&
-        attr.name &&
-        attr.name.name === 'visible',
-    )
-  ) {
-    throw aotError(
-      'AOT: `visible` on an <Svg> is not supported',
-      'wrap it: <View visible={…}><Svg …/></View> — the View carries the hide and the whole subtree goes with it.',
-    );
-  }
-
   // Pick the path: a baked .svg file, a state-driven tape, or a static one.
   const sourceAttr = element.openingElement.attributes.find(
     (candidate): candidate is t.JSXAttribute =>
@@ -1180,13 +1312,13 @@ function emitSvgStatic(
 ): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
   const svgElement = jsxToSvgElement(element, scope)!;
-  const {ops, paints} = flattenSvg(svgElement.props);
+  const {ops, paints, gradients} = flattenSvg(svgElement.props);
   const nodeId = `n${out.allocateNodeId()}`;
   const tables: IrVectorTables = {
     id: out.svgN++,
     ops: Array.from(ops),
     paints: paintsOf(paints),
-    gradients: [],
+    gradients,
   };
   checkVectorTables(tables);
   out.vectors.push({kind: 'tables', tables});
@@ -1195,8 +1327,16 @@ function emitSvgStatic(
   const node = lowerSvgBox(
     nodeId,
     'ER_NODE_VECTOR',
-    svgElement.props.width,
-    svgElement.props.height,
+    svgBoxSize(
+      'width',
+      svgElement.props.width,
+      svgElement.props.viewBox != null,
+    ),
+    svgBoxSize(
+      'height',
+      svgElement.props.height,
+      svgElement.props.viewBox != null,
+    ),
     element.openingElement,
     scope,
     env,
@@ -1252,30 +1392,37 @@ function emitSvgSource(
   }
 
   // Scale the artifact at compile time to a static width/height, defaulting to its intrinsic size.
-  const numericAttr = (attrName: string, fallback: number): number => {
+  const numericAttr = (
+    attrName: 'width' | 'height',
+    fallback: number,
+  ): number => {
     const attr = element.openingElement.attributes.find(
       (candidate): candidate is t.JSXAttribute =>
         candidate.type === 'JSXAttribute' &&
         candidate.name &&
         candidate.name.name === attrName,
     );
-    if (!attr || attr.value == null) return fallback;
+    if (!attr) return fallback;
 
-    if (attr.value.type === 'StringLiteral') {
-      return svgNum(attr.value.value, fallback);
-    }
-
-    if (attr.value.type === 'JSXExpressionContainer') {
+    let value: unknown = true; // a bare attribute
+    if (attr.value?.type === 'StringLiteral') {
+      value = attr.value.value;
+    } else if (attr.value?.type === 'JSXExpressionContainer') {
       try {
-        return svgNum(evalStatic(attr.value.expression, scope), fallback);
+        value = evalStatic(attr.value.expression, scope);
       } catch {
-        throw new Error(
-          'AOT: <Svg source> width/height must be a static number',
+        throw at(
+          aotError('AOT: <Svg source> width/height must be a static number'),
+          attr,
         );
       }
     }
 
-    return fallback;
+    try {
+      return svgPixels(attrName, value, true);
+    } catch (error) {
+      throw at(error as AotError, attr);
+    }
   };
 
   // Raster fallback: a .svg with unsupported features was baked to a PNG; register it and emit an Image node.
@@ -1289,8 +1436,8 @@ function emitSvgSource(
     const node = lowerSvgBox(
       `n${out.allocateNodeId()}`,
       NODE_TYPES.Image,
-      width,
-      height,
+      svgBoxSize('width', width, true),
+      svgBoxSize('height', height, true),
       element.openingElement,
       scope,
       env,
@@ -1315,8 +1462,8 @@ function emitSvgSource(
   const node = lowerSvgBox(
     nodeId,
     'ER_NODE_VECTOR',
-    width,
-    height,
+    svgBoxSize('width', width, true),
+    svgBoxSize('height', height, true),
     element.openingElement,
     scope,
     env,
@@ -1411,8 +1558,8 @@ function emitSvgDynamic(
   const node = lowerSvgBox(
     nodeId,
     'ER_NODE_VECTOR',
-    rootAttrs.width,
-    rootAttrs.height,
+    svgBoxSize('width', rootAttrs.width, false),
+    svgBoxSize('height', rootAttrs.height, false),
     element.openingElement,
     scope,
     env,

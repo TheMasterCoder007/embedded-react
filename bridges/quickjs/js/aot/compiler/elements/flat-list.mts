@@ -67,7 +67,7 @@ export function emitFlatList(
 
     // skip non-props
     const name = (attr.name as t.JSXIdentifier).name;
-    if (name === 'keyExtractor' || name === 'ref' || name === 'key') continue;
+    if (name === 'keyExtractor' || name === 'key') continue;
 
     // process props
     if (name === 'data') {

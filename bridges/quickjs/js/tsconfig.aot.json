@@ -21,7 +21,8 @@
     "aot/**/*.mts",
     "aot/**/*.mjs",
     "assets/**/*.mjs",
-    "src/embedded-react/svg-ops.js"
+    "src/embedded-react/svg-ops.js",
+    "src/embedded-react/warn-props.js"
   ],
   "exclude": ["**/__tests__/**"]
 }

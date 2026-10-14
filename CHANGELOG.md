@@ -28,12 +28,26 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Anti-aliased text draws faster: 2- and 4-bit fonts look up each coverage level from a small per-glyph
   table, which replaces four divides per pixel.
+
+- In Flow B, every element declares the props, style keys and children it lowers, and anything else is an
+  `AOT:` error at the prop: an unknown prop, a style key the engine doesn't draw on that element
+  (`opacity` on a `<Text>`), text outside a `<Text>`, or children on an `<Image>`. Props that were accepted
+  and ignored (`<TextInput autoFocus>`, `<Modal transparent>`, a disabled `<Switch>`) are refused too.
+  All of these used to compile and do nothing on the device.
   
 ### Fixed
 
 - The RP2040 watch example gives its stack an explicit 8 KB with a guard below it. The watch face needs
   about 3.1 KB, past the SDK's 2 KB default, and a deeper app now reboots the board instead of silently
   overwriting the framebuffer.
+
+- Flow B lowers `<Text numberOfLines ellipsizeMode>`, `<TextInput onSubmitEditing onFocus onBlur>`,
+  `<Pressable disabled>`, `<ActivityIndicator style={{color}}>`, a percentage `<Svg width>`, fragment
+  children, nested ternaries (`a ? <A/> : b ? <B/> : <C/>`) and the gradients of a constant `<Svg>` shape.
+  Each used to be dropped without an error.
+
+- A Flow B transform entry beside an animated one, an animated `rotateX`, and a fifth `<Dial>` gradient stop
+  fail with an `AOT:` error. They used to be dropped.
 
 - A Flow B `Math.<name>` or `e.layout.<name>` that names a built-in object property (`Math.toString`,
   say) fails with an `AOT:` error. It used to compile to invalid C.

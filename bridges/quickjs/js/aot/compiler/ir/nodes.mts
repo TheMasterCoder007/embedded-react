@@ -31,8 +31,11 @@ import type {IrStateDrivenVector, IrVectorTables} from './vectors.mts';
 
 /** When a node built under a state-driven conditional shows; it exists either way. */
 export type IrShow =
-  /** `cond && <X/>`, or a branch of `cond ? <A/> : <B/>` (the else branch is negated). */
-  | {kind: 'condition'; test: IrExpr; negate: boolean}
+  /**
+   * `cond && <X/>`, or a branch of `cond ? <A/> : <B/>` (the else branch is negated). A condition nested in
+   * another's branch holds only `within` that branch.
+   */
+  | {kind: 'condition'; test: IrExpr; negate: boolean; within: IrShow | null}
   /** A row of a list's fixed pool, shown while the list holds that many items. */
   | {kind: 'rowInUse'; row: number; list: ListState};
 
@@ -140,15 +143,23 @@ export type IrElement =
  */
 export type IrChild =
   | {kind: 'element'; element: IrElement}
-  /** `cond && <X/>` or `cond ? <A/> : <B/>` on state: each branch is built and shown only while it is chosen. */
-  | {
-      kind: 'conditional';
-      test: IrExpr;
-      whenTrue: IrElement | null;
-      whenFalse: IrElement | null;
-    }
+  | IrConditional
   /** `items.map(…)` over list state: a fixed pool of rows, row i shown while the list holds more than i items. */
   | {kind: 'pool'; list: ListState; rows: IrElement[]};
+
+/**
+ * `cond && <X/>` or `cond ? <A/> : <B/>` on state: each branch is built and shown only while it is chosen. A
+ * branch is an element, another conditional (`a ? <A/> : b ? <B/> : <C/>`), or nothing.
+ */
+export interface IrConditional {
+  kind: 'conditional';
+  test: IrExpr;
+  whenTrue: IrBranch;
+  whenFalse: IrBranch;
+}
+
+/** One branch of a conditional. */
+export type IrBranch = IrElement | IrConditional | null;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -201,15 +212,28 @@ export function nodesOf(element: IrElement): IrNode[] {
     if (child.kind === 'element') {
       nodes.push(...nodesOf(child.element));
     } else if (child.kind === 'conditional') {
-      for (const branch of [child.whenTrue, child.whenFalse]) {
-        if (branch) {
-          nodes.push(...nodesOf(branch));
-        }
-      }
+      nodes.push(...branchElements(child).flatMap(nodesOf));
     } else {
       nodes.push(...child.rows.flatMap(nodesOf));
     }
   }
 
   return nodes;
+}
+
+/**
+ * The elements a conditional builds, in source order: every branch, nested conditionals included.
+ *
+ * @param conditional  The conditional.
+ *
+ * @returns The elements.
+ */
+export function branchElements(conditional: IrConditional): IrElement[] {
+  return [conditional.whenTrue, conditional.whenFalse].flatMap(branch =>
+    branch == null
+      ? []
+      : branch.kind === 'conditional'
+        ? branchElements(branch)
+        : [branch],
+  );
 }

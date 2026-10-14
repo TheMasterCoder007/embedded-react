@@ -146,7 +146,7 @@ describe('AOT baseline (regression)', () => {
       export function App() {
         return (<View><Svg visible={false} width={10} height={10}><Path d="M0 0 L1 1" fill="none" stroke="#fff" /></Svg></View>);
       }`),
-    ).toThrow(/`visible` on an <Svg> is not supported/);
+    ).toThrow(/<Svg> prop "visible" is not supported[\s\S]*hint: wrap it/);
   });
 
   it('lowers a state-driven visible into app_update', () => {

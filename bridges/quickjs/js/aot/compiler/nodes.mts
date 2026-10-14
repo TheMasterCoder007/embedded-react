@@ -27,10 +27,16 @@ import {isFn} from './collect.mts';
 import {
   attrExpr,
   collectStyleAssigns,
-  EVENT_TYPES,
   lowerNodeText,
   collectTextSpans,
 } from './style-text.mts';
+import {
+  at,
+  checkAttributes,
+  checkNoChildren,
+  elementSpec,
+  EVENT_TYPES,
+} from './elements/props.mts';
 import {lowerHandler} from './handlers.mts';
 import {emitPanResponder, panSpreadTarget} from './pan-responder.mts';
 import {emitComponent, emitChildren} from './control-flow.mts';
@@ -78,13 +84,19 @@ const FLOW_A_ONLY_COMPONENTS: Record<string, string> = {
 const TOUCHABLE_ACTIVE_OPACITY = 0.2; // RN's default
 const TOUCHABLE_RESTORE_MS = 250; // RN's fade-back; the dim itself lands with no ramp
 
-/** The press events a <TouchableOpacity disabled> drops — RN presses none of them and dims for none. */
+/** The press events a disabled <Pressable> or <TouchableOpacity> drops — RN presses none of them and dims for none. */
 const PRESS_EVENTS = new Set([
   'onPress',
   'onLongPress',
   'onPressIn',
   'onPressOut',
 ]);
+
+/** The `ellipsizeMode`s the engine draws as asked. */
+const ELLIPSIZE_MODES: Record<string, string> = {
+  tail: 'ER_TEXT_ELLIPSIZE_TAIL',
+  clip: 'ER_TEXT_ELLIPSIZE_CLIP',
+};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -172,27 +184,119 @@ function namedAttr(
 }
 
 /**
- * True for `<TouchableOpacity disabled>` / `disabled={SOME_CONST}`. Must fold: `disabled` decides what
- * the build EMITS — the press handlers and the dim binding — so there is nothing left to decide at runtime.
+ * True for `<Pressable disabled>` / `<TouchableOpacity disabled={SOME_CONST}>`. Must fold: `disabled`
+ * decides what the build EMITS — the press handlers and any dim binding — so there is nothing left to
+ * decide at runtime.
  *
- * @param element  The <TouchableOpacity>.
+ * @param element  The <Pressable> or <TouchableOpacity>.
+ * @param tag  Its tag, for the error.
  * @param scope  Compile-time constants in reach.
  *
  * @returns Whether it is disabled.
  */
-function touchableIsDisabled(element: t.JSXElement, scope: Scope): boolean {
+function pressableIsDisabled(
+  element: t.JSXElement,
+  tag: string,
+  scope: Scope,
+): boolean {
   const attr = namedAttr(element.openingElement, 'disabled');
   if (!attr) return false;
 
   return !!evalStaticOrThrow(
     attrExpr(attr),
     scope,
-    'AOT: <TouchableOpacity disabled> must be a compile-time constant',
+    `AOT: <${tag} disabled> must be a compile-time constant`,
     'a disabled one still renders — it lowers to a plain <Pressable>, children, layout ' +
-      'and style intact — but its press handlers and its dim are not emitted at all, so the ' +
+      'and style intact — but its press handlers are not emitted at all, so the ' +
       'AOT has to know at build time. To gate on state, leave it enabled and return early ' +
       'in the handler (`onPress={() => { if (!ready) return; … }}`).',
   );
+}
+
+/**
+ * A <Text>'s truncation: `numberOfLines` must fold to a whole number of lines the engine's byte holds, and
+ * `ellipsizeMode` to a mode the engine draws.
+ *
+ * @param openingElement  The <Text>'s opening tag.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The ERProps writes.
+ */
+function lowerTextTruncation(
+  openingElement: t.JSXOpeningElement,
+  scope: Scope,
+): StaticAssign[] {
+  const assigns: StaticAssign[] = [];
+  const linesAttr = namedAttr(openingElement, 'numberOfLines');
+  if (linesAttr) {
+    const lines = foldAttr(
+      linesAttr,
+      scope,
+      'AOT: <Text numberOfLines> must be a compile-time constant',
+    );
+    if (
+      typeof lines !== 'number' ||
+      !Number.isInteger(lines) ||
+      lines < 0 ||
+      lines > 255
+    ) {
+      throw at(
+        aotError(
+          `AOT: <Text numberOfLines> must be a whole number from 0 to 255 (got ${String(lines)})`,
+          '0 does not truncate; any other value is the most lines the text wraps to.',
+        ),
+        linesAttr,
+      );
+    }
+
+    assigns.push({field: 'number_of_lines', expr: String(lines)});
+  }
+
+  const modeAttr = namedAttr(openingElement, 'ellipsizeMode');
+  if (modeAttr) {
+    const mode = foldAttr(
+      modeAttr,
+      scope,
+      'AOT: <Text ellipsizeMode> must be a compile-time constant',
+    );
+    if (!Object.hasOwn(ELLIPSIZE_MODES, mode as string)) {
+      throw at(
+        aotError(
+          `AOT: <Text ellipsizeMode> "${String(mode)}" is not drawn by the engine`,
+          "use 'tail' or 'clip'; the engine draws 'head' and 'middle' as 'tail'.",
+        ),
+        modeAttr,
+      );
+    }
+
+    assigns.push({
+      field: 'ellipsize_mode',
+      expr: ELLIPSIZE_MODES[mode as string],
+    });
+  }
+
+  return assigns;
+}
+
+/**
+ * An attribute's value, which must fold; the error is pinned to the attribute.
+ *
+ * @param attr  The attribute.
+ * @param scope  Compile-time constants in reach.
+ * @param message  The error when it does not fold.
+ *
+ * @returns The folded value.
+ */
+function foldAttr(
+  attr: t.JSXAttribute,
+  scope: Scope,
+  message: string,
+): unknown {
+  try {
+    return evalStaticOrThrow(attrExpr(attr), scope, message);
+  } catch (error) {
+    throw at(error as AotError, attr);
+  }
 }
 
 /**
@@ -316,6 +420,72 @@ function touchablePressFades(
 }
 
 /**
+ * Lowers an event prop's function to a handler: a useCallback compiles once per instance and is shared, a
+ * callback prop compiles in its caller's environment, and an inline function compiles where it is.
+ *
+ * @param attr  The event prop.
+ * @param out  Everything emitted so far.
+ * @param env  The expression environment.
+ * @param state  The component's state table.
+ *
+ * @returns The handler's name.
+ */
+export function lowerEventHandler(
+  attr: t.JSXAttribute,
+  out: Out,
+  env: Env,
+  state: StateTable,
+): string {
+  const fn = attrExpr(attr);
+  if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
+    // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
+    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
+    let handlerName = out.cbEmitted.get(callbackKey);
+    if (!handlerName) {
+      handlerName = `er_cb_${callbackKey}`;
+      out.cbEmitted.set(callbackKey, handlerName);
+      out.handlers.push({
+        kind: 'callback',
+        name: handlerName,
+        callback: lowerHandler(env.callbacks.get(fn.name)!, env, state, out),
+      });
+    }
+
+    return handlerName;
+  }
+
+  const handlerName = `er_handler_${out.handlers.length}`;
+  if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
+    // Inline a callback prop's function, compiled in the caller's env/state so its setters and locals resolve.
+    const callbackProp = env.fnProps.get(fn.name)!;
+    out.handlers.push({
+      kind: 'callback',
+      name: handlerName,
+      callback: lowerHandler(
+        callbackProp.node,
+        callbackProp.env,
+        callbackProp.state,
+        out,
+      ),
+    });
+  } else if (isFn(fn)) {
+    out.handlers.push({
+      kind: 'callback',
+      name: handlerName,
+      callback: lowerHandler(fn, env, state, out),
+    });
+  } else {
+    throw aotError(
+      `AOT: ${(attr.name as t.JSXIdentifier).name} must be an inline function, a useCallback, or a callback prop`,
+      `pass an inline arrow (onPress={() => setX(…)}), a useCallback identifier, or a ` +
+        `function prop received by this component.`,
+    );
+  }
+
+  return handlerName;
+}
+
+/**
  * Lowers one JSX element to its engine node (see emitNode, the located entry point): dispatches the typed
  * elements (Svg, Switch, Dial, TextInput, ActivityIndicator, Modal, FlatList) and function components to
  * their emitters, and builds a generic host node (View / Text / Pressable / TouchableOpacity / Image /
@@ -338,9 +508,17 @@ function emitNodeImpl(
   state: StateTable,
   opts: EmitOptions = {},
 ): IrElement {
-  // Drop props that fold to undefined, then hand each typed element to its own emitter.
+  // Drop props that fold to undefined, refuse any the element does not declare, then dispatch.
   element = omitUndefinedAttrs(element, scope, env);
   const tag = resolveTag(element.openingElement);
+  const spec = elementSpec(tag);
+  if (spec) {
+    checkAttributes(spec, element.openingElement);
+    if (spec.children === 'none') {
+      checkNoChildren(spec, element.children);
+    }
+  }
+
   const typed = (node: IrNode): IrElement => ({
     kind: 'node',
     id: node.id,
@@ -391,9 +569,10 @@ function emitNodeImpl(
     );
   }
 
-  // A disabled <TouchableOpacity> is a plain Pressable with no handlers or dim; the engine has no disabled flag.
-  const isTouchableDisabled =
-    tag === 'TouchableOpacity' && touchableIsDisabled(element, scope);
+  // A disabled <Pressable> / <TouchableOpacity> has no press handlers or dim; the engine has no disabled flag.
+  const isPressDisabled =
+    (tag === 'Pressable' || tag === 'TouchableOpacity') &&
+    pressableIsDisabled(element, tag, scope);
 
   // Reject spreads, which the loops below would silently drop, except {...pan.panHandlers}.
   const panSpreads: PanResponderRecord[] = [];
@@ -435,7 +614,12 @@ function emitNodeImpl(
     element.openingElement,
     scope,
     env,
+    spec!,
   );
+  if (tag === 'Text') {
+    staticAssigns.push(...lowerTextTruncation(element.openingElement, scope));
+  }
+
   // A <Text> with a nested <Text> becomes inline SPANS; otherwise a single (possibly dynamic) string.
   const spans =
     tag === 'Text' ? collectTextSpans(element.children, scope, env) : null;
@@ -518,7 +702,7 @@ function emitNodeImpl(
 
   // <TouchableOpacity>'s own opacity binding, on top of any the style asked for.
   const press =
-    tag === 'TouchableOpacity' && !isTouchableDisabled
+    tag === 'TouchableOpacity' && !isPressDisabled
       ? touchablePressFades(
           element,
           nodeId,
@@ -561,7 +745,7 @@ function emitNodeImpl(
     children: [],
   };
 
-  // Compile each event prop into a handler; a disabled <TouchableOpacity> drops its press events.
+  // Compile each event prop into a handler; a disabled one drops its press events.
   const fadesWired = new Set<string>();
   for (const attr of element.openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') continue;
@@ -570,55 +754,13 @@ function emitNodeImpl(
     if (!eventType) continue;
 
     if (
-      isTouchableDisabled &&
+      isPressDisabled &&
       PRESS_EVENTS.has((attr.name as t.JSXIdentifier).name)
     ) {
       continue;
     }
 
-    const fn = attrExpr(attr);
-    let handlerName;
-    if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
-      // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
-      const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
-      handlerName = out.cbEmitted.get(callbackKey);
-      if (!handlerName) {
-        handlerName = `er_cb_${callbackKey}`;
-        out.cbEmitted.set(callbackKey, handlerName);
-        out.handlers.push({
-          kind: 'callback',
-          name: handlerName,
-          callback: lowerHandler(env.callbacks.get(fn.name)!, env, state, out),
-        });
-      }
-    } else if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
-      // Inline a callback prop's function, compiled in the caller's env/state so its setters and locals resolve.
-      const callbackProp = env.fnProps.get(fn.name)!;
-      handlerName = `er_handler_${out.handlers.length}`;
-      out.handlers.push({
-        kind: 'callback',
-        name: handlerName,
-        callback: lowerHandler(
-          callbackProp.node,
-          callbackProp.env,
-          callbackProp.state,
-          out,
-        ),
-      });
-    } else if (isFn(fn)) {
-      handlerName = `er_handler_${out.handlers.length}`;
-      out.handlers.push({
-        kind: 'callback',
-        name: handlerName,
-        callback: lowerHandler(fn, env, state, out),
-      });
-    } else {
-      throw aotError(
-        `AOT: ${(attr.name as t.JSXIdentifier).name} must be an inline function, a useCallback, or a callback prop`,
-        `pass an inline arrow (onPress={() => setX(…)}), a useCallback identifier, or a ` +
-          `function prop received by this component.`,
-      );
-    }
+    let handlerName = lowerEventHandler(attr, out, env, state);
 
     // Wrap the app's press-in/out with the fade; prepending would dim every other element sharing a useCallback.
     const pressFade = press?.fades[(attr.name as t.JSXIdentifier).name];
