@@ -556,6 +556,15 @@ describe('declared children', () => {
     );
   });
 
+  it('refuses a state-driven number on the left of `&&`, which renders 0 as text', () => {
+    expect(errorOf('<View>{n && <Text>A</Text>}</View>')).toBe(
+      'AOT: a number on the left of `&&` renders 0 as text when it is 0',
+    );
+    expect(gen('<View>{n > 0 && <Text>A</Text>}</View>')).toContain(
+      'p.display = (((s_state.n > 0)) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
+    );
+  });
+
   it('refuses a constant `&&` whose falsy value React would draw as text', () => {
     expect(errorOf('<View>{0 && <Text>A</Text>}</View>')).toBe(
       'AOT: a non-element expression child (0) cannot render here',
@@ -662,6 +671,16 @@ describe('values a declared prop cannot lower', () => {
     ],
   ])('refuses %s', (what, jsx, message) => {
     expect(errorOf(jsx)).toMatch(message);
+  });
+
+  it('lets a style size win over the <Svg> width and height, in either form', () => {
+    const c = gen(
+      '<Svg width="50%" height={40} style={{width: 30, height: \'25%\'}}><Circle r={4} /></Svg>',
+    );
+    expect(c).not.toContain('p.width_pct = 50.0f;');
+    expect(c).not.toContain('p.height = (int16_t)40;');
+    expect(c).toContain('p.width = 30;');
+    expect(c).toContain('p.height_pct = 25.0f;');
   });
 
   it('lowers a percentage <Svg> size, and refuses a numeric string', () => {

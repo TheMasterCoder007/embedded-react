@@ -687,6 +687,9 @@ function emitDynamicMap(
   return {kind: 'pool', list: listState, rows};
 }
 
+/** The value types whose falsy value, 0, React renders as text. */
+const NUMERIC_KINDS = new Set(['int', 'float', 'int64']);
+
 /**
  * Whether a folded child value renders nothing, as React treats it: false, null, undefined and the empty string.
  *
@@ -794,6 +797,17 @@ function lowerBranch(
 
     // A state-driven test builds every branch; each shows while the test picks it.
     const test = lowerExpr(testNode, env);
+    if (isAnd && NUMERIC_KINDS.has(test.type.kind)) {
+      const error = aotError(
+        'AOT: a number on the left of `&&` renders 0 as text when it is 0',
+        'React draws the 0 itself, and text needs a <Text>. Test it as a condition: `count > 0 && <El/>`.',
+      );
+      if (testNode.loc) {
+        error.aotLoc = testNode.loc.start;
+      }
+
+      throw error;
+    }
     const shown = (negate: boolean): IrShow => ({
       kind: 'condition',
       test,

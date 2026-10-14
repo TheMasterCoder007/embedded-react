@@ -31,7 +31,11 @@ import {
 import {aotError} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
-import {lowerColorValue, collectStyleAssigns} from './style-text.mts';
+import {
+  lowerColorValue,
+  collectStyleAssigns,
+  styleWrites,
+} from './style-text.mts';
 import {checkInterpolations, lowerRefBinds} from './nodes.mts';
 import {
   at,
@@ -1235,10 +1239,15 @@ function lowerSvgBox(
     );
   }
 
+  // A style width or height wins over the attribute, in pixels or as a percentage of the parent.
+  const size = [...width, ...height].filter(
+    assign =>
+      !styleWrites(staticAssigns, [], assign.field.replace(/_pct$/, '')),
+  );
   const node: IrNode = {
     id: nodeId,
     type,
-    constantProps: [...width, ...height, ...staticAssigns],
+    constantProps: [...size, ...staticAssigns],
     stateProps: [],
     placeholder: null,
     text: null,

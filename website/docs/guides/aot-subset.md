@@ -30,6 +30,8 @@ while the code that breaks it is still one line.
 - The entry is `export function App() {...}` and a component body must return a JSX element. A
   component that branches at the top level with `if` may only test a compile-time constant, such as
   the `screen` global; runtime layout branching is expressed inside JSX with `&&` or a ternary.
+  The left of a state-driven `&&` must be a condition, not a number: React draws a `0` as text, so
+  write `count > 0 && <El/>`.
 - Components live in the same file as `App`: local `.jsx` imports are not resolved.
 - A component that receives state-driven or function props must destructure them:
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
