@@ -46,9 +46,11 @@ import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
 import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
+import {nodeReads, vectorReads} from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
 import type {SlotWidths} from './ir/types.mts';
+import type {IrNode} from './ir/nodes.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
 import type {Env, Scope, StateRecord} from './types.mts';
 
@@ -118,6 +120,23 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
       settle(mountEffect.callback);
     } else if (mountEffect.kind === 'call' && !hasUpdate) {
       mountEffect.updatesState = false;
+    }
+  }
+}
+
+/**
+ * Flags each state a node or drawing reads, so a write to it marks it changed and app_update() sets them again.
+ * A node that also reads something untracked is set on every update, so its reads need no flag.
+ *
+ * @param nodes  The app's nodes.
+ */
+function watchState(nodes: IrNode[]): void {
+  for (const node of nodes) {
+    const vector = stateDrivenVectorOf(node);
+    for (const reads of [nodeReads(node), vector && vectorReads(vector)]) {
+      reads?.forEach(record => {
+        record.isWatched = true;
+      });
     }
   }
 }
@@ -331,6 +350,9 @@ function lowerProgram(
       node => isStateDriven(node) || stateDrivenVectorOf(node) !== null,
     ) || out.depEffects.length > 0;
   settleFunctions(out, hasUpdate);
+  if (hasUpdate) {
+    watchState(nodesOf(root));
+  }
 
   const stateRecords = [...state.byName.values(), ...out.childStateRecords];
   checkStateRecords(stateRecords);

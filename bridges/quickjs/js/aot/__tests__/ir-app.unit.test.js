@@ -243,7 +243,12 @@ describe('the lowered app: er_app_build and app_update', () => {
     expect(c).toContain('    er_tree_append_child(root, n0);');
     expect(updates).toBe(1);
     expect(c).toContain('static ERNode* s_n1;\nstatic ERNode* s_n3;');
-    expect(c).toContain('    er_node_set_props(s_n1, &p);\n    build_svg0();');
+    expect(c).toContain(
+      '    if (changed.n)\n    {\n        er_props_default(&p);',
+    );
+    expect(c).toContain(
+      '        er_node_set_props(s_n1, &p);\n        build_svg0();',
+    );
   });
 
   it('has no app_update() when nothing state drives is on screen', () => {
@@ -302,5 +307,131 @@ describe('the lowered app: er_app_build and app_update', () => {
         ),
       ),
     ).toThrow(/would collide with er_app_set_wall_clock/);
+  });
+});
+
+describe('app_update() sets again only what a state change affects', () => {
+  /** An app module whose component declares `body` and returns `jsx`. */
+  const app = (body, jsx) =>
+    "import React, {useState, useRef, useMemo, useEffect} from 'react';\n" +
+    "import {View, Text, Pressable, Svg, Circle, useHostValue} from 'embedded-react';\n" +
+    `export function App() {\n${body}\n  return ${jsx};\n}`;
+
+  /** The C an app compiles to. */
+  const cOf = source => writeApp(lower(source), 'probe', opts).c;
+
+  /** The body of a generated C function, by its signature line. */
+  const fnBody = (c, signature) => {
+    const start = c.indexOf(`${signature}\n{\n`);
+    expect(start, `no ${signature}`).toBeGreaterThanOrEqual(0);
+    return c.slice(start, c.indexOf('\n}\n', start) + 2);
+  };
+
+  it('re-sets a text only when the state it shows was written', () => {
+    const c = cOf(
+      app(
+        '  const [a, setA] = useState(0);\n  const [b, setB] = useState(0);',
+        '<View><Pressable onPress={() => setA(a + 1)}><Text>{a}</Text></Pressable><Text>{b}</Text></View>',
+      ),
+    );
+    expect(c).toContain(
+      'typedef struct\n{\n    uint8_t a;\n    uint8_t b;\n} ErAppChanged;\n\nstatic ErAppChanged s_changed;',
+    );
+
+    const update = fnBody(c, 'static void app_update(void)');
+    expect(update).toContain(
+      '    const ErAppChanged changed = s_changed;\n    memset(&s_changed, 0, sizeof(s_changed));',
+    );
+    expect(update).toMatch(
+      /    if \(changed\.a\)\n    \{\n[^}]*"%d", s_state\.a\);\n        er_node_set_props\(s_n2, &p\);\n    \}/,
+    );
+    expect(update).toMatch(
+      /    if \(changed\.b\)\n    \{\n[^}]*"%d", s_state\.b\);\n        er_node_set_props\(s_n3, &p\);\n    \}/,
+    );
+
+    // The handler flags only the state it wrote.
+    expect(c).toContain(
+      '    s_state.a = app_add(s_state.a, 1);\n    s_changed.a = 1;\n    app_update();',
+    );
+    expect(c).not.toContain('s_changed.b = 1;');
+
+    // The first update sets every node, whatever was written before it.
+    expect(c).toContain(
+      '    memset(&s_changed, 1, sizeof(s_changed)); /* the first update sets every node */\n    app_update();',
+    );
+  });
+
+  it('tests every state a node reads, through a memo too', () => {
+    const update = fnBody(
+      cOf(
+        app(
+          '  const [a, setA] = useState(0);\n  const [b, setB] = useState(false);\n' +
+            '  const twice = useMemo(() => a * 2, [a]);',
+          '<View><Text style={{color: b ? "#ffffff" : "#000000"}}>{twice}</Text></View>',
+        ),
+      ),
+      'static void app_update(void)',
+    );
+    expect(update).toContain('    if (changed.a || changed.b)\n');
+  });
+
+  it('sets a node that reads a ref on every update, as a re-render reads it', () => {
+    const c = cOf(
+      app(
+        '  const [a, setA] = useState(0);\n  const r = useRef(0);',
+        '<Pressable onPress={() => { r.current++; setA(a + 1); }}><Text>{r.current + a}</Text></Pressable>',
+      ),
+    );
+    const update = fnBody(c, 'static void app_update(void)');
+    expect(update).not.toContain('if (changed');
+    expect(update).toContain('    er_node_set_props(s_n1, &p);');
+    expect(c).not.toContain('ErAppChanged');
+  });
+
+  it('flags a list on every list write, and tests it once for all its rows', () => {
+    const c = cOf(
+      app(
+        "  const [items, setItems] = useState([{v: 'x'}]);",
+        "<Pressable onPress={() => setItems([...items, {v: 'y'}])}>{items.map(item => <Text>{item.v}</Text>)}</Pressable>",
+      ),
+    );
+    const update = fnBody(c, 'static void app_update(void)');
+    expect(update.match(/if \(changed\.items\)/g)).toHaveLength(1);
+    expect(update.match(/er_node_set_props/g).length).toBeGreaterThan(1);
+    expect(c).toMatch(
+      /        s_items_count\+\+;\n    \}\n    s_changed\.items = 1;\n    app_update\(\);/,
+    );
+  });
+
+  it('guards a drawing by the state its shapes read', () => {
+    const update = fnBody(
+      cOf(
+        app(
+          '  const [n, setN] = useState(0);\n  const [label] = useState("x");',
+          '<View><Text>{label}</Text><Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fill="#0f0" /></Svg></View>',
+        ),
+      ),
+      'static void app_update(void)',
+    );
+    expect(update).toMatch(
+      /    if \(changed\.n\)\n    \{\n        build_svg0\(\);/,
+    );
+  });
+
+  it('flags a host value in its setter, and leaves a state no node reads unflagged', () => {
+    const c = cOf(
+      app(
+        '  const temp = useHostValue(0);\n  const [seen, setSeen] = useState(0);\n' +
+          '  useEffect(() => { setSeen(temp); }, [temp]);',
+        '<Text>{temp}</Text>',
+      ),
+    );
+    expect(c).toContain(
+      'void er_app_set_temp(int v)\n{\n    s_state.temp = v;\n    s_changed.temp = 1;\n    app_update();\n}',
+    );
+    expect(c).toContain(
+      'typedef struct\n{\n    uint8_t temp;\n} ErAppChanged;',
+    );
+    expect(c).not.toContain('s_changed.seen');
   });
 });

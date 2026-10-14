@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Flow B: a state change now re-sets only the nodes and drawings that read that state, instead of every
+  state-driven node. On the thermostat, a setpoint step re-sets 2 nodes instead of 19, which halves the
+  handler's cost on the ESP32-S3.
 
 ## [0.16.0] - 2026-10-14
 ### Changed

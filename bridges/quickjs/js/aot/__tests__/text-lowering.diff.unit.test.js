@@ -978,7 +978,7 @@ export function App() {
         'handler-divconv',
       ).c;
       const body = c.match(
-        / {4}s_state\.n = [^\n]+\n {4}s_ref_q = [^\n]+\n {4}s_ref_m = [^\n]+\n {4}s_ref_g = [^\n]+\n/,
+        / {4}s_state\.n = [^\n]+\n {4}s_changed\.n = 1;\n {4}s_ref_q = [^\n]+\n {4}s_ref_m = [^\n]+\n {4}s_ref_g = [^\n]+\n/,
       );
       expect(body, 'no handler statements emitted').toBeTruthy();
       // [f, d, q and m's starting value]
@@ -993,7 +993,8 @@ export function App() {
       let prog =
         HELPER_INCLUDES +
         usedHelpers(helperDefs(c), [body[0]]) +
-        'struct St { int n; float f; int d; };\n';
+        'struct St { int n; float f; int d; };\n' +
+        'static struct { unsigned char n; } s_changed;\n';
       CASES.forEach(([f, d, q], i) => {
         prog +=
           `static void case_${i}(void){ struct St S = {0, ${cFloat(f)}, ${cInt(d)}};\n` +

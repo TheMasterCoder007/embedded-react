@@ -68,6 +68,8 @@ export interface ItemStruct {
 /** A name bound at runtime: a handler local, a dynamic prop, or a list row's item (which has a `struct`). */
 export interface Local extends CExpr {
   struct?: ItemStruct;
+  /** A list row's item: the list it is a row of. */
+  list?: ListState;
   /** What it was set from, which the typing pass reads when it infers slot widths. */
   source?: IrSource;
 }
@@ -80,6 +82,8 @@ interface StateSlot {
   cField: string;
   /** The setter's JS name; none for a host value. */
   setter: string | undefined;
+  /** A node or drawing reads it, so a write flags it for app_update() to set them again. */
+  isWatched?: boolean;
 }
 
 /** A scalar state: one field of the ErAppState struct. */

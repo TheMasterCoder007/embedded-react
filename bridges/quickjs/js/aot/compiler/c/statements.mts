@@ -25,6 +25,7 @@ import {printCondition, printExpr} from './expressions.mts';
 import {formatArgs, printText} from './text.mts';
 import {slotOf} from '../ir/types.mts';
 import type {IrExpr} from '../ir/expressions.mts';
+import type {StateRecord} from '../types.mts';
 import type {
   IrAppendItem,
   IrCallback,
@@ -56,6 +57,9 @@ export const APP_UPDATE_CALL = '    app_update();';
 /** The indent list operations print at, whatever block they sit in. */
 const LIST_INDENT = INDENT;
 
+/** The file-scope flags that record which state was written since app_update() last ran. */
+export const CHANGED_FLAGS = 's_changed';
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -69,6 +73,21 @@ const LIST_INDENT = INDENT;
  */
 const readsMember = (member: string): RegExp =>
   new RegExp(`(^|[^\\w.])${member.replace(/\./g, '\\.')}(?![\\w])`);
+
+/**
+ * The line that flags a state as written, so app_update() sets the nodes that read it again; none when no node
+ * reads it.
+ *
+ * @param state  The state.
+ * @param indent  The line's indentation.
+ *
+ * @returns The C lines.
+ */
+export const printChangedFlag = (
+  state: StateRecord,
+  indent: string,
+): string[] =>
+  state.isWatched ? [`${indent}${CHANGED_FLAGS}.${state.cField} = 1;`] : [];
 
 /**
  * A timer as the C call that starts it and evaluates to its id. A timestamp or float delay goes through
@@ -189,27 +208,44 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
     case 'clearTimer':
       return [`${indent}er_timer_clear(${printExpr(stmt.id)});`];
     case 'setState':
-      return [`${indent}${stmt.state.cMember} = ${printExpr(stmt.value)};`];
+      return [
+        `${indent}${stmt.state.cMember} = ${printExpr(stmt.value)};`,
+        ...printChangedFlag(stmt.state, indent),
+      ];
     case 'setStateText':
-      return [printSetStateText(stmt, indent)];
+      return [
+        printSetStateText(stmt, indent),
+        ...printChangedFlag(stmt.state, indent),
+      ];
     case 'clearList':
-      return [`${LIST_INDENT}${stmt.list.countMember} = 0;`];
+      return [
+        `${LIST_INDENT}${stmt.list.countMember} = 0;`,
+        ...printChangedFlag(stmt.list, LIST_INDENT),
+      ];
     case 'appendItem':
-      return printAppendItem(stmt);
+      return [
+        ...printAppendItem(stmt),
+        ...printChangedFlag(stmt.list, LIST_INDENT),
+      ];
     case 'dropLastItem': {
       const count = stmt.list.countMember;
-      return [`${LIST_INDENT}if (${count} > 0) ${count}--;`];
+      return [
+        `${LIST_INDENT}if (${count} > 0) ${count}--;`,
+        ...printChangedFlag(stmt.list, LIST_INDENT),
+      ];
     }
     case 'keepFirstItems': {
       const count = stmt.list.countMember;
       return [
         `${LIST_INDENT}${count} = (${count} < ${stmt.count}) ? ${count} : ${stmt.count};`,
+        ...printChangedFlag(stmt.list, LIST_INDENT),
       ];
     }
     case 'sliceItems': {
       const count = stmt.list.countMember;
       return [
         `${LIST_INDENT}${count} = app_slice_len(${count}, ${printExpr(stmt.end)});`,
+        ...printChangedFlag(stmt.list, LIST_INDENT),
       ];
     }
     case 'writeRef':

@@ -41,17 +41,21 @@ import {
 import {printKeyboard} from './c/keyboard.mts';
 import {printElementTree, printNode, printNodeUpdate} from './c/nodes.mts';
 import {printPanDecls, printPanQuery} from './c/pan-responder.mts';
+import {CHANGED_FLAGS, printChangedFlag} from './c/statements.mts';
 import {printVectorBlocks, printVectorRebuild} from './c/vectors.mts';
 import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
+import {nodeReads, vectorReads} from './ir/reads.mts';
 import type {ResolvedOptions} from './options.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
+import type {StateReads} from './ir/reads.mts';
 import type {SlotWidths} from './ir/types.mts';
 import type {
   AssetImport,
   ItemField,
   ItemStruct,
   ScalarState,
+  StateRecord,
 } from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -127,6 +131,48 @@ export const compileSourceImpl = (
 ): CompileResult => writeApp(lowerApp(src, opts, wide, stores), demo, opts);
 
 /**
+ * app_update()'s entries, each set again only when a state it reads changed. Consecutive entries that read the
+ * same state share one test; an entry that reads something untracked, or nothing, runs every time.
+ *
+ * @param entries  Each node's or drawing's reads, and its C lines.
+ * @param stateRecords  The app's state, in declaration order.
+ *
+ * @returns The C lines.
+ */
+function printGuardedUpdates(
+  entries: {reads: StateReads; lines: string[]}[],
+  stateRecords: StateRecord[],
+): string[] {
+  const testOf = (reads: StateReads): string | null =>
+    reads?.size
+      ? stateRecords
+          .filter(stateRecord => reads.has(stateRecord))
+          .map(stateRecord => `changed.${stateRecord.cField}`)
+          .join(' || ')
+      : null;
+
+  const lines: string[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const test = testOf(entries[index].reads);
+    if (test === null) {
+      lines.push(...entries[index].lines);
+      index++;
+      continue;
+    }
+
+    lines.push(`    if (${test})`, '    {');
+    while (index < entries.length && testOf(entries[index].reads) === test) {
+      lines.push(...entries[index].lines.map(line => '    ' + line));
+      index++;
+    }
+    lines.push('    }');
+  }
+
+  return lines;
+}
+
+/**
  * Writes a lowered app as C: file-scope state, declarations and functions, then er_app_build(), in
  * app.gen.c, and the app's public entry points in app.gen.h.
  *
@@ -192,12 +238,23 @@ export function writeApp(
       `{${scalarRecords.map(scalarRecord => ` .${scalarRecord.cField} = ${cConstant(scalarRecord.initial, scalarRecord.cType)}`).join(',')} ` +
       `};\n`
     : '';
-  const stateBlock = [scalarBlock, listBlocks].filter(Boolean).join('\n');
+  // One flag per state a node or drawing reads, set by each write and cleared by app_update().
+  const watchedRecords = stateRecords.filter(
+    stateRecord => stateRecord.isWatched,
+  );
+  const changedBlock = watchedRecords.length
+    ? `typedef struct\n{\n${watchedRecords.map(stateRecord => `    uint8_t ${stateRecord.cField};`).join('\n')}\n} ` +
+      `ErAppChanged;\n\nstatic ErAppChanged ${CHANGED_FLAGS};\n`
+    : '';
+  const stateBlock = [scalarBlock, listBlocks, changedBlock]
+    .filter(Boolean)
+    .join('\n');
 
   // The nodes er_app_build() creates, each before its children, and what app_update() re-applies to them.
   const nodes = nodesOf(app.root);
   const buildLines = printElementTree(app.root).join('\n');
-  const updates = nodes.flatMap(node => printNode(node).update ?? []);
+  const updatedNodes = nodes.filter(isStateDriven);
+  const updates = updatedNodes.map(node => printNode(node).update!);
 
   // A file-scope handle for each node app_update() re-applies, and one for each drawing it rebuilds.
   const handleDecls = nodes
@@ -254,16 +311,34 @@ export function writeApp(
     if (updates.length) {
       lines.push('    ERProps p;');
     }
-    for (const update of updates) {
-      lines.push(...printNodeUpdate(update));
+
+    // A snapshot of the flags, cleared first, so state an effect below writes is applied on the next update.
+    if (watchedRecords.length) {
+      lines.push(
+        `    const ErAppChanged changed = ${CHANGED_FLAGS};`,
+        `    memset(&${CHANGED_FLAGS}, 0, sizeof(${CHANGED_FLAGS}));`,
+      );
     }
-    // State-driven Svgs: recompute the op-tape from state and re-upload.
-    for (const node of nodes) {
-      const vector = stateDrivenVectorOf(node);
-      if (vector) {
-        lines.push(...printVectorRebuild(node.id, vector));
-      }
-    }
+
+    // Node props, then state-driven Svgs' op-tapes, each set again only when a state it reads changed.
+    const entries: {reads: StateReads; lines: string[]}[] = [
+      ...updatedNodes.map((node, index) => ({
+        reads: nodeReads(node),
+        lines: printNodeUpdate(updates[index]),
+      })),
+      ...nodes.flatMap(node => {
+        const vector = stateDrivenVectorOf(node);
+        return vector
+          ? [
+              {
+                reads: vectorReads(vector),
+                lines: printVectorRebuild(node.id, vector),
+              },
+            ]
+          : [];
+      }),
+    ];
+    lines.push(...printGuardedUpdates(entries, stateRecords));
     // Dep-driven useEffect: run each effect whose dependency value changed since the last app_update.
     for (const effect of out.depEffects) {
       lines.push(printDepEffectCheck(effect));
@@ -488,7 +563,11 @@ static int16_t app_round_dim(double v)
     .map(
       hostRecord =>
         `void er_app_set_${hostRecord.name}(${cScalarType(hostRecord.cType)} v)\n{\n    ` +
-        `${hostRecord.cMember} = v;\n${hasUpdate ? '    app_update();\n' : ''}}`,
+        `${hostRecord.cMember} = v;\n` +
+        printChangedFlag(hostRecord, '    ')
+          .map(line => line + '\n')
+          .join('') +
+        `${hasUpdate ? '    app_update();\n' : ''}}`,
     )
     .join('\n\n');
   const hostSetterProtos = hostRecords
@@ -849,8 +928,11 @@ static int16_t app_round_dim(double v)
     ? keyboard.setup +
       ' /* app-supplied on-screen keyboard layout/appearance */\n'
     : '';
+  const initialChanged = watchedRecords.length
+    ? `    memset(&${CHANGED_FLAGS}, 1, sizeof(${CHANGED_FLAGS})); /* the first update sets every node */\n`
+    : '';
   const initialUpdate = hasUpdate
-    ? '\n    app_update(); /* apply initial state-dependent props */\n'
+    ? `\n${initialChanged}    app_update(); /* apply initial state-dependent props */\n`
     : '';
 
   // app.gen.c: includes and version pin, then file-scope state, declarations and functions, then er_app_build().
