@@ -53,7 +53,7 @@ import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {AnimBind} from './style-text.mts';
-import type {IrElement, IrNode, IrWire} from './ir/nodes.mts';
+import type {IrElement, IrNode, IrShow, IrWire} from './ir/nodes.mts';
 import type {IrPressFade} from './ir/functions.mts';
 import type {
   DynAssign,
@@ -421,6 +421,42 @@ function touchablePressFades(
 }
 
 /**
+ * Shows a typed element only while the state-driven conditional it was built under picks it, as the host-node
+ * path does through `display`. The engine derives a Modal's display from `modal_visible`, so a Modal's
+ * condition gates that flag instead.
+ *
+ * @param node  The element's node.
+ * @param show  When it shows.
+ */
+function applyShow(node: IrNode, show: IrShow): void {
+  if (node.type !== 'ER_NODE_MODAL') {
+    node.stateProps.push({field: 'display', value: {kind: 'shown', show}});
+    return;
+  }
+
+  const constantAt = node.constantProps.findIndex(
+    assign => assign.field === 'modal_visible',
+  );
+  if (constantAt >= 0) {
+    const [visible] = node.constantProps.splice(constantAt, 1);
+    node.stateProps.push({
+      field: 'modal_visible',
+      value: {
+        kind: 'whileShown',
+        show,
+        value: {kind: 'constant', code: visible.expr},
+      },
+    });
+    return;
+  }
+
+  const visible = node.stateProps.find(
+    assign => assign.field === 'modal_visible',
+  )!;
+  visible.value = {kind: 'whileShown', show, value: visible.value};
+}
+
+/**
  * Lowers an event prop's function to a handler: a useCallback compiles once per instance and is shared, a
  * callback prop compiles in its caller's environment, and an inline function compiles where it is.
  *
@@ -524,11 +560,13 @@ function emitNodeImpl(
 
   element = omitUndefinedAttrs(element, scope, env);
 
-  const typed = (node: IrNode): IrElement => ({
-    kind: 'node',
-    id: node.id,
-    node,
-  });
+  const typed = (node: IrNode): IrElement => {
+    if (opts.show) {
+      applyShow(node, opts.show);
+    }
+
+    return {kind: 'node', id: node.id, node};
+  };
   if (tag === 'Svg') {
     return typed(emitSvg(element, scope, out, env, state, opts));
   }

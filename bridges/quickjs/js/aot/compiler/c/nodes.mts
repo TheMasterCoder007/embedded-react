@@ -98,6 +98,8 @@ export function printPropValue(value: IrPropValue): string {
       return `((${printExpr(value.value)}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`;
     case 'shown':
       return `((${printShow(value.show)}) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE)`;
+    case 'whileShown':
+      return `((${printShow(value.show)}) ? ${printPropValue(value.value)} : 0)`;
     case 'flag': {
       const test =
         value.truthiness === 'condition'

@@ -46,6 +46,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   children, nested ternaries (`a ? <A/> : b ? <B/> : <C/>`) and the gradients of a constant `<Svg>` shape.
   Each used to be dropped without an error.
 
+- In Flow B, a `<Switch>`, `<Dial>`, `<TextInput>`, `<ActivityIndicator>` or `<Modal>` under a state-driven
+  `&&` or ternary, or in a row of a state list, shows only while it is chosen. It used to stay visible.
+
+- A Flow B `<Svg source>` with a style width or height bakes its drawing at that size, as Flow A does. It used
+  to bake at the attribute's size and draw it clipped into the styled box.
+
 - A Flow B transform entry beside an animated one, an animated `rotateX`, and a fifth `<Dial>` gradient stop
   fail with an `AOT:` error. They used to be dropped.
 

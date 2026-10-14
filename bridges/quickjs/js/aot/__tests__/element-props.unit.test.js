@@ -726,6 +726,64 @@ describe('values a declared prop cannot lower', () => {
   });
 });
 
+describe('typed elements under a state-driven conditional', () => {
+  it('shows a Switch, Dial, TextInput or ActivityIndicator only while it is chosen', () => {
+    for (const element of [
+      '<Switch />',
+      '<Dial />',
+      '<TextInput />',
+      '<ActivityIndicator />',
+    ]) {
+      expect(gen(`<View>{n > 0 && ${element}}</View>`), element).toContain(
+        'p.display = (((s_state.n > 0)) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
+      );
+    }
+  });
+
+  it("gates a Modal's own visible flag, which the engine derives its display from", () => {
+    expect(gen('<View>{n > 0 && <Modal visible />}</View>')).toContain(
+      'p.modal_visible = (((s_state.n > 0)) ? 1 : 0);',
+    );
+    expect(
+      gen('<View>{n > 0 ? <Text>a</Text> : <Modal visible={n < -1} />}</View>'),
+    ).toContain(
+      'p.modal_visible = ((!((s_state.n > 0))) ? (uint8_t)(((s_state.n < -1)) ? 1 : 0) : 0);',
+    );
+  });
+});
+
+describe('a baked <Svg source>', () => {
+  const artifact = {
+    ops: [0, 0, 1, 0, 0, 2, 10, 0, 2, 10, 10, 6],
+    paints: [0, 0, 4, 4, 0, 0, 0, 0, 0],
+    width: 10,
+    height: 10,
+  };
+  const baked = attrs =>
+    compileSource(
+      `${PRE}import art from './art.svg';
+export function App() { return <Svg source={art} ${attrs} />; }`,
+      'App.jsx',
+      {svgArtifacts: {art: artifact}},
+    ).c;
+
+  it('scales the drawing to the style size, which wins over the attribute', () => {
+    const tape = c => c.match(/s_svg0_ops\[\] = \{[^}]*\}/)[0];
+    const styled = baked(
+      'width={20} height={20} style={{width: 30, height: 30}}',
+    );
+    expect(tape(styled)).toBe(tape(baked('width={30} height={30}')));
+    expect(styled).toContain('p.width = 30;');
+    expect(styled).not.toContain('(int16_t)20');
+  });
+
+  it('refuses a percentage style size, which it cannot bake', () => {
+    expect(() =>
+      baked("width={20} height={20} style={{width: '50%'}}"),
+    ).toThrow(/percentage style width on an <Svg source> is not supported/);
+  });
+});
+
 describe('animated style keys', () => {
   it('binds an animated transform on a typed element and an <Svg>', () => {
     expect(gen('<Switch style={{transform: [{scale: a}]}} />')).toContain(

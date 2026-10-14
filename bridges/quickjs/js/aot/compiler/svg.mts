@@ -1439,9 +1439,29 @@ function emitSvgSource(
     }
   };
 
+  // The drawing is scaled to the box, so a style size wins over the attribute, as in Flow A.
+  const {staticAssigns: style} = collectStyleAssigns(
+    element.openingElement,
+    scope,
+    env,
+    elementSpec('Svg')!,
+  );
+  const boxSize = (field: 'width' | 'height', fallback: number): number => {
+    if (style.some(assign => assign.field === `${field}_pct`)) {
+      throw aotError(
+        `AOT: a percentage style ${field} on an <Svg source> is not supported`,
+        'the drawing is scaled to the box at build time, when the parent size is unknown; give the ' +
+          `<Svg> its ${field} in pixels.`,
+      );
+    }
+
+    const styled = style.find(assign => assign.field === field);
+    return styled ? Number(styled.expr) : numericAttr(field, fallback);
+  };
+
   // Raster fallback: a .svg with unsupported features was baked to a PNG; register it and emit an Image node.
-  const width = numericAttr('width', artifact.width);
-  const height = numericAttr('height', artifact.height);
+  const width = boxSize('width', artifact.width);
+  const height = boxSize('height', artifact.height);
   if (artifact.kind === 'raster') {
     if (artifact.png) {
       out.images.set(artifact.name, artifact.png);

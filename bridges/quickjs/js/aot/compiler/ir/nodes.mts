@@ -58,6 +58,8 @@ export type IrPropValue =
   | {kind: 'visible'; value: IrExpr}
   /** The display toggle of a node built under a state-driven conditional. */
   | {kind: 'shown'; show: IrShow}
+  /** `value` while a node built under a state-driven conditional shows, else 0. */
+  | {kind: 'whileShown'; show: IrShow; value: IrPropValue}
   /**
    * A byte that is `whenTrue` while the test holds, else 0: a 0/1 flag, or a gradient's stop count. `truthiness`
    * is how C reads the test: as a JS condition (a string is truthy when non-empty), or as the value itself.
