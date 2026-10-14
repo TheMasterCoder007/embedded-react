@@ -239,4 +239,22 @@ describe('IR types: 64-bit numbers that are not times', () => {
       /a 64-bit time value cannot be stored in state "f"/,
     );
   });
+
+  it('works a float Math function on a 64-bit number, and keeps whole-number Math exact', () => {
+    const c = compile(
+      'setBig(3000000000); setF(Math.sqrt(big) + Math.pow(big, 2)); setBig(Math.abs(big));',
+    );
+    expect(c).toContain('sqrtf((float)(((float)s_state.big)))');
+    expect(c).toContain('powf((float)(((float)s_state.big)), (float)(2))');
+    expect(c).toContain('s_state.big = app_abs64(s_state.big);');
+    expect(() => compile('setF(Math.sqrt(Date.now()));')).toThrow(
+      /Math\.sqrt\(\.\.\.\) on a 64-bit time value is not supported/,
+    );
+  });
+
+  it("types an updater's parameter as the number its state holds", () => {
+    expect(compile('setBig(3000000000); setBig(prev => prev % n);')).toContain(
+      's_state.big = app_mod64(s_state.big, s_state.n);',
+    );
+  });
 });

@@ -1042,9 +1042,19 @@ function typeMath(
     if (intDiv) return intDiv;
   }
 
-  const argExprs = litPeers(...source.args.map(arg => typeSource(arg, math64)));
+  let argExprs = litPeers(...source.args.map(arg => typeSource(arg, math64)));
   if (argExprs.some(argExpr => argExpr.type.kind === 'int64')) {
-    return typeMath64(fn, argExprs);
+    // Whole-number Math keeps a 64-bit value exact, and a time takes nothing else; the rest works on floats.
+    if (WHOLE_MATH.has(fn) || argExprs.some(isTime64)) {
+      return typeMath64(fn, argExprs);
+    }
+
+    argExprs = argExprs.map(
+      (argExpr): IrExpr =>
+        argExpr.type.kind === 'int64'
+          ? {kind: 'toFloat', operand: argExpr, type: FLOAT}
+          : argExpr,
+    );
   }
 
   // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.

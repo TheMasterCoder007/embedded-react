@@ -1017,6 +1017,7 @@ function lowerHandlerExprImpl(
         code: targetState.cMember,
         cType: targetState.cType,
         isBool: targetState.isBool,
+        ...(targetState.widened === 'number' ? {lit: true} : {}),
         source: {kind: 'state', state: targetState, loc: undefined},
       });
     }
