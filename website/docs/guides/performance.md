@@ -83,6 +83,10 @@ engine, so layout, raster and present are the whole frame, and the habits above 
 and animation are the entire story. Timers are advanced by `er_app_tick()`, which the host calls
 once per frame.
 
+A state change re-sets only the nodes and drawings that read that state. A node that reads a ref or
+`Date.now()` while rendering is re-set on every state change, as a React re-render would read it again.
+Keep those reads out of nodes that otherwise depend on a single state.
+
 ## Measuring on the device
 
 The engine keeps a per-frame timing split and resource counters, retains the **worst frame seen**
