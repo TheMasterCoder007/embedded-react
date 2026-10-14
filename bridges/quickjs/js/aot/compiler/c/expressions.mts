@@ -235,7 +235,7 @@ export function toCExpr(expr: IrExpr): CExpr {
   if (expr.type.kind === 'bool') {
     cExpr.isBool = true;
   } else if (expr.type.kind === 'int64' && expr.type.source !== 'time') {
-    cExpr[expr.type.source === 'constant' ? 'lit' : 'wide'] = true;
+    cExpr[expr.type.source === 'number' ? 'lit' : 'wide'] = true;
   }
 
   return cExpr;

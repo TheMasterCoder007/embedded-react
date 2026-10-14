@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import type {CExpr, CType, RefRecord} from '../types.mts';
+import type {CExpr, CType, RefRecord, ScalarState} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -28,10 +28,19 @@ import type {CExpr, CType, RefRecord} from '../types.mts';
 export type Int64Source =
   /** A time: a clock read, or a value computed from one. Only whole-number math keeps it exact. */
   | 'time'
-  /** A constant past the int range, which converts like any other number. */
-  | 'constant'
+  /**
+   * A 64-bit number that is not a time: a constant past the int range, or a slot that only ever holds such
+   * numbers. It converts like any other number.
+   */
+  | 'number'
   /** Whole-number math worked out in 64 bits beside a time, so it cannot overflow. */
   | 'math';
+
+/** What an int slot widened to 64 bits holds: a time, or only 64-bit numbers that are not times. */
+export type WideSlot = 'time' | 'number';
+
+/** The slots widened to 64 bits, by C name. */
+export type SlotWidths = Map<string, WideSlot>;
 
 /** The type of a value in the IR: what JS holds, whatever slot a backend stores it in. */
 export type IrType =
@@ -54,7 +63,7 @@ export const INT: IrType = {kind: 'int'};
 export const FLOAT: IrType = {kind: 'float'};
 export const STRING: IrType = {kind: 'string'};
 export const TIME: IrType = {kind: 'int64', source: 'time'};
-export const INT64_CONSTANT: IrType = {kind: 'int64', source: 'constant'};
+export const INT64_NUMBER: IrType = {kind: 'int64', source: 'number'};
 export const INT64_MATH: IrType = {kind: 'int64', source: 'math'};
 export const STRUCT: IrType = {kind: 'struct'};
 export const NODE: IrType = {kind: 'node'};
@@ -94,11 +103,7 @@ export function slotOf(type: IrType): CType | undefined {
  * @returns The type.
  */
 export const int64Of = (source: Int64Source): IrType =>
-  source === 'time'
-    ? TIME
-    : source === 'constant'
-      ? INT64_CONSTANT
-      : INT64_MATH;
+  source === 'time' ? TIME : source === 'number' ? INT64_NUMBER : INT64_MATH;
 
 /**
  * The type of a value whose slot is known: a boolean when it holds one, a time when it is a 64-bit slot.
@@ -147,7 +152,7 @@ export function typeOfCExpr(value: Omit<CExpr, 'code'>): IrType {
         'AOT internal: a 64-bit source on a value that is not one 64-bit number',
       );
     }
-    return value.lit ? INT64_CONSTANT : INT64_MATH;
+    return value.lit ? INT64_NUMBER : INT64_MATH;
   }
 
   return typeOfSlot(value.cType, value.isBool);
@@ -173,14 +178,14 @@ export const isTime = (type: IrType): boolean =>
 export const isBoolean = (type: IrType): boolean => type.kind === 'bool';
 
 /**
- * Whether a value is a 64-bit constant, which converts like any other number.
+ * Whether a value is a 64-bit number that is not a time, which converts like any other number.
  *
  * @param type  The value's type.
  *
- * @returns True for a 64-bit constant.
+ * @returns True for such a number.
  */
-export const isInt64Constant = (type: IrType): boolean =>
-  type.kind === 'int64' && type.source === 'constant';
+export const isInt64Number = (type: IrType): boolean =>
+  type.kind === 'int64' && type.source === 'number';
 
 /**
  * Whether a value is stored in an int: an int, or a boolean.
@@ -193,14 +198,44 @@ export const isIntSlot = (type: IrType): boolean =>
   type.kind === 'int' || type.kind === 'bool';
 
 /**
- * A type without what JS adds to its slot: a boolean as an int, any 64-bit number as a time.
+ * The type of a 64-bit value picked from several (a ternary's branches, the operands of `&&` / `||`): a time
+ * when any of them is one, a number when every 64-bit one is, whole-number math otherwise.
  *
- * @param type  The type.
+ * @param types  The types it is picked from.
  *
- * @returns The plain type.
+ * @returns The picked value's type.
  */
-export const plainOf = (type: IrType): IrType =>
-  type.kind === 'bool' ? INT : type.kind === 'int64' ? TIME : type;
+export function int64Join(...types: IrType[]): IrType {
+  const sources = types.flatMap(type =>
+    type.kind === 'int64' ? [type.source] : [],
+  );
+  if (sources.includes('time')) return TIME;
+  return sources.every(source => source === 'number')
+    ? INT64_NUMBER
+    : INT64_MATH;
+}
+
+/**
+ * The type of a 64-bit slot: a time, unless it only ever holds 64-bit numbers that are not times.
+ *
+ * @param widened  What the slot was widened to hold, if it was.
+ *
+ * @returns The type of a read of the slot.
+ */
+const wideSlotType = (widened: WideSlot | undefined): IrType =>
+  widened === 'number' ? INT64_NUMBER : TIME;
+
+/**
+ * The type of a scalar state's value.
+ *
+ * @param state  The state.
+ *
+ * @returns Its type.
+ */
+export const stateType = (state: ScalarState): IrType =>
+  state.cType === 'i64'
+    ? wideSlotType(state.widened)
+    : typeOfSlot(state.cType, state.isBool);
 
 /**
  * The type of a ref's current value.
@@ -210,4 +245,8 @@ export const plainOf = (type: IrType): IrType =>
  * @returns A node handle for a node ref, the value's type otherwise.
  */
 export const refType = (ref: RefRecord): IrType =>
-  ref.kind === 'node' ? NODE : typeOfSlot(ref.cType);
+  ref.kind === 'node'
+    ? NODE
+    : ref.cType === 'i64'
+      ? wideSlotType(ref.widened)
+      : typeOfSlot(ref.cType);

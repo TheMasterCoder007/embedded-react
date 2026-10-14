@@ -48,6 +48,7 @@ import type {ResolvedOptions} from './options.mts';
 import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
+import type {SlotWidths} from './ir/types.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
 import type {Env, Scope, StateRecord} from './types.mts';
 
@@ -169,7 +170,7 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
 export function lowerApp(
   src: string,
   opts: ResolvedOptions,
-  wide: Set<string>,
+  wide: SlotWidths,
   stores: IrSlotStore[],
 ): IrApp {
   const {result, checks} = lowerWithChecks(() =>
@@ -194,7 +195,7 @@ export function lowerApp(
 function lowerProgram(
   src: string,
   opts: ResolvedOptions,
-  wide: Set<string>,
+  wide: SlotWidths,
   stores: IrSlotStore[],
 ): Omit<IrApp, 'checks'> {
   // Parse the app and prepare the AST for the passes below.

@@ -89,10 +89,11 @@ import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
-import {inferWideSlots} from './compiler/expressions.mts';
+import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import type {CompileOptions, ResolvedOptions} from './compiler/options.mts';
 import type {CompileResult} from './compiler/assemble.mts';
 import type {IrSlotStore} from './compiler/ir/source.mts';
+import type {SlotWidths} from './compiler/ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -127,7 +128,7 @@ function compileWidened(
   opts: ResolvedOptions,
 ): CompileResult {
   // The slots found so far that need 64 bits; every pass compiles with all of them widened.
-  let wide = new Set<string>();
+  let wide: SlotWidths = new Map();
   for (;;) {
     // Run one pass, holding on to its error instead of throwing it straight away.
     const stores: IrSlotStore[] = [];
@@ -141,7 +142,7 @@ function compileWidened(
 
     // Stop once no slot is inferred to widen; a failed pass with new ones may have failed on a narrow type.
     const inferred = inferWideSlots(stores, wide);
-    if (inferred.size === wide.size) {
+    if (sameSlotWidths(inferred, wide)) {
       if (error) {
         throw error;
       }

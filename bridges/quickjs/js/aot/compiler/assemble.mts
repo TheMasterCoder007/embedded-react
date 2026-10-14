@@ -46,6 +46,7 @@ import {isStateDriven, nodesOf, stateDrivenVectorOf} from './ir/nodes.mts';
 import type {ResolvedOptions} from './options.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
+import type {SlotWidths} from './ir/types.mts';
 import type {
   AssetImport,
   ItemField,
@@ -121,7 +122,7 @@ export const compileSourceImpl = (
   src: string,
   demo: string,
   opts: ResolvedOptions,
-  wide: Set<string>,
+  wide: SlotWidths,
   stores: IrSlotStore[],
 ): CompileResult => writeApp(lowerApp(src, opts, wide, stores), demo, opts);
 

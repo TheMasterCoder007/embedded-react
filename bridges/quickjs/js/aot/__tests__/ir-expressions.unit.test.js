@@ -138,7 +138,7 @@ describe('expressions lower to the IR', () => {
     expect(expr).toMatchObject({
       kind: 'number',
       value: 2147483648,
-      type: {kind: 'int64', source: 'constant'},
+      type: {kind: 'int64', source: 'number'},
     });
   });
 

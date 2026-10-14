@@ -19,14 +19,15 @@ import {
   BOOL,
   FLOAT,
   INT,
-  INT64_CONSTANT,
+  INT64_NUMBER,
   INT64_MATH,
   NODE,
   STRING,
   STRUCT,
   TIME,
   isIntSlot,
-  plainOf,
+  int64Join,
+  stateType,
   refType,
   slotOf,
   typeOfCExpr,
@@ -42,7 +43,7 @@ import {resolveOptions} from '../compiler/options.mts';
 describe('IR types', () => {
   it('stores a boolean in an int, and every 64-bit number in an int64', () => {
     expect(
-      [BOOL, INT, FLOAT, STRING, TIME, INT64_CONSTANT, INT64_MATH].map(slotOf),
+      [BOOL, INT, FLOAT, STRING, TIME, INT64_NUMBER, INT64_MATH].map(slotOf),
     ).toEqual(['int', 'int', 'float', 'string', 'i64', 'i64', 'i64']);
     expect(slotOf(STRUCT)).toBeUndefined();
     expect(isIntSlot(BOOL)).toBe(true);
@@ -53,7 +54,7 @@ describe('IR types', () => {
     expect(typeOfCExpr({cType: 'int', isBool: true})).toBe(BOOL);
     expect(typeOfCExpr({cType: 'int', isBool: false})).toBe(INT);
     expect(typeOfCExpr({cType: 'i64'})).toBe(TIME);
-    expect(typeOfCExpr({cType: 'i64', lit: true})).toBe(INT64_CONSTANT);
+    expect(typeOfCExpr({cType: 'i64', lit: true})).toBe(INT64_NUMBER);
     expect(typeOfCExpr({cType: 'i64', wide: true})).toBe(INT64_MATH);
     expect(typeOfSlot(undefined)).toBe(STRUCT);
     expect(() => typeOfCExpr({cType: 'int', lit: true})).toThrow(
@@ -69,10 +70,25 @@ describe('IR types', () => {
     expect(refType({kind: 'node', cType: 'ERNode*'})).toBe(NODE);
   });
 
-  it('drops what JS adds to a slot', () => {
-    expect(plainOf(BOOL)).toBe(INT);
-    expect(plainOf(INT64_CONSTANT)).toBe(TIME);
-    expect(plainOf(FLOAT)).toBe(FLOAT);
+  it('joins 64-bit values into a time only when one of them is', () => {
+    expect(int64Join(TIME, INT)).toBe(TIME);
+    expect(int64Join(INT64_NUMBER, INT)).toBe(INT64_NUMBER);
+    expect(int64Join(INT64_NUMBER, INT64_MATH)).toBe(INT64_MATH);
+    expect(int64Join(INT64_NUMBER, TIME)).toBe(TIME);
+  });
+
+  it('reads a widened slot as a time only when it holds one', () => {
+    const state = widened => ({
+      kind: 'scalar',
+      cType: 'i64',
+      isBool: false,
+      widened,
+    });
+    expect(stateType(state('time'))).toBe(TIME);
+    expect(stateType(state('number'))).toBe(INT64_NUMBER);
+    expect(refType({kind: 'value', cType: 'i64', widened: 'number'})).toBe(
+      INT64_NUMBER,
+    );
   });
 });
 
@@ -110,7 +126,7 @@ describe('IR types: slot widths', () => {
 
   it('records every value stored into an int slot', () => {
     const stores = [];
-    lowerApp(app, resolveOptions({}), new Set(), stores);
+    lowerApp(app, resolveOptions({}), new Map(), stores);
     expect(stores.map(store => store.slot)).toEqual([
       'a',
       'b',
@@ -127,13 +143,15 @@ describe('IR types: slot widths', () => {
 
   it('follows a timestamp through every slot it reaches, through locals too', () => {
     const stores = [];
-    lowerApp(app, resolveOptions({}), new Set(), stores);
-    expect([...inferWideSlots(stores, new Set())].sort()).toEqual([
-      'a',
-      'b',
-      'c',
-      's_ref_r',
-    ]);
+    lowerApp(app, resolveOptions({}), new Map(), stores);
+    expect(inferWideSlots(stores, new Map())).toEqual(
+      new Map([
+        ['a', 'time'],
+        ['b', 'time'],
+        ['c', 'time'],
+        ['s_ref_r', 'time'],
+      ]),
+    );
   });
 
   it('compiles the widened slots as 64-bit', () => {
@@ -143,5 +161,55 @@ describe('IR types: slot widths', () => {
     }
     expect(c).toContain('    int n;');
     expect(c).toContain('static int64_t s_ref_r = 0;');
+  });
+});
+
+describe('IR types: 64-bit numbers that are not times', () => {
+  /** The C of an app with an int `n`, a float `f`, a boolean `on`, an int `big` and an int ref `r`. */
+  const compile = handler =>
+    compileSource(
+      "import React, {useState, useRef} from 'react';\n" +
+        "import {View, Text} from 'embedded-react';\n" +
+        'export function App() {\n' +
+        '  const [n, setN] = useState(0);\n' +
+        '  const [f, setF] = useState(1.5);\n' +
+        '  const [on, setOn] = useState(false);\n' +
+        '  const [big, setBig] = useState(0);\n' +
+        '  const r = useRef(0);\n' +
+        `  return <View onTouchStart={() => { ${handler} }}><Text>{n + big + r.current}</Text></View>;\n` +
+        '}',
+    ).c;
+
+  it('keeps `+` on a 64-bit number a number, which a float slot takes', () => {
+    expect(compile('setF(+2147483648);')).toContain(
+      's_state.f = (+(2147483648));',
+    );
+  });
+
+  it('picks a number, not a time, from a ternary or `||` of numbers', () => {
+    expect(compile('setN((on ? 2147483648 + 1 : 0) % n);')).toContain(
+      's_state.n = app_mod64((s_state.on ? 2147483649 : 0), s_state.n);',
+    );
+    expect(compile('setN((n || 2147483648) % n);')).toContain('app_mod64(');
+  });
+
+  it('reads back a slot widened by numbers as a number, and one that holds a time as a time', () => {
+    const c = compile('setBig(3000000000); setF(big * 0.5);');
+    expect(c).toContain('    int64_t big;');
+    expect(c).toContain('s_state.f = (((float)s_state.big) * 0.5f);');
+    expect(() =>
+      compile('setBig(3000000000); setBig(Date.now()); setF(big * 0.5);'),
+    ).toThrow(/a 64-bit time value cannot be mixed with a float/);
+  });
+
+  it('divides a 64-bit ref that holds no time by any whole number', () => {
+    const c = compile(
+      'r.current = 3000000000; r.current %= n; r.current /= n; r.current++;',
+    );
+    expect(c).toContain('s_ref_r = app_mod64(s_ref_r, s_state.n);');
+    expect(c).toContain('s_ref_r = app_div64(s_ref_r, s_state.n);');
+    expect(() => compile('r.current = Date.now(); r.current %= n;')).toThrow(
+      /can only be divided by a constant/,
+    );
   });
 });

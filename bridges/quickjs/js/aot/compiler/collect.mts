@@ -26,6 +26,7 @@ import {aotError} from './diagnostics.mts';
 import {evalStaticOrThrow, evalStatic, withUndefined} from './static-eval.mts';
 import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
+import type {SlotWidths} from './ir/types.mts';
 import type {AotError} from './diagnostics.mts';
 import type {Screen} from './options.mts';
 import type {
@@ -48,7 +49,7 @@ import type {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** No state or ref slot widened to 64 bits — the collectors' default. */
-export const NO_WIDE = new Set<string>();
+export const NO_WIDE: SlotWidths = new Map();
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
@@ -254,7 +255,7 @@ export function collectState(
   scope: Scope,
   caps: Caps,
   prefix = '',
-  wide: Set<string> = NO_WIDE,
+  wide: SlotWidths = NO_WIDE,
 ): StateTable {
   // Index each state by its JS name and, when it has one, by its setter's name.
   const byName = new Map<string, StateRecord>();
@@ -382,8 +383,10 @@ export function collectState(
           cType = 'float';
         }
 
-        // A setter stores a timestamp in it, so it holds 64 bits (see compileWidened).
-        if (cType === 'int' && !isBool && wide.has(cField)) {
+        // A setter stores a timestamp or a number past the int range in it, so it holds 64 bits (see compileWidened).
+        const widened =
+          cType === 'int' && !isBool ? wide.get(cField) : undefined;
+        if (widened) {
           cType = 'i64';
         }
 
@@ -405,6 +408,7 @@ export function collectState(
           cMember: `s_state.${cField}`,
           initial,
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
+          ...(widened ? {widened} : {}),
         };
       }
 

@@ -51,20 +51,23 @@ import type {
   LayoutField,
   WholeHelper,
 } from './ir/expressions.mts';
+import type {SlotWidths} from './ir/types.mts';
 import type {IrText, IrTextPart} from './ir/text.mts';
 import {
   BOOL,
   FLOAT,
   INT,
-  INT64_CONSTANT,
+  INT64_NUMBER,
   INT64_MATH,
   STRING,
   TIME,
   isBoolean,
-  isInt64Constant,
+  isInt64Number,
   isIntSlot,
   isTime,
-  plainOf,
+  int64Join,
+  int64Of,
+  stateType,
   refType,
   slotOf,
   typeOfCExpr,
@@ -142,8 +145,8 @@ const FLOAT_MATH_UNARY = new Set([
 ]);
 const FLOAT_MATH_BINARY = new Set(['min', 'max', 'atan2', 'pow']);
 
-/** While the typing pass infers slot widths: the int slots it takes to hold 64 bits. Null otherwise. */
-let assumedWide: Set<string> | null = null;
+/** While the typing pass infers slot widths: the slots it takes to hold 64 bits, and what each holds. */
+let assumedWide: SlotWidths | null = null;
 
 /** The fields of an onLayout rect. */
 const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
@@ -252,7 +255,7 @@ function numConst(value: number): IrNumber {
   }
 
   if (value < INT_MIN || value > INT_MAX) {
-    return {kind: 'number', value, type: INT64_CONSTANT};
+    return {kind: 'number', value, type: INT64_NUMBER};
   }
 
   return {kind: 'number', value, type: INT};
@@ -370,7 +373,7 @@ const litPeers = (...operands: IrExpr[]): IrExpr[] =>
   operands.some(operand => operand.type.kind === 'float')
     ? operands.map(
         (operand): IrExpr =>
-          isInt64Constant(operand.type)
+          isInt64Number(operand.type)
             ? {kind: 'toFloat', operand, type: FLOAT}
             : operand,
       )
@@ -696,7 +699,7 @@ function typeUnary(
           helper: 'neg',
           bits: 64,
           args: [operand],
-          type: isTime64(operand) ? TIME : INT64_MATH,
+          type: operand.type.kind === 'int64' ? operand.type : INT64_MATH,
         }
       : {
           kind: 'helper',
@@ -712,7 +715,8 @@ function typeUnary(
     kind: 'unary',
     op: source.op,
     operand,
-    type: source.op === '!' ? BOOL : plainOf(operand.type),
+    type:
+      source.op === '!' ? BOOL : isBoolean(operand.type) ? INT : operand.type,
   };
 }
 
@@ -932,7 +936,13 @@ function typeLogical(
       throw bool64Error(`"${source.op}"`);
     }
 
-    return {kind: 'pick', op: source.op, left, right, type: TIME};
+    return {
+      kind: 'pick',
+      op: source.op,
+      left,
+      right,
+      type: int64Join(left.type, right.type),
+    };
   }
 
   // Otherwise the C result is the truth of the expression, a boolean only when both operands are.
@@ -999,10 +1009,13 @@ function typeConditional(
     test,
     consequent,
     alternate,
-    type: typeOfSlot(
-      slot,
-      isBoolean(consequent.type) && isBoolean(alternate.type),
-    ),
+    type:
+      slot === 'i64'
+        ? int64Join(consequent.type, alternate.type)
+        : typeOfSlot(
+            slot,
+            isBoolean(consequent.type) && isBoolean(alternate.type),
+          ),
   };
 }
 
@@ -1128,14 +1141,14 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         return boolConst(source.value);
       case 'state': {
         const {state} = source;
-        const isAssumedWide =
-          assumedWide?.has(state.cField) &&
-          state.cType === 'int' &&
-          !state.isBool;
+        const assumed =
+          (state.cType === 'int' || state.cType === 'i64') && !state.isBool
+            ? assumedWide?.get(state.cField)
+            : undefined;
         return {
           kind: 'state',
           state,
-          type: isAssumedWide ? TIME : typeOfSlot(state.cType, state.isBool),
+          type: assumed ? int64Of(assumed) : stateType(state),
         };
       }
       case 'local':
@@ -1145,11 +1158,15 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
           : localRead(source.local);
       case 'ref': {
         const {ref} = source;
-        const isAssumedWide =
-          assumedWide?.has(ref.cVar) &&
-          ref.kind === 'value' &&
-          ref.cType === 'int';
-        return {kind: 'ref', ref, type: isAssumedWide ? TIME : refType(ref)};
+        const assumed =
+          ref.kind === 'value' && (ref.cType === 'int' || ref.cType === 'i64')
+            ? assumedWide?.get(ref.cVar)
+            : undefined;
+        return {
+          kind: 'ref',
+          ref,
+          type: assumed ? int64Of(assumed) : refType(ref),
+        };
       }
       case 'fixed':
         return source.expr;
@@ -1171,29 +1188,33 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
 }
 
 /**
- * Infers the int slots that have to hold 64 bits: those a value stored into is a 64-bit number, once the slots
- * found so far are taken to hold 64 bits too, until no more are found. A value whose typing fails leaves its
- * slot as it is; lowering it again reports the error.
+ * Infers the slots that have to hold 64 bits: an int slot a value stored into is a 64-bit number, once the
+ * slots found so far are taken to hold 64 bits too, until no more are found. Each one holds a time when a time
+ * is stored into it, and only 64-bit numbers otherwise. A value whose typing fails leaves its slot as it is;
+ * lowering it again reports the error.
  *
- * @param stores  Every value lowering stored into an int slot.
+ * @param stores  Every value lowering stored into an int slot, or into a 64-bit one that holds no time yet.
  * @param wide  The slots already 64-bit.
  *
  * @returns Those slots, and every one inferred.
  */
 export function inferWideSlots(
   stores: IrSlotStore[],
-  wide: Set<string>,
-): Set<string> {
-  const inferred = new Set(wide);
+  wide: SlotWidths,
+): SlotWidths {
+  const inferred = new Map(wide);
   let grew = true;
   while (grew) {
     grew = false;
     for (const store of stores) {
-      if (inferred.has(store.slot)) continue;
+      if (inferred.get(store.slot) === 'time') continue;
       assumedWide = inferred;
       try {
-        if (typeSource(store.value, store.math64).type.kind === 'int64') {
-          inferred.add(store.slot);
+        const {type} = typeSource(store.value, store.math64);
+        if (type.kind !== 'int64') continue;
+        const holds = type.source === 'time' ? 'time' : 'number';
+        if (holds === 'time' || !inferred.has(store.slot)) {
+          inferred.set(store.slot, holds);
           grew = true;
         }
       } catch {
@@ -1206,6 +1227,17 @@ export function inferWideSlots(
 
   return inferred;
 }
+
+/**
+ * Whether two sets of slot widths are the same.
+ *
+ * @param a  One set.
+ * @param b  The other.
+ *
+ * @returns True when every slot holds the same in both.
+ */
+export const sameSlotWidths = (a: SlotWidths, b: SlotWidths): boolean =>
+  a.size === b.size && [...a].every(([slot, holds]) => b.get(slot) === holds);
 
 /**
  * Whether an operand is written as a number, so a boolean on the other side of `===` never equals it: a

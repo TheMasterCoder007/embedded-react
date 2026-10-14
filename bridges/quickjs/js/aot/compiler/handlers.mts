@@ -60,14 +60,15 @@ import type {IrExpr} from './ir/expressions.mts';
 import {
   INT,
   isBoolean,
-  isInt64Constant,
+  isInt64Number,
   isIntSlot,
+  isTime,
   refType,
   slotOf,
-  typeOfSlot,
 } from './ir/types.mts';
 import type {IrDepEffect} from './ir/functions.mts';
 import type {IrSource} from './ir/source.mts';
+import type {WideSlot} from './ir/types.mts';
 import type {
   IrCallback,
   IrItemValue,
@@ -248,6 +249,7 @@ function blockList(node: t.Statement): t.Statement[] {
  * @param lowered  The value: its source, and its type.
  * @param slotType  The slot's C kind.
  * @param isBool  The slot holds a boolean.
+ * @param widened  What the slot holds, if it was widened to 64 bits.
  * @param slotCName  The slot's C name, for env.stores.
  * @param slotDescription  The slot, for the message.
  * @param env  The expression environment.
@@ -256,12 +258,13 @@ function storeCheck(
   lowered: {source: IrSource; expr: IrExpr},
   slotType: CType,
   isBool: boolean,
+  widened: WideSlot | undefined,
   slotCName: string,
   slotDescription: string,
   env: Env,
 ): void {
   const value = lowered.expr;
-  if (slotType === 'int' && !isBool) {
+  if ((slotType === 'int' && !isBool) || widened === 'number') {
     env.stores.push({
       slot: slotCName,
       value: lowered.source,
@@ -272,7 +275,7 @@ function storeCheck(
   if (value.type.kind === 'int64' && slotType !== 'i64') {
     if (slotType === 'int' && !isBool) return;
 
-    if (isInt64Constant(value.type) && slotType === 'float') return;
+    if (isInt64Number(value.type) && slotType === 'float') return;
 
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${slotDescription}`,
@@ -348,6 +351,7 @@ function lowerScalarSet(
       lowered,
       scalarState.cType,
       scalarState.isBool,
+      scalarState.widened,
       scalarState.cField,
       `state "${scalarState.name}"`,
       env,
@@ -771,10 +775,8 @@ function lowerHandlerExprImpl(
     const refEnv = ref.cType === 'i64' ? {...env, math64: true} : env;
     const loweredValue = lowerSource(expr.right, refEnv);
     const valueExpr = loweredValue.expr;
-    if (
-      expr.operator === '/=' &&
-      (ref.cType === 'i64' || isTime64(valueExpr))
-    ) {
+    const refHoldsTime = isTime(refType(ref));
+    if (expr.operator === '/=' && (refHoldsTime || isTime64(valueExpr))) {
       throw aotError(
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
@@ -782,13 +784,14 @@ function lowerHandlerExprImpl(
     }
 
     const wideModDivisor =
-      expr.operator === '%=' && (ref.cType === 'i64' || isTime64(valueExpr))
+      expr.operator === '%=' && (refHoldsTime || isTime64(valueExpr))
         ? constDivisor(expr.right, env)
         : null;
     storeCheck(
       loweredValue,
       ref.cType as CType,
       false,
+      ref.kind === 'value' ? ref.widened : undefined,
       ref.cVar,
       `ref "${((expr.left as t.MemberExpression).object as t.Identifier).name}"`,
       env,
@@ -829,10 +832,15 @@ function lowerHandlerExprImpl(
       ];
     }
 
-    // Int `/=` and `%=` use app_div/app_mod for JS's answer; a constant divisor other than 0 or -1 needs no check.
+    // Whole-number `/=` and `%=` use app_div/app_mod for JS's answer, in 64 bits on a 64-bit ref that holds no
+    // time; a constant divisor other than 0 or -1 needs no check.
+    const isWholeValue =
+      isIntSlot(valueExpr.type) ||
+      (valueExpr.type.kind === 'int64' && !isTime64(valueExpr));
+    const refBits = ref.cType === 'i64' ? 64 : 32;
     if (
-      ref.cType === 'int' &&
-      isIntSlot(valueExpr.type) &&
+      ((ref.cType === 'int' && isIntSlot(valueExpr.type)) ||
+        (ref.cType === 'i64' && !refHoldsTime && isWholeValue)) &&
       (expr.operator === '/=' || expr.operator === '%=')
     ) {
       const staticDivisor = staticInt(expr.right, env);
@@ -848,9 +856,9 @@ function lowerHandlerExprImpl(
             value: {
               kind: 'helper',
               helper: 'div',
-              bits: 32,
+              bits: refBits,
               args: [refRead(ref), valueExpr],
-              type: INT,
+              type: refType(ref),
             },
           },
         ];
@@ -872,9 +880,9 @@ function lowerHandlerExprImpl(
             value: {
               kind: 'helper',
               helper: 'mod',
-              bits: 32,
+              bits: refBits,
               args: [refRead(ref), valueExpr],
-              type: INT,
+              type: refType(ref),
             },
           },
         ];
@@ -920,7 +928,7 @@ function lowerHandlerExprImpl(
             helper: expr.operator === '++' ? 'add' : 'sub',
             bits: ref.cType === 'i64' ? 64 : 32,
             args: [refRead(ref), {kind: 'number', value: 1, type: INT}],
-            type: typeOfSlot(ref.cType),
+            type: refType(ref),
           },
         },
       ];

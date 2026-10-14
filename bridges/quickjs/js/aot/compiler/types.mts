@@ -24,6 +24,7 @@ import type {IrPropValue, IrShow} from './ir/nodes.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrStaticDecl} from './ir/functions.mts';
 import type {IrSlotStore, IrSource} from './ir/source.mts';
+import type {SlotWidths, WideSlot} from './ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -92,6 +93,8 @@ export interface ScalarState extends StateSlot {
   initial: number | string;
   /** Fed by the host through a generated er_app_set_<name>() (useHostValue). */
   host: boolean;
+  /** What it holds once widened to 64 bits (see compileWidened). */
+  widened?: WideSlot;
 }
 
 /** A list state: a fixed-capacity struct array and a count. */
@@ -119,6 +122,8 @@ export interface ValueRef {
   cVar: string;
   cType: 'int' | 'float' | 'i64';
   initial: number;
+  /** What it holds once widened to 64 bits (see compileWidened). */
+  widened?: WideSlot;
   /** Whether the generated C reads or writes it; an unused ref declares nothing. */
   used: boolean;
 }
@@ -292,8 +297,8 @@ export interface Env {
   svgImports: Map<string, AssetImport>;
   svgArtifacts: Record<string, SvgArtifact>;
   caps: Caps;
-  /** State and ref slots declared 64-bit this pass (see compileWidened). */
-  wide: Set<string>;
+  /** State and ref slots declared 64-bit this pass, and what each holds (see compileWidened). */
+  wide: SlotWidths;
   /** Collects every value stored into an int slot, from which the typing pass infers the slots to widen. */
   stores: IrSlotStore[];
   /** `Date` / `performance` calls that name the app's own binding rather than the engine clock. */
