@@ -62,7 +62,7 @@ import {
   STRING,
   TIME,
   isBoolean,
-  isInt64Number,
+  isConvertible64,
   isIntSlot,
   isTime,
   int64Join,
@@ -363,17 +363,17 @@ const keepsMath64 = (source: IrSource): boolean =>
 export const isTime64 = (expr: IrTyped): boolean => isTime(expr.type);
 
 /**
- * Besides a float, a 64-bit constant is an ordinary number that converts, as in JS; only a timestamp refuses.
+ * Besides a float, a 64-bit number that is not a time converts, as in JS; only a timestamp refuses.
  *
  * @param operands  The operands.
  *
- * @returns The operands, with any 64-bit constant converted to float when one of them is a float.
+ * @returns The operands, with any such number converted to float when one of them is a float.
  */
 const litPeers = (...operands: IrExpr[]): IrExpr[] =>
   operands.some(operand => operand.type.kind === 'float')
     ? operands.map(
         (operand): IrExpr =>
-          isInt64Number(operand.type)
+          isConvertible64(operand.type)
             ? {kind: 'toFloat', operand, type: FLOAT}
             : operand,
       )

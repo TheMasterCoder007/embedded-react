@@ -27,7 +27,7 @@ import {
   evalStaticOr,
 } from './static-eval.mts';
 import {INT_MAX, lowerExpr} from './expressions.mts';
-import {NO_WIDE, isFn} from './collect.mts';
+import {NO_WIDE, isFn, wideInitial} from './collect.mts';
 import {lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
 import type * as t from '@babel/types';
@@ -279,12 +279,18 @@ export function collectRefs(
         }
 
         // A ref a timestamp or a number past the int range is written to hold 64 bits (see compileWidened).
-        const widened = Number.isInteger(value) ? wide.get(cVar) : undefined;
-        const cType = !Number.isInteger(value)
-          ? 'float'
-          : widened
-            ? 'i64'
-            : 'int';
+        const initialWidth = wideInitial(value);
+        const widened =
+          Number.isInteger(value) && initialWidth !== 'float'
+            ? (wide.get(cVar) ??
+              (initialWidth === 'number' ? 'number' : undefined))
+            : undefined;
+        const cType =
+          !Number.isInteger(value) || initialWidth === 'float'
+            ? 'float'
+            : widened
+              ? 'i64'
+              : 'int';
         if (cType === 'float') {
           checkNumber(value);
         }

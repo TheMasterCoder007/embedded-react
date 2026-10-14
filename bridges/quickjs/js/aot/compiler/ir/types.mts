@@ -178,14 +178,15 @@ export const isTime = (type: IrType): boolean =>
 export const isBoolean = (type: IrType): boolean => type.kind === 'bool';
 
 /**
- * Whether a value is a 64-bit number that is not a time, which converts like any other number.
+ * Whether a value is a 64-bit number that is not a time (a number past the int range, or whole-number math),
+ * which converts to float like any other number.
  *
  * @param type  The value's type.
  *
  * @returns True for such a number.
  */
-export const isInt64Number = (type: IrType): boolean =>
-  type.kind === 'int64' && type.source === 'number';
+export const isConvertible64 = (type: IrType): boolean =>
+  type.kind === 'int64' && type.source !== 'time';
 
 /**
  * Whether a value is stored in an int: an int, or a boolean.

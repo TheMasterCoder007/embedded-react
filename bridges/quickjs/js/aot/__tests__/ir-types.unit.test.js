@@ -212,4 +212,31 @@ describe('IR types: 64-bit numbers that are not times', () => {
       /can only be divided by a constant/,
     );
   });
+
+  it('starts a state or ref with a whole number past the int range 64-bit', () => {
+    const c = compileSource(
+      "import React, {useState, useRef} from 'react';\n" +
+        "import {Text} from 'embedded-react';\n" +
+        'export function App() {\n' +
+        '  const [big, setBig] = useState(3000000000);\n' +
+        '  const r = useRef(-3000000000);\n' +
+        '  return <Text onTouchStart={() => { r.current = r.current + 1; }}>{big + r.current}</Text>;\n' +
+        '}',
+    ).c;
+    expect(c).toContain('    int64_t big;');
+    expect(c).toContain('.big = 3000000000');
+    expect(c).toContain('static int64_t s_ref_r = -3000000000;');
+  });
+
+  it('keeps a local holding a 64-bit number a number', () => {
+    const c = compile(
+      'const total = n + 3000000000; setF(total); setN(total % n);',
+    );
+    expect(c).toContain('int64_t l_total = app_add64(s_state.n, 3000000000);');
+    expect(c).toContain('s_state.f = l_total;');
+    expect(c).toContain('s_state.n = app_mod64(l_total, s_state.n);');
+    expect(() => compile('const t = Date.now(); setF(t);')).toThrow(
+      /a 64-bit time value cannot be stored in state "f"/,
+    );
+  });
 });

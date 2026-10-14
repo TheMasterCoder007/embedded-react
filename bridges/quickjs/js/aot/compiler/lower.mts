@@ -300,6 +300,8 @@ function lowerProgram(
         code: `(${cExpr.code})`,
         cType: cExpr.cType,
         isBool: cExpr.isBool,
+        lit: cExpr.lit,
+        wide: cExpr.wide,
         source: cExpr.source,
       });
       delete scope[name]; // a runtime binding beats a module const of its name in every fold

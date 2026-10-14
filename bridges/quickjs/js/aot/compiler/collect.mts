@@ -51,6 +51,23 @@ import type {
 /** No state or ref slot widened to 64 bits — the collectors' default. */
 export const NO_WIDE: SlotWidths = new Map();
 
+/**
+ * What a whole-number initial value needs beyond an int slot, typed as a constant of its size is: nothing in
+ * the int range, a 64-bit number past it, a float past 64 bits.
+ *
+ * @param value  The initial value.
+ *
+ * @returns 'number' for a 64-bit slot, 'float' for a float one, or null for an int.
+ */
+export const wideInitial = (value: unknown): 'number' | 'float' | null =>
+  typeof value !== 'number' || !Number.isInteger(value)
+    ? null
+    : value < -(2 ** 63) || value >= 2 ** 63
+      ? 'float'
+      : value < -(2 ** 31) || value > 2 ** 31 - 1
+        ? 'number'
+        : null;
+
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -383,9 +400,18 @@ export function collectState(
           cType = 'float';
         }
 
-        // A setter stores a timestamp or a number past the int range in it, so it holds 64 bits (see compileWidened).
+        // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
+        // stores a timestamp or such a number in it (see compileWidened).
+        const initialWidth = cType === 'int' ? wideInitial(initValue) : null;
+        if (initialWidth === 'float') {
+          cType = 'float';
+        }
+
         const widened =
-          cType === 'int' && !isBool ? wide.get(cField) : undefined;
+          cType === 'int' && !isBool
+            ? (wide.get(cField) ??
+              (initialWidth === 'number' ? 'number' : undefined))
+            : undefined;
         if (widened) {
           cType = 'i64';
         }

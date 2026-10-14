@@ -59,8 +59,7 @@ import type {Out} from './out.mts';
 import type {IrExpr} from './ir/expressions.mts';
 import {
   INT,
-  isBoolean,
-  isInt64Number,
+  isConvertible64,
   isIntSlot,
   isTime,
   refType,
@@ -275,7 +274,7 @@ function storeCheck(
   if (value.type.kind === 'int64' && slotType !== 'i64') {
     if (slotType === 'int' && !isBool) return;
 
-    if (isInt64Number(value.type) && slotType === 'float') return;
+    if (isConvertible64(value.type) && slotType === 'float') return;
 
     throw aotError(
       `AOT: a 64-bit time value cannot be stored in ${slotDescription}`,
@@ -687,6 +686,7 @@ function inlineHelperCall(
         cType: argExpr.cType,
         isBool: argExpr.isBool,
         lit: argExpr.lit,
+        wide: argExpr.wide,
         source: argExpr.source,
       });
     }
@@ -1168,9 +1168,8 @@ export function lowerStmts(
         env = {
           ...env,
           locals: new Map(env.locals).set(decl.id.name, {
+            ...toCExpr(initExpr),
             code: cName,
-            cType: slotOf(initExpr.type)!,
-            isBool: isBoolean(initExpr.type),
             source: initSource,
           }),
         };

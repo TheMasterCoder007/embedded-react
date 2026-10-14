@@ -345,6 +345,8 @@ export function emitComponent(
         cType: descriptor.cType,
         struct: descriptor.struct,
         isBool: descriptor.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
+        lit: descriptor.lit,
+        wide: descriptor.wide,
         source: descriptor.source,
       });
 
@@ -442,6 +444,8 @@ export function emitComponent(
         code: `(${cExpr.code})`,
         cType: cExpr.cType,
         isBool: cExpr.isBool,
+        lit: cExpr.lit,
+        wide: cExpr.wide,
         source: cExpr.source,
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
