@@ -27,8 +27,11 @@ import type {Screen} from '../options.mts';
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** How far a fraction a guard reads may stray from the build's, relative to its size. */
-const FLOAT_TOLERANCE = 1e-3;
+/**
+ * How far a fraction a guard reads may stray from the build's, relative to its size. Boot works in doubles as JS
+ * does, so only a libm function's last digit can differ; any other panel's value is far outside this.
+ */
+const FLOAT_TOLERANCE = 1e-9;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -98,9 +101,7 @@ function printAssumption(assumption: IrBootAssumption, screen: Screen): string {
   }
 
   // A fraction within a small margin: boot and the compiler need not round its last digit alike.
-  const margin = doubleLit(
-    Number((FLOAT_TOLERANCE * (1 + Math.abs(value))).toPrecision(2)),
-  );
+  const margin = doubleLit(FLOAT_TOLERANCE * (1 + Math.abs(value)));
   const expected = doubleLit(value);
   return `(${read} - ${expected} <= ${margin} && ${expected} - ${read} <= ${margin})`;
 }

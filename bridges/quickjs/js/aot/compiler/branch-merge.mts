@@ -48,6 +48,23 @@ const UNMERGEABLE_TYPES = new Set([
   'UpdateExpression',
 ]);
 
+/** The Math functions the compiler lowers, and how many arguments each takes. */
+const MATH_ARITY: Record<string, number> = {
+  sin: 1,
+  cos: 1,
+  tan: 1,
+  sqrt: 1,
+  abs: 1,
+  round: 1,
+  floor: 1,
+  ceil: 1,
+  trunc: 1,
+  min: 2,
+  max: 2,
+  atan2: 2,
+  pow: 2,
+};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -103,7 +120,7 @@ function holdsUnmergeable(node: unknown): boolean {
   if (typeof node !== 'object' || node === null) return false;
   if (Array.isArray(node)) return node.some(holdsUnmergeable);
   const typed = node as {type?: string} & Record<string, unknown>;
-  if (typed.type === 'CallExpression' && isMathCall(typed as t.Node)) {
+  if (typed.type === 'CallExpression' && isLowerableMath(typed as t.Node)) {
     return (typed.arguments as t.Node[]).some(holdsUnmergeable);
   }
 
@@ -114,18 +131,30 @@ function holdsUnmergeable(node: unknown): boolean {
 }
 
 /**
- * Whether a node is a `Math.<fn>(…)` call.
+ * Whether a node is a `Math.<fn>(…)` call the compiler lowers, with the number of arguments it takes.
  *
  * @param node  The node.
  *
  * @returns True when it is.
  */
-const isMathCall = (node: t.Node): boolean =>
-  node.type === 'CallExpression' &&
-  node.callee.type === 'MemberExpression' &&
-  !node.callee.computed &&
-  node.callee.object.type === 'Identifier' &&
-  node.callee.object.name === 'Math';
+function isLowerableMath(node: t.Node): boolean {
+  if (
+    node.type !== 'CallExpression' ||
+    node.callee.type !== 'MemberExpression' ||
+    node.callee.computed ||
+    node.callee.object.type !== 'Identifier' ||
+    node.callee.object.name !== 'Math' ||
+    node.callee.property.type !== 'Identifier' ||
+    node.arguments.some(arg => arg.type === 'SpreadElement')
+  ) {
+    return false;
+  }
+
+  const fn = node.callee.property.name;
+  return (
+    Object.hasOwn(MATH_ARITY, fn) && MATH_ARITY[fn] === node.arguments.length
+  );
+}
 
 /**
  * `test ? whenTrue : whenFalse`, entry by entry where both are object or array literals of the same shape, so

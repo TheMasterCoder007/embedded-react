@@ -216,13 +216,13 @@ export function App() {
   return (<View style={{padding: 8, flexDirection: 'column'}}><Text style={{fontSize: 12}}>Hi</Text></View>);
 }`);
     expect(bootOf(c)).toContain('return true;');
-    expect(c).toContain('p.padding = app_round_dim((s_boot.WIDE ? 24 : 8));');
+    expect(bootOf(c)).toContain('s_boot.value = (s_boot.WIDE ? 24 : 8);');
+    expect(bootOf(c)).toContain('s_boot.value_2 = (s_boot.WIDE ? 20 : 12);');
+    expect(c).toContain('p.padding = app_round_dim(s_boot.value);');
     expect(c).toContain(
       'p.flex_direction = ((s_boot.WIDE) ? ER_FLEX_ROW : ER_FLEX_COL);',
     );
-    expect(c).toContain(
-      'p.font_size = app_round_dim((s_boot.WIDE ? 20 : 12));',
-    );
+    expect(c).toContain('p.font_size = app_round_dim(s_boot.value_2);');
   });
 
   it('merges a same-shape ternary child, keeping each state-driven entry its own', () => {
@@ -241,9 +241,102 @@ export function App() {
     expect(c).toContain(
       'p.color = ((s_state.on) ? 0xFFFF0000u : 0xFF00FF00u);',
     );
-    expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%s", (s_boot.WIDE ? "wide" : "tall"));',
+    expect(bootOf(c)).toContain(
+      's_boot.value_2 = (s_boot.WIDE ? "wide" : "tall");',
     );
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%s", s_boot.value_2);',
+    );
+  });
+
+  it('keeps a variant when only the untaken branch calls a Math function the compiler lacks', () => {
+    const c = compile(`${IMPORTS}const W = screen.width > 400;
+export function App() {
+  return (<View>{W ? <Text>{Math.random()}</Text> : <Text>{1}</Text>}</View>);
+}`);
+    expect(bootOf(c)).toContain('return !s_boot.W;');
+  });
+
+  it('guards a folded fraction to within rounding, not a nearby panel', () => {
+    const c = compile(`${IMPORTS}export function App() {
+  const [scale, setScale] = useState(screen.width / 10000);
+  return (<Text>{scale}</Text>);
+}`);
+    const margin = Number(bootOf(c).match(/<= ([\d.e-]+) &&/)[1]);
+    expect(margin).toBeLessThan(0.0241 - 0.024);
+  });
+
+  it('folds a boot value in a nested <Text> span at the build panel', () => {
+    const c = compile(`${IMPORTS}export function App() {
+  return (<Text>a <Text style={{fontSize: screen.width / 20}}>b</Text></Text>);
+}`);
+    expect(c).toContain('er_node_set_text_spans(');
+    expect(bootOf(c)).toContain('s_boot.value - 12.0');
+  });
+
+  it('keeps a boot Math.trunc in double precision', () => {
+    const c =
+      compile(`${IMPORTS}const T = Math.trunc(screen.width / 1.00000001);
+export function App() {
+  return (<View style={{width: T}} />);
+}`);
+    expect(bootOf(c)).toContain(
+      's_boot.T = app_d2i((double)(((double)(s_boot.screen_width) / (double)(1.00000001))));',
+    );
+    expect(c).toContain('static int app_d2i(double v)');
+  });
+
+  it('picks Dial flags and colors at boot', () => {
+    const c = compileSource(
+      `import { useState } from 'react';
+import { Dial } from 'embedded-react';
+export function App() {
+  const [v, setV] = useState(1);
+  return (
+    <Dial value={v} adjustable={screen.width > 400}
+      indicatorColor={screen.width > 400 ? '#ff0000' : '#00ff00'} />
+  );
+}`,
+      'boot',
+      PORTRAIT,
+    ).c;
+    expect(bootOf(c)).toContain('return true;');
+    expect(c).toContain(
+      'p.arc_adjustable = (uint8_t)((s_boot.value) ? 1 : 0);',
+    );
+    expect(c).toContain(
+      'p.arc_indicator_color = ((s_boot.value) ? 0xFFFF0000u : 0xFF00FF00u);',
+    );
+  });
+
+  it('guards an attribute that is undefined only on the build panel', () => {
+    const c = compile(`${IMPORTS}export function App() {
+  return (<View style={screen.width < 400 ? undefined : {padding: 8}} />);
+}`);
+    expect(bootOf(c)).toContain('return s_boot.value;');
+    expect(bootOf(c)).toContain('s_boot.value = (s_boot.screen_width < 400);');
+  });
+
+  it('picks a color read through a boot const at boot', () => {
+    const c =
+      compile(`${IMPORTS}const COLOR = screen.width < 400 ? '#ff0000' : '#0000ff';
+export function App() {
+  return (<View style={{backgroundColor: COLOR}} />);
+}`);
+    expect(bootOf(c)).toContain('return true;');
+    expect(c).toContain(
+      'p.background_color = ((s_boot.value) ? 0xFFFF0000u : 0xFF0000FFu);',
+    );
+  });
+
+  it('works an inline boot expression out in double precision', () => {
+    const c = compile(`${IMPORTS}export function App() {
+  return (<View style={{width: screen.width + 0.49999999}} />);
+}`);
+    expect(bootOf(c)).toContain(
+      's_boot.value = (s_boot.screen_width + 0.49999999);',
+    );
+    expect(c).toContain('p.width = app_round_dim(s_boot.value);');
   });
 
   it('keeps a variant when the branches differ in a handler or in text', () => {

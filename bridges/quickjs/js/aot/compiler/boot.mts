@@ -46,6 +46,10 @@ interface BootContext {
   slots: IrBootSlot[];
   /** The values a constant fold read at the build's panel. */
   assumed: Set<BootValue>;
+  /** The expressions whose slots are being lowered; their parts are not slots of their own. */
+  lowering: Set<t.Node>;
+  /** The boot value each expression read as a whole stands for, by the scope it was read in. */
+  wholes: Map<t.Node, Map<Scope, BootValue>>;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -233,7 +237,14 @@ export const screenBinding = (screen: {
  * Starts recording a compile's boot values.
  */
 export function beginBoot(): void {
-  context = {env: null, lower: null, slots: [], assumed: new Set()};
+  context = {
+    env: null,
+    lower: null,
+    slots: [],
+    assumed: new Set(),
+    lowering: new Set(),
+    wholes: new Map(),
+  };
 }
 
 /**
@@ -323,6 +334,41 @@ function slotField(name: string): string {
 }
 
 /**
+ * Whether two lowered expressions compute the same value the same way (they read slots by identity).
+ *
+ * @param first  One expression.
+ * @param second  The other.
+ *
+ * @returns True when they do.
+ */
+function sameExpr(first: unknown, second: unknown): boolean {
+  if (first === second) return true;
+  if (
+    typeof first !== 'object' ||
+    typeof second !== 'object' ||
+    first === null ||
+    second === null ||
+    Array.isArray(first) !== Array.isArray(second)
+  ) {
+    return false;
+  }
+
+  const firstKeys = Object.keys(first);
+  return (
+    firstKeys.length === Object.keys(second).length &&
+    firstKeys.every(key =>
+      key === 'slot'
+        ? (first as Record<string, unknown>)[key] ===
+          (second as Record<string, unknown>)[key]
+        : sameExpr(
+            (first as Record<string, unknown>)[key],
+            (second as Record<string, unknown>)[key],
+          ),
+    )
+  );
+}
+
+/**
  * The environment a slot's expression lowers in: the app's, with no runtime names, and `scope` as its
  * constants.
  *
@@ -389,19 +435,31 @@ export function bootSlotOf(value: BootValue): IrBootSlot | null {
     if (!value.lowerable || !value.node) return null;
     const {env, lower} = context;
     let expr: IrExpr;
+    const {lowering} = context;
+    lowering.add(value.node);
     try {
       expr = attemptLowering(() =>
         lower(value.node!, bootEnv(env, value.scope)),
       );
     } catch {
       return null;
+    } finally {
+      lowering.delete(value.node);
     }
 
     if (!SLOT_KINDS.has(expr.type.kind)) return null;
-    // A value that only reads another slot shares it.
+    // A value that only reads another slot shares it, as does one worked out the same way as an earlier slot.
     if (expr.kind === 'boot') {
       value.slot = expr.slot;
       return expr.slot;
+    }
+
+    const sameSlot = context.slots.find(
+      slot => slot.init.kind === 'expr' && sameExpr(slot.init.expr, expr),
+    );
+    if (sameSlot) {
+      value.slot = sameSlot;
+      return sameSlot;
     }
 
     slot = {
@@ -429,6 +487,34 @@ export function bootCheckpoint(): () => void {
       marked.assumed = saved;
     }
   };
+}
+
+/**
+ * The boot value an expression read as a whole stands for: the first one found for it in this scope, so every
+ * read of the expression shares one slot. Null while a slot is being lowered: its expression is one slot.
+ *
+ * @param node  The expression.
+ * @param scope  The scope it was read in.
+ * @param value  The boot value a fold of it gave.
+ *
+ * @returns The boot value to read, or null.
+ */
+export function wholeBootValue(
+  node: t.Node,
+  scope: Scope,
+  value: BootValue,
+): BootValue | null {
+  if (!context || context.lowering.size) return null;
+  let byScope = context.wholes.get(node);
+  if (!byScope) {
+    byScope = new Map();
+    context.wholes.set(node, byScope);
+  }
+
+  const known = byScope.get(scope);
+  if (known) return known;
+  byScope.set(scope, value);
+  return value;
 }
 
 /**

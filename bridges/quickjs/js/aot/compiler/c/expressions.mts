@@ -254,9 +254,11 @@ export function printExpr(expr: IrExpr): string {
     case 'wholeRound':
       return printExpr(expr.operand);
     case 'trunc':
-      return `app_f2i((float)(${printExpr(expr.operand)}))`;
+      return inDoubles
+        ? `app_d2i((double)(${printExpr(expr.operand)}))`
+        : `app_f2i((float)(${printExpr(expr.operand)}))`;
     case 'toInt':
-      return `app_f2i(${printExpr(expr.operand)})`;
+      return `${inDoubles ? 'app_d2i' : 'app_f2i'}(${printExpr(expr.operand)})`;
     case 'compare':
       return `(${printExpr(expr.left)} ${expr.op} ${printExpr(expr.right)})`;
     case 'stringEquals':

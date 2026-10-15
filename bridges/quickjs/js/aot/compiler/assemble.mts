@@ -687,6 +687,16 @@ static int16_t app_round_dim(double v)
         '    return (int)v;\n}',
     ],
     [
+      'app_d2i',
+      '/* A double kept as an int, as app_f2i keeps a float: for a value worked out at boot, which a float ' +
+        'would round. */\n' +
+        'static int app_d2i(double v)\n{\n' +
+        '    if (v != v)\n    {\n        return 0;\n    }\n' +
+        '    if (v >= 2147483647.0)\n    {\n        return INT_MAX;\n    }\n' +
+        '    if (v <= -2147483648.0)\n    {\n        return INT_MIN;\n    }\n' +
+        '    return (int)v;\n}',
+    ],
+    [
       'app_roundf',
       "/* Math.round as JS rounds: to the nearest whole number, halves up (toward +Infinity). C's roundf takes\n" +
         '   halves away from zero, which gives -3 for -2.5 where JS gives -2. */\n' +

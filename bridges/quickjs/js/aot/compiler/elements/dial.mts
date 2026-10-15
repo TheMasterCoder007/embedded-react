@@ -182,7 +182,7 @@ export function emitDial(
   const colour = (field: string, node: t.Node, attr: t.JSXAttribute): void => {
     let color: unknown;
     try {
-      color = evalStatic(node, scope);
+      color = evalStatic(node, scope, 'strict');
     } catch {
       dynAssigns.push({field, value: lowerColorValue(node, env)});
       return;
@@ -236,7 +236,7 @@ export function emitDial(
       const {field, table} = DIAL_ENUM_PROPS[name];
       let token: unknown = null;
       try {
-        token = evalStatic(node, scope);
+        token = evalStatic(node, scope, 'strict');
       } catch {
         /* state-driven — handled below */
       }
@@ -258,7 +258,10 @@ export function emitDial(
     } else if (name === 'adjustable' || name === 'range') {
       const field = name === 'range' ? 'arc_range' : 'arc_adjustable';
       try {
-        staticAssigns.push({field, expr: evalStatic(node, scope) ? '1' : '0'});
+        staticAssigns.push({
+          field,
+          expr: evalStatic(node, scope, 'strict') ? '1' : '0',
+        });
       } catch {
         dynAssigns.push({
           field,

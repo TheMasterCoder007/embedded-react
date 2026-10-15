@@ -168,6 +168,15 @@ export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
     };
   }
 
+  // A const worked out at boot picks its color at boot, from its own expression.
+  const bootAlias = bootAliasOf(node, env);
+  if (bootAlias) {
+    const picked = tryLowering(() =>
+      lowerColorValue(bootAlias.node, bootAlias.env),
+    );
+    if (picked) return picked;
+  }
+
   // A statically resolvable color (a const string, or a theme token like `theme.card`) folds to a literal.
   try {
     const color = evalStatic(node, foldScope(env, env.consts ?? {}));
@@ -228,6 +237,15 @@ export function lowerEnumValue(
       whenFalse: lowerEnumValue(node.alternate, table, env),
     };
   }
+  // A const worked out at boot picks its value at boot, from its own expression.
+  const bootAlias = bootAliasOf(node, env);
+  if (bootAlias) {
+    const picked = tryLowering(() =>
+      lowerEnumValue(bootAlias.node, table, bootAlias.env),
+    );
+    if (picked) return picked;
+  }
+
   // A statically resolvable enum (a const string) folds to its constant.
   try {
     const enumValue = evalStatic(node, foldScope(env, env.consts ?? {}));
@@ -374,6 +392,31 @@ function lowerDynamicStyleValue(
 }
 
 /**
+ * The expression and environment of a value worked out at boot that `node` reads as a whole (a const, or an
+ * entry of one), for a lowering that picks between literals.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ *
+ * @returns The value's own expression and the environment it lowers in, or null.
+ */
+function bootAliasOf(
+  node: t.Node,
+  env: Env,
+): {node: t.Expression; env: Env} | null {
+  let value: unknown;
+  try {
+    value = evalStatic(node, foldScope(env, env.consts ?? {}), 'boot');
+  } catch {
+    return null;
+  }
+
+  if (!isBoot(value) || !value.node || value.node === node) return null;
+  const bootEnv = bootEnvOf(value);
+  return bootEnv && {node: value.node, env: bootEnv};
+}
+
+/**
  * A style entry worked out at boot, as the runtime write of its field: a size or an opacity. Null for a value
  * boot cannot work out, one that is no number, or a key that takes no runtime number, which then fold.
  *
@@ -498,6 +541,7 @@ export const styleWrites = (
  * @param scope  Compile-time constants in reach.
  * @param env  The expression environment.
  * @param spec  The element, for the style keys it takes.
+ * @param bootValues  How a value worked out at boot is set: once at build, or taken at the build's panel.
  *
  * @returns The style's constant writes, state-driven writes, and animated-value binds.
  */
@@ -506,6 +550,7 @@ export function collectStyleAssigns(
   scope: Scope,
   env: Env,
   spec: ElementSpec,
+  bootValues: 'boot' | 'fold' = 'boot',
 ): StyleAssigns {
   // ERProps field → its last write: a constant's C, or a state-driven value.
   const fields = new Map<string, {code: string} | {value: IrPropValue}>();
@@ -690,7 +735,11 @@ export function collectStyleAssigns(
         let readsBoot = false;
         try {
           staticValue = {
-            v: evalStatic(prop.value, withUndefined(scope), 'strict'),
+            v: evalStatic(
+              prop.value,
+              withUndefined(scope),
+              bootValues === 'fold' ? 'fold' : 'strict',
+            ),
           };
         } catch (error) {
           staticValue = null; // references state — lower it as a dynamic value
@@ -744,9 +793,10 @@ export function collectStyleAssigns(
 
     for (const [styleKey, entry] of Object.entries(resolved as object)) {
       // An entry worked out at boot is set once at build, if its key takes a runtime value.
-      const bootAssign = isBoot(entry)
-        ? bootStyleAssign(styleKey, entry)
-        : null;
+      const bootAssign =
+        bootValues === 'boot' && isBoot(entry)
+          ? bootStyleAssign(styleKey, entry)
+          : null;
       if (bootAssign) {
         checkStyleKey(spec, styleKey, expr);
         setField(bootAssign.field, {value: bootAssign.value});
@@ -985,11 +1035,13 @@ export function collectTextSpans(
       (child.openingElement.name as t.JSXIdentifier).name === 'Text'
     ) {
       checkAttributes(TEXT_SPAN, child.openingElement);
+      // A span is a static table, so a value worked out at boot is taken at the build's panel instead.
       const {staticAssigns, dynAssigns} = collectStyleAssigns(
         child.openingElement,
         scope,
         env,
         TEXT_SPAN,
+        'fold',
       );
       if (dynAssigns.length) {
         throw aotError(

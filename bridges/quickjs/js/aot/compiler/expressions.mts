@@ -21,7 +21,13 @@
 import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
 import {aotError, locateError, withLoc} from './diagnostics.mts';
-import {bootSlotOf, foldBoot, isBoot} from './boot.mts';
+import {
+  bootSlotOf,
+  containsBoot,
+  foldBoot,
+  isBoot,
+  wholeBootValue,
+} from './boot.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
@@ -110,6 +116,15 @@ const CHECKED_HELPER: Record<string, WholeHelper> = {
   '-': 'sub',
   '*': 'mul',
 };
+
+/** Expressions an app may write over values worked out at boot, which then read as one boot slot. */
+const WHOLE_BOOT_TYPES = new Set([
+  'BinaryExpression',
+  'UnaryExpression',
+  'LogicalExpression',
+  'ConditionalExpression',
+  'CallExpression',
+]);
 
 /** The range of a C int. */
 const INT_MIN = -(2 ** 31);
@@ -314,6 +329,71 @@ function bootSource(
   throw new Error(
     'AOT: a value derived from the panel size cannot be used in a dynamic expression',
   );
+}
+
+/**
+ * Whether an expression names a binding that is, or holds, a value worked out at boot.
+ *
+ * @param node  The expression.
+ * @param scope  The constants it reads.
+ *
+ * @returns True when it does.
+ */
+function readsBootName(node: unknown, scope: Scope): boolean {
+  if (typeof node !== 'object' || node === null) return false;
+  if (Array.isArray(node)) return node.some(item => readsBootName(item, scope));
+  const typed = node as t.Node;
+  if (typed.type === 'Identifier') {
+    return typed.name in scope && containsBoot(scope[typed.name]);
+  }
+
+  // A member's name and an object key are not reads.
+  if (typed.type === 'MemberExpression') {
+    return (
+      readsBootName(typed.object, scope) ||
+      (typed.computed && readsBootName(typed.property, scope))
+    );
+  }
+
+  if (typed.type === 'ObjectProperty' && !typed.computed) {
+    return readsBootName(typed.value, scope);
+  }
+
+  return Object.entries(typed).some(
+    ([key, value]) => key !== 'loc' && readsBootName(value, scope),
+  );
+}
+
+/**
+ * An expression that depends only on the panel, read as a whole from its boot slot, so it is worked out once and
+ * in double precision. Null for one that also reads state, or that boot cannot work out.
+ *
+ * @param node  The expression.
+ * @param env  The expression environment.
+ * @param loc  Where it is.
+ *
+ * @returns Its source, or null.
+ */
+function wholeBootSource(
+  node: t.Node,
+  env: Env,
+  loc: SourcePosition | undefined,
+): IrSource | null {
+  const scope = foldScope(env, env.consts ?? {});
+  if (!readsBootName(node, scope)) return null;
+  let value: unknown;
+  try {
+    value = evalStatic(node, scope, 'boot');
+  } catch {
+    return null;
+  }
+
+  if (!isBoot(value) || !value.lowerable) return null;
+  const whole = wholeBootValue(node, scope, value);
+  const slot = whole && bootSlotOf(whole);
+  return slot
+    ? {kind: 'fixed', expr: {kind: 'boot', slot, type: slot.type}, loc}
+    : null;
 }
 
 /**
@@ -1338,6 +1418,12 @@ const binarySource = (
  */
 function sourceOf(node: t.Node, env: Env): IrSource {
   const loc = node.loc?.start;
+  // An expression that depends only on the panel is read from a slot worked out at boot, in doubles as JS.
+  const whole = WHOLE_BOOT_TYPES.has(node.type)
+    ? wholeBootSource(node, env, loc)
+    : null;
+  if (whole) return whole;
+
   const operand = (operandNode: t.Node): IrSource =>
     lowerSource(operandNode, env).source;
   switch (node.type) {
