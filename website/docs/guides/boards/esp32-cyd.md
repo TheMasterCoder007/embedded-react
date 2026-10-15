@@ -81,6 +81,10 @@ start-up. If you run short, in order: shrink the strip height with `ER_LCD_BANDE
 more transfers), lower `ERUI_MAX_NODES`, or rebuild the app with a smaller `ER_AOT_LIST_CAP`.
 [Memory](../memory.md) goes through the numbers.
 
+A boot loop on `assert failed: vApplicationGetIdleTaskMemory` is the same shortage, earlier: until
+`app_main` runs, FreeRTOS allocates its first tasks from the RAM that static data leaves free. Lower
+`ERUI_MAX_NODES` to what the app needs; the thermostat uses 41.
+
 The backend, `backends/esp32-spi-lcd`, works with any `esp_lcd` RGB565 SPI panel. The board brings
 the panel up (SPI bus, panel and IO handle, reset, inversion, orientation, backlight) and passes both
 handles to `er_esp32_spi_lcd_backend_init(panel, io, width, height)`; in banded mode there is nothing

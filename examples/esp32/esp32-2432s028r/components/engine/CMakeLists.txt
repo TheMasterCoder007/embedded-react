@@ -2,8 +2,10 @@
 #
 # Unlike the ESP32-S3 example, there is NO linker_psram.lf and NO PSRAM: every static pool must fit
 # internal DRAM alongside the 150 KB RGB565 framebuffer. So the RAM-driving flags are turned DOWN:
-#   - ERUI_MAX_NODES sizes the node pool (sizeof(ERNode) is several hundred bytes — the dominant cost).
-#     Must cover the thermostat solo dial (39). It is the tightest budget on any supported board.
+#   - ERUI_MAX_NODES sizes the node pool (sizeof(ERNode) is over 1 KB — the dominant cost). Must cover
+#     the thermostat (41 with the root). It is the tightest budget on any supported board: until app_main,
+#     FreeRTOS allocates its first tasks from the DRAM that static data leaves, and too little of it
+#     boot-loops on `assert failed: vApplicationGetIdleTaskMemory`.
 #   - The opacity/transform SCRATCH pool is DEPTH x W x H x 4 bytes; kept tiny (8x8x1). A node with
 #     opacity < 255 that doesn't fit the scratch simply renders OPAQUE (graceful — no crash), so an
 #     app's art-dim effect is skipped here but everything else works.
@@ -65,7 +67,7 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_ONSCREEN_KEYBOARD=1
     ERUI_TRANSFORMS_TRANSLATE_ONLY=1
     ERUI_FONT_SIZES=7
-    ERUI_MAX_NODES=44
+    ERUI_MAX_NODES=42           # the thermostat's 41 and one spare; each slot is ~1.4 KB of .bss
     ERUI_MAX_OPACITY_DEPTH=1
     ERUI_SCRATCH_W=8
     ERUI_SCRATCH_H=8

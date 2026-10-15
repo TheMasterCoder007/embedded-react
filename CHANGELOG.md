@@ -18,6 +18,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   whose sides differ only in values becomes one tree whose values are picked at boot.
 - Flow B: `er_app_fits(w, h)` reports whether a panel picks the layout the app was compiled for.
 
+### Fixed
+
+- The CYD (no-PSRAM ESP32) example boot-looped on `assert failed: vApplicationGetIdleTaskMemory` since
+  0.14.0: the engine's static RAM had grown until FreeRTOS could not allocate its first tasks. The example
+  now sizes its node pool to the thermostat's 41 nodes plus one spare.
+
 ### Changed
 
 - **Breaking (Flow B):** `er_app_build()` returns `bool`. On a panel that picks another layout than the one

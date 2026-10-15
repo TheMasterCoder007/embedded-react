@@ -4,7 +4,8 @@
 CONFIG_IDF_TARGET="esp32"
 
 # No PSRAM on this board — the framebuffer + engine pools all live in internal DRAM (the whole point of
-# Flow B: no QuickJS heap). If the framebuffer alloc fails at boot, free RAM by lowering ERUI_MAX_NODES
+# Flow B: no QuickJS heap). If the framebuffer alloc fails at boot, or it boot-loops on
+# `assert failed: vApplicationGetIdleTaskMemory`, free RAM by lowering ERUI_MAX_NODES
 # (components/engine/CMakeLists.txt) and/or rebuilding the AOT app with a smaller ER_AOT_LIST_CAP.
 
 # 4 MB flash. Default partition table (single factory app) — the compiled app is IN the firmware image
