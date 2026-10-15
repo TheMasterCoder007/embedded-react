@@ -417,6 +417,21 @@ export function bootSlotOf(value: BootValue): IrBootSlot | null {
 }
 
 /**
+ * Marks the assumptions recorded so far, for a lowering attempt whose folds should not stand if it is abandoned.
+ *
+ * @returns A function that drops every assumption recorded after the mark.
+ */
+export function bootCheckpoint(): () => void {
+  const marked = context;
+  const saved = marked ? new Set(marked.assumed) : null;
+  return () => {
+    if (marked && saved) {
+      marked.assumed = saved;
+    }
+  };
+}
+
+/**
  * Records that a fold read a boot value at the build's panel.
  *
  * @param value  The value.

@@ -23,7 +23,14 @@ import {parse} from '@babel/parser';
 import {readFileSync, existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {aotError} from './diagnostics.mts';
-import {nameBootValues, screenBinding} from './boot.mts';
+import {mergeBranchElements} from './branch-merge.mts';
+import {
+  bootCheckpoint,
+  foldBoot,
+  isBoot,
+  nameBootValues,
+  screenBinding,
+} from './boot.mts';
 import {evalStaticOrThrow, evalStatic, withUndefined} from './static-eval.mts';
 import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
@@ -468,8 +475,9 @@ export function collectState(
 }
 
 /**
- * The JSX a component body returns. A top-level `if` whose test folds are decided at compile time, so a
- * responsive layout returns the branch for this build's screen.
+ * The JSX a component body returns. A top-level `if` whose test folds is decided at compile time, so a
+ * responsive layout returns the branch for this build's screen. When the test depends on the panel and both
+ * outcomes return elements of one shape, they merge into one element whose values boot picks.
  *
  * @param fnBody  The component's body.
  * @param scope  Compile-time constants the `if` tests fold against.
@@ -480,14 +488,17 @@ export function findReturnJSX(
   fnBody: t.BlockStatement,
   scope: Scope = {},
 ): t.JSXElement {
+  const statementsOf = (branch: t.Statement): t.Statement[] =>
+    branch.type === 'BlockStatement' ? branch.body : [branch];
+
   // Fold top-level `if (staticCond) return …` at compile time — responsive layouts switch on `screen`.
   const scan = (statements: t.Statement[]): t.JSXElement | null => {
-    for (const stmt of statements) {
+    for (const [index, stmt] of statements.entries()) {
       // A top-level `if` must fold; only the branch it takes is scanned.
       if (stmt.type === 'IfStatement') {
         let testValue;
         try {
-          testValue = evalStatic(stmt.test, scope);
+          testValue = evalStatic(stmt.test, scope, 'boot');
         } catch {
           throw new Error(
             'AOT: a top-level `if` in the component must have a compile-time-constant test (e.g. ' +
@@ -495,12 +506,17 @@ export function findReturnJSX(
           );
         }
 
+        // A test that depends on the panel needs no variant when both outcomes have one shape.
+        if (isBoot(testValue)) {
+          const merged = mergeOutcomes(stmt, statements.slice(index + 1));
+          if (merged) return merged;
+          testValue = foldBoot(testValue);
+        }
+
         // Follow only the statically selected branch and keep scanning it until a JSX return is found.
         const branch = testValue ? stmt.consequent : stmt.alternate;
         if (branch) {
-          const branchJSX = scan(
-            branch.type === 'BlockStatement' ? branch.body : [branch],
-          );
+          const branchJSX = scan(statementsOf(branch));
           if (branchJSX) return branchJSX;
         }
 
@@ -516,6 +532,29 @@ export function findReturnJSX(
       }
     }
 
+    return null;
+  };
+
+  // What each outcome of an `if` returns (a branch that does not return falls through), merged when it can be.
+  const mergeOutcomes = (
+    stmt: t.IfStatement,
+    rest: t.Statement[],
+  ): t.JSXElement | null => {
+    const restore = bootCheckpoint();
+    try {
+      const whenTrue = scan(statementsOf(stmt.consequent)) ?? scan(rest);
+      const whenFalse =
+        (stmt.alternate && scan(statementsOf(stmt.alternate))) ?? scan(rest);
+      const merged =
+        whenTrue && whenFalse
+          ? mergeBranchElements(stmt.test, whenTrue, whenFalse)
+          : null;
+      if (merged) return merged;
+    } catch {
+      /* an outcome that does not compile here is left to the fold, which reports it if it is taken */
+    }
+
+    restore();
     return null;
   };
 

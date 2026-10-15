@@ -191,6 +191,133 @@ export function App() {
     expect(c).toContain('bool er_app_build(int screen_w, int screen_h)');
   });
 
+  it('folds Math.min / max / floor / round, at compile time or at boot', () => {
+    const c = compile(`${IMPORTS}const BAR_W = Math.max(24, screen.width - 300);
+const THIRD = Math.round(screen.width / 3);
+const GAP = Math.floor(7 / 2);
+export function App() {
+  return (<View style={{width: BAR_W, height: THIRD, padding: GAP}} />);
+}`);
+    expect(bootOf(c)).toContain(
+      's_boot.BAR_W = app_max(24, app_sub(s_boot.screen_width, 300));',
+    );
+    expect(bootOf(c)).toContain(
+      's_boot.THIRD = app_rounddiv(s_boot.screen_width, 3);',
+    );
+    expect(c).toContain('p.padding = 3;');
+  });
+
+  it('merges a top-level `if` whose outcomes differ only in values', () => {
+    const c = compile(`${IMPORTS}const WIDE = screen.width > screen.height;
+export function App() {
+  if (WIDE) {
+    return (<View style={{padding: 24, flexDirection: 'row'}}><Text style={{fontSize: 20}}>Hi</Text></View>);
+  }
+  return (<View style={{padding: 8, flexDirection: 'column'}}><Text style={{fontSize: 12}}>Hi</Text></View>);
+}`);
+    expect(bootOf(c)).toContain('return true;');
+    expect(c).toContain('p.padding = app_round_dim((s_boot.WIDE ? 24 : 8));');
+    expect(c).toContain(
+      'p.flex_direction = ((s_boot.WIDE) ? ER_FLEX_ROW : ER_FLEX_COL);',
+    );
+    expect(c).toContain(
+      'p.font_size = app_round_dim((s_boot.WIDE ? 20 : 12));',
+    );
+  });
+
+  it('merges a same-shape ternary child, keeping each state-driven entry its own', () => {
+    const c = compile(`${IMPORTS}const WIDE = screen.width > screen.height;
+export function App() {
+  const [on, setOn] = useState(false);
+  return (
+    <View>
+      {WIDE
+        ? <Text style={{color: on ? '#ff0000' : '#00ff00', fontSize: 20}}>{'wide'}</Text>
+        : <Text style={{color: on ? '#ff0000' : '#00ff00', fontSize: 12}}>{'tall'}</Text>}
+    </View>
+  );
+}`);
+    expect(bootOf(c)).toContain('return true;');
+    expect(c).toContain(
+      'p.color = ((s_state.on) ? 0xFFFF0000u : 0xFF00FF00u);',
+    );
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%s", (s_boot.WIDE ? "wide" : "tall"));',
+    );
+  });
+
+  it('keeps a variant when the branches differ in a handler or in text', () => {
+    const handlers =
+      compile(`${IMPORTS}const WIDE = screen.width > screen.height;
+export function App() {
+  const [n, setN] = useState(0);
+  return (
+    <View>
+      {WIDE
+        ? <Pressable onPress={() => setN(1)}><Text>a</Text></Pressable>
+        : <Pressable onPress={() => setN(2)}><Text>a</Text></Pressable>}
+    </View>
+  );
+}`);
+    expect(bootOf(handlers)).toContain('return !s_boot.WIDE;');
+    const text = compile(`${IMPORTS}const WIDE = screen.width > screen.height;
+export function App() {
+  return (<View>{WIDE ? <Text>wide</Text> : <Text>tall</Text>}</View>);
+}`);
+    expect(bootOf(text)).toContain('return !s_boot.WIDE;');
+    expect(text).toContain('"tall"');
+    expect(text).not.toContain('"wide"');
+  });
+
+  (CC ? it : it.skip)(
+    `a merged app passes the C syntax check (${CC || 'no cc found'})`,
+    () => {
+      const {c, h} = compileSource(
+        `${IMPORTS}const WIDE = screen.width > screen.height;
+const S = screen.width / 320;
+export function App() {
+  const [on, setOn] = useState(false);
+  if (WIDE) {
+    return (
+      <Pressable onPress={() => setOn(!on)} style={{padding: 24 * S}}>
+        <Text style={{fontSize: 20, color: on ? '#ff0000' : '#00ff00'}}>{Math.round(S * 100)}%</Text>
+      </Pressable>
+    );
+  }
+  return (
+    <Pressable onPress={() => setOn(!on)} style={{padding: 8}}>
+      <Text style={{fontSize: 12, color: on ? '#ff0000' : '#00ff00'}}>{Math.round(S * 50)}%</Text>
+    </Pressable>
+  );
+}`,
+        'boot',
+        PORTRAIT,
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-merge-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.h'), h);
+        writeFileSync(join(dir, 'app.gen.c'), c);
+        const check = spawnSync(
+          CC,
+          [
+            '-fsyntax-only',
+            '-Wall',
+            '-I',
+            join(root, 'engine', 'include'),
+            '-I',
+            join(root, 'engine', 'core'),
+            join(dir, 'app.gen.c'),
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(check.stderr).toBe('');
+        expect(bootOf(c)).toContain('return true;');
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
   (CC ? it : it.skip)(
     `runs app_boot and er_app_fits at several panels (${CC || 'no cc found'})`,
     () => {

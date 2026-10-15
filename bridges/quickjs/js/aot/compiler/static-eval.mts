@@ -48,6 +48,21 @@ interface Fold {
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The Math functions a fold works out, as JS does. */
+const STATIC_MATH: Record<string, (...args: any[]) => number> = {
+  min: Math.min,
+  max: Math.max,
+  floor: Math.floor,
+  ceil: Math.ceil,
+  round: Math.round,
+  trunc: Math.trunc,
+  abs: Math.abs,
+};
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -412,6 +427,27 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
         (callee.property as t.Identifier).name === 'create'
       ) {
         return evaluate(node.arguments[0], scope, fold);
+      }
+
+      // Math.min / max / floor / ceil / round / trunc / abs fold as JS works them out; others are dynamic.
+      const mathFn =
+        callee.type === 'MemberExpression' &&
+        !callee.computed &&
+        callee.object.type === 'Identifier' &&
+        callee.object.name === 'Math' &&
+        !('Math' in scope)
+          ? (callee.property as t.Identifier).name
+          : null;
+      if (mathFn && Object.hasOwn(STATIC_MATH, mathFn)) {
+        const args = node.arguments.map(arg => {
+          if (arg.type === 'SpreadElement') {
+            throw new Error('AOT: cannot statically evaluate a spread');
+          }
+
+          return evaluate(arg, scope, fold);
+        });
+        const result = STATIC_MATH[mathFn](...args.map(buildValueOf));
+        return args.some(isBoot) ? bootOf(node, result, fold) : result;
       }
 
       throw new Error(`AOT: cannot statically evaluate call expression`);

@@ -19,6 +19,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
+import {foldBoot, isBoot} from './boot.mts';
+import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {emitSourcedWide, lowerExpr} from './expressions.mts';
 import {
@@ -778,9 +780,19 @@ function lowerBranch(
     // A test that folds picks its branch at build time; `&&` with a false test renders nothing.
     let folded: {value: unknown} | null;
     try {
-      folded = {value: evalStatic(testNode, scope)};
+      folded = {value: evalStatic(testNode, scope, 'boot')};
     } catch {
       folded = null;
+    }
+
+    // A test that depends on the panel needs no variant when both branches are elements of one shape.
+    if (folded && isBoot(folded.value)) {
+      const merged =
+        whenTrue.type === 'JSXElement' && whenFalse?.type === 'JSXElement'
+          ? mergeBranchElements(testNode, whenTrue, whenFalse)
+          : null;
+      if (merged) return lowerBranch(merged, scope, out, env, state, within);
+      folded = {value: foldBoot(folded.value)};
     }
 
     if (folded) {
