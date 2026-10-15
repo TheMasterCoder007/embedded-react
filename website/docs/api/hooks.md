@@ -72,10 +72,11 @@ const COMPACT = SW < 300;
 ```
 
 The host injects `screen` with the panel's `width` and `height` in pixels before the app runs. In
-Flow A it is the real panel (or the simulator's current size); in Flow B the size passed to
-`--screen` is baked in, and module-level constants derived from it fold at compile time, so a
-responsive app compiles to exactly one layout per board. [Layout](../concepts/layout.md#designing-for-small-panels)
-shows the pattern.
+Flow A it is the real panel (or the simulator's current size). In Flow B, values derived from it are
+worked out at boot from the real panel, while a branch that changes the tree is compiled for the
+`--screen` size, so one build runs on every panel that picks the same layout; see
+[the AOT subset](../guides/aot-subset.md#assets-and-screen-size).
+[Layout](../concepts/layout.md#designing-for-small-panels) shows the pattern.
 
 ## Timers and time
 

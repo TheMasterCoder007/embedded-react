@@ -62,8 +62,9 @@ that instead of `-p`. If flashing wedges after many resets, unplug and replug th
 :::
 
 **Orientation.** The example ships in the panel's native portrait, 240×320. `BOARD_ROTATE_90` in
-`main/board.h` gives landscape 320×240, swapping the panel and touch axes together; the `--screen`
-size must match, or a responsive app folds to the wrong layout on a correctly rotated screen. If the
+`main/board.h` gives landscape 320×240, swapping the panel and touch axes together. The thermostat
+lays landscape out differently, so build with `--screen 320x240` too; a portrait build refuses the
+rotated panel at boot and logs the command to regenerate it. If the
 image is upside down, flip `BOARD_ROTATE_CW` in `main/board.c`.
 
 ## How it fits without PSRAM

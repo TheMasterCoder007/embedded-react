@@ -10,8 +10,19 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Flow B: values derived from `screen.width`/`screen.height` are worked out at boot from the real panel
+  instead of folded at compile time, so one build runs on every panel that picks the same layout. Module
+  constants may use `Math.min`, `max`, `floor`, `ceil`, `round`, `trunc` and `abs`, and a `screen` branch
+  whose sides differ only in values becomes one tree whose values are picked at boot.
+- Flow B: `er_app_fits(w, h)` reports whether a panel picks the layout the app was compiled for.
+
 ### Changed
 
+- **Breaking (Flow B):** `er_app_build()` returns `bool`. On a panel that picks another layout than the one
+  the app was compiled for, it builds nothing and returns `false`. The board examples check it and log how
+  to regenerate, instead of `_Static_assert`ing the exact panel size.
 - Flow B: a state change now re-sets only the nodes and drawings that read that state, instead of every
   state-driven node. On the thermostat, a setpoint step re-sets 2 nodes instead of 19, which halves the
   handler's cost on the ESP32-S3.

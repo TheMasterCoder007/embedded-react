@@ -1043,13 +1043,10 @@ ${keyboardSetup}${initialUpdate}${mountEffectsBlock}    return true;
 #include <stdint.h>
 
 /*
- * What this file was generated FOR. er_app_build() takes the screen size at runtime, but a responsive app
- * folds its \`screen.width\`/\`screen.height\` branching at GENERATE time — so the layout in here is already
- * committed to these dimensions and no runtime argument can change it.
- *
- * Every board example consumes the same dist/app.gen.c, so generating for one board and then building
- * another produces firmware that compiles, links, boots, and lays out wrong. Boards \`_Static_assert\` these
- * against their own panel size to turn that into a compile error; see each board example's main.c.
+ * The panel this file was generated at. Values that depend only on the panel size are worked out at boot by
+ * er_app_build(), but a branch on \`screen\` that changes the tree was compiled for this panel only, and so
+ * was any value the compiler had to know. er_app_build() checks those at boot and builds nothing on a panel
+ * that differs in any of them, returning false; er_app_fits() asks the same without building.
  *
  * WHICH demo is recorded the same way, as a marker macro named ER_AOT_DEMO_<demo> with every character
  * outside [A-Za-z0-9] encoded as _<hex>_ (so \`watch-face\` defines ER_AOT_DEMO_watch_2d_face). The encoding

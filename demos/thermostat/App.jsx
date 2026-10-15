@@ -45,9 +45,9 @@ import {
 // than a state-driven <Path d>. See the README for the full list of what differs.
 
 // ----------------------------------------------------------------------------------------------------
-// Responsive selection — driven by the `screen` global. The Flow A host injects it at runtime; the Flow B
-// AOT compiler seeds it from ER_AOT_SCREEN_W/H at build time. Every term below folds to a constant for a
-// given panel, so the AOT compiles exactly ONE layout per board and never sees the others.
+// Responsive selection — driven by the `screen` global. The Flow A host injects it at runtime; a Flow B
+// build works the values below out at boot from the real panel, and compiles only the layout its build
+// panel (ER_AOT_SCREEN_W/H) picks, so it runs on any panel that picks the same one.
 // ----------------------------------------------------------------------------------------------------
 const SW = screen.width;
 const SH = screen.height;
@@ -76,9 +76,6 @@ const WEATHER_W = WEATHER_OUT_W - 2 * CPAD;
 // of the r=134 guide ring (and more off the bottom) — on a real panel that just reads as "the dial is cut
 // off", so we use the FULL 320×300 canvas instead and let the ring close. The outermost thing drawn is the
 // handle at r=135, so 150±135 = 15..285 sits inside 0..300 with a little margin.
-//
-// Everything below stays inside +-*/ and ternaries: the AOT folds module constants with its own static
-// evaluator, which has no Math.min/max/floor — only arithmetic, comparisons, and ?:.
 const HEAD_H = SOLO ? 28 : 40; // solo's header is one line (no status), so it needs less
 const MODE_H = 44;
 // Solo used to give the caption + steppers a row of their own, which cost 44 px of height. Because the
@@ -91,8 +88,8 @@ const CAPROW_H = 0;
 // A LANDSCAPE small panel (a rotated 240x320, or a 480x320) is the opposite problem: height is what is
 // scarce and width is what is spare, so stacking the mode buttons UNDER the dial spends the wrong axis —
 // at 320x240 it left the dial at 124 px with 160 px of width unused. Landscape therefore puts the modes
-// in a COLUMN beside the dial. Both branches fold at compile time, and because only flexDirection and
-// these constants differ, one JSX tree serves both.
+// in a COLUMN beside the dial. Because only flexDirection and these constants differ, one JSX tree
+// serves both, and a Flow B build picks between them at boot.
 const LAND = SOLO && SW > SH;
 const MODE_W = 56; // landscape: the mode column's width
 const ARC_H = LAND
@@ -101,9 +98,10 @@ const ARC_H = LAND
 const ARC_AVAIL_W = LAND ? THERMO_W - MODE_W - CGAP : THERMO_W;
 const ARC_MAX = LAYOUT === 'split' ? 400 : LAYOUT === 'stack' ? 360 : 300;
 const ARC_FIT_W = (ARC_H * 320) / 300; // widest box whose 320:300 height still fits the arc row
-const BOX_CAP = ARC_AVAIL_W < ARC_MAX ? ARC_AVAIL_W : ARC_MAX;
-const BOX_FIT = BOX_CAP < ARC_FIT_W ? BOX_CAP : ARC_FIT_W;
-const BOX_W = BOX_FIT < 120 ? 120 : BOX_FIT;
+const BOX_W = Math.max(
+  120,
+  Math.min(Math.min(ARC_AVAIL_W, ARC_MAX), ARC_FIT_W),
+);
 const BOX_H = (BOX_W * 300) / 320;
 const S = BOX_W / 320; // authoring unit → screen px
 

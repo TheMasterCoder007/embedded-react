@@ -42,18 +42,11 @@
 
 static const char* TAG = "embedded-react";
 
-/* Stringify for the screen-size assert below (two levels so the macro's VALUE is what lands in the text). */
-#define ER_STR2(x) #x
-#define ER_STR(x) ER_STR2(x)
-
 /* The generated app is shared: bridges/quickjs/js/dist/app.gen.c is one file that every board example
- * links, and a responsive demo folds its layout to the screen size at GENERATE time. Building this board
- * against an app.gen.c generated for another one otherwise compiles, links, boots — and lays out wrong.
- * app.gen.h records what it was generated for, so the mismatch is a compile error instead. */
-_Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LCD_HEIGHT,
-               "dist/app.gen.c was generated for a different screen than this board's panel. Regenerate it: "
-               "cd bridges/quickjs/js && ER_AOT_SCREEN_W=" ER_STR(BOARD_LCD_WIDTH) " ER_AOT_SCREEN_H=" ER_STR(
-                   BOARD_LCD_HEIGHT) " npm run aot -- thermostat");
+ * links. Values that depend only on the panel size are worked out at boot, but the layout a responsive demo
+ * picks is compiled for the panel it was generated at, so er_app_build() refuses a panel that picks another
+ * one (see er_app_fits()). Generate it for this board with:
+ *     cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat */
 
 /* app.gen.h also records WHICH demo it came from. A different demo's app.gen.c can still match this
  * panel size and link, leaving a board that boots someone else's UI (or fails on host setters it never
@@ -99,7 +92,21 @@ static void run_app(void)
     er_register_assets();
 
     /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
-    er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    if (!er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
+    {
+        /* The app was compiled for a panel that picks another layout; say so until someone reads the log. */
+        for (;;)
+        {
+            ESP_LOGE(TAG,
+                     "dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d "
+                     "panel. Regenerate it with the command at the top of main.c.",
+                     ER_AOT_SCREEN_W,
+                     ER_AOT_SCREEN_H,
+                     BOARD_LCD_WIDTH,
+                     BOARD_LCD_HEIGHT);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
     /* The software keyboard is compiled in via ERUI_ONSCREEN_KEYBOARD=1 (components/engine/CMakeLists.txt)
      * and auto-shows whenever a TextInput is focused — no runtime call needed. Customise its layout/colours
      * with er_keyboard_set_config(&cfg) here if desired. */

@@ -139,7 +139,20 @@ int main(void)
     er_app_set_wall_clock((int64_t)time(NULL) * 1000);
 
     /* Build the compiled app's scene graph (no JS — just er_scene.h calls baked at build time). */
-    er_app_build(phys_w, phys_h);
+    if (!er_app_build(phys_w, phys_h))
+    {
+        SDL_Log("dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d window. "
+                "Regenerate it with ER_AOT_SCREEN_W/H set to this size.",
+                ER_AOT_SCREEN_W,
+                ER_AOT_SCREEN_H,
+                phys_w,
+                phys_h);
+        er_sdl_backend_destroy();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
     SDL_Log("AOT app built at %dx%d (no QuickJS)", phys_w, phys_h);
     /* The on-screen keyboard is compiled into this host (ERUI_ONSCREEN_KEYBOARD=ON in CMakeLists.txt) and
      * auto-shows whenever a TextInput is focused. The host stays neutral — the app drives its layout/colours

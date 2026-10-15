@@ -40,18 +40,11 @@
 
 #include <stdio.h>
 
-/* Stringify for the screen-size assert below (two levels so the macro's VALUE is what lands in the text). */
-#define ER_STR2(x) #x
-#define ER_STR(x) ER_STR2(x)
-
 /* The generated app is shared: bridges/quickjs/js/dist/app.gen.c is one file that every board example
- * links, and a responsive demo folds its layout to the screen size at GENERATE time. Building this board
- * against an app.gen.c generated for another one otherwise compiles, links, boots — and lays out wrong.
- * app.gen.h records what it was generated for, so the mismatch is a compile error instead. */
-_Static_assert(ER_AOT_SCREEN_W == BOARD_LCD_WIDTH && ER_AOT_SCREEN_H == BOARD_LCD_HEIGHT,
-               "dist/app.gen.c was generated for a different screen than this board's panel. Regenerate it: "
-               "cd bridges/quickjs/js && ER_AOT_SCREEN_W=" ER_STR(BOARD_LCD_WIDTH) " ER_AOT_SCREEN_H=" ER_STR(
-                   BOARD_LCD_HEIGHT) " npm run aot -- watch-face");
+ * links. Values that depend only on the panel size are worked out at boot, but the layout a responsive demo
+ * picks is compiled for the panel it was generated at, so er_app_build() refuses a panel that picks another
+ * one (see er_app_fits()). Generate it for this board with:
+ *     cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face */
 
 /* app.gen.h also records WHICH demo it came from. This board's main.c calls that demo's useHostValue
  * setters, so an app.gen.c built from another demo fails as a pile of implicit-declaration errors for
@@ -208,7 +201,22 @@ int main(void)
     er_register_assets();
 
     /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
-    er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    if (!er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
+    {
+        /* The app was compiled for a panel that picks another layout. Repeat the reason, since USB serial
+         * may connect late, and keep the watchdog fed so it does not turn this into a boot loop. */
+        for (;;)
+        {
+            printf("dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d panel. "
+                   "Regenerate it with the command at the top of main.c.\n",
+                   ER_AOT_SCREEN_W,
+                   ER_AOT_SCREEN_H,
+                   BOARD_LCD_WIDTH,
+                   BOARD_LCD_HEIGHT);
+            watchdog_update();
+            sleep_ms(1000);
+        }
+    }
     printf("AOT app built at %dx%d (no QuickJS)\n", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
 
     /* Present the first frame while the backlight is still off, THEN light it — so the panel goes

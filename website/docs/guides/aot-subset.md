@@ -153,13 +153,19 @@ in the engine's C responder negotiation, so the compiled version is not a transp
 
 ## Assets and screen size
 
-Images and SVGs must be imports (`import logo from './logo.png'`). The panel size is baked in with
-`--screen WxH`, which seeds the `screen` global (without it the compiler warns and assumes
-800×480); every module-level constant derived from it folds
-with `+ - * /` and ternaries only, so write `a < b ? a : b` rather than `Math.min(a, b)` at module
-level. (`Math.*` is fine inside state-driven expressions.) Only the branch a board takes is
-compiled, so an import used solely in an untaken branch is fine, and a top-level `if (COMPACT)
-return ...` keeps a board's whole layout in one place.
+Images and SVGs must be imports (`import logo from './logo.png'`).
+
+Values derived from `screen.width` and `screen.height` (with `+ - * /`, comparisons, ternaries and
+`Math.min`, `max`, `floor`, `ceil`, `round`, `trunc` and `abs`) are worked out at boot from the real
+panel. A branch on `screen` whose two sides differ only in values (styles, props, `{text}`) is one
+tree whose values are picked at boot.
+
+A branch that changes the tree is compiled for one panel: the `--screen WxH` you build with
+(without it the compiler warns and assumes 800×480). Only that side is compiled, so an import used
+solely in the other side is fine, and a top-level `if (COMPACT) return ...` keeps a board's whole
+layout in one place. The same goes for a value the compiler has to know, such as a state's initial
+value or Svg geometry. `er_app_build()` checks these at boot: on a panel that picks another layout, 
+it builds nothing and returns `false`, and `er_app_fits(w, h)` asks the same without building.
 
 ## Where the subset is going
 

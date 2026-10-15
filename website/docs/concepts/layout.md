@@ -78,8 +78,8 @@ board, 800 on the largest. Two habits carry an app across that range.
 - **Read the size.** The host injects a `screen` global with `width` and `height`, and both flows
   let module-level constants derive from it. Pick paddings, font sizes and even whole layouts
   from `screen.width`, as the starter and the thermostat demo do, and one file fits every board.
-  In Flow B the size is baked at build time (`--screen 240x320`), so the compiler folds those
-  constants and emits only the branch that board takes.
+  In Flow B those values are worked out at boot, and only the layout the `--screen` size picks is
+  compiled, so one build fits every panel that picks the same layout.
 - **Let flexbox absorb the rest.** Percentages, `flex: 1` and `maxWidth` do the same job here
   as on a phone. A card that is `width: '100%'` with a `maxWidth` fills a small panel and centres
   on a large one without a second layout.

@@ -32,7 +32,9 @@ for (;;) {
 ```
 
 A Flow B firmware replaces the node building with the generated `er_app_build(w, h)` and adds
-`er_app_tick(dt)` for the app's timers. A Flow A firmware replaces it with `er_runtime`, which
+`er_app_tick(dt)` for the app's timers. `er_app_build()` returns `false`, having built nothing, when
+the panel picks another layout than the one the app was compiled for; `er_app_fits(w, h)` asks the
+same without building. A Flow A firmware replaces it with `er_runtime`, which
 builds the tree from JavaScript.
 
 ## Nodes and the tree
