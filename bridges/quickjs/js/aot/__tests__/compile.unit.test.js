@@ -2959,6 +2959,43 @@ import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embed
   });
 });
 
+describe('AOT Pressable disabled', () => {
+  const P = `import { useState } from 'react';
+import { View, Text, Pressable } from 'embedded-react';
+`;
+
+  it('compiles a disabled Pressable with no event handlers', () => {
+    const c = gen(`${P}
+      export function App() {
+        return (<Pressable disabled onPress={() => {}} onLongPress={() => {}}><Text>x</Text></Pressable>);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_PRESSABLE)');
+    expect(c).not.toContain('er_event_set(');
+  });
+
+  it('rejects a state-driven disabled on Pressable', () => {
+    expect(() =>
+      gen(`${P}
+        export function App() {
+          const [d, setD] = useState(true);
+          return (<Pressable disabled={d} onPress={() => setD(false)}><Text>x</Text></Pressable>);
+        }`),
+    ).toThrow(/disabled> must be a compile-time constant/);
+  });
+
+  it('keeps a disabled Pressable children, layout and style intact', () => {
+    const c = gen(`${P}
+      export function App() {
+        return (<Pressable disabled style={{padding: 8, opacity: 0.8}}><Text>label</Text></Pressable>);
+      }`);
+    expect(c).toContain('er_node_create(ER_NODE_TEXT)');
+    expect(c).toContain('"label"');
+    expect(c).toContain('p.padding = 8;');
+    expect(c).toContain('p.opacity = 204;');
+    expect(c).not.toContain('er_event_set(');
+  });
+});
+
 describe('AOT callback props', () => {
   const C = `import { useState } from 'react';
 import { View, Text, Pressable } from 'embedded-react';

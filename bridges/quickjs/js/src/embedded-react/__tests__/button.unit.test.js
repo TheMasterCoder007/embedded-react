@@ -16,6 +16,7 @@
 
 import {describe, it, expect, vi, afterEach} from 'vitest';
 import {Button} from '../Button.js';
+import {Pressable} from '../Pressable.js';
 import {flattenStyleObj} from '../../props.js';
 
 // Button is a plain component, so calling it IS the render — no reconciler needed. What matters is the
@@ -33,7 +34,7 @@ afterEach(() => vi.restoreAllMocks());
 describe('Button renders as a Pressable + Text', () => {
   it('returns a Pressable wrapping exactly one Text', () => {
     const el = render({title: 'Save'});
-    expect(el.type).toBe('Pressable');
+    expect(el.type).toBe(Pressable);
     expect(label(el).type).toBe('Text');
     expect(label(el).props.children).toBe('Save');
   });
@@ -81,12 +82,17 @@ describe('Button color and disabled', () => {
     expect(flat(label(el)).color).toBe('#a1a1a1');
   });
 
-  // `disabled` is inert on a Pressable node (the engine has no such flag), so withholding the handler
-  // is the only thing that actually stops the press.
-  it('detaches onPress when disabled', () => {
+  // Button forwards `disabled` and `onPress` to Pressable, which drops the press handler when disabled.
+  it('forwards disabled and onPress to Pressable', () => {
     const onPress = () => {};
+    expect(render({title: 'x', onPress, disabled: true}).props.disabled).toBe(
+      true,
+    );
     expect(render({title: 'x', onPress, disabled: true}).props.onPress).toBe(
-      undefined,
+      onPress,
+    );
+    expect(render({title: 'x', onPress, disabled: false}).props.disabled).toBe(
+      false,
     );
     expect(render({title: 'x', onPress, disabled: false}).props.onPress).toBe(
       onPress,

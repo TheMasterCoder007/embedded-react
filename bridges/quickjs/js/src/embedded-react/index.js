@@ -26,7 +26,6 @@ export {
   Text,
   Image,
   ScrollView,
-  Pressable,
   TextInput,
   Switch,
   ActivityIndicator,
@@ -41,6 +40,7 @@ export {
   G,
   Arc,
 } from './components.js';
+export {Pressable} from './Pressable.js';
 export {Button} from './Button.js';
 export {TouchableOpacity} from './TouchableOpacity.js';
 export {FlatList} from './FlatList.js';

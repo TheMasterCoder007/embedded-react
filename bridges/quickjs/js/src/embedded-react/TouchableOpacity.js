@@ -37,13 +37,13 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import {Pressable} from './components.js';
+import {Pressable} from './Pressable.js';
 import {timing, useAnimatedValue} from './Animated.js';
 import {Easing} from './Easing.js';
 import {flattenStyleObj} from '../props.js';
 
 // RN's own numbers (Libraries/Components/Touchable/TouchableOpacity.js): the dim lands on touch-down
-// with no ramp at all, and fades back over a quarter second once the finger lifts.
+// with no ramp at all and fades back over a quarter second once the finger lifts.
 const DEFAULT_ACTIVE_OPACITY = 0.2;
 const DIM_MS = 0;
 const RESTORE_MS = 250;
@@ -140,13 +140,10 @@ export const TouchableOpacity = forwardRef(
       ref,
       style: composedStyle,
       disabled,
-      // `disabled` here is RN's: no press, and no feedback with it. Withholding the handlers is what
-      // actually does that — the engine has no such node flag, so a Pressable left holding onPress still
-      // fires (the same reason <Button> withholds its own).
-      onPress: disabled ? undefined : onPress,
-      onLongPress: disabled ? undefined : onLongPress,
-      onPressIn: disabled ? undefined : handlePressIn,
-      onPressOut: disabled ? undefined : handlePressOut,
+      onPress,
+      onLongPress,
+      onPressIn: handlePressIn,
+      onPressOut: handlePressOut,
     });
   },
 );

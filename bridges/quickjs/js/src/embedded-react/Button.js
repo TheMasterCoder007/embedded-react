@@ -29,7 +29,8 @@
 // the same: drop to <Pressable> + <Text> and style them yourself. `color` and `disabled` are the two
 // knobs, exactly as upstream.
 import {createElement} from 'react';
-import {Pressable, Text} from './components.js';
+import {Text} from './components.js';
+import {Pressable} from './Pressable.js';
 import {createPropWarner, RN_PLATFORM_NO_OPS} from './warn-props.js';
 
 // RN's Button styles are Platform.select({ios, android}) and Platform.OS is 'embedded', so neither
@@ -85,9 +86,7 @@ export function Button(props = {}) {
     {
       style: buttonStyles,
       disabled,
-      // Withholding the handler is what actually disables the button: `disabled` is a Pressable prop
-      // in name only (the engine has no such node flag), so a node left holding onPress still fires.
-      onPress: disabled ? undefined : onPress,
+      onPress,
     },
     createElement(
       Text,
