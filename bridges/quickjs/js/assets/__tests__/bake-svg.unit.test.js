@@ -232,6 +232,23 @@ describe('bake-svg: svgToVector', () => {
     ]).toEqual([50, 50]); // default cx=0.5, cy=0.5 -> center (50, 50)
   });
 
+  it('falls back to default coordinates when gradient attributes are infinite', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10">' +
+        '<defs><linearGradient id="g" x1="-Infinity" y1="1e999" x2="Infinity" y2="1e999%"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
+        '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
+        '</svg>',
+    );
+    expect(a.gradients).toHaveLength(1);
+    const g = a.gradients[0];
+    expect([
+      Math.round(g.ax),
+      Math.round(g.ay),
+      Math.round(g.bx),
+      Math.round(g.by),
+    ]).toEqual([0, 0, 10, 0]);
+  });
+
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
     const a = await svgToVector(
       '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>',

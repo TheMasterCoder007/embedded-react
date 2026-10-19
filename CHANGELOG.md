@@ -13,6 +13,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - In Flow A (QuickJS), `<Pressable disabled>` now withholds its press event handlers (`onPress`, `onLongPress`, `onPressIn`, `onPressOut`) so the engine skips the node during touch hit-testing, matching React Native and Flow B behavior.
+- An `.svg` gradient coordinate that does not parse (`x1="abc"`) now takes its SVG default instead of
+  being drawn as 0, so a bad `x2` no longer collapses the gradient to a flat color.
 
 ## [0.17.0] - 2026-10-15
 ### Added
