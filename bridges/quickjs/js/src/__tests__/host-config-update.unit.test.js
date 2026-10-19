@@ -310,6 +310,16 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
     expect(calls.setProps[0].p.imageName).toBe('logo.png');
     expect(calls.setVectorOps).toHaveLength(0); // raster never uploads a tape
   });
+
+  it('<Image> with a constant source: a style change re-applies its imageName', () => {
+    const ui = width => el('Image', {source: 'logo', style: {width}});
+    const update = mount(ui(20));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui(40));
+    expect(calls.setProps).toHaveLength(1);
+    expect(calls.setProps[0].p.imageName).toBe('logo');
+  });
 });
 
 describe('prepareUpdate diffing: Animated.Value binding stays correct', () => {

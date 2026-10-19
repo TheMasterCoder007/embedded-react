@@ -782,7 +782,7 @@ function emitNodeImpl(
       image?.imageNameDyn != null
         ? {kind: 'value', value: image.imageNameDyn}
         : image?.imageName != null
-          ? {kind: 'static', name: image.imageName, resetOnUpdate: false}
+          ? {kind: 'static', name: image.imageName}
           : null,
     spans,
     wiring,

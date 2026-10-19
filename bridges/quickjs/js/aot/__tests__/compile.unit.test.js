@@ -3139,6 +3139,20 @@ import logo from './assets/logo.png';
     expect(r.images).toEqual([{name: 'logo', importPath: './assets/logo.png'}]);
   });
 
+  // A state-driven style keeps the node's handle and app_update() sets all its props from er_props_default,
+  // so the constant name must be written there too, or the image never shows.
+  it('sets a constant image name in app_update when state drives the style', () => {
+    const c = compileSource(
+      `${IMG}import { useState } from 'react';\nexport function App() { const [on] = useState(false); ` +
+        `return (<Image source={logo} style={{ width: on ? 40 : 20, height: 40 }} />); }`,
+      'demo',
+    ).c;
+    const update = c.slice(c.indexOf('static void app_update(void)\n{'));
+    expect(update).toContain(
+      'snprintf(p.image_name, sizeof(p.image_name), "%s", "logo");',
+    );
+  });
+
   it('lowers resizeMode to the ERResizeMode enum', () => {
     const r = compileSource(
       `${IMG}\nexport function App() { return (<Image source={logo} resizeMode="contain" />); }`,

@@ -372,10 +372,7 @@ export function emitDial(
     stateProps: dynAssigns,
     placeholder: null,
     text: null,
-    image:
-      knobImage != null
-        ? {kind: 'static', name: knobImage, resetOnUpdate: true}
-        : null,
+    image: knobImage != null ? {kind: 'static', name: knobImage} : null,
     spans: null,
     children: [],
     wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),

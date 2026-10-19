@@ -1476,7 +1476,7 @@ function emitSvgSource(
       scope,
       env,
     );
-    node.image = {kind: 'static', name: artifact.name, resetOnUpdate: false};
+    node.image = {kind: 'static', name: artifact.name};
     return node;
   }
 

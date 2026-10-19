@@ -79,11 +79,10 @@ export type IrPropValue =
 
 /**
  * An image to show: a name known at build time, or a string read from state or a list item. A node state drives
- * sets its props again on every update; `resetOnUpdate` is false where that loses a constant name (a host
- * <Image>, a known bug).
+ * sets its props again on every update, the name included.
  */
 export type IrImageName =
-  | {kind: 'static'; name: string; resetOnUpdate: boolean}
+  | {kind: 'static'; name: string}
   | {kind: 'value'; value: IrExpr};
 
 /** Something wired onto a node once it exists, in the order the element wires it. */

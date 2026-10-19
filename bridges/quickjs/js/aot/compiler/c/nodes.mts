@@ -191,7 +191,7 @@ export function printNode(node: IrNode): PrintedNode {
   const imageName =
     node.image?.kind === 'value'
       ? printExpr(node.image.value)
-      : node.image?.resetOnUpdate
+      : node.image
         ? cstr(node.image.name)
         : null;
   const build = [`    ${id} = er_node_create(${node.type});`];
@@ -215,8 +215,7 @@ export function printNode(node: IrNode): PrintedNode {
           styleAssigns: node.constantProps,
           text,
           dynAssigns: node.stateProps,
-          imageName:
-            node.image?.kind === 'static' ? cstr(node.image.name) : imageName,
+          imageName,
           placeholder: node.placeholder,
         },
         id,
