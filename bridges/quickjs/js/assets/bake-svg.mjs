@@ -303,11 +303,12 @@ function urlRef(v) {
   return m ? m[1] : null;
 }
 
-/** A gradient coordinate: "50%" -> 0.5; a plain number passes through. */
+/** A gradient coordinate: "50%" -> 0.5; a plain number passes through; NaN falls back to dflt. */
 function gradCoord(v, dflt) {
   if (v == null) return dflt;
   const s = String(v).trim();
-  return s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
+  const n = s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s);
+  return Number.isNaN(n) ? dflt : n;
 }
 
 /** Local-space bounding box of a path-op array (no SHAPE header; MOVE/LINE/QUAD/CUBIC, CLOSE has no args). */

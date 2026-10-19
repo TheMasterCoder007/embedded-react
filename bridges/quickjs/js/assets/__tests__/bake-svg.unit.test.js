@@ -187,6 +187,51 @@ describe('bake-svg: svgToVector', () => {
     expect(a.paints[8]).toBe(1); // stroke_grad = 1 (the 9th paint field)
   });
 
+  it('falls back to default coordinates when <linearGradient> attributes evaluate to NaN', async () => {
+    const a = await svgToVector(
+      '<svg viewBox="0 0 10 10">' +
+        '<defs><linearGradient id="g" x1="abc" y1="invalid" x2="bad" y2="none"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
+        '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
+        '</svg>',
+    );
+    expect(a.gradients).toHaveLength(1);
+    const g = a.gradients[0];
+    // Defaults: x1=0, y1=0, x2=1, y2=0 mapped onto bbox (0,0,10,10) -> (0,0) to (10,0)
+    expect([
+      Math.round(g.ax),
+      Math.round(g.ay),
+      Math.round(g.bx),
+      Math.round(g.by),
+    ]).toEqual([0, 0, 10, 0]);
+  });
+
+  it('falls back to default coordinates when <radialGradient> and <conicGradient> attributes evaluate to NaN', async () => {
+    const rad = await svgToVector(
+      '<svg viewBox="0 0 100 100">' +
+        '<defs><radialGradient id="r" cx="bad" cy="abc" r="xyz"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient></defs>' +
+        '<rect x="0" y="0" width="100" height="100" fill="url(#r)"/>' +
+        '</svg>',
+    );
+    expect(rad.gradients).toHaveLength(1);
+    expect([
+      Math.round(rad.gradients[0].ax),
+      Math.round(rad.gradients[0].ay),
+    ]).toEqual([50, 50]); // default cx=0.5, cy=0.5 -> center (50, 50)
+    expect(rad.gradients[0].r).toBeCloseTo(50, 1); // default r=0.5 * 100 = 50
+
+    const conic = await svgToVector(
+      '<svg viewBox="0 0 100 100">' +
+        '<defs><conicGradient id="c" cx="invalid" cy="bad"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></conicGradient></defs>' +
+        '<rect x="0" y="0" width="100" height="100" fill="url(#c)"/>' +
+        '</svg>',
+    );
+    expect(conic.gradients).toHaveLength(1);
+    expect([
+      Math.round(conic.gradients[0].ax),
+      Math.round(conic.gradients[0].ay),
+    ]).toEqual([50, 50]); // default cx=0.5, cy=0.5 -> center (50, 50)
+  });
+
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
     const a = await svgToVector(
       '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>',
