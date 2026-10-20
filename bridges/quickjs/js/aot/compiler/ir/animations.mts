@@ -87,6 +87,18 @@ export interface IrCompletionWait {
 }
 
 /**
+ * A run whose animations have no fixed end (a spring or decay) besides a delay that may end later, so it is
+ * joined at run time: the completion runs as finished once the delay has passed and every animation has
+ * finished, whichever is last, and as not finished as soon as one is interrupted.
+ */
+export interface IrCompletionJoin {
+  /** Milliseconds from the start until the composition's last delay ends. */
+  delayMs: number;
+  /** The composition the run belongs to, which a stop names to end it. */
+  owner: number;
+}
+
+/**
  * Animations started together, a composition (parallel / stagger / delay) already folded into their delays.
  * The completion runs when the last one ends; there is at most one when there is a completion.
  */
@@ -97,6 +109,8 @@ export interface IrStartAnimations {
   firstConfig: number;
   completion: IrCompletion | null;
   completionWait: IrCompletionWait | null;
+  /** Set instead of completionWait when the wait cannot be known at build time. */
+  completionJoin: IrCompletionJoin | null;
 }
 
 /** How a chain repeats. */

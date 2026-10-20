@@ -51,6 +51,7 @@ export interface ChainFunctions {
  * @param animation  The animation.
  * @param configName  The config's name, unique within the function.
  * @param onComplete  The C function to run when it completes, or null.
+ * @param userData  What the engine passes that function as user_data, or null.
  *
  * @returns The C block.
  */
@@ -58,6 +59,7 @@ export function printAnimation(
   animation: IrAnimation,
   configName: string,
   onComplete: string | null,
+  userData: string | null = null,
 ): string[] {
   const set = (field: string, value: string) =>
     `        ${configName}.${field} = ${value};`;
@@ -106,6 +108,9 @@ export function printAnimation(
   }
   if (onComplete) {
     lines.push(set('on_complete', onComplete));
+  }
+  if (userData) {
+    lines.push(set('on_complete_user_data', userData));
   }
 
   // Decay with no target is given the value it holds now.
@@ -161,25 +166,28 @@ export function printWaitDeclarations(callers: string): string {
 #endif
 
 /* The wait between a run's last animation and its completion: the composition it belongs to (which a stop
-   names), the time left and the completion it runs. */
+   names), the time left, the animations of a joined run still running, and the completion it runs. */
 typedef struct
 {
     int remaining_ms;
     int owner;
     ERAnimCompleteFn done;
     uint8_t state;
+    uint8_t parts;
 } ErAnimWait;
 enum
 {
     APP_WAIT_FREE,
     APP_WAIT_PENDING,
     APP_WAIT_DUE,
-    APP_WAIT_STOPPING
+    APP_WAIT_STOPPING,
+    /* A joined run that has completed, kept until its animations still running have reported. */
+    APP_WAIT_DRAINING
 };
 static ErAnimWait s_waits[ER_AOT_MAX_WAITS];
 
-/* Starts a wait for one run; runs never share one. */
-static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
+/* Takes a free wait for one run; runs never share one. */
+static int app_wait_claim(int owner, int ms, int parts, ERAnimCompleteFn done)
 {
     for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
     {
@@ -188,8 +196,9 @@ static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
             s_waits[i].remaining_ms = ms;
             s_waits[i].owner = owner;
             s_waits[i].done = done;
+            s_waits[i].parts = (uint8_t)parts;
             s_waits[i].state = APP_WAIT_PENDING;
-            return;
+            return i;
         }
     }
 
@@ -202,21 +211,22 @@ static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
         done(false, NULL);
         s_reporting_full = false;
     }
+    return -1;
 }
 
-/* Counts down every wait, then completes the ones that ran out. A wait a completion starts here waits its
-   full time. */
+/* Counts down every wait, then completes the ones that ran out. A joined run that runs out first holds until
+   its animations finish. A wait a completion starts here waits its full time. */
 static void app_wait_tick(int dt_ms)
 {
     for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
     {
-        if (s_waits[i].state == APP_WAIT_PENDING)
+        if (s_waits[i].state == APP_WAIT_PENDING && s_waits[i].remaining_ms > 0)
         {
             s_waits[i].remaining_ms -= dt_ms;
-            if (s_waits[i].remaining_ms <= 0)
-            {
-                s_waits[i].state = APP_WAIT_DUE;
-            }
+        }
+        if (s_waits[i].state == APP_WAIT_PENDING && s_waits[i].remaining_ms <= 0 && s_waits[i].parts == 0)
+        {
+            s_waits[i].state = APP_WAIT_DUE;
         }
     }
     for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
@@ -229,6 +239,60 @@ static void app_wait_tick(int dt_ms)
     }
 }`,
   ];
+  if (callers.includes('app_wait_start(')) {
+    blocks.push(`/* Starts the wait between a run's last animation and its completion. */
+static void app_wait_start(int owner, int ms, ERAnimCompleteFn done)
+{
+    (void)app_wait_claim(owner, ms, 0, done);
+}`);
+  }
+  if (callers.includes('app_wait_join(')) {
+    blocks.push(`/* Starts a run that waits for its animations as well as its delay: it completes as finished once ms have passed
+   and all of its parts (animations) have finished, and as not finished as soon as one is interrupted. Each
+   animation runs app_wait_part when it ends, with what this returns as its user_data (NULL: the table was full,
+   so the run has already ended). */
+static void* app_wait_join(int owner, int ms, int parts, ERAnimCompleteFn done)
+{
+    const int i = app_wait_claim(owner, ms, parts, done);
+    return i < 0 ? NULL : (void*)(intptr_t)(i + 1);
+}
+
+/* An animation of a joined run has ended. */
+static void app_wait_part(bool finished, void* user_data)
+{
+    if (!user_data)
+    {
+        return;
+    }
+
+    ErAnimWait* wait = &s_waits[(intptr_t)user_data - 1];
+    wait->parts--;
+    if (wait->state == APP_WAIT_DRAINING)
+    {
+        if (wait->parts == 0)
+        {
+            wait->state = APP_WAIT_FREE;
+        }
+        return;
+    }
+
+    /* A stop in progress reports the run itself (see app_wait_report). */
+    if (wait->state != APP_WAIT_PENDING)
+    {
+        return;
+    }
+    if (!finished)
+    {
+        wait->state = wait->parts ? APP_WAIT_DRAINING : APP_WAIT_FREE;
+        wait->done(false, NULL);
+    }
+    else if (wait->parts == 0 && wait->remaining_ms <= 0)
+    {
+        wait->state = APP_WAIT_FREE;
+        wait->done(true, NULL);
+    }
+}`);
+  }
   if (callers.includes('app_wait_detach(')) {
     blocks.push(`/* A stop's two halves: detach the composition's waits, then report them as not finished. Anything a
    completion in between starts is a new run, which the stop leaves alone. */
@@ -250,7 +314,7 @@ static void app_wait_report(int owner)
     {
         if (s_waits[i].owner == owner && s_waits[i].state == APP_WAIT_STOPPING)
         {
-            s_waits[i].state = APP_WAIT_FREE;
+            s_waits[i].state = s_waits[i].parts ? APP_WAIT_DRAINING : APP_WAIT_FREE;
             s_waits[i].done(false, NULL);
         }
     }
@@ -436,6 +500,24 @@ export function printAnimationStart(start: IrAnimationStart): string[] {
       // A completion nothing can run (an endless loop of delays) is still referenced, so -Werror builds pass.
       if (!start.animations.length) {
         return start.completion ? [`    (void)${start.completion.name};`] : [];
+      }
+
+      // A joined run takes its wait first, and every animation reports to it.
+      const join = start.completionJoin;
+      if (join && start.completion) {
+        return [
+          '    {',
+          `        void* join = app_wait_join(${join.owner}, ${join.delayMs}, ${start.animations.length}, ${start.completion.name});`,
+          ...start.animations.flatMap((animation, index) =>
+            printAnimation(
+              animation,
+              `cfg${start.firstConfig + index}`,
+              'app_wait_part',
+              'join',
+            ).map(line => `    ${line}`),
+          ),
+          '    }',
+        ];
       }
 
       // The completion (or its wait) goes on the last animation, the only one when there is a completion.

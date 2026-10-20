@@ -353,14 +353,35 @@ describe('animation IR: completions', () => {
     ]);
   });
 
-  it('rejects a callback on a spring or decay beside a delay that runs past its start', () => {
-    for (const source of [
-      'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]).start(() => setN(1));',
-      'Animated.stagger(100, [Animated.decay(c, {velocity: 1}), Animated.delay(50), Animated.delay(60)]).start(() => setN(1));',
-    ]) {
-      expect(() => lowerBody(source)).toThrow(
-        /beside a longer Animated\.delay is not yet supported/,
+  it('joins a spring or decay with a delay beside it that runs past its start', () => {
+    const cases = [
+      [
+        'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)])',
+        500,
+      ],
+      [
+        'Animated.stagger(100, [Animated.decay(c, {velocity: 1}), Animated.delay(50), Animated.delay(60)])',
+        260,
+      ],
+    ];
+    for (const [animation, delayMs] of cases) {
+      const {stmt, ctx} = lowerOne(`${animation}.start(() => setN(1));`);
+      expect(stmt.completionWait).toBeNull();
+      expect(stmt.completionJoin).toEqual({delayMs, owner: 0});
+      expect([...ctx.out.animWaits.values()]).toEqual([
+        {owner: 0, isStarted: true},
+      ]);
+
+      // The animation reports to the run's join rather than to the completion; no callback of its own is added.
+      const c = printStmts([stmt], '    ');
+      expect(c[0]).toBe('    {');
+      expect(c[1]).toBe(
+        `        void* join = app_wait_join(0, ${delayMs}, 1, er_donecb_0);`,
       );
+      expect(c).toContain('            cfg0.on_complete = app_wait_part;');
+      expect(c).toContain('            cfg0.on_complete_user_data = join;');
+      expect(c.at(-1)).toBe('    }');
+      expect(callbacksOf(ctx).map(fn => fn.name)).toEqual(['er_donecb_0']);
     }
 
     // A delay that is over before the spring starts leaves nothing to wait for, and no callback is fine too.
@@ -368,8 +389,22 @@ describe('animation IR: completions', () => {
       'Animated.stagger(100, [Animated.delay(50), Animated.spring(a, {toValue: 1})]).start(() => setN(1));',
       'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]).start();',
     ]) {
-      expect(lowerOne(source).stmt.completionWait).toBeNull();
+      const {stmt} = lowerOne(source);
+      expect(stmt.completionWait).toBeNull();
+      expect(stmt.completionJoin).toBeNull();
     }
+  });
+
+  it('ends a joined run through a stop of its composition', () => {
+    const {stmts} = lowerBody(
+      'const pop = Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]); pop.start(() => setN(1)); pop.stop();',
+    );
+    expect(stmts[0].completionJoin.owner).toBe(0);
+    expect(printStmts([stmts[1]], '    ')).toEqual([
+      '    app_wait_detach(0);',
+      '    er_anim_value_set(s_av_a, er_anim_value_get(s_av_a));',
+      '    app_wait_report(0);',
+    ]);
   });
 
   it('adds no wait when the animation outlasts every delay, or nothing waits on it', () => {

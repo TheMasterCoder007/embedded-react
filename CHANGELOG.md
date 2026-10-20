@@ -18,6 +18,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: an `<Image>` with a constant source and a state-driven style (or an `<Svg>` drawn from a raster
   fallback with one) now shows its image. `app_update()` sets the node's props from defaults and left the
   constant image name out.
+- Flow B: a `.start(onComplete)` on a spring or decay beside a longer delay
+  (`Animated.parallel([Animated.spring(b, {toValue: 1}), Animated.delay(500)])`) compiles and calls its
+  callback once both the spring and the delay have ended, whichever is last, as Flow A does. Interrupting
+  or stopping the spring calls it at once with `finished: false`. It was an `AOT:` error since 0.16.0.
 
 ## [0.17.0] - 2026-10-15
 ### Added

@@ -242,8 +242,8 @@ describe('AOT generated C compiles', () => {
          }`,
         'loops',
       );
-      // Completion waits: a sequence's trailing delay stopped by a cleanup, a delay alone, and a stop of a
-      // composition nothing waits on (its slot is dropped).
+      // Completion waits: a sequence's trailing delay stopped by a cleanup, a delay alone, a stop of a
+      // composition nothing waits on (its slot is dropped), and a spring joined with a longer delay.
       const waits = compileSource(
         `import { useState, useEffect } from 'react';
          import { View, Animated, useAnimatedValue } from 'embedded-react';
@@ -260,6 +260,7 @@ describe('AOT generated C compiles', () => {
                onPress={() => {
                  Animated.delay(500).start(() => setN(3));
                  Animated.parallel([Animated.timing(a, { toValue: 0 }), Animated.delay(900)]).stop();
+                 Animated.parallel([Animated.spring(a, { toValue: 1 }), Animated.delay(400)]).start(() => setN(4));
                }}
                style={{ flex: 1, opacity: a, width: n }}
              />
@@ -268,9 +269,10 @@ describe('AOT generated C compiles', () => {
         'waits',
       );
       expect(waits.c).toContain('app_wait_start(0, 500, er_donecb_0);');
-      expect(waits.c).toContain('app_wait_detach(2);');
+      expect(waits.c).toContain('app_wait_detach(3);');
       expect(waits.c).toContain('app_wait_tick(dt_ms);');
       expect(waits.c).not.toContain('app_wait_detach(1);');
+      expect(waits.c).toContain('app_wait_join(2, 400, 1, er_donecb_1);');
       for (const [name, r] of [
         [
           'starter',
@@ -396,6 +398,106 @@ int main(void)
         // detach and report, survives; a run that finds the table full ends at once, as not finished.
         expect(run.stdout.trim()).toBe(
           'A+A+|A-B+|R-B+|A-B+|A-/' + 'B+'.repeat(8),
+        );
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a joined run completes when its animation and its delay have both ended (${CC || 'no cc found'})`,
+    () => {
+      // Runs the join helpers, standing in for the engine: app_wait_part is what an animation's on_complete calls.
+      const harness = `#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+typedef void (*ERAnimCompleteFn)(bool finished, void* user_data);
+${printWaitDeclarations('app_wait_start( app_wait_join( app_wait_detach(')}
+
+static char s_log[256];
+static void done_a(bool finished, void* user_data)
+{
+    (void)user_data;
+    strcat(s_log, finished ? "A+" : "A-");
+}
+static void done_b(bool finished, void* user_data)
+{
+    (void)user_data;
+    strcat(s_log, finished ? "B+" : "B-");
+}
+
+int main(void)
+{
+    void* join = app_wait_join(0, 500, 1, done_a);
+    app_wait_part(true, join);
+    app_wait_tick(300);
+    strcat(s_log, ".");
+    app_wait_tick(250);
+    strcat(s_log, "|");
+
+    join = app_wait_join(0, 100, 1, done_a);
+    app_wait_tick(200);
+    strcat(s_log, ".");
+    app_wait_part(true, join);
+    strcat(s_log, "|");
+
+    join = app_wait_join(0, 500, 1, done_a);
+    app_wait_part(false, join);
+    app_wait_tick(600);
+    strcat(s_log, "|");
+
+    join = app_wait_join(1, 500, 1, done_a);
+    app_wait_detach(1);
+    app_wait_part(false, join);
+    strcat(s_log, ".");
+    app_wait_report(1);
+    app_wait_tick(600);
+    strcat(s_log, "|");
+
+    join = app_wait_join(1, 500, 1, done_a);
+    app_wait_part(true, join);
+    app_wait_detach(1);
+    app_wait_report(1);
+    app_wait_tick(600);
+    strcat(s_log, "|");
+
+    join = app_wait_join(0, 100, 2, done_a);
+    app_wait_part(false, join);
+    app_wait_part(true, join);
+    app_wait_tick(200);
+    strcat(s_log, "|");
+
+    for (int i = 0; i < ER_AOT_MAX_WAITS; i++)
+    {
+        app_wait_start(3, 100, done_b);
+    }
+    join = app_wait_join(3, 100, 1, done_a);
+    app_wait_part(true, join);
+    strcat(s_log, join ? "?" : "/");
+    app_wait_tick(200);
+    puts(s_log);
+    return 0;
+}
+`;
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-joins-'));
+      try {
+        writeFileSync(join(dir, 'joins.c'), harness);
+        const exe = join(dir, 'joins.exe');
+        const build = spawnSync(
+          CC,
+          ['-Wall', '-Werror', join(dir, 'joins.c'), '-o', exe],
+          {encoding: 'utf8'},
+        );
+        expect(build.stderr || '').toBe('');
+        expect(build.status).toBe(0);
+        const run = spawnSync(exe, [], {encoding: 'utf8'});
+        // Whichever ends last completes the run; an interruption or a stop ends it at once, as not finished, and
+        // only once; a run kept until its last animation reports frees its wait, as every run above does (the
+        // table then holds eight more); a run that finds the table full ends at once.
+        expect(run.stdout.trim()).toBe(
+          '.A+|.A+|A-|.A-|A-|A-|A-/' + 'B+'.repeat(8),
         );
       } finally {
         rmSync(dir, {recursive: true, force: true});
