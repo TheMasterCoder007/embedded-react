@@ -27,6 +27,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `Animated.stagger(ms, …)` interval) fails with an `AOT:` error that names it and points at it, as do the
   times of a composition, or of a counted loop's passes, that add up past the int range. It used to be
   written into the generated C as it was (`duration_ms = NaN;`), which does not build.
+- Flow B: a screen size or buffer cap that isn't a whole number in range (`ER_AOT_LIST_CAP=-1`,
+  `ER_AOT_LIST_STR_CAP=1.5`, a `--screen` dimension past 32767) fails with an `AOT:` error that names the
+  option or variable. Screen dimensions and `listCap` / `listStrCap` take 1–32767, `maxTextSpans` 1–255. They
+  used to be written into the generated C as they were (`s_items[-1]`), which does not build, and a
+  variable that didn't parse silently took its default; only a blank one does now.
 
 ## [0.17.0] - 2026-10-15
 ### Added

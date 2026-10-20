@@ -57,8 +57,53 @@ export interface ResolvedOptions extends CompileOptions {
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * The largest value each size or cap takes; the smallest is 1. Screen dimensions end up in int16_t props, a
+ * list's row count and a string buffer's size in a C `int`, and a nested <Text>'s segment count in the
+ * engine's uint8_t `span_count`.
+ */
+const MAX_SCREEN = 32767;
+const MAX_LIST_CAP = 32767;
+const MAX_LIST_STR_CAP = 32767;
+const MAX_TEXT_SPANS = 255;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Checks that a size or cap is a whole number from 1 to `max`, since it is written into the generated C as a
+ * `#define` or an array size.
+ *
+ * @param value  The value, as the option or the parsed variable gave it.
+ * @param name  The option or variable, as the error names it.
+ * @param max  The largest value allowed.
+ * @param shown  The value as the error shows it. Defaults to `value`.
+ *
+ * @returns The value, when it is in range.
+ */
+function wholeInRange(
+  value: unknown,
+  name: string,
+  max: number,
+  shown: string = String(value),
+): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > max
+  ) {
+    throw new Error(
+      `AOT: ${name} must be a whole number from 1 to ${max}, got ${shown}`,
+    );
+  }
+
+  return value;
+}
 
 /**
  * compileSource's options with the target screen and the fixed-buffer caps filled in. Each one the caller
@@ -73,29 +118,72 @@ export interface ResolvedOptions extends CompileOptions {
  *   maxTextSpans  ER_AOT_MAX_TEXT_SPANS   4        Inline segments in a nested <Text>. Must match the
  *                                                  engine's ER_TEXT_MAX_SPANS.
  *
+ * Each value must be a whole number from 1 up: to 32767 for the screen and the list caps, to 255 for
+ * maxTextSpans. One that isn't, from the options or a variable, is an `AOT:` error that names it.
+ *
  * @param opts  The options the caller passed.
  *
  * @returns The same options with every value filled in.
  */
 export function resolveOptions(opts: CompileOptions): ResolvedOptions {
-  // A blank or unparsable variable falls back to the default for that value alone.
-  const fromEnv = (name: string, fallback: number): number =>
-    Number(process.env[name]) || fallback;
-  const screenFromEnv =
-    Number(process.env.ER_AOT_SCREEN_W) > 0 &&
-    Number(process.env.ER_AOT_SCREEN_H) > 0;
+  // An unset or blank variable falls back to the default; any other value must parse to one in range.
+  const isSet = (name: string): boolean =>
+    (process.env[name] ?? '').trim() !== '';
+  const fromEnv = (name: string, fallback: number, max: number): number => {
+    if (!isSet(name)) return fallback;
+    const raw = process.env[name] as string;
+    return wholeInRange(Number(raw), name, max, JSON.stringify(raw));
+  };
+  const fromOption = (
+    value: number | undefined,
+    name: string,
+    envName: string,
+    fallback: number,
+    max: number,
+  ): number =>
+    value != null
+      ? wholeInRange(value, name, max)
+      : fromEnv(envName, fallback, max);
+
   return {
     ...opts,
-    screen: opts.screen ?? {
-      width: fromEnv('ER_AOT_SCREEN_W', 800),
-      height: fromEnv('ER_AOT_SCREEN_H', 480),
-    },
+    screen: opts.screen
+      ? {
+          width: wholeInRange(opts.screen.width, 'screen.width', MAX_SCREEN),
+          height: wholeInRange(opts.screen.height, 'screen.height', MAX_SCREEN),
+        }
+      : {
+          width: fromEnv('ER_AOT_SCREEN_W', 800, MAX_SCREEN),
+          height: fromEnv('ER_AOT_SCREEN_H', 480, MAX_SCREEN),
+        },
     // Where the size came from, for the error footer: 'option', 'env' (both dimensions) or 'default'.
-    screenFrom: opts.screen ? 'option' : screenFromEnv ? 'env' : 'default',
+    screenFrom: opts.screen
+      ? 'option'
+      : isSet('ER_AOT_SCREEN_W') && isSet('ER_AOT_SCREEN_H')
+        ? 'env'
+        : 'default',
     caps: {
-      listCap: opts.listCap ?? fromEnv('ER_AOT_LIST_CAP', 16),
-      listStrCap: opts.listStrCap ?? fromEnv('ER_AOT_LIST_STR_CAP', 48),
-      maxTextSpans: opts.maxTextSpans ?? fromEnv('ER_AOT_MAX_TEXT_SPANS', 4),
+      listCap: fromOption(
+        opts.listCap,
+        'listCap',
+        'ER_AOT_LIST_CAP',
+        16,
+        MAX_LIST_CAP,
+      ),
+      listStrCap: fromOption(
+        opts.listStrCap,
+        'listStrCap',
+        'ER_AOT_LIST_STR_CAP',
+        48,
+        MAX_LIST_STR_CAP,
+      ),
+      maxTextSpans: fromOption(
+        opts.maxTextSpans,
+        'maxTextSpans',
+        'ER_AOT_MAX_TEXT_SPANS',
+        4,
+        MAX_TEXT_SPANS,
+      ),
     },
   };
 }

@@ -129,4 +129,85 @@ describe('AOT compile options', () => {
       'a <Text> has 3 inline segments but the engine renders at most 2',
     );
   });
+
+  it.each([0, -1, 1.5, NaN, Infinity, 1e21])(
+    'refuses listCap, listStrCap and maxTextSpans of %s',
+    value => {
+      for (const name of ['listCap', 'listStrCap', 'maxTextSpans']) {
+        expect(() => compileSource(LIST_APP, 'demo', {[name]: value})).toThrow(
+          `AOT: ${name} must be a whole number from 1 to`,
+        );
+      }
+    },
+  );
+
+  it.each([0, -1, 1.5, NaN, Infinity, 1e21, 32768])(
+    'refuses a screen dimension of %s',
+    value => {
+      expect(() =>
+        compileSource(RESPONSIVE_APP, 'demo', {
+          screen: {width: value, height: 320},
+        }),
+      ).toThrow(
+        `AOT: screen.width must be a whole number from 1 to 32767, got ${value}`,
+      );
+      expect(() =>
+        compileSource(RESPONSIVE_APP, 'demo', {
+          screen: {width: 240, height: value},
+        }),
+      ).toThrow('AOT: screen.height must be a whole number from 1 to 32767');
+    },
+  );
+
+  it('accepts each value at the ends of its range', () => {
+    const generated = compileSource(LIST_APP, 'demo', {
+      screen: {width: 1, height: 32767},
+      listCap: 1,
+      listStrCap: 32767,
+      maxTextSpans: 255,
+    });
+    expect(generated.h).toContain('#define ER_AOT_SCREEN_W 1');
+    expect(generated.h).toContain('#define ER_AOT_SCREEN_H 32767');
+    expect(generated.c).toContain('s_items[1] = {');
+    expect(generated.c).toContain('char label[32767];');
+    expect(() => compileSource(LIST_APP, 'demo', {listCap: 32768})).toThrow(
+      'AOT: listCap must be a whole number from 1 to 32767, got 32768',
+    );
+    expect(() => compileSource(LIST_APP, 'demo', {maxTextSpans: 256})).toThrow(
+      'AOT: maxTextSpans must be a whole number from 1 to 255, got 256',
+    );
+  });
+
+  it.each([
+    ['ER_AOT_LIST_CAP', '-1'],
+    ['ER_AOT_LIST_STR_CAP', '1.5'],
+    ['ER_AOT_MAX_TEXT_SPANS', '0'],
+    ['ER_AOT_SCREEN_W', '1e21'],
+    ['ER_AOT_SCREEN_H', 'Infinity'],
+    ['ER_AOT_LIST_CAP', 'abc'],
+  ])('refuses %s=%s, naming the variable', (name, raw) => {
+    vi.stubEnv(name, raw);
+    expect(() => compileSource(LIST_APP, 'demo')).toThrow(
+      `AOT: ${name} must be a whole number from 1 to`,
+    );
+    expect(() => compileSource(LIST_APP, 'demo')).toThrow(`got "${raw}"`);
+  });
+
+  it('falls back to the defaults for a blank variable', () => {
+    vi.stubEnv('ER_AOT_LIST_CAP', '');
+    vi.stubEnv('ER_AOT_SCREEN_W', '  ');
+    const result = compileSource(LIST_APP, 'demo');
+    expect(result.c).toContain('s_items[16] = {');
+    expect(result.h).toContain('#define ER_AOT_SCREEN_W 800');
+  });
+
+  it('does not read a variable the option overrides', () => {
+    vi.stubEnv('ER_AOT_LIST_CAP', '-1');
+    vi.stubEnv('ER_AOT_SCREEN_W', '-1');
+    const result = compileSource(LIST_APP, 'demo', {
+      listCap: 4,
+      screen: {width: 240, height: 320},
+    });
+    expect(result.c).toContain('s_items[4] = {');
+  });
 });

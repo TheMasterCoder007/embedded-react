@@ -2085,8 +2085,8 @@ describe('AOT diagnostics', () => {
     expect(err.message).not.toMatch(/did not supply both dimensions/);
   });
 
-  it('does not credit the environment when only one dimension is usable', async () => {
-    const err = await errAtScreen('nonsense', '320');
+  it('does not credit the environment when only one dimension is set', async () => {
+    const err = await errAtScreen(undefined, '320');
     expect(err.message).toContain('screen: 800×320'); // width fell back, height did not
     expect(err.message).toMatch(/did not supply both dimensions/);
   });
