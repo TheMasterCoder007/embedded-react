@@ -137,4 +137,19 @@ void er_text_measure_spans(const ERTextSpan* spans,
                            int* out_width,
                            int* out_height);
 
+/**
+ * @brief Measures the lines er_text_render() breaks a text into at a given width, without rendering it.
+ *
+ * Breaks exactly as er_text_render() does with a clip max_width pixels wide: on word boundaries at the
+ * advance each glyph is drawn with (span styles and faux bold included), at explicit newlines, and at
+ * most number_of_lines lines (0 = unlimited). Of params only the text or spans, font_size, font_family,
+ * font_weight, letter_spacing and number_of_lines are read; the clip is ignored.
+ *
+ * @param[in]  params     Text and style, as passed to er_text_render(); must not be NULL.
+ * @param[in]  max_width  Width to break at in pixels; 0 or less breaks at explicit newlines only.
+ * @param[out] out_width  Receives the widest line's width in pixels (trailing whitespace excluded).
+ * @param[out] out_lines  Receives the number of lines; 0 for empty text.
+ */
+void er_text_measure_lines(const ERTextRenderParams* params, int max_width, int* out_width, int* out_lines);
+
 #endif

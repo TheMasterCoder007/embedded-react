@@ -12,6 +12,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- A `<Text>` with no height is as tall as the lines it wraps into at the width it gets, at most
+  `numberOfLines`. It used to be laid out one line tall, so everything after its first line was cut off,
+  and `numberOfLines` reserved that many lines even for a one-line label. As in React Native, a child is
+  measured no wider than its parent's content box, so a long Text in a row wraps at the row's edge instead
+  of running past it; a `flex: 1` Text wraps at the width it flexes to, and the row grows to hold it; a
+  shrink-wrapped Text is as wide as its widest line.
 - An `<Image>` with `borderRadius` or per-corner radii clips its bitmap to the rounded corners, with the
   same anti-aliased edge a background with those radii has. It used to draw square corners, so a rounded
   cover image, or `borderRadius` in an `<ImageBackground>`'s `imageStyle`, had no effect. Flow B accepts

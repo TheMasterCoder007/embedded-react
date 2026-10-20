@@ -3154,10 +3154,6 @@ int main(void)
  *   - margin: auto centering: margins are fixed pixels; ER_LAYOUT_AUTO margin is treated as 0.
  *   - percentage padding/margin/min/max/position: width%, height% and flex_basis% have fields
  *     (width%/height% covered by the pct-* fixtures above); the rest do not yet.
- *   - width-aware text wrapping / auto height: Text uses single-line measurement unless
- *     number_of_lines is set, so an auto-height container under-sizes wrapped text. (Needs a
- *     width-aware measure pass; the expected height is font-dependent, so a tolerance-based
- *     assertion would be required rather than the exact-rect compare used here.)
  *   - alignItems: baseline: no baseline alignment.
  *   - cross-axis margins under wrap-reverse: Pass 5 places a child with its LEADING cross margin and
  *     then mirrors, so the mirrored child is held off the far edge by the wrong margin. This is the

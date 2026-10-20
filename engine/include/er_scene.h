@@ -1146,7 +1146,7 @@ extern "C"
 
     /**
      * @brief Returns how many times the text renderer has measured a glyph run
-     *        (er_text_measure() + er_text_measure_spans() combined).
+     *        (er_text_measure() + er_text_measure_spans() + er_text_measure_lines() combined).
      *
      * Monotonic since process start. Intended for diagnostics and profiling — e.g. confirming
      * that the layout pass's per-node intrinsic-size cache is actually preventing a Text node
