@@ -12,6 +12,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- A translated node inside an `overflow: 'hidden'` container no longer leaves a trail when it moves after a
+  frame in which an opaque view painted over it repainted only its own content (a pill sliding along a
+  clipping bar under a panel whose child changes every frame). That frame recorded the node at its
+  untranslated box, so the next move erased that box instead of the node's pixels.
 - An `<Image>` with `borderRadius` or per-corner radii clips its bitmap to the rounded corners, with the
   same anti-aliased edge a background with those radii has. It used to draw square corners, so a rounded
   cover image, or `borderRadius` in an `<ImageBackground>`'s `imageStyle`, had no effect. Flow B accepts

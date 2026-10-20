@@ -26,6 +26,7 @@
  *   - partial: only the siblings BELOW the cover are skipped, the ones above still paint,
  *   - flags retire: a buried node that changed does not re-damage the same pixels forever, and a
  *     TRANSFORMED sibling is never buried at all (it has no box-shaped footprint to record),
+ *   - a translated node buried inside a clipping container still records its translated box,
  *   - pixel equivalence: the culled frame is byte-identical to one rendered with everything drawn.
  *
  * The assertions that a layer WAS skipped are the only ones gated on ERUI_OCCLUSION_CULLING; every
@@ -440,6 +441,75 @@ static int check_transformed_sibling_not_buried(void)
 #endif
 
 /*
+ * A translated node under an opaque cover must record where its pixels are (issue #312). A clipping container
+ * leaves its children's transforms out of subtree_prunable, so the cull buries a translated child of one like
+ * any other; render_tree then walked it occluded and skipped the translate offset along with the capture,
+ * recording its untranslated box. The next move erased that box instead of the pixels the node had painted,
+ * and a piece of it stayed on screen.
+ *
+ * The scene is the issue's: a clipping bar with a pill sliding in from the right, and an opaque panel at the
+ * bar's right end whose child changes between the moves, so every other commit repaints only that child and
+ * the panel covers it.
+ */
+static int check_translated_node_under_cover_leaves_no_trail(void)
+{
+    static uint32_t reference[SCREEN * SCREEN];
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = box(0, 0, SCREEN, SCREEN, C_ROOT);
+    rp.position = ER_POS_RELATIVE;
+    er_node_set_props(root, &rp);
+
+    ERNode* bar = er_node_create(ER_NODE_VIEW);
+    ERProps bp = box(0, 0, SCREEN, 40, 0U);
+    bp.overflow = ER_OVERFLOW_HIDDEN;
+    er_node_set_props(bar, &bp);
+
+    ERNode* pill = er_node_create(ER_NODE_VIEW);
+    ERProps pp = box(0, 10, 40, 20, C_DEEP);
+    pp.transform_translate_x = 140.0f;
+    er_node_set_props(pill, &pp);
+    er_tree_append_child(bar, pill);
+
+    ERNode* panel = er_node_create(ER_NODE_VIEW);
+    ERProps np = box(150, 0, 50, 40, C_COVER);
+    er_node_set_props(panel, &np);
+
+    ERNode* blink = er_node_create(ER_NODE_VIEW);
+    ERProps kp = box(20, 15, 10, 10, C_TOP);
+    er_node_set_props(blink, &kp);
+    er_tree_append_child(panel, blink);
+
+    er_tree_append_child(root, bar);
+    er_tree_append_child(root, panel); /* painted after the bar: buries it whenever only `blink` repaints */
+    er_tree_set_root(root);
+
+    full_frame();
+
+    bool on = false;
+    for (int tx = 140; tx >= 0; tx -= 20)
+    {
+        on = !on;
+        kp.background_color = on ? 0xFFE0E040U : C_TOP;
+        er_node_set_props(blink, &kp);
+        er_commit();
+
+        pp.transform_translate_x = (float)tx;
+        er_node_set_props(pill, &pp);
+        er_commit();
+    }
+
+    memcpy(reference, s_fb, sizeof(reference));
+    memset(s_fb, 0, sizeof(s_fb));
+    full_frame();
+
+    if (memcmp(reference, s_fb, sizeof(reference)) != 0)
+        return fail("a translated node walked under an opaque cover left a trail when it next moved");
+    return EXIT_SUCCESS;
+}
+
+/*
  * The catch-all. Drive an incremental, damage-clipped sequence over a scene whose occluder is only
  * SOMETIMES a valid one, then compare against the same scene rendered with a forced full repaint.
  * Any cull that skipped a layer it should not have shows up as a pixel difference.
@@ -494,6 +564,7 @@ int main(void)
 #if ERUI_TRANSFORMS_FULL
         check_transformed_sibling_not_buried,
 #endif
+        check_translated_node_under_cover_leaves_no_trail,
         check_pixel_equivalence,
     };
 

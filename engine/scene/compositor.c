@@ -2270,13 +2270,20 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * re-damaged itself on every commit for as long as it existed. */
 #if ERUI_TRANSFORMS_FULL
     const bool complex_xf = er_node_has_complex_transform(n);
+#else
+    const bool complex_xf = false;
 #endif
-    /* An occluded node never captures a transform source: the scratch render would be thrown away,
-     * and the cull only ever occludes transform-free subtrees anyway (see the subtree_prunable gate). */
-    if (n->has_transform && !occluded)
+    if (n->has_transform && !complex_xf)
     {
-#if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
-        if (complex_xf && er_transform_is_3d(n))
+        px += (int)n->tp_translate_x;
+        py += (int)n->tp_translate_y;
+    }
+#if ERUI_TRANSFORMS_FULL
+    /* An occluded node never captures a transform source: the scratch render would be thrown away. */
+    else if (complex_xf && !occluded)
+    {
+#if ERUI_3D_TRANSFORMS
+        if (er_transform_is_3d(n))
         {
             /* 3D perspective path: compute homography, render into scratch, back-project blit. */
             float H[9];
@@ -2300,8 +2307,6 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         }
         else
 #endif
-#if ERUI_TRANSFORMS_FULL
-            if (complex_xf)
         {
             /* Full affine: render into scratch, then inverse-map blit. */
             float a, b, c, d, ftx, fty;
@@ -2323,14 +2328,8 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
             /* On failure (too large or singular matrix) fall through to normal render at
              * the untransformed position as a graceful degradation. */
         }
-        else
-#endif
-        {
-            /* Translate-only fast path: shift the render position by the prop offsets. */
-            px += (int)n->tp_translate_x;
-            py += (int)n->tp_translate_y;
-        }
     }
+#endif
 
     /* Banded-composite replay: later tiles of the same band pass reuse the transform source
      * captured in the first tile — emit only, bounded to the tile scissor. The subtree
@@ -2810,7 +2809,9 @@ static void render_node_content(
      * which deliberately skips the scratch capture — cannot compute. Storing the raw box instead
      * would leave the damage pre-pass comparing a box against an AABB, reading `moved` on every
      * subsequent commit and re-damaging a subtree nobody can see, forever. Such a sibling simply
-     * paints as usual and the occluder covers it a moment later.
+     * paints as usual and the occluder covers it a moment later. A clipping container's flag leaves
+     * its children's transforms out, so a transformed node can still be walked occluded inside one;
+     * render_tree still applies a translate-only offset there.
      *
      * The children are scanned front to back (the cursor only walks forward), keeping the last match. */
     int occ_idx = -1;
