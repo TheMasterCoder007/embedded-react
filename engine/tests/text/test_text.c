@@ -691,5 +691,76 @@ int main(void)
             return fail("bold span wider than its box was not wrapped onto a second line");
     }
 
+    /* ---- A letter-spaced span breaks and aligns at its own spacing, not the parent's ---- */
+    {
+        int reg_w = 0, line_h = 0;
+        er_text_measure("Hello World", 14, NULL, 0, 0, &reg_w, &line_h);
+
+        /* "Hello " inherits the parent's (zero) spacing; "World" spaces its glyphs 2px apart. */
+        ERTextSpan sp5[2];
+        memset(sp5, 0, sizeof(sp5));
+        for (int i = 0; i < 2; i++)
+        {
+            sp5[i].font_weight = 0xFFU;
+            sp5[i].font_style = 0xFFU;
+            sp5[i].text_decoration = 0xFFU;
+            sp5[i].letter_spacing = ER_LAYOUT_AUTO;
+        }
+        strncpy(sp5[0].text, "Hello ", ER_SPAN_TEXT_MAX);
+        strncpy(sp5[1].text, "World", ER_SPAN_TEXT_MAX);
+        sp5[1].letter_spacing = 2;
+
+        int spaced_w = 0, dummy_h = 0;
+        er_text_measure_spans(sp5, 2, 14, NULL, 0, 0, &spaced_w, &dummy_h);
+        if (spaced_w <= reg_w)
+            return fail("letter-spaced span did not measure wider than the unspaced text");
+
+        /* A box as wide as the unspaced text wraps the spaced span onto a second line. */
+        memset(&par, 0, sizeof(par));
+        par.clip = (ERRect){0, 0, reg_w, FB_H};
+        par.color = 0xFFFFFFFFU;
+        par.font_size = 14;
+        par.number_of_lines = 2;
+        par.span_count = 2;
+        par.spans = sp5;
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        er_text_render(&par);
+        if (tc.out_of_bounds != 0)
+            return fail("letter-spaced span render emitted out-of-bounds pixels");
+        if (tc.max_y <= line_h)
+            return fail("letter-spaced span wider than its box was not wrapped onto a second line");
+
+        /* In a wide box, right alignment moves the line by exactly the box width minus its drawn width,
+           and center alignment by half of that. */
+        par.clip = (ERRect){0, 0, 200, FB_H};
+        par.number_of_lines = 0;
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        par.text_align = ER_TEXT_ALIGN_LEFT;
+        er_text_render(&par);
+        const int spaced_left_min_x = tc.min_x;
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        par.text_align = ER_TEXT_ALIGN_RIGHT;
+        er_text_render(&par);
+        if (tc.min_x - spaced_left_min_x != 200 - spaced_w)
+            return fail("right-aligned letter-spaced span was not placed at its drawn width");
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        par.text_align = ER_TEXT_ALIGN_CENTER;
+        er_text_render(&par);
+        if (tc.min_x - spaced_left_min_x != (200 - spaced_w) / 2)
+            return fail("centered letter-spaced span was not placed at its drawn width");
+    }
+
     return EXIT_SUCCESS;
 }
