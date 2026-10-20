@@ -496,6 +496,62 @@ function configFloat(rawValue: unknown): number {
 }
 
 /**
+ * A folded config time in whole milliseconds, checked so a time C cannot hold is reported at the field.
+ *
+ * @param node  The field's value, if the app wrote one.
+ * @param env  The expression environment.
+ * @param defaultValue  The time when the field is left out or not known at build time.
+ * @param field  What the time is, for the error.
+ *
+ * @returns The time.
+ */
+function configMs(
+  node: t.Node | null | undefined,
+  env: Env,
+  defaultValue: number,
+  field: string,
+): number {
+  const rawValue = evalStaticOr(node, env, defaultValue);
+  check({kind: 'milliseconds', field, value: rawValue}, node?.loc?.start);
+  return Math.round(Number(rawValue));
+}
+
+/**
+ * A timing's folded duration (250 ms when it is left out, as in React Native).
+ *
+ * @param get  The timing's config.
+ * @param env  The expression environment.
+ *
+ * @returns The duration.
+ */
+const timingDuration = (get: ConfigGetter, env: Env): number =>
+  configMs(get('duration'), env, 250, `Animated.timing's "duration"`);
+
+/**
+ * An animation's own delay (0 when it is left out).
+ *
+ * @param kind  timing, spring or decay.
+ * @param get  The animation's config.
+ * @param env  The expression environment.
+ *
+ * @returns The delay.
+ */
+const ownDelayMs = (kind: string, get: ConfigGetter, env: Env): number =>
+  configMs(get('delay'), env, 0, `Animated.${kind}'s "delay"`);
+
+/**
+ * A time added up from a composition's times, checked like them: each fits an int, but a sum of them need not.
+ *
+ * @param value  The sum.
+ *
+ * @returns The sum.
+ */
+function totalMs(value: number): number {
+  check({kind: 'milliseconds', field: "this animation's total time", value});
+  return value;
+}
+
+/**
  * Lowers one atomic animation (timing/spring/decay). `delayMs` is the absolute start delay (how composition
  * offsets are realized) and `loop` repeats a timing on the engine's own loop.
  *
@@ -523,9 +579,7 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
       velocity: configFloat(evalStaticOr(get('velocity'), env, 0)),
     };
   } else {
-    const durationMs = Math.round(
-      Number(evalStaticOr(get('duration'), env, 250)),
-    );
+    const durationMs = timingDuration(get, env);
     const {ease, bezier} = easingInfo(get('easing'), env);
     curve = {
       kind: 'timing',
@@ -545,7 +599,7 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
     handle: cVar,
     curve,
     to: toNode ? lowerExpr(toNode, env) : null,
-    delayMs,
+    delayMs: totalMs(delayMs),
     isLooping: loop,
   };
 }
@@ -590,11 +644,9 @@ function flattenAnim(
     }
     const cVar = env.animations.get(valRef.name)!.cVar;
     const get = animConfigGetter(args[1]);
-    const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
+    const ownDelay = ownDelayMs(kind, get, env);
     const duration =
-      kind === 'timing'
-        ? ownDelay + Math.round(Number(evalStaticOr(get('duration'), env, 250)))
-        : null;
+      kind === 'timing' ? ownDelay + timingDuration(get, env) : null;
     return {
       entries: [{cVar, kind, get, delayMs: baseDelay + ownDelay, loop}],
       duration,
@@ -605,7 +657,7 @@ function flattenAnim(
   if (kind === 'delay') {
     return {
       entries: [],
-      duration: Math.round(Number(evalStaticOr(args[0], env, 0))),
+      duration: configMs(args[0], env, 0, "Animated.delay's time"),
     };
   }
 
@@ -614,7 +666,7 @@ function flattenAnim(
     const list = kind === 'stagger' ? args[1] : args[0];
     const staggerMs =
       kind === 'stagger'
-        ? Math.round(Number(evalStaticOr(args[0], env, 0)))
+        ? configMs(args[0], env, 0, "Animated.stagger's interval")
         : 0;
     if (list?.type !== 'ArrayExpression') {
       throw aotError(`AOT: Animated.${kind}(...) needs an array of animations`);
@@ -733,7 +785,7 @@ function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
 
   // Fold this step's own delay and add any delay inherited from an enclosing sequence/delay.
   const get = animConfigGetter(node.arguments[1]);
-  const ownDelay = Math.round(Number(evalStaticOr(get('delay'), env, 0)));
+  const ownDelay = ownDelayMs(kind, get, env);
   return {
     cVar: env.animations.get(valRef.name)!.cVar,
     kind,
@@ -823,8 +875,11 @@ function sequenceSteps(
     // Fold delay-only entries into the following animation step.
     const kind = child.callee.property.name;
     if (kind === 'delay') {
-      pendingDelay += Math.round(
-        Number(evalStaticOr(child.arguments[0], env, 0)),
+      pendingDelay += configMs(
+        child.arguments[0],
+        env,
+        0,
+        "Animated.delay's time",
       );
       continue;
     }
@@ -896,7 +951,7 @@ function lowerChain(
           finalWait:
             loop.iterations >= 0 && completion && loop.trailingDelay > 0
               ? {
-                  delayMs: loop.trailingDelay,
+                  delayMs: totalMs(loop.trailingDelay),
                   owner: waitOwner(ctx, loop.key, true),
                 }
               : null,
@@ -1054,7 +1109,11 @@ const completionWait = (
   key: string,
   delayMs: number,
   callback: string,
-): IrCompletionWait => ({delayMs, callback, owner: waitOwner(ctx, key, true)});
+): IrCompletionWait => ({
+  delayMs: totalMs(delayMs),
+  callback,
+  owner: waitOwner(ctx, key, true),
+});
 
 /**
  * A start that drives no value. As in JS, its completion still runs as finished once the composition's delays
@@ -1080,7 +1139,7 @@ function startNothing(
   const start: IrCompleteAfter = {
     kind: 'completeAfter',
     completion,
-    delayMs,
+    delayMs: totalMs(delayMs),
     owner: null,
   };
   if (delayMs > 0) {
@@ -1174,7 +1233,7 @@ function lowerLoopStart(
   const instant = (animEntry: AnimEntry) =>
     animEntry.kind === 'timing' &&
     animEntry.delayMs === 0 &&
-    Math.round(Number(evalStaticOr(animEntry.get('duration'), env, 250))) === 0;
+    timingDuration(animEntry.get, env) === 0;
   if (trailingDelay === 0 && steps.every(instant)) {
     throw aotError(
       'AOT: every step of this Animated.loop finishes instantly, so it would never stop repeating',
@@ -1320,16 +1379,14 @@ export function lowerAnimateStart(
     duration > only.delayMs
   ) {
     start.completionJoin = {
-      delayMs: duration,
+      delayMs: totalMs(duration),
       owner: waitOwner(ctx, key, true),
     };
   }
 
   // A delay beside the one timing that outlasts it holds the completion back until the composition ends.
   if (completion && only.kind === 'timing' && !only.loop && duration != null) {
-    const end =
-      only.delayMs +
-      Math.round(Number(evalStaticOr(only.get('duration'), env, 250)));
+    const end = only.delayMs + timingDuration(only.get, env);
     if (duration > end) {
       start.completionWait = completionWait(
         ctx,

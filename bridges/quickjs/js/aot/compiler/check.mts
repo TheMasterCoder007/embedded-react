@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {GRAD_MAX_STOPS} from '../../src/embedded-react/svg-ops.js';
-import {aotError, currentLoc} from './diagnostics.mts';
+import {aotError, currentLoc, locateError} from './diagnostics.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -30,6 +30,8 @@ import type {AotError, SourcePosition} from './diagnostics.mts';
 export type IrCheckSubject =
   /** A number the app stores as a float. */
   | {kind: 'number'; value: unknown}
+  /** A time in milliseconds an animation waits or runs for, and what it is, for the error ("Animated.timing's "duration""). */
+  | {kind: 'milliseconds'; field: string; value: unknown}
   /** The breakpoints of an `.interpolate()`. */
   | {kind: 'interpolationPoints'; count: number}
   /** The inline segments of a <Text>, and the most the engine draws. */
@@ -48,6 +50,9 @@ export type IrCheck = IrCheckSubject & {loc: SourcePosition | undefined};
 
 /** The most breakpoints an interpolation holds (the engine's ER_INTERPOLATE_MAX_POINTS). */
 const MAX_INTERPOLATION_POINTS = 8;
+
+/** The longest time an animation can wait or run for: INT_MAX, since the waits the app counts down take an int. */
+const MAX_MILLISECONDS = 2 ** 31 - 1;
 
 /** The most stops a <Dial indicatorGradient> holds (the engine's ER_GRADIENT_MAX_STOPS). */
 export const DIAL_MAX_GRADIENT_STOPS = 4;
@@ -91,6 +96,41 @@ export function numberProblem(rawValue: unknown): AotError | null {
 }
 
 /**
+ * What is wrong with an animation time, if anything: it is rounded to whole milliseconds, and C holds those
+ * from 0 to INT_MAX.
+ *
+ * @param field  What the time is, for the error.
+ * @param rawValue  The value; anything `Number()` converts.
+ *
+ * @returns The error to report, or null for a time C holds.
+ */
+export function millisecondsProblem(
+  field: string,
+  rawValue: unknown,
+): AotError | null {
+  const hint = `a time is a number of milliseconds from 0 to ${MAX_MILLISECONDS}.`;
+  const value = Math.round(Number(rawValue));
+  if (!Number.isFinite(value)) {
+    return aotError(
+      `AOT: ${field} folded to ` +
+        `${rawValue === undefined ? 'undefined' : String(rawValue)}, which is not a time`,
+      hint,
+    );
+  }
+
+  if (value < 0) {
+    return aotError(
+      `AOT: ${field} is ${value} ms; a time cannot be negative`,
+      hint,
+    );
+  }
+
+  return value > MAX_MILLISECONDS
+    ? aotError(`AOT: ${field} is ${value} ms, past the int range`, hint)
+    : null;
+}
+
+/**
  * What is wrong with a recorded subject, if anything.
  *
  * @param subject  The subject.
@@ -101,6 +141,8 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
   switch (subject.kind) {
     case 'number':
       return numberProblem(subject.value);
+    case 'milliseconds':
+      return millisecondsProblem(subject.field, subject.value);
     case 'interpolationPoints':
       return subject.count > MAX_INTERPOLATION_POINTS
         ? aotError(
@@ -144,15 +186,17 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
  * reported; otherwise, or inside a fallback attempt, it is checked at once.
  *
  * @param subject  The subject.
+ * @param loc  Where its error is reported, when that is more exact than the node being lowered.
  */
-export function check(subject: IrCheckSubject): void {
+export function check(subject: IrCheckSubject, loc?: SourcePosition): void {
   if (recording && !attempts) {
-    recording.push({...subject, loc: currentLoc()});
+    recording.push({...subject, loc: loc ?? currentLoc()});
     return;
   }
 
   const problem = checkProblem(subject);
   if (problem) {
+    locateError(problem, loc);
     throw problem;
   }
 }

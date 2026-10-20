@@ -21,6 +21,7 @@ import {
   checkNumber,
   checkProblem,
   lowerWithChecks,
+  millisecondsProblem,
   numberProblem,
   runChecks,
 } from '../compiler/check.mts';
@@ -211,5 +212,89 @@ describe('check pass: fixed caps', () => {
     expect(() => lower(capApp('<View onTouchStart={5} />'))).toThrow(
       /onTouchStart must be an inline function/,
     );
+  });
+});
+
+describe('check pass: animation times', () => {
+  it('refuses a time that is not whole milliseconds from 0 to INT_MAX', () => {
+    for (const ms of [0, 300.4, 2 ** 31 - 1]) {
+      expect(millisecondsProblem('the time', ms)).toBeNull();
+    }
+    expect(millisecondsProblem('the time', 0 / 0)).toMatchObject({
+      message: 'AOT: the time folded to NaN, which is not a time',
+      aotHint: 'a time is a number of milliseconds from 0 to 2147483647.',
+    });
+    expect(millisecondsProblem('the time', undefined).message).toBe(
+      'AOT: the time folded to undefined, which is not a time',
+    );
+    expect(millisecondsProblem('the time', -5).message).toBe(
+      'AOT: the time is -5 ms; a time cannot be negative',
+    );
+    expect(millisecondsProblem('the time', 2 ** 31).message).toBe(
+      'AOT: the time is 2147483648 ms, past the int range',
+    );
+  });
+
+  /** An app whose touch starts `animation` on `a` (and `b`), on line 6. */
+  const animApp = animation =>
+    "import React from 'react';\n" +
+    "import {View, Animated, useAnimatedValue} from 'embedded-react';\n" +
+    'export function App() {\n  const a = useAnimatedValue(0);\n  const b = useAnimatedValue(0);\n' +
+    `  return <View onTouchStart={() => ${animation}.start(() => {})}>` +
+    '<Animated.View style={{opacity: a, transform: [{scale: b}]}} /></View>;\n}';
+
+  it.each([
+    [
+      'a NaN duration',
+      'Animated.timing(a, {toValue: 1, duration: 0 / 0})',
+      `Animated.timing's "duration" folded to NaN, which is not a time`,
+      '0 / 0',
+    ],
+    [
+      'an Infinity delay',
+      'Animated.spring(a, {toValue: 1, delay: 1 / 0})',
+      `Animated.spring's "delay" folded to Infinity, which is not a time`,
+      '1 / 0',
+    ],
+    [
+      'a negative Animated.delay',
+      'Animated.sequence([Animated.delay(-1), Animated.timing(a, {toValue: 1})])',
+      "Animated.delay's time is -1 ms; a time cannot be negative",
+      '-1',
+    ],
+    [
+      'a NaN stagger interval',
+      'Animated.stagger(0 / 0, [Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})])',
+      "Animated.stagger's interval folded to NaN, which is not a time",
+      '0 / 0',
+    ],
+    [
+      'a delay past the int range',
+      'Animated.parallel([Animated.decay(a, {delay: 3e9}), Animated.delay(5)])',
+      `Animated.decay's "delay" is 3000000000 ms, past the int range`,
+      '3e9',
+    ],
+  ])('refuses %s, at the time', (_what, animation, message, written) => {
+    const source = animApp(animation);
+    const error = thrown(() => lower(source));
+    expect(error.message).toBe(`AOT: ${message}`);
+    expect(error.aotLoc).toMatchObject({
+      line: 6,
+      column: source.split('\n')[5].indexOf(written),
+    });
+  });
+
+  it('refuses times that add up past the int range, at the start', () => {
+    const error = thrown(() =>
+      lower(
+        animApp(
+          'Animated.sequence([Animated.delay(2e9), Animated.delay(2e9), Animated.timing(a, {toValue: 1})])',
+        ),
+      ),
+    );
+    expect(error.message).toBe(
+      "AOT: this animation's total time is 4000000000 ms, past the int range",
+    );
+    expect(error.aotLoc).toMatchObject({line: 6});
   });
 });
