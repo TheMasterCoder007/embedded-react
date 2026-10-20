@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include "text_renderer.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -170,6 +171,48 @@ static ERProps props_default(void)
     p.flex_basis = ER_LAYOUT_AUTO;
     p.opacity = 255U;
     return p;
+}
+
+/**
+ * @brief Measures how er_text_render() breaks a 14 px string at a given width.
+ *
+ * @param[in]  text       String to break.
+ * @param[in]  width      Width to break at in pixels.
+ * @param[out] out_width  Receives the widest line's width; may be NULL.
+ *
+ * @return The number of lines.
+ */
+static int lines_at(const char* text, int width, int* out_width)
+{
+    ERTextRenderParams p;
+    memset(&p, 0, sizeof(p));
+    p.text = text;
+    p.font_size = 14;
+    int w = 0, n = 0;
+    er_text_measure_lines(&p, width, &w, &n);
+    if (out_width)
+        *out_width = w;
+    return n;
+}
+
+/**
+ * @brief Creates a 14 px Text node that records its computed rect.
+ *
+ * @param[in]  p     Props to apply; the text and font size are set here.
+ * @param[in]  text  String to show.
+ * @param[out] cap   ERRect that receives the node's computed rect via ER_EVENT_LAYOUT.
+ *
+ * @return The created node.
+ */
+static ERNode* mk_text(ERProps p, const char* text, ERRect* cap)
+{
+    ERNode* n = er_node_create(ER_NODE_TEXT);
+    p.font_size = 14;
+    strncpy(p.text, text, ER_TEXT_MAX);
+    er_node_set_props(n, &p);
+    *cap = (ERRect){-1, -1, -1, -1};
+    er_event_set(n, ER_EVENT_LAYOUT, on_layout_rect, cap);
+    return n;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1086,6 +1129,245 @@ int main(void)
         er_tree_remove_child(mf_root, mf_mid);
         er_node_destroy(mf_mid);
         er_node_destroy(mf_root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: an auto-height Text is as tall as the lines it wraps into at the
+     * width it gets, capped by numberOfLines — and a one-line text stays one
+     * line tall even with numberOfLines set. Expected sizes come from
+     * er_text_measure_lines(), the breaker er_text_render() draws with, so
+     * they hold whatever font the build ships.
+     * -----------------------------------------------------------------------*/
+    {
+        static const char* k_desc = "A description long enough to wrap onto four or five lines at this width";
+        int dummy = 0, lh = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
+        int desc_w120 = 0;
+        const int desc_lines120 = lines_at(k_desc, 120, &desc_w120);
+        if (lh <= 0 || desc_lines120 < 3)
+            return fail("text wrap: the long description should break onto at least three lines at 120 px");
+
+        er_reset();
+        ERNode* wr_root = er_node_create(ER_NODE_VIEW);
+        ERProps wrp = props_default();
+        wrp.width = (int16_t)FB_W;
+        wrp.height = (int16_t)FB_H;
+        wrp.flex_direction = ER_FLEX_COL;
+        wrp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(wr_root, &wrp);
+
+        /* <View style={{width: 120}}> with three Texts, stretched to the column's width. */
+        ERNode* col = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 120;
+        er_node_set_props(col, &cp);
+        ERRect r_save, r_desc, r_short, r_clip;
+        ERNode* t_save = mk_text(props_default(), "Save", &r_save);
+        ERNode* t_desc = mk_text(props_default(), k_desc, &r_desc);
+        ERProps sp = props_default();
+        sp.number_of_lines = 3;
+        ERNode* t_short = mk_text(sp, "Short", &r_short);
+        ERProps lp = props_default();
+        lp.number_of_lines = 2;
+        ERNode* t_clip = mk_text(lp, k_desc, &r_clip);
+        er_tree_append_child(col, t_save);
+        er_tree_append_child(col, t_desc);
+        er_tree_append_child(col, t_short);
+        er_tree_append_child(col, t_clip);
+        er_tree_append_child(wr_root, col);
+
+        /* A flex: 1 Text beside a 200 px box in a 300 px row gets 100 px and wraps there. */
+        int desc_w100 = 0;
+        const int desc_lines100 = lines_at(k_desc, 100, &desc_w100);
+        ERNode* row = er_node_create(ER_NODE_VIEW);
+        ERRect r_row = {-1, -1, -1, -1};
+        ERProps rwp = props_default();
+        rwp.width = 300;
+        rwp.flex_direction = ER_FLEX_ROW;
+        rwp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(row, &rwp);
+        er_event_set(row, ER_EVENT_LAYOUT, on_layout_rect, &r_row);
+        ERProps bxp = props_default();
+        bxp.width = 200;
+        bxp.height = 10;
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(box, &bxp);
+        ERProps fxp = props_default();
+        fxp.flex_grow = 1;
+        fxp.flex_shrink = 1;
+        fxp.flex_basis = 0;
+        ERRect r_flex;
+        ERNode* t_flex = mk_text(fxp, k_desc, &r_flex);
+        er_tree_append_child(row, box);
+        er_tree_append_child(row, t_flex);
+        er_tree_append_child(wr_root, row);
+
+        /* A shrink-wrapped Text in the flex-start column: as wide as its widest line, never wider than the column. */
+        ERNode* narrow = er_node_create(ER_NODE_VIEW);
+        ERProps np = props_default();
+        np.width = 120;
+        np.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(narrow, &np);
+        ERRect r_wrap, r_one;
+        ERNode* t_wrap = mk_text(props_default(), k_desc, &r_wrap);
+        ERProps op1 = props_default();
+        op1.number_of_lines = 1;
+        op1.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+        ERNode* t_one = mk_text(op1, k_desc, &r_one);
+        er_tree_append_child(narrow, t_wrap);
+        er_tree_append_child(narrow, t_one);
+        er_tree_append_child(wr_root, narrow);
+
+        er_tree_set_root(wr_root);
+        er_commit();
+
+        if (r_save.w != 120 || r_save.h != lh)
+            return fail("text wrap: a label that fits keeps its one-line height");
+        if (r_desc.w != 120 || r_desc.h != desc_lines120 * lh)
+            return fail("text wrap: the long text in the 120 px column is not as tall as its wrapped lines");
+        if (r_short.y != r_desc.y + r_desc.h || r_short.h != lh)
+            return fail("text wrap: numberOfLines={3} on a one-line label must stay one line tall");
+        if (r_clip.h != 2 * lh)
+            return fail("text wrap: numberOfLines={2} must cap a long text at two lines");
+        if (r_flex.x != 200 || r_flex.w != 100 || r_flex.h != desc_lines100 * lh)
+            return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
+        if (r_row.h != r_flex.h)
+            return fail("text wrap: the row must grow to hold its wrapped flex: 1 Text");
+        if (r_wrap.w != desc_w120 || r_wrap.h != desc_lines120 * lh)
+            return fail("text wrap: a shrink-wrapped Text should take its widest line at the width it is offered");
+        if (r_one.w > 120 || r_one.h != lh)
+            return fail("text wrap: numberOfLines={1} must stay inside the column it would overflow");
+
+        /* The same row without its own width takes the column's, and still grows to hold the Text. */
+        rwp.width = ER_LAYOUT_AUTO;
+        rwp.flex_direction = ER_FLEX_ROW;
+        er_node_set_props(row, &rwp);
+        wrp.align_items = ER_ALIGN_STRETCH;
+        wrp.width = 300;
+        er_node_set_props(wr_root, &wrp);
+        er_commit();
+        if (r_row.w != 300 || r_flex.w != 100 || r_flex.h != desc_lines100 * lh || r_row.h != r_flex.h)
+            return fail("text wrap: an auto-width row must flex and wrap its Text at the width its parent offers");
+
+        er_reset();
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: a row measures its children at most its own width, as Yoga does,
+     * so a long Text that does not flex still wraps at the row's edge. Beside
+     * a fixed box it keeps that width and overflows, since flexShrink is 0.
+     * A row that scrolls offers no bound, and its Text stays on one line.
+     * -----------------------------------------------------------------------*/
+    {
+        static const char* k_desc = "A description long enough to wrap onto four or five lines at this width";
+        int dummy = 0, lh = 0, w120 = 0, w300 = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
+        const int lines120 = lines_at(k_desc, 120, &w120);
+        const int lines300 = lines_at(k_desc, 300, &w300);
+        if (lines120 < 3 || lines300 < 2)
+            return fail("row text: the long description should wrap at both 120 px and 300 px");
+
+        er_reset();
+        ERNode* rt_root = er_node_create(ER_NODE_VIEW);
+        ERProps rtp = props_default();
+        rtp.width = (int16_t)FB_W;
+        rtp.height = (int16_t)FB_H;
+        rtp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(rt_root, &rtp);
+
+        ERProps rowp = props_default();
+        rowp.flex_direction = ER_FLEX_ROW;
+        rowp.align_items = ER_ALIGN_FLEX_START;
+
+        rowp.width = 120;
+        ERNode* narrow_row = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(narrow_row, &rowp);
+        ERRect r_narrow;
+        er_tree_append_child(narrow_row, mk_text(props_default(), k_desc, &r_narrow));
+        er_tree_append_child(rt_root, narrow_row);
+
+        rowp.width = 300;
+        ERNode* boxed_row = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(boxed_row, &rowp);
+        ERNode* rt_box = er_node_create(ER_NODE_VIEW);
+        ERProps rbp = props_default();
+        rbp.width = 200;
+        rbp.height = 10;
+        er_node_set_props(rt_box, &rbp);
+        ERRect r_boxed;
+        er_tree_append_child(boxed_row, rt_box);
+        er_tree_append_child(boxed_row, mk_text(props_default(), k_desc, &r_boxed));
+        er_tree_append_child(rt_root, boxed_row);
+
+        rowp.width = 120;
+        rowp.overflow = ER_OVERFLOW_SCROLL;
+        ERNode* scroll_row = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(scroll_row, &rowp);
+        ERRect r_scroll;
+        er_tree_append_child(scroll_row, mk_text(props_default(), k_desc, &r_scroll));
+        er_tree_append_child(rt_root, scroll_row);
+
+        er_tree_set_root(rt_root);
+        er_commit();
+
+        if (r_narrow.w != w120 || r_narrow.h != lines120 * lh)
+            return fail("row text: a long Text in a 120 px row must wrap at the row's edge");
+        if (r_boxed.x != 200 || r_boxed.w != w300 || r_boxed.h != lines300 * lh)
+            return fail("row text: beside a box, a non-shrinking Text keeps the width it wraps at in the row");
+        if (r_scroll.h != lh || r_scroll.w <= 120)
+            return fail("row text: a scrolling row must leave its Text on one line");
+
+        er_reset();
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test: measure_content() memoisation across a flexed row. Measuring the
+     * row flexes it once and laying it out flexes it again; the Text is
+     * measured at the row's width for its height, then at its flexed width,
+     * and the cache answers every other ask — 3 calls: the single-line
+     * measure at each width, plus breaking it into lines at 100 px.
+     * -----------------------------------------------------------------------*/
+    {
+        er_reset();
+        ERNode* fr_root = er_node_create(ER_NODE_VIEW);
+        ERProps frp = props_default();
+        frp.width = 300;
+        frp.height = (int16_t)FB_H;
+        er_node_set_props(fr_root, &frp);
+
+        ERNode* fr_row = er_node_create(ER_NODE_VIEW);
+        ERProps frwp = props_default();
+        frwp.flex_direction = ER_FLEX_ROW;
+        frwp.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(fr_row, &frwp);
+        ERNode* fr_box = er_node_create(ER_NODE_VIEW);
+        ERProps frbp = props_default();
+        frbp.width = 200;
+        frbp.height = 10;
+        er_node_set_props(fr_box, &frbp);
+        ERProps frtp = props_default();
+        frtp.flex_grow = 1;
+        frtp.flex_shrink = 1;
+        frtp.flex_basis = 0;
+        ERRect r_fr;
+        ERNode* fr_text = mk_text(frtp, "The same long description", &r_fr);
+        er_tree_append_child(fr_row, fr_box);
+        er_tree_append_child(fr_row, fr_text);
+        er_tree_append_child(fr_root, fr_row);
+        er_tree_set_root(fr_root);
+
+        int dummy = 0, lh = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
+        const int fr_lines = lines_at("The same long description", 100, NULL);
+        const uint32_t tr0 = er_text_measure_count();
+        er_commit();
+        const uint32_t tr1 = er_text_measure_count();
+        if (fr_lines < 2 || r_fr.w != 100 || r_fr.h != fr_lines * lh)
+            return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
+        if (tr1 != tr0 + 3U)
+            return fail("measure-cache: a flexed row re-measured its Text more than once per width");
+
+        er_reset();
     }
 
     return EXIT_SUCCESS;

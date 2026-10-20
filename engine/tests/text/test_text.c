@@ -246,6 +246,50 @@ int main(void)
     if (w_two != w_nols)
         return fail("two spans did not measure the same as the joined string");
 
+    /* Line measurement breaks the way the renderer does: on word boundaries at the width, at explicit
+       newlines, at most number_of_lines lines, and reports the widest line without trailing spaces. */
+    {
+        int w_hello = 0, w_world = 0;
+        er_text_measure("Hello", 14, NULL, 0, 0, &w_hello, &dummy);
+        er_text_measure("world", 14, NULL, 0, 0, &w_world, &dummy);
+        const int w_widest = (w_hello > w_world) ? w_hello : w_world;
+        ERTextRenderParams lp;
+        memset(&lp, 0, sizeof(lp));
+        lp.text = "Hello world";
+        lp.font_size = 14;
+        int lw = 0, ln = 0;
+        er_text_measure_lines(&lp, 0, &lw, &ln);
+        if (ln != 1)
+            return fail("measure_lines: an unbounded single line did not measure as one line");
+        er_text_measure_lines(&lp, w_widest, &lw, &ln);
+        if (ln != 2 || lw != w_widest)
+            return fail("measure_lines: two words at the wider word's width did not break onto two lines");
+        lp.number_of_lines = 1;
+        er_text_measure_lines(&lp, w_widest, &lw, &ln);
+        if (ln != 1 || lw != w_hello)
+            return fail("measure_lines: number_of_lines=1 did not stop after the first line");
+        lp.number_of_lines = 0;
+        lp.text = "Hello\nworld";
+        er_text_measure_lines(&lp, 0, &lw, &ln);
+        if (ln != 2 || lw != w_widest)
+            return fail("measure_lines: an explicit newline did not start a second line");
+        lp.text = "";
+        er_text_measure_lines(&lp, 100, &lw, &ln);
+        if (ln != 0 || lw != 0)
+            return fail("measure_lines: empty text should measure no lines");
+
+        /* Spans break as one run: "Hello " + "world" breaks exactly like "Hello world". */
+        ERTextSpan words[2] = {span_plain, span_plain};
+        memcpy(words[0].text, "Hello ", 7);
+        memcpy(words[1].text, "world", 6);
+        lp.text = NULL;
+        lp.spans = words;
+        lp.span_count = 2;
+        er_text_measure_lines(&lp, w_widest, &lw, &ln);
+        if (ln != 2 || lw != w_widest)
+            return fail("measure_lines: spans did not break the way the joined string does");
+    }
+
     /* UTF-8: 2-byte sequence measures wider than the plain ASCII baseline. */
     int w_plain = 0, w_sym = 0;
     er_text_measure("23C", 16, NULL, 0, 0, &w_plain, &dummy);

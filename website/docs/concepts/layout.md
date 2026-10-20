@@ -40,8 +40,13 @@ unresolved sizes to the node's own content, as a flow child would.
 
 **Text** is measured by the engine's own text layout, in the font and size the node uses, and the
 measurement is memoised within a pass so a deep tree does not re-measure the same string on the
-way down. Fonts are bitmaps baked at fixed sizes, so a `fontSize` that was not baked measures at
-the nearest size that was. See [Assets](./assets.md).
+way down. A `<Text>` with no height is as tall as the lines it wraps into at the width it gets, at
+most `numberOfLines`; a text that fits on one line is one line tall. As in Yoga, a child is
+measured no wider than its parent's content box, so a long `<Text>` in a row wraps at the row's
+edge, and one that flexes wraps at the width flexing gives it: `flex: 1` text beside a fixed box
+wraps in the space left, and the row grows to hold it. A row with `overflow: 'scroll'` offers no
+bound, so its text stays on one line. Fonts are bitmaps baked at fixed sizes, so a `fontSize` that 
+was not baked measures at the nearest size that was. See [Assets](./assets.md).
 
 ## What is different
 
@@ -58,7 +63,8 @@ the nearest size that was. See [Assets](./assets.md).
   rectangle collapses to zero, so it takes no space and `onLayout` reports an empty box. This is
   the cheap way to switch between pages: build each once, then flip `display`.
 - **`onLayout` reports the box in screen coordinates**, not the parent's as React Native does,
-  and before any scroll offset or transform. It fires after the commit that laid the node out. Layout is only current once a commit has run, so code that reads a rectangle part-way
+  and before any scroll offset or transform. It fires after the commit that laid the node out. 
+  Layout is only current once a commit has run, so code that reads a rectangle part-way
   through a frame sees the previous commit's answer.
 
 ## Layout that moves

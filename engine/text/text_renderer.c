@@ -79,9 +79,10 @@ typedef struct
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/* Diagnostic: number of glyph-run measurement calls (er_text_measure + er_text_measure_spans)
- * since process start. Exposed via er_text_measure_count() so callers (and tests) can confirm
- * the layout pass's measure_content() cache is actually skipping redundant remeasurement. */
+/* Diagnostic: number of glyph-run measurement calls (er_text_measure, er_text_measure_spans and
+ * er_text_measure_lines) since process start. Exposed via er_text_measure_count() so callers (and
+ * tests) can confirm the layout pass's measure_content() cache is actually skipping redundant
+ * remeasurement. */
 static uint32_t s_text_measure_count = 0;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -849,17 +850,16 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
 }
 
 /**
- * @brief Span mode: merges every span's text into one string and draws it as one run of lines.
+ * @brief Merges every span's text into one string, recording where each span ends.
  *
- * Kept out of er_text_render() so plain text does not carry the merge buffer on its stack.
+ * @param[in]  params    Render parameters; spans[] provides the content (at most ER_TEXT_MAX_SPANS are used).
+ * @param[out] merged    Receives the merged, null-terminated text; SPAN_MERGED_MAX + 1 bytes.
+ * @param[out] span_end  Receives the byte offset in merged where each span ends; ER_TEXT_MAX_SPANS entries.
  *
- * @param[in] params  Render parameters; spans[] provides the content (at most ER_TEXT_MAX_SPANS are drawn).
- * @param[in] font    Font resolved from params.
+ * @return The number of spans merged.
  */
-static ER_NOINLINE void render_span_text(const ERTextRenderParams* params, const BitmapFont* font)
+static uint8_t merge_spans(const ERTextRenderParams* params, char* merged, uint16_t* span_end)
 {
-    char merged[SPAN_MERGED_MAX + 1];
-    uint16_t span_end[ER_TEXT_MAX_SPANS];
     const uint8_t n_spans = (params->span_count < ER_TEXT_MAX_SPANS) ? params->span_count : ER_TEXT_MAX_SPANS;
 
     size_t pos = 0;
@@ -871,9 +871,85 @@ static ER_NOINLINE void render_span_text(const ERTextRenderParams* params, const
         span_end[si] = (uint16_t)pos;
     }
     merged[pos] = '\0';
+    return n_spans;
+}
+
+/**
+ * @brief Span mode: merges every span's text into one string and draws it as one run of lines.
+ *
+ * Kept out of er_text_render() so plain text does not carry the merge buffer on its stack.
+ *
+ * @param[in] params  Render parameters; spans[] provides the content (at most ER_TEXT_MAX_SPANS are drawn).
+ * @param[in] font    Font resolved from params.
+ */
+static ER_NOINLINE void render_span_text(const ERTextRenderParams* params, const BitmapFont* font)
+{
+    char merged[SPAN_MERGED_MAX + 1];
+    uint16_t span_end[ER_TEXT_MAX_SPANS];
+    const uint8_t n_spans = merge_spans(params, merged, span_end);
 
     if (merged[0])
         render_lines(params, font, merged, span_end, n_spans);
+}
+
+/**
+ * @brief Breaks a resolved text run into lines the way render_lines() does, without drawing them.
+ *
+ * @param[in]  params     Text style: letter spacing, faux bold, number_of_lines and spans.
+ * @param[in]  font       Font resolved from params.
+ * @param[in]  src        UTF-8 text to break: params->text, or every span's text merged into one string.
+ * @param[in]  span_end   Span mode: the byte offset in src where each span ends. NULL breaks src as one run.
+ * @param[in]  n_spans    Number of entries in span_end.
+ * @param[in]  max_width  Width to break at in pixels; 0 = break at explicit newlines only.
+ * @param[out] out_width  Receives the widest line's width in pixels.
+ * @param[out] out_lines  Receives the number of lines.
+ */
+static void break_lines(const ERTextRenderParams* params,
+                        const BitmapFont* font,
+                        const char* src,
+                        const uint16_t* span_end,
+                        uint8_t n_spans,
+                        int max_width,
+                        int* out_width,
+                        int* out_lines)
+{
+    LineBreaker lb = {src, font, max_width, (int)params->letter_spacing, params->font_weight != 0U,
+                      (int)params->number_of_lines, 0, false, src, params->spans, span_end, n_spans};
+    LineSpan line;
+    int widest = 0;
+    int lines = 0;
+    while (next_line(&lb, &line))
+    {
+        if (line.px_width > widest)
+            widest = line.px_width;
+        lines++;
+    }
+    *out_width = widest;
+    *out_lines = lines;
+}
+
+/**
+ * @brief Span mode of er_text_measure_lines(): merges the spans and breaks them as one run.
+ *
+ * Kept out of er_text_measure_lines() so plain text does not carry the merge buffer on its stack.
+ *
+ * @param[in]  params     Text and style; spans[] provides the content.
+ * @param[in]  font       Font resolved from params.
+ * @param[in]  max_width  Width to break at in pixels; 0 = break at explicit newlines only.
+ * @param[out] out_width  Receives the widest line's width in pixels.
+ * @param[out] out_lines  Receives the number of lines.
+ */
+static ER_NOINLINE void break_span_text(const ERTextRenderParams* params,
+                                        const BitmapFont* font,
+                                        int max_width,
+                                        int* out_width,
+                                        int* out_lines)
+{
+    char merged[SPAN_MERGED_MAX + 1];
+    uint16_t span_end[ER_TEXT_MAX_SPANS];
+    const uint8_t n_spans = merge_spans(params, merged, span_end);
+
+    break_lines(params, font, merged, span_end, n_spans, max_width, out_width, out_lines);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -999,6 +1075,29 @@ void er_text_measure_spans(const ERTextSpan* spans,
         *out_width = (int)width;
     if (out_height)
         *out_height = (int)font->line_height;
+}
+
+void er_text_measure_lines(const ERTextRenderParams* params, int max_width, int* out_width, int* out_lines)
+{
+    s_text_measure_count++;
+
+    *out_width = 0;
+    *out_lines = 0;
+
+    const bool span_mode = (params->span_count > 0 && params->spans != NULL);
+    if (!span_mode && !params->text)
+        return;
+
+    const BitmapFont* font = font_registry_get(params->font_family, er_text_clamp_font_size(params->font_size));
+    if (!font)
+        return;
+
+    if (max_width < 0)
+        max_width = 0;
+    if (span_mode)
+        break_span_text(params, font, max_width, out_width, out_lines);
+    else
+        break_lines(params, font, params->text, NULL, 0, max_width, out_width, out_lines);
 }
 
 uint32_t er_text_measure_count(void)
