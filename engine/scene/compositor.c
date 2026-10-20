@@ -1562,7 +1562,9 @@ static bool s_prune_ok = false;
  * hidden/scroll, ScrollView, FlatList) bounds them to its own box, so its subtree bounds collapse
  * to that box no matter where the children lay out. subtree_prunable is cleared whenever the
  * subtree contains a transform — whose scratch-rendered output is not captured by the computed
- * box — so render_tree() never prunes such a subtree.
+ * box — so render_tree() never prunes such a subtree. subtree_complex_xf is set whenever the subtree
+ * holds a transform that needs the capture path, clipped children included, so render_node_content()
+ * never buries one under an occluder.
  *
  * Bounds are in computed (pre-scroll) space; render_tree() subtracts the running scroll
  * translation before testing them against the damage clip. Refreshed on layout commits and whenever
@@ -1581,6 +1583,11 @@ static void compute_subtree_bounds(ERNode* n)
     int x1 = x0 + n->computed.w;
     int y1 = y0 + n->computed.h;
     bool prunable = !n->has_transform;
+#if ERUI_TRANSFORMS_FULL
+    bool complex_xf = er_node_has_complex_transform(n);
+#else
+    bool complex_xf = false;
+#endif
     /* A knob wider than the ring paints past the box: widen the prune bounds by its reach. */
     int aw = x1 - x0, ah = y1 - y0;
     expand_for_arc(n, &x0, &y0, &aw, &ah);
@@ -1604,6 +1611,8 @@ static void compute_subtree_bounds(ERNode* n)
             continue;
         }
         compute_subtree_bounds(c);
+        if (c->subtree_complex_xf)
+            complex_xf = true;
         if (!clips)
         {
             /* Non-clipping parent: a child may paint past this box, so grow to cover its subtree. */
@@ -1626,6 +1635,7 @@ static void compute_subtree_bounds(ERNode* n)
     n->sub_w = (int16_t)(x1 - x0);
     n->sub_h = (int16_t)(y1 - y0);
     n->subtree_prunable = prunable;
+    n->subtree_complex_xf = complex_xf;
 }
 
 /* Banded opacity compositing: when a composite region exceeds one scratch strip, the subtree
@@ -2279,7 +2289,9 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         py += (int)n->tp_translate_y;
     }
 #if ERUI_TRANSFORMS_FULL
-    /* An occluded node never captures a transform source: the scratch render would be thrown away. */
+    /* An occluded node never captures a transform source: the scratch render would be thrown away. The
+     * cull never buries a subtree holding one (subtree_complex_xf), so this is reached only by the
+     * bookkeeping-only walk of a commit with nothing to paint. */
     else if (complex_xf && !occluded)
     {
 #if ERUI_3D_TRANSFORMS
@@ -2809,9 +2821,10 @@ static void render_node_content(
      * which deliberately skips the scratch capture — cannot compute. Storing the raw box instead
      * would leave the damage pre-pass comparing a box against an AABB, reading `moved` on every
      * subsequent commit and re-damaging a subtree nobody can see, forever. Such a sibling simply
-     * paints as usual and the occluder covers it a moment later. A clipping container's flag leaves
-     * its children's transforms out, so a transformed node can still be walked occluded inside one;
-     * render_tree still applies a translate-only offset there.
+     * paints as usual and the occluder covers it a moment later. A clipping container's
+     * subtree_prunable leaves its children's transforms out, so subtree_complex_xf, which counts them,
+     * gates the burial too. A translated node can still be walked occluded inside a clipping container;
+     * render_tree applies its offset there, so its record stays right.
      *
      * The children are scanned front to back (the cursor only walks forward), keeping the last match. */
     int occ_idx = -1;
@@ -2875,7 +2888,7 @@ static void render_node_content(
     {
         /* Children before the occluder are buried by it; children from the occluder on still paint.
          * A subtree carrying a transform is never buried — see the note on the cull above. */
-        const bool buried = (i < occ_idx) && child->subtree_prunable;
+        const bool buried = (i < occ_idx) && child->subtree_prunable && !child->subtree_complex_xf;
         render_tree(child, needs_paint, occluded || buried, child_tx, child_ty);
     }
 

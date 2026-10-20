@@ -18,6 +18,7 @@
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include "spring.h"
+#include "transform.h"
 #include <math.h>
 #include <string.h>
 
@@ -359,9 +360,17 @@ static void update_has_transform(ERNode* node)
     node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
                            || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
                            || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
-    /* The compositor caches a prune flag derived from this one, normally refreshed by a layout pass an
-     * animation-only frame skips. Nothing moved, so ask for the bounds refresh alone. */
-    if (node->has_transform != was)
+    /* The compositor caches prune and cull flags derived from this one, normally refreshed by a layout pass
+     * an animation-only frame skips. Nothing moved, so ask for the bounds refresh alone: when a transform
+     * appears or goes, and when one turns complex (a rotate or scale joining a translate) while the cached
+     * subtree_complex_xf says it holds none. One that stops being complex only leaves that flag set, which
+     * costs a cull, never a pixel, until the next layout pass clears it. */
+    bool refresh = node->has_transform != was;
+#if ERUI_TRANSFORMS_FULL
+    if (er_node_has_complex_transform(node) && !node->subtree_complex_xf)
+        refresh = true;
+#endif
+    if (refresh)
         er_request_subtree_bounds_pass();
 }
 

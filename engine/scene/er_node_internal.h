@@ -493,6 +493,11 @@ struct ERNode
      * false when the bounds may be unreliable (a transform in the subtree), disabling the skip there. */
     int16_t sub_x, sub_y, sub_w, sub_h;
     bool subtree_prunable;
+    /* Whether this node or any descendant has a transform that needs the capture path (rotate, scale, 3D),
+     * refreshed with the bounds above. Unlike subtree_prunable it counts the children of a clipping node
+     * too: the occlusion cull reads it, and an occluded walk cannot record a captured node's transformed
+     * footprint wherever in the subtree that node sits. */
+    bool subtree_complex_xf;
     /* Set for the one commit that follows an overflow clip/unclip on this node. What the toggle
      * changes is whether DESCENDANTS may paint outside this box, which the damage pre-pass — which
      * measures every node by its own rect — cannot otherwise see, so the pre-pass damages the

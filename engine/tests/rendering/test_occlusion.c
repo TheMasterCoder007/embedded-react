@@ -26,7 +26,8 @@
  *   - partial: only the siblings BELOW the cover are skipped, the ones above still paint,
  *   - flags retire: a buried node that changed does not re-damage the same pixels forever, and a
  *     TRANSFORMED sibling is never buried at all (it has no box-shaped footprint to record),
- *   - a translated node buried inside a clipping container still records its translated box,
+ *   - a translated node buried inside a clipping container still records its translated box, and a
+ *     rotated one keeps the container from being buried at all,
  *   - pixel equivalence: the culled frame is byte-identical to one rendered with everything drawn.
  *
  * The assertions that a layer WAS skipped are the only ones gated on ERUI_OCCLUSION_CULLING; every
@@ -120,29 +121,47 @@ static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/**
+ * @brief Source-over composites premultiplied pixels, scaled by a global alpha, into the framebuffer.
+ *
+ * Real compositing rather than a counter, so a transformed node — which reaches the panel only through
+ * copy/blend — lands in s_fb and a pixel comparison can see where it was left.
+ */
+static void fb_composite(const void* src, int stride, uint32_t alpha, int x, int y, int w, int h)
+{
+    s_op_count++;
+    for (int row = 0; row < h; row++)
+    {
+        const uint32_t* sp = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
+        for (int col = 0; col < w; col++)
+        {
+            const int dx = x + col, dy = y + row;
+            if (dx < 0 || dx >= SCREEN || dy < 0 || dy >= SCREEN)
+                continue;
+            const uint32_t p = sp[col];
+            const uint32_t sa = div255(((p >> 24) & 0xFFU) * alpha);
+            if (sa == 0U)
+                continue;
+            const uint32_t inv = 255U - sa;
+            uint32_t* d = &s_fb[dy * SCREEN + dx];
+            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
+            *d = 0xFF000000U | ((div255(((p >> 16) & 0xFFU) * alpha) + div255(dr * inv)) << 16)
+                 | ((div255(((p >> 8) & 0xFFU) * alpha) + div255(dg * inv)) << 8)
+                 | (div255((p & 0xFFU) * alpha) + div255(db * inv));
+        }
+    }
+}
+
 static void fb_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
 {
-    (void)src;
-    (void)stride;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
     (void)ctx;
-    s_op_count++;
+    fb_composite(src, stride, 255U, x, y, w, h);
 }
 
 static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
 {
-    (void)src;
-    (void)stride;
-    (void)alpha;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
     (void)ctx;
-    s_op_count++;
+    fb_composite(src, stride, alpha, x, y, w, h);
 }
 
 static ERProps props_default(void)
@@ -440,18 +459,21 @@ static int check_transformed_sibling_not_buried(void)
 }
 #endif
 
-/*
- * A translated node under an opaque cover must record where its pixels are (issue #312). A clipping container
- * leaves its children's transforms out of subtree_prunable, so the cull buries a translated child of one like
- * any other; render_tree then walked it occluded and skipped the translate offset along with the capture,
- * recording its untranslated box. The next move erased that box instead of the pixels the node had painted,
- * and a piece of it stayed on screen.
+/**
+ * @brief Slides a pill along a clipping bar under an opaque panel, then compares the frame with a full repaint.
  *
- * The scene is the issue's: a clipping bar with a pill sliding in from the right, and an opaque panel at the
- * bar's right end whose child changes between the moves, so every other commit repaints only that child and
- * the panel covers it.
+ * The scene from issues #312 and #369: a bar that clips, a pill sliding in from the right, and an opaque panel
+ * at the bar's right end, painted after it, whose child changes between the moves. Every other commit repaints
+ * only that child, so the panel covers the whole damage region and the cull can bury the bar.
+ *
+ * @param[in] rotate_z  The pill's rotation in degrees; 0 leaves it translate-only.
+ * @param[in] animated  Drive every change through animated values instead of props, so no commit after the
+ *                      first runs a layout pass: the pill is laid out translate-only and the rotation, the
+ *                      slide and the blink (an opacity toggle) all arrive on the native driver.
+ *
+ * @return true when the settled frame matches a full repaint of the same scene.
  */
-static int check_translated_node_under_cover_leaves_no_trail(void)
+static bool slide_under_cover_matches_full_repaint(float rotate_z, bool animated)
 {
     static uint32_t reference[SCREEN * SCREEN];
     er_reset();
@@ -469,6 +491,7 @@ static int check_translated_node_under_cover_leaves_no_trail(void)
     ERNode* pill = er_node_create(ER_NODE_VIEW);
     ERProps pp = box(0, 10, 40, 20, C_DEEP);
     pp.transform_translate_x = 140.0f;
+    pp.transform_rotate_z = animated ? 0.0f : rotate_z;
     er_node_set_props(pill, &pp);
     er_tree_append_child(bar, pill);
 
@@ -482,32 +505,84 @@ static int check_translated_node_under_cover_leaves_no_trail(void)
     er_tree_append_child(panel, blink);
 
     er_tree_append_child(root, bar);
-    er_tree_append_child(root, panel); /* painted after the bar: buries it whenever only `blink` repaints */
+    er_tree_append_child(root, panel); /* painted after the bar: covers the damage whenever only `blink` repaints */
     er_tree_set_root(root);
 
     full_frame();
+
+    ERAnimValueHandle slide = er_anim_value_create(140.0f);
+    ERAnimValueHandle spin = er_anim_value_create(0.0f);
+    ERAnimValueHandle fade = er_anim_value_create(1.0f);
+    if (animated)
+    {
+        er_anim_value_bind(slide, pill, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(spin, pill, ER_PROP_ROTATE_Z);
+        er_anim_value_bind(fade, blink, ER_PROP_OPACITY);
+        er_anim_value_set(spin, rotate_z);
+        er_commit();
+    }
 
     bool on = false;
     for (int tx = 140; tx >= 0; tx -= 20)
     {
         on = !on;
-        kp.background_color = on ? 0xFFE0E040U : C_TOP;
-        er_node_set_props(blink, &kp);
+        if (animated)
+            er_anim_value_set(fade, on ? 0.5f : 1.0f);
+        else
+        {
+            kp.background_color = on ? 0xFFE0E040U : C_TOP;
+            er_node_set_props(blink, &kp);
+        }
         er_commit();
 
-        pp.transform_translate_x = (float)tx;
-        er_node_set_props(pill, &pp);
+        if (animated)
+            er_anim_value_set(slide, (float)tx);
+        else
+        {
+            pp.transform_translate_x = (float)tx;
+            er_node_set_props(pill, &pp);
+        }
         er_commit();
     }
 
     memcpy(reference, s_fb, sizeof(reference));
     memset(s_fb, 0, sizeof(s_fb));
     full_frame();
+    return memcmp(reference, s_fb, sizeof(reference)) == 0;
+}
 
-    if (memcmp(reference, s_fb, sizeof(reference)) != 0)
+/*
+ * A translated node under an opaque cover must record where its pixels are (issue #312). A clipping container
+ * leaves its children's transforms out of subtree_prunable, so the cull can bury a translated child of one;
+ * render_tree walks it occluded and must still apply the translate offset, or it records its untranslated box
+ * and the next move erases that box instead of the pixels it painted, leaving a trail.
+ */
+static int check_translated_node_under_cover_leaves_no_trail(void)
+{
+    if (!slide_under_cover_matches_full_repaint(0.0f, false))
         return fail("a translated node walked under an opaque cover left a trail when it next moved");
     return EXIT_SUCCESS;
 }
+
+#if ERUI_TRANSFORMS_FULL
+/*
+ * The same slide with the pill rotated (issue #369). An occluded walk skips the capture, so it cannot record the
+ * transformed footprint the node's pixels occupy, and a record at the raw box would leave the rotated corners on
+ * screen after the next move. The cull must not bury the clipping bar at all while it holds such a node, even
+ * though the bar's subtree_prunable leaves the clipped child's transform out.
+ *
+ * Run twice: with the rotation set as a prop, and with it arriving on the native driver after the last layout
+ * pass, where nothing but the animation itself can tell the cached flag that the bar now holds one.
+ */
+static int check_rotated_node_in_clipper_not_buried(void)
+{
+    if (!slide_under_cover_matches_full_repaint(30.0f, false))
+        return fail("a rotated node inside a clipping container left a trail after being buried by an opaque cover");
+    if (!slide_under_cover_matches_full_repaint(30.0f, true))
+        return fail("a node rotated by an animation inside a clipping container left a trail after being buried");
+    return EXIT_SUCCESS;
+}
+#endif
 
 /*
  * The catch-all. Drive an incremental, damage-clipped sequence over a scene whose occluder is only
@@ -565,6 +640,9 @@ int main(void)
         check_transformed_sibling_not_buried,
 #endif
         check_translated_node_under_cover_leaves_no_trail,
+#if ERUI_TRANSFORMS_FULL
+        check_rotated_node_in_clipper_not_buried,
+#endif
         check_pixel_equivalence,
     };
 
