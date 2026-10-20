@@ -297,4 +297,17 @@ describe('check pass: animation times', () => {
     );
     expect(error.aotLoc).toMatchObject({line: 6});
   });
+
+  it('refuses a loop of delays whose passes add up past the int range, rather than cutting the wait short', () => {
+    const loop = completion =>
+      animApp(
+        'Animated.loop(Animated.sequence([Animated.delay(2e9)]), {iterations: 2})',
+      ).replace('.start(() => {})', `.start(${completion})`);
+    expect(thrown(() => lower(loop('() => {}'))).message).toBe(
+      "AOT: this animation's total time is 4000000000 ms, past the int range",
+    );
+
+    // With no completion there is nothing to wait for, so nothing is too long.
+    expect(() => lower(loop(''))).not.toThrow();
+  });
 });

@@ -1220,12 +1220,7 @@ function lowerLoopStart(
   if (!steps.length) {
     return iterations < 0
       ? emptyStart(ctx, completion)
-      : startNothing(
-          ctx,
-          completion,
-          Math.min(iterations * trailingDelay, INT_MAX),
-          key,
-        );
+      : startNothing(ctx, completion, iterations * trailingDelay, key);
   }
 
   // A timing with no duration and no delay completes inside er_anim_value_animate, so a loop made only of

@@ -24,9 +24,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   or stopping the spring calls it at once with `finished: false`. It was an `AOT:` error since 0.16.0.
 - Flow B: an `Animated` time that folds to `NaN` or `Infinity`, is negative, or is past the int range
   (`Animated.timing(a, {toValue: 1, duration: 0 / 0})`, a `delay`, `Animated.delay(ms)`, the
-  `Animated.stagger(ms, …)` interval) fails with an `AOT:` error that names it and points at it, as do a
-  composition's times that add up past the int range. It used to be written into the generated C as it was
-  (`duration_ms = NaN;`), which does not build.
+  `Animated.stagger(ms, …)` interval) fails with an `AOT:` error that names it and points at it, as do the
+  times of a composition, or of a counted loop's passes, that add up past the int range. It used to be
+  written into the generated C as it was (`duration_ms = NaN;`), which does not build.
 
 ## [0.17.0] - 2026-10-15
 ### Added
