@@ -61,13 +61,18 @@ typedef struct
  */
 typedef struct
 {
-    const char* p;          /**< First byte not yet assigned to a line. */
-    const BitmapFont* font; /**< Font used to measure glyph advances. */
-    int max_w;              /**< Maximum pixel width per line; 0 = no horizontal limit. */
-    int letter_spacing;     /**< Extra pixels added to each glyph advance. */
-    int max_lines;          /**< Maximum lines to produce; 0 = unlimited. */
-    int count;              /**< Lines produced so far. */
-    bool truncated;         /**< Set when max_lines cut the text short. */
+    const char* p;            /**< First byte not yet assigned to a line. */
+    const BitmapFont* font;   /**< Font used to measure glyph advances. */
+    int max_w;                /**< Maximum pixel width per line; 0 = no horizontal limit. */
+    int letter_spacing;       /**< Base extra pixels added to each glyph advance. */
+    bool bold;                /**< Base faux bold: each glyph is drawn one pixel wider. */
+    int max_lines;            /**< Maximum lines to produce; 0 = unlimited. */
+    int count;                /**< Lines produced so far. */
+    bool truncated;           /**< Set when max_lines cut the text short. */
+    const char* src;          /**< Start of the text; span_end offsets count from here. */
+    const ERTextSpan* spans;  /**< Span styles overriding the base; NULL for a single run. */
+    const uint16_t* span_end; /**< Byte offset in src where each span ends; NULL for a single run. */
+    uint8_t n_spans;          /**< Number of entries in spans and span_end. */
 } LineBreaker;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -476,6 +481,37 @@ static void draw_cp(
 }
 
 /**
+ * @brief Returns the advance a codepoint is drawn with: letter spacing and faux bold of the span holding it.
+ *
+ * Matches the draw loop in render_lines() and er_text_measure_spans(), so a line never draws wider than the
+ * width it was broken at.
+ *
+ * @param[in] lb  Breaker state supplying the font, the base style and the spans.
+ * @param[in] at  Byte in lb->src where the codepoint starts.
+ * @param[in] cp  The codepoint.
+ *
+ * @return Cursor advance in pixels.
+ */
+static int drawn_adv(const LineBreaker* lb, const char* at, uint32_t cp)
+{
+    int ls = lb->letter_spacing;
+    bool bold = lb->bold;
+    if (lb->span_end)
+    {
+        const size_t off = (size_t)(at - lb->src);
+        uint8_t si = 0;
+        while (si + 1U < lb->n_spans && off >= lb->span_end[si])
+            si++;
+        const ERTextSpan* sp = &lb->spans[si];
+        if (sp->font_weight != 0xFFU)
+            bold = (sp->font_weight != 0U);
+        if (sp->letter_spacing != ER_LAYOUT_AUTO)
+            ls = (int)sp->letter_spacing;
+    }
+    return glyph_adv(lb->font, cp, ls) + (bold ? 1 : 0);
+}
+
+/**
  * @brief Produces the next line of a UTF-8 string that fits within the breaker's max_w pixels.
  *
  * Wraps on word boundaries (spaces/tabs). Falls back to character-boundary wrapping
@@ -490,9 +526,7 @@ static void draw_cp(
  */
 static bool next_line(LineBreaker* lb, LineSpan* out)
 {
-    const BitmapFont* font = lb->font;
     const int max_w = lb->max_w;
-    const int letter_spacing = lb->letter_spacing;
     const char* p = lb->p;
 
     if (!*p || lb->count >= TEXT_MAX_LINES)
@@ -569,8 +603,9 @@ static bool next_line(LineBreaker* lb, LineSpan* out)
             }
             while (*p == ' ' || *p == '\t')
             {
+                const char* ws_cp = p;
                 uint32_t cp = utf8_next(&p);
-                line_w += glyph_adv(font, cp, letter_spacing);
+                line_w += drawn_adv(lb, ws_cp, cp);
             }
             next_word = p;
             saw_ws = true;
@@ -581,7 +616,7 @@ static bool next_line(LineBreaker* lb, LineSpan* out)
         /* Non-whitespace: a word character. */
         const char* cp_start = p;
         uint32_t cp = utf8_next(&p);
-        const int adv = glyph_adv(font, cp, letter_spacing);
+        const int adv = drawn_adv(lb, cp_start, cp);
 
         if (max_w > 0 && line_w + adv > max_w && cp_start > line_start)
         {
@@ -632,8 +667,9 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
     const bool bold = (params->font_weight != 0U);
     const bool italic = (params->font_style != 0U);
 
-    /* Line breaking always uses the parent ls for measurement. */
-    LineBreaker lb = {src, font, params->clip.w, ls, (int)params->number_of_lines, 0, false};
+    /* Lines break at the advance each glyph is drawn with, span styles and faux bold included. */
+    LineBreaker lb = {src, font, params->clip.w, ls, bold, (int)params->number_of_lines, 0, false,
+                      src, params->spans, span_end, n_spans};
     LineSpan line;
     LineSpan next;
     bool have_next = next_line(&lb, &next);
@@ -676,7 +712,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
             {
                 const char* cps = p;
                 uint32_t cp = utf8_next(&p);
-                const int adv = glyph_adv(font, cp, ls) + (bold ? 1 : 0);
+                const int adv = drawn_adv(&lb, cps, cp);
                 if (w + adv > avail)
                 {
                     p = cps;

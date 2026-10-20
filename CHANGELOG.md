@@ -16,6 +16,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   same anti-aliased edge a background with those radii has. It used to draw square corners, so a rounded
   cover image, or `borderRadius` in an `<ImageBackground>`'s `imageStyle`, had no effect. Flow B accepts
   the radius keys on `<Image>`; it used to reject them with an `AOT:` error.
+- Bold text, and a bold or letter-spaced span inside a `<Text>`, wraps at the width it is drawn with. A
+  bold title slightly wider than its box used to be broken as one line at the regular advance and drawn
+  past the box edge, cut off, instead of wrapping onto a second line; its centered or right-aligned lines
+  sat a pixel per glyph off.
 - In Flow A (QuickJS), `<Pressable disabled>` now withholds its press event handlers (`onPress`, `onLongPress`, `onPressIn`, `onPressOut`) so the engine skips the node during touch hit-testing, matching React Native and Flow B behavior.
 - An `.svg` gradient coordinate that does not parse (`x1="abc"`) now takes its SVG default instead of
   being drawn as 0, so a bad `x2` no longer collapses the gradient to a flat color.

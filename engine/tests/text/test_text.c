@@ -644,5 +644,52 @@ int main(void)
             return fail("mixed-weight span render emitted out-of-bounds pixels");
     }
 
+    /* ---- Bold breaks at its drawn advance: a box exactly as wide as the regular text wraps bold ---- */
+    {
+        int reg_w = 0, line_h = 0;
+        er_text_measure("Hello World", 14, NULL, 0, 0, &reg_w, &line_h);
+
+        memset(&par, 0, sizeof(par));
+        par.text = "Hello World";
+        par.clip = (ERRect){0, 0, reg_w, FB_H};
+        par.color = 0xFFFFFFFFU;
+        par.font_size = 14;
+        par.number_of_lines = 2;
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        er_text_render(&par);
+        if (tc.max_y > line_h)
+            return fail("regular text exactly as wide as its box did not fit on one line");
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        par.font_weight = 1;
+        er_text_render(&par);
+        if (tc.max_y <= line_h)
+            return fail("bold text wider than its box was not wrapped onto a second line");
+
+        /* A bold span in a regular parent breaks at the bold advance too. */
+        ERTextSpan sp4 = {0};
+        sp4.font_weight = 1U;
+        sp4.font_style = 0xFFU;
+        sp4.text_decoration = 0xFFU;
+        sp4.letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(sp4.text, "Hello World", ER_SPAN_TEXT_MAX);
+
+        ctx_reset(&tc);
+        be.ctx = &tc;
+        embedded_renderer_set_backend(&be);
+        par.font_weight = 0;
+        par.text = NULL;
+        par.span_count = 1;
+        par.spans = &sp4;
+        er_text_render(&par);
+        if (tc.max_y <= line_h)
+            return fail("bold span wider than its box was not wrapped onto a second line");
+    }
+
     return EXIT_SUCCESS;
 }
