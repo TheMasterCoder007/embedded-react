@@ -192,6 +192,8 @@ const EmbeddedRenderBackend* er_backend(void);
  *
  * All subsequent er_blit_fill / er_blit_copy / er_blit_blend calls are scissored to the
  * intersection of every pushed clip rectangle.  Calls must be balanced with er_pop_clip_rect().
+ * Once the stack is full a push is not applied, but it is still counted, so its matching pop
+ * leaves every outer clip in place.
  *
  * @param[in] x  Left edge of the clip rectangle.
  * @param[in] y  Top edge of the clip rectangle.
@@ -212,7 +214,8 @@ void er_pop_clip_rect(void);
  *
  * Used by offscreen source captures (transform subtree render) that must rasterise the whole
  * subtree regardless of outer scissors — the captured output is clipped by the restored stack
- * when it is blended out.  Balance with er_pop_clip_rect().
+ * when it is blended out.  Balance with er_pop_clip_rect().  Like er_push_clip_rect(), a push at
+ * a full stack is counted but not applied.
  */
 void er_push_clip_reset(void);
 

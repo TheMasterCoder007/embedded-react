@@ -68,6 +68,10 @@ typedef struct
 {
     ClipEntry clip_stack[ER_CLIP_STACK_DEPTH]; /**< Scissor stack (intersected). */
     int clip_depth;
+    /* Pushes dropped because the stack was full. Each pop undoes one of these before it touches
+     * clip_depth, so a dropped push's matching pop never removes an outer clip still in use. Content
+     * under a dropped clip is clipped only by the deepest entry that fit. */
+    int clip_overflow;
 
     /* Banded rendering. The strip currently being rendered occupies screen rows [band_oy, band_oy +
      * band_h). This is applied at the BACKEND-EMIT boundary only — NOT via the clip stack — so it
@@ -371,7 +375,10 @@ void er_scratch_end(void)
 void er_push_clip_rect(int x, int y, int w, int h)
 {
     if (rc()->clip_depth >= ER_CLIP_STACK_DEPTH)
+    {
+        rc()->clip_overflow++;
         return;
+    }
 
     ClipEntry entry = {x, y, w, h};
 
@@ -401,14 +408,19 @@ void er_push_clip_rect(int x, int y, int w, int h)
 
 void er_pop_clip_rect(void)
 {
-    if (rc()->clip_depth > 0)
+    if (rc()->clip_overflow > 0)
+        rc()->clip_overflow--;
+    else if (rc()->clip_depth > 0)
         rc()->clip_depth--;
 }
 
 void er_push_clip_reset(void)
 {
     if (rc()->clip_depth >= ER_CLIP_STACK_DEPTH)
+    {
+        rc()->clip_overflow++;
         return;
+    }
     /* Full-extent entry pushed WITHOUT intersecting the current top: used by offscreen source
      * captures (transform subtree render) that must see the whole subtree regardless of outer
      * scissors — the captured OUTPUT is clipped by the restored stack when it is blended out. */
@@ -677,6 +689,7 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
     {
         NRCtx* c = &s_ctx[i];
         c->clip_depth = 0;
+        c->clip_overflow = 0;
         c->band_oy = 0;
         c->band_h = 0;
         c->scratch_buf = NULL;
