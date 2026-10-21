@@ -3336,6 +3336,54 @@ static void fixture_wrap_auto_height_nested(void)
     er_reset();
 }
 
+/** @brief A wrapping row sized by flex inside a row grows to hold the lines it wraps into at its flexed width. */
+static void fixture_wrap_auto_height_flexed(void)
+{
+    er_reset();
+
+    ERProps cp = props_default();
+    cp.width = 200;
+    cp.height = 200;
+    cp.flex_direction = ER_FLEX_COL;
+    ERNode* col = mk(cp, NULL);
+
+    ERRect outer, wrap_r, marker;
+    ERProps op = props_default();
+    op.flex_direction = ER_FLEX_ROW;
+    op.align_items = ER_ALIGN_FLEX_START;
+    ERNode* row = mk(op, &outer);
+    er_tree_append_child(col, row);
+
+    ERProps lp = props_default();
+    lp.width = 40;
+    lp.height = 20;
+    er_tree_append_child(row, mk(lp, NULL));
+
+    ERProps rp = props_default();
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.flex_wrap = ER_WRAP_WRAP;
+    rp.flex_grow = 1;
+    rp.flex_shrink = 1;
+    rp.flex_basis = 0;
+    ERNode* wrap = mk(rp, &wrap_r);
+    er_tree_append_child(row, wrap);
+    for (int i = 0; i < 5; i++)
+        er_tree_append_child(wrap, mk(lp, NULL));
+
+    ERProps mp = props_default();
+    mp.height = 10;
+    er_tree_append_child(col, mk(mp, &marker));
+
+    er_tree_set_root(col);
+    er_commit();
+
+    /* Flexed to 160, the wrapping row holds four 40s on its first line and one on its second. */
+    pcheck("wrap-auto-flexed", "outer", EXPECT, outer, 0, 0, 200, 40);
+    pcheck("wrap-auto-flexed", "wrap", EXPECT, wrap_r, 40, 0, 160, 40);
+    pcheck("wrap-auto-flexed", "marker", EXPECT, marker, 0, 40, 200, 10);
+    er_reset();
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -3420,6 +3468,7 @@ int main(void)
     fixture_wrap_auto_height();
     fixture_wrap_auto_height_gap();
     fixture_wrap_auto_height_nested();
+    fixture_wrap_auto_height_flexed();
 
     printf("\nYoga parity: %d passed, %d known-divergence (xfail), %d regressions, %d to promote\n",
            g_pass,
