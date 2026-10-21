@@ -1086,6 +1086,138 @@ static void fixture_flow_aspect_ratio_auto_parent(void)
     er_reset();
 }
 
+/** @brief An auto-height parent measures a child with a percentage width and aspectRatio at its ratio height. */
+static void fixture_flow_aspect_ratio_pct_measured(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 300;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect col, ra;
+    ERProps p = props_default();
+    p.width = 200;
+    p.align_items = ER_ALIGN_FLEX_START;
+    ERNode* c = mk(p, &col);
+    er_tree_append_child(root, c);
+
+    p = props_default();
+    p.width_pct = 50.0f;
+    p.aspect_ratio = 2.0f;
+    er_tree_append_child(c, mk(p, &ra));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-pct-meas", "col", EXPECT, col, 0, 0, 200, 50);
+    pcheck("flow-aspect-pct-meas", "a", EXPECT, ra, 0, 0, 100, 50);
+    er_reset();
+}
+
+/**
+ * @brief Builds a container holding one aspectRatio child that flexes, and captures the child's rect.
+ *
+ * @param[in]  row     Whether the container is a row.
+ * @param[in]  w       Container width.
+ * @param[in]  h       Container height.
+ * @param[in]  size    The child's main size.
+ * @param[in]  grow    The child's flex_grow.
+ * @param[in]  shrink  The child's flex_shrink.
+ * @param[out] out     Receives the child's rect.
+ */
+static void
+build_flexed_aspect(const bool row, int16_t w, int16_t h, int16_t size, int16_t grow, int16_t shrink, ERRect* out)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = w;
+    rp.height = h;
+    rp.flex_direction = row ? ER_FLEX_ROW : ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERProps p = props_default();
+    if (row)
+        p.width = size;
+    else
+        p.height = size;
+    p.aspect_ratio = 2.0f;
+    p.flex_grow = grow;
+    p.flex_shrink = shrink;
+    er_tree_append_child(root, mk(p, out));
+
+    er_tree_set_root(root);
+    er_commit();
+}
+
+/** @brief aspectRatio gives the cross size from the main size an item flexes to, not its basis. */
+static void fixture_flow_aspect_ratio_flexed(void)
+{
+    ERRect ra;
+    build_flexed_aspect(true, 80, 200, 100, 0, 1, &ra);
+    pcheck("flow-aspect-flexed", "shrink", EXPECT, ra, 0, 0, 80, 40);
+    build_flexed_aspect(true, 200, 200, 50, 1, 0, &ra);
+    pcheck("flow-aspect-flexed", "grow", EXPECT, ra, 0, 0, 200, 100);
+    build_flexed_aspect(false, 300, 80, 100, 0, 1, &ra);
+    pcheck("flow-aspect-flexed", "col", EXPECT, ra, 0, 0, 160, 80);
+    er_reset();
+
+    /* An auto-height row is measured at the height its shrunk child ends up with. */
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 200;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect row;
+    ERProps p = props_default();
+    p.width = 80;
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_FLEX_START;
+    ERNode* r = mk(p, &row);
+    er_tree_append_child(root, r);
+
+    p = props_default();
+    p.width = 100;
+    p.aspect_ratio = 2.0f;
+    p.flex_shrink = 1;
+    er_tree_append_child(r, mk(p, &ra));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-flexed", "row", EXPECT, row, 0, 0, 80, 40);
+    pcheck("flow-aspect-flexed", "a", EXPECT, ra, 0, 0, 80, 40);
+    er_reset();
+}
+
+/** @brief Stretch does not override a cross size that aspectRatio gives: width 100, ratio 2 stays 50 high. */
+static void fixture_flow_aspect_ratio_stretch(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 120;
+    rp.flex_direction = ER_FLEX_ROW;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps p = props_default();
+    p.width = 100;
+    p.aspect_ratio = 2.0f;
+    er_tree_append_child(root, mk(p, &ra));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-stretch", "a", EXPECT, ra, 0, 0, 100, 50);
+    er_reset();
+}
+
 /** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
 static void fixture_abs_content_overflows(void)
 {
@@ -3244,6 +3376,9 @@ int main(void)
     fixture_flow_aspect_ratio_column();
     fixture_flow_aspect_ratio_clamped();
     fixture_flow_aspect_ratio_auto_parent();
+    fixture_flow_aspect_ratio_pct_measured();
+    fixture_flow_aspect_ratio_flexed();
+    fixture_flow_aspect_ratio_stretch();
     fixture_abs_content_overflows();
     fixture_abs_containing_block();
     fixture_abs_padding_box_edges();

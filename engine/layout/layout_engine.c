@@ -671,6 +671,36 @@ static int16_t aspect_main_size(const ERLayoutSpec* cl, const bool is_row, const
 }
 
 /**
+ * @brief Whether aspect_ratio gives an item its cross size from its main size.
+ *
+ * @param[in] cl      The item's layout spec.
+ * @param[in] is_row  Whether the container's main axis is horizontal.
+ *
+ * @return true when the item has an aspect_ratio and no explicit or percentage cross size.
+ */
+static bool cross_from_aspect(const ERLayoutSpec* cl, const bool is_row)
+{
+    return cl->aspect_ratio > 0.0f && (is_row ? cl->height : cl->width) == ER_LAYOUT_AUTO
+           && (is_row ? cl->height_pct : cl->width_pct) <= 0.0f;
+}
+
+/**
+ * @brief The cross size aspect_ratio gives an item from its main size.
+ *
+ * @param[in] cl      The item's layout spec.
+ * @param[in] is_row  Whether the main axis is horizontal, so the size returned is a height.
+ * @param[in] main    The item's main size.
+ *
+ * @return The cross size, held to the item's cross-axis min/max.
+ */
+static int16_t aspect_cross_size(const ERLayoutSpec* cl, const bool is_row, const int16_t main)
+{
+    const float cross = is_row ? (float)main / cl->aspect_ratio : (float)main * cl->aspect_ratio;
+    return clamp_size(
+        round_px(cross), is_row ? cl->min_height : cl->min_width, is_row ? cl->max_height : cl->max_width);
+}
+
+/**
  * @brief A flex item's base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > aspect ratio >
  * intrinsic.
  *
@@ -944,7 +974,11 @@ static bool measure_flexed_row(const ERNode* n,
     int16_t cross_max = 0;
     for (int k = 0; k < i; k++)
     {
-        remeasure_cross(&items[k]);
+        const ERNode* c = er_get_node(items[k].tag);
+        if (c && cross_from_aspect(&c->layout, true))
+            items[k].cross = aspect_cross_size(&c->layout, true, items[k].main);
+        else
+            remeasure_cross(&items[k]);
         main_sum += (int32_t)items[k].main + items[k].margin_main_start + items[k].margin_main_end;
         const int32_t outer_h = (int32_t)items[k].cross + items[k].margin_cross_start + items[k].margin_cross_end;
         if (outer_h > cross_max)
@@ -1006,11 +1040,17 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
     const ERLayoutSpec* L = &n->layout;
     int16_t exp_w = L->width;
     int16_t exp_h = L->height;
-    /* aspect_ratio turns an explicit size on one axis into one on the other. */
-    if (exp_w == ER_LAYOUT_AUTO)
-        exp_w = aspect_main_size(L, true, ER_LAYOUT_AUTO);
-    else if (exp_h == ER_LAYOUT_AUTO)
-        exp_h = aspect_main_size(L, false, ER_LAYOUT_AUTO);
+    /* aspect_ratio turns a definite size on one axis into one on the other. A percentage width
+     * arrives already resolved as avail_w. */
+    if (L->aspect_ratio > 0.0f)
+    {
+        if (exp_w == ER_LAYOUT_AUTO && L->width_pct > 0.0f)
+            exp_w = avail_w;
+        if (exp_w == ER_LAYOUT_AUTO)
+            exp_w = aspect_main_size(L, true, ER_LAYOUT_AUTO);
+        else if (exp_h == ER_LAYOUT_AUTO)
+            exp_h = aspect_cross_size(L, true, clamp_size(exp_w, L->min_width, L->max_width));
+    }
 
     /* Text leaf: measure the glyph run, then add the node's own padding — the glyphs are this node's
      * content, so an auto axis has to grow around them exactly as a container grows around a child
@@ -1258,13 +1298,12 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             const int16_t main_mx = is_row ? cl->max_width : cl->max_height;
 
             /* Base cross size (stretch may override later if still auto). When aspect_ratio
-             * will drive the cross size below, skip measuring: the aspect branch overwrites
-             * whatever the intrinsic fallback would have produced anyway. */
+             * will drive the cross size after flexing, skip measuring. */
             const int16_t crosssz = is_row ? cl->height : cl->width;
             const float cross_pct = is_row ? cl->height_pct : cl->width_pct;
             const int16_t cross_mn = is_row ? cl->min_height : cl->min_width;
             const int16_t cross_mx = is_row ? cl->max_height : cl->max_width;
-            const bool cross_via_aspect = cl->aspect_ratio > 0.0f && crosssz == ER_LAYOUT_AUTO && cross_pct <= 0.0f;
+            const bool cross_via_aspect = cross_from_aspect(cl, is_row);
             int16_t hypo_cross;
             int16_t measured_w = ER_LAYOUT_AUTO;
             if (cross_pct > 0.0f)
@@ -1272,7 +1311,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             else if (crosssz != ER_LAYOUT_AUTO)
                 hypo_cross = crosssz;
             else if (cross_via_aspect)
-                hypo_cross = 0; /* placeholder — overwritten by the aspect_ratio branch below */
+                hypo_cross = 0; /* placeholder — set from the flexed main size after Pass 3 */
             else
             {
                 measure_lazy(ct, avail_w, &measured, &intr_w, &intr_h);
@@ -1281,18 +1320,6 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
                     measured_w = intr_w;
             }
             hypo_cross = clamp_size(hypo_cross, cross_mn, cross_mx);
-
-            /* aspect_ratio: if the cross dimension is auto (no explicit size or percentage),
-             * derive it from the main. aspect_ratio == width / height, so:
-             *   row  direction: cross (height) = main (width)  / aspect_ratio
-             *   col  direction: cross (width)  = main (height) * aspect_ratio
-             */
-            if (cross_via_aspect)
-            {
-                const float new_cross =
-                    is_row ? (float)hypo_main / cl->aspect_ratio : (float)hypo_main * cl->aspect_ratio;
-                hypo_cross = clamp_size((int16_t)(new_cross + 0.5f), cross_mn, cross_mx);
-            }
 
             /* Per-edge margins. */
             const int16_t ml = edge_or(cl->margin_left, cl->margin);
@@ -1364,6 +1391,14 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
     {
         for (int ln = 0; ln < n_lines; ln++)
             resolve_flex_line(s_scratch, n_inflow, ln, main_size, main_gap, rev_main);
+    }
+
+    /* aspect_ratio gives the cross size from the main size each item flexed to. */
+    for (int i = 0; i < n_inflow; i++)
+    {
+        const ERNode* c = er_get_node(s_scratch[i].tag);
+        if (c && cross_from_aspect(&c->layout, is_row))
+            s_scratch[i].cross = aspect_cross_size(&c->layout, is_row, s_scratch[i].main);
     }
 
     /*--------------------------------------------------------------------------
@@ -1589,13 +1624,14 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             {
                 case ER_ALIGN_STRETCH:
                 {
-                    /* Stretch fills cross-axis only when size was auto (no explicit px or %). */
+                    /* Stretch fills cross-axis only when size was auto (no explicit px or %, and no
+                     * aspect_ratio giving it, as in Yoga). */
                     const ERNode* c = er_get_node(s_scratch[i].tag);
                     if (c)
                     {
                         const int16_t cz = is_row ? c->layout.height : c->layout.width;
                         const float cz_pct = is_row ? c->layout.height_pct : c->layout.width_pct;
-                        if (cz == ER_LAYOUT_AUTO && cz_pct <= 0.0f)
+                        if (cz == ER_LAYOUT_AUTO && cz_pct <= 0.0f && c->layout.aspect_ratio <= 0.0f)
                         {
                             const int16_t mn = is_row ? c->layout.min_height : c->layout.min_width;
                             const int16_t mx = is_row ? c->layout.max_height : c->layout.max_width;
