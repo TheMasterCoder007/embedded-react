@@ -217,14 +217,14 @@ function bindParams(
     bindings.set(param.name, {static: true, value: propsObject});
   } else if (param.type === 'ObjectPattern') {
     // `function C({x, y: renamed, z = 1})`: bind each name to its prop, else to its folded default.
-    for (const property of param.properties) {
+    const properties = param.properties.map(property => {
       if (property.type === 'RestElement') {
         throw new Error(
           'AOT: rest props (...rest) in a component param not supported',
         );
       }
 
-      // Resolve a destructured prop's source name, local binding name, and optional default value descriptor.
+      // Resolve a destructured prop's source name and local binding name.
       const propName =
         (property.key as t.Identifier).name ??
         (property.key as t.StringLiteral).value;
@@ -234,18 +234,28 @@ function bindParams(
           : property.value?.type === 'AssignmentPattern'
             ? (property.value.left as t.Identifier).name
             : propName;
+      return {property, propName, bindName};
+    });
+
+    // As in JS, the pattern's names shadow module ones in a default, and each is in reach only once bound.
+    const defaultScope: Scope = {...scope};
+    for (const {bindName} of properties) delete defaultScope[bindName];
+
+    for (const {property, propName, bindName} of properties) {
       let descriptor = props[propName];
       if (!descriptor && property.value?.type === 'AssignmentPattern') {
         descriptor = {
           static: true,
           value: bindConst(
             bindName,
-            evalStatic(property.value.right, scope, 'boot'),
+            evalStatic(property.value.right, defaultScope, 'boot'),
           ),
         };
       }
 
-      bindings.set(bindName, descriptor ?? {static: true, value: undefined});
+      descriptor ??= {static: true, value: undefined};
+      if (descriptor.static) defaultScope[bindName] = descriptor.value;
+      bindings.set(bindName, descriptor);
     }
   } else {
     throw new Error('AOT: unsupported component parameter pattern');
