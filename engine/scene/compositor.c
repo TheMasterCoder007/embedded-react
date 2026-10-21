@@ -2266,6 +2266,9 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     /* --- 2D/3D transform application --- */
     bool doing_affine = false;
     bool doing_replay = false;
+    /* An occluded node whose capture would have been admitted: it captures nothing, but records and
+     * scopes its subtree exactly as doing_affine does (see the transform block below). */
+    bool doing_bookkeeping_capture = false;
     int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
     float xf_ia = 1.0f, xf_ib = 0.0f, xf_ic = 0.0f, xf_id = 1.0f, xf_itx = 0.0f, xf_ity = 0.0f;
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
@@ -2289,10 +2292,18 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         py += (int)n->tp_translate_y;
     }
 #if ERUI_TRANSFORMS_FULL
-    /* An occluded node never captures a transform source: the scratch render would be thrown away. The
-     * cull never buries a subtree holding one (subtree_complex_xf), so this is reached only by the
-     * bookkeeping-only walk of a commit with nothing to paint. */
-    else if (complex_xf && !occluded)
+    /* An occluded node never captures a transform source: the scratch render would be thrown away. It
+     * still works out the footprint, because last_paint_rect must say where its pixels ARE, which is
+     * where its last real paint put them: the transformed AABB whenever the capture would have been
+     * admitted. The cull never buries a subtree holding one (subtree_complex_xf), so an occluded node
+     * gets here only on the bookkeeping-only walk of a commit whose every change clamped off-screen —
+     * and since the dirty chain reaches the root, that walk refreshes the record of every node on screen.
+     * A raw box recorded there would have the next move erase it and leave the transformed corners behind.
+     *
+     * Admission is predicted the way er_transform_source_begin() decides it: the source fits and no
+     * capture is running. xf_capturing stands in for the latter, real or predicted, so a nested node
+     * records the raw box its real paint would fall back to. */
+    else if (complex_xf)
     {
 #if ERUI_3D_TRANSFORMS
         if (er_transform_is_3d(n))
@@ -2304,7 +2315,10 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
 
             if (er_transform_homography_invert(H, xf_inv_H))
             {
-                if (cc()->tile_active && !cc()->tile_first && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
+                if (occluded)
+                    doing_bookkeeping_capture = !cc()->xf_capturing && er_transform_source_fits(w, h);
+                else if (cc()->tile_active && !cc()->tile_first
+                         && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
                 {
                     doing_replay = true;
                     doing_3d = true;
@@ -2327,7 +2341,10 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
 
             if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity))
             {
-                if (cc()->tile_active && !cc()->tile_first && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
+                if (occluded)
+                    doing_bookkeeping_capture = !cc()->xf_capturing && er_transform_source_fits(w, h);
+                else if (cc()->tile_active && !cc()->tile_first
+                         && er_transform_source_is_cached(n->tag, cc()->cur_loop_gen))
                 {
                     doing_replay = true;
                 }
@@ -2372,7 +2389,11 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * assignment, so a node that starts its own capture still reports its own transformed AABB. */
     const bool xf_outer_capturing = cc()->xf_capturing;
     const ERRect xf_outer_dst = cc()->xf_capture_dst;
-    if (doing_affine)
+    /* The node's pixels are (or, occluded, were last painted as) its capture's inverse-map blit. */
+    const bool xf_footprint = doing_affine || doing_bookkeeping_capture;
+    if (doing_bookkeeping_capture)
+        er_push_clip_reset(); /* what er_transform_source_begin() pushes: the subtree is walked in source space */
+    if (xf_footprint)
     {
         cc()->tile_active = false;
         cc()->xf_capturing = true;
@@ -2389,10 +2410,10 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * subsequent commit, re-damaging the same pixels for as long as it stays hidden. */
     if (needs_paint)
     {
-        int lp_x = doing_affine ? dst_x : px;
-        int lp_y = doing_affine ? dst_y : py;
-        int lp_w = doing_affine ? dst_w : w;
-        int lp_h = doing_affine ? dst_h : h;
+        int lp_x = xf_footprint ? dst_x : px;
+        int lp_y = xf_footprint ? dst_y : py;
+        int lp_w = xf_footprint ? dst_w : w;
+        int lp_h = xf_footprint ? dst_h : h;
         /* RECORD WHAT WAS PAINTED, not the bare box: the knob's reach past the box and the shadow's
          * bleed around it are on the panel too, so every reader of this trail — the move erase below,
          * note_removed_subtree(), propagate_hidden(), er_node_destroy() — must erase them with it.
@@ -2403,7 +2424,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
          * Neither is added on the affine path, which bounds itself by the transformed layout box: a
          * captured node's knob is clipped by the scratch and it casts no shadow at all (see the
          * shadow block below, gated on the same `!doing_affine`). */
-        if (!doing_affine)
+        if (!xf_footprint)
         {
             expand_for_arc(n, &lp_x, &lp_y, &lp_w, &lp_h);
 #if ERUI_SHADOWS
@@ -2416,7 +2437,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         n->last_paint_rect.y = (int16_t)lp_y;
         n->last_paint_rect.w = (int16_t)lp_w;
         n->last_paint_rect.h = (int16_t)lp_h;
-        n->last_paint_untransformed = !doing_affine;
+        n->last_paint_untransformed = !xf_footprint;
         n->has_last_paint = true;
     }
 
@@ -2452,7 +2473,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         {
             union_dirty_rect(xf_outer_dst.x, xf_outer_dst.y, xf_outer_dst.w, xf_outer_dst.h);
         }
-        else if (doing_affine)
+        else if (xf_footprint)
         {
             union_dirty_rect(dst_x, dst_y, dst_w, dst_h);
         }
@@ -2548,6 +2569,13 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
 #endif
             er_transform_source_end_blit(
                 px, py, w, h, xf_ia, xf_ib, xf_ic, xf_id, xf_itx, xf_ity, dst_x, dst_y, dst_w, dst_h);
+    }
+    else if (doing_bookkeeping_capture)
+    {
+        er_pop_clip_rect(); /* the clip reset pushed above; nothing was captured, so nothing is blitted */
+    }
+    if (xf_footprint)
+    {
         cc()->tile_active = xf_saved_tile_active;
         cc()->xf_capturing = xf_outer_capturing;
         cc()->xf_capture_dst = xf_outer_dst;

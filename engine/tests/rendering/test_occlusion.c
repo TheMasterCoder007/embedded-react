@@ -582,6 +582,97 @@ static int check_rotated_node_in_clipper_not_buried(void)
         return fail("a node rotated by an animation inside a clipping container left a trail after being buried");
     return EXIT_SUCCESS;
 }
+
+/*
+ * A commit whose only change lands off-screen paints nothing, but still walks the tree, marked occluded, to retire
+ * the changed node's flags. The dirty chain reaches the root, so every node on that walk refreshes its paint
+ * record. A rotated node the walk does not capture must still record the transformed footprint its pixels
+ * occupy, or its next move erases the raw box instead and leaves the rotated corners on screen.
+ *
+ * Two nodes whose real paint falls back to the raw box ride along, so the walk has to predict the capture's
+ * admission rather than assume it: a rotated child of the rotated node (a capture is already running) and a
+ * rotated strip too wide for the transform source. A wrong guess for the strip over-erases rather than
+ * trails, so it is caught by the reported dirty rect instead: a record the damage pre-pass does not predict
+ * re-damages on every commit.
+ */
+static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
+{
+    static uint32_t reference[SCREEN * SCREEN];
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps rp = box(0, 0, SCREEN, SCREEN, C_ROOT);
+    rp.position = ER_POS_RELATIVE;
+    er_node_set_props(root, &rp);
+
+    ERNode* spun = er_node_create(ER_NODE_VIEW);
+    ERProps sp = box(40, 40, 60, 30, C_DEEP);
+    sp.transform_rotate_z = 30.0f;
+    er_node_set_props(spun, &sp);
+
+    ERNode* nested = er_node_create(ER_NODE_VIEW);
+    ERProps np = box(10, 5, 20, 10, C_INNER);
+    np.transform_rotate_z = 20.0f;
+    er_node_set_props(nested, &np);
+    er_tree_append_child(spun, nested);
+
+    ERNode* wide = er_node_create(ER_NODE_VIEW);
+    ERProps wp = box(-30, 150, ERUI_XFORM_W + 10, 12, C_COVER);
+    wp.transform_rotate_z = 3.0f;
+    er_node_set_props(wide, &wp);
+
+    /* Entirely left of the screen: its damage clamps to nothing. */
+    ERNode* offscreen = er_node_create(ER_NODE_VIEW);
+    ERProps op = box(-100, 0, 20, 20, C_TOP);
+    er_node_set_props(offscreen, &op);
+
+    ERNode* marker = er_node_create(ER_NODE_VIEW);
+    ERProps mp = box(180, 180, 10, 10, C_TOP);
+    er_node_set_props(marker, &mp);
+
+    er_tree_append_child(root, spun);
+    er_tree_append_child(root, wide);
+    er_tree_append_child(root, offscreen);
+    er_tree_append_child(root, marker);
+    er_tree_set_root(root);
+
+    full_frame();
+
+    op.background_color = 0xFF123456U;
+    er_node_set_props(offscreen, &op);
+    er_commit();
+
+    /* Each record must also be the one the damage pre-pass predicts, or the node reads as moved on every
+     * commit from here on. Nothing repaints a clean node, so the pixels stay right and the check below
+     * would pass; what leaks is the reported dirty rect. Recolour a marker far from every transformed
+     * node: the report must be the marker alone. */
+    mp.background_color = 0xFF00AAFFU;
+    er_node_set_props(marker, &mp);
+    er_commit();
+    ERRect after;
+    if (!er_get_dirty_rect(&after))
+        return fail("recolouring the marker reported no damage");
+    if (after.x < 160 || after.y < 160)
+        return fail("after an off-screen-only commit, a transformed node re-damaged a footprint it did not paint");
+
+    /* That commit painted, so every record is a real one again. Go back off-screen, then move. */
+    op.background_color = C_TOP;
+    er_node_set_props(offscreen, &op);
+    er_commit();
+
+    sp.transform_translate_x = 60.0f;
+    er_node_set_props(spun, &sp);
+    wp.transform_translate_y = -20.0f;
+    er_node_set_props(wide, &wp);
+    er_commit();
+
+    memcpy(reference, s_fb, sizeof(reference));
+    memset(s_fb, 0, sizeof(s_fb));
+    full_frame();
+    if (memcmp(reference, s_fb, sizeof(reference)) != 0)
+        return fail("a rotated node left a trail after a commit whose only change was off-screen");
+    return EXIT_SUCCESS;
+}
 #endif
 
 /*
@@ -642,6 +733,7 @@ int main(void)
         check_translated_node_under_cover_leaves_no_trail,
 #if ERUI_TRANSFORMS_FULL
         check_rotated_node_in_clipper_not_buried,
+        check_rotated_node_keeps_footprint_across_offscreen_change,
 #endif
         check_pixel_equivalence,
     };

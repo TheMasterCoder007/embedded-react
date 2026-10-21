@@ -12,10 +12,16 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
-- A translated node inside an `overflow: 'hidden'` container no longer leaves a trail when it moves after a
-  frame in which an opaque view painted over it repainted only its own content (a pill sliding along a
-  clipping bar under a panel whose child changes every frame). That frame recorded the node at its
-  untranslated box, so the next move erased that box instead of the node's pixels.
+- With `ERUI_TRANSFORMS=FULL`, a rotated, scaled, or 3D-transformed node no longer leaves a trail when it
+  moves after a commit whose only change was off-screen (a node outside the screen, or scrolled out of
+  view, changing). That commit painted nothing, but recorded the node at its untransformed box, so the next
+  move erased that box instead of the transformed area its pixels cover.
+- A translated, rotated, or scaled node inside an `overflow: 'hidden'` container no longer leaves a trail
+  when it moves after a frame in which an opaque view painted over it repainted only its own content (a pill
+  sliding along a clipping bar under a panel whose child changes every frame). That frame recorded the node
+  at its untransformed box, so the next move erased that box instead of the node's pixels. A container
+  holding a rotated, scaled, or 3D-transformed node is now always painted under an opaque cover rather than
+  skipped, as one without clipping already was.
 - A `<Text>` with no height is as tall as the lines it wraps into at the width it gets, at most
   `numberOfLines`. It used to be laid out one line tall, so everything after its first line was cut off,
   and `numberOfLines` reserved that many lines even for a one-line label. As in React Native, a child is
@@ -78,7 +84,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [0.16.0] - 2026-10-14
 ### Changed
 
-- **Breaking (Flow B):** every element declares the props, style keys and children it lowers, and anything else
+- **Breaking (Flow B):** every element declares the props, style keys, and children it lowers, and anything else
   is an `AOT:` error at the prop: an unknown prop, a style key the engine doesn't draw on that element
   (`opacity` on a `<Text>`), text outside a `<Text>`, or children on an `<Image>`. Props that were accepted
   and ignored (`<TextInput autoFocus>`, `<Modal transparent>`, a disabled `<Switch>`) are refused too.
