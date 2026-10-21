@@ -220,6 +220,15 @@ describe('handler statements lower to the IR', () => {
     ]);
   });
 
+  it('refuses an empty slot in a list append', () => {
+    expect(() =>
+      lowerBody(
+        "setItems([...items, , {name: 'b'}]);",
+        stateOf(list('items', [{key: 'name', kind: 'string'}])),
+      ),
+    ).toThrow('AOT: a list literal has an empty slot');
+  });
+
   it('refuses a statement it cannot lower', () => {
     expect(() => lowerBody('for (;;) {}', stateOf())).toThrow(
       /unsupported statement "ForStatement"/,

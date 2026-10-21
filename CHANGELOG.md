@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: an empty slot in a list append or an `updateVector` dirty rect (`[...items, , item]`) is now a
+  located compile error instead of a compiler crash.
 - AOT: a component's prop default can now use a module constant (`function Box({ size = SIZE })`).
 - A view or `Image` with `aspectRatio` and only a height (or only a width in a column) now takes its other
   size from the ratio instead of from its content, and keeps its ratio when it flexes or is stretched.

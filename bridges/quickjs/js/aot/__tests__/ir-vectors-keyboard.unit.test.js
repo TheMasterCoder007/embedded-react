@@ -412,4 +412,10 @@ describe('vector IR: updateVector', () => {
       lowerHandler('updateVector(art, [{rect: [1, 2, 3, 4, , 6]}]);'),
     ).toThrow('AOT: updateVector "rect" has an empty slot at position 4');
   });
+
+  it('rejects an empty slot in the dirty rect', () => {
+    expect(() =>
+      lowerHandler('updateVector(art, [{circle: [1, 2, 3]}], [0, , 40, 40]);'),
+    ).toThrow('AOT: updateVector dirtyRect has an empty slot at position 1');
+  });
 });

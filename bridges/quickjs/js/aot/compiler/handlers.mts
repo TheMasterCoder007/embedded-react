@@ -145,7 +145,10 @@ function lowerListOp(
     // Each appended object literal fills the fields of the next free slot; a full list drops it.
     const statements: IrStmt[] = [];
     for (const item of appendedItems) {
-      if (item!.type !== 'ObjectExpression') {
+      if (!item) {
+        throw aotError('AOT: a list literal has an empty slot');
+      }
+      if (item.type !== 'ObjectExpression') {
         throw new Error('AOT: appended list items must be object literals');
       }
 
@@ -451,19 +454,16 @@ function imperativeShape(
     }
 
     // A hole (`[1, , 3]`) has no value to lower; an optional rect radius left out is just a shorter array.
-    const values = elements.slice(0, count);
-    const hole = values.findIndex(valueNode => valueNode == null);
-    if (hole >= 0) {
-      throw aotError(
-        `AOT: updateVector "${key}" has an empty slot at position ${hole}`,
-        shapeHint,
-      );
-    }
+    return elements.slice(0, count).map((valueNode, position) => {
+      if (!valueNode) {
+        throw aotError(
+          `AOT: updateVector "${key}" has an empty slot at position ${position}`,
+          shapeHint,
+        );
+      }
 
-    return values.map(valueNode => ({
-      kind: 'float',
-      value: lowerExpr(valueNode!, env),
-    }));
+      return {kind: 'float', value: lowerExpr(valueNode, env)};
+    });
   };
   let geometry: IrGeometry;
   if (props.arc) {
@@ -589,9 +589,15 @@ function lowerUpdateVector(
       );
     }
 
-    update.dirty = dirtyArg.elements
-      .slice(0, 4)
-      .map(edgeNode => lowerExpr(edgeNode!, env));
+    update.dirty = dirtyArg.elements.slice(0, 4).map((edgeNode, edge) => {
+      if (!edgeNode) {
+        throw aotError(
+          `AOT: updateVector dirtyRect has an empty slot at position ${edge}`,
+        );
+      }
+
+      return lowerExpr(edgeNode, env);
+    });
   }
 
   return update;

@@ -1541,6 +1541,21 @@ describe('AOT arithmetic semantics', () => {
     expect(c).toContain('if (v != v)');
   });
 
+  it('refuses an empty slot in a list append, with a location', () => {
+    let err;
+    try {
+      gen(`${PRE}
+        export function App() {
+          const [items, setItems] = useState([{w: 1}]);
+          return (<Pressable onPress={() => setItems([...items, , {w: 2}])}><Text>x</Text></Pressable>);
+        }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(/AOT: a list literal has an empty slot/);
+    expect(err.aotLoc).toBeTruthy();
+  });
+
   it('rounds a float to an int like JS, and leaves an int as it is', () => {
     const c = gen(`${PRE}
       export function App() {
