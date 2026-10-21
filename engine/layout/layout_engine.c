@@ -643,16 +643,46 @@ static int16_t offered_width(const ERLayoutSpec* L, const ERLayoutSpec* cl, cons
 }
 
 /**
- * @brief A flex item's base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > intrinsic.
+ * @brief The main size aspect_ratio gives an item from its definite cross size.
  *
- * @param[in]      tag        Tag of the item.
- * @param[in]      cl         The item's layout spec.
- * @param[in]      is_row     Whether the container's main axis is horizontal.
- * @param[in]      main_size  Container content-box extent on the main axis; percentages resolve against it.
- * @param[in]      avail_w    Width offered to the item's measurement, or ER_LAYOUT_AUTO when unconstrained.
- * @param[in,out]  measured   Threaded through measure_lazy(), so the measurement is shared with the cross axis.
- * @param[out]     intr_w     Receives the intrinsic width if this call measures.
- * @param[out]     intr_h     Receives the intrinsic height if this call measures.
+ * @param[in] cl          The item's layout spec.
+ * @param[in] is_row      Whether the main axis is horizontal, so the size returned is a width.
+ * @param[in] cross_size  Container content-box extent on the cross axis, or ER_LAYOUT_AUTO when unknown.
+ *
+ * @return The main size, or ER_LAYOUT_AUTO when the item has no aspect_ratio or no definite cross size.
+ */
+static int16_t aspect_main_size(const ERLayoutSpec* cl, const bool is_row, const int16_t cross_size)
+{
+    if (cl->aspect_ratio <= 0.0f)
+        return ER_LAYOUT_AUTO;
+    const float cross_pct = is_row ? cl->height_pct : cl->width_pct;
+    int16_t cross = is_row ? cl->height : cl->width;
+    if (cross_pct > 0.0f)
+    {
+        if (cross_size == ER_LAYOUT_AUTO)
+            return ER_LAYOUT_AUTO;
+        cross = (int16_t)((float)cross_size * cross_pct / 100.0f + 0.5f);
+    }
+    else if (cross == ER_LAYOUT_AUTO)
+        return ER_LAYOUT_AUTO;
+    cross = clamp_size(cross, is_row ? cl->min_height : cl->min_width, is_row ? cl->max_height : cl->max_width);
+    /* aspect_ratio == width / height. */
+    return round_px(is_row ? (float)cross * cl->aspect_ratio : (float)cross / cl->aspect_ratio);
+}
+
+/**
+ * @brief A flex item's base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > aspect ratio >
+ * intrinsic.
+ *
+ * @param[in]      tag         Tag of the item.
+ * @param[in]      cl          The item's layout spec.
+ * @param[in]      is_row      Whether the container's main axis is horizontal.
+ * @param[in]      main_size   Container content-box extent on the main axis; percentages resolve against it.
+ * @param[in]      cross_size  Container content-box extent on the cross axis, or ER_LAYOUT_AUTO when unknown.
+ * @param[in]      avail_w     Width offered to the item's measurement, or ER_LAYOUT_AUTO when unconstrained.
+ * @param[in,out]  measured    Threaded through measure_lazy(), so the measurement is shared with the cross axis.
+ * @param[out]     intr_w      Receives the intrinsic width if this call measures.
+ * @param[out]     intr_h      Receives the intrinsic height if this call measures.
  *
  * @return The base main size, held to the item's main-axis min/max.
  */
@@ -660,6 +690,7 @@ static int16_t base_main_size(const uint16_t tag,
                               const ERLayoutSpec* cl,
                               const bool is_row,
                               const int16_t main_size,
+                              const int16_t cross_size,
                               const int16_t avail_w,
                               bool* measured,
                               int16_t* intr_w,
@@ -682,7 +713,7 @@ static int16_t base_main_size(const uint16_t tag,
             hypo_main = (int16_t)((float)main_size * main_pct / 100.0f + 0.5f);
         else if (mainsz != ER_LAYOUT_AUTO)
             hypo_main = mainsz;
-        else
+        else if ((hypo_main = aspect_main_size(cl, is_row, cross_size)) == ER_LAYOUT_AUTO)
         {
             measure_lazy(tag, avail_w, measured, intr_w, intr_h);
             hypo_main = is_row ? *intr_w : *intr_h;
@@ -842,14 +873,19 @@ static void measure_text(const ERTextProps* tp, const int break_w, int32_t* out_
  *
  * @param[in]  n         The row.
  * @param[in]  inner_w   The row's content-box width.
+ * @param[in]  inner_h   The row's content-box height, or ER_LAYOUT_AUTO when unknown.
  * @param[in]  main_gap  Gap between adjacent children.
  * @param[out] out_w     Receives the content width.
  * @param[out] out_h     Receives the content height.
  *
  * @return false when the row has no in-flow children or s_scratch has no room; nothing is written then.
  */
-static bool
-measure_flexed_row(const ERNode* n, const int16_t inner_w, const int16_t main_gap, int16_t* out_w, int16_t* out_h)
+static bool measure_flexed_row(const ERNode* n,
+                               const int16_t inner_w,
+                               const int16_t inner_h,
+                               const int16_t main_gap,
+                               int16_t* out_w,
+                               int16_t* out_h)
 {
     int count = 0;
     for (uint16_t ct = n->first_child_tag; ct != ER_INVALID_TAG;)
@@ -884,7 +920,7 @@ measure_flexed_row(const ERNode* n, const int16_t inner_w, const int16_t main_ga
             FlexChild* fc = &items[i++];
             memset(fc, 0, sizeof(*fc));
             fc->tag = ct;
-            fc->main = base_main_size(ct, cl, true, inner_w, avail_w, &measured, &intr_w, &intr_h);
+            fc->main = base_main_size(ct, cl, true, inner_w, inner_h, avail_w, &measured, &intr_w, &intr_h);
             measure_lazy(ct, avail_w, &measured, &intr_w, &intr_h);
             fc->cross = intr_h;
             fc->measured_w = (cl->height == ER_LAYOUT_AUTO) ? intr_w : ER_LAYOUT_AUTO;
@@ -968,8 +1004,13 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
     }
 
     const ERLayoutSpec* L = &n->layout;
-    const int16_t exp_w = L->width;
-    const int16_t exp_h = L->height;
+    int16_t exp_w = L->width;
+    int16_t exp_h = L->height;
+    /* aspect_ratio turns an explicit size on one axis into one on the other. */
+    if (exp_w == ER_LAYOUT_AUTO)
+        exp_w = aspect_main_size(L, true, ER_LAYOUT_AUTO);
+    else if (exp_h == ER_LAYOUT_AUTO)
+        exp_h = aspect_main_size(L, false, ER_LAYOUT_AUTO);
 
     /* Text leaf: measure the glyph run, then add the node's own padding — the glyphs are this node's
      * content, so an auto axis has to grow around them exactly as a container grows around a child
@@ -1027,9 +1068,12 @@ static void measure_content(const uint16_t tag, const int16_t avail_w, int16_t* 
         /* A wrapping row with a known width breaks into lines; the main axis is then the widest
          * line and the cross axis the summed line heights plus the gaps between them. */
         const bool wraps = is_row && L->flex_wrap != ER_WRAP_NOWRAP && inner_w != ER_LAYOUT_AUTO;
+        const int16_t inner_h = (exp_h == ER_LAYOUT_AUTO)
+                                    ? ER_LAYOUT_AUTO
+                                    : (int16_t)(exp_h > pad.top + pad.bottom ? exp_h - pad.top - pad.bottom : 0);
         /* A row that knows its width flexes its children first: their heights depend on the widths they get. */
         const bool flexed = is_row && !wraps && inner_w != ER_LAYOUT_AUTO
-                            && measure_flexed_row(n, inner_w, main_gap, &content_w, &content_h);
+                            && measure_flexed_row(n, inner_w, inner_h, main_gap, &content_w, &content_h);
         if (!flexed)
         {
             int32_t main_sum = 0;
@@ -1208,7 +1252,8 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
              * inside it break into lines at the content box's edge. */
             const int16_t avail_w = offered_width(L, cl, content_w);
 
-            int16_t hypo_main = base_main_size(ct, cl, is_row, main_size, avail_w, &measured, &intr_w, &intr_h);
+            int16_t hypo_main =
+                base_main_size(ct, cl, is_row, main_size, cross_avail, avail_w, &measured, &intr_w, &intr_h);
             const int16_t main_mn = is_row ? cl->min_width : cl->min_height;
             const int16_t main_mx = is_row ? cl->max_width : cl->max_height;
 

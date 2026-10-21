@@ -932,6 +932,160 @@ static void fixture_abs_aspect_ratio_both_auto(void)
     er_node_destroy(root);
 }
 
+/** @brief In a row, aspectRatio gives a flow child's width from its height, explicit or a percentage. */
+static void fixture_flow_aspect_ratio_row(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 120;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra, rb, rc;
+    ERProps p = props_default();
+    p.height = 80;
+    p.aspect_ratio = 0.75f;
+    er_tree_append_child(root, mk(p, &ra));
+
+    p = props_default();
+    p.height_pct = 50.0f;
+    p.aspect_ratio = 2.0f;
+    er_tree_append_child(root, mk(p, &rb));
+
+    p = props_default();
+    p.width = 20;
+    p.height = 20;
+    er_tree_append_child(root, mk(p, &rc));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-row", "a", EXPECT, ra, 0, 0, 60, 80);
+    pcheck("flow-aspect-row", "b", EXPECT, rb, 60, 0, 120, 60);
+    pcheck("flow-aspect-row", "c", EXPECT, rc, 180, 0, 20, 20);
+    er_reset();
+}
+
+/** @brief In a column, aspectRatio gives a flow child's height from its width: width 100, ratio 2 → 50. */
+static void fixture_flow_aspect_ratio_column(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 200;
+    rp.height = 200;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra, rm;
+    ERProps p = props_default();
+    p.width = 100;
+    p.aspect_ratio = 2.0f;
+    er_tree_append_child(root, mk(p, &ra));
+
+    p = props_default();
+    p.width = 10;
+    p.height = 10;
+    er_tree_append_child(root, mk(p, &rm));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-col", "a", EXPECT, ra, 0, 0, 100, 50);
+    pcheck("flow-aspect-col", "marker", EXPECT, rm, 0, 50, 10, 10);
+    er_reset();
+}
+
+/** @brief The cross size is clamped before aspectRatio turns it into a main size, as in CSS: 40 high → 80 wide. */
+static void fixture_flow_aspect_ratio_clamped(void)
+{
+    er_reset();
+
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 120;
+    rp.flex_direction = ER_FLEX_ROW;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect ra;
+    ERProps p = props_default();
+    p.height = 80;
+    p.max_height = 40;
+    p.aspect_ratio = 2.0f;
+    er_tree_append_child(root, mk(p, &ra));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-clamped", "a", EXPECT, ra, 0, 0, 80, 40);
+    er_reset();
+}
+
+/** @brief An auto-sized container measures an aspectRatio child at the size the ratio gives it. */
+static void fixture_flow_aspect_ratio_auto_parent(void)
+{
+    er_reset();
+
+    /* An auto-width row in a column is measured with its children flexed. */
+    ERProps rp = props_default();
+    rp.width = 300;
+    rp.height = 200;
+    rp.flex_direction = ER_FLEX_COL;
+    rp.align_items = ER_ALIGN_FLEX_START;
+    ERNode* root = mk(rp, NULL);
+
+    ERRect row, ra;
+    ERProps p = props_default();
+    p.flex_direction = ER_FLEX_ROW;
+    p.align_items = ER_ALIGN_FLEX_START;
+    ERNode* r = mk(p, &row);
+    er_tree_append_child(root, r);
+
+    p = props_default();
+    p.height = 80;
+    p.aspect_ratio = 0.75f;
+    er_tree_append_child(r, mk(p, &ra));
+
+    p = props_default();
+    p.width = 20;
+    p.height = 20;
+    er_tree_append_child(r, mk(p, NULL));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-auto", "row", EXPECT, row, 0, 0, 80, 80);
+    pcheck("flow-aspect-auto", "a", EXPECT, ra, 0, 0, 60, 80);
+    er_reset();
+
+    /* An auto-width column in a row measures its children one by one. */
+    rp.flex_direction = ER_FLEX_ROW;
+    root = mk(rp, NULL);
+
+    ERRect col;
+    p = props_default();
+    p.align_items = ER_ALIGN_FLEX_START;
+    ERNode* c = mk(p, &col);
+    er_tree_append_child(root, c);
+
+    p = props_default();
+    p.height = 80;
+    p.aspect_ratio = 0.75f;
+    er_tree_append_child(c, mk(p, &ra));
+
+    p = props_default();
+    p.width = 20;
+    p.height = 20;
+    er_tree_append_child(c, mk(p, NULL));
+
+    er_tree_set_root(root);
+    er_commit();
+    pcheck("flow-aspect-auto", "col", EXPECT, col, 0, 0, 60, 100);
+    pcheck("flow-aspect-auto", "a", EXPECT, ra, 0, 0, 60, 80);
+    er_reset();
+}
+
 /** @brief Content sizing is max-content, not "at most the parent": a 40x120 child in a 100x50 root overflows. */
 static void fixture_abs_content_overflows(void)
 {
@@ -3086,6 +3240,10 @@ int main(void)
     fixture_abs_pct();
     fixture_abs_aspect_ratio();
     fixture_abs_aspect_ratio_both_auto();
+    fixture_flow_aspect_ratio_row();
+    fixture_flow_aspect_ratio_column();
+    fixture_flow_aspect_ratio_clamped();
+    fixture_flow_aspect_ratio_auto_parent();
     fixture_abs_content_overflows();
     fixture_abs_containing_block();
     fixture_abs_padding_box_edges();
