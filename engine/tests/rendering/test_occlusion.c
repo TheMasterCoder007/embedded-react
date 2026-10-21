@@ -594,8 +594,13 @@ static int check_rotated_node_in_clipper_not_buried(void)
  * rotated strip too wide for the transform source. A wrong guess for the strip over-erases rather than
  * trails, so it is caught by the reported dirty rect instead: a record the damage pre-pass does not predict
  * re-damages on every commit.
+ *
+ * @param[in] three_d  Tilt the three nodes with rotateX/rotateY and perspective instead of rotating them in
+ *                     the plane, so the walk takes the homography path instead of the affine one.
+ *
+ * @return NULL when every check holds, otherwise what failed.
  */
-static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
+static const char* offscreen_change_keeps_transformed_footprint(bool three_d)
 {
     static uint32_t reference[SCREEN * SCREEN];
     er_reset();
@@ -607,18 +612,37 @@ static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
 
     ERNode* spun = er_node_create(ER_NODE_VIEW);
     ERProps sp = box(40, 40, 60, 30, C_DEEP);
-    sp.transform_rotate_z = 30.0f;
     er_node_set_props(spun, &sp);
 
     ERNode* nested = er_node_create(ER_NODE_VIEW);
     ERProps np = box(10, 5, 20, 10, C_INNER);
-    np.transform_rotate_z = 20.0f;
     er_node_set_props(nested, &np);
     er_tree_append_child(spun, nested);
 
     ERNode* wide = er_node_create(ER_NODE_VIEW);
     ERProps wp = box(-30, 150, ERUI_XFORM_W + 10, 12, C_COVER);
-    wp.transform_rotate_z = 3.0f;
+    er_node_set_props(wide, &wp);
+
+#if ERUI_3D_TRANSFORMS
+    if (three_d)
+    {
+        sp.transform_rotate_y = 50.0f;
+        sp.transform_perspective = 150.0f;
+        np.transform_rotate_x = 40.0f;
+        np.transform_perspective = 100.0f;
+        wp.transform_rotate_x = 30.0f;
+        wp.transform_perspective = 200.0f;
+    }
+    else
+#endif
+    {
+        (void)three_d;
+        sp.transform_rotate_z = 30.0f;
+        np.transform_rotate_z = 20.0f;
+        wp.transform_rotate_z = 3.0f;
+    }
+    er_node_set_props(spun, &sp);
+    er_node_set_props(nested, &np);
     er_node_set_props(wide, &wp);
 
     /* Entirely left of the screen: its damage clamps to nothing. */
@@ -651,16 +675,19 @@ static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
     er_commit();
     ERRect after;
     if (!er_get_dirty_rect(&after))
-        return fail("recolouring the marker reported no damage");
+        return "recolouring the marker reported no damage";
     if (after.x < 160 || after.y < 160)
-        return fail("after an off-screen-only commit, a transformed node re-damaged a footprint it did not paint");
+        return "after an off-screen-only commit, a transformed node re-damaged a footprint it did not paint";
 
     /* That commit painted, so every record is a real one again. Go back off-screen, then move. */
     op.background_color = C_TOP;
     er_node_set_props(offscreen, &op);
     er_commit();
 
-    sp.transform_translate_x = 60.0f;
+    /* Far enough that the new footprint cannot cover what the old one left: the erase of the old record
+     * alone decides whether the corners survive. */
+    sp.transform_translate_x = 100.0f;
+    sp.transform_translate_y = 90.0f;
     er_node_set_props(spun, &sp);
     wp.transform_translate_y = -20.0f;
     er_node_set_props(wide, &wp);
@@ -670,9 +697,24 @@ static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
     memset(s_fb, 0, sizeof(s_fb));
     full_frame();
     if (memcmp(reference, s_fb, sizeof(reference)) != 0)
-        return fail("a rotated node left a trail after a commit whose only change was off-screen");
-    return EXIT_SUCCESS;
+        return "a transformed node left a trail after a commit whose only change was off-screen";
+    return NULL;
 }
+
+static int check_rotated_node_keeps_footprint_across_offscreen_change(void)
+{
+    const char* err = offscreen_change_keeps_transformed_footprint(false);
+    return err ? fail(err) : EXIT_SUCCESS;
+}
+
+#if ERUI_3D_TRANSFORMS
+/* The same with perspective tilts: the homography path predicts admission and records the projected AABB. */
+static int check_3d_node_keeps_footprint_across_offscreen_change(void)
+{
+    const char* err = offscreen_change_keeps_transformed_footprint(true);
+    return err ? fail(err) : EXIT_SUCCESS;
+}
+#endif
 #endif
 
 /*
@@ -734,6 +776,9 @@ int main(void)
 #if ERUI_TRANSFORMS_FULL
         check_rotated_node_in_clipper_not_buried,
         check_rotated_node_keeps_footprint_across_offscreen_change,
+#if ERUI_3D_TRANSFORMS
+        check_3d_node_keeps_footprint_across_offscreen_change,
+#endif
 #endif
         check_pixel_equivalence,
     };
