@@ -81,6 +81,19 @@ export function App() {
     expect(c).not.toContain('static void app_update');
   });
 
+  it('works a prop default read from a boot const out at boot', () => {
+    const c = compile(`${IMPORTS}const CARD_W = screen.width - 40;
+function Card({ w = CARD_W }) { return (<View style={{width: w}} />); }
+export function App() {
+  return (<Card />);
+}`);
+    expect(bootOf(c)).toContain(
+      's_boot.CARD_W = app_sub(s_boot.screen_width, 40);',
+    );
+    expect(c).toContain('p.width = app_round_dim(s_boot.CARD_W);');
+    expect(c).not.toContain('p.width = 200;');
+  });
+
   it('works fractions out in double precision, as JS does', () => {
     const c = compile(`${IMPORTS}const S = screen.width / 320;
 export function App() {

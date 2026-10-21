@@ -238,7 +238,10 @@ function bindParams(
       if (!descriptor && property.value?.type === 'AssignmentPattern') {
         descriptor = {
           static: true,
-          value: evalStatic(property.value.right, scope),
+          value: bindConst(
+            bindName,
+            evalStatic(property.value.right, scope, 'boot'),
+          ),
         };
       }
 
