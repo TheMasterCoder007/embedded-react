@@ -58,6 +58,7 @@ import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr} from './ir/expressions.mts';
 import {
+  FLOAT,
   INT,
   isConvertible64,
   isIntSlot,
@@ -142,7 +143,8 @@ function lowerListOp(
       );
     }
 
-    // Each appended object literal fills the fields of the next free slot; a full list drops it.
+    // Each appended object literal fills every field of the next free slot; a full list drops it. A field it
+    // leaves out is reset to 0 or "", as an initial item's is, so the slot keeps nothing from a cleared item.
     const statements: IrStmt[] = [];
     for (const item of appendedItems) {
       if (!item) {
@@ -164,8 +166,20 @@ function lowerListOp(
       const values: IrItemValue[] = [];
       for (const field of struct.fields) {
         const valueNode = props.get(field.key);
-        if (!valueNode) continue;
-        if (field.kind === 'string') {
+        if (!valueNode) {
+          values.push(
+            field.kind === 'string'
+              ? {field, text: {parts: []}}
+              : {
+                  field,
+                  value: {
+                    kind: 'number',
+                    value: 0,
+                    type: field.kind === 'float' ? FLOAT : INT,
+                  },
+                },
+          );
+        } else if (field.kind === 'string') {
           values.push({field, text: lowerText(valueNode, env)});
         } else {
           values.push({

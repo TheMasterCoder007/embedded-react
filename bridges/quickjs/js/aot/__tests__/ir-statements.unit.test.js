@@ -178,6 +178,32 @@ describe('handler statements lower to the IR', () => {
     ]);
   });
 
+  it('resets the fields an appended item leaves out', () => {
+    const fields = [
+      {key: 'name', kind: 'string'},
+      {key: 'score', kind: 'int'},
+      {key: 'ratio', kind: 'float'},
+    ];
+    const {stmts} = lowerBody(
+      'setItems([...items, {score: 2}]);',
+      stateOf(list('items', fields)),
+    );
+    expect(stmts[0].values).toMatchObject([
+      {field: {key: 'name'}, text: {parts: []}},
+      {field: {key: 'score'}, value: {kind: 'number', value: 2}},
+      {field: {key: 'ratio'}, value: {kind: 'number', value: 0}},
+    ]);
+    expect(printStmts(stmts, '    ')).toEqual([
+      '    if (s_items_count < 8)',
+      '    {',
+      '        snprintf(s_items[s_items_count].name, sizeof(s_items[s_items_count].name), "%s", "");',
+      '        s_items[s_items_count].score = 2;',
+      '        s_items[s_items_count].ratio = 0.0f;',
+      '        s_items_count++;',
+      '    }',
+    ]);
+  });
+
   it("prints list operations at the body's top-level indent, even inside a block", () => {
     const {stmts} = lowerBody(
       'if (on) { setItems([]); }',

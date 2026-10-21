@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a list append resets the fields the new item leaves out to 0 or `""` instead of keeping a cleared
+  item's values.
 - AOT: an empty slot in a list append or an `updateVector` dirty rect (`[...items, , item]`) is now a
   located compile error instead of a compiler crash.
 - AOT: a component's prop default can now use a module constant (`function Box({ size = SIZE })`).
