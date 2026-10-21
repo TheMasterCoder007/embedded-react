@@ -3542,6 +3542,14 @@ import {View, Text} from 'embedded-react';
     expect(texts(c)).toContain('i=module');
   });
 
+  it('a prop default folds with module consts, not the caller\'s', () => {
+    const c = gen(`${D}const SIZE = 30;
+      function Box({ size = SIZE }) { return (<View style={{width: size}} />); }
+      export function App() { const SIZE = 7; return (<View><Box /></View>); }`);
+    expect(c).toContain('p.width = 30;');
+    expect(c).not.toContain('p.width = 7;');
+  });
+
   // Styles fold constants through the same scope as text, so a runtime binding has to beat a same-named
   // module const there too — otherwise the fold silently emits the module value where the prop or row
   // item was meant. `width` is a supported dynamic style, so a correct lowering is observable.

@@ -12,6 +12,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a component's prop default can now use a module constant (`function Box({ size = SIZE })`).
 - A view or `Image` with `aspectRatio` and only a height (or only a width in a column) now takes its other
   size from the ratio instead of from its content, and keeps its ratio when it flexes or is stretched.
 - A translated view now moves its children with it, and a `Pressable` inside one can be pressed where it is

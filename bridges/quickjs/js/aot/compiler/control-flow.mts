@@ -188,12 +188,14 @@ function extractProps(
  *
  * @param fn  The component.
  * @param props  The props the instance was given.
+ * @param scope  Module constants a default can refer to.
  *
  * @returns The descriptor each name in the component's body is bound to.
  */
 function bindParams(
   fn: FunctionNode,
   props: Record<string, PropDescriptor>,
+  scope: Scope,
 ): Map<string, PropDescriptor> {
   const bindings = new Map<string, PropDescriptor>();
   const param = fn.params[0];
@@ -236,7 +238,7 @@ function bindParams(
       if (!descriptor && property.value?.type === 'AssignmentPattern') {
         descriptor = {
           static: true,
-          value: evalStatic(property.value.right, {}),
+          value: evalStatic(property.value.right, scope),
         };
       }
 
@@ -326,7 +328,8 @@ export function emitComponent(
   }
 
   // A child sees only module scope: start from module consts with no locals, so caller bindings cannot leak in.
-  const childScope: Scope = {...(env.moduleConsts ?? scope)};
+  const moduleScope = env.moduleConsts ?? scope;
+  const childScope: Scope = {...moduleScope};
   const childLocals = new Map<string, Local>();
   // Callback props resolve to the caller's function, env and state; inherit the caller's own so they forward.
   const fnProps = new Map<string, FunctionProp>(env.fnProps);
@@ -335,6 +338,7 @@ export function emitComponent(
   for (const [name, descriptor] of bindParams(
     fn,
     extractProps(element.openingElement, scope, env),
+    moduleScope,
   )) {
     // The children binding comes from the slot, not from a value prop.
     if (childrenRef?.kind === 'local' && name === childrenRef?.name) continue;
