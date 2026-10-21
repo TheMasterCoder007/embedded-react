@@ -397,7 +397,7 @@ static bool point_inside_transformed_with_slop(const ERNode* node, int x, int y)
 }
 
 /**
- * @brief Accumulates the total scroll offset of all ScrollView/FlatList ancestors.
+ * @brief Accumulates the total scroll offset of all ScrollView/FlatList ancestors, less their translates.
  *
  * Walking from node's parent up to the root, sums every ancestor's
  * scroll_offset_x/y.  Adding the result to a raw screen-space coordinate
@@ -406,8 +406,8 @@ static bool point_inside_transformed_with_slop(const ERNode* node, int x, int y)
  * when an ancestor scroll view has a non-zero scroll offset.
  *
  * @param[in]  node   Node whose ancestor offsets to accumulate (excluding self).
- * @param[out] out_x  Total horizontal scroll offset.
- * @param[out] out_y  Total vertical scroll offset.
+ * @param[out] out_x  Total horizontal scroll offset, minus the ancestors' translates.
+ * @param[out] out_y  Total vertical scroll offset, minus the ancestors' translates.
  */
 static void accumulate_scroll_offsets(const ERNode* node, int* out_x, int* out_y)
 {
@@ -419,6 +419,11 @@ static void accumulate_scroll_offsets(const ERNode* node, int* out_x, int* out_y
         {
             sx += (int)n->scroll_offset_x;
             sy += (int)n->scroll_offset_y;
+        }
+        if (er_node_has_offset_translate(n))
+        {
+            sx -= (int)n->tp_translate_x;
+            sy -= (int)n->tp_translate_y;
         }
         n = er_get_node(n->parent_tag);
     }

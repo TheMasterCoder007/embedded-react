@@ -48,6 +48,12 @@ target_link_libraries(test_reflow_damage PRIVATE embedded-react)
 target_include_directories(test_reflow_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_reflow_damage COMMAND test_reflow_damage)
 
+add_executable(test_translate_subtree test_translate_subtree.c)
+target_link_libraries(test_translate_subtree PRIVATE embedded-react)
+# test_translate_subtree needs engine/core for renderer_internal.h (er_force_full_repaint, the reference frame).
+target_include_directories(test_translate_subtree PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_translate_subtree COMMAND test_translate_subtree)
+
 add_executable(test_occlusion test_occlusion.c)
 target_link_libraries(test_occlusion PRIVATE embedded-react)
 # test_occlusion needs engine/core for renderer_internal.h (er_force_full_repaint).

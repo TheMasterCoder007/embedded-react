@@ -3713,6 +3713,46 @@ static int test_oversized_translate_only_keeps_offset(void)
 }
 
 /**
+ * @brief Checks a Pressable inside a translated parent is pressed where the translate draws it.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_press_inside_translated_parent(void)
+{
+    ERNode* root = create_root_sized(200, 200);
+    EventCounts counts = {0};
+
+    ERNode* header = er_node_create(ER_NODE_VIEW);
+    ERProps hp = props_default();
+    hp.position = ER_POS_ABSOLUTE;
+    hp.left = 0;
+    hp.top = 0;
+    hp.width = 200;
+    hp.height = 40;
+    hp.background_color = 0xFF4DA3FFU;
+    hp.transform_translate_x = 20.0f;
+    hp.transform_translate_y = 100.0f;
+    er_node_set_props(header, &hp);
+
+    ERNode* item = create_pressable(0, 0, 80, 40, &counts);
+    er_tree_append_child(header, item);
+    er_tree_append_child(root, header);
+    er_commit();
+
+    /* Where it is drawn: layout box 0,0 80x40 shifted by the header's 20,100. */
+    tap(60, 120);
+    if (counts.press_count != 1)
+        return fail("a Pressable inside a translated parent was not pressed where it is drawn");
+
+    /* Its untranslated box, which nothing is drawn at. */
+    tap(10, 20);
+    if (counts.press_count != 1)
+        return fail("a Pressable inside a translated parent was pressed at its untranslated box");
+
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Checks a transformed node nested inside a CAPTURING one is hit where it is painted.
  *
  * The other way a capture fails, and the one no size test can predict: the outer node's capture is
@@ -4156,6 +4196,8 @@ int main(void)
     if (test_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_oversized_translate_only_keeps_offset() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_press_inside_translated_parent() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_nested_uncaptured_transform_hits_painted_box() != EXIT_SUCCESS)
         return EXIT_FAILURE;

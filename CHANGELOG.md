@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- A translated view now moves its children with it, and a `Pressable` inside one can be pressed where it is
+  drawn.
 - With `ERUI_TRANSFORMS=FULL`, a rotated, scaled, or 3D-transformed node no longer leaves a trail when it
   moves after a commit whose only change was off-screen (a node outside the screen, or scrolled out of
   view, changing). That commit painted nothing, but recorded the node at its untransformed box, so the next

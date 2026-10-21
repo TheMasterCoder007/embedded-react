@@ -434,6 +434,22 @@ static inline bool er_node_has_complex_transform(const ERNode* n)
 }
 
 /**
+ * @brief Whether a node's translate is a plain pixel offset that moves its whole subtree.
+ *
+ * @param[in] n  Node to inspect.
+ *
+ * @return true when the node offsets itself and its descendants by tp_translate_x/y.
+ */
+static inline bool er_node_has_offset_translate(const ERNode* n)
+{
+#if ERUI_TRANSFORMS_FULL
+    return n->has_transform && !er_node_has_complex_transform(n);
+#else
+    return n->has_transform;
+#endif
+}
+
+/**
  * @brief Whether a node could hold the transform capture — the geometry half of the admission test.
  *
  * er_node_has_complex_transform() plus the source-size limit: the two things about a node ITSELF that decide

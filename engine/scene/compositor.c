@@ -677,13 +677,13 @@ static void add_damage(ERDamageSet* s, int x, int y, int w, int h, int rx0, int 
 }
 
 /**
- * @brief Sums the scroll offsets of every ScrollView / FlatList above a node.
+ * @brief Sums the scroll offsets of every ScrollView / FlatList above a node, less their translates.
  *
  * render_tree carries this down the walk as its translation; the flat per-node damage passes have no
  * parent context, so they re-derive it here.
  *
- * @param[in]  n       Node to measure from (its own scroll offset is NOT included).
- * @param[out] sx,sy   Receive the accumulated ancestor scroll.
+ * @param[in]  n       Node to measure from (its own scroll offset and translate are NOT included).
+ * @param[out] sx,sy   Receive the accumulated ancestor scroll, minus the accumulated ancestor translate.
  */
 static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
 {
@@ -696,6 +696,11 @@ static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
         {
             *sx += (int)a->scroll_offset_x;
             *sy += (int)a->scroll_offset_y;
+        }
+        if (er_node_has_offset_translate(a))
+        {
+            *sx -= (int)a->tp_translate_x;
+            *sy -= (int)a->tp_translate_y;
         }
         a = er_get_node(a->parent_tag);
     }
@@ -2193,7 +2198,7 @@ static int paint_masked_text(const char* text, const ERTextRenderParams* par)
  * @brief Recursively renders a node and its children depth-first.
  *
  * translate_x / translate_y accumulate the total scroll offset contributed by all
- * ScrollView ancestors.  Each node's actual screen position is computed by subtracting
+ * ScrollView ancestors, less ancestor translates.  Each node's actual screen position is computed by subtracting
  * the accumulated translation from its layout-computed position.
  *
  * overflow:hidden and overflow:scroll nodes push a scissor clip rectangle around their
@@ -2206,8 +2211,8 @@ static int paint_masked_text(const char* text, const ERTextRenderParams* par)
  *                          The subtree is still walked — its paint bookkeeping (painted_seq,
  *                          last_paint_rect) has to stay in step or a hidden node damages the same
  *                          pixels forever — but it emits nothing.
- * @param[in] translate_x   Accumulated horizontal scroll offset from ancestor ScrollViews.
- * @param[in] translate_y   Accumulated vertical scroll offset from ancestor ScrollViews.
+ * @param[in] translate_x   Accumulated horizontal scroll offset from ancestor ScrollViews, less ancestor translates.
+ * @param[in] translate_y   Accumulated vertical scroll offset from ancestor ScrollViews, less ancestor translates.
  */
 static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int translate_x, int translate_y)
 {
@@ -2286,10 +2291,15 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
 #else
     const bool complex_xf = false;
 #endif
-    if (n->has_transform && !complex_xf)
+    /* A plain translate moves the children with the node. */
+    int child_tx = translate_x;
+    int child_ty = translate_y;
+    if (er_node_has_offset_translate(n))
     {
         px += (int)n->tp_translate_x;
         py += (int)n->tp_translate_y;
+        child_tx -= (int)n->tp_translate_x;
+        child_ty -= (int)n->tp_translate_y;
     }
 #if ERUI_TRANSFORMS_FULL
     /* An occluded node never captures a transform source: the scratch render would be thrown away. It
@@ -2541,9 +2551,9 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     bool composited = false;
     if (node_opacity < 255U && should_render)
     {
-        composited = composite_from_cache(n, node_opacity, px, py, w, h, translate_x, translate_y);
+        composited = composite_from_cache(n, node_opacity, px, py, w, h, child_tx, child_ty);
         if (!composited)
-            composited = composite_with_opacity(n, node_opacity, px, py, w, h, translate_x, translate_y);
+            composited = composite_with_opacity(n, node_opacity, px, py, w, h, child_tx, child_ty);
     }
     if (!composited)
     {
@@ -2553,7 +2563,7 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         const uint8_t saved_alpha = er_get_draw_alpha();
         if (node_opacity < 255U && should_render)
             er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / 255U));
-        render_node_content(n, needs_paint, occluded, px, py, w, h, translate_x, translate_y);
+        render_node_content(n, needs_paint, occluded, px, py, w, h, child_tx, child_ty);
         er_set_draw_alpha(saved_alpha);
     }
 
