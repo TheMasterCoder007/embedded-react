@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a name on `Object.prototype` (`toString`, `constructor`, …) used as an enum style value, a named
+  color, or an undeclared identifier is now a compile error instead of invalid C or a silent wrong value.
 - AOT: a `setKeyboardConfig` layout with no layers, or a layer with no rows, is now a located compile
   error instead of C that fails to build.
 - AOT: a list append resets the fields the new item leaves out to 0 or `""` instead of keeping a cleared

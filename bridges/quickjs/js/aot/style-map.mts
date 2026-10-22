@@ -185,7 +185,10 @@ export function parseColorValue(color: unknown): number {
 
   // Accept a named color, else a hex string, expanding the 3-digit form to 6.
   const normalized = color.trim().toLowerCase();
-  if (normalized in NAMED_COLORS) return NAMED_COLORS[normalized] >>> 0;
+  if (Object.hasOwn(NAMED_COLORS, normalized)) {
+    return NAMED_COLORS[normalized] >>> 0;
+  }
+
   const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(normalized);
   if (!hexMatch) {
     throw new Error(
@@ -242,7 +245,9 @@ export function colorLiteral(color: unknown): string {
 const enumKey =
   (table: EnumTable, name: string) =>
   (value: unknown): string => {
-    const constant = table[value as string];
+    const constant = Object.hasOwn(table, value as string)
+      ? table[value as string]
+      : undefined;
     if (!constant) {
       throw new Error(
         `${name}: unsupported value "${value}" (one of ${Object.keys(table).join(', ')})`,

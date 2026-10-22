@@ -28,7 +28,7 @@ import {
   isBoot,
   wholeBootValue,
 } from './boot.mts';
-import {evalStatic, foldScope} from './static-eval.mts';
+import {evalStatic, foldScope, hasBinding} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import {toCExpr} from './c/expressions.mts';
 import {printText} from './c/text.mts';
@@ -344,7 +344,7 @@ function readsBootName(node: unknown, scope: Scope): boolean {
   if (Array.isArray(node)) return node.some(item => readsBootName(item, scope));
   const typed = node as t.Node;
   if (typed.type === 'Identifier') {
-    return typed.name in scope && containsBoot(scope[typed.name]);
+    return hasBinding(scope, typed.name) && containsBoot(scope[typed.name]);
   }
 
   // A member's name and an object key are not reads.
@@ -1450,7 +1450,7 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         return {kind: 'state', state: stateRecord, loc};
       }
 
-      if (node.name in env.consts) {
+      if (hasBinding(env.consts, node.name)) {
         const constValue = env.consts[node.name];
         if (isBoot(constValue)) return bootSource(constValue, loc);
         if (typeof constValue === 'number')

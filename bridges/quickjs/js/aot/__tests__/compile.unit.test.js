@@ -4702,6 +4702,39 @@ import { View, StyleSheet } from 'embedded-react';
     ).toThrow(/style "valueOf" is not supported/);
   });
 
+  it('rejects an Object.prototype name as an enum value', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{alignItems: 'toString'}} />);
+      }`);
+    expect(e.message).toMatch(/unsupported value for style "alignItems"/);
+  });
+
+  it('rejects an Object.prototype name as a color', () => {
+    const e = err(`${D}
+      export function App() {
+        return (<View style={{backgroundColor: 'constructor'}} />);
+      }`);
+    expect(e.message).toMatch(/unsupported color "constructor"/);
+  });
+
+  it('does not resolve an undeclared Object.prototype name as a constant', () => {
+    expect(() =>
+      gen(`${D}
+      export function App() {
+        return (<View style={{width: toString ? 10 : 20}} />);
+      }`),
+    ).toThrow(/resolve identifier "toString"/);
+  });
+
+  it('still resolves a declared const named like an Object.prototype method', () => {
+    const c = gen(`${D}const toString = 12;
+      export function App() {
+        return (<View style={{width: toString}} />);
+      }`);
+    expect(c).toContain('p.width = 12;');
+  });
+
   it('locates an unknown key that arrived through a StyleSheet', () => {
     const e = err(`${D}
       const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });
