@@ -27,7 +27,7 @@
 // Flow B (the AOT compiler) lowers a documented SUBSET of this surface and fails the build on anything it
 // cannot compile, so these types describe Flow A and the AOT reports the difference.
 
-import type {ReactNode, Ref} from 'react';
+import type {ComponentType, ReactNode, Ref} from 'react';
 
 /** A node handle: what a `ref` on a host component receives, and what the imperative API takes. */
 export type NodeHandle = number;
@@ -35,8 +35,8 @@ export type NodeHandle = number;
 // --- Styling ---------------------------------------------------------------
 
 /**
- * A box dimension. Percentage strings are resolved for `width` and `height` only — every other box
- * property (margins, padding, min/max, borders, insets) takes pixels and ignores a string.
+ * A box dimension. Percentage strings are resolved for `width`, `height`, `flexBasis` and the insets —
+ * every other box property (margins, padding, min/max, borders) takes pixels and ignores a string.
  */
 export type DimensionValue = number | `${number}%`;
 
@@ -50,19 +50,19 @@ export interface ShadowOffset {
 export type TransformOrigin = [number, number];
 
 /**
- * One transform entry. Every axis except `perspective` can be driven by an `AnimatedValue`; `scale` binds
+ * One transform entry. Every axis except `perspective` can be driven by an animated value; `scale` binds
  * both axes at once. Rotations are CSS angle strings ('45deg', '0.5rad').
  */
 export type TransformStyle =
-  | {scale: number | AnimatedValue}
-  | {scaleX: number | AnimatedValue}
-  | {scaleY: number | AnimatedValue}
-  | {translateX: number | AnimatedValue}
-  | {translateY: number | AnimatedValue}
-  | {rotate: string | AnimatedValue}
-  | {rotateX: string | AnimatedValue}
-  | {rotateY: string | AnimatedValue}
-  | {rotateZ: string | AnimatedValue}
+  | {scale: number | AnimatedNode}
+  | {scaleX: number | AnimatedNode}
+  | {scaleY: number | AnimatedNode}
+  | {translateX: number | AnimatedNode}
+  | {translateY: number | AnimatedNode}
+  | {rotate: string | AnimatedNode}
+  | {rotateX: string | AnimatedNode}
+  | {rotateY: string | AnimatedNode}
+  | {rotateZ: string | AnimatedNode}
   | {perspective: number};
 
 /**
@@ -73,7 +73,7 @@ export type TransformStyle =
 export type StyleValue =
   | string
   | number
-  | AnimatedValue
+  | AnimatedNode
   | TransformStyle[]
   | ShadowOffset
   | TransformOrigin
@@ -121,7 +121,7 @@ export interface ViewStyle {
   flex?: number;
   flexGrow?: number;
   flexShrink?: number;
-  flexBasis?: number;
+  flexBasis?: DimensionValue;
   flexDirection?: 'row' | 'column' | 'row-reverse' | 'column-reverse';
   flexWrap?: 'nowrap' | 'wrap' | 'wrap-reverse';
   justifyContent?:
@@ -157,8 +157,8 @@ export interface ViewStyle {
   pointerEvents?: 'auto' | 'none' | 'box-none' | 'box-only';
 
   // Paint.
-  backgroundColor?: string | AnimatedValue;
-  opacity?: number | AnimatedValue;
+  backgroundColor?: string | AnimatedNode;
+  opacity?: number | AnimatedNode;
 
   // Border.
   borderRadius?: number;
@@ -191,7 +191,7 @@ export interface ViewStyle {
 }
 
 export interface TextStyle extends ViewStyle {
-  color?: string | AnimatedValue;
+  color?: string | AnimatedNode;
   fontSize?: number;
   fontFamily?: string;
   /** Anything from 600 up (or 'bold') selects the bold face; the engine carries no other weights. */
@@ -558,7 +558,7 @@ export interface DialGradient {
 export interface DialProps extends TouchEventProps {
   style?: StyleProp<ViewStyle>;
   /** Current value in [min, max]. Animatable with Animated.Value (native driver). */
-  value?: number | AnimatedValue;
+  value?: number | AnimatedNode;
   min?: number;
   max?: number;
   startAngle?: number;
@@ -593,7 +593,7 @@ export interface DialProps extends TouchEventProps {
    */
   range?: boolean;
   /** RANGE mode: the band's low end. Animatable like `value`. */
-  valueStart?: number | AnimatedValue;
+  valueStart?: number | AnimatedNode;
   /**
    * RANGE mode: the minimum separation the two ends keep, in value units. 0 (default) lets them meet.
    * Above 0, a drag that would close the gap pushes the far end along instead of stopping dead, and
@@ -772,6 +772,12 @@ export const Arc: (props: ArcProps) => JSX.Element;
 // --- StyleSheet ------------------------------------------------------------
 export const StyleSheet: {
   create<T extends Record<string, ViewStyle | TextStyle>>(styles: T): T;
+  /** Merges a style array (nested, with falsy entries skipped) into one object; later entries win. */
+  flatten(style?: StyleProp<ViewStyle>): ViewStyle;
+  /** 1 — the engine draws whole pixels, so the thinnest line is one. */
+  hairlineWidth: number;
+  /** `{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0}`. */
+  absoluteFill: ViewStyle;
 };
 
 // --- Platform --------------------------------------------------------------
@@ -789,21 +795,94 @@ export const AppRegistry: {
 };
 
 // --- Animated --------------------------------------------------------------
-// A handle to an engine-side animated float. Not importable directly — obtain one from `useAnimatedValue`
-// or `new Animated.Value(...)`, so this is a type, not a runtime export.
-export interface AnimatedValue {
-  setValue(value: number): void;
-  interpolate(config: {
-    inputRange: number[];
-    outputRange: number[] | string[];
-  }): AnimatedValue;
+/** Behavior outside `inputRange`: keep the slope ('extend'), hold the end value, or pass the input through. */
+export type ExtrapolateType = 'extend' | 'clamp' | 'identity';
+
+/**
+ * A piecewise-linear mapping, up to 8 breakpoints. Both ranges are numbers — the engine carries no colour
+ * or unit-string interpolation; a rotation axis reads the output in degrees. `extrapolate` sets both ends
+ * and the per-end keys override it.
+ */
+export interface InterpolationConfig {
+  inputRange: number[];
+  outputRange: number[];
+  extrapolate?: ExtrapolateType;
+  extrapolateLeft?: ExtrapolateType;
+  extrapolateRight?: ExtrapolateType;
 }
 
+/** Anything a style or `Dial` value can be bound to: an `AnimatedValue` or one of its interpolations. */
+export interface AnimatedNode {
+  interpolate(config: InterpolationConfig): AnimatedNode;
+}
+
+// A handle to an engine-side animated float. Not importable directly — obtain one from `useAnimatedValue`
+// or `new Animated.Value(...)`, so this is a type, not a runtime export.
+export interface AnimatedValue extends AnimatedNode {
+  setValue(value: number): void;
+  /**
+   * Frees the engine-side slot. The value pool is fixed-size, so a `new Animated.Value` that outlives its
+   * screen must be destroyed; `useAnimatedValue` does it on unmount. Idempotent.
+   */
+  destroy(): void;
+}
+
+/** A named engine curve. */
+export type EasingName =
+  | 'linear'
+  | 'ease'
+  | 'easeIn'
+  | 'easeOut'
+  | 'easeInOut'
+  | 'quadIn'
+  | 'quadOut'
+  | 'quadInOut'
+  | 'cubicIn'
+  | 'cubicOut'
+  | 'cubicInOut'
+  | 'bounceOut'
+  | 'elasticOut';
+
+/** A custom cubic-bezier curve, from `Easing.bezier`. */
+export interface BezierEasing {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** An `Easing` token. The engine evaluates the curve; it is not a JS function. */
+export type EasingCurve = EasingName | BezierEasing;
+
+/** `Animated.timing` config. */
 export interface AnimationConfig {
   toValue: number;
   duration?: number;
   delay?: number;
-  easing?: (t: number) => number;
+  easing?: EasingCurve;
+  useNativeDriver?: boolean;
+}
+
+/** `Animated.spring` config, in the engine's physical parameters (RN's `tension`/`friction` are not read). */
+export interface SpringAnimationConfig {
+  toValue: number;
+  /** Default 100. */
+  stiffness?: number;
+  /** Default 10. */
+  damping?: number;
+  /** Default 1. */
+  mass?: number;
+  velocity?: number;
+  delay?: number;
+  useNativeDriver?: boolean;
+}
+
+/** `Animated.decay` config. There is no target: the value coasts from `velocity`. */
+export interface DecayAnimationConfig {
+  /** Value units per ms. */
+  velocity: number;
+  /** Per-ms friction. Default 0.998. */
+  deceleration?: number;
   useNativeDriver?: boolean;
 }
 
@@ -818,8 +897,8 @@ export const Animated: {
   Text: (props: TextProps) => JSX.Element;
   Image: (props: ImageProps) => JSX.Element;
   timing(value: AnimatedValue, config: AnimationConfig): Animation;
-  spring(value: AnimatedValue, config: AnimationConfig): Animation;
-  decay(value: AnimatedValue, config: Record<string, unknown>): Animation;
+  spring(value: AnimatedValue, config: SpringAnimationConfig): Animation;
+  decay(value: AnimatedValue, config: DecayAnimationConfig): Animation;
   sequence(animations: Animation[]): Animation;
   parallel(
     animations: Animation[],
@@ -831,6 +910,10 @@ export const Animated: {
     config?: {iterations?: number; resetBeforeIteration?: boolean},
   ): Animation;
   delay(ms: number): Animation;
+  /** RN parity: a pass-through wrapper, since any component binds an animated style already. */
+  createAnimatedComponent<P>(
+    component: ComponentType<P>,
+  ): (props: P) => JSX.Element;
 };
 
 /** Creates an AnimatedValue tied to the component lifecycle (destroyed on unmount). */
@@ -843,7 +926,9 @@ export function usePersistentState<S>(
 ): [S, (value: S | ((prev: S) => S)) => void];
 
 export function useHostValue(initial: number): number;
-export const Easing: Record<string, (t: number) => number>;
+export const Easing: {readonly [K in EasingName]: K} & {
+  bezier(x1: number, y1: number, x2: number, y2: number): BezierEasing;
+};
 export const LayoutAnimation: Record<string, unknown>;
 
 // --- PanResponder ----------------------------------------------------------
