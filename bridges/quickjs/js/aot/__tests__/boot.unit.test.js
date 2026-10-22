@@ -375,6 +375,29 @@ export function App() {
     expect(text).not.toContain('"wide"');
   });
 
+  it('keeps a variant when multi-line branches differ only in the space beside a {value}', () => {
+    const c = compile(`${IMPORTS}const WIDE = screen.width > screen.height;
+export function App() {
+  const [n, setN] = useState(5);
+  return (
+    <View>
+      {WIDE ? (
+        <Text>
+          {n}items
+        </Text>
+      ) : (
+        <Text>
+          {n} items
+        </Text>
+      )}
+    </View>
+  );
+}`);
+    expect(bootOf(c)).toContain('return !s_boot.WIDE;');
+    expect(c).toContain('"%d items"');
+    expect(c).not.toContain('"%ditems"');
+  });
+
   (CC ? it : it.skip)(
     `a merged app passes the C syntax check (${CC || 'no cc found'})`,
     () => {
