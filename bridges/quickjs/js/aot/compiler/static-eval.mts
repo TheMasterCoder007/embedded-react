@@ -489,9 +489,11 @@ function binary(operator: string, left: any, right: any): unknown {
     case '>=':
       return left >= right;
     case '==':
+      return left == right;
     case '===':
       return left === right;
     case '!=':
+      return left != right;
     case '!==':
       return left !== right;
   }

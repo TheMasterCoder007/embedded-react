@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a constant `==` or `!=` now folds with JS's loose equality (`undefined == null` is true) instead of
+  as `===` or `!==`.
 - AOT: a name on `Object.prototype` (`toString`, `constructor`, …) used as an enum style value, a named
   color, or an undeclared identifier is now a compile error instead of invalid C or a silent wrong value.
 - AOT: a `setKeyboardConfig` layout with no layers, or a layer with no rows, is now a located compile

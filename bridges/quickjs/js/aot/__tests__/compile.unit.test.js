@@ -4702,6 +4702,15 @@ import { View, StyleSheet } from 'embedded-react';
     ).toThrow(/style "valueOf" is not supported/);
   });
 
+  it('folds == and != with loose equality', () => {
+    const c = gen(`${D}const item = {};
+      export function App() {
+        return (<View style={{width: item.missing == null ? 10 : 20, height: item.missing != null ? 30 : 40}} />);
+      }`);
+    expect(c).toContain('p.width = 10;');
+    expect(c).toContain('p.height = 40;');
+  });
+
   it('rejects an Object.prototype name as an enum value', () => {
     const e = err(`${D}
       export function App() {
