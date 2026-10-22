@@ -94,6 +94,17 @@ extern "C"
 #define ER_DAMAGE_RECTS_MAX 16
 #endif
 
+/**
+ * @brief Scene-graph node pool size.
+ *
+ * Part of the ABI rather than an engine detail because a caller sizes against it: a compiled (Flow B) app
+ * checks its node count against it at build time. The engine CMake publishes the value that build was
+ * configured with; this fallback is what a direct-source build (no CMake) gets.
+ */
+#ifndef ERUI_MAX_NODES
+#define ERUI_MAX_NODES 512
+#endif
+
     /*----------------------------------------------------------------------------------------------------------------------
      - Types
      ---------------------------------------------------------------------------------------------------------------------*/

@@ -197,6 +197,37 @@ describe('AOT generated C compiles', () => {
   );
 
   (CC ? it : it.skip)(
+    `an app past the default node pool fails a build that never set one (${CC || 'no cc found'})`,
+    () => {
+      const rows = Array.from({length: 520}, (_, i) => i).join(', ');
+      const r = compileSource(
+        `import {View, Text} from 'embedded-react';
+         export function App() {
+           return (<View>{[${rows}].map(n => <Text>{n}</Text>)}</View>);
+         }`,
+        'big',
+      );
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-default-pool-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        // Only the public headers, and no -DERUI_MAX_NODES: er_scene.h's default applies.
+        const res = spawnSync(
+          CC,
+          ['-fsyntax-only', '-I', engineInc, join(dir, 'app.gen.c')],
+          {encoding: 'utf8'},
+        );
+        expect(res.status).not.toBe(0);
+        expect(res.stderr).toContain(
+          `raise ERUI_MAX_NODES to at least ${r.nodes + 1}`,
+        );
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
     `reports a full list and a string cut short once each (${CC || 'no cc found'})`,
     () => {
       const {c} = compileSource(

@@ -936,10 +936,8 @@ static int16_t app_round_dim(double v)
   // The root and every node in the tree, all created by er_app_build().
   const totalNodes = out.nodeCount + 1;
   const limitBlock = `/* er_app_build() creates every node the app has, so a pool too small for the tree fails here, not on the
-   device. */
-#ifdef ERUI_MAX_NODES
+   device. ERUI_MAX_NODES comes from er_scene.h, as the engine was configured or its default. */
 _Static_assert(ERUI_MAX_NODES >= ${totalNodes}, "this app builds ${totalNodes} nodes: raise ERUI_MAX_NODES to at least ${totalNodes}");
-#endif
 
 ${APP_LIMIT_DEFINITION}
 /* er_node_create, reporting a full pool: the engine skips a NULL node, so the app would run with part of

@@ -28,15 +28,12 @@
  * Per-module knobs stay with their module (the vector pools in vector.c, the arc span cache in arc.c).
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/**
- * @brief Scene-graph node pool size.
- *
- * Shared by the pool itself (scene/compositor.c), the layout scratch arrays (layout/layout_engine.c) and the
+/*
+ * ERUI_MAX_NODES, the scene-graph node pool size, is in er_scene.h: a compiled app checks against it. It is
+ * shared by the pool itself (scene/compositor.c), the layout scratch arrays (layout/layout_engine.c) and the
  * hit-test walks (scene/hit_test.c) — all three index nodes by tag over the same range.
  */
-#ifndef ERUI_MAX_NODES
-#define ERUI_MAX_NODES 512
-#endif
+#include "er_scene.h"
 
 /**
  * @brief Opacity-composite scratch width in pixels (the widest node that can be captured offscreen).
