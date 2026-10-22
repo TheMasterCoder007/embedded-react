@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- Named colors now resolve the same in Flow A styles, SVG paint and Flow B: one shared list with CSS
+  values (`green` is `#008000`), matched in any case.
 - Types: `index.d.ts` now matches the runtime for `StyleSheet`, `Animated`, `Easing` and `flexBasis`
   percentages.
 - AOT: `useEffect(fn)` with no dependency list is now a compile error instead of running only once.

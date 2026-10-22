@@ -22,6 +22,8 @@
 // shapes to path ops, bakes viewBox + <G> translate/scale into coordinates, and resolves inherited
 // paint. The opcodes below MUST stay in sync with er_scene.h.
 
+import {NAMED_COLORS} from './named-colors.js';
+
 // Op-tape vocabulary — exported so the build-time SVG baker (assets/bake-svg.mjs) can reuse it without
 // duplicating the encoding (and without pulling its SVG-parser dependency into this runtime module).
 export const VOP_SHAPE = 0;
@@ -115,18 +117,10 @@ export function encodeVectorGradients(grads) {
   return out;
 }
 
-// Minimal named-color set (extend as needed); everything else goes through hex/rgb parsing.
-const NAMED = {
-  none: 0,
-  transparent: 0,
-  black: 0xff000000,
-  white: 0xffffffff,
-  red: 0xffff0000,
-  green: 0xff008000,
-  blue: 0xff0000ff,
-  gray: 0xff808080,
-  grey: 0xff808080,
-};
+// The shared named colors plus SVG's `none`; everything else goes through hex/rgb parsing.
+const NAMED = Object.freeze(
+  Object.assign(Object.create(null), NAMED_COLORS, {none: 0}),
+);
 
 // Cache string->uint32 results: a theme reuses a handful of color strings, so on a continuous drag
 // (which recompiles the dial every move) this turns repeated hex parsing into a Map lookup.
@@ -135,7 +129,7 @@ const _colorCache = new Map();
 /**
  * Parses a CSS color string to a uint32 ARGB8888. Returns 0 (fully transparent) for none/transparent/
  * null, so the engine treats it as "no fill"/"no stroke". Accepts #rgb, #rgba, #rrggbb, #rrggbbaa,
- * rgb()/rgba(), and the small named set above. String results are memoised (see _colorCache).
+ * rgb()/rgba(), and the named colors above. String results are memoised (see _colorCache).
  */
 export function parseColor(c) {
   if (c == null || c === false) return 0;

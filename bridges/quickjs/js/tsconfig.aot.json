@@ -21,6 +21,7 @@
     "aot/**/*.mts",
     "aot/**/*.mjs",
     "assets/**/*.mjs",
+    "src/embedded-react/named-colors.js",
     "src/embedded-react/svg-ops.js",
     "src/embedded-react/warn-props.js"
   ],

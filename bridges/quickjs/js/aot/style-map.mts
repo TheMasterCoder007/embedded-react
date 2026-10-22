@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {NAMED_COLORS} from '../src/embedded-react/named-colors.js';
 import type {StaticAssign} from './compiler/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -42,16 +43,6 @@ export type DynamicStyleField =
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/** A few CSS/RN named colors (extend as demos need them); everything else must be hex. */
-const NAMED_COLORS: Record<string, number> = {
-  transparent: 0x00000000,
-  white: 0xffffffff,
-  black: 0xff000000,
-  red: 0xffff0000,
-  green: 0xff00ff00,
-  blue: 0xff0000ff,
-};
 
 // RN enum values → ER_* constants, shared by the static (KEYS) and state-driven (ENUM_FIELDS) lowerings.
 const ALIGN: EnumTable = {

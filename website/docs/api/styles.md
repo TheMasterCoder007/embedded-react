@@ -88,11 +88,11 @@ Two components add a property of their own: `Modal` reads `backdropColor` for it
 
 ## Colours
 
-Flow A parses `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the lowercase names
-`transparent`, `black`, `white`, `red`, `green`, `blue`, `gray`/`grey`, `yellow`, `cyan`, `magenta`
-and `orange`. **Flow B** accepts `#rgb`, `#rrggbb`, `#rrggbbaa` and the first six of those names
-only, and a state-driven color must be a literal or a ternary of literals. Neither flow parses
-`#rgba` in a style.
+Flow A parses `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the names `transparent`,
+`black`, `white`, `red`, `green`, `blue`, `gray`/`grey`, `yellow`, `cyan`, `magenta` and `orange`, in
+any case and with their CSS values (`green` is `#008000`). **Flow B** accepts `#rgb`, `#rrggbb`,
+`#rrggbbaa` and the same names, and a state-driven color must be a literal or a ternary of literals.
+Neither flow parses `#rgba` in a style.
 
 ## StyleSheet
 

@@ -56,6 +56,16 @@ check(
   'the named spelling of it painted the same',
 );
 
+// Names match in any case and use their CSS values.
+check(
+  paint({backgroundColor: 'Green'}) === 0xff008000,
+  'a capitalised name painted its CSS value',
+);
+check(
+  paint({backgroundColor: 'ORANGE'}) === 0xffffa500,
+  'an uppercase name painted',
+);
+
 // More distinct colors than the cache holds, cycled twice: every one still parses to itself, whether
 // it survived eviction or had to be re-parsed.
 const ramp = [];

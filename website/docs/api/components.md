@@ -370,7 +370,8 @@ import gauge from './gauge.svg';
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
 `fillRule` (`nonzero`/`evenodd`), and `fillGrad`/`strokeGrad`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
-stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and a few names.
+stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the
+[named colours](./styles.md#colours).
 **An unfilled shape defaults to black**: set `fill="none"` on anything meant to be stroke-only.
 
 | Shape       | Props                                                                                                                                                                                                  |

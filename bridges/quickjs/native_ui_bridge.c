@@ -532,8 +532,22 @@ static bool parse_rgb_func(const char* s, uint32_t* out)
     return true;
 }
 
+/** @brief True when @p a equals the lowercase @p lower, ignoring ASCII case in @p a. */
+static bool ascii_ieq(const char* a, const char* lower)
+{
+    for (; *lower; a++, lower++)
+    {
+        const char c = (*a >= 'A' && *a <= 'Z') ? (char)(*a - 'A' + 'a') : *a;
+        if (c != *lower)
+        {
+            return false;
+        }
+    }
+    return *a == '\0';
+}
+
 /**
- * @brief Parses a CSS color string (hex, rgb/rgba, or a small set of named colors).
+ * @brief Parses a CSS color string (hex, rgb/rgba, or a named color, in any case).
  *
  * @param[in]  s    Color string.
  * @param[out] out  Receives straight-alpha ARGB8888.
@@ -555,7 +569,7 @@ static bool parse_css_color(const char* s, uint32_t* out)
         return parse_rgb_func(s, out);
     }
 
-    /* Minimal named-color set; extend as needed. */
+    /* Must match NAMED_COLORS in js/src/embedded-react/named-colors.js. */
     static const struct
     {
         const char* name;
@@ -576,7 +590,7 @@ static bool parse_css_color(const char* s, uint32_t* out)
     };
     for (size_t i = 0; i < sizeof(k_named) / sizeof(k_named[0]); i++)
     {
-        if (strcmp(s, k_named[i].name) == 0)
+        if (ascii_ieq(s, k_named[i].name))
         {
             *out = k_named[i].argb;
             return true;
