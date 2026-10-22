@@ -31,7 +31,12 @@ import {
   nameBootValues,
   screenBinding,
 } from './boot.mts';
-import {evalStaticOrThrow, evalStatic, withUndefined} from './static-eval.mts';
+import {
+  evalStaticOrThrow,
+  evalStatic,
+  setBinding,
+  withUndefined,
+} from './static-eval.mts';
 import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
@@ -218,9 +223,13 @@ export function moduleScope(
         continue;
       }
       try {
-        scope[decl.id.name] = bindConst(
+        setBinding(
+          scope,
           decl.id.name,
-          evalStatic(decl.init, withUndefined(scope), 'boot'),
+          bindConst(
+            decl.id.name,
+            evalStatic(decl.init, withUndefined(scope), 'boot'),
+          ),
         );
       } catch {
         /* not a static const — skip */

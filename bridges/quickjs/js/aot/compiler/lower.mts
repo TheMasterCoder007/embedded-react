@@ -20,7 +20,7 @@
 
 import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
 import {aotError} from './diagnostics.mts';
-import {evalStatic, withUndefined} from './static-eval.mts';
+import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
 import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
 import {
   findShadowedClockCalls,
@@ -260,9 +260,13 @@ function lowerProgram(
     for (const decl of statement.declarations) {
       if (decl.id.type !== 'Identifier' || !decl.init) continue;
       try {
-        scope[decl.id.name] = bindConst(
+        setBinding(
+          scope,
           decl.id.name,
-          evalStatic(decl.init, withUndefined(scope), 'boot'),
+          bindConst(
+            decl.id.name,
+            evalStatic(decl.init, withUndefined(scope), 'boot'),
+          ),
         );
       } catch {
         // A dynamic const must hide a same-named module const, or the JSX quietly renders the module value.
@@ -329,7 +333,7 @@ function lowerProgram(
   // Before emit, fold each memo or inline its C expression at each use (no cache needed: dep tracking re-applies).
   for (const [name, expr] of memos) {
     try {
-      scope[name] = bindConst(name, evalStatic(expr, scope, 'boot'));
+      setBinding(scope, name, bindConst(name, evalStatic(expr, scope, 'boot')));
     } catch {
       const cExpr = emitSourcedWide(expr, env);
       env.locals.set(name, {

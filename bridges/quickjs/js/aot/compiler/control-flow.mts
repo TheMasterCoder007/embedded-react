@@ -21,7 +21,7 @@
 import {aotError} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
-import {evalStatic, withUndefined} from './static-eval.mts';
+import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
 import {emitSourcedWide, lowerExpr} from './expressions.mts';
 import {
   isFn,
@@ -254,7 +254,8 @@ function bindParams(
       }
 
       descriptor ??= {static: true, value: undefined};
-      if (descriptor.static) defaultScope[bindName] = descriptor.value;
+      if (descriptor.static)
+        setBinding(defaultScope, bindName, descriptor.value);
       bindings.set(bindName, descriptor);
     }
   } else {
@@ -362,7 +363,7 @@ export function emitComponent(
         state: descriptor.state ?? state,
       });
     } else if (descriptor.static) {
-      childScope[name] = descriptor.value;
+      setBinding(childScope, name, descriptor.value);
     } else {
       childLocals.set(name, {
         code: descriptor.code,
@@ -405,9 +406,13 @@ export function emitComponent(
         if (decl.id.type !== 'Identifier' || !decl.init) continue;
         if (childLocals.has(decl.id.name)) continue; // a dynamic prop of that name is already bound
         try {
-          childScope[decl.id.name] = bindConst(
+          setBinding(
+            childScope,
             decl.id.name,
-            evalStatic(decl.init, withUndefined(childScope), 'boot'),
+            bindConst(
+              decl.id.name,
+              evalStatic(decl.init, withUndefined(childScope), 'boot'),
+            ),
           );
         } catch {
           // A dynamic const hides any same-named module const; a memo re-binds it below, else it stays unresolved.
@@ -464,7 +469,11 @@ export function emitComponent(
   // Resolve memos in order (fold, else a local C expr), then compile its effects, all in the child's env/state.
   for (const [name, expr] of childMemos) {
     try {
-      childScope[name] = bindConst(name, evalStatic(expr, childScope, 'boot'));
+      setBinding(
+        childScope,
+        name,
+        bindConst(name, evalStatic(expr, childScope, 'boot')),
+      );
     } catch {
       const cExpr = emitSourcedWide(expr, childEnv);
       childLocals.set(name, {
@@ -567,10 +576,10 @@ function emitMap(
   return items.map((item, index) => {
     const rowScope: Scope = {...scope};
     if (itemName) {
-      rowScope[itemName] = item;
+      setBinding(rowScope, itemName, item);
     }
     if (indexName) {
-      rowScope[indexName] = index;
+      setBinding(rowScope, indexName, index);
     }
     return emitElementInto(
       rowJSX,
@@ -677,7 +686,7 @@ function emitDynamicMap(
     }
 
     if (indexName) {
-      rowScope[indexName] = rowIndex; // the index is a compile-time literal per pooled row
+      setBinding(rowScope, indexName, rowIndex); // the index is a compile-time literal per pooled row
     }
 
     const rowLocals = new Map<string, Local>(env.locals);

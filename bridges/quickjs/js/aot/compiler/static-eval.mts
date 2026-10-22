@@ -139,7 +139,7 @@ function snapshotOf(fold: Fold): Scope {
   if (!fold.snapshot) {
     const copy: Scope = {};
     for (const name in fold.scope) {
-      copy[name] = fold.scope[name];
+      setBinding(copy, name, fold.scope[name]);
     }
     fold.snapshot = copy;
   }
@@ -561,6 +561,22 @@ export function hasBinding(scope: Scope, name: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Binds `name` in `scope` as its own property, so `__proto__` is a name rather than Object.prototype's setter.
+ *
+ * @param scope  The scope to bind in.
+ * @param name  The identifier.
+ * @param value  Its value.
+ */
+export function setBinding(scope: Scope, name: string, value: unknown): void {
+  Object.defineProperty(scope, name, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 /**

@@ -4735,6 +4735,29 @@ import { View, StyleSheet } from 'embedded-react';
     expect(c).toContain('p.width = 12;');
   });
 
+  it('binds a const named __proto__ as a name, not the scope prototype', () => {
+    const c = gen(`${D}const __proto__ = 12;
+      export function App() {
+        return (<View style={{width: __proto__}} />);
+      }`);
+    expect(c).toContain('p.width = 12;');
+    expect(() =>
+      gen(`${D}const __proto__ = {SIZE: 5};
+      export function App() {
+        return (<View style={{width: SIZE}} />);
+      }`),
+    ).toThrow(/resolve identifier "SIZE"/);
+  });
+
+  it('rejects an Object.prototype name in a state-driven enum style', () => {
+    const e = err(`${D}
+      export function App() {
+        const [on, setOn] = useState(false);
+        return (<View style={{alignItems: on ? 'toString' : 'center'}} />);
+      }`);
+    expect(e.message).toMatch(/unsupported enum value "toString"/);
+  });
+
   it('locates an unknown key that arrived through a StyleSheet', () => {
     const e = err(`${D}
       const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });

@@ -219,7 +219,9 @@ export function lowerEnumValue(
   env: Env,
 ): IrPropValue {
   if (node.type === 'StringLiteral') {
-    const enumConstant = table[node.value];
+    const enumConstant = Object.hasOwn(table, node.value)
+      ? table[node.value]
+      : undefined;
     if (!enumConstant) {
       throw aotError(
         `AOT: unsupported enum value "${node.value}"`,
@@ -249,7 +251,7 @@ export function lowerEnumValue(
   // A statically resolvable enum (a const string) folds to its constant.
   try {
     const enumValue = evalStatic(node, foldScope(env, env.consts ?? {}));
-    if (typeof enumValue === 'string' && table[enumValue]) {
+    if (typeof enumValue === 'string' && Object.hasOwn(table, enumValue)) {
       return {kind: 'constant', code: table[enumValue]};
     }
   } catch {
