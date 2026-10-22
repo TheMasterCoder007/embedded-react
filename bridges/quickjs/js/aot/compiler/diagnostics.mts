@@ -20,6 +20,7 @@
 
 import {codeFrameColumns} from '@babel/code-frame';
 import type {Node} from '@babel/types';
+import type {IrText, IrTextLiteral} from './ir/text.mts';
 import type {ResolvedOptions} from './options.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -65,6 +66,51 @@ export function currentLoc(): SourcePosition | undefined {
   }
 
   return undefined;
+}
+
+/** The most bytes each of the engine's fixed string buffers holds, as er_scene.h defines them. */
+export const ENGINE_STRING_MAX = {
+  ER_TEXT_MAX: 255,
+  ER_SPAN_TEXT_MAX: 63,
+  ER_PLACEHOLDER_MAX: 63,
+  ER_IMAGE_NAME_MAX: 63,
+} as const;
+
+/**
+ * A text's string when every part of it is known at compile time.
+ *
+ * @param text  The text.
+ *
+ * @returns The string, or null when a part is a run-time value.
+ */
+export const constantText = (text: IrText): string | null =>
+  text.parts.every(part => part.kind === 'literal')
+    ? text.parts.map(part => (part as IrTextLiteral).text).join('')
+    : null;
+
+/**
+ * Refuses a constant string too long for the engine buffer it is copied into, which C would cut short.
+ *
+ * @param text  The string, or null for one built at run time (checked when it is written).
+ * @param limit  The er_scene.h define that sizes the buffer.
+ * @param what  What the string is, for the error.
+ */
+export function checkEngineString(
+  text: string | null,
+  limit: keyof typeof ENGINE_STRING_MAX,
+  what: string,
+): void {
+  if (text === null) {
+    return;
+  }
+
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > ENGINE_STRING_MAX[limit]) {
+    throw aotError(
+      `AOT: ${what} is ${bytes} bytes, but the engine holds ${ENGINE_STRING_MAX[limit]} (${limit})`,
+      `shorten it: ${limit} in er_scene.h sizes the engine's buffer.`,
+    );
+  }
 }
 
 /**

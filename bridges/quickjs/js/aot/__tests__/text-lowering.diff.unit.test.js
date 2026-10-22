@@ -271,7 +271,7 @@ const jsChild = val =>
 const MODES = {
   child: {
     app: childApp,
-    re: /snprintf\(p\.text, sizeof\(p\.text\), ([\s\S]*?)\);\n/,
+    re: /snprintf\(p\.text, sizeof\(p\.text\), (.*?)\)(?:;| >= \(int\)sizeof\(p\.text\)\))\n/,
   },
   setter: {
     app: setterApp,
@@ -279,7 +279,7 @@ const MODES = {
   },
   'child component': {
     app: childCompApp,
-    re: /snprintf\(p\.text, sizeof\(p\.text\), ([\s\S]*?)\);\n/,
+    re: /snprintf\(p\.text, sizeof\(p\.text\), (.*?)\)(?:;| >= \(int\)sizeof\(p\.text\)\))\n/,
   },
 };
 

@@ -15,7 +15,9 @@
  */
 
 import {describe, it, expect, vi} from 'vitest';
+import {readFileSync} from 'node:fs';
 import {compileSource} from '../compile.mts';
+import {ENGINE_STRING_MAX} from '../compiler/diagnostics.mts';
 import {flattenSvg} from '../../src/embedded-react/svg-ops.js';
 
 // The Flow B AOT compiler turns an App.jsx source string into C. These tests assert on the generated C
@@ -265,7 +267,7 @@ describe('AOT baseline (regression)', () => {
     );
     // the Text node renders the string with %s
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%s", s_state.label);',
+      'if (snprintf(p.text, sizeof(p.text), "%s", s_state.label) >= (int)sizeof(p.text))',
     );
   });
 
@@ -2712,7 +2714,7 @@ describe('AOT nested Text spans', () => {
         );
       }`);
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%d items of   %d", s_state.count, s_state.count);',
+      'if (snprintf(p.text, sizeof(p.text), "%d items of   %d", s_state.count, s_state.count) >= (int)sizeof(p.text))',
     );
   });
 });
@@ -3101,7 +3103,7 @@ import { View, Text, TextInput } from 'embedded-react';
     );
     // value drives the buffer (synced in app_update), placeholder + color applied
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%s", s_state.name);',
+      'if (snprintf(p.text, sizeof(p.text), "%s", s_state.name) >= (int)sizeof(p.text))',
     );
     expect(c).toContain(
       'snprintf(p.placeholder, sizeof(p.placeholder), "%s", "Name");',
@@ -3234,7 +3236,7 @@ import logo from './assets/logo.png';
       'demo',
     ).c;
     expect(c).toContain(
-      'snprintf(p.image_name, sizeof(p.image_name), "%s", s_items[0].icon);',
+      'if (snprintf(p.image_name, sizeof(p.image_name), "%s", s_items[0].icon) >= (int)sizeof(p.image_name))',
     );
   });
 
@@ -3244,7 +3246,7 @@ import logo from './assets/logo.png';
       'demo',
     );
     expect(r.c).toContain(
-      'snprintf(p.image_name, sizeof(p.image_name), "%s", (s_state.day ? "sun" : "moon"));',
+      'if (snprintf(p.image_name, sizeof(p.image_name), "%s", (s_state.day ? "sun" : "moon")) >= (int)sizeof(p.image_name))',
     );
     expect(r.images.map(i => i.name).sort()).toEqual(['moon', 'sun']);
   });
@@ -3464,7 +3466,7 @@ describe('AOT useHostValue (host-fed input)', () => {
     expect(c).toContain('int steps;'); // field in ErAppState
     expect(c).toContain('.steps = 0'); // initializer
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%d", s_state.steps);',
+      'if (snprintf(p.text, sizeof(p.text), "%d", s_state.steps) >= (int)sizeof(p.text))',
     ); // read into Text
     expect(c).toContain('void er_app_set_steps(int v)'); // generated public setter
     expect(c).toContain('s_state.steps = v;');
@@ -4262,7 +4264,7 @@ import { View, Text, TextInput } from 'embedded-react';
         return (<Text>{'render-check ' + (page + 1) + '/' + PAGES}</Text>);
       }`);
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "render-check %d/4", app_add(s_state.page, 1));',
+      'if (snprintf(p.text, sizeof(p.text), "render-check %d/4", app_add(s_state.page, 1)) >= (int)sizeof(p.text))',
     );
   });
 
@@ -4948,6 +4950,58 @@ describe('AOT fixed limits', () => {
       '_Static_assert(ERUI_MAX_NODES >= 4, "this app builds 4 nodes: raise ERUI_MAX_NODES to at least 4");',
     );
     expect(c).toContain('APP_LIMIT("node pool full, raise ERUI_MAX_NODES");');
+  });
+
+  it('keeps its copy of the engine string limits in step with er_scene.h', () => {
+    const header = readFileSync(
+      new URL('../../../../../engine/include/er_scene.h', import.meta.url),
+      'utf8',
+    );
+    for (const [name, max] of Object.entries(ENGINE_STRING_MAX)) {
+      expect(header).toMatch(new RegExp(`#define ${name} ${max}\\b`));
+    }
+  });
+
+  it('refuses constant node text too long for the engine', () => {
+    const long = 'x'.repeat(256);
+    expect(() =>
+      gen(`${T}export function App() { return (<Text>${long}</Text>); }`),
+    ).toThrow(
+      /a <Text> is 256 bytes, but the engine holds 255 \(ER_TEXT_MAX\)/,
+    );
+    expect(() =>
+      gen(
+        `${T}export function App() { return (<Text>a<Text>${'x'.repeat(64)}</Text></Text>); }`,
+      ),
+    ).toThrow(/a <Text> span is 64 bytes, but the engine holds 63/);
+    expect(() =>
+      gen(
+        `import {TextInput} from 'embedded-react';
+         export function App() { return (<TextInput placeholder="${'x'.repeat(64)}" />); }`,
+      ),
+    ).toThrow(/a <TextInput> placeholder is 64 bytes/);
+    expect(() =>
+      gen(
+        `import {TextInput} from 'embedded-react';
+         export function App() { return (<TextInput value="${long}" />); }`,
+      ),
+    ).toThrow(/a <TextInput> value is 256 bytes/);
+    expect(
+      gen(
+        `${T}export function App() { return (<Text>${'x'.repeat(255)}</Text>); }`,
+      ),
+    ).not.toContain('ER_TEXT_MAX');
+  });
+
+  it('reports node text cut short at run time', () => {
+    const c = gen(`${T}export function App() {
+      const [n, setN] = useState(0);
+      return (<Pressable onPress={() => setN(n + 1)}><Text>{n}</Text></Pressable>);
+    }`);
+    expect(c).toContain(
+      'if (snprintf(p.text, sizeof(p.text), "%d", s_state.n) >= (int)sizeof(p.text))',
+    );
+    expect(c).toContain('APP_LIMIT("text cut short at ER_TEXT_MAX");');
   });
 
   it('reports a full timer table', () => {

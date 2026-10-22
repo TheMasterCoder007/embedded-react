@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.js';
-import {aotError, withLoc} from './diagnostics.mts';
+import {aotError, constantText, withLoc} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {
   mix64Error,
@@ -76,7 +76,7 @@ import type {
   IrTimer,
   IrUpdateVector,
 } from './ir/statements.mts';
-import type {IrText, IrTextLiteral} from './ir/text.mts';
+import type {IrText} from './ir/text.mts';
 import type {IrGeometry, IrTapeValue, IrVectorPaint} from './ir/vectors.mts';
 import type {
   CType,
@@ -357,14 +357,12 @@ const refRead = (ref: RefRecord): IrExpr => ({
  * @param env  The expression environment.
  */
 function checkConstantFits(text: IrText, what: string, env: Env): void {
-  if (!text.parts.every(part => part.kind === 'literal')) {
+  const constant = constantText(text);
+  if (constant === null) {
     return;
   }
 
-  const bytes = Buffer.byteLength(
-    text.parts.map(part => (part as IrTextLiteral).text).join(''),
-    'utf8',
-  );
+  const bytes = Buffer.byteLength(constant, 'utf8');
   if (bytes >= env.caps.listStrCap) {
     throw aotError(
       `AOT: ${what} is set to a ${bytes}-byte string, but a string holds ${env.caps.listStrCap - 1} bytes`,

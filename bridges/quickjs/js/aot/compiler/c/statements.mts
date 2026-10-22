@@ -131,16 +131,16 @@ function printTimerAdd(timer: IrTimer): string {
  * @param buffer  The buffer, as a C lvalue.
  * @param args  snprintf's arguments after the buffer and its size.
  * @param isConstant  The value is a constant.
- * @param what  What the buffer holds, for the report.
+ * @param report  What APP_LIMIT reports when the value is cut short.
  * @param indent  The statement's indentation.
  *
  * @returns The C lines.
  */
-function printStringWrite(
+export function printStringWrite(
   buffer: string,
   args: string,
   isConstant: boolean,
-  what: string,
+  report: string,
   indent: string,
 ): string[] {
   const write = `snprintf(${buffer}, sizeof(${buffer}), ${args})`;
@@ -151,10 +151,20 @@ function printStringWrite(
   return [
     `${indent}if (${write} >= (int)sizeof(${buffer}))`,
     `${indent}{`,
-    `${indent}${INDENT}APP_LIMIT(${cstr(`${what} cut short, raise ER_AOT_LIST_STR_CAP`)});`,
+    `${indent}${INDENT}APP_LIMIT(${cstr(report)});`,
     `${indent}}`,
   ];
 }
+
+/**
+ * The report for an app string buffer cut short.
+ *
+ * @param what  What the buffer holds.
+ *
+ * @returns The report.
+ */
+const cutShort = (what: string): string =>
+  `${what} cut short, raise ER_AOT_LIST_STR_CAP`;
 
 /**
  * A string state write. snprintf's source and destination may not overlap, so a value that reads the slot
@@ -168,7 +178,7 @@ function printStringWrite(
 function printSetStateText(stmt: IrSetStateText, indent: string): string[] {
   const member = stmt.state.cMember;
   const format = printText(stmt.text);
-  const what = `state '${stmt.state.name}'`;
+  const report = cutShort(`state '${stmt.state.name}'`);
   if (format.args.some(formatArg => readsMember(member).test(formatArg))) {
     return [
       `${indent}{`,
@@ -177,7 +187,7 @@ function printSetStateText(stmt: IrSetStateText, indent: string): string[] {
         'next',
         formatArgs(format),
         false,
-        what,
+        report,
         indent + INDENT,
       ),
       `${indent}    memcpy(${member}, next, strlen(next) + 1);`,
@@ -189,7 +199,7 @@ function printSetStateText(stmt: IrSetStateText, indent: string): string[] {
     member,
     formatArgs(format),
     !format.args.length,
-    what,
+    report,
     indent,
   );
 }
@@ -216,7 +226,7 @@ function printAppendItem(stmt: IrAppendItem): string[] {
           slot,
           formatArgs(format),
           !format.args.length,
-          `field '${itemValue.field.key}' of list '${name}'`,
+          cutShort(`field '${itemValue.field.key}' of list '${name}'`),
           LIST_INDENT + INDENT,
         ),
       );
@@ -261,7 +271,7 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
             stmt.name,
             `"%s", ${printExpr(init)}`,
             init.kind === 'string',
-            `local '${stmt.name}'`,
+            cutShort(`local '${stmt.name}'`),
             indent,
           ),
         ];

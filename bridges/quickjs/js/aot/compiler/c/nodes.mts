@@ -21,7 +21,8 @@
 import {cstr, floatLit} from '../c-syntax.mts';
 import {printCondition, printExpr} from './expressions.mts';
 import {panEventName, panQueryName} from './pan-responder.mts';
-import {printText} from './text.mts';
+import {printStringWrite} from './statements.mts';
+import {formatArgs, printText} from './text.mts';
 import {printStateDrivenVectorWiring, printVectorOps} from './vectors.mts';
 import {branchElements, hasRuntimeProps, isStateDriven} from '../ir/nodes.mts';
 import type {IrElement, IrNode, IrPropValue, IrShow} from '../ir/nodes.mts';
@@ -360,21 +361,28 @@ export function printNodeUpdate(
       `    snprintf(p.placeholder, sizeof(p.placeholder), "%s", ${cstr(update.placeholder)});`,
     );
   }
+  // A static image name was checked at compile time; one from state is checked here.
   if (update.imageName != null) {
     lines.push(
-      `    snprintf(p.image_name, sizeof(p.image_name), "%s", ${update.imageName});`,
+      ...printStringWrite(
+        'p.image_name',
+        `"%s", ${update.imageName}`,
+        update.imageName.startsWith('"'),
+        'image name cut short at ER_IMAGE_NAME_MAX',
+        '    ',
+      ),
     );
   }
   if (update.text) {
-    if (update.text.args.length) {
-      lines.push(
-        `    snprintf(p.text, sizeof(p.text), ${cstr(update.text.format)}, ${update.text.args.join(', ')});`,
-      );
-    } else {
-      lines.push(
-        `    snprintf(p.text, sizeof(p.text), "%s", ${cstr(update.text.format.replace(/%%/g, '%'))});`,
-      );
-    }
+    lines.push(
+      ...printStringWrite(
+        'p.text',
+        formatArgs(update.text),
+        !update.text.args.length,
+        'text cut short at ER_TEXT_MAX',
+        '    ',
+      ),
+    );
   }
   lines.push(`    er_node_set_props(${target}, &p);`);
   return lines;

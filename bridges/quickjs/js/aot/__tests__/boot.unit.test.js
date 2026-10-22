@@ -121,7 +121,7 @@ export function App() {
   return (<Text>{screen.width}x{screen.height}</Text>);
 }`);
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%dx%d", s_boot.screen_width, s_boot.screen_height);',
+      'if (snprintf(p.text, sizeof(p.text), "%dx%d", s_boot.screen_width, s_boot.screen_height) >= (int)sizeof(p.text))',
     );
     expect(c).not.toContain('static void app_update');
   });
@@ -258,7 +258,7 @@ export function App() {
       's_boot.value_2 = (s_boot.WIDE ? "wide" : "tall");',
     );
     expect(c).toContain(
-      'snprintf(p.text, sizeof(p.text), "%s", s_boot.value_2);',
+      'if (snprintf(p.text, sizeof(p.text), "%s", s_boot.value_2) >= (int)sizeof(p.text))',
     );
   });
 
@@ -464,8 +464,10 @@ export function App() {
         PORTRAIT,
       );
 
-      // Everything before er_app_build(), with the engine calls app_update() and the clock make stubbed out.
+      // Everything before er_app_build(), with the engine calls app_update(), app_node_create() and the clock
+      // make stubbed out.
       const main = `
+ERNode* er_node_create(ERNodeType type) { (void)type; return NULL; }
 void er_props_default(ERProps* props) { (void)props; }
 void er_node_set_props(ERNode* node, const ERProps* props) { (void)node; (void)props; }
 uint64_t er_now_ms64(void) { return 0; }

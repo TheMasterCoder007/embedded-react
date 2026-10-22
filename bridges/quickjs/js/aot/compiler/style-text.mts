@@ -34,7 +34,7 @@ import {
   colorLiteral,
 } from '../style-map.mts';
 import {parseColor} from '../../src/embedded-react/svg-ops.js';
-import {aotError} from './diagnostics.mts';
+import {aotError, checkEngineString} from './diagnostics.mts';
 import {
   at,
   checkAnimatedStyleKey,
@@ -1004,13 +1004,19 @@ export function collectTextSpans(
     letter_spacing: 'ER_LAYOUT_AUTO',
   });
 
+  // A span's text is a C literal in a fixed engine buffer.
+  const spanText = (text: string): string => {
+    checkEngineString(text, 'ER_SPAN_TEXT_MAX', 'a <Text> span');
+    return cstr(text);
+  };
+
   // One span per child: text and static {…} values inherit the parent's style; a nested <Text> carries its own.
   const spans = [];
   for (const child of children) {
     if (child.type === 'JSXText') {
       const text = cleanJsxText(child.value);
       if (text) {
-        spans.push(inheritSpan(cstr(text)));
+        spans.push(inheritSpan(spanText(text)));
       }
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
@@ -1027,7 +1033,7 @@ export function collectTextSpans(
 
       // React draws nothing for null, undefined, or a boolean child.
       if (value !== undefined && value !== null && typeof value !== 'boolean') {
-        spans.push(inheritSpan(cstr(String(value))));
+        spans.push(inheritSpan(spanText(String(value))));
       }
     } else if (
       child.type === 'JSXElement' &&
@@ -1054,7 +1060,7 @@ export function collectTextSpans(
         staticAssigns.find(assign => assign.field === fieldName)?.expr ??
         fallback;
       spans.push({
-        text: cstr(staticTextContent(child.children, scope)),
+        text: spanText(staticTextContent(child.children, scope)),
         color: spanStyle('color', '0u'),
         font_size: spanStyle('font_size', '0'),
         font_weight: spanStyle('font_weight', '0xFF'),

@@ -20,7 +20,12 @@
 
 import {checkNumber} from './check.mts';
 import {NODE_TYPES} from '../style-map.mts';
-import {aotError, withLoc} from './diagnostics.mts';
+import {
+  aotError,
+  checkEngineString,
+  constantText,
+  withLoc,
+} from './diagnostics.mts';
 import {buildValueOf, foldBoot} from './boot.mts';
 import {evalStaticOrThrow, evalStatic, foldScope} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
@@ -671,8 +676,16 @@ function emitNodeImpl(
     tag === 'Text' && !spans
       ? lowerNodeText(element.children, scope, env)
       : null;
+  if (text) {
+    checkEngineString(constantText(text), 'ER_TEXT_MAX', 'a <Text>');
+  }
   // An <Image>'s resize/tint are static, so fold them into staticAssigns for both the static and dynamic paths.
   const image = tag === 'Image' ? resolveImageAttrs(element, env, out) : null;
+  checkEngineString(
+    image?.imageName ?? null,
+    'ER_IMAGE_NAME_MAX',
+    `image name "${image?.imageName}"`,
+  );
   if (image?.resizeMode) {
     staticAssigns.push({field: 'resize_mode', expr: image.resizeMode});
   }

@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {colorLiteral} from '../../style-map.mts';
-import {aotError} from '../diagnostics.mts';
+import {aotError, checkEngineString, constantText} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
@@ -109,6 +109,11 @@ export function emitTextInput(
       onChangeFn = node;
     } else if (name === 'placeholder') {
       placeholder = String(evalStatic(node, scope));
+      checkEngineString(
+        placeholder,
+        'ER_PLACEHOLDER_MAX',
+        'a <TextInput> placeholder',
+      );
     } else if (name === 'placeholderTextColor') {
       staticAssigns.push({
         field: 'placeholder_color',
@@ -145,6 +150,11 @@ export function emitTextInput(
     }
   }
 
+  const text = valueNode ? lowerText(valueNode, env, scope) : null;
+  if (text) {
+    checkEngineString(constantText(text), 'ER_TEXT_MAX', 'a <TextInput> value');
+  }
+
   // value → the input's text buffer (er_node_set_props → er_text_input_set_text): static literal, or a
   // state-driven value re-synced each app_update.
   const node: IrNode = {
@@ -153,7 +163,7 @@ export function emitTextInput(
     constantProps: staticAssigns,
     stateProps: dynAssigns,
     placeholder,
-    text: valueNode ? lowerText(valueNode, env, scope) : null,
+    text,
     image: null,
     spans: null,
     children: [],
