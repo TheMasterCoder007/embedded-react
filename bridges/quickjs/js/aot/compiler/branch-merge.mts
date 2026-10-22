@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {cleanJsxText} from './style-text.mts';
 import type * as t from '@babel/types';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -318,16 +319,6 @@ const childrenOf = (element: t.JSXElement): t.JSXElement['children'] =>
   );
 
 /**
- * JSX text as it renders: text spanning lines collapses its whitespace, as Babel does.
- *
- * @param text  The text.
- *
- * @returns The rendered text.
- */
-const renderedText = (text: t.JSXText): string =>
-  /\n/.test(text.value) ? text.value.replace(/\s+/g, ' ').trim() : text.value;
-
-/**
  * Two branches of a test that depends on the panel, as one element whose differing values each pick at boot,
  * or null when the branches differ in shape: their elements, attributes, children, handlers or text. A branch
  * that changes only values then needs no per-panel variant.
@@ -376,7 +367,7 @@ export function mergeBranchElements(
       sameCode(child, other) ||
       (child.type === 'JSXText' &&
         other.type === 'JSXText' &&
-        renderedText(child) === renderedText(other))
+        cleanJsxText(child.value) === cleanJsxText(other.value))
     ) {
       children.push(child);
     } else if (child.type === 'JSXElement' && other.type === 'JSXElement') {

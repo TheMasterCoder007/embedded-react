@@ -859,10 +859,7 @@ export function lowerNodeText(
   const parts: IrTextPart[] = [];
   for (const child of inlineFragments(children)) {
     if (child.type === 'JSXText') {
-      const text = /\n/.test(child.value)
-        ? child.value.replace(/\s+/g, ' ').trim()
-        : child.value;
-      parts.push({kind: 'literal', text});
+      parts.push({kind: 'literal', text: cleanJsxText(child.value)});
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
       // Constants fold into literal text; anything referencing state is a runtime value.
@@ -903,7 +900,7 @@ const unsupportedTextChild = (child: t.Node): AotError =>
  *
  * @returns The text as React would render it.
  */
-function cleanJsxText(value: string): string {
+export function cleanJsxText(value: string): string {
   // Find the last line with content: it is the only one not followed by a joining space.
   const lines = value.split(/\r\n|\n|\r/);
   let lastContentLine = 0;

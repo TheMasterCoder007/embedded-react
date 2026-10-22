@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a multi-line `<Text>` keeps the space beside a `{value}` (`{count} items` no longer renders
+  `5items`).
 - AOT: a constant `==` or `!=` now folds with JS's loose equality (`undefined == null` is true)
   rather than strict equality (`===`/`!==`).
 - AOT: a name on `Object.prototype` (`toString`, `constructor`, …) used as an enum style value, a named

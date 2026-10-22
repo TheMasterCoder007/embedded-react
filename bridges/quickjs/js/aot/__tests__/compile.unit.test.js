@@ -2699,6 +2699,22 @@ describe('AOT nested Text spans', () => {
     expect(c).not.toContain('er_node_set_text_spans');
     expect(c).toContain('snprintf(p.text');
   });
+
+  it('keeps the space beside a {value} in a multi-line <Text>', () => {
+    const c = gen(`${PRE}
+      export function App() {
+        const [count, setCount] = useState(5);
+        return (
+          <Text>
+            {count} items
+            of   {count}
+          </Text>
+        );
+      }`);
+    expect(c).toContain(
+      'snprintf(p.text, sizeof(p.text), "%d items of   %d", s_state.count, s_state.count);',
+    );
+  });
 });
 
 describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
