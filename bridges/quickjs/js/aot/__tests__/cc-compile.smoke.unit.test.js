@@ -30,6 +30,7 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {compileSource, bakeSvgArtifacts} from '../compile.mts';
 import {printWaitDeclarations} from '../compiler/c/animations.mts';
+import {APP_LIMIT_DEFINITION} from '../compiler/c/statements.mts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const demosDir = join(root, 'demos');
@@ -98,7 +99,7 @@ const GCC_FORMAT_FLAGS = (() => {
 describe('AOT generated C compiles', () => {
   it('emits the thermostat solo dial as a native, state-driven arc node', async () => {
     const r = await emitThermostat();
-    expect(r.c).toContain('er_node_create(ER_NODE_ARC)');
+    expect(r.c).toContain('app_node_create(ER_NODE_ARC)');
     expect(r.c).toContain('p.arc_range ='); // AUTO's two-setpoint band
     expect(r.c).toContain('p.arc_value ='); // the setpoint drives it directly
     expect(r.c).toContain('ER_EVENT_VALUE_CHANGE');
@@ -154,6 +155,122 @@ describe('AOT generated C compiles', () => {
         );
         expect(res.stderr || '').toBe('');
         expect(res.status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `a node pool smaller than the tree fails the C build (${CC || 'no cc found'})`,
+    async () => {
+      const r = await emitThermostat();
+      const nodes = r.nodes + 1; // and the root
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-cc-pool-'));
+      try {
+        writeFileSync(join(dir, 'app.gen.c'), r.c);
+        writeFileSync(join(dir, 'app.gen.h'), r.h);
+        const check = pool =>
+          spawnSync(
+            CC,
+            [
+              '-fsyntax-only',
+              `-DERUI_MAX_NODES=${pool}`,
+              '-I',
+              engineInc,
+              '-I',
+              engineCore,
+              join(dir, 'app.gen.c'),
+            ],
+            {encoding: 'utf8'},
+          );
+        const tooSmall = check(nodes - 1);
+        expect(tooSmall.status).not.toBe(0);
+        expect(tooSmall.stderr).toContain(
+          `raise ERUI_MAX_NODES to at least ${nodes}`,
+        );
+        expect(check(nodes).status).toBe(0);
+      } finally {
+        rmSync(dir, {recursive: true, force: true});
+      }
+    },
+  );
+
+  (CC ? it : it.skip)(
+    `reports a full list and a string cut short once each (${CC || 'no cc found'})`,
+    () => {
+      const {c} = compileSource(
+        `import {useState} from 'react';
+         import {Text, Pressable} from 'embedded-react';
+         export function App() {
+           const [n, setN] = useState(12345678);
+           const [label, setLabel] = useState('');
+           const [items, setItems] = useState([{t: ''}]);
+           return (
+             <Pressable onPress={() => { setLabel('n=' + n); setItems([...items, {t: 'n=' + n}]); }}>
+               <Text>{label}</Text>
+             </Pressable>
+           );
+         }`,
+        'limits',
+        {listCap: 2, listStrCap: 8},
+      );
+      // Lift the state and the handler out of the generated file and run the handler three times.
+      const pragmas = c.match(/#if defined\(__GNUC__\)[\s\S]*?#endif\n/)[0];
+      const state = c.match(
+        /typedef struct\n\{\n[\s\S]*?static ErAppChanged s_changed;\n/,
+      )[0];
+      const handler = c.match(
+        /static void er_handler_0\([^)]*\)\n\{[\s\S]*?\n\}\n/,
+      )[0];
+      const harness = `#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "er_scene.h"
+${pragmas}${APP_LIMIT_DEFINITION}
+${state}
+static void app_update(void)
+{
+}
+
+${handler}
+int main(void)
+{
+    for (int i = 0; i < 3; i++)
+    {
+        er_handler_0(NULL, NULL, NULL);
+    }
+    printf("%d %s %s\\n", s_items_count, s_state.label, s_items[1].t);
+    return 0;
+}
+`;
+      const dir = mkdtempSync(join(tmpdir(), 'er-aot-limits-'));
+      try {
+        writeFileSync(join(dir, 'limits.c'), harness);
+        const exe = join(dir, 'limits.exe');
+        const build = spawnSync(
+          CC,
+          [
+            '-Wall',
+            '-Werror',
+            '-I',
+            engineInc,
+            join(dir, 'limits.c'),
+            '-o',
+            exe,
+          ],
+          {encoding: 'utf8'},
+        );
+        expect(build.stderr || '').toBe('');
+        expect(build.status).toBe(0);
+        const run = spawnSync(exe, [], {encoding: 'utf8'});
+        expect(run.stdout).toBe('2 n=12345 n=12345\n');
+        expect(run.stderr).toBe(
+          "AOT: state 'label' cut short, raise ER_AOT_LIST_STR_CAP\n" +
+            "AOT: field 't' of list 'items' cut short, raise ER_AOT_LIST_STR_CAP\n" +
+            "AOT: list 'items' full, raise ER_AOT_LIST_CAP\n",
+        );
       } finally {
         rmSync(dir, {recursive: true, force: true});
       }
@@ -320,6 +437,7 @@ describe('AOT generated C compiles', () => {
 #include <stdio.h>
 #include <string.h>
 typedef void (*ERAnimCompleteFn)(bool finished, void* user_data);
+${APP_LIMIT_DEFINITION}
 ${printWaitDeclarations('app_wait_start( app_wait_detach(')}
 
 static char s_log[256];
@@ -399,6 +517,9 @@ int main(void)
         expect(run.stdout.trim()).toBe(
           'A+A+|A-B+|R-B+|A-B+|A-/' + 'B+'.repeat(8),
         );
+        expect(run.stderr).toBe(
+          'AOT: wait table full, raise ER_AOT_MAX_WAITS\n',
+        );
       } finally {
         rmSync(dir, {recursive: true, force: true});
       }
@@ -414,6 +535,7 @@ int main(void)
 #include <stdio.h>
 #include <string.h>
 typedef void (*ERAnimCompleteFn)(bool finished, void* user_data);
+${APP_LIMIT_DEFINITION}
 ${printWaitDeclarations('app_wait_start( app_wait_join( app_wait_detach(')}
 
 static char s_log[256];

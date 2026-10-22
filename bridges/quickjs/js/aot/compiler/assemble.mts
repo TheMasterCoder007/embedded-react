@@ -41,7 +41,11 @@ import {
 import {printKeyboard} from './c/keyboard.mts';
 import {printElementTree, printNode, printNodeUpdate} from './c/nodes.mts';
 import {printPanDecls, printPanQuery} from './c/pan-responder.mts';
-import {CHANGED_FLAGS, printChangedFlag} from './c/statements.mts';
+import {
+  APP_LIMIT_DEFINITION,
+  CHANGED_FLAGS,
+  printChangedFlag,
+} from './c/statements.mts';
 import {printVectorBlocks, printVectorRebuild} from './c/vectors.mts';
 import {
   isStateDriven,
@@ -431,7 +435,8 @@ static int er_timer_add(int ms, bool repeat, void (*fn)(void))
             return (s_timers[i].gen * ER_AOT_MAX_TIMERS) + i;
         }
     }
-    return -1; /* table full (raise ER_AOT_MAX_TIMERS) */
+    APP_LIMIT("timer table full, raise ER_AOT_MAX_TIMERS");
+    return -1;
 }`
     : '';
 
@@ -928,6 +933,27 @@ static int16_t app_round_dim(double v)
       '#ifndef M_PI\n#define M_PI 3.14159265358979323846\n#endif\n'
     : '';
   const limitsInclude = usesLimits ? '#include <limits.h>\n' : '';
+  // The root and every node in the tree, all created by er_app_build().
+  const totalNodes = out.nodeCount + 1;
+  const limitBlock = `/* er_app_build() creates every node the app has, so a pool too small for the tree fails here, not on the
+   device. */
+#ifdef ERUI_MAX_NODES
+_Static_assert(ERUI_MAX_NODES >= ${totalNodes}, "this app builds ${totalNodes} nodes: raise ERUI_MAX_NODES to at least ${totalNodes}");
+#endif
+
+${APP_LIMIT_DEFINITION}
+/* er_node_create, reporting a full pool: the engine skips a NULL node, so the app would run with part of
+   its tree missing. */
+static ERNode* app_node_create(ERNodeType type)
+{
+    ERNode* node = er_node_create(type);
+    if (!node)
+    {
+        APP_LIMIT("node pool full, raise ERUI_MAX_NODES");
+    }
+    return node;
+}
+`;
   // A blank line sets off each non-empty block before and after.
   const spaced = (block: string) => (block ? '\n' + block + '\n' : '');
   const keyboard = app.keyboard ? printKeyboard(app.keyboard) : null;
@@ -1001,7 +1027,8 @@ static int16_t app_round_dim(double v)
 #include <string.h>
 
 /* Every string this file writes goes into a FIXED-SIZE slot (a state buffer, ERProps.text), so an
-   over-long value is truncated by design — the app cannot grow the buffer the way JS grows a string.
+   over-long value is truncated by design — the app cannot grow the buffer the way JS grows a string, and
+   a cut app string is reported through APP_LIMIT.
    GCC's -Wformat-truncation reports exactly that intent for any format combining %s with anything else,
    and ESP-IDF compiles with -Werror, so leaving it on would fail the build for ordinary text like
    {'n=' + name}. Clang does not implement the warning; the guard keeps its "unknown warning group"
@@ -1015,7 +1042,8 @@ static int16_t app_round_dim(double v)
    A mismatch fails HERE at compile time (not on-device). Regenerate the app (npm run aot) or align versions. */
 _Static_assert(ER_VERSION_MAJOR == ${PKG_MAJOR} && ER_VERSION_MINOR == ${PKG_MINOR},
                "${versionMismatch}");
-${mathInclude}${limitsInclude}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${declarations}
+${mathInclude}${limitsInclude}
+${limitBlock}${dimRoundBlock}\n${clockBlock}\n${stateBlock ? '\n' + stateBlock : ''}${declarations}
 ${appTickFn}
 
 void er_app_set_wall_clock(int64_t epoch_ms)
@@ -1031,7 +1059,7 @@ bool er_app_build(int screen_w, int screen_h)
     ERNode* ${nodeDecls.join(';\n    ERNode* ')};
 ${bootCall}
     /* A screen-sized root the app tree fills (mirrors AppRegistry mounting into a screen-sized host). */
-    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERNode* root = app_node_create(ER_NODE_VIEW);
     er_props_default(&p);
     p.width = (int16_t)screen_w;
     p.height = (int16_t)screen_h;

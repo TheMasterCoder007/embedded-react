@@ -98,7 +98,10 @@ describe('handler statements lower to the IR', () => {
     );
     expect(stmts).toMatchObject([{kind: 'setStateText'}]);
     expect(printStmts(stmts, '    ')).toEqual([
-      '    snprintf(s_state.label, sizeof(s_state.label), "n=%d", s_state.count);',
+      '    if (snprintf(s_state.label, sizeof(s_state.label), "n=%d", s_state.count) >= (int)sizeof(s_state.label))',
+      '    {',
+      '        APP_LIMIT("state \'label\' cut short, raise ER_AOT_LIST_STR_CAP");',
+      '    }',
     ]);
   });
 
@@ -107,7 +110,7 @@ describe('handler statements lower to the IR', () => {
       "setLabel(label + '!');",
       stateOf(scalar('label', 'string')),
     );
-    expect(printStmts(stmts, '    ')[0]).toContain(
+    expect(printStmts(stmts, '    ').join('\n')).toContain(
       'char next[sizeof(s_state.label)];',
     );
   });
@@ -200,6 +203,10 @@ describe('handler statements lower to the IR', () => {
       '        s_items[s_items_count].score = 2;',
       '        s_items[s_items_count].ratio = 0.0f;',
       '        s_items_count++;',
+      '    }',
+      '    else',
+      '    {',
+      '        APP_LIMIT("list \'items\' full, raise ER_AOT_LIST_CAP");',
       '    }',
     ]);
   });

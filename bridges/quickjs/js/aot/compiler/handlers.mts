@@ -76,6 +76,7 @@ import type {
   IrTimer,
   IrUpdateVector,
 } from './ir/statements.mts';
+import type {IrText, IrTextLiteral} from './ir/text.mts';
 import type {IrGeometry, IrTapeValue, IrVectorPaint} from './ir/vectors.mts';
 import type {
   CType,
@@ -180,7 +181,13 @@ function lowerListOp(
                 },
           );
         } else if (field.kind === 'string') {
-          values.push({field, text: lowerText(valueNode, env)});
+          const text = lowerText(valueNode, env);
+          checkConstantFits(
+            text,
+            `field "${field.key}" of list state "${listState.name}"`,
+            env,
+          );
+          values.push({field, text});
         } else {
           values.push({
             field,
@@ -342,6 +349,31 @@ const refRead = (ref: RefRecord): IrExpr => ({
 });
 
 /**
+ * Refuses a constant string too long for the buffer it is written into, which C would cut short. A string
+ * built at run time is checked when it is written instead.
+ *
+ * @param text  The text written.
+ * @param what  What it is written into, for the error.
+ * @param env  The expression environment.
+ */
+function checkConstantFits(text: IrText, what: string, env: Env): void {
+  if (!text.parts.every(part => part.kind === 'literal')) {
+    return;
+  }
+
+  const bytes = Buffer.byteLength(
+    text.parts.map(part => (part as IrTextLiteral).text).join(''),
+    'utf8',
+  );
+  if (bytes >= env.caps.listStrCap) {
+    throw aotError(
+      `AOT: ${what} is set to a ${bytes}-byte string, but a string holds ${env.caps.listStrCap - 1} bytes`,
+      'raise ER_AOT_LIST_STR_CAP (the listStrCap option), or shorten the string.',
+    );
+  }
+}
+
+/**
  * Lowers a write of an expression into a scalar state slot: text for a string buffer (so a `+` chain keeps its
  * parts), a plain value otherwise.
  *
@@ -380,10 +412,12 @@ function lowerScalarSet(
     };
   }
 
+  const text = lowerText(valueNode, env);
+  checkConstantFits(text, `state "${scalarState.name}"`, env);
   return {
     kind: 'setStateText',
     state: scalarState,
-    text: lowerText(valueNode, env),
+    text,
   };
 }
 
@@ -1151,6 +1185,14 @@ export function lowerStmts(
           env,
         );
         if (initExpr.type.kind === 'string') {
+          if (initExpr.kind === 'string') {
+            checkConstantFits(
+              {parts: [{kind: 'literal', text: initExpr.value}]},
+              `local "${decl.id.name}"`,
+              env,
+            );
+          }
+
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
             ctx.hoist!.decls.push({

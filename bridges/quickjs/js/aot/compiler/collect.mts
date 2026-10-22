@@ -287,6 +287,51 @@ function inferItemStruct(items: unknown, name: string): ItemStruct {
 }
 
 /**
+ * Refuses an initial value too big for its fixed buffer: C would cut it short at boot without a word.
+ *
+ * @param stateName  The state's JS name.
+ * @param items  The list's initial rows, or null for a scalar.
+ * @param strings  The initial strings it starts with, as `[what, text]` pairs.
+ * @param caps  The compile's caps.
+ * @param initArg  The initial value, for the error's location.
+ */
+function checkInitialFits(
+  stateName: string,
+  items: unknown[] | null,
+  strings: [string, string][],
+  caps: Caps,
+  initArg: t.Node | undefined,
+): void {
+  let error: AotError | null = null;
+  if (items && items.length > caps.listCap) {
+    error = aotError(
+      `AOT: list state "${stateName}" starts with ${items.length} rows, but a list holds ${caps.listCap}`,
+      'raise ER_AOT_LIST_CAP (the listCap option), or start with fewer rows.',
+    );
+  }
+
+  // A string buffer keeps one byte for the terminator.
+  const tooLong = strings.find(
+    ([, text]) => Buffer.byteLength(text, 'utf8') >= caps.listStrCap,
+  );
+  if (!error && tooLong) {
+    const [what, text] = tooLong;
+    error = aotError(
+      `AOT: ${what} starts ${Buffer.byteLength(text, 'utf8')} bytes long, but a string holds ` +
+        `${caps.listStrCap - 1} bytes`,
+      'raise ER_AOT_LIST_STR_CAP (the listStrCap option), or shorten the string.',
+    );
+  }
+
+  if (error) {
+    if (initArg?.loc) {
+      error.aotLoc = initArg.loc.start;
+    }
+    throw error;
+  }
+}
+
+/**
  * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
  * name (writes). `prefix` namespaces the C STORAGE so each inlined child instance gets its own slots: the
  * lookup keys stay the bare JS names (`count`), but the C field / array / count derive from `cField`
@@ -370,6 +415,20 @@ export function collectState(
           }
           throw error;
         }
+        checkInitialFits(
+          name,
+          items,
+          items.flatMap(item =>
+            struct.fields
+              .filter(field => field.kind === 'string')
+              .map((field): [string, string] => [
+                `field "${field.key}" of list state "${name}"`,
+                String(item[field.key] ?? ''),
+              ]),
+          ),
+          caps,
+          initArg,
+        );
         record = {
           name,
           cField,
@@ -457,6 +516,14 @@ export function collectState(
           checkNumber(initial);
         } else if (cType === 'i64') {
           cConstant(initial, cType); // BigInt refuses a value that is not a whole number
+        } else if (cType === 'string') {
+          checkInitialFits(
+            name,
+            null,
+            [[`state "${name}"`, String(initial)]],
+            caps,
+            initArg,
+          );
         }
         record = {
           name,

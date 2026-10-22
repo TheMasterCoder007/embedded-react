@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {cScalarType} from '../c-syntax.mts';
+import {cScalarType, cstr} from '../c-syntax.mts';
 import {printAnimationStart} from './animations.mts';
 import {printUpdateVector} from './vectors.mts';
 import {printCondition, printExpr} from './expressions.mts';
@@ -59,6 +59,21 @@ const LIST_INDENT = INDENT;
 
 /** The file-scope flags that record which state was written since app_update() last ran. */
 export const CHANGED_FLAGS = 's_changed';
+
+/** Reports a fixed limit the app ran past to stderr, once per place it can happen. */
+export const APP_LIMIT_DEFINITION = `/* Reports a fixed limit the app ran past, once per place it can happen, so a timer appending to a full list
+   cannot flood the log. */
+#define APP_LIMIT(msg)                         \\
+    do                                         \\
+    {                                          \\
+        static bool reported_;                 \\
+        if (!reported_)                        \\
+        {                                      \\
+            reported_ = true;                  \\
+            fprintf(stderr, "AOT: %s\\n", msg); \\
+        }                                      \\
+    } while (0)
+`;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -110,39 +125,84 @@ function printTimerAdd(timer: IrTimer): string {
 }
 
 /**
+ * A write into a fixed string buffer. One that can come out too long reports, once, when snprintf cuts it
+ * short; a constant was checked to fit at compile time.
+ *
+ * @param buffer  The buffer, as a C lvalue.
+ * @param args  snprintf's arguments after the buffer and its size.
+ * @param isConstant  The value is a constant.
+ * @param what  What the buffer holds, for the report.
+ * @param indent  The statement's indentation.
+ *
+ * @returns The C lines.
+ */
+function printStringWrite(
+  buffer: string,
+  args: string,
+  isConstant: boolean,
+  what: string,
+  indent: string,
+): string[] {
+  const write = `snprintf(${buffer}, sizeof(${buffer}), ${args})`;
+  if (isConstant) {
+    return [`${indent}${write};`];
+  }
+
+  return [
+    `${indent}if (${write} >= (int)sizeof(${buffer}))`,
+    `${indent}{`,
+    `${indent}${INDENT}APP_LIMIT(${cstr(`${what} cut short, raise ER_AOT_LIST_STR_CAP`)});`,
+    `${indent}}`,
+  ];
+}
+
+/**
  * A string state write. snprintf's source and destination may not overlap, so a value that reads the slot
  * itself (`setLabel(label + '!')`) is built in a temporary first.
  *
  * @param stmt  The write.
  * @param indent  The statement's indentation.
  *
- * @returns The C statement (several lines, joined, for a value that reads the slot).
+ * @returns The C lines.
  */
-function printSetStateText(stmt: IrSetStateText, indent: string): string {
+function printSetStateText(stmt: IrSetStateText, indent: string): string[] {
   const member = stmt.state.cMember;
   const format = printText(stmt.text);
+  const what = `state '${stmt.state.name}'`;
   if (format.args.some(formatArg => readsMember(member).test(formatArg))) {
     return [
       `${indent}{`,
       `${indent}    char next[sizeof(${member})];`,
-      `${indent}    snprintf(next, sizeof(next), ${formatArgs(format)});`,
+      ...printStringWrite(
+        'next',
+        formatArgs(format),
+        false,
+        what,
+        indent + INDENT,
+      ),
       `${indent}    memcpy(${member}, next, strlen(next) + 1);`,
       `${indent}}`,
-    ].join('\n');
+    ];
   }
 
-  return `${indent}snprintf(${member}, sizeof(${member}), ${formatArgs(format)});`;
+  return printStringWrite(
+    member,
+    formatArgs(format),
+    !format.args.length,
+    what,
+    indent,
+  );
 }
 
 /**
- * An appended list item: fill the next free slot's fields and count it, unless the list is full.
+ * An appended list item: fill the next free slot's fields and count it, or report a full list.
  *
  * @param stmt  The append.
  *
  * @returns The C lines.
  */
 function printAppendItem(stmt: IrAppendItem): string[] {
-  const {arrayName, countMember, cap} = stmt.list;
+  const {name, arrayName, countMember, cap} = stmt.list;
   const lines = [
     `${LIST_INDENT}if (${countMember} < ${cap})`,
     `${LIST_INDENT}{`,
@@ -150,8 +210,15 @@ function printAppendItem(stmt: IrAppendItem): string[] {
   for (const itemValue of stmt.values) {
     const slot = `${arrayName}[${countMember}].${itemValue.field.key}`;
     if ('text' in itemValue) {
+      const format = printText(itemValue.text);
       lines.push(
-        `${LIST_INDENT}${INDENT}snprintf(${slot}, sizeof(${slot}), ${formatArgs(printText(itemValue.text))});`,
+        ...printStringWrite(
+          slot,
+          formatArgs(format),
+          !format.args.length,
+          `field '${itemValue.field.key}' of list '${name}'`,
+          LIST_INDENT + INDENT,
+        ),
       );
     } else {
       lines.push(
@@ -160,7 +227,14 @@ function printAppendItem(stmt: IrAppendItem): string[] {
     }
   }
 
-  lines.push(`${LIST_INDENT}${INDENT}${countMember}++;`, `${LIST_INDENT}}`);
+  lines.push(
+    `${LIST_INDENT}${INDENT}${countMember}++;`,
+    `${LIST_INDENT}}`,
+    `${LIST_INDENT}else`,
+    `${LIST_INDENT}{`,
+    `${LIST_INDENT}${INDENT}APP_LIMIT(${cstr(`list '${name}' full, raise ER_AOT_LIST_CAP`)});`,
+    `${LIST_INDENT}}`,
+  );
   return lines;
 }
 
@@ -183,7 +257,13 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
           : [`${indent}char ${stmt.name}[${stmt.stringCap}];`];
         return [
           ...declaration,
-          `${indent}snprintf(${stmt.name}, sizeof(${stmt.name}), "%s", ${printExpr(init)});`,
+          ...printStringWrite(
+            stmt.name,
+            `"%s", ${printExpr(init)}`,
+            init.kind === 'string',
+            `local '${stmt.name}'`,
+            indent,
+          ),
         ];
       }
 
@@ -214,7 +294,7 @@ function printStmt(stmt: IrStmt, indent: string): string[] {
       ];
     case 'setStateText':
       return [
-        printSetStateText(stmt, indent),
+        ...printSetStateText(stmt, indent),
         ...printChangedFlag(stmt.state, indent),
       ];
     case 'clearList':

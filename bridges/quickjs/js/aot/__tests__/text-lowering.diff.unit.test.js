@@ -31,6 +31,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync, execFileSync} from 'node:child_process';
 import {compileSource} from '../compile.mts';
+import {APP_LIMIT_DEFINITION} from '../compiler/c/statements.mts';
 
 /** First working C compiler, or null (the suite still passes on a toolchain-less machine). */
 function findCC() {
@@ -274,7 +275,7 @@ const MODES = {
   },
   setter: {
     app: setterApp,
-    re: /snprintf\(s_state\.out, sizeof\(s_state\.out\), ([\s\S]*?)\);\n/,
+    re: /snprintf\(s_state\.out, sizeof\(s_state\.out\), (.*?)\)(?:;| >= \(int\)sizeof\(s_state\.out\)\))\n/,
   },
   'child component': {
     app: childCompApp,
@@ -359,13 +360,15 @@ describe('AOT self-referential string setter', () => {
          }`,
         'selfref',
       ).c;
-      const block = c.match(/\{\s*\n\s*char next\[[\s\S]*?\n\s*\}/);
+      const block = c.match(/\n( *)\{\n\1 {4}char next\[[\s\S]*?\n\1\}/);
       expect(block, 'no temporary-buffer block emitted').toBeTruthy();
       const body = block[0].replace(/s_state\./g, 'S.');
 
       const ITER = 5;
       let prog =
-        '#include <stdio.h>\n#include <string.h>\n' + GENERATED_PRAGMAS;
+        '#include <stdbool.h>\n#include <stdio.h>\n#include <string.h>\n' +
+        GENERATED_PRAGMAS +
+        APP_LIMIT_DEFINITION;
       prog += 'struct St { char out[64]; };\n';
       prog +=
         'int main(void){ struct St S; snprintf(S.out, sizeof S.out, "%s", "ab");\n';

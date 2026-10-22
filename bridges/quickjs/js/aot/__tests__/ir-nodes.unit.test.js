@@ -121,7 +121,7 @@ describe('node IR: state-driven style values', () => {
     const {build, updates} = emit('<View style={{width: 10}} />');
     expect(updates).toEqual([]);
     expect(build).toEqual([
-      '    n0 = er_node_create(ER_NODE_VIEW);',
+      '    n0 = app_node_create(ER_NODE_VIEW);',
       '    er_props_default(&p);',
       '    p.width = 10;',
       '    er_node_set_props(n0, &p);',
@@ -172,7 +172,7 @@ describe('node IR: printing', () => {
       ],
     });
     expect(printed.build).toEqual([
-      '    n3 = er_node_create(ER_NODE_PRESSABLE);',
+      '    n3 = app_node_create(ER_NODE_PRESSABLE);',
       '    s_n3 = n3;',
       '    er_anim_value_bind(s_av_a, n3, ER_PROP_OPACITY);',
       '    s_ref_box = n3;',
@@ -236,7 +236,7 @@ describe('node IR: typed elements', () => {
       refs,
     );
     expect(build).toEqual([
-      '    n0 = er_node_create(ER_NODE_TEXT_INPUT);',
+      '    n0 = app_node_create(ER_NODE_TEXT_INPUT);',
       '    er_props_default(&p);',
       '    snprintf(p.placeholder, sizeof(p.placeholder), "%s", "name");',
       '    snprintf(p.text, sizeof(p.text), "%s", "hi");',

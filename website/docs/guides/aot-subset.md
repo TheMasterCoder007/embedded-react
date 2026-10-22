@@ -165,8 +165,29 @@ A branch that changes the tree is compiled for one panel: the `--screen WxH` you
 (without it the compiler warns and assumes 800×480). Only that side is compiled, so an import used
 solely in the other side is fine, and a top-level `if (COMPACT) return ...` keeps a board's whole
 layout in one place. The same goes for a value the compiler has to know, such as a state's initial
-value or Svg geometry. `er_app_build()` checks these at boot: on a panel that picks another layout, 
+value or Svg geometry. `er_app_build()` checks these at boot: on a panel that picks another layout,
 it builds nothing and returns `false`, and `er_app_fits(w, h)` asks the same without building.
+
+## Fixed limits
+
+A compiled app keeps its state in buffers sized at build time. The compiler checks each limit where it
+can know the answer, and the app reports the rest at run time:
+
+| Limit                                                     | Default               | Raise it with                    | When it is past                                                                                                                                                                    |
+| --------------------------------------------------------- | --------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rows in a list state                                      | 16                    | `ER_AOT_LIST_CAP`                | An initial list with more rows fails the build. An append to a full list is skipped and reported.                                                                                  |
+| Bytes in a string state, a list's string field or a local | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`            | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                         |
+| Engine nodes                                              | 512                   | `ERUI_MAX_NODES`                 | The app's node count is fixed when it compiles, so `app.gen.c` checks it against `ERUI_MAX_NODES` and a pool too small fails the C build. A node the pool cannot give is reported. |
+| Live timers                                               | 8                     | `ER_AOT_MAX_TIMERS` (a C define) | A `setTimeout` or `setInterval` past it never fires, and is reported.                                                                                                              |
+| Animation completion waits                                | 8                     | `ER_AOT_MAX_WAITS` (a C define)  | The run ends at once, as not finished, and is reported.                                                                                                                            |
+
+`ER_AOT_LIST_CAP` and `ER_AOT_LIST_STR_CAP` are read by the compiler (`npm run aot`); the others are
+defined when the C is built. A report is one line on stderr, once for each place in the app that can
+hit it, and names the limit to raise:
+
+```text
+AOT: list 'items' full, raise ER_AOT_LIST_CAP
+```
 
 ## Where the subset is going
 

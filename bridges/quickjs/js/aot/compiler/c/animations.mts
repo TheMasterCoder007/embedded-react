@@ -202,8 +202,9 @@ static int app_wait_claim(int owner, int ms, int parts, ERAnimCompleteFn done)
         }
     }
 
-    /* The table is full (raise ER_AOT_MAX_WAITS): the run cannot wait, so it ends now, as not finished. A run
-       that completion starts while the table is still full is dropped instead of recursing. */
+    /* The table is full: the run cannot wait, so it ends now, as not finished. A run that completion starts
+       while the table is still full is dropped instead of recursing. */
+    APP_LIMIT("wait table full, raise ER_AOT_MAX_WAITS");
     static bool s_reporting_full;
     if (!s_reporting_full)
     {

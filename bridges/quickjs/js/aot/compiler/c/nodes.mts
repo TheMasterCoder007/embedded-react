@@ -194,7 +194,7 @@ export function printNode(node: IrNode): PrintedNode {
       : node.image
         ? cstr(node.image.name)
         : null;
-  const build = [`    ${id} = er_node_create(${node.type});`];
+  const build = [`    ${id} = app_node_create(${node.type});`];
   let update: NodeUpdate | null = null;
   if (isStateDriven(node)) {
     build.push(`    s_${id} = ${id};`);

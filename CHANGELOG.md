@@ -14,6 +14,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Creating a node past `ERUI_MAX_NODES` now logs a line to stderr instead of failing silently, and
   unmounting a render that overflowed the pool frees all of its nodes.
+- AOT: Flow B's fixed limits no longer drop data silently. An initial value or constant string too big
+  for its buffer is a compile error, a node pool smaller than the app fails the C build, and a full list,
+  a string cut short, or a full timer table logs a line to stderr.
 - AOT: a multi-line `<Text>` keeps the space beside a `{value}` (`{count} items` no longer renders
   `5items`).
 - AOT: a constant `==` or `!=` now folds with JS's loose equality (`undefined == null` is true)

@@ -399,7 +399,7 @@ describe('app_update() sets again only what a state change affects', () => {
     expect(update.match(/if \(changed\.items\)/g)).toHaveLength(1);
     expect(update.match(/er_node_set_props/g).length).toBeGreaterThan(1);
     expect(c).toMatch(
-      /        s_items_count\+\+;\n    \}\n    s_changed\.items = 1;\n    app_update\(\);/,
+      /        s_items_count\+\+;\n    \}\n    else\n    \{\n        APP_LIMIT\("list 'items' full, raise ER_AOT_LIST_CAP"\);\n    \}\n    s_changed\.items = 1;\n    app_update\(\);/,
     );
   });
 

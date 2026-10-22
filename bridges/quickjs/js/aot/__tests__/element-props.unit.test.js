@@ -519,7 +519,7 @@ describe('declared children', () => {
     const c = gen(
       '<View>{n === 0 ? <Text>A</Text> : n === 1 ? <Text>B</Text> : <Text>C</Text>}</View>',
     );
-    expect(c.match(/er_node_create\(ER_NODE_TEXT\)/g)).toHaveLength(3);
+    expect(c.match(/app_node_create\(ER_NODE_TEXT\)/g)).toHaveLength(3);
     expect(c).toContain(
       'p.display = ((((!((s_state.n == 0))) && ((s_state.n == 1)))) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
     );
