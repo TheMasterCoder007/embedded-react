@@ -150,6 +150,22 @@ describe('keyboard IR', () => {
     );
     expect(keyboardOf('const x = 1;')).toBeNull();
   });
+
+  it('rejects a layout with no layers, or a layer with no rows, at the config', () => {
+    let err;
+    try {
+      keyboardOf('setKeyboardConfig({layers: []});');
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toBe(
+      'AOT: setKeyboardConfig `layers` needs at least one layer',
+    );
+    expect(err.aotLoc).toMatchObject({line: 1, column: 18});
+    expect(() =>
+      keyboardOf('setKeyboardConfig({layers: [[[{char: "a"}]], []]});'),
+    ).toThrow('AOT: setKeyboardConfig `layers[1]` needs at least one row');
+  });
 });
 
 describe('vector IR: baked drawings', () => {

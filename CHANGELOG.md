@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: a `setKeyboardConfig` layout with no layers, or a layer with no rows, is now a located compile
+  error instead of C that fails to build.
 - AOT: a list append resets the fields the new item leaves out to 0 or `""` instead of keeping a cleared
   item's values.
 - AOT: an empty slot in a list append or an `updateVector` dirty rect (`[...items, , item]`) is now a

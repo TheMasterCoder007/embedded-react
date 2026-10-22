@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parseColor} from '../../src/embedded-react/svg-ops.js';
-import {aotError} from './diagnostics.mts';
+import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import type * as t from '@babel/types';
 import type {IrKeyboard, IrKeyboardKey} from './ir/keyboard.mts';
@@ -106,31 +106,13 @@ function lowerKey(
 }
 
 /**
- * Lowers a module-level `setKeyboardConfig({...})`, which customizes the on-screen keyboard (colors/sizes, and
- * optionally a full layout) from the app with no engine edit. The config must be statically foldable; omit
- * `layers` to keep the built-in QWERTY.
+ * Lowers the argument of a `setKeyboardConfig(...)` call, its AOT errors located at it.
  *
- * @param program  The parsed module.
+ * @param configArg  The call's config argument.
  *
- * @returns The config, or null when the module has none.
+ * @returns The config.
  */
-export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
-  // Find the first top-level setKeyboardConfig(...) call; without one, the built-in keyboard stays as is.
-  let configArg: t.Node | null = null;
-  for (const statement of program.body) {
-    if (
-      statement.type === 'ExpressionStatement' &&
-      statement.expression.type === 'CallExpression' &&
-      statement.expression.callee.type === 'Identifier' &&
-      statement.expression.callee.name === 'setKeyboardConfig'
-    ) {
-      configArg = statement.expression.arguments[0];
-      break;
-    }
-  }
-
-  if (!configArg) return null;
-
+const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
   // Fold the config object at compile time.
   let config;
   try {
@@ -149,13 +131,26 @@ export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
     throw aotError('AOT: setKeyboardConfig(...) needs a config object');
   }
 
-  // Lower the layout when the app gives one, layer by layer and row by row.
+  // Lower the layout when the app gives one, layer by layer and row by row; C has no empty table.
   let layers: IrKeyboardKey[][][] | null = null;
   if (Array.isArray(config.layers)) {
+    if (!config.layers.length) {
+      throw aotError(
+        'AOT: setKeyboardConfig `layers` needs at least one layer',
+        'omit `layers` to keep the built-in QWERTY.',
+      );
+    }
+
     layers = config.layers.map((layer, layerIndex) => {
       if (!Array.isArray(layer)) {
         throw aotError(
           'AOT: setKeyboardConfig `layers[i]` must be an array of rows',
+        );
+      }
+
+      if (!layer.length) {
+        throw aotError(
+          `AOT: setKeyboardConfig \`layers[${layerIndex}]\` needs at least one row`,
         );
       }
 
@@ -183,4 +178,31 @@ export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
     keyActiveColor: kbdColor(config.keyActiveColor),
     labelColor: kbdColor(config.labelColor),
   };
+});
+
+/**
+ * Lowers a module-level `setKeyboardConfig({...})`, which customizes the on-screen keyboard (colors/sizes, and
+ * optionally a full layout) from the app with no engine edit. The config must be statically foldable; omit
+ * `layers` to keep the built-in QWERTY.
+ *
+ * @param program  The parsed module.
+ *
+ * @returns The config, or null when the module has none.
+ */
+export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
+  // Find the first top-level setKeyboardConfig(...) call; without one, the built-in keyboard stays as is.
+  let configArg: t.Node | null = null;
+  for (const statement of program.body) {
+    if (
+      statement.type === 'ExpressionStatement' &&
+      statement.expression.type === 'CallExpression' &&
+      statement.expression.callee.type === 'Identifier' &&
+      statement.expression.callee.name === 'setKeyboardConfig'
+    ) {
+      configArg = statement.expression.arguments[0];
+      break;
+    }
+  }
+
+  return configArg ? lowerConfig(configArg) : null;
 }
