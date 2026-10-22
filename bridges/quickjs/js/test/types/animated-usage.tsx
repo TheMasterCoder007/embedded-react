@@ -47,6 +47,8 @@ export function AnimatedUsage() {
   v.interpolate({inputRange: [0, 1], outputRange: ['0deg', '360deg']});
   // @ts-expect-error — an interpolation is not a settable value.
   spin.setValue(1);
+  // @ts-expect-error — nor does it own an engine slot to free.
+  spin.destroy();
 
   const flat = StyleSheet.flatten([styles.fill, false, [styles.rule]]);
   void flat.flexBasis;
