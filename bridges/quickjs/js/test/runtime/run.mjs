@@ -19,7 +19,7 @@
 // no-op backend, console, and a `screen` global, evaluates the bundle, and exits non-zero if the
 // test recorded any failures (globalThis.__runtime_failed) or threw.
 import {build} from 'esbuild';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {readdirSync, existsSync, mkdirSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
@@ -100,23 +100,36 @@ for (const test of tests) {
   // The harness runs the device's lite intrinsic profile so a bundle that needs a stripped intrinsic
   // fails here rather than on hardware. A test that is specifically about an opt-in intrinsic asks for
   // it with a marker comment, and only that test gets it.
-  const flags = readFileSync(path.join(here, test), 'utf8').includes(
-    '@runtime-intrinsics: typed-arrays',
-  )
+  const source = readFileSync(path.join(here, test), 'utf8');
+  const flags = source.includes('@runtime-intrinsics: typed-arrays')
     ? ['--typed-arrays']
     : [];
+
+  // A test about a diagnostic lists the stderr lines it expects, one marker each; its stderr must be
+  // exactly those lines.
+  const expectedStderr = [...source.matchAll(/@runtime-stderr: (.*)$/gm)].map(
+    m => m[1],
+  );
 
   process.stdout.write(
     `\n=== ${test}${bytecodeMode ? ' [bytecode]' : ''} ===\n`,
   );
-  try {
-    const out = execFileSync(exe, [...flags, runArg], {encoding: 'utf8'});
-    process.stdout.write(out);
-  } catch (e) {
-    if (e.stdout) process.stdout.write(e.stdout);
-    if (e.stderr) process.stderr.write(e.stderr);
+  const run = spawnSync(exe, [...flags, runArg], {encoding: 'utf8'});
+  process.stdout.write(run.stdout ?? '');
+  const stderrLines = (run.stderr ?? '').split('\n').filter(Boolean);
+  const stderrOk =
+    expectedStderr.length === 0 ||
+    JSON.stringify(stderrLines) === JSON.stringify(expectedStderr);
+  if (run.status !== 0 || !stderrOk) {
+    process.stderr.write(run.stderr ?? '');
     failed++;
-    console.error(`FAILED: ${test} (exit ${e.status})`);
+    console.error(
+      run.status !== 0
+        ? `FAILED: ${test} (exit ${run.status ?? run.error})`
+        : `FAILED: ${test} (stderr is not the expected ${JSON.stringify(expectedStderr)})`,
+    );
+  } else if (expectedStderr.length === 0) {
+    process.stderr.write(run.stderr ?? '');
   }
 }
 

@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-// react-reconciler host config: translates React's mutation API into NativeUI.* calls.
-//
-// Instances ARE the integer node handles returned by NativeUI.createNode(). We keep no JS-side
-// wrapper objects — the engine owns the scene graph, the handle is the identity.
 import {DefaultEventPriority} from 'react-reconciler/constants';
 import {NativeUI} from './native-ui.js';
 import {
@@ -111,6 +107,36 @@ function applyBindings(handle, bindings) {
  */
 function forgetBindings(handle) {
   boundValues.delete(handle);
+}
+
+// --- Failed creates ------------------------------------------------------------------------------
+// createNode returns 0 when the node pool is full. React creates children before their parent, so the
+// children of a parent that did not fit are never attached to anything, and removing that parent frees
+// nothing in C. Each failed create gets its own negative instance (the bridge ignores handles <= 0), and
+// the children appended to it are kept here so they are freed when it is deleted.
+const orphansOf = new Map(); // failed instance → Set of child handles
+let nextFailedInstance = -1;
+
+/** Records `child` as held by `parent` when `parent` is a failed create. */
+function adoptIfOrphan(parent, child) {
+  if (parent >= 0 || child <= 0) return;
+  let orphans = orphansOf.get(parent);
+  if (orphans === undefined) {
+    orphans = new Set();
+    orphansOf.set(parent, orphans);
+  }
+  orphans.add(child);
+}
+
+/** Frees the children a failed create was holding. */
+function freeOrphans(instance) {
+  const orphans = orphansOf.get(instance);
+  if (orphans === undefined) return;
+  orphansOf.delete(instance);
+  for (const child of orphans) {
+    NativeUI.destroyNode(child);
+    forgetBindings(child);
+  }
 }
 
 /**
@@ -385,12 +411,14 @@ export const hostConfig = {
     const raster = rasterSvgArtifact(type, props);
     if (raster) {
       const handle = NativeUI.createNode('Image');
+      if (handle === 0) return nextFailedInstance--;
       forgetBindings(handle);
       applyProps('Image', handle, rasterImageProps(props, raster));
       applyEvents(handle, null, props);
       return handle;
     }
     const handle = NativeUI.createNode(type);
+    if (handle === 0) return nextFailedInstance--;
     forgetBindings(handle);
     const flatStyle = applyProps(type, handle, props);
     applyTextSpans(type, handle, props, flatStyle);
@@ -407,6 +435,7 @@ export const hostConfig = {
   },
   appendInitialChild(parent, child) {
     NativeUI.appendChild(parent, child);
+    adoptIfOrphan(parent, child);
   },
   finalizeInitialChildren() {
     return false;
@@ -423,18 +452,21 @@ export const hostConfig = {
   // --- Mutation ---
   appendChild(parent, child) {
     NativeUI.appendChild(parent, child);
+    adoptIfOrphan(parent, child);
   },
   appendChildToContainer(container, child) {
     NativeUI.appendChild(container, child);
   },
   insertBefore(parent, child, beforeChild) {
     NativeUI.insertBefore(parent, child, beforeChild);
+    adoptIfOrphan(parent, child);
   },
   insertInContainerBefore(container, child, beforeChild) {
     NativeUI.insertBefore(container, child, beforeChild);
   },
   removeChild(parent, child) {
     NativeUI.removeChild(parent, child);
+    orphansOf.get(parent)?.delete(child);
     NativeUI.destroyNode(child);
     forgetBindings(child);
   },
@@ -473,7 +505,10 @@ export const hostConfig = {
   },
 
   // --- Misc required hooks (no-ops for our renderer) ---
-  detachDeletedInstance() {},
+  detachDeletedInstance(instance) {
+    // Called for every host instance in a deleted subtree, including failed creates below its top.
+    if (instance < 0) freeOrphans(instance);
+  },
   getCurrentEventPriority() {
     return DefaultEventPriority;
   },

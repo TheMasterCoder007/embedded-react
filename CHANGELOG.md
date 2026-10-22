@@ -12,6 +12,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- Creating a node past `ERUI_MAX_NODES` now logs a line to stderr instead of failing silently, and
+  unmounting a render that overflowed the pool frees all of its nodes.
 - AOT: a multi-line `<Text>` keeps the space beside a `{value}` (`{count} items` no longer renders
   `5items`).
 - AOT: a constant `==` or `!=` now folds with JS's loose equality (`undefined == null` is true)

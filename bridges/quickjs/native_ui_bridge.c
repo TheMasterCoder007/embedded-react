@@ -92,6 +92,9 @@ static int s_free_top = 0;
 /** @brief Next never-yet-allocated slot index; starts at 1 (0 is the invalid sentinel). */
 static int s_high_water = 1;
 
+/** @brief A createNode failure has been reported; the next success clears it, so a run of failures logs once. */
+static bool s_create_failure_logged = false;
+
 /** @brief Context the bridge was installed into; used by the event trampoline. */
 static JSContext* s_bridge_ctx = NULL;
 
@@ -3033,14 +3036,25 @@ ER_BRIDGE_MARSHAL_FN(js_create_node)
 
     if (!node)
     {
+        if (!s_create_failure_logged)
+        {
+            fprintf(stderr, "createNode: node pool full, raise ERUI_MAX_NODES\n");
+            s_create_failure_logged = true;
+        }
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
     const int32_t handle = handle_alloc(node);
     if (handle == ER_BRIDGE_HANDLE_INVALID)
     {
         er_node_destroy(node);
+        if (!s_create_failure_logged)
+        {
+            fprintf(stderr, "createNode: handle table full (%d), raise ER_BRIDGE_MAX_HANDLES\n", ER_BRIDGE_MAX_HANDLES);
+            s_create_failure_logged = true;
+        }
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
+    s_create_failure_logged = false;
     return JS_NewInt32(ctx, handle);
 }
 
@@ -4828,6 +4842,7 @@ void er_bridge_install(JSContext* ctx)
     memset(s_node_by_handle, 0, sizeof(s_node_by_handle));
     s_free_top = 0;
     s_high_water = 1;
+    s_create_failure_logged = false;
 
     /* Start every context with an empty timer pool (statics persist across re-install in tests). */
     for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
