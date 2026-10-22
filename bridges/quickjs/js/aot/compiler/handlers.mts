@@ -1343,11 +1343,10 @@ export function lowerEffect(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
 
-  // A mount-once effect (no dependency list, or `[]`) runs once, from er_app_build.
+  // A mount-once effect (`[]`) runs once, from er_app_build.
   const isMount =
-    !effect.deps ||
-    (effect.deps.type === 'ArrayExpression' &&
-      effect.deps.elements.length === 0);
+    effect.deps.type === 'ArrayExpression' &&
+    effect.deps.elements.length === 0;
   if (isMount) {
     const ctx: StatementContext = {
       stateChanged: false,
@@ -1379,7 +1378,7 @@ export function lowerEffect(
   }
 
   // A dep-driven effect gets its own C function; each dep must be scalar, so a change shows against a stored copy.
-  if (effect.deps!.type !== 'ArrayExpression') {
+  if (effect.deps.type !== 'ArrayExpression') {
     throw aotError(
       'AOT: a useEffect dependency list must be an array literal',
       'pass `[]` (run once) or `[a, b]` (re-run when a/b change).',

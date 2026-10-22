@@ -1036,6 +1036,15 @@ export function collectEffects(
           'write useEffect(() => { … }, []).',
         );
       }
+      // React runs an effect with no deps after every render, which Flow B has no lowering for.
+      if (call.arguments.length < 2) {
+        const error = aotError(
+          'AOT: useEffect needs a dependency list',
+          'pass `[]` (run once) or `[a, b]` (re-run when a/b change).',
+        );
+        if (call.loc) error.aotLoc = call.loc.start;
+        throw error;
+      }
       effects.push({
         fn: call.arguments[0],
         deps: call.arguments[1],

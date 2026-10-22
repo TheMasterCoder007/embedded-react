@@ -12,6 +12,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Fixed
 
+- AOT: `useEffect(fn)` with no dependency list is now a compile error instead of running only once.
 - Creating a node past `ERUI_MAX_NODES` now logs a line to stderr instead of failing silently, and
   unmounting a render that overflowed the pool frees all of its nodes.
 - AOT: Flow B's fixed limits no longer drop data silently. An initial value or constant string too big

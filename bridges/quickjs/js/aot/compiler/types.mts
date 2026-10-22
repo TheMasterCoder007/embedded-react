@@ -226,7 +226,7 @@ export interface AssetImport {
 /** A `useEffect(fn, deps)` call. The deps are checked when the effect is compiled. */
 export interface EffectRecord {
   fn: FunctionNode;
-  deps: t.CallExpression['arguments'][number] | undefined;
+  deps: t.CallExpression['arguments'][number];
   node: t.CallExpression;
 }
 

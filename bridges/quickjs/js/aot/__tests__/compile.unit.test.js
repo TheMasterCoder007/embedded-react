@@ -2303,6 +2303,23 @@ describe('AOT effects & timers', () => {
     expect(c).not.toContain('er_effect_0_cleanup');
   });
 
+  it('rejects a useEffect with no dependency list', () => {
+    let err;
+    try {
+      gen(`${PRE}
+      export function App() {
+        const [n, setN] = useState(0);
+        useEffect(() => { setN(1); });
+        return (<Text>{n}</Text>);
+      }`);
+    } catch (e) {
+      err = e;
+    }
+    expect(err.message).toMatch(/useEffect needs a dependency list/);
+    expect(err.message).toContain('demos/test/App.jsx:');
+    expect(err.message).toContain('hint:');
+  });
+
   it('rejects a dependency-driven cleanup returned from inside an if', () => {
     let err;
     try {
