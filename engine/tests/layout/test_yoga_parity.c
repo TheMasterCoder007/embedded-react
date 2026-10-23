@@ -790,7 +790,7 @@ static void fixture_abs_auto_height(void)
     er_tree_set_root(root);
     er_commit();
     pcheck("abs-auto-height", "abs", EXPECT, ra, 20, 30, 100, 40);
-    pcheck("abs-auto-height", "kid", EXPECT, rk, 20, 30, 80, 40);
+    pcheck("abs-auto-height", "kid", EXPECT, rk, 0, 0, 80, 40);
 
     kill_child(abs, kid);
     kill_child(root, abs);

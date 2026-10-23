@@ -62,9 +62,9 @@ was not baked measures at the nearest size that was. See [Assets](./assets.md).
   layout, rendering and hit-testing, but its nodes, props and React state survive. Its computed
   rectangle collapses to zero, so it takes no space and `onLayout` reports an empty box. This is
   the cheap way to switch between pages: build each once, then flip `display`.
-- **`onLayout` reports the box in screen coordinates**, not the parent's as React Native does,
-  and before any scroll offset or transform. It fires after the commit that laid the node out. 
-  Layout is only current once a commit has run, so code that reads a rectangle part-way
+- **`onLayout` reports the box relative to the parent**, as React Native does, before any scroll
+  offset or transform, and also at `e.nativeEvent.layout`. It fires after the commit that laid the
+  node out. Layout is only current once a commit has run, so code that reads a rectangle part-way
   through a frame sees the previous commit's answer.
 
 ## Layout that moves

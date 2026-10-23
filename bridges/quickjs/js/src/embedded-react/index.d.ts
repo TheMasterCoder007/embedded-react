@@ -218,7 +218,7 @@ export type StyleProp<T> = T | false | null | undefined | StyleProp<T>[];
 
 // --- Events ----------------------------------------------------------------
 
-/** The laid-out box reported by `onLayout`, in screen coordinates (not parent-relative). */
+/** The laid-out box reported by `onLayout`. `x`/`y` are relative to the parent, as in React Native. */
 export interface LayoutRectangle {
   x: number;
   y: number;
@@ -289,6 +289,8 @@ export interface ScrollEvent extends NativeEvent<'scroll'> {
 
 export interface LayoutChangeEvent extends NativeEvent<'layout'> {
   layout: LayoutRectangle;
+  /** The same rect, where React Native puts it. */
+  nativeEvent: {layout: LayoutRectangle};
 }
 
 /**

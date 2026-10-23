@@ -480,9 +480,11 @@ export function lowerEventHandler(
   state: StateTable,
 ): string {
   const fn = attrExpr(attr);
+  const layout = (attr.name as t.JSXIdentifier).name === 'onLayout';
   if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
     // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
-    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
+    // Its onLayout use gets a handler of its own, since only that event carries the layout rect.
+    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}${layout ? '_layout' : ''}`;
     let handlerName = out.cbEmitted.get(callbackKey);
     if (!handlerName) {
       handlerName = `er_cb_${callbackKey}`;
@@ -490,7 +492,12 @@ export function lowerEventHandler(
       out.handlers.push({
         kind: 'callback',
         name: handlerName,
-        callback: lowerHandler(env.callbacks.get(fn.name)!, env, state, out),
+        callback: lowerHandler(
+          env.callbacks.get(fn.name)!,
+          {...env, layout},
+          state,
+          out,
+        ),
       });
     }
 
@@ -506,7 +513,7 @@ export function lowerEventHandler(
       name: handlerName,
       callback: lowerHandler(
         callbackProp.node,
-        callbackProp.env,
+        {...callbackProp.env, layout},
         callbackProp.state,
         out,
       ),
@@ -515,7 +522,7 @@ export function lowerEventHandler(
     out.handlers.push({
       kind: 'callback',
       name: handlerName,
-      callback: lowerHandler(fn, env, state, out),
+      callback: lowerHandler(fn, {...env, layout}, state, out),
     });
   } else {
     throw aotError(

@@ -909,7 +909,7 @@ extern "C"
         float vy;                 /**< Y velocity in px/ms at the last sampled move (touch + responder events). */
         float scroll_x;           /**< Scroll offset X (ER_EVENT_SCROLL). */
         float scroll_y;           /**< Scroll offset Y (ER_EVENT_SCROLL). */
-        ERRect layout_rect;       /**< New computed rectangle (ER_EVENT_LAYOUT). */
+        ERRect layout_rect;       /**< New computed rectangle, x/y relative to the parent (ER_EVENT_LAYOUT). */
         const char* changed_text; /**< Points into node's text buffer (ER_EVENT_CHANGE_TEXT). */
         float value;              /**< New widget value (ER_EVENT_VALUE_CHANGE). */
         float value_start;        /**< New low end of a RANGE Arc (ER_EVENT_VALUE_CHANGE; = value otherwise). */

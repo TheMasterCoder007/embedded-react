@@ -1725,6 +1725,43 @@ describe('AOT touch drag', () => {
     ).toHaveLength(2);
   });
 
+  it('reads the onLayout rect from e.nativeEvent.layout as React Native does', () => {
+    const c = gen(`${PRE}
+      import { useRef } from 'react';
+      export function App() {
+        const top = useRef(0);
+        return <View onLayout={(e) => { top.current = e.nativeEvent.layout.y; }} />;
+      }`);
+    expect(c).toContain('s_ref_top = data->layout_rect.y;');
+  });
+
+  it('refuses a layout read outside an onLayout handler', () => {
+    expect(() =>
+      gen(`${PRE}
+        import { useRef } from 'react';
+        export function App() {
+          const top = useRef(0);
+          return <View onTouchStart={(e) => { top.current = e.nativeEvent.layout.y; }} />;
+        }`),
+    ).toThrow(/only an onLayout event carries a layout rect/);
+  });
+
+  it('gives a useCallback shared with onLayout a handler of its own for that event', () => {
+    const c = gen(`${PRE}
+      import { useRef, useCallback } from 'react';
+      export function App() {
+        const n = useRef(0);
+        const bump = useCallback(() => { n.current = n.current + 1; }, []);
+        return <View onLayout={bump} onTouchStart={bump} />;
+      }`);
+    expect(c).toMatch(
+      /er_event_set\([^,]+, ER_EVENT_LAYOUT, er_cb_bump_layout, NULL\);/,
+    );
+    expect(c).toMatch(
+      /er_event_set\([^,]+, ER_EVENT_TOUCH_START, er_cb_bump, NULL\);/,
+    );
+  });
+
   it('treats useState(70.0) as a FLOAT slot (decimal literal forces float, value stays sub-integer)', () => {
     const c = gen(`${PRE}
       export function App() {

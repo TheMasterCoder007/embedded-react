@@ -2440,6 +2440,10 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
         JS_SetPropertyStr(ctx, r, "y", JS_NewInt32(ctx, data->layout_rect.y));
         JS_SetPropertyStr(ctx, r, "width", JS_NewInt32(ctx, data->layout_rect.w));
         JS_SetPropertyStr(ctx, r, "height", JS_NewInt32(ctx, data->layout_rect.h));
+        // React Native reads it from e.nativeEvent.layout; e.layout is the same object.
+        JSValue native = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, native, "layout", JS_DupValue(ctx, r));
+        JS_SetPropertyStr(ctx, ev, "nativeEvent", native);
         JS_SetPropertyStr(ctx, ev, "layout", r);
     }
     else if (type == ER_EVENT_CHANGE_TEXT && data->changed_text)

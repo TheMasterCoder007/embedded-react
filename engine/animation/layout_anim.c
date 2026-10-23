@@ -439,7 +439,7 @@ static void la_post_layout_node(ERNode* n, bool has_pending, const ERLayoutAnimC
         return;
 
     const ERLayoutRect cur = n->computed;
-    const ERLayoutRect prev = n->prev_computed;
+    const ERLayoutRect prev = n->prev_layout;
 
     /* A node whose last committed computed rect was zero-size is being created, not
      * updated.  Skip animation for new nodes — snap to computed immediately. */
