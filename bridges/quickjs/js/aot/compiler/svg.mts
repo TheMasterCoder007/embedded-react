@@ -25,6 +25,7 @@ import {
   parseColor,
   parsePath,
   KAPPA,
+  PAINT_PROPS,
   PAINT_STRIDE,
   scaleVectorArtifact,
 } from '../../src/embedded-react/svg-ops.js';
@@ -1556,7 +1557,10 @@ function emitSvgDynamic(
       tapeNumber(shapePaints.length),
       ...shape.entries,
     );
-    shapePaints.push(lowerShapePaint(attrs, env, scope));
+    // The root's paint cascades to each shape, as flattenSvg does.
+    const paintAttrs = {...attrs};
+    for (const name of PAINT_PROPS) paintAttrs[name] ??= rootAttrs[name];
+    shapePaints.push(lowerShapePaint(paintAttrs, env, scope));
   }
 
   // Allocate the node and this <Svg>'s table names.

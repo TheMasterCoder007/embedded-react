@@ -364,6 +364,30 @@ describe('flattenSvg', () => {
     expect(ops[moveIdx + 1]).toBe(10); // translated x
     expect(ops[moveIdx + 2]).toBe(20); // translated y
   });
+
+  it('the <Svg> paint cascades to its shapes, under a G and a shape that override it', () => {
+    const props = {
+      fill: 'none',
+      stroke: '#ff0000',
+      strokeWidth: 3,
+      children: [
+        el('Circle', {cx: 10, cy: 10, r: 5}),
+        el('G', {
+          stroke: '#00ff00',
+          children: [
+            el('Rect', {x: 0, y: 0, width: 5, height: 5, fill: '#0000ff'}),
+          ],
+        }),
+      ],
+    };
+    const {paints} = flattenSvg(props);
+    expect(paints[0]).toBe(0); // fill
+    expect(paints[1] >>> 0).toBe(0xffff0000); // stroke
+    expect(paints[2]).toBe(3); // width
+    expect(paints[9] >>> 0).toBe(0xff0000ff); // the Rect's own fill
+    expect(paints[10] >>> 0).toBe(0xff00ff00); // the G's stroke
+    expect(paints[11]).toBe(3); // the <Svg>'s width
+  });
 });
 
 // <Svg> owns its subtree instead of mounting it, so the walk sees raw JSX children — and every child

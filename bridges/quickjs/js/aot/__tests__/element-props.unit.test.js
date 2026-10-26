@@ -231,6 +231,7 @@ const SAMPLES = {
         'width={10} height={10}',
         'width={10} height={10} viewBox="0 0 5 5"',
       ],
+      ...PAINT,
     },
   },
 };
@@ -421,9 +422,6 @@ describe('declared element props', () => {
       gen('<Svg width={9} height={9} onPress={() => setN(1)} />'),
     ).toThrow(
       /prop "onPress" is not supported[\s\S]*hint: wrap it in a <Pressable>/,
-    );
-    expect(() => gen('<Svg width={9} height={9} fill="red" />')).toThrow(
-      /prop "fill" is not supported[\s\S]*hint: paint goes on the shapes/,
     );
   });
 });

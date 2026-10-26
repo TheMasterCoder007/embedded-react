@@ -282,6 +282,17 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
     expect(calls.setVectorOps).toHaveLength(1);
   });
 
+  it('a changed <Svg> paint re-uploads the tape', () => {
+    const ui = fill =>
+      el('Svg', {width: 100, height: 100, fill}, ...shapes('M0 0 L10 10'));
+    const update = mount(ui('#ff0000'));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui('#00ff00'));
+
+    expect(calls.setVectorOps).toHaveLength(1);
+  });
+
   it('<Svg source>: same artifact and box skip the upload; a resized box re-uploads', () => {
     const art = {kind: 'vector', ops: [], paints: [], width: 24, height: 24};
     const ui = w => el('Svg', {source: art, width: w, height: 24});

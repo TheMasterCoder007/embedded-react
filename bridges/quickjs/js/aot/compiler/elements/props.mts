@@ -190,10 +190,6 @@ const NO_TEXT_INPUT_FIELD =
 const SVG_EVENT =
   'wrap it in a <Pressable> (or a <View>) that takes the event: <Pressable onPress={…}><Svg …/></Pressable>.';
 
-/** Why an <Svg> refuses paint on itself: Flow A does not inherit it either. */
-const SVG_ROOT_PAINT =
-  'paint goes on the shapes, or on a <G> around them; the <Svg> itself passes none down.';
-
 /** The built-in elements, by tag. `Animated.X` resolves to X. */
 const ELEMENTS: Record<string, ElementSpec> = {
   View: element(
@@ -367,7 +363,7 @@ const ELEMENTS: Record<string, ElementSpec> = {
   },
   Svg: element(
     'Svg',
-    ['style', 'ref', 'width', 'height', 'viewBox', 'source'],
+    ['style', 'ref', 'width', 'height', 'viewBox', 'source', ...SVG_PAINT],
     LAYOUT_STYLE,
     'shapes',
     {
@@ -376,7 +372,6 @@ const ELEMENTS: Record<string, ElementSpec> = {
       ...Object.fromEntries(
         Object.keys(EVENT_TYPES).map(name => [name, SVG_EVENT]),
       ),
-      ...Object.fromEntries(SVG_PAINT.map(name => [name, SVG_ROOT_PAINT])),
     },
   ),
 };

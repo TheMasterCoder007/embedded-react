@@ -779,10 +779,12 @@ const PAINT_DEFAULT = {
   strokeGrad: null,
 };
 
+/** The props that make up a shape's paint; a <G> or the <Svg> itself passes them down. */
+export const PAINT_PROPS = Object.keys(PAINT_DEFAULT);
+
 function mergePaint(base, props) {
   const out = {...base};
-  for (const k of Object.keys(PAINT_DEFAULT))
-    if (props[k] != null) out[k] = props[k];
+  for (const k of PAINT_PROPS) if (props[k] != null) out[k] = props[k];
   return out;
 }
 
@@ -1000,7 +1002,8 @@ export function flattenSvg(props) {
     for (let k = 0; k < seg.length; k++) ops.push(seg[k]);
   };
 
-  walk(props.children, PAINT_DEFAULT, root);
+  // The <Svg>'s own paint cascades to every shape, like a <G> wrapping them all.
+  walk(props.children, mergePaint(PAINT_DEFAULT, props), root);
   return {ops, paints, gradients};
 }
 
