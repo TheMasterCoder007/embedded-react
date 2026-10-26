@@ -344,7 +344,9 @@ function diffUpdate(type, prevProps, nextProps) {
       default:
         if (!deepEqualProps(a, b)) {
           props = true;
-          if (type === 'Svg' && PAINT_PROPS.includes(key)) vector = true;
+          // A source tape ignores root paint.
+          if (type === 'Svg' && !nextProps.source && PAINT_PROPS.includes(key))
+            vector = true;
         }
     }
   };

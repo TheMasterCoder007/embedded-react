@@ -307,6 +307,17 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
     expect(calls.setProps).toHaveLength(1); // width also folds into the resolved style box
   });
 
+  it('<Svg source>: a changed root paint skips the upload, since the artifact ignores it', () => {
+    const art = {kind: 'vector', ops: [], paints: [], width: 24, height: 24};
+    const ui = fill => el('Svg', {source: art, width: 24, height: 24, fill});
+    const update = mount(ui('#ff0000'));
+    Object.values(calls).forEach(a => (a.length = 0));
+
+    update(ui('#00ff00'));
+
+    expect(calls.setVectorOps).toHaveLength(0);
+  });
+
   it('<Svg source> raster fallback: unchanged props are bridge-free, a style change re-applies image props', () => {
     const art = {kind: 'raster', name: 'logo.png', width: 24, height: 24};
     const ui = top => el('Svg', {source: art, style: {top}});
