@@ -595,6 +595,9 @@ static bool apply_color_value(ERNode* node, ERAnimProp prop, uint32_t color)
         case ER_PROP_COLOR:
             if (node->type != ER_NODE_TEXT)
                 return false;
+            /* The text painter reads 0 as unset and draws white. Any color at alpha 0 draws nothing alike. */
+            if (color == 0U)
+                color = 0x00FFFFFFU;
             field = &node->props.text.color;
             break;
         default:

@@ -957,6 +957,21 @@ int main(void)
         if (!inked)
             return fail("text opacity=255: the text should paint");
 
+        /* An animated color that reaches transparent black draws nothing, not the unset-color white. A
+         * blue backdrop tells the two apart. */
+        rp.background_color = 0xFF0000FFU;
+        er_node_set_props(root, &rp);
+        ERAnimValueHandle cv = er_anim_value_create(0.0f);
+        const ERColorInterpolation ci = {
+            {0.0f, 1.0f}, {0x00000000U, 0xFF000000U}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_color(cv, txt, ER_PROP_COLOR, &ci);
+        er_commit();
+        for (int y = 8; y < 28; y++)
+            for (int x = 0; x < FB_W; x++)
+                if (px(&tc, x, y) != 0xFF0000FFU)
+                    return fail("text color: an animated transparent color should paint nothing");
+        er_anim_value_destroy(cv);
+
         er_tree_remove_child(root, txt);
         er_tree_remove_child(root, img);
         er_node_destroy(txt);
