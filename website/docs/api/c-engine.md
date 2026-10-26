@@ -98,12 +98,14 @@ more properties.
 
 - `er_anim_start(node, prop, to, &cfg)` / `er_anim_cancel(node, prop)` animate a property in place.
 - `er_anim_value_create()` makes a standalone float; `er_anim_value_bind(v, node, prop)` and
-  `er_anim_value_bind_interpolated(v, node, prop, &map)` attach it, `er_anim_value_animate(v,
-to, &cfg)` drives it, `er_anim_value_set`/`get` read and write it, `er_anim_value_unbind_all` and
+  `er_anim_value_bind_interpolated(v, node, prop, &map)` attach it, and a color prop takes
+  `er_anim_value_bind_color(v, node, prop, &colors)` only. `er_anim_value_animate(v, to, &cfg)`
+  drives it, `er_anim_value_set`/`get` read and write it, `er_anim_value_unbind_all` and
   `er_anim_unbind_prop` detach, `er_anim_value_destroy` frees it. This is what an `Animated.Value`
   is.
 - `er_anim_sequence`, `er_anim_parallel`, `er_anim_stagger` group animations; `er_anim_stop(handle)`
-  stops any of them. `er_interpolate` maps a float through a breakpoint table.
+  stops any of them. `er_interpolate` maps a float through a breakpoint table, and
+  `er_interpolate_color` maps one onto colors.
 
 `ERAnimConfig` selects the algorithm (`ER_ANIM_TIMING`, `ER_ANIM_SPRING`, `ER_ANIM_DECAY`), the
 easing (`ER_EASE_LINEAR` through `ER_EASE_ELASTIC_OUT`, or `ER_EASE_BEZIER` with four control

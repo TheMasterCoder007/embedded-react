@@ -485,7 +485,7 @@ extern "C"
      */
     typedef enum
     {
-        ER_PROP_OPACITY = 0,      /**< Transparency (0.0–1.0). */
+        ER_PROP_OPACITY = 0,      /**< Transparency (0.0–1.0); View family, Text, Image and TextInput. */
         ER_PROP_TRANSLATE_X,      /**< Horizontal translation in pixels. */
         ER_PROP_TRANSLATE_Y,      /**< Vertical translation in pixels. */
         ER_PROP_SCALE_X,          /**< Horizontal scale factor. */
@@ -1363,6 +1363,7 @@ extern "C"
      * er_anim_value_set()), node->prop is updated automatically and the node is marked dirty.
      * Duplicate bindings for the same node+prop pair are silently ignored.  The binding
      * capacity per value is fixed at compile time (ERUI_MAX_VALUE_BINDINGS, default 4).
+     * A color property is refused; bind one with er_anim_value_bind_color().
      *
      * @param[in] handle  Target animatable value.
      * @param[in] node    Scene node to receive updates.
@@ -1505,6 +1506,49 @@ extern "C"
                                          ERNode* node,
                                          ERAnimProp prop,
                                          const ERInterpolation* interp);
+
+    /**
+     * @brief Piecewise-linear mapping from an input range to ARGB8888 colors.
+     *
+     * @details The color twin of ERInterpolation, for `outputRange: ['#000', '#fff']`. Each channel,
+     * alpha included, is interpolated in straight alpha and clamped to 0–255. ER_EXTRAPOLATE_IDENTITY
+     * has no meaning for a color and behaves as ER_EXTRAPOLATE_CLAMP.
+     */
+    typedef struct
+    {
+        float input_range[ER_INTERPOLATE_MAX_POINTS];     /**< Ascending input breakpoints. */
+        uint32_t output_range[ER_INTERPOLATE_MAX_POINTS]; /**< ARGB8888 color at each breakpoint. */
+        uint8_t point_count;             /**< Number of valid breakpoints [2–ER_INTERPOLATE_MAX_POINTS]. */
+        ERExtrapolate extrapolate_left;  /**< Behavior for inputs below input_range[0]. */
+        ERExtrapolate extrapolate_right; /**< Behavior for inputs above the last breakpoint. */
+    } ERColorInterpolation;
+
+    /**
+     * @brief Maps a single float through a color interpolation.
+     *
+     * @param[in] input   Value to map.
+     * @param[in] interp  Mapping; point_count < 2 returns 0 (transparent).
+     *
+     * @return The interpolated ARGB8888 color.
+     */
+    uint32_t er_interpolate_color(float input, const ERColorInterpolation* interp);
+
+    /**
+     * @brief Binds a shared animatable value to a color property through a color interpolation.
+     *
+     * @details The native-driver form of `value.interpolate({ inputRange, outputRange: [colors] })` on
+     * `backgroundColor` or `color`. A color prop takes only this binding: er_anim_value_bind() and
+     * er_anim_value_bind_interpolated() refuse one, since a plain float is not a color.
+     *
+     * @param[in] handle  Animatable value to bind.
+     * @param[in] node    Target node.
+     * @param[in] prop    ER_PROP_BACKGROUND_COLOR or ER_PROP_COLOR.
+     * @param[in] interp  Color mapping (copied; must have point_count >= 2).
+     */
+    void er_anim_value_bind_color(ERAnimValueHandle handle,
+                                  ERNode* node,
+                                  ERAnimProp prop,
+                                  const ERColorInterpolation* interp);
 
     /**
      * @brief Returns the axis-aligned bounding rectangle of all pixels repainted by the last er_commit()

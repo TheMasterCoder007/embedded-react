@@ -37,15 +37,18 @@ tied to the component and destroys it on unmount, which is the form to prefer. A
 - `destroy()`: release its engine slot. The engine's value pool is fixed-size, so a
   `new Animated.Value` that outlives its screen must be destroyed; `useAnimatedValue` does this for you.
 - `interpolate({inputRange, outputRange, extrapolate?, extrapolateLeft?, extrapolateRight?})`: a
-  derived value mapped through a piecewise-linear curve, up to 8 breakpoints. Both ranges are
-  numbers; a value bound to a rotation axis is read in degrees, so `outputRange: [0, 360]` is a
-  full turn. `extrapolate` is `'extend'` (default), `'clamp'` or `'identity'`, with per-end
-  overrides.
+  derived value mapped through a piecewise-linear curve, up to 8 breakpoints. `outputRange` is
+  numbers, or colors (`['#000', 'red']`) for `backgroundColor` and `color`; a value
+  bound to a rotation axis is read in degrees, so `outputRange: [0, 360]` is a full turn.
+  `extrapolate` is `'extend'` (default), `'clamp'` or `'identity'`, with per-end overrides; a color
+  treats `'identity'` as `'clamp'`.
 
 ## Where a value can go
 
-`Animated.View`, `Animated.Text` and `Animated.Image` accept values in `backgroundColor`, `opacity`,
-`color` and any `transform` axis (`scale` binds both axes). The wrappers are pass-through, kept for
+`Animated.View`, `Animated.Text` and `Animated.Image` accept values in `opacity` and any `transform`
+axis (`scale` binds both axes), `backgroundColor` on a View and `color` on a Text. A color takes only an
+interpolation onto colors: a value bound to one directly is ignored with a warning (and rejected by the
+AOT). The wrappers are pass-through, kept for
 React Native parity: a plain `View` or `Pressable` binds an animated style the same way, in both flows.
 **Flow B** binds `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` and `rotate`/`rotateZ`, not
 `rotateX`/`rotateY`. `Dial` also accepts one in `value` and `valueStart`.

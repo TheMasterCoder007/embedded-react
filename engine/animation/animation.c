@@ -153,8 +153,13 @@ typedef struct
     uint16_t node_tag;
     ERAnimProp prop;
     bool active;
-    bool interpolated;      /**< When true, value is mapped through interp before being applied. */
-    ERInterpolation interp; /**< Mapping applied when interpolated is true. */
+    bool interpolated; /**< When true, value is mapped through map before being applied. */
+    bool color;        /**< map holds a color mapping (map.color) rather than a numeric one (map.num). */
+    union
+    {
+        ERInterpolation num;
+        ERColorInterpolation color;
+    } map;
 } ERValueBinding;
 
 /**
@@ -257,6 +262,48 @@ static bool is_view_node(const ERNode* node)
 }
 
 /**
+ * @brief Returns a node's opacity byte, wherever its type keeps it.
+ *
+ * @param[in] node  Node to inspect.
+ *
+ * @return Pointer to the opacity byte, or NULL when the node has none.
+ */
+static uint8_t* opacity_field(ERNode* node)
+{
+    if (is_view_node(node))
+        return &node->props.view.opacity;
+    switch (node->type)
+    {
+        case ER_NODE_TEXT:
+            return &node->props.text.opacity;
+        case ER_NODE_IMAGE:
+            return &node->props.image.opacity;
+        case ER_NODE_TEXT_INPUT:
+            return &node->props.text_input.opacity;
+        default:
+            return NULL;
+    }
+}
+
+/**
+ * @brief Marks a node dirty after one of its animated properties changed.
+ *
+ * An opacity change on a node that composites its own subtree changes only its blend, so the node's fade
+ * cache stays valid. A Text or Image fades at a draw alpha inside whatever subtree holds it, so it, like
+ * every other prop, changes content.
+ *
+ * @param[in,out] node  Node that changed.
+ * @param[in]     prop  Property that changed.
+ */
+static void mark_prop_dirty(ERNode* node, ERAnimProp prop)
+{
+    if (prop == ER_PROP_OPACITY && (is_view_node(node) || node->type == ER_NODE_TEXT_INPUT))
+        er_mark_dirty_upward_opacity(node);
+    else
+        er_mark_dirty_upward(node);
+}
+
+/**
  * @brief Reads the current numeric value for an animatable property.
  *
  * @param[in]  node   Node to inspect.
@@ -265,7 +312,7 @@ static bool is_view_node(const ERNode* node)
  *
  * @return true if the property is supported on the node.
  */
-static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value)
+static bool read_numeric_value(ERNode* node, ERAnimProp prop, float* value)
 {
     if (!value)
         return false;
@@ -273,10 +320,13 @@ static bool read_numeric_value(const ERNode* node, ERAnimProp prop, float* value
     switch (prop)
     {
         case ER_PROP_OPACITY:
-            if (!is_view_node(node))
+        {
+            const uint8_t* o = opacity_field(node);
+            if (!o)
                 return false;
-            *value = (float)node->props.view.opacity / 255.0f;
+            *value = (float)*o / 255.0f;
             return true;
+        }
         case ER_PROP_TRANSLATE_X:
             *value = node->tp_translate_x;
             return true;
@@ -400,16 +450,17 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
     {
         case ER_PROP_OPACITY:
         {
-            if (!is_view_node(node))
+            uint8_t* field = opacity_field(node);
+            if (!field)
                 return false;
             if (value < 0.0f)
                 value = 0.0f;
             if (value > 1.0f)
                 value = 1.0f;
             const uint8_t o = (uint8_t)(value * 255.0f + 0.5f);
-            if (node->props.view.opacity == o)
+            if (*field == o)
                 return false;
-            node->props.view.opacity = o;
+            *field = o;
             return true;
         }
         case ER_PROP_TRANSLATE_X:
@@ -486,13 +537,17 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
  *
  * @param[in] from  Start channel value.
  * @param[in] to    Target channel value.
- * @param[in] t     Interpolation fraction in range 0.0-1.0.
+ * @param[in] t     Interpolation fraction; outside 0.0-1.0 extrapolates, clamped to the channel range.
  *
  * @return Interpolated channel value.
  */
 static uint8_t lerp_channel(uint8_t from, uint8_t to, float t)
 {
     const float value = (float)from + ((float)to - (float)from) * t;
+    if (value <= 0.0f)
+        return 0U;
+    if (value >= 255.0f)
+        return 255U;
     return (uint8_t)(value + 0.5f);
 }
 
@@ -501,7 +556,7 @@ static uint8_t lerp_channel(uint8_t from, uint8_t to, float t)
  *
  * @param[in] from  Start ARGB8888 color.
  * @param[in] to    Target ARGB8888 color.
- * @param[in] t     Interpolation fraction in range 0.0-1.0.
+ * @param[in] t     Interpolation fraction (see lerp_channel).
  *
  * @return Interpolated ARGB8888 color.
  */
@@ -522,28 +577,59 @@ static uint32_t lerp_color(uint32_t from, uint32_t to, float t)
  * @param[in]     prop   Property to update.
  * @param[in]     color  ARGB8888 color.
  *
- * @return true if the property was applied.
+ * @return true if the stored color actually changed (see apply_numeric_value).
  */
 static bool apply_color_value(ERNode* node, ERAnimProp prop, uint32_t color)
 {
     if (!node)
         return false;
 
+    uint32_t* field;
     switch (prop)
     {
         case ER_PROP_BACKGROUND_COLOR:
             if (!is_view_node(node))
                 return false;
-            node->props.view.background_color = color;
-            return true;
+            field = &node->props.view.background_color;
+            break;
         case ER_PROP_COLOR:
             if (node->type != ER_NODE_TEXT)
                 return false;
-            node->props.text.color = color;
-            return true;
+            /* The text painter reads 0 as unset and draws white. Any color at alpha 0 draws nothing alike. */
+            if (color == 0U)
+                color = 0x00FFFFFFU;
+            field = &node->props.text.color;
+            break;
         default:
             return false;
     }
+    if (*field == color)
+        return false;
+    *field = color;
+    return true;
+}
+
+/**
+ * @brief Applies an animated value's current float to one binding's node property.
+ *
+ * @param[in,out] node     Bound node.
+ * @param[in]     bind     Binding, with its mapping.
+ * @param[in]     current  The value's current float.
+ *
+ * @return true if the property changed.
+ */
+static bool apply_binding(ERNode* node, const ERValueBinding* bind, float current)
+{
+    if (bind->color)
+        return apply_color_value(node, bind->prop, er_interpolate_color(current, &bind->map.color));
+    if (bind->interpolated)
+        current = er_interpolate(current,
+                                 bind->map.num.input_range,
+                                 bind->map.num.output_range,
+                                 (int)bind->map.num.point_count,
+                                 bind->map.num.extrapolate_left,
+                                 bind->map.num.extrapolate_right);
+    return apply_numeric_value(node, bind->prop, current);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -861,24 +947,8 @@ static void push_to_value_bindings(ERAnimValue* val)
         ERNode* n = er_get_node(bind->node_tag);
         if (!n)
             continue;
-        float v = val->current;
-        if (bind->interpolated)
-            v = er_interpolate(v,
-                               bind->interp.input_range,
-                               bind->interp.output_range,
-                               (int)bind->interp.point_count,
-                               bind->interp.extrapolate_left,
-                               bind->interp.extrapolate_right);
-        if (apply_numeric_value(n, bind->prop, v))
-        {
-            /* An animated opacity value changes only the blend, not the subtree's rendered
-             * content — mark visual-only so the compositor's fade cache stays valid. Every
-             * other prop (position, scale, rotation, color) changes content. */
-            if (bind->prop == ER_PROP_OPACITY)
-                er_mark_dirty_upward_visual(n);
-            else
-                er_mark_dirty_upward(n);
-        }
+        if (apply_binding(n, bind, val->current))
+            mark_prop_dirty(n, bind->prop);
     }
 }
 
@@ -900,15 +970,7 @@ void er_anim_reapply_bound(ERNode* node)
             ERValueBinding* bind = &val->bindings[b];
             if (!bind->active || bind->node_tag != node->tag)
                 continue;
-            float v = val->current;
-            if (bind->interpolated)
-                v = er_interpolate(v,
-                                   bind->interp.input_range,
-                                   bind->interp.output_range,
-                                   (int)bind->interp.point_count,
-                                   bind->interp.extrapolate_left,
-                                   bind->interp.extrapolate_right);
-            (void)apply_numeric_value(node, bind->prop, v);
+            (void)apply_binding(node, bind, val->current);
         }
     }
 }
@@ -947,6 +1009,7 @@ void er_anim_unbind_prop(ERNode* node, ERAnimProp prop)
      */
     if (!node)
         return;
+    bool released = false;
     for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
     {
         ERAnimValue* val = &s_anim_values[s];
@@ -955,9 +1018,16 @@ void er_anim_unbind_prop(ERNode* node, ERAnimProp prop)
         for (int b = 0; b < val->binding_count; b++)
         {
             if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+            {
                 val->bindings[b].active = false;
+                released = true;
+            }
         }
     }
+    /* The next setProps writes the static value back, but skips the repaint when its props are unchanged,
+     * which they are when the prop simply stopped being animated. */
+    if (released)
+        er_mark_dirty_upward(node);
 }
 
 /**
@@ -1440,6 +1510,28 @@ ERAnimValueHandle er_anim_value_create(float initial_value)
     return ER_ANIM_VALUE_INVALID;
 }
 
+/**
+ * @brief Releases every binding of a value and marks each bound node dirty.
+ *
+ * Its next setProps writes the static value back but skips the repaint when the props are unchanged, so
+ * the release has to ask for it (as er_anim_unbind_prop does).
+ *
+ * @param[in,out] val  Value whose bindings to release.
+ */
+static void release_bindings(ERAnimValue* val)
+{
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (!val->bindings[b].active)
+            continue;
+        val->bindings[b].active = false;
+        ERNode* n = er_get_node(val->bindings[b].node_tag);
+        if (n)
+            er_mark_dirty_upward(n);
+    }
+    val->binding_count = 0;
+}
+
 void er_anim_value_destroy(ERAnimValueHandle handle)
 {
     if (handle == ER_ANIM_VALUE_INVALID)
@@ -1447,40 +1539,60 @@ void er_anim_value_destroy(ERAnimValueHandle handle)
     cancel_value_anim(handle);
     ERAnimValue* val = find_value_slot(handle);
     if (val)
+    {
+        release_bindings(val);
         val->in_use = false;
+    }
+}
+
+/**
+ * @brief Claims a free binding slot on a value for a node+prop pair.
+ *
+ * @param[in,out] val   Value to bind; NULL claims nothing.
+ * @param[in]     node  Target node.
+ * @param[in]     prop  Property to drive.
+ *
+ * @return The claimed binding, its mapping left for the caller to fill; NULL when there is no value,
+ *         the pair is already bound (the reconciler may re-bind on every render, which would otherwise
+ *         exhaust the pool), or every slot is taken.
+ */
+static ERValueBinding* claim_binding(ERAnimValue* val, const ERNode* node, ERAnimProp prop)
+{
+    if (!val)
+        return NULL;
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+            return NULL;
+    }
+    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+    {
+        ERValueBinding* bind = &val->bindings[b];
+        if (bind->active)
+            continue;
+        memset(bind, 0, sizeof(*bind));
+        bind->node_tag = node->tag;
+        bind->prop = prop;
+        bind->active = true;
+        if ((uint8_t)(b + 1) > val->binding_count)
+            val->binding_count = (uint8_t)(b + 1);
+        return bind;
+    }
+    return NULL;
 }
 
 void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
 {
-    if (handle == ER_ANIM_VALUE_INVALID || !node)
+    /* A plain float is not a color: a color prop is bound through er_anim_value_bind_color. */
+    if (handle == ER_ANIM_VALUE_INVALID || !node || is_color_prop(prop))
         return;
     ERAnimValue* val = find_value_slot(handle);
-    if (!val)
+    ERValueBinding* bind = claim_binding(val, node, prop);
+    if (!bind)
         return;
-    /* Refuse duplicate bindings for the same node+prop pair. */
-    for (int b = 0; b < val->binding_count; b++)
-    {
-        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
-            return;
-    }
-    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
-    {
-        if (!val->bindings[b].active)
-        {
-            val->bindings[b].node_tag = node->tag;
-            val->bindings[b].prop = prop;
-            val->bindings[b].active = true;
-            val->bindings[b].interpolated = false;
-            if ((uint8_t)(b + 1) > val->binding_count)
-                val->binding_count = (uint8_t)(b + 1);
-            /* Apply immediately so the node reflects the current value on bind (matches the
-             * interpolated path) — keeps a freshly-bound node from showing its default until the
-             * value next changes. */
-            (void)apply_numeric_value(node, prop, val->current);
-            er_mark_dirty_upward(node);
-            return;
-        }
-    }
+    /* Apply at once so the node shows the current value, not its default until the value next changes. */
+    (void)apply_binding(node, bind, val->current);
+    er_mark_dirty_upward(node);
 }
 
 float er_interpolate(float input,
@@ -1545,53 +1657,82 @@ void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
                                      ERAnimProp prop,
                                      const ERInterpolation* interp)
 {
-    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u)
+    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u || is_color_prop(prop))
         return;
     ERAnimValue* val = find_value_slot(handle);
-    if (!val)
+    ERValueBinding* bind = claim_binding(val, node, prop);
+    if (!bind)
         return;
-    /* Refuse duplicate bindings for the same node+prop pair (the reconciler may re-bind on every
-     * render). Without this, re-renders would exhaust the binding pool. */
-    for (int b = 0; b < val->binding_count; b++)
+    bind->interpolated = true;
+    bind->map.num = *interp;
+    (void)apply_binding(node, bind, val->current);
+    er_mark_dirty_upward(node);
+}
+
+uint32_t er_interpolate_color(float input, const ERColorInterpolation* interp)
+{
+    if (!interp || interp->point_count < 2U)
+        return 0U;
+
+    const float* in = interp->input_range;
+    const uint32_t* out = interp->output_range;
+    const int last = (int)interp->point_count - 1;
+
+    /* NaN maps to the last color, as er_interpolate maps it to the last output. */
+    if (input != input)
+        return out[last];
+
+    /* The segment [seg - 1, seg] the input falls in, or extends past. Only EXTEND continues the slope
+     * outside the range; IDENTITY has no color reading, so it holds the endpoint like CLAMP. */
+    int seg;
+    if (input < in[0])
     {
-        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
-            return;
+        if (interp->extrapolate_left != ER_EXTRAPOLATE_EXTEND)
+            return out[0];
+        seg = 1;
     }
-    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+    else if (input > in[last])
     {
-        if (!val->bindings[b].active)
-        {
-            val->bindings[b].node_tag = node->tag;
-            val->bindings[b].prop = prop;
-            val->bindings[b].active = true;
-            val->bindings[b].interpolated = true;
-            val->bindings[b].interp = *interp;
-            if ((uint8_t)(b + 1) > val->binding_count)
-                val->binding_count = (uint8_t)(b + 1);
-            /* Apply immediately so the node reflects the current value on bind. */
-            {
-                const float v = er_interpolate(val->current,
-                                               interp->input_range,
-                                               interp->output_range,
-                                               (int)interp->point_count,
-                                               interp->extrapolate_left,
-                                               interp->extrapolate_right);
-                (void)apply_numeric_value(node, prop, v);
-                er_mark_dirty_upward(node);
-            }
-            return;
-        }
+        if (interp->extrapolate_right != ER_EXTRAPOLATE_EXTEND)
+            return out[last];
+        seg = last;
     }
+    else
+    {
+        seg = 1;
+        while (seg < last && input > in[seg])
+            seg++;
+    }
+
+    const float span = in[seg] - in[seg - 1];
+    if (span == 0.0f)
+        return input > in[last] ? out[last] : out[seg - 1];
+    return lerp_color(out[seg - 1], out[seg], (input - in[seg - 1]) / span);
+}
+
+void er_anim_value_bind_color(ERAnimValueHandle handle,
+                              ERNode* node,
+                              ERAnimProp prop,
+                              const ERColorInterpolation* interp)
+{
+    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u || !is_color_prop(prop))
+        return;
+    ERAnimValue* val = find_value_slot(handle);
+    ERValueBinding* bind = claim_binding(val, node, prop);
+    if (!bind)
+        return;
+    bind->interpolated = true;
+    bind->color = true;
+    bind->map.color = *interp;
+    (void)apply_binding(node, bind, val->current);
+    er_mark_dirty_upward(node);
 }
 
 void er_anim_value_unbind_all(ERAnimValueHandle handle)
 {
     ERAnimValue* val = find_value_slot(handle);
-    if (!val)
-        return;
-    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
-        val->bindings[b].active = false;
-    val->binding_count = 0;
+    if (val)
+        release_bindings(val);
 }
 
 ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg)
@@ -1889,11 +2030,7 @@ void er_anim_tick(uint32_t delta_ms)
                 finished = true;
         }
 
-        /* Opacity-only animation frames keep the fade cache valid (see push_to_value_bindings). */
-        if (anim->prop == ER_PROP_OPACITY)
-            er_mark_dirty_upward_visual(node);
-        else
-            er_mark_dirty_upward(node);
+        mark_prop_dirty(node, anim->prop);
 
         if (finished)
         {

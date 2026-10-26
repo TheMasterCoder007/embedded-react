@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -705,6 +706,103 @@ int main(void)
         er_node_destroy(root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Fade cache: a child's animated opacity inside a cached group. The child's change is
+     * visual-only to itself but new content to the group's cache, which must not be reused.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 16;
+        gp.height = 16;
+        gp.opacity = 128U;
+        er_node_set_props(group, &gp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 16;
+        cp.height = 16;
+        cp.background_color = 0xFFFF0000U;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(group, child);
+        er_tree_append_child(root, group);
+        er_tree_set_root(root);
+
+        ERAnimValueHandle val = er_anim_value_create(1.0f);
+        er_anim_value_bind(val, child, ER_PROP_OPACITY);
+        er_commit();
+        er_commit(); /* capture, in cache-enabled builds */
+        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+            return fail("nested fade: red at the group alpha");
+
+        er_anim_value_set(val, 0.0f);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFFFFFFU)
+            return fail("nested fade: a child faded out inside a cached group must disappear");
+
+        er_anim_value_destroy(val);
+        er_tree_remove_child(group, child);
+        er_tree_remove_child(root, group);
+        er_node_destroy(child);
+        er_node_destroy(group);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Releasing every binding of a value repaints its nodes at their static props, even when the
+     * setProps that restores them sees nothing new.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        ERProps bp = props_default();
+        bp.width = 8;
+        bp.height = 8;
+        bp.background_color = 0xFFFF0000U;
+        er_node_set_props(box, &bp);
+        er_tree_append_child(root, box);
+        er_tree_set_root(root);
+
+        ERAnimValueHandle val = er_anim_value_create(1.0f);
+        const ERColorInterpolation ci = {
+            {0.0f, 1.0f}, {0xFF000000U, 0xFF0000FFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_color(val, box, ER_PROP_BACKGROUND_COLOR, &ci);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFF0000FFU)
+            return fail("unbind all: the bound color should paint");
+
+        er_anim_value_unbind_all(val);
+        er_node_set_props(box, &bp);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFF0000U)
+            return fail("unbind all: the static color should repaint");
+
+        er_anim_value_destroy(val);
+        er_tree_remove_child(root, box);
+        er_node_destroy(box);
+        er_node_destroy(root);
+    }
+
 #if ERUI_TRANSFORMS_FULL
     /* -----------------------------------------------------------------------
      * Transform inside a banded opacity group.
@@ -778,6 +876,108 @@ int main(void)
         er_node_destroy(root);
     }
 #endif /* ERUI_TRANSFORMS_FULL */
+
+    /* -----------------------------------------------------------------------
+     * Image and Text opacity: each is one leaf draw, faded at a draw alpha. A red image at 128 over
+     * white lands on the same pink as a View at 128; a Text at 0 paints nothing.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+        static const uint32_t red4x4[16] = {
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+        };
+        er_image_load("red4x4", red4x4, 4, 4);
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* img = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 4;
+        ip.height = 4;
+        strncpy(ip.image_name, "red4x4", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        ip.opacity = 128U;
+        er_node_set_props(img, &ip);
+
+        ERNode* txt = er_node_create(ER_NODE_TEXT);
+        ERProps tp = props_default();
+        tp.position = ER_POS_ABSOLUTE;
+        tp.left = 0;
+        tp.top = 8;
+        tp.width = FB_W;
+        tp.height = 20;
+        strncpy(tp.text, "MMMM", ER_TEXT_MAX);
+        tp.color = 0xFF000000U;
+        tp.font_size = 16;
+        tp.opacity = 0U;
+        er_node_set_props(txt, &tp);
+
+        er_tree_append_child(root, img);
+        er_tree_append_child(root, txt);
+        er_tree_set_root(root);
+        er_commit();
+
+        const uint32_t p = px(&tc, 1, 1);
+        if (((p >> 16) & 0xFFU) != 0xFFU || ((p >> 8) & 0xFFU) != 0x7FU || (p & 0xFFU) != 0x7FU)
+            return fail("image opacity=128: red over white should be pink");
+        for (int y = 8; y < 28; y++)
+            for (int x = 0; x < FB_W; x++)
+                if (px(&tc, x, y) != 0xFFFFFFFFU)
+                    return fail("text opacity=0: the text should paint nothing");
+
+        /* The same text, opaque, does paint: the check above is not passing on an empty draw. */
+        tp.opacity = 255U;
+        er_node_set_props(txt, &tp);
+        er_commit();
+        bool inked = false;
+        for (int y = 8; y < 28 && !inked; y++)
+            for (int x = 0; x < FB_W && !inked; x++)
+                inked = px(&tc, x, y) != 0xFFFFFFFFU;
+        if (!inked)
+            return fail("text opacity=255: the text should paint");
+
+        /* An animated color that reaches transparent black draws nothing, not the unset-color white. A
+         * blue backdrop tells the two apart. */
+        rp.background_color = 0xFF0000FFU;
+        er_node_set_props(root, &rp);
+        ERAnimValueHandle cv = er_anim_value_create(0.0f);
+        const ERColorInterpolation ci = {
+            {0.0f, 1.0f}, {0x00000000U, 0xFF000000U}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_color(cv, txt, ER_PROP_COLOR, &ci);
+        er_commit();
+        for (int y = 8; y < 28; y++)
+            for (int x = 0; x < FB_W; x++)
+                if (px(&tc, x, y) != 0xFF0000FFU)
+                    return fail("text color: an animated transparent color should paint nothing");
+        er_anim_value_destroy(cv);
+
+        er_tree_remove_child(root, txt);
+        er_tree_remove_child(root, img);
+        er_node_destroy(txt);
+        er_node_destroy(img);
+        er_node_destroy(root);
+    }
 
     return EXIT_SUCCESS;
 }

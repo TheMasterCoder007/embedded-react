@@ -43,8 +43,9 @@ export function AnimatedUsage() {
     extrapolateRight: 'extend',
   });
 
-  // @ts-expect-error — the bridge reads outputRange as numbers; a string becomes NaN.
-  v.interpolate({inputRange: [0, 1], outputRange: ['0deg', '360deg']});
+  v.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']});
+  // @ts-expect-error — an outputRange is all numbers or all colors.
+  v.interpolate({inputRange: [0, 1], outputRange: [0, '#fff']});
   // @ts-expect-error — an interpolation is not a settable value.
   spin.setValue(1);
   // @ts-expect-error — nor does it own an engine slot to free.

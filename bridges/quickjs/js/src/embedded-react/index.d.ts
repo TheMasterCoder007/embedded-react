@@ -801,13 +801,14 @@ export const AppRegistry: {
 export type ExtrapolateType = 'extend' | 'clamp' | 'identity';
 
 /**
- * A piecewise-linear mapping, up to 8 breakpoints. Both ranges are numbers — the engine carries no colour
- * or unit-string interpolation; a rotation axis reads the output in degrees. `extrapolate` sets both ends
- * and the per-end keys override it.
+ * A piecewise-linear mapping, up to 8 breakpoints. `outputRange` is numbers, or colors for
+ * `backgroundColor` and `color`, which take nothing else; the engine carries no unit-string
+ * interpolation, and a rotation axis reads the output in degrees. `extrapolate` sets both ends and the
+ * per-end keys override it.
  */
 export interface InterpolationConfig {
   inputRange: number[];
-  outputRange: number[];
+  outputRange: number[] | string[];
   extrapolate?: ExtrapolateType;
   extrapolateLeft?: ExtrapolateType;
   extrapolateRight?: ExtrapolateType;

@@ -48,6 +48,7 @@ import {cstr} from './c-syntax.mts';
 import {jsxChildText, lowerExpr, lowerText} from './expressions.mts';
 import {printPropValue} from './c/nodes.mts';
 import {
+  ANIM_COLOR_KEYS,
   ANIM_STYLE_PROPS,
   ANIM_TRANSFORM_PROPS,
   parseInterp,
@@ -144,6 +145,39 @@ export function argbLiteral(value: unknown): string {
       .toUpperCase() +
     'u'
   );
+}
+
+/**
+ * Refuses an animated binding whose values do not fit the key: a color key takes only an interpolation onto
+ * colors, and every other key only numbers.
+ *
+ * @param key  The style or transform key.
+ * @param interp  The binding's interpolation, or undefined for the value itself.
+ * @param node  The node to pin an error to.
+ */
+function checkAnimatedColor(
+  key: string,
+  interp: Interpolation | undefined,
+  node: t.Node,
+): void {
+  if (ANIM_COLOR_KEYS.has(key) && !interp?.colors) {
+    throw at(
+      aotError(
+        `AOT: an animated "${key}" needs colors`,
+        "bind value.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']}) rather than a number.",
+      ),
+      node,
+    );
+  }
+  if (!ANIM_COLOR_KEYS.has(key) && interp?.colors) {
+    throw at(
+      aotError(
+        `AOT: an animated "${key}" takes numbers, not colors`,
+        'an outputRange of colors drives backgroundColor or color.',
+      ),
+      node,
+    );
+  }
 }
 
 /**
@@ -632,6 +666,7 @@ export function collectStyleAssigns(
             transformProp,
           );
         }
+        checkAnimatedColor(transformKey, mapped?.interp, transformProp);
 
         for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
           transformBinds.push(
@@ -702,6 +737,7 @@ export function collectStyleAssigns(
         const animVar = animRef(prop.value);
         if (animVar && ANIM_STYLE_PROPS[key]) {
           checkAnimatedStyleKey(spec, key, prop);
+          checkAnimatedColor(key, undefined, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
             binds.push({cVar: animVar, prop: animProp});
           }
@@ -711,6 +747,7 @@ export function collectStyleAssigns(
         const animInterp = animInterpRef(prop.value);
         if (animInterp && ANIM_STYLE_PROPS[key]) {
           checkAnimatedStyleKey(spec, key, prop);
+          checkAnimatedColor(key, animInterp.interp, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
             binds.push({
               cVar: animInterp.cVar,

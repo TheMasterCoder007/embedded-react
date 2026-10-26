@@ -1680,6 +1680,22 @@ static void fade_cache_invalidate(void)
 #endif
 }
 
+void er_mark_dirty_upward_opacity(ERNode* node)
+{
+#if ER_FADE_CACHE_ENABLED
+    /* The cache holds its owner's subtree as painted, so a descendant's new alpha is new content to it. */
+    for (ERNode* a = node ? er_get_node(node->parent_tag) : NULL; a; a = er_get_node(a->parent_tag))
+    {
+        if (a->tag == s_fade_cache_tag)
+        {
+            s_content_gen++;
+            break;
+        }
+    }
+#endif
+    er_mark_dirty_upward_visual(node);
+}
+
 #if ER_PROF
 /* TEMP on-device profiling: phase accumulators printed every ER_PROF_INTERVAL commits (host provides
  * the clock). The interval is named because the line it prints states it — a literal in both the
@@ -2547,9 +2563,16 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
         node_opacity = n->props.view.opacity;
     else if (n->type == ER_NODE_TEXT_INPUT)
         node_opacity = n->props.text_input.opacity;
+    else if (n->type == ER_NODE_TEXT)
+        node_opacity = n->props.text.opacity;
+    else if (n->type == ER_NODE_IMAGE)
+        node_opacity = n->props.image.opacity;
+
+    /* A Text or Image is one leaf draw, so the draw-alpha path below fades it without a scratch composite. */
+    const bool leaf_fade = n->type == ER_NODE_TEXT || n->type == ER_NODE_IMAGE;
 
     bool composited = false;
-    if (node_opacity < 255U && should_render)
+    if (node_opacity < 255U && should_render && !leaf_fade)
     {
         composited = composite_from_cache(n, node_opacity, px, py, w, h, child_tx, child_ty);
         if (!composited)
@@ -2557,9 +2580,9 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
     }
     if (!composited)
     {
-        /* Graceful degradation: when the group cannot be composited (scratch pool exhausted),
-         * multiply its opacity into every primitive draw instead of dropping it. Exact wherever
-         * siblings don't overlap; far closer to correct than rendering fully opaque. */
+        /* A leaf fade, or graceful degradation: when the group cannot be composited (scratch pool
+         * exhausted), multiply its opacity into every primitive draw instead of dropping it. Exact
+         * wherever siblings don't overlap; far closer to correct than rendering fully opaque. */
         const uint8_t saved_alpha = er_get_draw_alpha();
         if (node_opacity < 255U && should_render)
             er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / 255U));
@@ -3177,10 +3200,22 @@ ERNode* er_node_create(ERNodeType type)
 
     init_layout_defaults(&n->layout);
 
-    /* View-type nodes default to fully opaque. */
+    /* Nodes with an opacity default to fully opaque. */
     if (type == ER_NODE_VIEW || type == ER_NODE_SCROLL_VIEW || type == ER_NODE_PRESSABLE || type == ER_NODE_MODAL)
     {
         n->props.view.opacity = 255U;
+    }
+    else if (type == ER_NODE_TEXT)
+    {
+        n->props.text.opacity = 255U;
+    }
+    else if (type == ER_NODE_IMAGE)
+    {
+        n->props.image.opacity = 255U;
+    }
+    else if (type == ER_NODE_TEXT_INPUT)
+    {
+        n->props.text_input.opacity = 255U;
     }
 
     /* ActivityIndicator starts spinning immediately. */
@@ -3571,6 +3606,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text.text_decoration = props->text_decoration;
             node->props.text.line_height = props->line_height;
             node->props.text.letter_spacing = props->letter_spacing;
+            node->props.text.opacity = props->opacity;
             {
                 const uint8_t sc =
                     (props->span_count < ER_TEXT_MAX_SPANS) ? props->span_count : (uint8_t)ER_TEXT_MAX_SPANS;
@@ -3595,6 +3631,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.image.image_name[ER_IMAGE_NAME_MAX] = '\0';
             node->props.image.resize_mode = props->resize_mode;
             node->props.image.tint_color = props->tint_color;
+            node->props.image.opacity = props->opacity;
             node->props.image.border_tl_radius =
                 props->border_top_left_radius > 0 ? props->border_top_left_radius : props->border_radius;
             node->props.image.border_tr_radius =
@@ -3711,7 +3748,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text_input.border_color = props->border_color;
             node->props.text_input.border_width = props->border_width;
             node->props.text_input.border_radius = props->border_radius;
-            node->props.text_input.opacity = props->opacity ? props->opacity : 255U;
+            node->props.text_input.opacity = props->opacity;
             node->props.text_input.color = props->color;
             node->props.text_input.font_size = props->font_size;
             strncpy(node->props.text_input.font_family, props->font_family, ER_FONT_FAMILY_MAX);
@@ -3731,7 +3768,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.border_color = props->border_color;
             node->props.view.border_width = props->border_width;
             node->props.view.border_radius = props->border_radius;
-            node->props.view.opacity = props->opacity ? props->opacity : 255U;
+            node->props.view.opacity = props->opacity;
             node->modal_visible = props->modal_visible;
             node->modal_backdrop_color = props->backdrop_color;
             /* Propagate visibility to the layout so the modal takes no space when hidden. */

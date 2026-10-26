@@ -247,6 +247,7 @@ typedef struct
     int16_t letter_spacing;
     uint8_t span_count;                  /**< 0 = use text[]; >0 = use spans[]. */
     ERTextSpan spans[ER_TEXT_MAX_SPANS]; /**< Inline span descriptors. */
+    uint8_t opacity;                     /**< 0–255. */
 } ERTextProps;
 
 /**
@@ -262,6 +263,7 @@ typedef struct
     int16_t border_tr_radius;
     int16_t border_br_radius;
     int16_t border_bl_radius;
+    uint8_t opacity; /**< 0–255. */
 } ERImageProps;
 
 /**
@@ -612,6 +614,16 @@ void er_mark_dirty_upward(ERNode* node);
  * @param[in,out] node  Node whose ancestor chain should be invalidated.
  */
 void er_mark_dirty_upward_visual(ERNode* node);
+
+/**
+ * @brief Marks a node dirty after its own composited opacity changed.
+ *
+ * Visual-only for the node's own fade cache, but a content change to an ancestor's: the ancestor's cache
+ * holds this node at its old alpha.
+ *
+ * @param[in,out] node  Node whose opacity changed.
+ */
+void er_mark_dirty_upward_opacity(ERNode* node);
 
 /**
  * @brief Requests a layout pass on the next er_commit() (the compositor's private layout-dirty flag).
