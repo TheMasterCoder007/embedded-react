@@ -133,6 +133,19 @@ function printBind(node: IrNode, bind: AnimBind, index: number): string[] {
   const interp = bind.interp;
   const name = `interp_${node.id}_${index}`;
   const input = interp.input.map(floatLit).join(', ');
+  if (interp.colors) {
+    const colors = interp.colors
+      .map(c => `0x${c.toString(16).padStart(8, '0').toUpperCase()}u`)
+      .join(', ');
+    return [
+      `    {`,
+      `        static const ERColorInterpolation ${name} = { { ${input} }, { ${colors} }, ` +
+        `${interp.input.length}, ${interp.exLeft}, ${interp.exRight} };`,
+      `        er_anim_value_bind_color(${bind.cVar}, ${node.id}, ${bind.prop}, &${name});`,
+      `    }`,
+    ];
+  }
+
   const output = interp.output.map(floatLit).join(', ');
   const table =
     node.type === 'ER_NODE_ARC'

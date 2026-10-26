@@ -247,6 +247,7 @@ typedef struct
     int16_t letter_spacing;
     uint8_t span_count;                  /**< 0 = use text[]; >0 = use spans[]. */
     ERTextSpan spans[ER_TEXT_MAX_SPANS]; /**< Inline span descriptors. */
+    uint8_t opacity;                     /**< 0–255. */
 } ERTextProps;
 
 /**
@@ -262,6 +263,7 @@ typedef struct
     int16_t border_tr_radius;
     int16_t border_br_radius;
     int16_t border_bl_radius;
+    uint8_t opacity; /**< 0–255. */
 } ERImageProps;
 
 /**

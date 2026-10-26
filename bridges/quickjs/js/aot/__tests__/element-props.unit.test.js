@@ -435,12 +435,8 @@ describe('declared style keys', () => {
   });
 
   it.each([
-    ['opacity', '<Text style={{opacity: 0.5}}>x</Text>', 'Text'],
-    [
-      'an animated opacity',
-      '<Animated.Text style={{opacity: a}}>x</Animated.Text>',
-      'Text',
-    ],
+    ['opacity', '<Switch style={{opacity: 0.5}} />', 'Switch'],
+    ['an animated opacity', '<Switch style={{opacity: a}} />', 'Switch'],
     [
       'backgroundColor',
       "<Text style={{backgroundColor: '#fff'}}>x</Text>",
@@ -828,7 +824,6 @@ describe('animated style keys', () => {
   });
 
   it.each([
-    ['opacity', '<TextInput style={{opacity: a}} />', 'TextInput'],
     [
       'backgroundColor',
       '<TextInput style={{backgroundColor: a}} />',
@@ -844,4 +839,51 @@ describe('animated style keys', () => {
       );
     },
   );
+
+  it.each([
+    ['Text', '<Text style={{opacity: a}}>x</Text>'],
+    ['Image', '<Image source="logo" style={{opacity: a}} />'],
+    ['TextInput', '<TextInput style={{opacity: a}} />'],
+  ])('binds an animated opacity on a <%s>', (_tag, jsx) => {
+    expect(gen(jsx)).toContain(
+      'er_anim_value_bind(s_av_a, n0, ER_PROP_OPACITY);',
+    );
+  });
+
+  it('binds a color through an interpolation onto colors', () => {
+    const c = gen(
+      "<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: ['#ff0000', 'blue']})}} />",
+    );
+    expect(c).toContain(
+      'static const ERColorInterpolation interp_n0_0 = { { 0.0f, 1.0f }, { 0xFFFF0000u, 0xFF0000FFu }, 2, ' +
+        'ER_EXTRAPOLATE_EXTEND, ER_EXTRAPOLATE_EXTEND };',
+    );
+    expect(c).toContain(
+      'er_anim_value_bind_color(s_av_a, n0, ER_PROP_BACKGROUND_COLOR, &interp_n0_0);',
+    );
+  });
+
+  it.each([
+    ['the value itself', '<Text style={{color: a}}>x</Text>', 'color'],
+    [
+      'a numeric outputRange',
+      '<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: [0, 1]})}} />',
+      'backgroundColor',
+    ],
+  ])('refuses %s on a color key', (_what, jsx, key) => {
+    expect(errorOf(jsx)).toBe(`AOT: an animated "${key}" needs colors`);
+  });
+
+  it('refuses an outputRange of colors on a numeric key', () => {
+    expect(
+      errorOf(
+        "<View style={{opacity: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})}} />",
+      ),
+    ).toBe('AOT: an animated "opacity" takes numbers, not colors');
+    expect(
+      errorOf(
+        "<View style={{transform: [{scale: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})}]}} />",
+      ),
+    ).toBe('AOT: an animated "scale" takes numbers, not colors');
+  });
 });

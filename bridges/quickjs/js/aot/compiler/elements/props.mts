@@ -121,13 +121,14 @@ const VIEW_STYLE = [
   'opacity',
 ];
 
-/** What the engine draws an Image with, beyond its props: the corners its bitmap is clipped to. */
+/** What the engine draws an Image with, beyond its props: the corners its bitmap is clipped to, and its opacity. */
 const IMAGE_STYLE = [
   'borderRadius',
   'borderTopLeftRadius',
   'borderTopRightRadius',
   'borderBottomRightRadius',
   'borderBottomLeftRadius',
+  'opacity',
 ];
 
 /** What the engine draws a Text with. */
@@ -137,6 +138,7 @@ const TEXT_STYLE = [
   'fontWeight',
   'lineHeight',
   'letterSpacing',
+  'opacity',
 ];
 
 /** What the engine draws a Modal's own box with. */
@@ -155,7 +157,10 @@ const TEXT_INPUT_STYLE = [...MODAL_STYLE, 'color', 'fontSize'];
 const VIEW_ANIMATED = ['opacity', 'backgroundColor', 'transform'];
 
 /** The style keys the engine animates on a Text. */
-const TEXT_ANIMATED = ['color', 'transform'];
+const TEXT_ANIMATED = ['color', 'opacity', 'transform'];
+
+/** The style keys the engine animates on an Image or a TextInput. */
+const OPACITY_ANIMATED = ['opacity', 'transform'];
 
 /** What a span of a multi-span <Text> carries; the rest of its look comes from the outer <Text>. */
 const SPAN_STYLE = ['color', 'fontSize', 'fontWeight', 'letterSpacing'];
@@ -242,6 +247,8 @@ const ELEMENTS: Record<string, ElementSpec> = {
     [...HOST_PROPS, 'source', 'imageName', 'resizeMode', 'tintColor'],
     [...LAYOUT_STYLE, ...IMAGE_STYLE],
     'none',
+    {},
+    OPACITY_ANIMATED,
   ),
   Switch: element(
     'Switch',
@@ -287,6 +294,7 @@ const ELEMENTS: Record<string, ElementSpec> = {
         'returnKeyType',
       ].map(name => [name, NO_TEXT_INPUT_FIELD]),
     ),
+    OPACITY_ANIMATED,
   ),
   ActivityIndicator: element(
     'ActivityIndicator',
@@ -656,8 +664,9 @@ export function checkAnimatedStyleKey(
   throw at(
     aotError(
       `AOT: an animated "${key}" has no effect on <${spec.tag}>`,
-      'the engine animates opacity and backgroundColor on a View, ScrollView, Pressable or Modal, color on ' +
-        'a Text, and transform anywhere. Animate a wrapping <View>, or drive the value from state.',
+      'the engine animates opacity on a View, ScrollView, Pressable, Modal, Text, Image or TextInput, ' +
+        'backgroundColor on a View, ScrollView, Pressable or Modal, color on a Text, and transform anywhere. ' +
+        'Animate a wrapping <View>, or drive the value from state.',
     ),
     node,
   );

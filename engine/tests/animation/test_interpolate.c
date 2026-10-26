@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 
+#include <math.h>
 #include <stdio.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -149,6 +150,36 @@ static int test_degenerate(void)
     return s_fail;
 }
 
+/**
+ * @brief Verifies the color mapping: per-channel lerp, multi-stop, extrapolation and degenerate input.
+ *
+ * @return 0 on success, 1 on failure.
+ */
+static int test_color(void)
+{
+    ERColorInterpolation ci = {
+        {0.0f, 1.0f}, {0xFF000000U, 0x80FF0000U}, 2, ER_EXTRAPOLATE_EXTEND, ER_EXTRAPOLATE_CLAMP};
+    CHECK(er_interpolate_color(0.0f, &ci) == 0xFF000000U, "color: start");
+    CHECK(er_interpolate_color(1.0f, &ci) == 0x80FF0000U, "color: end");
+    CHECK(er_interpolate_color(0.5f, &ci) == 0xC0800000U, "color: every channel, alpha included, lerps");
+    /* Extending past the start drives red below 0 and alpha above 255; both clamp. */
+    CHECK(er_interpolate_color(-1.0f, &ci) == 0xFF000000U, "color: extend clamps each channel");
+    CHECK(er_interpolate_color(2.0f, &ci) == 0x80FF0000U, "color: clamp holds the end");
+    ci.extrapolate_left = ER_EXTRAPOLATE_IDENTITY;
+    CHECK(er_interpolate_color(-1.0f, &ci) == 0xFF000000U, "color: identity holds the endpoint");
+    CHECK(er_interpolate_color(NAN, &ci) == 0x80FF0000U, "color: NaN maps to the last color");
+
+    const ERColorInterpolation three = {
+        {0.0f, 1.0f, 2.0f}, {0xFFFF0000U, 0xFF00FF00U, 0xFF0000FFU}, 3, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+    CHECK(er_interpolate_color(1.5f, &three) == 0xFF008080U, "color: second segment");
+    CHECK(er_interpolate_color(1.0f, &three) == 0xFF00FF00U, "color: on a breakpoint");
+
+    ci.point_count = 1;
+    CHECK(er_interpolate_color(0.5f, &ci) == 0U, "color: one point is transparent");
+    CHECK(er_interpolate_color(0.5f, NULL) == 0U, "color: NULL is transparent");
+    return s_fail;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Entry point
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -164,6 +195,7 @@ int main(void)
     test_three_point_range();
     test_extrapolation();
     test_degenerate();
+    test_color();
 
     if (s_fail)
     {

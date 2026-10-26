@@ -39,7 +39,7 @@ while the code that breaks it is still one line.
   compile-time-constant object.
 - Every element takes a fixed set of props, style keys, and children; anything else is an `AOT:`
   error at the prop. That covers a prop the element does not have, a style key the engine does not
-  draw on it (`opacity` on a `<Text>`, `borderWidth` on an `<Image>`; see
+  draw on it (`backgroundColor` on a `<Text>`, `borderWidth` on an `<Image>`; see
   [Styles](../api/styles.md#flow-b)), text outside a `<Text>`, and children on an `<Image>`,
   `<Switch>`, `<TextInput>` or `<ActivityIndicator>`. `testID` and the accessibility props are
   accepted and ignored everywhere but `<FlatList>`.

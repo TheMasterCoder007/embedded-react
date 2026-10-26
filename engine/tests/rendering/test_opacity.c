@@ -16,6 +16,7 @@
 
 #include "er_scene.h"
 #include "native_renderer.h"
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -778,6 +779,93 @@ int main(void)
         er_node_destroy(root);
     }
 #endif /* ERUI_TRANSFORMS_FULL */
+
+    /* -----------------------------------------------------------------------
+     * Image and Text opacity: each is one leaf draw, faded at a draw alpha. A red image at 128 over
+     * white lands on the same pink as a View at 128; a Text at 0 paints nothing.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+        static const uint32_t red4x4[16] = {
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+            0xFFFF0000U,
+        };
+        er_image_load("red4x4", red4x4, 4, 4);
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* img = er_node_create(ER_NODE_IMAGE);
+        ERProps ip = props_default();
+        ip.width = 4;
+        ip.height = 4;
+        strncpy(ip.image_name, "red4x4", ER_IMAGE_NAME_MAX);
+        ip.resize_mode = ER_RESIZE_STRETCH;
+        ip.opacity = 128U;
+        er_node_set_props(img, &ip);
+
+        ERNode* txt = er_node_create(ER_NODE_TEXT);
+        ERProps tp = props_default();
+        tp.position = ER_POS_ABSOLUTE;
+        tp.left = 0;
+        tp.top = 8;
+        tp.width = FB_W;
+        tp.height = 20;
+        strncpy(tp.text, "MMMM", ER_TEXT_MAX);
+        tp.color = 0xFF000000U;
+        tp.font_size = 16;
+        tp.opacity = 0U;
+        er_node_set_props(txt, &tp);
+
+        er_tree_append_child(root, img);
+        er_tree_append_child(root, txt);
+        er_tree_set_root(root);
+        er_commit();
+
+        const uint32_t p = px(&tc, 1, 1);
+        if (((p >> 16) & 0xFFU) != 0xFFU || ((p >> 8) & 0xFFU) != 0x7FU || (p & 0xFFU) != 0x7FU)
+            return fail("image opacity=128: red over white should be pink");
+        for (int y = 8; y < 28; y++)
+            for (int x = 0; x < FB_W; x++)
+                if (px(&tc, x, y) != 0xFFFFFFFFU)
+                    return fail("text opacity=0: the text should paint nothing");
+
+        /* The same text, opaque, does paint: the check above is not passing on an empty draw. */
+        tp.opacity = 255U;
+        er_node_set_props(txt, &tp);
+        er_commit();
+        bool inked = false;
+        for (int y = 8; y < 28 && !inked; y++)
+            for (int x = 0; x < FB_W && !inked; x++)
+                inked = px(&tc, x, y) != 0xFFFFFFFFU;
+        if (!inked)
+            return fail("text opacity=255: the text should paint");
+
+        er_tree_remove_child(root, txt);
+        er_tree_remove_child(root, img);
+        er_node_destroy(txt);
+        er_node_destroy(img);
+        er_node_destroy(root);
+    }
 
     return EXIT_SUCCESS;
 }

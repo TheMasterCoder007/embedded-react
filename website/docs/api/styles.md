@@ -118,15 +118,18 @@ border widths and colors, the shadow keys and `elevation`, `transformOrigin`, `f
 It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
 The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on
 `View`, `ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`, and on `TextInput` without the
-per-corner radii. `borderRadius` and the per-corner radii work on `Image`. `color`, `fontSize`,
-`fontWeight`, `lineHeight` and `letterSpacing` work on `Text`;
+per-corner radii. `borderRadius`, the per-corner radii and `opacity` work on `Image`. `color`,
+`fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` and `opacity` work on `Text`;
 `TextInput` takes `color` and `fontSize`, and `ActivityIndicator` takes `color` as its tint. A nested
 `<Text>` span takes `color`, `fontSize`, `fontWeight` and `letterSpacing` only.
 
 ## Animated values in styles
 
-An `Animated.Value` can sit directly in any `transform` axis on any element, in `backgroundColor` and
-`opacity` on a `View`, `ScrollView`, `Pressable` or `Modal`, in `color` on a `Text`, and in a `Dial`'s
-`value`/`valueStart`; the engine animates nothing else, so Flow B rejects it. The `Animated.*`
+An `Animated.Value` can sit directly in any `transform` axis on any element, in `opacity` on a `View`,
+`ScrollView`, `Pressable`, `Modal`, `Text`, `Image` or `TextInput`, and in a `Dial`'s
+`value`/`valueStart`. `backgroundColor` on a `View`, `ScrollView`, `Pressable` or `Modal` and `color` on
+a `Text` take an interpolation onto colors:
+`v.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})`. The engine animates nothing else,
+so Flow B rejects it. The `Animated.*`
 wrappers are pass-through. The engine binds the value to the property and drives it natively; no JavaScript runs per
 frame. See [Animated](./animated.md).

@@ -805,6 +805,81 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
+     * COLOR BINDINGS: a value drives backgroundColor and color only through a color mapping; a plain
+     * float bound to either is refused rather than written as a color.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* cv = er_node_create(ER_NODE_VIEW);
+        ERNode* ct = er_node_create(ER_NODE_TEXT);
+        ERProps cp = props_default();
+        cp.background_color = 0xFF123456U;
+        er_node_set_props(cv, &cp);
+        cp.color = 0xFF123456U;
+        er_node_set_props(ct, &cp);
+
+        ERAnimValueHandle ch = er_anim_value_create(0.0f);
+        er_anim_value_bind(ch, cv, ER_PROP_BACKGROUND_COLOR);
+        const ERInterpolation num = {{0.0f, 1.0f}, {0.0f, 1.0f}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_interpolated(ch, ct, ER_PROP_COLOR, &num);
+        er_anim_value_set(ch, 1.0f);
+        if (cv->props.view.background_color != 0xFF123456U || ct->props.text.color != 0xFF123456U)
+            return fail("color bind: a plain float bound to a color prop should be refused");
+
+        const ERColorInterpolation ci = {
+            {0.0f, 1.0f}, {0xFF000000U, 0xFFFFFFFFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_color(ch, cv, ER_PROP_BACKGROUND_COLOR, &ci);
+        er_anim_value_bind_color(ch, ct, ER_PROP_COLOR, &ci);
+        if (cv->props.view.background_color != 0xFFFFFFFFU || ct->props.text.color != 0xFFFFFFFFU)
+            return fail("color bind: binding should apply the current value at once");
+
+        ERAnimConfig ccfg = {0};
+        ccfg.type = ER_ANIM_TIMING;
+        ccfg.duration_ms = 100U;
+        er_anim_value_animate(ch, 0.0f, &ccfg);
+        embedded_renderer_tick(50U);
+        if (cv->props.view.background_color != 0xFF808080U || ct->props.text.color != 0xFF808080U)
+            return fail("color bind: animating the value should interpolate both colors");
+
+        /* setProps writes the static color; the binding puts the animated one back. */
+        er_node_set_props(cv, &cp);
+        if (cv->props.view.background_color != 0xFF808080U)
+            return fail("color bind: setProps should not clobber an animated color");
+
+        er_anim_value_destroy(ch);
+        er_node_destroy(cv);
+        er_node_destroy(ct);
+    }
+
+    /* -----------------------------------------------------------------------
+     * OPACITY ON TEXT AND IMAGE: both keep an opacity of their own, static and animated.
+     * ---------------------------------------------------------------------- */
+    {
+        ERNode* ot = er_node_create(ER_NODE_TEXT);
+        ERNode* oi = er_node_create(ER_NODE_IMAGE);
+        if (ot->props.text.opacity != 255U || oi->props.image.opacity != 255U)
+            return fail("text/image opacity: a fresh node should be opaque");
+        ERProps op = props_default();
+        op.opacity = 64U;
+        er_node_set_props(ot, &op);
+        er_node_set_props(oi, &op);
+        if (ot->props.text.opacity != 64U || oi->props.image.opacity != 64U)
+            return fail("text/image opacity: setProps should store a static opacity");
+
+        ERAnimValueHandle oh = er_anim_value_create(1.0f);
+        er_anim_value_bind(oh, ot, ER_PROP_OPACITY);
+        er_anim_value_bind(oh, oi, ER_PROP_OPACITY);
+        if (ot->props.text.opacity != 255U || oi->props.image.opacity != 255U)
+            return fail("text/image opacity: binding should apply the current value at once");
+        er_anim_value_set(oh, 0.5f);
+        if (ot->props.text.opacity != 128U || oi->props.image.opacity != 128U)
+            return fail("text/image opacity: an animated value should drive the opacity");
+
+        er_anim_value_destroy(oh);
+        er_node_destroy(ot);
+        er_node_destroy(oi);
+    }
+
+    /* -----------------------------------------------------------------------
      * NAN AND OUT-OF-RANGE VALUES: NaN fails every comparison, so a clamp alone would pass it on to the
      * opacity byte's cast, or to the compositor's (int)tp_translate_x, both undefined in C. A NaN value is
      * 0 (for a transform component, unset), and a translate is clamped to what an int holds.

@@ -30,6 +30,7 @@ import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn, wideInitial} from './collect.mts';
 import {lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
+import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
 import type {
@@ -85,7 +86,10 @@ interface FlatAnimation {
 /** A `.interpolate({...})` config, folded: the breakpoints and the ER_EXTRAPOLATE_* mode at each end. */
 export interface Interpolation {
   input: number[];
+  /** The numeric outputs; empty when the outputRange holds colors. */
   output: number[];
+  /** ARGB8888 outputs, when the outputRange holds colors. */
+  colors?: number[];
   exLeft: string;
   exRight: string;
 }
@@ -105,6 +109,9 @@ interface LoopSpec {
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The style keys an animated value drives only through an interpolation onto colors. */
+export const ANIM_COLOR_KEYS = new Set(['backgroundColor', 'color']);
 
 /** Style key → the ERAnimProp(s) an animated value binds to. */
 export const ANIM_STYLE_PROPS: Record<string, string[]> = {
@@ -422,18 +429,23 @@ export function parseInterp(
           (property.key as t.StringLiteral).value) === key,
     )?.value;
 
-  // Fold an interpolation range into numeric breakpoints; ranges must be array literals for AOT emission.
-  const arr = (node: t.Node | undefined, name: string): number[] => {
+  // Fold an interpolation range into its breakpoints; ranges must be array literals for AOT emission.
+  const arr = (node: t.Node | undefined, name: string): unknown[] => {
     if (node?.type !== 'ArrayExpression') {
       throw aotError(`AOT: .interpolate() ${name} must be an array literal`);
     }
-    return node.elements.map(e => Number(evalStatic(e!, env.consts ?? {})));
+    return node.elements.map(e => evalStatic(e!, env.consts ?? {}));
   };
 
-  // inputRange and outputRange define the piecewise mapping and must line up point-for-point.
-  const input = arr(get('inputRange'), 'inputRange');
-  const output = arr(get('outputRange'), 'outputRange');
-  if (input.length < 2 || input.length !== output.length) {
+  // inputRange and outputRange define the piecewise mapping and must line up point-for-point. An
+  // outputRange of strings maps onto colors.
+  const input = arr(get('inputRange'), 'inputRange').map(Number);
+  const outputValues = arr(get('outputRange'), 'outputRange');
+  const colors = outputValues.every(v => typeof v === 'string')
+    ? outputValues.map(v => parseColor(v) >>> 0)
+    : undefined;
+  const output = colors ? [] : outputValues.map(Number);
+  if (input.length < 2 || input.length !== outputValues.length) {
     throw aotError(
       'AOT: .interpolate() inputRange and outputRange must be the same length (>= 2)',
     );
@@ -457,6 +469,7 @@ export function parseInterp(
   return {
     input,
     output,
+    ...(colors && {colors}),
     exLeft: ex(get('extrapolateLeft') ?? both),
     exRight: ex(get('extrapolateRight') ?? both),
   };

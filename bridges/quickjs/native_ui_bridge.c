@@ -4531,7 +4531,8 @@ static void read_extrapolate(JSContext* ctx, JSValueConst obj, const char* key, 
  *
  * interp = { inputRange:[…], outputRange:[…], extrapolate?, extrapolateLeft?, extrapolateRight? }.
  * `extrapolate` sets both ends; the per-end keys override it. Tokens: "extend" (default), "clamp",
- * "identity".
+ * "identity". On `backgroundColor` and `color` the outputRange holds colors, any form a style color
+ * takes; one that does not parse leaves the prop unbound.
  *
  * @return JS_UNDEFINED.
  */
@@ -4565,9 +4566,12 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     {
         return JS_UNDEFINED;
     }
+    const bool color = prop == ER_PROP_BACKGROUND_COLOR || prop == ER_PROP_COLOR;
 
     ERInterpolation interp;
+    ERColorInterpolation color_interp;
     memset(&interp, 0, sizeof(interp));
+    memset(&color_interp, 0, sizeof(color_interp));
     interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
     interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
 
@@ -4578,6 +4582,7 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     read_extrapolate(ctx, argv[3], "extrapolateRight", &interp.extrapolate_right);
 
     /* Read inputRange / outputRange arrays (clamped to ER_INTERPOLATE_MAX_POINTS). */
+    bool outputs_ok = true;
     JSValue in = JS_GetPropertyStr(ctx, argv[3], "inputRange");
     JSValue out = JS_GetPropertyStr(ctx, argv[3], "outputRange");
     if (JS_IsArray(in) && JS_IsArray(out))
@@ -4595,11 +4600,18 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
             JSValue iv = JS_GetPropertyUint32(ctx, in, (uint32_t)i);
             JSValue ov = JS_GetPropertyUint32(ctx, out, (uint32_t)i);
             double di = 0.0;
-            double dovv = 0.0;
             JS_ToFloat64(ctx, &di, iv);
-            JS_ToFloat64(ctx, &dovv, ov);
             interp.input_range[i] = (float)di;
-            interp.output_range[i] = (float)dovv;
+            if (color)
+            {
+                outputs_ok = outputs_ok && to_color(ctx, ov, &color_interp.output_range[i]);
+            }
+            else
+            {
+                double dovv = 0.0;
+                JS_ToFloat64(ctx, &dovv, ov);
+                interp.output_range[i] = (float)dovv;
+            }
             JS_FreeValue(ctx, iv);
             JS_FreeValue(ctx, ov);
         }
@@ -4608,7 +4620,19 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     JS_FreeValue(ctx, in);
     JS_FreeValue(ctx, out);
 
-    if (interp.point_count >= 2)
+    if (interp.point_count < 2 || !outputs_ok)
+    {
+        return JS_UNDEFINED;
+    }
+    if (color)
+    {
+        memcpy(color_interp.input_range, interp.input_range, sizeof(color_interp.input_range));
+        color_interp.point_count = interp.point_count;
+        color_interp.extrapolate_left = interp.extrapolate_left;
+        color_interp.extrapolate_right = interp.extrapolate_right;
+        er_anim_value_bind_color((ERAnimValueHandle)vh, node, prop, &color_interp);
+    }
+    else
     {
         er_anim_value_bind_interpolated((ERAnimValueHandle)vh, node, prop, &interp);
     }
