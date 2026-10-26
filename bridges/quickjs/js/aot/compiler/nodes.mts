@@ -483,12 +483,14 @@ export function lowerEventHandler(
   const layout = (attr.name as t.JSXIdentifier).name === 'onLayout';
   if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
     // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
-    // Its onLayout use gets a handler of its own, since only that event carries the layout rect.
-    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}${layout ? '_layout' : ''}`;
-    let handlerName = out.cbEmitted.get(callbackKey);
+    // Its onLayout use gets a handler of its own, since only that event carries the layout rect. The key's
+    // `layout:` and the name's `er_cbl_` can't come from an identifier, so they never meet another callback.
+    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
+    const emittedKey = layout ? `layout:${callbackKey}` : callbackKey;
+    let handlerName = out.cbEmitted.get(emittedKey);
     if (!handlerName) {
-      handlerName = `er_cb_${callbackKey}`;
-      out.cbEmitted.set(callbackKey, handlerName);
+      handlerName = `${layout ? 'er_cbl_' : 'er_cb_'}${callbackKey}`;
+      out.cbEmitted.set(emittedKey, handlerName);
       out.handlers.push({
         kind: 'callback',
         name: handlerName,

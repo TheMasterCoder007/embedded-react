@@ -1746,6 +1746,24 @@ describe('AOT touch drag', () => {
     ).toThrow(/only an onLayout event carries a layout rect/);
   });
 
+  it('keeps an onLayout handler apart from a callback whose name ends in _layout', () => {
+    const c = gen(`${PRE}
+      import { useRef, useCallback } from 'react';
+      export function App() {
+        const top = useRef(0);
+        const n = useRef(0);
+        const bump = useCallback((e) => { top.current = e.layout.y; }, []);
+        const bump_layout = useCallback(() => { n.current = n.current + 1; }, []);
+        return <View onLayout={bump} onTouchStart={bump_layout} />;
+      }`);
+    expect(c).toMatch(
+      /er_event_set\([^,]+, ER_EVENT_LAYOUT, er_cbl_bump, NULL\);/,
+    );
+    expect(c).toMatch(
+      /er_event_set\([^,]+, ER_EVENT_TOUCH_START, er_cb_bump_layout, NULL\);/,
+    );
+  });
+
   it('gives a useCallback shared with onLayout a handler of its own for that event', () => {
     const c = gen(`${PRE}
       import { useRef, useCallback } from 'react';
@@ -1755,7 +1773,7 @@ describe('AOT touch drag', () => {
         return <View onLayout={bump} onTouchStart={bump} />;
       }`);
     expect(c).toMatch(
-      /er_event_set\([^,]+, ER_EVENT_LAYOUT, er_cb_bump_layout, NULL\);/,
+      /er_event_set\([^,]+, ER_EVENT_LAYOUT, er_cbl_bump, NULL\);/,
     );
     expect(c).toMatch(
       /er_event_set\([^,]+, ER_EVENT_TOUCH_START, er_cb_bump, NULL\);/,
