@@ -320,6 +320,20 @@ describe('vector IR: state-driven drawings', () => {
     );
   });
 
+  it("cascades the <Svg>'s paint to shapes that don't set their own", () => {
+    const {element} = emit(
+      `<Svg width={10} height={10} fill="none" stroke={on ? '#f00' : '#00f'} strokeWidth={3}>
+        <Circle cx={n} cy={5} r={2} />
+        <Circle cx={5} cy={5} r={2} stroke="#0f0" />
+      </Svg>`,
+    );
+    const [inherited, own] = drawingOf(element).paints;
+    expect(inherited.fill).toEqual({kind: 'static', argb: 0});
+    expect(inherited.stroke).toMatchObject({kind: 'state'});
+    expect(inherited.strokeWidth).toEqual({kind: 'number', value: 3});
+    expect(own.stroke).toEqual({kind: 'static', argb: 0xff00ff00});
+  });
+
   it('gives each gradient a table place, used only while its condition holds', () => {
     const {element} = emit(
       `<Svg width={10} height={10}><Circle cx={n} cy={5} r={2}

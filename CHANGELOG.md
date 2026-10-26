@@ -18,6 +18,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Fixed
 
+- Paint props on `<Svg>` now apply to its shapes in both flows, like a `<G>` around them all. Flow B
+  no longer refuses them.
 - Named colors now resolve the same in Flow A styles, SVG paint and Flow B: one shared list with CSS
   values (`green` is `#008000`), matched in any case.
 - Types: `index.d.ts` now matches the runtime for `StyleSheet`, `Animated`, `Easing` and `flexBasis`

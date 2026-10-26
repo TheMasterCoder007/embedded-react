@@ -25,6 +25,7 @@ import {
 } from './props.js';
 import {
   flattenSvg,
+  PAINT_PROPS,
   warnVectorCaps,
   scaleVectorArtifact,
   encodeVectorGradients,
@@ -286,8 +287,9 @@ function svgSourceBoxChanged(prevProps, nextProps) {
  *
  * The vector flag tracks the op-tape's actual inputs. A source artifact tape depends on the source
  * reference and the resolved box; a declarative <Svg><Path/></Svg> tape depends on the shape
- * children, viewBox, and the direct width/height props (flattenSvg never reads style). So a
- * position-only style move of either kind — the interactive-drag hot path — skips the upload.
+ * children, viewBox, the direct width/height props, and its own paint props, which cascade to its
+ * shapes (flattenSvg never reads style). So a position-only style move of either kind — the
+ * interactive-drag hot path — skips the upload.
  *
  * Props buildProps never reads still set the props flag when they change — conservative, and only
  * paid when such a value actually changed.
@@ -340,7 +342,12 @@ function diffUpdate(type, prevProps, nextProps) {
         }
       // fall through: on other types these are ordinary (ignored or passthrough) props
       default:
-        if (!deepEqualProps(a, b)) props = true;
+        if (!deepEqualProps(a, b)) {
+          props = true;
+          // A source tape ignores root paint.
+          if (type === 'Svg' && !nextProps.source && PAINT_PROPS.includes(key))
+            vector = true;
+        }
     }
   };
   for (const key in prevProps) diffKey(key);

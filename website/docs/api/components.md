@@ -364,9 +364,9 @@ import gauge from './gauge.svg';
 | `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored                               |
 | `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
 | `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers                                                                                          |
-| paint props       |                   | Go on `<G>` and the shapes; set on `<Svg>` itself they draw nothing (Flow B refuses them)                                                                                       |
+| paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
 
-**Paint props**, on `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
+**Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
 `fillRule` (`nonzero`/`evenodd`), and `fillGrad`/`strokeGrad`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
