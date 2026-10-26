@@ -223,13 +223,13 @@ stage(OUT_DIR);
 
 // Stage the prebuilt module + host page into the npm package's sim/ dir so `npx embedded-react dev` ships
 // with it (the `files` whitelist includes sim/). This is what CI builds + publishes; not committed.
-const PKG_SIM = resolve(HERE, '../../bridges/quickjs/js/sim');
+const PKG_SIM = resolve(HERE, '../../packages/embedded-react/sim');
 mkdirSync(PKG_SIM, {recursive: true});
 stage(PKG_SIM);
 copyFileSync(resolve(HERE, 'index.html'), resolve(PKG_SIM, 'index.html'));
 
 console.log(
-  '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + bridges/quickjs/js/sim/',
+  '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + packages/embedded-react/sim/',
 );
 console.log(
   '  repo preview: node tools/web-sim/dev.mjs [demo]   ·   consumer CLI: npx embedded-react dev',

@@ -4,7 +4,7 @@
 #
 # Flow B needs NO QuickJS (the app is compiled C), so unlike the esp32-s3 example this only pulls in the
 # embedded-react engine + backend — from the LOCAL monorepo checkout when building in-tree, else fetched
-# from GitHub. The AOT app itself (bridges/quickjs/js/dist/app.gen.c) is generated separately by
+# from GitHub. The AOT app itself (packages/embedded-react/dist/app.gen.c) is generated separately by
 # `npm run aot` and compiled by main/ (see main/CMakeLists.txt).
 cmake_minimum_required(VERSION 3.16)
 

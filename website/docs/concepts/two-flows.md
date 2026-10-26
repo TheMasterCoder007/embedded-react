@@ -31,7 +31,7 @@ hosts a React reconciler that drives the engine as the app runs.
 ```text
 JSX  →  esbuild bundle  →  QuickJS bytecode  →  app.erpkg  →  flashed to the device
                                                                    ↓
-                                    React reconciler, on QuickJS   (bridges/quickjs/js)
+                                    React reconciler, on QuickJS   (packages/embedded-react)
                                                                    ↓
                                     NativeUI bridge → er_scene.h   (bridges/quickjs/*.c)
                                                                    ↓
@@ -71,18 +71,18 @@ version it was built for, so a mismatched build shows an error panel rather than
 The runtime is deliberately small. It creates its JavaScript context with only what React needs:
 base objects, `RegExp`, `JSON`, `Map`/`Set`, `Promise`, and `Date.now()`/`performance.now()` on
 the engine's clock. There are no `Date` objects, no `Proxy`, no typed arrays unless the firmware
-opts in. The same profile runs on the device, the desktop and the simulator, so nothing works in
+opts in. The same profile runs on the device, the desktop, and the simulator, so nothing works in
 one place and not another.
 
 ## Flow B: JSX compiled to C
 
 The thing React Native cannot do. An ahead-of-time compiler consumes the same JSX and **emits C**
 that calls the engine directly. There is no JavaScript engine on the device, no garbage collector,
-no reconciler. The component tree, the `useState` state machine, event handlers and animations are
+no reconciler. The component tree, the `useState` state machine, event handlers, and animations are
 all resolved at compile time.
 
 ```text
-JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c/.h + assets.generated.c/.h
+JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.gen.c/.h + assets.generated.c/.h
                                                                    ↓
                                                     compiled into the firmware
                                                                    ↓
@@ -91,7 +91,7 @@ JSX  →  AOT compiler (bridges/quickjs/js/aot)  →  app.gen.c/.h + assets.gene
 
 `npx embedded-react build --aot --screen 240x320` writes the generated C. Your firmware compiles it
 in and calls `er_app_build()` at boot. Everything the engine does at runtime in Flow A it still does
-here: layout, rendering, touch, scrolling and animation are engine features, not JavaScript ones.
+here: layout, rendering, touch, scrolling, and animation are engine features, not JavaScript ones.
 
 **What you get**
 
@@ -140,7 +140,7 @@ Two things make the choice cheaper than it looks:
 ## Why one engine
 
 Both flows end at the same place: `er_scene.h`, the engine's C API for creating nodes, setting
-props and committing a frame. The engine has no opinion about who calls it. That neutrality is what
+props, and committing a frame. The engine has no opinion about who calls it. That neutrality is what
 makes Flow B possible at all, and it keeps the two flows honest with each other: a layout or
 rendering fix lands once and both flows get it. [Engine and backends](./engine-and-backends.md)
 explains the layers underneath.

@@ -41,7 +41,7 @@ idf.py set-target esp32s3
 idf.py build flash monitor          # "No config loaded" on the panel means the firmware works
 ```
 
-Then, from your app project (or `cd bridges/quickjs/js && npm run pack` for a repo demo):
+Then, from your app project (or `cd packages/embedded-react && npm run pack` for a repo demo):
 
 ```bash
 npx embedded-react build                                                  # → dist/app.erpkg

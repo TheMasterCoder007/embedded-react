@@ -7,7 +7,7 @@ project(embedded-react-simulator C)
 # The same SDL + QuickJS + engine host as the desktop demo: it reuses the shared host core
 # (examples/linux/host.c) and adds a watch + live-reload loop (sim_main.c). The demo
 # (examples/linux) stays a plain demo; this is the dedicated dev simulator, launched by
-# `npm run sim` (bridges/quickjs/js), which runs esbuild --watch to rewrite the bundle on save.
+# `npm run sim` (packages/embedded-react), which runs esbuild --watch to rewrite the bundle on save.
 #
 # Configure + build once:
 #   cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake]

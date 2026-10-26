@@ -72,14 +72,14 @@ target_link_libraries(embedded-react-desktop
 )
 
 # Copy the packed config container into the slot next to the exe so the demo runs it by default. The
-# container is produced out-of-band (`npm run pack` in bridges/quickjs/js, which bundles + bytecode-
+# container is produced out-of-band (`npm run pack` in packages/embedded-react, which bundles + bytecode-
 # compiles + bakes a demo from the top-level demos/ folder into a single app.erpkg). copy_config.cmake
 # no-ops when it's missing — the demo still builds and shows a "No config loaded" panel at runtime,
 # just as firmware boots without a config until one is uploaded. Re-run `npm run pack` then rebuild
 # (or drop a fresh app.erpkg next to the exe) to "upload" a new config.
 add_custom_command(TARGET embedded-react-desktop POST_BUILD
         COMMAND ${CMAKE_COMMAND}
-        -DCONFIG_SRC=${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist/app.erpkg
+        -DCONFIG_SRC=${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist/app.erpkg
         -DCONFIG_DST=$<TARGET_FILE_DIR:embedded-react-desktop>/app.erpkg
         -P ${CMAKE_CURRENT_SOURCE_DIR}/copy_config.cmake
 )

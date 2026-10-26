@@ -30,7 +30,7 @@ import {existsSync, mkdirSync} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const JS = resolve(REPO, 'bridges/quickjs/js'); // where esbuild + react + the library live
+const JS = resolve(REPO, 'packages/embedded-react'); // where esbuild + react + the library live
 
 // esbuild + react + the reconciler are installed in the JS package, not here — resolve from there.
 const require = createRequire(resolve(JS, 'package.json'));

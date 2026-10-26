@@ -16,7 +16,7 @@ npm create embedded-react@latest my-watch -- --template watch-face
 A scaffolded copy has `npm run dev` (the browser simulator), `npm run dev:device` (hot reload on a
 board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `app.gen.c` at
 the panel size the demo targets). Inside the repository, `npm run sim -- thermostat` and
-`npm run pack -- …` from `bridges/quickjs/js` build a demo against the in-repo library with no
+`npm run pack -- …` from `packages/embedded-react` build a demo against the in-repo library with no
 install. `npm run aot` does too, but reads the panel size from the environment and otherwise assumes
 800×480, where the thermostat does not compile:
 `ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
@@ -100,9 +100,9 @@ the first render's state, hence the `pageRef` mirror.
 ## Adding a demo
 
 ```bash
-cd bridges/quickjs/js
+cd packages/embedded-react
 npm run create -- my-app     # creates demos/my-app, wired to the in-repo build tools
-cd ../../../demos/my-app
+cd ../../demos/my-app
 npm run sim
 ```
 

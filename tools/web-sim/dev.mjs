@@ -18,7 +18,7 @@
 //
 //   node tools/web-sim/dev.mjs [demo] [--port 3333]
 //
-// A thin wrapper over the shared dev server (bridges/quickjs/js/sim-server.mjs) — the same core the shipped
+// A thin wrapper over the shared dev server (packages/embedded-react/sim-server.mjs) — the same core the shipped
 // `npx embedded-react dev` CLI uses — pointed at a repo demo + the locally built module in public/. Build the
 // module once first: `node tools/web-sim/build.mjs`. See tools/web-sim/README.md.
 
@@ -28,7 +28,7 @@ import {dirname, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const JS = resolve(REPO, 'bridges/quickjs/js');
+const JS = resolve(REPO, 'packages/embedded-react');
 const PUBLIC = resolve(HERE, 'public');
 
 const args = process.argv.slice(2);

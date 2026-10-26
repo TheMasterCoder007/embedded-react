@@ -20,7 +20,7 @@ _deps/
 
 # Prebuilt WASM simulator (built locally / by CI, never committed)
 tools/web-sim/public/
-bridges/quickjs/js/sim/
+packages/embedded-react/sim/
 
 # Lockfile
 package-lock.json

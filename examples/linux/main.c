@@ -24,7 +24,7 @@
  * *demo*, not the dev tool — hot-reload-driven development lives in the simulator (see tools/simulator/README.md).
  * All the runtime lives in the shared host core (host.c); main() just drives it.
  *
- * Build a config with `npm run pack` (in bridges/quickjs/js); the build copies it into the slot. To
+ * Build a config with `npm run pack` (in packages/embedded-react); the build copies it into the slot. To
  * "upload" a new one, drop a fresh app.erpkg next to the exe and restart.
  *
  * Usage:

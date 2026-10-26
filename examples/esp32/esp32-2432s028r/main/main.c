@@ -42,11 +42,11 @@
 
 static const char* TAG = "embedded-react";
 
-/* The generated app is shared: bridges/quickjs/js/dist/app.gen.c is one file that every board example
+/* The generated app is shared: packages/embedded-react/dist/app.gen.c is one file that every board example
  * links. Values that depend only on the panel size are worked out at boot, but the layout a responsive demo
  * picks is compiled for the panel it was generated at, so er_app_build() refuses a panel that picks another
  * one (see er_app_fits()). Generate it for this board with:
- *     cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat */
+ *     cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat */
 
 /* app.gen.h also records WHICH demo it came from. A different demo's app.gen.c can still match this
  * panel size and link, leaving a board that boots someone else's UI (or fails on host setters it never

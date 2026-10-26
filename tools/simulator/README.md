@@ -13,7 +13,7 @@ cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg
 cmake --build tools/simulator/build
 
 # then run it against a demo, by name, from the JS package
-cd bridges/quickjs/js && npm run sim -- thermostat
+cd packages/embedded-react && npm run sim -- thermostat
 ```
 
 `npm run sim` runs esbuild in watch mode and launches the simulator, reading `demos/<name>/index.jsx`

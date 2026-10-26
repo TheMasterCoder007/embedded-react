@@ -18,7 +18,7 @@ The Raspberry Pi Pico SDK, the Arm GNU toolchain (`arm-none-eabi-gcc`), CMake, a
 ```bash
 # 1. compile the app to C at the panel size
 npx embedded-react build --aot --screen 240x280
-#    in-repo: cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face
+#    in-repo: cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face
 
 # 2. build the firmware
 cd examples/rp2040/rp2040-touch-lcd-1.69

@@ -15,7 +15,7 @@
  */
 
 /*
- * stage-npm-package.mjs — copy the embedded-react npm package into bridges/quickjs/js/dist/npm-package with
+ * stage-npm-package.mjs — copy the embedded-react npm package into packages/embedded-react/dist/npm-package with
  * its TypeScript compiled to JavaScript, ready for `npm pack <dir>` / `npm publish <dir>`.
  *
  * Part of the package is written in TypeScript (.mts). In the repo Node runs those files directly by
@@ -25,7 +25,7 @@
  *
  *   node tools/stage-npm-package.mjs      prints the staged directory
  *
- * Needs the package's dev dependencies installed (npm ci in bridges/quickjs/js) for the TypeScript compiler.
+ * Needs the package's dev dependencies installed (npm ci in packages/embedded-react) for the TypeScript compiler.
  */
 
 import {execFileSync} from 'node:child_process';
@@ -42,7 +42,7 @@ import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const JS = resolve(ROOT, 'bridges/quickjs/js');
+const JS = resolve(ROOT, 'packages/embedded-react');
 export const STAGE = resolve(JS, 'dist/npm-package');
 
 const MODULE = /\.(m?js|mts)$/;

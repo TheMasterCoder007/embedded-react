@@ -31,7 +31,7 @@ thermostat demo uses its compact, dial-only layout at 240×320:
 npx embedded-react build --aot --screen 240x320      # → dist/app.gen.c, app.gen.h, assets.generated.c
 ```
 
-Inside the repository the equivalent is `cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
+Inside the repository the equivalent is `cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
 
 **2. Build and flash.** Plug in the **USB-C** port (it appears as a CH340 serial device), then:
 

@@ -15,7 +15,7 @@ on Windows with its toolchain file passed to CMake).
 
 ```sh
 # 1. pack a demo into a config container (from the repo root)
-cd bridges/quickjs/js && npm install && npm run pack       # → dist/app.erpkg
+cd packages/embedded-react && npm install && npm run pack       # → dist/app.erpkg
 cd ../../..
 
 # 2. build and run the host

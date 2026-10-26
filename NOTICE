@@ -48,7 +48,7 @@ under their own respective licenses and copyrights:
     Used by the Flow A bridge to drive the native engine.
 
 The embedded-react public API (e.g. the View / Text / Pressable / Animated /
-StyleSheet modules under bridges/quickjs/js/src/embedded-react/) is an original,
+StyleSheet modules under packages/embedded-react/src/embedded-react/) is an original,
 independent reimplementation inspired by the React Native API surface. It is not
 derived from or copied out of React Native's source, and is the original work of
 Cory Lamming.

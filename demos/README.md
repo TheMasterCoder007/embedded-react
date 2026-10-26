@@ -21,7 +21,7 @@ npm create embedded-react@latest my-app -- --template thermostat   # start from 
 cd demos/thermostat && npm install && npm run dev
 
 # from the repository root: or by name, against the in-repo library
-cd bridges/quickjs/js
+cd packages/embedded-react
 npm run sim   -- thermostat     # the SDL simulator
 npm run pack  -- thermostat     # → dist/app.erpkg (Flow A)
 ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # → dist/app.gen.c (Flow B), at 240×320

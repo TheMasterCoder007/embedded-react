@@ -21,7 +21,7 @@
  * er_hotreload — the portable receiver for on-device hot reload over a byte stream (USB-CDC, a
  * USB-Serial-JTAG console, or a UART).
  *
- * This is the device-side mirror of the host's ERHR transport frame (bridges/quickjs/js/hotreload/
+ * This is the device-side mirror of the host's ERHR transport frame (packages/embedded-react/hotreload/
  * protocol.mjs). It is a transport-agnostic, allocation-free state machine: you feed it whatever bytes
  * arrive on your channel, and it scans for the frame magic, parses the header, collects the payload
  * into a caller-provided staging buffer, and verifies the transport CRC. When a complete, intact frame

@@ -10,6 +10,9 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- The npm package moved from `bridges/quickjs/js` to `packages/embedded-react`.
 
 ## [0.18.0] - 2026-10-26
 ### Added

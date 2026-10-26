@@ -16,7 +16,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "cd demos/thermostat && exec node ../../bridges/quickjs/js/cli.mjs dev --port 3334"
+        "cd demos/thermostat && exec node ../../packages/embedded-react/cli.mjs dev --port 3334"
       ],
       "port": 3334
     },

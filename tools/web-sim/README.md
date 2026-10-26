@@ -31,7 +31,7 @@ stale after engine changes; rebuild it.
 |---|---|
 | `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
 | `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/`, and stages the package's `sim/` |
-| `dev.mjs` | the repo dev loop over `demos/`: a thin wrapper over the shared `bridges/quickjs/js/sim-server.mjs` |
+| `dev.mjs` | the repo dev loop over `demos/`: a thin wrapper over the shared `packages/embedded-react/sim-server.mjs` |
 | `bundle-app.mjs`, `serve.mjs` | one-shot bundle and a static server, for previewing a prebuilt bundle |
 | `index.html` | the host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData`, pointer → touch, SSE reload |
 | `public/` | build output (gitignored) |

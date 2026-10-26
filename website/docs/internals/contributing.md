@@ -39,7 +39,7 @@ the npm package, not a dependency of it or of the scaffolded template, so run it
 the whole repository:
 
 ```bash
-cd bridges/quickjs/js
+cd packages/embedded-react
 npm run format         # rewrite in place
 npm run format:check   # dry-run
 ```
@@ -52,9 +52,9 @@ JavaScript, so pass the pages explicitly. `--prose-wrap preserve` keeps the line
 and still aligns the tables:
 
 ```bash
-cd bridges/quickjs/js
-npx prettier --prose-wrap preserve --write "../../../website/docs/**/*.{md,mdx}" \
-  "!../../../website/docs/{changelog,roadmap}.md"
+cd packages/embedded-react
+npx prettier --prose-wrap preserve --write "../../website/docs/**/*.{md,mdx}" \
+  "!../../website/docs/{changelog,roadmap}.md"
 ```
 
 Neither formatter runs in CI, so run them before you push.
