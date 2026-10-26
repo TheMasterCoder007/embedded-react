@@ -616,6 +616,16 @@ void er_mark_dirty_upward(ERNode* node);
 void er_mark_dirty_upward_visual(ERNode* node);
 
 /**
+ * @brief Marks a node dirty after its own composited opacity changed.
+ *
+ * Visual-only for the node's own fade cache, but a content change to an ancestor's: the ancestor's cache
+ * holds this node at its old alpha.
+ *
+ * @param[in,out] node  Node whose opacity changed.
+ */
+void er_mark_dirty_upward_opacity(ERNode* node);
+
+/**
  * @brief Requests a layout pass on the next er_commit() (the compositor's private layout-dirty flag).
  *
  * For subsystems outside the compositor whose state change moves a computed rect — e.g. an Arc value

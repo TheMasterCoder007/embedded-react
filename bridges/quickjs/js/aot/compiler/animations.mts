@@ -30,7 +30,7 @@ import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn, wideInitial} from './collect.mts';
 import {lowerStmts} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
-import {parseColor} from '../../src/embedded-react/svg-ops.js';
+import {parseColorValue} from '../style-map.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
 import type {
@@ -441,8 +441,17 @@ export function parseInterp(
   // outputRange of strings maps onto colors.
   const input = arr(get('inputRange'), 'inputRange').map(Number);
   const outputValues = arr(get('outputRange'), 'outputRange');
+  // Colors parse as strictly as a static style color, so a typo is an error rather than black.
   const colors = outputValues.every(v => typeof v === 'string')
-    ? outputValues.map(v => parseColor(v) >>> 0)
+    ? outputValues.map(v => {
+        try {
+          return parseColorValue(v);
+        } catch (error) {
+          throw aotError(
+            `AOT: .interpolate() outputRange has an ${(error as Error).message}`,
+          );
+        }
+      })
     : undefined;
   if (!colors && outputValues.some(v => typeof v !== 'number')) {
     throw aotError(

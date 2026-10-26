@@ -1680,6 +1680,22 @@ static void fade_cache_invalidate(void)
 #endif
 }
 
+void er_mark_dirty_upward_opacity(ERNode* node)
+{
+#if ER_FADE_CACHE_ENABLED
+    /* The cache holds its owner's subtree as painted, so a descendant's new alpha is new content to it. */
+    for (ERNode* a = node ? er_get_node(node->parent_tag) : NULL; a; a = er_get_node(a->parent_tag))
+    {
+        if (a->tag == s_fade_cache_tag)
+        {
+            s_content_gen++;
+            break;
+        }
+    }
+#endif
+    er_mark_dirty_upward_visual(node);
+}
+
 #if ER_PROF
 /* TEMP on-device profiling: phase accumulators printed every ER_PROF_INTERVAL commits (host provides
  * the clock). The interval is named because the line it prints states it — a literal in both the
@@ -3197,6 +3213,10 @@ ERNode* er_node_create(ERNodeType type)
     {
         n->props.image.opacity = 255U;
     }
+    else if (type == ER_NODE_TEXT_INPUT)
+    {
+        n->props.text_input.opacity = 255U;
+    }
 
     /* ActivityIndicator starts spinning immediately. */
     if (type == ER_NODE_ACTIVITY_INDICATOR)
@@ -3728,7 +3748,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.text_input.border_color = props->border_color;
             node->props.text_input.border_width = props->border_width;
             node->props.text_input.border_radius = props->border_radius;
-            node->props.text_input.opacity = props->opacity ? props->opacity : 255U;
+            node->props.text_input.opacity = props->opacity;
             node->props.text_input.color = props->color;
             node->props.text_input.font_size = props->font_size;
             strncpy(node->props.text_input.font_family, props->font_family, ER_FONT_FAMILY_MAX);
@@ -3748,7 +3768,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             node->props.view.border_color = props->border_color;
             node->props.view.border_width = props->border_width;
             node->props.view.border_radius = props->border_radius;
-            node->props.view.opacity = props->opacity ? props->opacity : 255U;
+            node->props.view.opacity = props->opacity;
             node->modal_visible = props->modal_visible;
             node->modal_backdrop_color = props->backdrop_color;
             /* Propagate visibility to the layout so the modal takes no space when hidden. */

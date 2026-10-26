@@ -26,6 +26,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Animated `backgroundColor` and `color` now work, through `interpolate` with an `outputRange` of
   colors. A value bound to a color directly warns in Flow A and is a compile error in Flow B.
 - A prop that stops being animated now repaints at its static value.
+- A static `opacity: 0` now hides a `TextInput` or `Modal` instead of drawing it opaque.
+- With the fade cache on, a node fading inside a faded parent now updates instead of freezing.
 - Paint props on `<Svg>` now apply to its shapes in both flows, like a `<G>` around them all. Flow B
   no longer refuses them.
 - Named colors now resolve the same in Flow A styles, SVG paint and Flow B: one shared list with CSS

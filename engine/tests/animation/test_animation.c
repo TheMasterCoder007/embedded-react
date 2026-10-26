@@ -877,6 +877,20 @@ int main(void)
         er_anim_value_destroy(oh);
         er_node_destroy(ot);
         er_node_destroy(oi);
+
+        /* A TextInput keeps an explicit 0, so releasing an animated opacity can restore a hidden one. */
+        ERNode* oti = er_node_create(ER_NODE_TEXT_INPUT);
+        if (oti->props.text_input.opacity != 255U)
+            return fail("text input opacity: a fresh node should be opaque");
+        ERAnimValueHandle th = er_anim_value_create(1.0f);
+        er_anim_value_bind(th, oti, ER_PROP_OPACITY);
+        er_anim_unbind_prop(oti, ER_PROP_OPACITY);
+        op.opacity = 0U;
+        er_node_set_props(oti, &op);
+        if (oti->props.text_input.opacity != 0U)
+            return fail("text input opacity: a static opacity of 0 should stay 0");
+        er_anim_value_destroy(th);
+        er_node_destroy(oti);
     }
 
     /* -----------------------------------------------------------------------

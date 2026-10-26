@@ -887,6 +887,16 @@ describe('animated style keys', () => {
     ).toBe('AOT: an animated "scale" takes numbers, not colors');
   });
 
+  it('refuses a malformed color in an outputRange', () => {
+    expect(
+      errorOf(
+        "<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#ggg']})}} />",
+      ),
+    ).toMatch(
+      /^AOT: \.interpolate\(\) outputRange has an unsupported color "#ggg"/,
+    );
+  });
+
   it('refuses an outputRange mixing numbers and colors', () => {
     expect(
       errorOf(

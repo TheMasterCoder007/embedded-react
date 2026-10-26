@@ -706,6 +706,103 @@ int main(void)
         er_node_destroy(root);
     }
 
+    /* -----------------------------------------------------------------------
+     * Fade cache: a child's animated opacity inside a cached group. The child's change is
+     * visual-only to itself but new content to the group's cache, which must not be reused.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* group = er_node_create(ER_NODE_VIEW);
+        ERProps gp = props_default();
+        gp.width = 16;
+        gp.height = 16;
+        gp.opacity = 128U;
+        er_node_set_props(group, &gp);
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps cp = props_default();
+        cp.width = 16;
+        cp.height = 16;
+        cp.background_color = 0xFFFF0000U;
+        er_node_set_props(child, &cp);
+
+        er_tree_append_child(group, child);
+        er_tree_append_child(root, group);
+        er_tree_set_root(root);
+
+        ERAnimValueHandle val = er_anim_value_create(1.0f);
+        er_anim_value_bind(val, child, ER_PROP_OPACITY);
+        er_commit();
+        er_commit(); /* capture, in cache-enabled builds */
+        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+            return fail("nested fade: red at the group alpha");
+
+        er_anim_value_set(val, 0.0f);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFFFFFFU)
+            return fail("nested fade: a child faded out inside a cached group must disappear");
+
+        er_anim_value_destroy(val);
+        er_tree_remove_child(group, child);
+        er_tree_remove_child(root, group);
+        er_node_destroy(child);
+        er_node_destroy(group);
+        er_node_destroy(root);
+    }
+
+    /* -----------------------------------------------------------------------
+     * Releasing every binding of a value repaints its nodes at their static props, even when the
+     * setProps that restores them sees nothing new.
+     * ---------------------------------------------------------------------- */
+    reset(&tc);
+    {
+        er_reset();
+
+        ERNode* root = er_node_create(ER_NODE_VIEW);
+        ERProps rp = props_default();
+        rp.width = FB_W;
+        rp.height = FB_H;
+        rp.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &rp);
+
+        ERNode* box = er_node_create(ER_NODE_VIEW);
+        ERProps bp = props_default();
+        bp.width = 8;
+        bp.height = 8;
+        bp.background_color = 0xFFFF0000U;
+        er_node_set_props(box, &bp);
+        er_tree_append_child(root, box);
+        er_tree_set_root(root);
+
+        ERAnimValueHandle val = er_anim_value_create(1.0f);
+        const ERColorInterpolation ci = {
+            {0.0f, 1.0f}, {0xFF000000U, 0xFF0000FFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_color(val, box, ER_PROP_BACKGROUND_COLOR, &ci);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFF0000FFU)
+            return fail("unbind all: the bound color should paint");
+
+        er_anim_value_unbind_all(val);
+        er_node_set_props(box, &bp);
+        er_commit();
+        if (px(&tc, 2, 2) != 0xFFFF0000U)
+            return fail("unbind all: the static color should repaint");
+
+        er_anim_value_destroy(val);
+        er_tree_remove_child(root, box);
+        er_node_destroy(box);
+        er_node_destroy(root);
+    }
+
 #if ERUI_TRANSFORMS_FULL
     /* -----------------------------------------------------------------------
      * Transform inside a banded opacity group.

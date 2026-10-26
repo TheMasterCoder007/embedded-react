@@ -288,9 +288,9 @@ static uint8_t* opacity_field(ERNode* node)
 /**
  * @brief Marks a node dirty after one of its animated properties changed.
  *
- * An opacity change on a node that composites its own subtree changes only the blend, so it is marked
- * visual-only and the compositor's fade cache stays valid. A Text or Image fades at a draw alpha inside
- * whatever subtree holds it, so it, like every other prop, changes content.
+ * An opacity change on a node that composites its own subtree changes only its blend, so the node's fade
+ * cache stays valid. A Text or Image fades at a draw alpha inside whatever subtree holds it, so it, like
+ * every other prop, changes content.
  *
  * @param[in,out] node  Node that changed.
  * @param[in]     prop  Property that changed.
@@ -298,7 +298,7 @@ static uint8_t* opacity_field(ERNode* node)
 static void mark_prop_dirty(ERNode* node, ERAnimProp prop)
 {
     if (prop == ER_PROP_OPACITY && (is_view_node(node) || node->type == ER_NODE_TEXT_INPUT))
-        er_mark_dirty_upward_visual(node);
+        er_mark_dirty_upward_opacity(node);
     else
         er_mark_dirty_upward(node);
 }
@@ -1507,6 +1507,28 @@ ERAnimValueHandle er_anim_value_create(float initial_value)
     return ER_ANIM_VALUE_INVALID;
 }
 
+/**
+ * @brief Releases every binding of a value and marks each bound node dirty.
+ *
+ * Its next setProps writes the static value back but skips the repaint when the props are unchanged, so
+ * the release has to ask for it (as er_anim_unbind_prop does).
+ *
+ * @param[in,out] val  Value whose bindings to release.
+ */
+static void release_bindings(ERAnimValue* val)
+{
+    for (int b = 0; b < val->binding_count; b++)
+    {
+        if (!val->bindings[b].active)
+            continue;
+        val->bindings[b].active = false;
+        ERNode* n = er_get_node(val->bindings[b].node_tag);
+        if (n)
+            er_mark_dirty_upward(n);
+    }
+    val->binding_count = 0;
+}
+
 void er_anim_value_destroy(ERAnimValueHandle handle)
 {
     if (handle == ER_ANIM_VALUE_INVALID)
@@ -1514,7 +1536,10 @@ void er_anim_value_destroy(ERAnimValueHandle handle)
     cancel_value_anim(handle);
     ERAnimValue* val = find_value_slot(handle);
     if (val)
+    {
+        release_bindings(val);
         val->in_use = false;
+    }
 }
 
 /**
@@ -1703,11 +1728,8 @@ void er_anim_value_bind_color(ERAnimValueHandle handle,
 void er_anim_value_unbind_all(ERAnimValueHandle handle)
 {
     ERAnimValue* val = find_value_slot(handle);
-    if (!val)
-        return;
-    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
-        val->bindings[b].active = false;
-    val->binding_count = 0;
+    if (val)
+        release_bindings(val);
 }
 
 ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg)

@@ -38,7 +38,7 @@ tied to the component and destroys it on unmount, which is the form to prefer. A
   `new Animated.Value` that outlives its screen must be destroyed; `useAnimatedValue` does this for you.
 - `interpolate({inputRange, outputRange, extrapolate?, extrapolateLeft?, extrapolateRight?})`: a
   derived value mapped through a piecewise-linear curve, up to 8 breakpoints. `outputRange` is
-  numbers, or colors (`['#000', 'rgb(255, 0, 0)']`) for `backgroundColor` and `color`; a value
+  numbers, or colors (`['#000', 'red']`) for `backgroundColor` and `color`; a value
   bound to a rotation axis is read in degrees, so `outputRange: [0, 360]` is a full turn.
   `extrapolate` is `'extend'` (default), `'clamp'` or `'identity'`, with per-end overrides; a color
   treats `'identity'` as `'clamp'`.
