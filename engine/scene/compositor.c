@@ -3019,33 +3019,53 @@ static void refresh_scroll_content_sizes(ERNode* node)
 }
 
 /**
- * @brief Walks the subtree and fires ER_EVENT_LAYOUT for every node whose computed
- *        rectangle changed since the previous commit.
+ * @brief Walks the subtree and fires ER_EVENT_LAYOUT for every node whose rectangle relative to its
+ *        parent changed since it was last reported.
  *
- * @param[in] node  Subtree root to check.
+ * The payload is parent-relative, as in React Native, so a node whose parent moved without moving it
+ * doesn't fire. A display:none node reports an empty box at 0,0, and its subtree is skipped: those
+ * rects are stale until it shows again.
+ *
+ * @param[in] node        Subtree root to check.
+ * @param[in] parent_cur  The parent's computed rect from this commit.
  */
-static void dispatch_layout_events(ERNode* node)
+static void dispatch_layout_events(ERNode* node, ERLayoutRect parent_cur)
 {
     if (!node)
         return;
 
+    const bool hidden = node->layout.display == ER_DISPLAY_NONE;
     const ERLayoutRect cur = node->computed;
-    const ERLayoutRect prev = node->prev_computed;
-
-    if (cur.x != prev.x || cur.y != prev.y || cur.w != prev.w || cur.h != prev.h)
+    ERLayoutRect rel = cur;
+    if (hidden)
     {
+        rel.x = 0;
+        rel.y = 0;
+    }
+    else
+    {
+        rel.x = (int16_t)(cur.x - parent_cur.x);
+        rel.y = (int16_t)(cur.y - parent_cur.y);
+    }
+
+    const ERLayoutRect prev = node->prev_layout;
+    if (rel.x != prev.x || rel.y != prev.y || rel.w != prev.w || rel.h != prev.h)
+    {
+        node->prev_layout = rel;
         const EREventHandler* h = &node->events[ER_EVENT_LAYOUT];
         if (h->fn)
         {
             EREventData data = {0};
-            data.layout_rect.x = (int)cur.x;
-            data.layout_rect.y = (int)cur.y;
-            data.layout_rect.w = (int)cur.w;
-            data.layout_rect.h = (int)cur.h;
+            data.layout_rect.x = rel.x;
+            data.layout_rect.y = rel.y;
+            data.layout_rect.w = rel.w;
+            data.layout_rect.h = rel.h;
             h->fn(node, &data, h->user_data);
         }
-        node->prev_computed = cur;
     }
+
+    if (hidden)
+        return;
 
     uint16_t child_tag = node->first_child_tag;
     while (child_tag != ER_INVALID_TAG)
@@ -3053,7 +3073,7 @@ static void dispatch_layout_events(ERNode* node)
         ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        dispatch_layout_events(child);
+        dispatch_layout_events(child, cur);
         child_tag = child->next_sibling_tag;
     }
 }
@@ -5055,7 +5075,7 @@ void er_commit(void)
         anchor_arc_children(root);
         refresh_scroll_content_sizes(root);
         er_layout_anim_post_layout(root);
-        dispatch_layout_events(root);
+        dispatch_layout_events(root, (ERLayoutRect){0});
         compute_subtree_bounds(root); /* refresh cached prune bounds; stay valid through static frames */
         s_subtree_bounds_dirty = false;
 

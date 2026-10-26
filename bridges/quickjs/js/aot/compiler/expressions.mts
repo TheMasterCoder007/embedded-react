@@ -1408,6 +1408,26 @@ const binarySource = (
 });
 
 /**
+ * Whether `node` is the handler's event, or its `nativeEvent` as React Native code reads it.
+ *
+ * @param node  The expression.
+ * @param event  The event parameter's name, if the handler has one.
+ *
+ * @returns True for `<event>` or `<event>.nativeEvent`.
+ */
+function isEventRoot(node: t.Node, event: string | null | undefined): boolean {
+  if (!event) return false;
+  if (node.type === 'Identifier') return node.name === event;
+  return (
+    node.type === 'MemberExpression' &&
+    !node.computed &&
+    node.object.type === 'Identifier' &&
+    node.object.name === event &&
+    (node.property as t.Identifier).name === 'nativeEvent'
+  );
+}
+
+/**
  * Lowers one JS expression to its source: names resolved, constants folded, and each operand lowered and typed
  * in turn, so an error in it is reported before anything after it.
  *
@@ -1626,14 +1646,20 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         return fixed(lowerGestureField(prop, env.pan));
       }
 
-      // `<event>.layout.x / .y / .width / .height` — the onLayout rect.
+      // `<event>.layout.x / .y / .width / .height` — the onLayout rect, also read as
+      // `<event>.nativeEvent.layout.…` as in React Native.
       if (
         object.type === 'MemberExpression' &&
         !object.computed &&
-        object.object.type === 'Identifier' &&
-        env.event === object.object.name &&
-        (object.property as t.Identifier).name === 'layout'
+        (object.property as t.Identifier).name === 'layout' &&
+        isEventRoot(object.object, env.event)
       ) {
+        if (!env.layout) {
+          throw aotError(
+            'AOT: only an onLayout event carries a layout rect',
+            'read e.layout (or e.nativeEvent.layout) inside an onLayout handler.',
+          );
+        }
         if (!LAYOUT_FIELDS.has(prop as string)) {
           throw new Error(
             `AOT: unknown onLayout rect field "${prop}" (use x / y / width / height)`,

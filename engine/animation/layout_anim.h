@@ -31,7 +31,7 @@
  * er_layout_anim_configure_next() config exists, a layout animation is started (or
  * retargeted) that interpolates animated from its current position to computed; otherwise
  * animated is snapped to computed immediately.  Nodes appearing for the first time
- * (prev_computed was zero-size) are always snapped regardless of the pending config.
+ * (prev_layout was zero-size) are always snapped regardless of the pending config.
  *
  * Consumes the pending config after one invocation.
  *

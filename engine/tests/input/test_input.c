@@ -3489,6 +3489,103 @@ static int test_layout_event_dispatch(void)
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Checks that ER_EVENT_LAYOUT reports x/y relative to the parent, and doesn't fire for a child
+ *        when only its parent moved.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on failure.
+ */
+static int test_layout_event_parent_relative(void)
+{
+    ERNode* root = create_root();
+    LayoutRecord parent_rec = {0};
+    LayoutRecord child_rec = {0};
+
+    ERNode* parent = er_node_create(ER_NODE_VIEW);
+    ERProps pp = props_default();
+    pp.position = ER_POS_ABSOLUTE;
+    pp.left = 40;
+    pp.top = 30;
+    pp.width = 100;
+    pp.height = 80;
+    pp.padding = 5;
+    pp.padding_horizontal = pp.padding_vertical = ER_LAYOUT_AUTO;
+    er_node_set_props(parent, &pp);
+    er_event_set(parent, ER_EVENT_LAYOUT, on_layout, &parent_rec);
+    er_tree_append_child(root, parent);
+
+    ERNode* child = er_node_create(ER_NODE_VIEW);
+    ERProps cp = props_default();
+    cp.width = 20;
+    cp.height = 10;
+    cp.margin_left = 3;
+    cp.margin_horizontal = cp.margin_vertical = ER_LAYOUT_AUTO;
+    er_node_set_props(child, &cp);
+    er_event_set(child, ER_EVENT_LAYOUT, on_layout, &child_rec);
+    er_tree_append_child(parent, child);
+
+    er_commit();
+
+    if (parent_rec.count != 1 || parent_rec.rect.x != 40 || parent_rec.rect.y != 30)
+        return fail("layout event: parent rect was wrong");
+    if (child_rec.count != 1 || child_rec.rect.x != 8 || child_rec.rect.y != 5 || child_rec.rect.w != 20
+        || child_rec.rect.h != 10)
+        return fail("layout event: child rect was not relative to its parent");
+
+    /* Move only the parent: the child keeps its place inside it, so it doesn't fire */
+    pp.left = 60;
+    er_node_set_props(parent, &pp);
+    er_commit();
+
+    if (parent_rec.count != 2 || parent_rec.rect.x != 60)
+        return fail("layout event: moved parent did not fire");
+    if (child_rec.count != 1)
+        return fail("layout event: child fired when only its parent moved");
+
+    /* Change the parent's padding: the child moves inside it, so it fires */
+    pp.padding = 9;
+    er_node_set_props(parent, &pp);
+    er_commit();
+
+    if (child_rec.count != 2 || child_rec.rect.x != 12 || child_rec.rect.y != 9)
+        return fail("layout event: child did not fire after moving inside its parent");
+
+    /* Hide the child: it reports an empty box at 0,0, and moving the parent leaves it quiet */
+    cp.display = ER_DISPLAY_NONE;
+    er_node_set_props(child, &cp);
+    er_commit();
+
+    if (child_rec.count != 3 || child_rec.rect.x != 0 || child_rec.rect.y != 0 || child_rec.rect.w != 0
+        || child_rec.rect.h != 0)
+        return fail("layout event: hidden child did not report an empty box at 0,0");
+
+    pp.left = 80;
+    er_node_set_props(parent, &pp);
+    er_commit();
+
+    if (child_rec.count != 3)
+        return fail("layout event: hidden child fired when its parent moved");
+
+    /* Show it again, then hide the parent: the parent reports empty and the child stays quiet */
+    cp.display = ER_DISPLAY_FLEX;
+    er_node_set_props(child, &cp);
+    er_commit();
+
+    if (child_rec.count != 4 || child_rec.rect.x != 12 || child_rec.rect.y != 9 || child_rec.rect.w != 20)
+        return fail("layout event: shown child did not report its box again");
+
+    pp.display = ER_DISPLAY_NONE;
+    er_node_set_props(parent, &pp);
+    er_commit();
+
+    if (parent_rec.rect.w != 0 || parent_rec.rect.x != 0)
+        return fail("layout event: hidden parent did not report an empty box at 0,0");
+    if (child_rec.count != 4)
+        return fail("layout event: child of a hidden parent fired");
+
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -4178,6 +4275,8 @@ int main(void)
     if (test_overflow_hidden_clips_hit() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_layout_event_dispatch() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+    if (test_layout_event_parent_relative() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     if (test_responder_start_should_set() != EXIT_SUCCESS)
         return EXIT_FAILURE;

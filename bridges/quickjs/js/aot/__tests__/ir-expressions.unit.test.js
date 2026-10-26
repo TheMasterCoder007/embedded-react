@@ -159,7 +159,11 @@ describe('expressions lower to the IR', () => {
   });
 
   it("reads an onLayout rect field from the engine's rect", () => {
-    const expr = lower('e.layout.width', {...envWith(), event: 'e'});
+    const expr = lower('e.layout.width', {
+      ...envWith(),
+      event: 'e',
+      layout: true,
+    });
     expect(expr).toMatchObject({
       kind: 'layout',
       field: 'width',
@@ -170,7 +174,7 @@ describe('expressions lower to the IR', () => {
 
   it('refuses an onLayout name that is not a rect field', () => {
     expect(() =>
-      lower('e.layout.toString', {...envWith(), event: 'e'}),
+      lower('e.layout.toString', {...envWith(), event: 'e', layout: true}),
     ).toThrow(/unknown onLayout rect field "toString"/);
   });
 });

@@ -315,6 +315,8 @@ export interface Env {
   cbPrefix?: string;
   /** The handler's event parameter, whose touch fields read EREventData. */
   event?: string | null;
+  /** The handler is an onLayout handler, so its event carries the layout rect. */
+  layout?: boolean;
   /** A PanResponder callback's gestureState parameter, and the responder it belongs to. */
   gesture?: string | null;
   pan?: PanResponderRecord | null;

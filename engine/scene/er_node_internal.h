@@ -411,7 +411,7 @@ struct ERNode
     uint16_t long_press_ms;  /**< Hold time before a long press fires; 0 = the engine default. */
     ERLayoutSpec layout;
     ERLayoutRect computed;
-    ERLayoutRect prev_computed;   /**< Computed rect from the previous commit, used to detect layout changes. */
+    ERLayoutRect prev_layout;     /**< Rect last reported to ER_EVENT_LAYOUT (x/y relative to the parent). */
     ERLayoutRect animated;        /**< Current display rect; updated by layout animations; equals computed when idle. */
     ERLayoutRect last_paint_rect; /**< Screen FOOTPRINT this node last painted — its box grown by whatever
                                        it drew outside it, an Arc knob's reach or a shadow's bleed — used
