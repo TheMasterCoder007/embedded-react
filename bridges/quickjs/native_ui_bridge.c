@@ -4532,7 +4532,7 @@ static void read_extrapolate(JSContext* ctx, JSValueConst obj, const char* key, 
  * interp = { inputRange:[…], outputRange:[…], extrapolate?, extrapolateLeft?, extrapolateRight? }.
  * `extrapolate` sets both ends; the per-end keys override it. Tokens: "extend" (default), "clamp",
  * "identity". On `backgroundColor` and `color` the outputRange holds colors, any form a style color
- * takes; one that does not parse leaves the prop unbound.
+ * takes, and on every other prop numbers; an entry that is neither leaves the prop unbound.
  *
  * @return JS_UNDEFINED.
  */
@@ -4609,7 +4609,7 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
             else
             {
                 double dovv = 0.0;
-                JS_ToFloat64(ctx, &dovv, ov);
+                outputs_ok = outputs_ok && JS_IsNumber(ov) && JS_ToFloat64(ctx, &dovv, ov) == 0;
                 interp.output_range[i] = (float)dovv;
             }
             JS_FreeValue(ctx, iv);

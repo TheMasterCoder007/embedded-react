@@ -25,6 +25,7 @@ import {deepEqualProps} from '../props.js';
 const COLOR_PROPS = new Set(['backgroundColor', 'color']);
 
 let _warnedColorBind = false;
+let _warnedNumberBind = false;
 
 /** Warns once that `prop` takes a color, which a plain float or a numeric outputRange cannot give it. */
 function warnColorBind(prop) {
@@ -33,6 +34,15 @@ function warnColorBind(prop) {
   console.warn(
     `embedded-react: an animated "${prop}" needs colors: bind value.interpolate({inputRange, ` +
       `outputRange: ['#000', '#fff']}) rather than the value itself, which is ignored.`,
+  );
+}
+
+/** Warns once that `prop` takes numbers, which an outputRange holding anything else cannot give it. */
+function warnNumberBind(prop) {
+  if (_warnedNumberBind) return;
+  _warnedNumberBind = true;
+  console.warn(
+    `embedded-react: an animated "${prop}" takes an outputRange of numbers; this one is ignored.`,
   );
 }
 
@@ -94,13 +104,16 @@ export class AnimatedInterpolation {
 
   __bind(node, prop) {
     const out = this._config?.outputRange;
-    if (
-      COLOR_PROPS.has(prop) &&
-      Array.isArray(out) &&
-      out.some(c => typeof c !== 'string')
-    ) {
-      warnColorBind(prop);
-      return;
+    if (Array.isArray(out)) {
+      if (COLOR_PROPS.has(prop)) {
+        if (out.some(c => typeof c !== 'string')) {
+          warnColorBind(prop);
+          return;
+        }
+      } else if (out.some(n => typeof n !== 'number')) {
+        warnNumberBind(prop);
+        return;
+      }
     }
     NativeUI.animValueBindInterpolated(
       this._parent._handle,

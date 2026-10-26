@@ -444,7 +444,12 @@ export function parseInterp(
   const colors = outputValues.every(v => typeof v === 'string')
     ? outputValues.map(v => parseColor(v) >>> 0)
     : undefined;
-  const output = colors ? [] : outputValues.map(Number);
+  if (!colors && outputValues.some(v => typeof v !== 'number')) {
+    throw aotError(
+      'AOT: .interpolate() outputRange must be all numbers or all colors',
+    );
+  }
+  const output = colors ? [] : (outputValues as number[]);
   if (input.length < 2 || input.length !== outputValues.length) {
     throw aotError(
       'AOT: .interpolate() inputRange and outputRange must be the same length (>= 2)',

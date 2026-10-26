@@ -886,4 +886,12 @@ describe('animated style keys', () => {
       ),
     ).toBe('AOT: an animated "scale" takes numbers, not colors');
   });
+
+  it('refuses an outputRange mixing numbers and colors', () => {
+    expect(
+      errorOf(
+        "<View style={{opacity: a.interpolate({inputRange: [0, 1], outputRange: [0, '#fff']})}} />",
+      ),
+    ).toBe('AOT: .interpolate() outputRange must be all numbers or all colors');
+  });
 });

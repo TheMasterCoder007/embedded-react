@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-// An animated color reaches the node only through an interpolation onto colors, and an animated
+// An animated color reaches the node only through an interpolation onto colors, and animated
 // opacity fades a Text as it does a View. Both are read back from the framebuffer.
+import {createRef} from 'react';
 import {createRoot} from '../../src/renderer.js';
 import {Animated, Text, View} from 'embedded-react';
 import {check, report} from './harness.js';
@@ -72,6 +73,50 @@ check(__pixel(50, 50) === BLUE, 'a plain value does not write a color');
 check(
   warnings.some(w => w.includes('"backgroundColor" needs colors')),
   'and says how to animate one',
+);
+
+// --- colors on a numeric prop are refused, with a warning ---------------------------------------
+const fade = new Animated.Value(1);
+root.render(
+  <View style={BACKDROP}>
+    <Animated.View
+      style={{
+        width: 100,
+        height: 100,
+        backgroundColor: '#ff0000',
+        opacity: fade.interpolate({
+          inputRange: [0, 1],
+          outputRange: ['#000', '#fff'],
+        }),
+      }}
+    />
+  </View>,
+);
+check(__pixel(50, 50) === 0xffff0000, 'colors do not write an opacity');
+check(
+  warnings.some(w => w.includes('"opacity" takes an outputRange of numbers')),
+  'and the warning names the prop',
+);
+
+// The bridge refuses them too, for a caller that skips the JS check: read as numbers they would be NaN,
+// a fully transparent opacity.
+const box = createRef();
+root.render(
+  <View style={BACKDROP}>
+    <View
+      ref={box}
+      style={{width: 100, height: 100, backgroundColor: '#ff0000'}}
+    />
+  </View>,
+);
+NativeUI.animValueBindInterpolated(fade._handle, box.current, 'opacity', {
+  inputRange: [0, 1],
+  outputRange: ['#000', '#fff'],
+});
+NativeUI.commit();
+check(
+  __pixel(50, 50) === 0xffff0000,
+  'the bridge does not bind colors to an opacity',
 );
 
 // --- opacity on a Text ----------------------------------------------------------------------------
