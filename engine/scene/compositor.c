@@ -2304,8 +2304,6 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
      * re-damaged itself on every commit for as long as it existed. */
 #if ERUI_TRANSFORMS_FULL
     const bool complex_xf = er_node_has_complex_transform(n);
-#else
-    const bool complex_xf = false;
 #endif
     /* A plain translate moves the children with the node. */
     int child_tx = translate_x;
