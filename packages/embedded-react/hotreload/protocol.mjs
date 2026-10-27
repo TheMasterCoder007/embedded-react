@@ -34,7 +34,7 @@
 //   payload_crc    u32       — CRC-32/IEEE over the payload (same polynomial as ERCF / the C loader)
 //   payload        bytes[payload_len]   — the .erpkg (ERCF container)
 //
-// The mirror of this lives in the firmware parser (bridges/quickjs/er_hotreload.c); the two MUST stay
+// The mirror of this lives in the firmware parser (runtime/er_hotreload.c); the two MUST stay
 // byte-compatible. crc32 is shared with emit-container.mjs so all three CRCs are the one algorithm.
 
 import {crc32} from '../assets/emit-container.mjs';

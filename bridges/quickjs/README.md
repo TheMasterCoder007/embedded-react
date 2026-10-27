@@ -5,8 +5,9 @@ object into a QuickJS context and forwards each call to `er_scene.h`; the React 
 [`packages/embedded-react/`](../../packages/embedded-react/README.md) drives it. `er_runtime.{c,h}` is
 the portable host core a firmware calls: create the runtime, install the bridge and host globals,
 load an app, pump it once per frame.
-`er_js_alloc.c` is the allocator that keeps QuickJS's garbage collector working on bare metal;
-`er_hotreload.c` parses the USB reload frames; `er_assets.c` registers an ERPK pack.
+`er_js_alloc.c` is the allocator that keeps QuickJS's garbage collector working on bare metal. The
+container reader, the asset-pack loader and the hot-reload frame parser are in
+[`runtime/`](../../runtime/README.md), which the bridge links.
 
 **Docs:** [NativeUI bridge](https://embedded-react.dev/api/native-ui-bridge) (the JavaScript surface,
 `er_runtime`, heap accounting, hosts with external RAM), [Hot reload](https://embedded-react.dev/guides/hot-reload),

@@ -130,6 +130,7 @@ lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.18.0
 ```
 engine/                   Pure C99 runtime: scene graph, layout, rendering, text, animation.
 backends/                 Hardware adapters, one folder per rendering API or peripheral.
+runtime/                  The container reader, asset-pack loader and hot-reload frame parser.
 bridges/quickjs/          Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
 packages/embedded-react/  The npm package `embedded-react`: components, reconciler, bundler,
                           asset bakers, the dev/export/build CLI, and the Flow B compiler (aot/).
