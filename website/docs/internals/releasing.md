@@ -71,8 +71,9 @@ thing that ties it to releases is the playground, which runs the published `embe
 version `website/package.json` pins. `release.mjs` bumps that pin in the release commit; the docs
 workflow then waits for that version to appear on npm (the publish runs in parallel from the same
 push) before installing and building. The lockfile cannot carry the hash of an unpublished tarball,
-which is why the site's CI uses `npm install` rather than `npm ci`, and why the lockfile catches up
-on the next local install.
+so that push uses `npm install` and the lockfile is left one release behind. Pull requests use
+`npm ci`, so the first one that touches the site after a release fails until the lockfile is
+updated: run `npm install` in `website/` and commit `package-lock.json`.
 
 ## Version compatibility
 

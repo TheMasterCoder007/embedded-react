@@ -49,8 +49,7 @@ jobs:
           cache-dependency-path: website/package-lock.json
       # The playground runs the published `embedded-react` at the version the site pins, which the release
       # script bumps in the release commit. The npm publish runs in parallel from the same push, so wait
-      # for that version to exist before installing it; `npm install` (not `npm ci`) because the lockfile
-      # cannot carry the new tarball's hash until it is published.
+      # for that version to exist before installing it.
       - name: Wait for the pinned embedded-react on npm
         run: |
           ver=$(node -p "require('./package.json').devDependencies['embedded-react']")
@@ -64,7 +63,13 @@ jobs:
           done
           echo "embedded-react@$ver never appeared on npm" >&2
           exit 1
-      - run: npm install --no-audit --no-fund
+      # Pull requests install from the lockfile, so one left behind by a release fails here until it is
+      # updated (run `npm install` in website/ and commit it). Pushes use `npm install`, because the
+      # release commit's lockfile cannot carry the new tarball's hash until it is published.
+      - if: github.event_name == 'pull_request'
+        run: npm ci --no-audit --no-fund
+      - if: github.event_name != 'pull_request'
+        run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run build
       - if: github.event_name != 'pull_request'
