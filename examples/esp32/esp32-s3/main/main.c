@@ -35,8 +35,7 @@
  */
 
 #include "board.h"
-#include "er_hotreload.h" /* er_hotreload_apply (on-device hot reload) */
-#include "er_perf.h"      /* per-frame timing split + resource counters (feeds the overlay) */
+#include "er_perf.h" /* per-frame timing split + resource counters (feeds the overlay) */
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"

@@ -16,9 +16,9 @@
 
 /*
  * Simulator asset-pack loader (see asset_pack.h): reads an ERPK pack file into RAM and hands it to the
- * portable parser (er_assets_load_pack, in the bridge). The buffer is kept alive for the process
+ * portable parser (er_assets_load_pack, in runtime/). The buffer is kept alive for the process
  * (image pixels + font bitmaps reference it); a reload allocates a fresh one and leaks the previous —
- * fine for a dev tool. Parsing + registration live in bridges/quickjs/er_assets.c so the same code
+ * fine for a dev tool. Parsing + registration live in runtime/er_assets.c so the same code
  * loads a pack from flash on a device (and from a config container).
  */
 
