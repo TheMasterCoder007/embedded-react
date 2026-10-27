@@ -25,25 +25,23 @@
  * protocol.mjs). It is a transport-agnostic, allocation-free state machine: you feed it whatever bytes
  * arrive on your channel, and it scans for the frame magic, parses the header, collects the payload
  * into a caller-provided staging buffer, and verifies the transport CRC. When a complete, intact frame
- * is ready, the caller hands the payload (an .erpkg / ERCF container) to er_runtime — usually via the
- * er_hotreload_apply() convenience below.
+ * is ready, the caller hands the payload (an .erpkg / ERCF container) to its loader — for a QuickJS app,
+ * er_hotreload_apply() in er_runtime.h.
  *
  * Split of responsibilities (the "portable protocol + thin per-board shim" model):
  *   - THIS FILE  — the wire protocol + parser. No threads, no malloc, no platform headers.
  *   - per board  — a small shim that (a) reads bytes from the actual channel and feeds them here, and
  *                  (b) applies a ready frame from the task that owns the runtime/frame loop.
  *
- * Threading: ErHotReload is single-consumer — feed it from ONE task. er_hotreload_apply() (and all
- * er_runtime_* calls) must run on the task that owns the runtime/frame loop. If you parse on a separate
- * RX task, signal the frame-loop task to apply (see the ESP32-S3 example).
+ * Threading: ErHotReload is single-consumer — feed it from ONE task. Applying a frame must run on the
+ * task that owns the runtime/frame loop. If you parse on a separate RX task, signal the frame-loop task
+ * to apply (see the ESP32-S3 example).
  *
  * Wire format (little-endian) — see protocol.mjs for the authoritative description:
  *   magic "ERHR" (4) | proto_version u8 (=1) | msg_type u8 | flags u16 | payload_len u32 | crc u32
  *   then payload_len bytes of .erpkg. The CRC is CRC-32/IEEE over the payload (same polynomial as the
  *   ERCF container's own CRC), so a truncated/corrupt transfer is caught before the runtime is touched.
  */
-
-#include "er_runtime.h" /* ErContainerStatus (er_hotreload_apply return) */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -131,23 +129,5 @@ ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t
 
 /** @brief A short human-readable string for an ErHotReloadStatus (for logging). */
 const char* er_hotreload_status_str(ErHotReloadStatus status);
-
-/**
- * @brief Convenience: load a freshly received container, painting the on-screen error panel on failure
- *        (so a bad hot reload is visible, like a bad boot config).
- *
- * Picks the reload mode from the container: one carrying a vendor section is a full reload (resets the
- * runtime first); an app-only frame reloads incrementally against the resident vendor with no reset (see
- * er_runtime_container_has_vendor). Shared by every board's shim so they stay thin. MUST be called from the
- * task that owns the runtime and frame loop. It loads with copy_assets=true, so @p erpkg does NOT need to
- * stay live afterward — the receiver may immediately reuse the staging buffer for the next upload (which is
- * what lets the old UI stay on screen during a reload, no teardown).
- *
- * @param[in] erpkg  Container bytes received in a frame (the parser's staging buffer).
- * @param[in] len    Payload length from er_hotreload_feed.
- *
- * @return ER_CONTAINER_OK, or the specific load failure (already shown on-screen + returned for logging).
- */
-ErContainerStatus er_hotreload_apply(const void* erpkg, size_t len);
 
 #endif
