@@ -38,7 +38,6 @@
  * The engine + bridge are single-instance (static state), so this runtime is a singleton too.
  */
 
-#include "er_container.h" /* ErContainerStatus, er_crc32 (the container reader in runtime/) */
 #include "quickjs.h"
 
 #include <stdbool.h>
@@ -205,6 +204,17 @@ JSContext* er_runtime_context(void);
  */
 void er_runtime_set_wall_clock(int64_t epoch_ms);
 
+/** @brief Result of er_runtime_load_container (see er_runtime_container_status_str). */
+typedef enum
+{
+    ER_CONTAINER_OK = 0,      /**< Loaded and the app ran. */
+    ER_CONTAINER_BAD_MAGIC,   /**< Not an ERCF container. */
+    ER_CONTAINER_BAD_VERSION, /**< Unsupported container format version (or malformed structure). */
+    ER_CONTAINER_BAD_CRC,     /**< Integrity check failed — corrupt or partially written. */
+    ER_CONTAINER_BAD_QJS,     /**< Built for a different QuickJS version than this firmware. */
+    ER_CONTAINER_LOAD_FAILED, /**< No bytecode section, or the app threw on evaluation. */
+} ErContainerStatus;
+
 /**
  * @brief Loads an ERCF config container: verifies its CRC + QuickJS version, registers its asset pack,
  *        then evaluates its bytecode (and pumps).
@@ -247,8 +257,8 @@ ErContainerStatus er_runtime_load_container_ex(const void* buf, size_t len, bool
  * @brief Reports whether a container carries a vendor bytecode section (the framework half of the
  *        incremental-hot-reload split).
  *
- * A structural-only scan (er_container_scan: no CRC or QuickJS check) used to choose a reload strategy: a
- * container WITH a vendor section is a full boot/reload (reset first, then load); one WITHOUT is an app-only frame that
+ * A structural-only scan (no CRC/version check) used to choose a reload strategy: a container WITH a
+ * vendor section is a full boot/reload (reset first, then load); one WITHOUT is an app-only frame that
  * reloads incrementally against the resident vendor (load with no reset — see er_hotreload_apply). Safe on
  * malformed input (returns false); the real validation happens in er_runtime_load_container.
  *
@@ -263,22 +273,23 @@ bool er_runtime_container_has_vendor(const void* buf, size_t len);
 const char* er_runtime_container_status_str(ErContainerStatus status);
 
 /**
- * @brief Loads a container received over hot reload, painting the on-screen error panel on failure (so a
- *        bad hot reload is visible, like a bad boot config).
+ * @brief CRC-32/IEEE (zlib polynomial 0xEDB88320), table-free.
  *
- * Picks the reload mode from the container: one carrying a vendor section is a full reload (resets the
- * runtime first); an app-only frame reloads incrementally against the resident vendor with no reset (see
- * er_runtime_container_has_vendor). Shared by every board's shim so they stay thin. MUST be called from the
- * task that owns the runtime and frame loop. It loads with copy_assets=true, so @p erpkg does NOT need to
- * stay live afterward — the receiver may immediately reuse the staging buffer for the next upload (which is
- * what lets the old UI stay on screen during a reload, no teardown).
+ * The ONE checksum of the delivery pipeline: the hot-reload transport frame, the host-built container and
+ * the container as the device verifies it are all this function. It is declared here, rather than kept
+ * privately by each of them, because a divergence does not fail loudly — a frame or container simply
+ * stops loading with a CRC mismatch and nothing says why.
  *
- * @param[in] erpkg         Container bytes received in a frame (the er_hotreload parser's staging buffer).
- * @param[in] erpkg_length  Payload length from er_hotreload_feed.
+ * The JS side (packages/embedded-react/assets/emit-container.mjs, which hotreload/protocol.mjs imports) is the
+ * fourth copy and cannot share this one; it carries a note pointing back here, and container.unit.test.js
+ * pins both to the standard "123456789" -> 0xCBF43926 check vector.
  *
- * @return ER_CONTAINER_OK, or the specific load failure (already shown on-screen + returned for logging).
+ * @param[in] p  Bytes to checksum.
+ * @param[in] n  Byte count.
+ *
+ * @return The CRC as an unsigned 32-bit value.
  */
-ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length);
+uint32_t er_crc32(const uint8_t* p, size_t n);
 
 /**
  * @brief Evaluates an app from a compiled QuickJS bytecode blob (JS_ReadObject), then pumps once.

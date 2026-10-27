@@ -13,12 +13,6 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Changed
 
 - The npm package moved from `bridges/quickjs/js` to `packages/embedded-react`.
-- The container reader, `er_assets` and `er_hotreload` moved to a new `runtime/` library that doesn't
-  link QuickJS. `er_hotreload_apply` is now declared in `er_runtime.h`.
-
-### Fixed
-
-- On 32-bit targets, a corrupt section length in a container could pass the bounds check.
 
 ## [0.18.0] - 2026-10-26
 ### Added

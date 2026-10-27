@@ -2,27 +2,23 @@
 # EMBEDDED_REACT_SRC_DIR (set by the top-level CMakeLists):
 #   native_ui_bridge.c — the NativeUI surface over er_scene.h
 #   er_runtime.c       — the portable QuickJS host core (context/globals/load/pump/reset/overlay +
-#                        the config-container loader main.c uses, and the hot-reload apply step)
+#                        the ERCF config-container loader main.c uses)
 #   er_js_alloc.c      — default JS-heap allocator with working GC size accounting (unused here: main.c
 #                        supplies its own PSRAM allocator, but er_runtime's boot-time probe lives with it)
-# plus the parts from runtime/ that no JS engine owns:
-#   er_container.c     — the ERCF container reader and CRC
 #   er_assets.c        — the portable ERPK asset-pack parser (the container's asset section)
-#   er_hotreload.c     — the portable ERHR transport-frame parser for on-device hot reload (the RX task
-#                        in hotreload_usb.c feeds received USB/serial bytes into it)
+#   er_hotreload.c     — the portable ERHR transport-frame parser for on-device hot reload (main.c's
+#                        RX task feeds received USB/serial bytes into it, then applies a ready frame)
 # They need er_scene.h (engine) and quickjs.h (quickjs).
 set(BRIDGE_DIR "${EMBEDDED_REACT_SRC_DIR}/bridges/quickjs")
-set(RUNTIME_DIR "${EMBEDDED_REACT_SRC_DIR}/runtime")
 
 idf_component_register(
     SRCS "${BRIDGE_DIR}/native_ui_bridge.c"
          "${BRIDGE_DIR}/er_runtime.c"
          "${BRIDGE_DIR}/er_js_alloc.c"
+         "${BRIDGE_DIR}/er_assets.c"
+         "${BRIDGE_DIR}/er_hotreload.c"
          "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)
-         "${RUNTIME_DIR}/er_container.c"
-         "${RUNTIME_DIR}/er_assets.c"
-         "${RUNTIME_DIR}/er_hotreload.c"
-    INCLUDE_DIRS "${BRIDGE_DIR}" "${RUNTIME_DIR}"
+    INCLUDE_DIRS "${BRIDGE_DIR}"
     REQUIRES engine quickjs
     LDFRAGMENTS "linker_psram.lf" # the bridge's tables live in PSRAM (see the file)
 )

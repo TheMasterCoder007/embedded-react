@@ -29,19 +29,6 @@ if (NOT TARGET embedded-react)
     )
 endif ()
 
-# The container reader, asset-pack loader and hot-reload frame parser live in runtime/, shared with
-# Flow B. A standalone bridge build (CI) also runs its tests.
-if (NOT TARGET er-runtime)
-    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-        enable_testing()
-        set(ER_RUNTIME_TESTS ON CACHE BOOL "" FORCE)
-    endif ()
-    add_subdirectory(
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime
-            ${CMAKE_CURRENT_BINARY_DIR}/runtime
-    )
-endif ()
-
 # ---------------------------------------------------------------------------
 # Lite (device/release) profile — drops the JS source parser from QuickJS
 # (upstream QJS_DISABLE_PARSER): the firmware runs precompiled bytecode only,
@@ -91,14 +78,17 @@ endforeach ()
 
 # ---------------------------------------------------------------------------
 # Bridge library — thin adapter over er_scene.h (native_ui_bridge.c), plus the portable QuickJS host
-# core (er_runtime.c: context lifecycle, console/screen/persist globals, container load, pump/reset/error,
-# and the hot-reload apply step). Hosts (desktop, MCU firmware) build on er_runtime with a few lines of
-# glue — see er_runtime.h.
+# core (er_runtime.c: context lifecycle, console/screen/persist globals, load/pump/reset/error) and the
+# portable hot-reload receiver (er_hotreload.c: the ERHR transport-frame parser firmware feeds bytes
+# into to swap the running config over USB/serial). Hosts (desktop, MCU firmware) build on er_runtime
+# with a few lines of glue — see er_runtime.h.
 # ---------------------------------------------------------------------------
 add_library(er-bridge-quickjs STATIC
         native_ui_bridge.c
         er_runtime.c
         er_js_alloc.c
+        er_assets.c
+        er_hotreload.c
         overlay/message_overlay.qbc.c # precompiled error-overlay app (regen: see overlay/message_overlay.js)
 )
 
@@ -127,7 +117,6 @@ endif ()
 target_link_libraries(er-bridge-quickjs
         PUBLIC
         embedded-react
-        er-runtime
         qjs
 )
 

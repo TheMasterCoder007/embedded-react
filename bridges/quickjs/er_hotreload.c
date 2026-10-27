@@ -16,8 +16,6 @@
 
 #include "er_hotreload.h"
 
-#include "er_container.h" /* er_crc32 */
-
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -160,4 +158,28 @@ ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t
 
     *consumed = i; /* == n: all input processed without finishing a frame */
     return ER_HR_NEED_MORE;
+}
+
+ErContainerStatus er_hotreload_apply(const void* erpkg, size_t len)
+{
+    /* Two reload modes, chosen by what the container carries:
+     *   - With a vendor section (a full boot/reload): tear the context down to a clean slate first, then
+     *     load — the vendor runs, then the app.
+     *   - App-only frame (the incremental case): DON'T reset. Keep the resident vendor + context, so
+     *     react/reconciler stay parsed and __erPersist survives; loading just re-evaluates the app, which
+     *     re-renders into the resident root (a "soft" reload).
+     * Either way assets are copied (copy_assets=true) since @p erpkg is a staging buffer the receiver
+     * reuses for the next upload — that copy lets the old UI stay on screen until the new one mounts. On
+     * failure, paint the on-screen panel. */
+    if (er_runtime_container_has_vendor(erpkg, len))
+    {
+        er_runtime_reset();
+    }
+    const ErContainerStatus status = er_runtime_load_container_ex(erpkg, len, true);
+    if (status != ER_CONTAINER_OK)
+    {
+        er_runtime_show_message(
+            "Hot reload failed", er_runtime_container_status_str(status), "Fix the app and save again to re-send.");
+    }
+    return status;
 }

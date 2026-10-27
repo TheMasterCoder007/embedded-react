@@ -13,9 +13,6 @@ engine/                 Pure C99 runtime: scene graph, layout, rendering, text, 
 backends/               Hardware adapters, one folder per rendering API or peripheral. A backend
                         implements five function pointers; the rest of the stack is portable.
 
-runtime/                The device-side pieces no JS engine owns: the ERCF container reader and
-                        CRC, the asset-pack loader, the hot-reload frame parser.
-
 bridges/                Frontends that drive the engine.
   quickjs/              Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
 
@@ -83,14 +80,10 @@ the container writer. `cli.mjs` and `sim-server.mjs` are the `dev`/`export`/`bui
 object into a QuickJS context and forwards each method to the engine, interning prop names and
 hashing prop bags so an unchanged `setProps` is cheap. `er_runtime.c` is the portable host core:
 runtime and context lifecycle, the lite JavaScript profile, the host globals (`console`, `screen`,
-timers, the persist store), container loading with the QuickJS version check, the frame pump, the
-error overlay. `er_js_alloc.c` is the allocator that reports real block sizes so QuickJS's collector
-works on bare metal. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
-
-**The runtime** (`runtime/`) is C that links only the engine. `er_container.c` reads an ERCF
-container: the magic, the format version, every section bound, and the CRC, before anything runs.
-`er_assets.c` registers an ERPK pack. `er_hotreload.c` parses the USB reload frames. The bridge
-links it, and the Flow B runtime will reuse it.
+timers, the persist store), container loading with CRC and version checks, the frame pump, the error
+overlay. `er_js_alloc.c` is the allocator that reports real block sizes so QuickJS's collector
+works on bare metal. `er_hotreload.c` parses the USB reload frames. `er_assets.c` registers an ERPK
+pack. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
 
 **The AOT compiler** (`packages/embedded-react/aot/`) parses the app's JSX with Babel, folds
 module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
@@ -134,13 +127,12 @@ state and props, and the host's `er_commit()` does the rest.
 
 ## Building the pieces
 
-Each folder is its own project, and the runtime, the bridge, and the examples pull the engine in
-themselves with a relative `add_subdirectory`; nothing is installed.
+Each folder is its own project, and the bridge and the examples pull the engine in themselves with a
+relative `add_subdirectory`; nothing is installed.
 
 | Piece                 | Command                                                                                    | Notes                                                                                                                                                        |
 | --------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Engine and its tests  | `cmake -S engine -B build -DBUILD_TESTING=ON && cmake --build build`                       | A static library, `embedded-react`; `ctest --test-dir build` runs the suites                                                                                 |
-| Runtime and its tests | `cmake -S runtime -B runtime/build && cmake --build runtime/build`                         | A static library, `er-runtime`; `ctest --test-dir runtime/build` runs the container test                                                                     |
 | QuickJS bridge        | `cmake -S bridges/quickjs -B bridges/quickjs/build && cmake --build bridges/quickjs/build` | Also builds `er-bridge-quickjs-runtest` (the headless test harness) and `er-bridge-quickjs-compile` (the bytecode precompiler `npm run pack` needs)          |
 | The npm package       | `cd packages/embedded-react && npm install`                                                | `npm run pack -- <demo>`, `npm run aot -- <demo>`, `npm run sim -- <demo>`, `npm test`, `npm run parity`; the `-- <demo>` names a folder in `demos/`         |
 | Desktop hosts         | `cmake -S examples/linux -B examples/linux/build` (and `examples/linux-aot`)               | [Linux](../guides/boards/linux.md)                                                                                                                           |

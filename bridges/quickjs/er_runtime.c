@@ -649,30 +649,112 @@ void er_runtime_free(void* p)
 }
 
 /* --- ERCF config container ------------------------------------------------------------------------
- * The reader (er_container.c) checks the structure and the CRC; this half checks the tag against the
- * QuickJS this firmware links and runs the sections. */
+ * Layout (little-endian): "ERCF" | format_version u32 | crc32 u32 (over everything after it) |
+ *   qjs_tag (u16 len + bytes) | section_count u32 | sections[ type u32 | len u32 | bytes ]
+ * Section types: 1 = QuickJS bytecode, 2 = ERPK asset pack, 3 = vendor bytecode, 0 = alignment
+ * padding (zero bytes the emitter inserts so the asset pack starts 4-byte aligned relative to the
+ * container — asset pixels are read in place, so the pack's internal alignment pads only hold at the
+ * absolute addresses the engine reads when the pack itself starts on a word boundary). Unknown types
+ * are skipped, so new section types never break older loaders. The CALLER must place the container at
+ * a 4-byte-aligned base (flash linker section or malloc'd buffer both do). */
+
+static uint16_t rd_le16(const uint8_t* p)
+{
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static uint32_t rd_le32(const uint8_t* p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Declared in er_runtime.h — the one CRC the hot-reload receiver shares. */
+uint32_t er_crc32(const uint8_t* p, size_t n)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++)
+    {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++)
+        {
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1u)));
+        }
+    }
+    return ~crc;
+}
 
 const char* er_runtime_container_status_str(ErContainerStatus status)
 {
-    return er_container_status_str(status);
+    switch (status)
+    {
+        case ER_CONTAINER_OK:
+            return "ok";
+        case ER_CONTAINER_BAD_MAGIC:
+            return "not an ERCF container";
+        case ER_CONTAINER_BAD_VERSION:
+            return "unsupported or malformed container";
+        case ER_CONTAINER_BAD_CRC:
+            return "CRC mismatch (corrupt or partially written)";
+        case ER_CONTAINER_BAD_QJS:
+            return "built for a different QuickJS version";
+        case ER_CONTAINER_LOAD_FAILED:
+            return "app load failed";
+        default:
+            return "unknown";
+    }
 }
 
-bool er_runtime_container_has_vendor(const void* buf, size_t len)
+/** @brief Most sections a single container may hold (we use up to 3: app bytecode + asset pack + an
+ * optional vendor bytecode chunk for the incremental-hot-reload split). */
+#define ER_CONTAINER_MAX_SECTIONS 8u
+
+bool er_runtime_container_has_vendor(const void* vbuf, size_t len)
 {
-    /* A structural-only scan (no CRC) for a vendor section: present → the container is a full boot/reload
-     * that carries the framework; absent → an app-only frame for an incremental soft reload. A malformed
-     * blob returns false; the loader rejects it for real afterward. */
-    ErContainer container;
-    if (er_container_scan(buf, len, &container) != ER_CONTAINER_OK)
+    /* A structural-only scan (no CRC) for a SECTION_VENDOR_BYTECODE (type 3): present → the container is a
+     * full boot/reload that carries the framework; absent → an app-only frame for an incremental soft
+     * reload. The caller uses this to decide whether to reset before loading. Every field is bounds-checked
+     * against @p len, so a malformed blob simply returns false (the loader rejects it for real afterward). */
+    const uint8_t* buf = (const uint8_t*)vbuf;
+    if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
     {
         return false;
     }
-    for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
+    size_t off = 12u;
+    if (off + 2u > len)
     {
-        if (container.sections[section_index].type == ER_SECTION_VENDOR_BYTECODE)
+        return false;
+    }
+    const uint16_t tlen = rd_le16(buf + off);
+    off += 2u;
+    if (off + (size_t)tlen + 4u > len)
+    {
+        return false;
+    }
+    off += tlen;
+    const uint32_t nsec = rd_le32(buf + off);
+    off += 4u;
+    if (nsec > ER_CONTAINER_MAX_SECTIONS)
+    {
+        return false;
+    }
+    for (uint32_t i = 0; i < nsec; i++)
+    {
+        if (off + 8u > len)
+        {
+            return false;
+        }
+        const uint32_t type = rd_le32(buf + off);
+        const uint32_t slen = rd_le32(buf + off + 4u);
+        off += 8u;
+        if (off + slen > len)
+        {
+            return false;
+        }
+        if (type == 3u) /* SECTION_VENDOR_BYTECODE */
         {
             return true;
         }
+        off += slen;
     }
     return false;
 }
@@ -684,74 +766,112 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
 
 ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
 {
-    /* Integrity, then version compatibility — both before touching the engine. */
-    ErContainer container;
-    const ErContainerStatus status = er_container_read(vbuf, len, &container);
-    if (status != ER_CONTAINER_OK)
+    const uint8_t* buf = (const uint8_t*)vbuf;
+    if (!buf || len < 12u || memcmp(buf, "ERCF", 4) != 0)
     {
-        return status;
+        return ER_CONTAINER_BAD_MAGIC;
     }
-    if (container.tag_length != strlen(ER_QUICKJS_TAG)
-        || memcmp(container.tag, ER_QUICKJS_TAG, container.tag_length) != 0)
+    if (rd_le32(buf + 4) != 1u)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    const uint32_t stored_crc = rd_le32(buf + 8);
+
+    /* Walk the structure FIRST, bounds-checking every field against `len`, to learn the exact payload
+     * end. This lets `len` be an upper bound — e.g. the full size of a flash/config partition the
+     * container was written into — rather than the exact byte count. The CRC is then taken over only
+     * the true payload, so trailing partition bytes don't corrupt the check. The walk reads unverified
+     * length fields, but each is bounds-checked, so a malformed blob is rejected, never over-read. */
+    size_t off = 12u;
+    if (off + 2u > len)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    const uint16_t tlen = rd_le16(buf + off);
+    off += 2u;
+    if (off + (size_t)tlen + 4u > len)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+    const uint8_t* tag = buf + off;
+    off += tlen;
+    const uint32_t nsec = rd_le32(buf + off);
+    off += 4u;
+    if (nsec > ER_CONTAINER_MAX_SECTIONS)
+    {
+        return ER_CONTAINER_BAD_VERSION;
+    }
+
+    struct
+    {
+        uint32_t type;
+        const uint8_t* data;
+        uint32_t len;
+    } secs[ER_CONTAINER_MAX_SECTIONS];
+    for (uint32_t i = 0; i < nsec; i++)
+    {
+        if (off + 8u > len)
+        {
+            return ER_CONTAINER_BAD_VERSION;
+        }
+        const uint32_t type = rd_le32(buf + off);
+        const uint32_t slen = rd_le32(buf + off + 4u);
+        off += 8u;
+        if (off + slen > len)
+        {
+            return ER_CONTAINER_BAD_VERSION;
+        }
+        secs[i].type = type;
+        secs[i].data = buf + off;
+        secs[i].len = slen;
+        off += slen;
+    }
+    const size_t payload_end = off; /* exact end of the container within the (possibly larger) buffer */
+
+    /* Integrity, then version compatibility — both before touching the engine. */
+    if (stored_crc != er_crc32(buf + 12, payload_end - 12u))
+    {
+        return ER_CONTAINER_BAD_CRC;
+    }
+    if (tlen != strlen(ER_QUICKJS_TAG) || memcmp(tag, ER_QUICKJS_TAG, tlen) != 0)
     {
         return ER_CONTAINER_BAD_QJS;
     }
 
     /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts). Then run the
-     * vendor chunk if present — it installs the module registry + require() shim the app resolves its
-     * imports through — and finally the app last, regardless of section order. A container with no vendor
-     * section is a plain monolithic app and loads exactly as before. */
-    const ErContainerSection* vendor = NULL;
-    const ErContainerSection* bytecode = NULL;
-    for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
+     * vendor chunk (type 3) if present — it installs the module registry + require() shim the app resolves
+     * its imports through — and finally the app (type 1) last, regardless of section order. A container
+     * with no vendor section is a plain monolithic app and loads exactly as before. */
+    const uint8_t* vendor = NULL;
+    uint32_t vendor_len = 0;
+    const uint8_t* bytecode = NULL;
+    uint32_t bytecode_len = 0;
+    for (uint32_t i = 0; i < nsec; i++)
     {
-        const ErContainerSection* section = &container.sections[section_index];
-        if (section->type == ER_SECTION_ASSET_PACK)
+        if (secs[i].type == 2u) /* SECTION_ASSET_PACK */
         {
-            er_assets_load_pack_ex(section->data, section->length, copy_assets);
+            er_assets_load_pack_ex(secs[i].data, secs[i].len, copy_assets);
         }
-        else if (section->type == ER_SECTION_BYTECODE)
+        else if (secs[i].type == 1u) /* SECTION_BYTECODE (app) */
         {
-            bytecode = section;
+            bytecode = secs[i].data;
+            bytecode_len = secs[i].len;
         }
-        else if (section->type == ER_SECTION_VENDOR_BYTECODE)
+        else if (secs[i].type == 3u) /* SECTION_VENDOR_BYTECODE */
         {
-            vendor = section;
+            vendor = secs[i].data;
+            vendor_len = secs[i].len;
         }
     }
     if (!bytecode)
     {
         return ER_CONTAINER_LOAD_FAILED;
     }
-    if (vendor && !er_runtime_load_bytecode(vendor->data, vendor->length))
+    if (vendor && !er_runtime_load_bytecode(vendor, vendor_len))
     {
         return ER_CONTAINER_LOAD_FAILED;
     }
-    return er_runtime_load_bytecode(bytecode->data, bytecode->length) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
-}
-
-ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
-{
-    /* Two reload modes, chosen by what the container carries:
-     *   - With a vendor section (a full boot/reload): tear the context down to a clean slate first, then
-     *     load — the vendor runs, then the app.
-     *   - App-only frame (the incremental case): DON'T reset. Keep the resident vendor + context, so
-     *     react/reconciler stay parsed and __erPersist survives; loading just re-evaluates the app, which
-     *     re-renders into the resident root (a "soft" reload).
-     * Either way assets are copied (copy_assets=true) since @p erpkg is a staging buffer the receiver
-     * reuses for the next upload — that copy lets the old UI stay on screen until the new one mounts. On
-     * failure, paint the on-screen panel. */
-    if (er_runtime_container_has_vendor(erpkg, erpkg_length))
-    {
-        er_runtime_reset();
-    }
-    const ErContainerStatus status = er_runtime_load_container_ex(erpkg, erpkg_length, true);
-    if (status != ER_CONTAINER_OK)
-    {
-        er_runtime_show_message(
-            "Hot reload failed", er_container_status_str(status), "Fix the app and save again to re-send.");
-    }
-    return status;
+    return er_runtime_load_bytecode(bytecode, bytecode_len) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
 }
 
 bool er_runtime_load_source(const char* src, size_t len, const char* name)

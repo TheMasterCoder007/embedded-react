@@ -45,9 +45,7 @@ ctest --test-dir bridges/quickjs/build --output-on-failure
 ```
 
 The bridge's own CTest covers heap accounting: that the allocator reports block sizes and the
-collector runs, the bug that looks like a leak on bare metal. It also runs the `runtime/` container
-test, which checks the CRC and that a malformed container is rejected without reading past it
-(`cmake -S runtime -B runtime/build` runs that one alone). The smoke binary is a link check. CI
+collector runs, the bug that looks like a leak on bare metal. The smoke binary is a link check. CI
 builds the bridge twice, with the native allocator and with the bare-metal size-prefix one, and
 runs the JavaScript runtime tiers against both.
 

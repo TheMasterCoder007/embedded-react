@@ -9,11 +9,10 @@ project(embedded-react-tools NONE)
 # Monorepo top-level
 # ---------------------------------------------------------------------------
 # Each component is a self-contained CMake project that configures and builds on
-# its own: `engine/`, `runtime/`, `bridges/quickjs/`, and each `examples/<target>/`.
-# None are add_subdirectory'd from here — open or configure whichever component
-# you're working on directly (see each folder's CMakeLists.txt). The runtime, the
-# bridge and the examples pull the engine in themselves via a relative
-# add_subdirectory fallback.
+# its own: `engine/`, `bridges/quickjs/`, and each `examples/<target>/`. None are
+# add_subdirectory'd from here — open or configure whichever component you're
+# working on directly (see each folder's CMakeLists.txt). The bridge and examples
+# pull the engine in themselves via a relative add_subdirectory fallback.
 #
 # This root file exists only for repo-wide developer utilities (the clang-format
 # targets below). It deliberately builds none of the components, so an IDE rooted
@@ -29,8 +28,6 @@ if (CLANG_FORMAT_EXE)
             "${CMAKE_SOURCE_DIR}/engine/*.h"
             "${CMAKE_SOURCE_DIR}/backends/*.c"
             "${CMAKE_SOURCE_DIR}/backends/*.h"
-            "${CMAKE_SOURCE_DIR}/runtime/*.c"
-            "${CMAKE_SOURCE_DIR}/runtime/*.h"
             "${CMAKE_SOURCE_DIR}/examples/*.c"
             "${CMAKE_SOURCE_DIR}/examples/*.h"
             "${CMAKE_SOURCE_DIR}/bridges/*.c"

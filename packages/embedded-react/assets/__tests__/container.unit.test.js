@@ -15,7 +15,7 @@
  */
 
 // Unit tests for the ERCF config-container emitter (emit-container.mjs). These lock down the on-disk
-// format and — crucially — that the JS CRC-32 matches the C reader's er_crc32() (runtime/er_container.c), so
+// format and — crucially — that the JS CRC-32 matches the C loader's crc32_bytes() (er_runtime.c), so
 // a container packed here verifies on a device instead of being rejected as corrupt.
 import {describe, it, expect} from 'vitest';
 import {
@@ -65,7 +65,7 @@ const realSections = p => p.sections.filter(s => s.type !== SECTION_PAD);
 describe('crc32', () => {
   it('matches the canonical CRC-32/IEEE check value (so it matches the C loader)', () => {
     // "123456789" → 0xCBF43926 is the standard check vector for CRC-32/IEEE (poly 0xEDB88320, init
-    // 0xFFFFFFFF, xorout 0xFFFFFFFF) — the exact variant er_crc32() computes.
+    // 0xFFFFFFFF, xorout 0xFFFFFFFF) — the exact variant er_runtime.c's crc32_bytes() computes.
     expect(crc32(Buffer.from('123456789', 'ascii'))).toBe(0xcbf43926);
   });
 
