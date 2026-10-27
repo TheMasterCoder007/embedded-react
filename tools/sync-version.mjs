@@ -174,7 +174,7 @@ const MANIFESTS = [
   },
   // The playground runs the published package, pinned exactly so it tracks each release. The docs
   // workflow installs this pin once the release is on npm (the lockfile cannot know the new tarball's
-  // hash until then, which is why that workflow uses `npm install`, not `npm ci`).
+  // hash until then, so it is updated by hand afterwards; pull requests run `npm ci` to catch it).
   {
     path: 'website/package.json',
     read: text => JSON.parse(text).devDependencies?.['embedded-react'],

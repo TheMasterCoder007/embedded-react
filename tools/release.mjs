@@ -175,6 +175,9 @@ async function main() {
   }
   git('tag', '-a', tag, '-m', `release: ${tag}`); // 5. annotated tag (carries tagger/date + works with --follow-tags)
   console.log(`\n✓ tagged ${tag}. Push to release:  git push --follow-tags`);
+  console.log(
+    `Once ${version} is on npm, run \`npm install\` in website/ and commit its package-lock.json.`,
+  );
 }
 
 // Run only when invoked directly (`node tools/release.mjs ...`), not when imported (e.g. by a test).
