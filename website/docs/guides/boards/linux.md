@@ -30,7 +30,7 @@ Then, from the repository root:
 ```bash
 # 1. Pack a demo into a config container
 cd packages/embedded-react && npm install && npm run pack     # → dist/app.erpkg
-cd ../../..
+cd ../..
 
 # 2. Build and run the host
 cmake -S examples/linux -B examples/linux/build
@@ -59,7 +59,7 @@ first, then build:
 
 ```bash
 cd packages/embedded-react && npm run aot -- thermostat     # → dist/app.gen.c + assets.generated.c
-cd ../../..
+cd ../..
 cmake -S examples/linux-aot -B examples/linux-aot/build
 cmake --build examples/linux-aot/build --target embedded-react-desktop-aot
 examples/linux-aot/build/embedded-react-desktop-aot
