@@ -71,6 +71,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'internals/architecture',
         'internals/engine-internals',
+        'internals/flow-b-packages',
         'internals/writing-a-backend',
         'internals/testing',
         'internals/releasing',

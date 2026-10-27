@@ -90,7 +90,8 @@ works on bare metal. [NativeUI bridge](../api/native-ui-bridge.md) documents the
 **The runtime** (`runtime/`) is C that links only the engine. `er_container.c` reads an ERCF
 container: the magic, the format version, every section bound, and the CRC, before anything runs.
 `er_assets.c` registers an ERPK pack. `er_hotreload.c` parses the USB reload frames. The bridge
-links it, and the Flow B runtime will reuse it.
+links it, and the Flow B runtime will reuse it; [Flow B packages](./flow-b-packages.md) is that
+runtime's design.
 
 **The AOT compiler** (`packages/embedded-react/aot/`) parses the app's JSX with Babel, folds
 module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
